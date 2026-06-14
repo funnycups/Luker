@@ -914,7 +914,7 @@ function wrapExecWithSession(exec) {
  * can no-op without throwing.
  */
 function loadOrchestratorRegistrar() {
-    const orch = SillyTavern.getContext().getExtensionApi('orchestrator');
+    const orch = Luker.getContext().getExtensionApi('orchestrator');
     if (!orch || typeof orch.registerOrchestrationTool !== 'function') return null;
     return orch;
 }

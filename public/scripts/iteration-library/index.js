@@ -4,7 +4,7 @@
  * Three-layer surface (per spec §15):
  *   Layer 1 (direct):       import { ... } from '/scripts/iteration-library/index.js';
  *   Layer 2 (lukerContext): const { ... } = lukerContext.iterationLibrary;
- *   Layer 3 (getContext):   const { ... } = SillyTavern.getContext().iterationLibrary;
+ *   Layer 3 (getContext):   const { ... } = Luker.getContext().iterationLibrary;
  *
  * Stage 1 deliverable. The legacy `iterationStudio.*` surface stays
  * exposed throughout Stages 1–5 (dual-track period). First access to

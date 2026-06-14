@@ -63,7 +63,7 @@ test.describe('Skills: conflict dialog Skip / Replace branches', () => {
             bodyTail: INITIAL_BODY_ANCHOR,
         });
         await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.executeExtractEmbed({ payload, targetScope: scope, conflictStrategies: {} });
         }, { payload: initialPayload, scope: targetScope });
 
@@ -80,7 +80,7 @@ test.describe('Skills: conflict dialog Skip / Replace branches', () => {
 
         // ── 2. Preview against the existing install → expect 'different' ─
         const preview = await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.previewExtractEmbed({ payload, targetScope: scope });
         }, { payload: replacementPayload, scope: targetScope });
         const fixturePreview = (preview?.items || []).find(it => it && it.name === FIXTURE_SKILL_NAME);
@@ -143,7 +143,7 @@ async function driveConflictDialog({ page, payload, targetScope, radioChoice, sc
     // on window so we can await it from the harness after the dialog closes.
     await page.evaluate(async ({ payload, targetScope }) => {
         const mod = await import('/scripts/skills/embed-import-dialog.js');
-        const context = window.SillyTavern.getContext();
+        const context = window.Luker.getContext();
         window.__luker_smoke_conflict_result = mod.runEmbedImportFlow({
             context,
             payload,
@@ -204,7 +204,7 @@ async function driveConflictDialog({ page, payload, targetScope, radioChoice, sc
  */
 async function readFixtureBody(page, scope) {
     return await page.evaluate(async ({ scope, name }) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         try {
             const file = await ctx.skills.readFile({ scope, name, path: 'SKILL.md' });
             return file?.content || '';

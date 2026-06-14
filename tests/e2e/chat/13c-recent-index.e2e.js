@@ -31,7 +31,7 @@ test.afterAll(async () => {
 
 async function createIyana(page) {
     return page.evaluate(async () => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const headers = ctx.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
         const res = await fetch('/api/characters/create', {
             method: 'POST',
@@ -58,7 +58,7 @@ async function createIyana(page) {
 
 async function fetchRecent(page) {
     return page.evaluate(async () => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const headers = ctx.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
         const res = await fetch('/api/chats/recent', {
             method: 'POST',
@@ -74,7 +74,7 @@ test.describe('#13c — recent-chats index', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
         await sendMessageAndAwaitReply(page, 'Seraphina turn 1: open the watch.');
@@ -84,11 +84,11 @@ test.describe('#13c — recent-chats index', () => {
         const iyanaAvatar = await createIyana(page);
         expect(iyanaAvatar).toBe('iyana-the-watchwoman.png');
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.getCharacters?.();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.characters.some(c => c?.name === 'Iyana the Watchwoman');
         }, { timeout: 10_000 });
 
@@ -97,19 +97,19 @@ test.describe('#13c — recent-chats index', () => {
         // open but the picker block visibility flickers. Select Iyana
         // through the context API directly.
         await page.evaluate(async (wantName) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === wantName);
             if (idx < 0) throw new Error(`character ${wantName} not loaded`);
             const mod = await import('/script.js');
             await mod.selectCharacterById?.(idx);
         }, 'Iyana the Watchwoman');
         await page.waitForFunction((wantName) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const c = ctx.characters[ctx.characterId];
             return c?.name === wantName;
         }, 'Iyana the Watchwoman', { timeout: 10_000 });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -124,13 +124,13 @@ test.describe('#13c — recent-chats index', () => {
 
         // Switch back to Seraphina via context, send a turn, recency flips back.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Seraphina');
             const mod = await import('/script.js');
             await mod.selectCharacterById?.(idx);
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const c = ctx.characters[ctx.characterId];
             return c?.name === 'Seraphina';
         }, { timeout: 10_000 });

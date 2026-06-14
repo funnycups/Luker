@@ -61,7 +61,7 @@ test.describe('#37 — orchestrator iter-studio Apply→Global writes through wr
         // The orchestrator extension auto-bootstraps on first paint —
         // wait for `presetLibraries` to appear under `extensionSettings.orchestrator`.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const ext = ctx?.extensionSettings?.orchestrator;
             return ext && ext.presetLibraries && ext.presetLibraries.director
                 && ext.activePresetIds && typeof ext.activePresetIds.director === 'string';
@@ -71,7 +71,7 @@ test.describe('#37 — orchestrator iter-studio Apply→Global writes through wr
         // migration installed). Synthesize a clearly mutated profile and
         // apply it through the same function the apply button calls.
         const beforeState = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings.orchestrator;
             const activeId = ext.activePresetIds.director;
             const baseline = ext.presetLibraries.director[activeId];
@@ -98,7 +98,7 @@ test.describe('#37 — orchestrator iter-studio Apply→Global writes through wr
         // of writing legacy flat fields — this regression test verifies
         // both halves of that contract.
         const applyResult = await page.evaluate(async ({ markerPrompt }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings.orchestrator;
             const lib = await import('/scripts/extensions/orchestrator/preset-library.js');
             const defaults = await import('/scripts/extensions/orchestrator/defaults.js');
@@ -195,7 +195,7 @@ test.describe('#37 — orchestrator iter-studio Apply→Global writes through wr
         await reloadAndAwait(page, server.baseURL);
 
         const afterRestart = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings.orchestrator;
             const lib = await import('/scripts/extensions/orchestrator/preset-library.js');
             const defaults = await import('/scripts/extensions/orchestrator/defaults.js');
@@ -216,7 +216,7 @@ test.describe('#37 — orchestrator iter-studio Apply→Global writes through wr
         await awaitMainUI(page, server.baseURL);
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const ext = ctx?.extensionSettings?.orchestrator;
             return ext && ext.presetLibraries && ext.presetLibraries.loop
                 && ext.activePresetIds && typeof ext.activePresetIds.loop === 'string';
@@ -226,7 +226,7 @@ test.describe('#37 — orchestrator iter-studio Apply→Global writes through wr
         const MARKER = '*Ash signals across the strait with two flashes from the brass lantern.* You are the loop worker — process the watch report in successive passes; produce a strictly bounded scene closure each iteration. — regression marker e2e #37 loop.';
 
         const result = await page.evaluate(async ({ marker }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings.orchestrator;
             const lib = await import('/scripts/extensions/orchestrator/preset-library.js');
             const defaults = await import('/scripts/extensions/orchestrator/defaults.js');
@@ -256,7 +256,7 @@ test.describe('#37 — orchestrator iter-studio Apply→Global writes through wr
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         const after = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings.orchestrator;
             const lib = await import('/scripts/extensions/orchestrator/preset-library.js');
             const defaults = await import('/scripts/extensions/orchestrator/defaults.js');

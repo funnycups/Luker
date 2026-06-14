@@ -35,8 +35,8 @@
  *   - `getSettings`               accessor for the current global settings
  */
 
-const getContext = SillyTavern.getContext;
-const UNSET_VALUE = SillyTavern.getContext().constants.unset;
+const getContext = Luker.getContext;
+const UNSET_VALUE = Luker.getContext().constants.unset;
 
 let deps = {
     MODULE_NAME: 'memory_graph',

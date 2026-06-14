@@ -640,7 +640,7 @@ class MacroCstWalker {
      * @returns {string} The result of the operation.
      */
     #executeVariableOperation(varName, isGlobal, operation, lazyValue) {
-        const ctx = SillyTavern.getContext();
+        const ctx = Luker.getContext();
         const vars = isGlobal ? ctx.variables.global : ctx.variables.local;
 
         /**

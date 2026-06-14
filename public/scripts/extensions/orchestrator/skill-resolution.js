@@ -37,7 +37,7 @@
  * refresh.
  */
 
-const skillsApi = SillyTavern.getContext().skills;
+const skillsApi = Luker.getContext().skills;
 
 let cachedInventory = null;
 let cacheStamp = 0;

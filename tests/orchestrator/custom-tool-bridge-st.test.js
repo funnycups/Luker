@@ -7,14 +7,14 @@ const mockTools = [
 ];
 const mockInvoke = jest.fn(async (name, params) => JSON.stringify({ called: name, params }));
 
-// register-custom-tool.js reads `SillyTavern.getContext().ToolManager`
+// register-custom-tool.js reads `Luker.getContext().ToolManager`
 // (post upstream 571c529c2). Surface the same mock via the shim so the
 // bridge resolves the live tool registry.
 const mockToolManager = {
     get tools() { return mockTools; },
     invokeFunctionTool: mockInvoke,
 };
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({
         ToolManager: mockToolManager,
         constants: {

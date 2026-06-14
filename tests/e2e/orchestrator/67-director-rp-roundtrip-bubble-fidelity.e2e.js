@@ -103,7 +103,7 @@ test.describe('#67 — Director RP one full round → 1:1 bubble fidelity', () =
 
         // Wait for the persisted chat to rehydrate.
         await page.waitForFunction((wantLen) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length >= wantLen;
         }, before.length, { timeout: 30_000 });
 

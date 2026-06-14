@@ -50,7 +50,7 @@ async function ensureInlineDrawerOpen(page, hostId) {
 // auto-apply checkbox present) run unconditionally.
 async function ensureConnectionProfile(page) {
     const hasProfile = await page.evaluate(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
         return Array.isArray(profiles) && profiles.length > 0;
     });
@@ -281,7 +281,7 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
     // selected character. Soft-skips if no character is loaded.
     async function ensureActiveCharacter(page) {
         const avatar = await page.evaluate(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return String(ctx?.characters?.[ctx?.characterId]?.avatar || '').trim();
         });
         test.skip(!avatar, 'no active character — cannot trigger CEA char iteration popup');
@@ -296,7 +296,7 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         // the current character's detail shape (matching main.js's reader:
         // `event.detail.character.avatar`).
         await page.evaluate(async (avatarId) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const settings = ctx?.extensionSettings?.['character-editor-assistant'];
             if (settings && typeof settings === 'object') {
                 settings.replaceLorebookSyncEnabled = true;
@@ -349,7 +349,7 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         const avatar = await ensureActiveCharacter(page);
 
         await page.evaluate(async (avatarId) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const settings = ctx?.extensionSettings?.['character-editor-assistant'];
             if (settings && typeof settings === 'object') {
                 settings.replaceLorebookSyncEnabled = true;

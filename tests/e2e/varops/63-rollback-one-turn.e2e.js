@@ -48,7 +48,7 @@ test.describe('#63 — Rollback one turn → state restored', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -62,7 +62,7 @@ test.describe('#63 — Rollback one turn → state restored', () => {
         }
 
         const initial = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 count: ctx.chatMetadata?.variables?.count ?? null,
                 chatLen: ctx.chat.length,
@@ -77,12 +77,12 @@ test.describe('#63 — Rollback one turn → state restored', () => {
         // it tests that the rebuild ignores user-side ops cleanly (there
         // are none in this test, but the path is exercised).
         const lastAssistantIdx = initial.chatLen - 1;
-        await page.evaluate((idx) => window.SillyTavern.getContext()
+        await page.evaluate((idx) => window.Luker.getContext()
             .executeSlashCommandsWithOptions(`/cut ${idx}`), lastAssistantIdx);
 
         // MESSAGE_DELETED fired → rebuild listener swept the surviving ops.
         const after1 = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 count: ctx.chatMetadata?.variables?.count ?? null,
                 chatLen: ctx.chat.length,
@@ -93,7 +93,7 @@ test.describe('#63 — Rollback one turn → state restored', () => {
 
         // Also expose via the public context API — same data, different surface.
         const viaContextApi = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return String(ctx.variables.local.get('count'));
         });
         expect(Number(viaContextApi)).toBe(2);
@@ -101,7 +101,7 @@ test.describe('#63 — Rollback one turn → state restored', () => {
         // Cut the user message we just received a reply for (now the tail).
         // Then cut the next assistant turn so we are back to count=1.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // chat now: [greeting, u1, a1(count=1), u2, a2(count=2), u3] after one cut
             // We want to roll back to "after a1" → cut indices >= 3
             //  /cut 3-5 inclusive
@@ -109,7 +109,7 @@ test.describe('#63 — Rollback one turn → state restored', () => {
         });
 
         const after2 = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 count: ctx.chatMetadata?.variables?.count ?? null,
                 chatLen: ctx.chat.length,
@@ -124,12 +124,12 @@ test.describe('#63 — Rollback one turn → state restored', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length > 0;
         }, { timeout: 15_000 });
 
         const afterRestart = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 count: ctx.chatMetadata?.variables?.count ?? null,
                 chatLen: ctx.chat.length,

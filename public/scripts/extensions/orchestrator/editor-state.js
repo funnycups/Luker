@@ -20,7 +20,7 @@
  * lives in `editor-persist.js`.
  */
 
-const extension_settings = SillyTavern.getContext().extensionSettings;
+const extension_settings = Luker.getContext().extensionSettings;
 import {
     ORCH_EXECUTION_MODE_AGENDA,
     ORCH_EXECUTION_MODE_DIRECTOR,

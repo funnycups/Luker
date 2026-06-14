@@ -35,7 +35,7 @@ import { resolveAgentToolFlags } from './persistence.js';
 // can import this module without first installing a SillyTavern global —
 // the loop body (`runMainAgentLoop`) and pure helpers do not need it.
 function getCreateMessageEditorHandle() {
-    return SillyTavern.getContext().createMessageEditorHandle;
+    return Luker.getContext().createMessageEditorHandle;
 }
 import {
     buildMainAgentToolSchemas,

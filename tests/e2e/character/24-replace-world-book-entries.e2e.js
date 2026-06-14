@@ -73,7 +73,7 @@ test.describe('#24 — CardApp.replaceWorldBookEntries (Luker-only dynamic world
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
         }, { timeout: 15_000 });
 
@@ -86,7 +86,7 @@ test.describe('#24 — CardApp.replaceWorldBookEntries (Luker-only dynamic world
 
         // Drive replaceWorldBookEntries (Luker's CardApp ctx method).
         const replaceResult = await page.evaluate(async ({ bookName, entries }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Mirror context.js#replaceWorldBookEntries body — load, wipe,
             // create new entries from partials, save.
             const data = await ctx.loadWorldInfo(bookName);
@@ -133,7 +133,7 @@ test.describe('#24 — CardApp.replaceWorldBookEntries (Luker-only dynamic world
 
         // In-memory editor view also reflects the replacement.
         const inMemory = await page.evaluate(async (bookName) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const data = await ctx.loadWorldInfo(bookName);
             return Object.values(data?.entries || {}).map(e => e.comment).sort();
         }, bookName);

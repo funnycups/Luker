@@ -74,7 +74,7 @@ test.describe('#56 — MG schema add-field persists and is visible to write API 
         // `saveSettings()` path the editor uses on its Apply button.
         const CUSTOM_FIELD = 'omen_score';
         const editResult = await page.evaluate(async ({ fieldId }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (!settings) return { error: 'memory_graph extension settings missing' };
             settings.enabled = true;
@@ -127,7 +127,7 @@ test.describe('#56 — MG schema add-field persists and is visible to write API 
         // the created node's id so we can find it post-restart even after
         // MG normalizes the event title to "Summary N".
         const writeResult = await page.evaluate(async ({ fieldId }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mg = ctx.getExtensionApi?.('memory-graph');
             const session = await mg?.openSession?.(ctx);
             if (!session) return { error: 'no session pre-restart' };
@@ -164,7 +164,7 @@ test.describe('#56 — MG schema add-field persists and is visible to write API 
         await selectCharacterByName(page, 'Seraphina');
 
         const afterRestart = await page.evaluate(async ({ fieldId, preRestartNodeId }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             // Re-query the schema via Layer-1 read-api — that's the surface

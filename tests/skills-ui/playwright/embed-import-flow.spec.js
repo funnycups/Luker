@@ -72,7 +72,7 @@ test.describe('Skills: embed import dialog', () => {
         // scope to install into — any one works for this flow). Hard-fails
         // only when the env has zero characters at all.
         const targetScope = await page.evaluate(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             // Prefer the active character; fall back to the first one.
             let avatar = '';
             const cid = ctx?.characterId;
@@ -92,7 +92,7 @@ test.describe('Skills: embed import dialog', () => {
         // character, delete it so we re-trigger the "new" install path
         // rather than landing on "different (choose)".
         await page.evaluate(async ({ scope, name }) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx?.skills) return;
             try {
                 await ctx.skills.delete(scope, name);
@@ -111,7 +111,7 @@ test.describe('Skills: embed import dialog', () => {
         // to retrieve the install result.
         await page.evaluate(async ({ payload, targetScope }) => {
             const mod = await import('/scripts/skills/embed-import-dialog.js');
-            const context = window.SillyTavern.getContext();
+            const context = window.Luker.getContext();
             window.__luker_smoke_embed_result = mod.runEmbedImportFlow({
                 context,
                 payload,
@@ -178,7 +178,7 @@ test.describe('Skills: embed import dialog', () => {
 
         // ── 5. Verify the skill surfaces in character scope ──────────
         const skillsAfter = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.list({ scope: 'all' });
         });
         const characterRow = (skillsAfter || []).find(
@@ -193,7 +193,7 @@ test.describe('Skills: embed import dialog', () => {
 
         // ── 6. Cleanup so subsequent runs are idempotent ─────────────
         await page.evaluate(async ({ scope, name }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             try {
                 await ctx.skills.delete(scope, name);
             } catch {

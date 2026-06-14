@@ -6,7 +6,7 @@
  * Boundary linter for Luker-new plugins.
  *
  * Contract: a Luker-new plugin in `public/scripts/extensions/<plugin>/**`
- * MUST consume core capabilities through `SillyTavern.getContext()` / the
+ * MUST consume core capabilities through `Luker.getContext()` / the
  * three-layer API, never via cross-boundary import. Cross-plugin coupling
  * (Luker-new plugin → another Luker-new plugin) is also disallowed —
  * sibling plugins talk over the published `getExtensionApi(name)` registry
@@ -244,8 +244,8 @@ function main() {
 
     console.error(`\n${total} violation(s) found.`);
     console.error('Fix:');
-    console.error('  - plugin → core:    consume via SillyTavern.getContext().');
-    console.error('  - plugin → plugin:  consume via SillyTavern.getContext().getExtensionApi(name); provider publishes via registerExtensionApi(name, api).');
+    console.error('  - plugin → core:    consume via Luker.getContext().');
+    console.error('  - plugin → plugin:  consume via Luker.getContext().getExtensionApi(name); provider publishes via registerExtensionApi(name, api).');
     console.error('  - core → plugin:    move the symbol the other way; core never imports from extensions/<luker-plugin>/.');
     process.exit(1);
 }

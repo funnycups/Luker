@@ -104,7 +104,7 @@ test.describe('#79 — CPA iter-studio Apply → Default.json mutated → surviv
         // disk-write code path under test. (The studio shell is also
         // exercised — the popup must open without errors.)
         const saveResult = await page.evaluate(async (newTemp) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Mirror the studio's commit shape exactly.
             const ref = { collection: 'openai', name: 'Default' };
             const stored = ctx.presets.getStored?.(ref);
@@ -173,7 +173,7 @@ test.describe('#79 — CPA iter-studio Apply → Default.json mutated → surviv
             $select.val(String(opt.val())).trigger('change');
             // Give the change handler a microtask + tick to settle.
             await new Promise(r => setTimeout(r, 50));
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 ok: true,
                 preset_settings_openai: ctx.chatCompletionSettings?.preset_settings_openai,
@@ -186,7 +186,7 @@ test.describe('#79 — CPA iter-studio Apply → Default.json mutated → surviv
         // handler awaits OAI_PRESET_CHANGED_BEFORE listeners asynchronously.
         await expect.poll(async () => {
             return await page.evaluate(() => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 return ctx.chatCompletionSettings?.temp_openai;
             });
         }, { timeout: 10_000 }).toBe(TARGET_TEMPERATURE);

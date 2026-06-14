@@ -41,7 +41,7 @@
  *   - `maxTotalRuns` — caps total agent runs across all rounds.
  */
 
-const extension_settings = SillyTavern.getContext().extensionSettings;
+const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
 import {

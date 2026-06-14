@@ -108,7 +108,7 @@ test.describe('Skills LLM: skill_edit_content changes one line; surrounding cont
             bodyTail: FIXTURE_BODY,
         });
         await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.executeExtractEmbed({
                 payload, targetScope: scope, conflictStrategies: {},
             });
@@ -118,7 +118,7 @@ test.describe('Skills LLM: skill_edit_content changes one line; surrounding cont
         // prepended by the SKILL.md writer, so the body lines live inside
         // a known position relative to the `---` fence.
         const seedFile = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const file = await ctx.skills.readFile({ scope: { kind: 'global' }, name, path: 'SKILL.md' });
             return file?.content || '';
         }, FIXTURE_SKILL_NAME);
@@ -251,7 +251,7 @@ test.describe('Skills LLM: skill_edit_content changes one line; surrounding cont
         // Read the post-edit file body. The server may persist the write
         // asynchronously through the editFile path, so we re-fetch from disk.
         const editedFile = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const file = await ctx.skills.readFile({ scope: { kind: 'global' }, name, path: 'SKILL.md' });
             return file?.content || '';
         }, FIXTURE_SKILL_NAME);

@@ -12,7 +12,7 @@ test.describe('Stage 4 — MG Schema iteration module smoke', () => {
         });
 
         await page.goto('/', { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => Boolean(window.SillyTavern?.getContext), { timeout: 30000 });
+        await page.waitForFunction(() => Boolean(window.Luker?.getContext), { timeout: 30000 });
         await page.waitForTimeout(1000);
 
         const mgPageErrors = pageErrors.filter(e => /memory[-_ ]graph|mg[-_ ]schema|schema[-_ ]adapter|could not be cloned/i.test(e));
@@ -24,10 +24,10 @@ test.describe('Stage 4 — MG Schema iteration module smoke', () => {
 
     test('iterationLibrary surface still intact post-Stage 4', async ({ page }) => {
         await page.goto('/', { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => Boolean(window.SillyTavern?.getContext), { timeout: 30000 });
+        await page.waitForFunction(() => Boolean(window.Luker?.getContext), { timeout: 30000 });
 
         const exposed = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const lib = ctx?.iterationLibrary;
             return {
                 hasApplyEdits: typeof lib?.applyEdits === 'function',

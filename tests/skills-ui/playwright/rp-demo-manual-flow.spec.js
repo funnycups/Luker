@@ -98,7 +98,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         // Poll for online_status to flip off no_connection — this is read-only
         // state inspection, not mutation.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const v = ctx?.onlineStatus ?? null;
             return Boolean(v) && String(v) !== 'no_connection';
         }, null, { timeout: 30000 });
@@ -130,7 +130,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         await seraphinaTile.click();
         // Wait for ctx.characterId to flip — read-only assertion.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return ctx?.characterId !== null && ctx?.characterId !== undefined
                 && ctx.characters?.[ctx.characterId]?.name === 'Seraphina';
         }, null, { timeout: 15000 });
@@ -363,7 +363,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         await page.locator('#rm_extensions_block').waitFor({ state: 'hidden', timeout: 5000 });
         // Sanity: the orchestrator mode is director.
         const executionMode = await page.evaluate(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return String(ctx?.extensionSettings?.orchestrator?.executionMode || '');
         });
         expect(executionMode, 'orchestrator must be in director mode for the demo').toBe('director');

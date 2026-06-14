@@ -29,7 +29,7 @@
  * Sharing model:
  *
  *   - Plugin-agnostic: only depends on the global `skillsApi`
- *     (`SillyTavern.getContext().skills`) and `yaml`. Any iter popup may
+ *     (`Luker.getContext().skills`) and `yaml`. Any iter popup may
  *     import this directly.
  *
  *   - Consumers today: orchestrator iter-studio (uses all 16) and CPA
@@ -54,7 +54,7 @@
  *     never touches popup internals directly. Tests stub the bag.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const skillsApi = __ctx.skills;
 const yaml = __ctx.lib.yaml;
 

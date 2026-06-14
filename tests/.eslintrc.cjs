@@ -36,6 +36,7 @@ module.exports = {
         'node_modules/**/*',
     ],
     globals: {
+        Luker: 'readonly',
         SillyTavern: 'readonly',
     },
     rules: {

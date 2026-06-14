@@ -43,13 +43,13 @@ test.describe('#22b — Character attribute merge (V2 canonical path)', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
         }, { timeout: 15_000 });
 
         // Step 1: merge a fresh extension key.
         const mergeResult = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const body = {
                 avatar,
                 data: {
@@ -78,7 +78,7 @@ test.describe('#22b — Character attribute merge (V2 canonical path)', () => {
 
         // Re-read; the key lives at data.extensions.bryn_test_plugin.
         const afterMerge = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST', headers: ctx.getRequestHeaders(),
                 body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache',
@@ -95,7 +95,7 @@ test.describe('#22b — Character attribute merge (V2 canonical path)', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const persisted = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST', headers: ctx.getRequestHeaders(),
                 body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache',
@@ -108,7 +108,7 @@ test.describe('#22b — Character attribute merge (V2 canonical path)', () => {
 
         // Step 2: UNSET sentinel — delete the key.
         const unsetResult = await page.evaluate(async ({ avatar, UNSET }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const body = {
                 avatar,
                 data: {
@@ -127,7 +127,7 @@ test.describe('#22b — Character attribute merge (V2 canonical path)', () => {
         expect(unsetResult.ok, `unset merge failed: ${unsetResult.status} ${unsetResult.body}`).toBe(true);
 
         const afterUnset = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST', headers: ctx.getRequestHeaders(),
                 body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache',

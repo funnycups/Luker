@@ -187,7 +187,7 @@ test.describe('#108 — Apply→Global routes through writeActivePreset', () => 
         await server.restart();
         await page.goto(server.baseURL);
         await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 60_000 });
-        await page.waitForFunction(() => !!window.SillyTavern?.getContext, { timeout: 30_000 });
+        await page.waitForFunction(() => !!window.Luker?.getContext, { timeout: 30_000 });
 
         // 4. Read back from in-memory settings post-restart. The director
         //    runtime reads via getActivePreset; if the data survives the

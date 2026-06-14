@@ -638,11 +638,11 @@ export class ConnectionManagerRequestService {
      * @returns {HTMLImageElement | null}
      */
     static getProfileIcon(profileId) {
-        if ((SillyTavern.getContext()).extensionSettings.disabledExtensions.includes('connection-manager')) {
+        if ((Luker.getContext()).extensionSettings.disabledExtensions.includes('connection-manager')) {
             return null;
         }
 
-        const id = profileId ?? (SillyTavern.getContext()).extensionSettings.connectionManager.selectedProfile;
+        const id = profileId ?? (Luker.getContext()).extensionSettings.connectionManager.selectedProfile;
         if (!id) return null;
 
         try {

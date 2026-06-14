@@ -61,6 +61,7 @@ module.exports = {
                 ePub: 'readonly',
                 pdfjsLib: 'readonly',
                 toastr: 'readonly',
+                Luker: 'readonly',
                 SillyTavern: 'readonly',
             },
         },

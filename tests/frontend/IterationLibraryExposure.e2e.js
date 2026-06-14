@@ -32,7 +32,7 @@ test.describe('iteration-library exposure', () => {
         await awaitMainUI(page);
 
         const exposed = await page.evaluate(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return { error: 'getContext unavailable' };
             const lib = ctx.iterationLibrary;
             if (!lib) return { error: 'iterationLibrary missing' };

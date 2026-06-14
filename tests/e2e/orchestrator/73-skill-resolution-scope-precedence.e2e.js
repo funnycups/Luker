@@ -49,7 +49,7 @@ test.describe('#73 — Skill resolution: 3-scope precedence', () => {
         // global one for `salt-mark-history` (no preset / character).
         const merged = await page.evaluate(async () => {
             const mod = await import('/scripts/extensions/orchestrator/skill-resolution.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             mod.invalidateSkillInventory();
             const originalList = ctx.skills.list;
 
@@ -134,7 +134,7 @@ test.describe('#73 — Skill resolution: 3-scope precedence', () => {
 
         const visible = await page.evaluate(async () => {
             const mod = await import('/scripts/extensions/orchestrator/skill-resolution.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             mod.invalidateSkillInventory();
             const orig = ctx.skills.list;
 

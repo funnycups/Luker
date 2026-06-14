@@ -12,7 +12,7 @@ test.describe('Stage 3 — CPA iteration module smoke', () => {
         });
 
         await page.goto('/', { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => Boolean(window.SillyTavern?.getContext), { timeout: 30000 });
+        await page.waitForFunction(() => Boolean(window.Luker?.getContext), { timeout: 30000 });
         await page.waitForTimeout(1000);
 
         const cpaPageErrors = pageErrors.filter(e => /completion[-_ ]preset|cpa[-_ ]iteration|could not be cloned/i.test(e));
@@ -24,10 +24,10 @@ test.describe('Stage 3 — CPA iteration module smoke', () => {
 
     test('iterationLibrary surface still intact post-Stage 3', async ({ page }) => {
         await page.goto('/', { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => Boolean(window.SillyTavern?.getContext), { timeout: 30000 });
+        await page.waitForFunction(() => Boolean(window.Luker?.getContext), { timeout: 30000 });
 
         const exposed = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const lib = ctx?.iterationLibrary;
             return {
                 hasApplyEdits: typeof lib?.applyEdits === 'function',

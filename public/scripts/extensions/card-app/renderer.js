@@ -6,7 +6,7 @@
  * since the formatting pipeline is a pure function.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
 const event_types = __ctx.eventTypes;
 const chat = __ctx.chat;

@@ -21,13 +21,13 @@ import {
     extractNonSystemFromCapturedPrompt,
 } from '../../iteration-library/simulation-review/dry-run-capture.js';
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const generateQuietPrompt = __ctx.generateQuietPrompt;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const DOMPurify = __ctx.lib.DOMPurify;
 const lodash = __ctx.lib.lodash;
 const extension_settings = __ctx.extensionSettings;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const getCharacterState = __ctx.getCharacterState;
 const setCharacterState = __ctx.setCharacterState;
 const addLocaleData = __ctx.addLocaleData;

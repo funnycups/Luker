@@ -217,7 +217,7 @@ test.describe('Orchestrator: critic regex-search flow', () => {
         try {
             await page.waitForFunction(
                 () => {
-                    const s = window.SillyTavern?.getContext?.()?.extensionSettings?.orchestrator;
+                    const s = window.Luker?.getContext?.()?.extensionSettings?.orchestrator;
                     return Boolean(s?.presetLibraries?.director && s?.activePresetIds);
                 },
                 { timeout: 30000 },
@@ -237,7 +237,7 @@ test.describe('Orchestrator: critic regex-search flow', () => {
         // we temporarily switch to the `default` preset which ships with
         // the two critics. Snapshot everything we mutate so we can restore.
         const restoreState = await page.evaluate(({ criticIds }) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) throw new Error('SillyTavern context missing');
             const settings = ctx.extensionSettings?.orchestrator;
             if (!settings) throw new Error('orchestrator settings missing');
@@ -287,7 +287,7 @@ test.describe('Orchestrator: critic regex-search flow', () => {
         // something to match. We push directly to ctx.chat — the
         // dispatcher reads context.chat, which IS the live array.
         await page.evaluate(({ fact, brief }) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) throw new Error('SillyTavern context missing');
             const chat = Array.isArray(ctx.chat) ? ctx.chat : null;
             if (!chat) throw new Error('ctx.chat array missing');
@@ -462,7 +462,7 @@ test.describe('Orchestrator: critic regex-search flow', () => {
             // Best-effort — assertion failures already surfaced.
             try {
                 await page.evaluate(({ criticSnapshot, prevExecutionMode, prevDirectorPresetId, mutatedPresetId }) => {
-                    const ctx = window.SillyTavern?.getContext?.();
+                    const ctx = window.Luker?.getContext?.();
                     const settings = ctx?.extensionSettings?.orchestrator;
                     if (!settings) return;
                     const lib = settings.presetLibraries?.director;
@@ -516,7 +516,7 @@ async function prepareDirectorEnv(page) {
         };
     }
     const llmReady = await page.evaluate(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const v = ctx?.onlineStatus ?? null;
         return Boolean(v) && String(v).toLowerCase() !== 'no_connection';
     });
@@ -545,7 +545,7 @@ async function prepareDirectorEnv(page) {
  */
 async function activateConnectionProfile(page) {
     return await page.evaluate(async () => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         if (!ctx) return '';
         const profiles = ctx.extensionSettings?.connectionManager?.profiles;
         if (!Array.isArray(profiles) || !profiles.length) return '';
@@ -578,7 +578,7 @@ async function activateConnectionProfile(page) {
  */
 async function ensureCharacterLoaded(page) {
     return await page.evaluate(async () => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         if (!ctx) return '';
         const cur = ctx.characters?.[ctx.characterId];
         if (cur?.avatar) return String(cur.avatar);

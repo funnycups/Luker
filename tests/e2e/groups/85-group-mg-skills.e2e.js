@@ -152,7 +152,7 @@ test.describe('#85 — Group + Memory-Graph + Skills coexistence', () => {
                 const scopeFrag = `character/${avatar}`;
                 const res = await fetch(`/api/skills?scope=${encodeURIComponent(scopeFrag)}`, {
                     method: 'GET',
-                    headers: window.SillyTavern.getContext().getRequestHeaders(),
+                    headers: window.Luker.getContext().getRequestHeaders(),
                 });
                 const arr = res.ok ? await res.json() : [];
                 out[avatar] = Array.isArray(arr) ? arr.map(e => e.name) : [];
@@ -191,7 +191,7 @@ test.describe('#85 — Group + Memory-Graph + Skills coexistence', () => {
         // SAME persistence path the extractor uses, so the on-disk
         // floor_log shape is identical.
         const seededPre = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgApi = ctx.getExtensionApi?.('memory-graph');
             if (!mgApi) return { ok: false, reason: 'no mg extension api' };
             const session = await mgApi.openSession?.(ctx);
@@ -328,7 +328,7 @@ test.describe('#85 — Group + Memory-Graph + Skills coexistence', () => {
         //      (one commit per "extraction round"), through the same
         //      Layer-1 session API.
         const seededPost = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgApi = ctx.getExtensionApi?.('memory-graph');
             const session = await mgApi.openSession?.(ctx);
             const node = await session.createNode({
@@ -370,7 +370,7 @@ test.describe('#85 — Group + Memory-Graph + Skills coexistence', () => {
         //      with the on-disk floor log. Both seeded nodes are
         //      retrievable as visible candidates.
         const mgAfterTurn = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgApi = ctx.getExtensionApi?.('memory-graph');
             const session = await mgApi.openSession?.(ctx);
             const cands = session.listVisibleCandidates({});

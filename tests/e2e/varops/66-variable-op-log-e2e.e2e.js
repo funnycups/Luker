@@ -83,7 +83,7 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -94,7 +94,7 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
 
         // State should reflect every op forward-applied.
         const afterAll = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatMetadata?.variables?.roster ?? null;
         });
         expect(afterAll, 'roster persisted as JSON string').toBeTruthy();
@@ -105,7 +105,7 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
 
         // Every assistant floor should carry exactly one op (each reply has one macro).
         const opsPerFloor = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat
                 .filter(m => !m.is_user)
                 .map(m => m?.extra?.var_ops ?? []);
@@ -122,12 +122,12 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
         ]);
 
         // ── Delete the last (assistant) turn — Alice was hit ─────────
-        const tailLen = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
-        await page.evaluate((idx) => window.SillyTavern.getContext()
+        const tailLen = await page.evaluate(() => window.Luker.getContext().chat.length);
+        await page.evaluate((idx) => window.Luker.getContext()
             .executeSlashCommandsWithOptions(`/cut ${idx}`), tailLen - 1);
 
         const afterCut = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return JSON.parse(ctx.chatMetadata?.variables?.roster ?? 'null');
         });
         // After delete, the "Alice was hit" op is gone → rebuild replays
@@ -140,12 +140,12 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
 
         // ── Persistence: on-disk header has the post-delete state ────
         const avatarFolder = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return (ctx.characters[ctx.characterId]?.avatar || '').replace(/\.png$/, '');
         });
         // Force a save so the disk file reflects the post-cut state.
-        await page.evaluate(() => window.SillyTavern.getContext().saveChat());
-        const chatId = await page.evaluate(() => window.SillyTavern.getContext().getCurrentChatId());
+        await page.evaluate(() => window.Luker.getContext().saveChat());
+        const chatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId());
         const chatDir = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder);
         const files = readdirSync(chatDir).filter(f => f.endsWith('.jsonl'));
         expect(files.length).toBeGreaterThan(0);
@@ -162,12 +162,12 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length > 0;
         }, { timeout: 15_000 });
 
         const afterRestart = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return JSON.parse(ctx.chatMetadata?.variables?.roster ?? 'null');
         });
         expect(afterRestart).toEqual({
@@ -177,7 +177,7 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
 
         // var_ops records also survive (the per-message log).
         const opsAfterRestart = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat
                 .filter(m => !m.is_user)
                 .map(m => m?.extra?.var_ops ?? [])

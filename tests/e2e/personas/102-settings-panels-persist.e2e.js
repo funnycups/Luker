@@ -95,7 +95,7 @@ test.describe('#102 — each major settings panel persists across restart', () =
             // Force a settings save (saveSettingsDebounced is debounced, so
             // we flush via the public API on getContext()).
             await page.evaluate(async () => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 if (typeof ctx.saveSettings === 'function') await ctx.saveSettings();
             });
 

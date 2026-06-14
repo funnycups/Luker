@@ -55,7 +55,7 @@
  *   - getRequestPresetOptions()           → { llmPresetName, apiPresetName }
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const Popup = __ctx.Popup;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
 const stripOpenAIConnectionFieldsFromPreset = __ctx.openai.stripPresetConnectionFields;
@@ -88,7 +88,7 @@ import {
     SESSION_MODE_DEFAULT,
 } from './system-prompts.js';
 import { augmentCpaPromptWithSkills } from './skill-prompt.js';
-const skillsApi = SillyTavern.getContext().skills;
+const skillsApi = Luker.getContext().skills;
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { CPA_TOOL_DISPLAY } from './tool-display.js';
 

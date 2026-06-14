@@ -35,15 +35,15 @@ test.describe('#10 — /impersonate populates the user textarea', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        const before = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const before = await page.evaluate(() => window.Luker.getContext().chat.length);
         const beforeRequests = mock.requests.length;
 
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/impersonate await=true');
+            await window.Luker.getContext().executeSlashCommandsWithOptions('/impersonate await=true');
         });
 
         // Wait for the chat-completion request to have happened so we know
@@ -53,7 +53,7 @@ test.describe('#10 — /impersonate populates the user textarea', () => {
         }, { before: beforeRequests }, { timeout: 10_000 }).catch(() => {});
         await page.waitForTimeout(800);
 
-        const after = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const after = await page.evaluate(() => window.Luker.getContext().chat.length);
         expect(after, '/impersonate should NOT add a new chat message').toBe(before);
 
         // The mock must have been hit (at least once), with an impersonate

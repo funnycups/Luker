@@ -37,7 +37,7 @@ test.describe('#7 — delete-from-here truncate', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -54,11 +54,11 @@ test.describe('#7 — delete-from-here truncate', () => {
         const truncateEnd = before.length - 1;
 
         await page.evaluate(async ({ from, to }) => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions(`/cut ${from}-${to}`);
+            await window.Luker.getContext().executeSlashCommandsWithOptions(`/cut ${from}-${to}`);
         }, { from: truncateStart, to: truncateEnd });
 
         await page.waitForFunction(({ wantLen }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat.length === wantLen;
         }, { wantLen: truncateStart }, { timeout: 10_000 });
         await page.waitForTimeout(400);
@@ -67,7 +67,7 @@ test.describe('#7 — delete-from-here truncate', () => {
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 15_000 });
 

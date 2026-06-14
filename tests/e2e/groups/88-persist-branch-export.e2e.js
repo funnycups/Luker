@@ -110,7 +110,7 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         }
 
         const inMemoryBefore = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 chatId: ctx.getCurrentChatId?.(),
                 length: ctx.chat?.length,
@@ -156,12 +156,12 @@ test.describe('#88 — group chat persistence + branch + export', () => {
 
         await openGroupForChat(page, groupId);
         await page.waitForFunction((wantLen) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat?.length >= wantLen;
         }, inMemoryBefore.length, { timeout: 15_000 });
 
         const inMemoryAfter = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 chatId: ctx.getCurrentChatId?.(),
                 length: ctx.chat?.length,
@@ -205,7 +205,7 @@ test.describe('#88 — group chat persistence + branch + export', () => {
             resolve(server.dataRoot, 'default-user', 'group chats'),
         ).filter(f => f.endsWith('.jsonl'));
         const branchEventP = page.evaluate(() => new Promise((resolve) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const t = setTimeout(() => resolve('timeout'), 30_000);
             const handler = (data) => {
                 clearTimeout(t);
@@ -215,21 +215,21 @@ test.describe('#88 — group chat persistence + branch + export', () => {
             ctx.eventSource.on(ctx.eventTypes.CHAT_BRANCH_CREATED, handler);
         }));
         await page.evaluate(async (id) => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions(`/branch-create ${id}`);
+            await window.Luker.getContext().executeSlashCommandsWithOptions(`/branch-create ${id}`);
         }, branchAt);
         const branchEventResult = await branchEventP;
         expect(branchEventResult, '/branch-create must fire CHAT_BRANCH_CREATED for the group chat').not.toBe('timeout');
 
         // Wait for the chat to switch into the new branch.
         await page.waitForFunction((origChat) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const cur = ctx.getCurrentChatId?.();
             return cur && cur !== origChat;
         }, chatId, { timeout: 15_000 });
         await page.waitForTimeout(500);
 
         const branchSnap = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 chatId: ctx.getCurrentChatId?.(),
                 length: ctx.chat?.length,
@@ -283,14 +283,14 @@ test.describe('#88 — group chat persistence + branch + export', () => {
             await mod.openGroupChat(gId, cId);
         }, { gId: groupId, cId: chatId });
         await page.waitForFunction((wantId) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.getCurrentChatId?.() === wantId;
         }, chatId, { timeout: 15_000 });
 
         // /api/chats/export with is_group:true returns the raw jsonl in
         // `result` (the same payload trySaveChat wrote to disk).
         const exportResult = await page.evaluate(async (cId) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const headers = ctx.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
             const res = await fetch('/api/chats/export', {
                 method: 'POST',
@@ -341,7 +341,7 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         // avatar_url; the chat is materialized in the user's `group chats`
         // dir with a freshly generated chat name).
         const importResult = await page.evaluate(async (jsonl) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const headers = ctx.getRequestHeaders?.({ omitContentType: true }) || {};
             const form = new FormData();
             form.append('avatar', new Blob([jsonl], { type: 'application/octet-stream' }), 'group-roundtrip.jsonl');

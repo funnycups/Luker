@@ -6,11 +6,11 @@ import { createContainer, destroyContainer, injectScopedCSS, loadEntryModule, sh
 import { buildContext } from './context.js';
 import { activateRendererBridge, deactivateRendererBridge } from './renderer.js';
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
 const event_types = __ctx.eventTypes;
 const getRequestHeaders = __ctx.getRequestHeaders;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
 const getCharacterState = __ctx.getCharacterState;
 const setCharacterState = __ctx.setCharacterState;

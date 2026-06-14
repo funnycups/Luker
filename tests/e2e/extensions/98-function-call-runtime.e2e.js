@@ -50,7 +50,7 @@ test.describe('#98 — Function call runtime round-trip', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -60,7 +60,7 @@ test.describe('#98 — Function call runtime round-trip', () => {
         // assertion (the mock supports both, and the streaming path is
         // exercised in other batches).
         await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Reach into oai_settings via the openai.js module.
             return import('/scripts/openai.js').then(mod => {
                 mod.oai_settings.function_calling = true;
@@ -76,7 +76,7 @@ test.describe('#98 — Function call runtime round-trip', () => {
         // Register the get_weather tool. Action returns the hardcoded
         // string the mock will echo back into the prompt.
         await page.evaluate((toolResult) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Defensive: drop any prior registration so re-runs don't double up.
             try { ctx.unregisterFunctionTool('get_weather'); } catch {}
             ctx.registerFunctionTool({
@@ -100,7 +100,7 @@ test.describe('#98 — Function call runtime round-trip', () => {
 
         // Confirm the tool registry sees it.
         const registeredNames = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // ToolDefinition keeps `name` as a private field; project it
             // via the public toFunctionOpenAI() shape instead.
             return ctx.ToolManager.tools.map(t => t.toFunctionOpenAI?.().function?.name);
@@ -117,9 +117,9 @@ test.describe('#98 — Function call runtime round-trip', () => {
         mock.scriptReply(finalText);
 
         // Send a turn that motivates the tool call.
-        const chatLenBefore = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions('/send What will the weather be tomorrow in Bryn-on-Sea? | /trigger await=true');
         });
 
@@ -130,7 +130,7 @@ test.describe('#98 — Function call runtime round-trip', () => {
         // about the exact count — Luker may also append other internal
         // markers depending on settings.
         await page.waitForFunction((targetLen) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Look for an assistant message that's not the tool-invocation
             // record (which is is_system) after the user's turn.
             return ctx.chat.some((m, i) => i > targetLen && !m.is_user && !m.is_system && typeof m.mes === 'string' && m.mes.includes('sunny'));
@@ -160,7 +160,7 @@ test.describe('#98 — Function call runtime round-trip', () => {
 
         // ===== Assert the final assistant bubble has both tokens. =====
         const finalBubble = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             for (let i = ctx.chat.length - 1; i >= 0; i--) {
                 const m = ctx.chat[i];
                 if (!m.is_user && !m.is_system && typeof m.mes === 'string') {
@@ -179,7 +179,7 @@ test.describe('#98 — Function call runtime round-trip', () => {
         // saveFunctionToolInvocations pushes a system message with
         // extra.tool_invocations[] — find it and check its `result`.
         const invocationRecord = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             for (let i = ctx.chat.length - 1; i >= 0; i--) {
                 const m = ctx.chat[i];
                 const inv = Array.isArray(m?.extra?.tool_invocations) ? m.extra.tool_invocations : null;

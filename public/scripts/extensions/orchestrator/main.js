@@ -2,12 +2,12 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 // Implementation source: Toolify: Empower any LLM with function calling capabilities. (https://github.com/funnycups/Toolify)
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const extension_prompt_roles = __ctx.constants.promptRoles;
 const saveSettings = __ctx.saveSettings;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
 const oai_settings = __ctx.chatCompletionSettings;
 const world_info_position = __ctx.constants.wiPosition;

@@ -85,7 +85,7 @@ test.describe('#60 — MG + var_ops co-operation via macro evaluation', () => {
         // onto floor N's `extra.var_ops`; the op log apply step then
         // mirrors it into `chatMetadata.variables`).
         const setResult = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             if (typeof ctx.setVariable !== 'function') {
                 return { error: 'ctx.setVariable not exposed' };
             }
@@ -138,7 +138,7 @@ test.describe('#60 — MG + var_ops co-operation via macro evaluation', () => {
         // expand correctly — the cross-component persistence contract:
         // chat metadata variables outlive the server process.
         const wroteWithMacro = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             const mg = ctx.getExtensionApi?.('memory-graph');
@@ -168,7 +168,7 @@ test.describe('#60 — MG + var_ops co-operation via macro evaluation', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         const afterRestart = await page.evaluate(async ({ nodeId }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // The var-op log apply step runs on CHAT_CHANGED. After a hard
             // reload, the chat reloads; we wait a tick for the listener to
             // settle, then force a manual rebuild as belt-and-suspenders
@@ -260,7 +260,7 @@ test.describe('#60 — MG + var_ops co-operation via macro evaluation', () => {
             // ReferenceError.
             const result = await page.evaluate(async () => {
                 try {
-                    const ctx = window.SillyTavern.getContext();
+                    const ctx = window.Luker.getContext();
                     await ctx.setVariable('bare_scope_test', 'expected-value');
                     return { ok: true, value: ctx.chatMetadata?.variables?.bare_scope_test };
                 } catch (err) {

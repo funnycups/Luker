@@ -24,7 +24,7 @@
  * module by import.
  */
 
-const wi_anchor_position = SillyTavern.getContext().constants.wiAnchor;
+const wi_anchor_position = Luker.getContext().constants.wiAnchor;
 
 export function normalizeWorldInfoEntries(rawEntries) {
     return Array.isArray(rawEntries)

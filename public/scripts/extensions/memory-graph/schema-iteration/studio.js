@@ -54,7 +54,7 @@
  *   - refreshRootUi(uiRoot)            called after each commit to refresh parent UI
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const Popup = __ctx.Popup;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
 import {

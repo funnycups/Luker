@@ -4,7 +4,7 @@ import { createMessageEditorHandle } from '../../../public/scripts/message-takeo
 
 // Replace the jest.setup.js Proxy stub with a context that returns the
 // real `createMessageEditorHandle` factory — director-runtime calls
-// `SillyTavern.getContext().createMessageEditorHandle(...)` to build the
+// `Luker.getContext().createMessageEditorHandle(...)` to build the
 // takeover handle whose lifecycle the dispatch-claim contract tests assert
 // on. A Proxy can't supply a callable that returns a real handle object,
 // so without this swap every test that awaits `handle.complete` resolves
@@ -15,7 +15,7 @@ beforeAll(() => {
     };
     globalThis.Luker = stub;
     globalThis.st = stub;
-    globalThis.SillyTavern = stub;
+    globalThis.Luker = stub;
 });
 
 function makeEvent({ type = 'normal' } = {}) {

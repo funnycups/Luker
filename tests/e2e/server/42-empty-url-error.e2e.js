@@ -49,11 +49,11 @@ test.describe('#42 — profile with no URL surfaces a friendly error', () => {
         // Wait for greeting to be in chat so any failure we observe is the
         // attempted /send turn, not the initial load.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        const chatLenBefore = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
 
         // Dispatch the /send + /trigger pair. Do NOT await MESSAGE_RECEIVED —
         // we expect this to fail and never fire that event. Instead, wait a
@@ -61,7 +61,7 @@ test.describe('#42 — profile with no URL surfaces a friendly error', () => {
         await page.evaluate(async () => {
             window.__sendError = null;
             try {
-                await window.SillyTavern.getContext()
+                await window.Luker.getContext()
                     .executeSlashCommandsWithOptions('/send The reef shifts under the dark. | /trigger');
             } catch (e) {
                 window.__sendError = String(e?.message || e);
@@ -72,7 +72,7 @@ test.describe('#42 — profile with no URL surfaces a friendly error', () => {
         const outcome = await page.evaluate(async () => {
             const deadline = Date.now() + 20_000;
             while (Date.now() < deadline) {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 const chat = ctx?.chat || [];
                 const last = chat[chat.length - 1];
                 const isAsst = last && !last.is_user;
@@ -103,7 +103,7 @@ test.describe('#42 — profile with no URL surfaces a friendly error', () => {
         // empty URL.
         expect(outcome.kind, `expected some user-visible failure signal within 20s; got ${JSON.stringify(outcome)}`).not.toBe('timeout');
 
-        const chatLenAfter = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const chatLenAfter = await page.evaluate(() => window.Luker.getContext().chat.length);
         // User message may still have been appended. The key assertion is
         // that we did NOT just sit there forever and that a real assistant
         // bubble with body did NOT silently appear from nowhere.

@@ -150,7 +150,7 @@ export function seedThreeCartographers(dataRoot) {
  */
 export async function createGroupViaApi(page, opts) {
     return page.evaluate(async (o) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const headers = ctx.getRequestHeaders ? ctx.getRequestHeaders() : { 'Content-Type': 'application/json' };
         const chatName = `groups-e2e-${Date.now()}`;
         const body = {
@@ -188,7 +188,7 @@ export async function createGroupViaApi(page, opts) {
  */
 export async function openGroupForChat(page, groupId) {
     await page.evaluate(async (id) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         // Try the exposed openGroupChat first (jumps straight to chat).
         // If unavailable (older context), fall back to clicking the group card.
         if (typeof ctx.openGroupChat === 'function') {
@@ -215,7 +215,7 @@ export async function openGroupForChat(page, groupId) {
         return new Promise(resolve => {
             const check = () => {
                 // selected_group is module-private; the chat array name + chat_id are observable through context.
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 const chatId = ctx.getCurrentChatId?.();
                 if (chatId) resolve(true);
                 else setTimeout(check, 50);
@@ -239,9 +239,9 @@ export async function openGroupForChat(page, groupId) {
  * @returns {Promise<{messages: object[], chatLengthBefore: number}>}
  */
 export async function sendUserAndAwaitGroupTurn(page, text, { timeoutMs = 120_000 } = {}) {
-    const lengthBefore = await page.evaluate(() => window.SillyTavern.getContext().chat?.length || 0);
+    const lengthBefore = await page.evaluate(() => window.Luker.getContext().chat?.length || 0);
     const wrapperDonePromise = page.evaluate((to) => new Promise((resolve, reject) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const t = setTimeout(() => reject(new Error('group wrapper timeout')), to);
         const handler = (payload) => {
             clearTimeout(t);
@@ -252,14 +252,14 @@ export async function sendUserAndAwaitGroupTurn(page, text, { timeoutMs = 120_00
     }), timeoutMs);
 
     await page.evaluate(async (msg) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         await ctx.executeSlashCommandsWithOptions(`/send ${msg.replace(/\n/g, ' ')} | /trigger`);
     }, text);
 
     await wrapperDonePromise;
 
     const messages = await page.evaluate((startAt) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const all = ctx.chat || [];
         return all.slice(startAt).map(m => ({
             name: m.name,

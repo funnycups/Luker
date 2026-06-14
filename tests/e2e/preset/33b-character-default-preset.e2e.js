@@ -81,14 +81,14 @@ test.describe('#33b — per-character default preset (name-match autoSelect)', (
             await mod.getCharacters();
         });
         await page.waitForFunction(({ a, b }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return [a, b].every(name => ctx.characters.some(c => c?.name === name));
         }, { a: ASH_NAME, b: IYANA_NAME }, { timeout: 15_000 });
 
         // ── Step 1: Save two presets, naming each EXACTLY after a character.
         //   autoSelectPreset → findPreset(character.name) is the contract.
         await page.evaluate(async ({ ashName, iyanaName, valsA, valsB }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const base = mgr.getCompletionPresetByName('Default') || {};
             const make = (vals) => {
@@ -116,19 +116,19 @@ test.describe('#33b — per-character default preset (name-match autoSelect)', (
         // and `oai_settings.top_p_openai` via the `settingsToUpdate` table
         // (public/scripts/openai.js). The wait-fors read the runtime keys.
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === name);
             await ctx.selectCharacterById(idx);
         }, ASH_NAME);
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9
                 && Math.abs((oai.top_p_openai ?? -1) - vals.top_p) < 1e-9;
         }, VALUES_ASH, { timeout: 10_000 });
 
         const afterAsh = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatCompletionSettings.preset_settings_openai;
         });
         expect(afterAsh, 'active preset name after Ash select').toBe(ASH_NAME);
@@ -138,35 +138,35 @@ test.describe('#33b — per-character default preset (name-match autoSelect)', (
         //   not the preset just "still being there"). Iyana is conveniently
         //   already wired with her own name-matched preset.
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === name);
             await ctx.selectCharacterById(idx);
         }, IYANA_NAME);
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9;
         }, VALUES_IYANA, { timeout: 10_000 });
         const afterIyana = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatCompletionSettings.preset_settings_openai;
         }, IYANA_NAME);
         expect(afterIyana).toBe(IYANA_NAME);
 
         // ── Step 4: Switch back to Ash → preset-A reactivates by name.
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === name);
             await ctx.selectCharacterById(idx);
         }, ASH_NAME);
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9
                 && Math.abs((oai.top_p_openai ?? -1) - vals.top_p) < 1e-9;
         }, VALUES_ASH, { timeout: 10_000 });
         const reAsh = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatCompletionSettings.preset_settings_openai;
         });
         expect(reAsh).toBe(ASH_NAME);
@@ -182,23 +182,23 @@ test.describe('#33b — per-character default preset (name-match autoSelect)', (
             await mod.getCharacters();
         });
         await page.waitForFunction(({ a, b }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return [a, b].every(name => ctx.characters.some(c => c?.name === name));
         }, { a: ASH_NAME, b: IYANA_NAME }, { timeout: 15_000 });
 
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === name);
             await ctx.selectCharacterById(idx);
         }, ASH_NAME);
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9
                 && Math.abs((oai.top_p_openai ?? -1) - vals.top_p) < 1e-9;
         }, VALUES_ASH, { timeout: 10_000 });
         const finalAsh = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatCompletionSettings.preset_settings_openai;
         });
         expect(finalAsh, 'name-matched preset auto-activates after restart').toBe(ASH_NAME);

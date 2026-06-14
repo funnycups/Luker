@@ -156,19 +156,19 @@ test.describe('#77 — Snapshot cache: hits and invalidates', () => {
         // build an anchor; without one, storeCompletedOrchestrationSnapshot
         // bails on the floor=0 guard).
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions('/send Cache test anchor message. | /sys silent=true');
         });
         // Give the chat a moment to settle before we grab the anchor.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, null, { timeout: 5_000 });
 
         const lifecycle = await page.evaluate(async () => {
             const sc = await import('/scripts/extensions/orchestrator/snapshot-cache.js');
             const anchors = await import('/scripts/extensions/orchestrator/anchors.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
 
             const chatKey = sc.getChatKey(ctx);
             // Build the canonical anchor for the live chat tail. This is

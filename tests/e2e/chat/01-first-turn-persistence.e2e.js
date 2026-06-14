@@ -38,7 +38,7 @@ test.describe('#1 — first-turn persistence', () => {
         // Wait for greeting to land so the message we care about isn't
         // mistaken for the first_mes echo.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -53,7 +53,7 @@ test.describe('#1 — first-turn persistence', () => {
         // Avatar filename (minus .png) is the chat-folder name. Look it up
         // through the context API rather than guessing.
         const avatarFolder = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const c = ctx.characters[ctx.characterId];
             return (c?.avatar || '').replace(/\.png$/, '');
         });
@@ -76,7 +76,7 @@ test.describe('#1 — first-turn persistence', () => {
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 2;
         }, { timeout: 15_000 });
 

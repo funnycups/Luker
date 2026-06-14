@@ -109,7 +109,7 @@ test.describe('#29 — WI import/export round-trip', () => {
 
         // 1. Snapshot original via the same /api/worldinfo/get the editor uses.
         const original = await page.evaluate(async (name) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
             return res.json();
         }, BOOK_NAME);
@@ -121,7 +121,7 @@ test.describe('#29 — WI import/export round-trip', () => {
 
         // 3. Delete via the deleteWorldInfo endpoint.
         const deleted = await page.evaluate(async (name) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/delete', { method: 'POST', headers, body: JSON.stringify({ name }) });
             return res.status;
         }, BOOK_NAME);
@@ -129,7 +129,7 @@ test.describe('#29 — WI import/export round-trip', () => {
 
         // Confirm it's gone — list-lite should not contain it.
         const afterDelete = await page.evaluate(async () => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/list-lite', { method: 'POST', headers, body: JSON.stringify({}) });
             return res.json();
         });
@@ -141,7 +141,7 @@ test.describe('#29 — WI import/export round-trip', () => {
             const file = new File([json], `${name}.json`, { type: 'application/json' });
             const formData = new FormData();
             formData.append('avatar', file);
-            const headers = window.SillyTavern.getContext().getRequestHeaders({ omitContentType: true });
+            const headers = window.Luker.getContext().getRequestHeaders({ omitContentType: true });
             const res = await fetch('/api/worldinfo/import', { method: 'POST', headers, body: formData });
             return { ok: res.ok, body: await res.json() };
         }, { json: exportedJson, name: REIMPORTED_NAME });
@@ -150,7 +150,7 @@ test.describe('#29 — WI import/export round-trip', () => {
 
         // 5. Re-GET and deep-compare normalized entries.
         const reloaded = await page.evaluate(async (name) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
             return res.json();
         }, REIMPORTED_NAME);
@@ -163,7 +163,7 @@ test.describe('#29 — WI import/export round-trip', () => {
         await awaitMainUI(page, server.baseURL);
 
         const afterRestart = await page.evaluate(async (name) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
             return res.json();
         }, REIMPORTED_NAME);

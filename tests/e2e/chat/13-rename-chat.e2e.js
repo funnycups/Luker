@@ -32,17 +32,17 @@ test.describe('#13 — rename chat', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
         await sendMessageAndAwaitReply(page, 'Tell me when you will be ready.');
 
-        const originalChatId = await page.evaluate(() => window.SillyTavern.getContext().getCurrentChatId());
+        const originalChatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId());
         expect(originalChatId).toBeTruthy();
 
         const avatarFolder = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return (ctx.characters[ctx.characterId]?.avatar || '').replace(/\.png$/, '');
         });
         const chatsDir = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder);
@@ -52,11 +52,11 @@ test.describe('#13 — rename chat', () => {
         const newName = 'bryn-headland-night-watch';
 
         await page.evaluate(async (name) => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions(`/renamechat ${name}`);
+            await window.Luker.getContext().executeSlashCommandsWithOptions(`/renamechat ${name}`);
         }, newName);
 
         await page.waitForFunction((expected) => {
-            return window.SillyTavern.getContext().getCurrentChatId() === expected;
+            return window.Luker.getContext().getCurrentChatId() === expected;
         }, newName, { timeout: 15_000 });
         // small settle for the file rename + index refresh
         await page.waitForTimeout(800);
@@ -69,7 +69,7 @@ test.describe('#13 — rename chat', () => {
 
         // /api/chats/recent (recent-chats index) should reflect new name.
         const recent = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/chats/recent', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': ctx.getRequestHeaders?.()?.['X-CSRF-Token'] || '' },

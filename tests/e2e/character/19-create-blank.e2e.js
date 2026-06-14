@@ -38,7 +38,7 @@ test.describe('#19 — Create blank character + fill all fields + save', () => {
 
         // POST /api/characters/create with a multipart form, no avatar.
         const createResult = await page.evaluate(async (payload) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const form = new FormData();
             form.append('ch_name', payload.name);
             form.append('description', payload.description);
@@ -79,12 +79,12 @@ test.describe('#19 — Create blank character + fill all fields + save', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction((name) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === name);
         }, NAME, { timeout: 15_000 });
 
         const full = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),
@@ -120,7 +120,7 @@ test.describe('#19 — Create blank character + fill all fields + save', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const after = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),

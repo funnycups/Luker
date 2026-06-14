@@ -103,7 +103,7 @@ test.describe('#25 — Activation strategies all inject correctly', () => {
 
         // Wait for the character card to finish loading (so character.data.extensions.world resolves)
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;
@@ -113,7 +113,7 @@ test.describe('#25 — Activation strategies all inject correctly', () => {
         // Settle: wait for first_mes greeting to render so the next
         // MESSAGE_RECEIVED is from our /trigger, not the chat-load event.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -175,7 +175,7 @@ test.describe('#25 — Activation strategies all inject correctly', () => {
         await selectCharacterByName(page, 'Ash Strategies');
 
         const sorted = await page.evaluate(async () => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', {
                 method: 'POST',
                 headers,

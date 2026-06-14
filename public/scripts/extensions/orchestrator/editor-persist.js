@@ -33,7 +33,7 @@
  * persist.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const saveSettings = __ctx.saveSettings;
 const UNSET_VALUE = __ctx.constants.unset;
 import {

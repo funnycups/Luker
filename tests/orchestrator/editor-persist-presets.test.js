@@ -4,14 +4,14 @@ const extensionSettings = { orchestrator: {} };
 const writes = [];
 
 // defaults.js (transitively imported by preset-library.js) reads
-// `SillyTavern.getContext().constants.{promptRoles,wiPosition}` at module
+// `Luker.getContext().constants.{promptRoles,wiPosition}` at module
 // load time. Provide a minimal shim so module evaluation succeeds.
 //
 // editor-persist.js (the module under test) also captures
-// `SillyTavern.getContext().saveSettings` and `.constants.unset` at
+// `Luker.getContext().saveSettings` and `.constants.unset` at
 // module-load time. Expose stubs and the shared `extensionSettings` so
 // beforeEach() mutations propagate.
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },

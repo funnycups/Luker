@@ -73,7 +73,7 @@ test.describe('#28 — Chat lore binding follows the chat, not the character', (
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash Unbound');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;
@@ -82,13 +82,13 @@ test.describe('#28 — Chat lore binding follows the chat, not the character', (
 
         // Settle the first_mes load so the next MESSAGE_RECEIVED is ours.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
         // --- Step 1: bind chat lore to current chat, record current chat id ---
         const firstChatId = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Direct mutation via the world-info module's metadata key.
             ctx.chatMetadata.world_info = 'harbor-chat-lore';
             // Persist chatMetadata via saveMetadata() if available; saveChat
@@ -102,12 +102,12 @@ test.describe('#28 — Chat lore binding follows the chat, not the character', (
 
         // --- Step 2: create a NEW chat — chat metadata resets, lore detaches ---
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.doNewChat({ deleteCurrentChat: false });
         });
         // Wait for the new chat to settle (chat_metadata should not contain world_info)
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const wi = ctx?.chatMetadata?.world_info;
             return !wi || (Array.isArray(wi) && wi.length === 0);
         }, { timeout: 10_000 });
@@ -117,13 +117,13 @@ test.describe('#28 — Chat lore binding follows the chat, not the character', (
 
         // --- Step 3: reopen the original chat — lore reattaches ---
         await page.evaluate(async (chatId) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.openCharacterChat(chatId);
         }, firstChatId);
 
         // Wait for the original chat's metadata to be restored
         await page.waitForFunction((id) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return ctx?.getCurrentChatId() === id && ctx?.chatMetadata?.world_info === 'harbor-chat-lore';
         }, firstChatId, { timeout: 10_000 });
 
@@ -153,7 +153,7 @@ test.describe('#28 — Chat lore binding follows the chat, not the character', (
         // The most recent chat for Ash Unbound is the one we just reopened,
         // which carries the harbor-chat-lore metadata.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return ctx?.chatMetadata?.world_info === 'harbor-chat-lore';
         }, { timeout: 15_000 });
 

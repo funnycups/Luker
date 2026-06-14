@@ -44,13 +44,13 @@ test.describe('#89 — Regex pre+post process applied', () => {
 
         // Wait for greeting so MESSAGE_RECEIVED later is the real reply.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
         // Install two GLOBAL regex scripts via extension_settings.regex.
         await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const reg = ctx.extensionSettings.regex = Array.isArray(ctx.extensionSettings.regex) ? ctx.extensionSettings.regex : [];
             reg.length = 0;
             reg.push({

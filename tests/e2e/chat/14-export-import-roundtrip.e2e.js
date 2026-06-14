@@ -36,7 +36,7 @@ test.describe('#14 — export/import roundtrip', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -44,7 +44,7 @@ test.describe('#14 — export/import roundtrip', () => {
         // PNG-embedded chara is properly written (the bundled fixtures
         // copyFileSync trick keeps the Seraphina chara chunk).
         const newCharAvatar = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const headers = ctx.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
             const res = await fetch('/api/characters/create', {
                 method: 'POST',
@@ -76,14 +76,14 @@ test.describe('#14 — export/import roundtrip', () => {
         const before = await getChatSnapshot(page);
         const chatId = before.chatId;
         const seraphinaAvatar = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.characters[ctx.characterId]?.avatar;
         });
         expect(seraphinaAvatar).toBeTruthy();
 
         // Export — POST /api/chats/export, format=jsonl.
         const exportResult = await page.evaluate(async ({ avatar, chatId }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const headers = ctx.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
             const res = await fetch('/api/chats/export', {
                 method: 'POST',
@@ -108,16 +108,16 @@ test.describe('#14 — export/import roundtrip', () => {
 
         // Reload character list so Iyana shows up in window.characters.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().getCharacters?.();
+            await window.Luker.getContext().getCharacters?.();
         });
         await page.waitForFunction((wantName) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.characters.some(c => c?.name === wantName);
         }, 'Iyana the Watchwoman', { timeout: 10_000 });
 
         // Import — POST /api/chats/import (multipart) on the second character.
         const importResult = await page.evaluate(async ({ avatar, jsonl, charName }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const headers = ctx.getRequestHeaders?.({ omitContentType: true }) || {};
             const form = new FormData();
             form.append('avatar_url', avatar);
@@ -166,12 +166,12 @@ test.describe('#14 — export/import roundtrip', () => {
         await selectCharacterByName(page, 'Iyana the Watchwoman');
         // We need to open the specific imported chat (Luker may start a new one).
         await page.evaluate(async (chatFile) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const fn = ctx.openCharacterChat || (await import('/script.js')).openCharacterChat;
             await fn(chatFile.replace(/\.jsonl$/, ''));
         }, importedFile);
         await page.waitForFunction((wantId) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.getCurrentChatId?.() === wantId;
         }, importedFile.replace(/\.jsonl$/, ''), { timeout: 15_000 });
         const finalSnap = await getChatSnapshot(page);

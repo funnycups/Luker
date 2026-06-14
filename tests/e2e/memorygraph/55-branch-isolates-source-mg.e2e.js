@@ -64,7 +64,7 @@ test.describe('#55 — branch chat keeps source MG intact across multiple floors
 
         // Let the greeting settle so the floor numbers below match chat indices.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -93,7 +93,7 @@ test.describe('#55 — branch chat keeps source MG intact across multiple floors
         // sentinels — their titles round-trip verbatim and we can match
         // them by name after branch + restart.
         const sourceState = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             const mg = ctx.getExtensionApi?.('memory-graph');
@@ -160,7 +160,7 @@ test.describe('#55 — branch chat keeps source MG intact across multiple floors
         // Plenty of source-tail floors are above mesId=2, so any source-leak
         // would be visible in the branch immediately.
         const branchResult = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions('/branch-create 2');
             await new Promise(r => setTimeout(r, 1500));
             return { branchChatId: ctx.getCurrentChatId?.() || '' };
@@ -177,7 +177,7 @@ test.describe('#55 — branch chat keeps source MG intact across multiple floors
         // branch point). What MUST NOT happen is the late source sentinels
         // leaking into the branch.
         const branchState = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             const mg = ctx.getExtensionApi?.('memory-graph');
@@ -218,7 +218,7 @@ test.describe('#55 — branch chat keeps source MG intact across multiple floors
         // Switch back to source and verify it still has everything it
         // started with, and never picked up the branch sentinel.
         const sourceAfter = await page.evaluate(async ({ sourceId }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions(`/go ${sourceId}`);
             await new Promise(r => setTimeout(r, 1500));
             const mg = ctx.getExtensionApi?.('memory-graph');

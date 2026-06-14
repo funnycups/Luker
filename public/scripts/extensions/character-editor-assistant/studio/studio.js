@@ -4,7 +4,7 @@
  * Layout: Left panel (AI chat) | Center (real chat/CardApp) | Right panel (code editor)
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const getRequestHeaders = __ctx.getRequestHeaders;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const translate = __ctx.translate;
@@ -12,7 +12,7 @@ const DOMPurify = __ctx.lib.DOMPurify;
 const DiffMatchPatch = __ctx.lib.DiffMatchPatch;
 const showdown = __ctx.lib.showdown;
 const extension_settings = __ctx.extensionSettings;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const getExtensionApi = __ctx.getExtensionApi;
 const getCharacterState = __ctx.getCharacterState;
 const setCharacterState = __ctx.setCharacterState;

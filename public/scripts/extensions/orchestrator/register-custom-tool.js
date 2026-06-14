@@ -83,7 +83,7 @@ export function listExtensionTools() {
 const ST_BRIDGE_PREFIX = 'st_';
 
 function getToolManager() {
-    return SillyTavern.getContext().ToolManager;
+    return Luker.getContext().ToolManager;
 }
 
 export async function bridgeSillyTavernTool(stToolName, opts = {}) {

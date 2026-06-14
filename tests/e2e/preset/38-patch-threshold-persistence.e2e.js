@@ -54,7 +54,7 @@ test.describe('#38 — settings patch-threshold persistence', () => {
         // verify against post-mutation. Avoid leaning on built-in defaults
         // alone — the test should care about a value we wrote.
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const base = mgr.getCompletionPresetByName('Default') || {};
             const clone = JSON.parse(JSON.stringify(base));
@@ -89,7 +89,7 @@ test.describe('#38 — settings patch-threshold persistence', () => {
                 return origFetch.apply(this, arguments);
             };
             try {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 // Single-field mutation — well below the 256-op threshold.
                 // We don't use the slider so the value sticks (the slider
                 // clamps + may overwrite on input).
@@ -146,7 +146,7 @@ test.describe('#38 — settings patch-threshold persistence', () => {
                 return origFetch.apply(this, arguments);
             };
             try {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 ctx.chatCompletionSettings.temperature = 0.59;
                 // saveSettings signature: (loopCounter = 0, options = null).
                 // Passing the options blob as the first arg silently no-ops

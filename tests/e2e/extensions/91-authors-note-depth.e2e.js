@@ -47,7 +47,7 @@ test.describe('#91 — Authors Note depth-2 injection', () => {
 
         // Wait for the greeting to land.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -57,7 +57,7 @@ test.describe('#91 — Authors Note depth-2 injection', () => {
         //   chat_metadata.note_position → 1 = IN_CHAT
         //   chat_metadata.note_interval → 1 = every turn
         await page.evaluate((anText) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const md = ctx.chatMetadata;
             md.note_prompt = anText;
             md.note_interval = 1;

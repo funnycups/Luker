@@ -21,7 +21,7 @@
 // (handled by memory-graph's own CHAT_CHANGED listener), so callers should
 // open a fresh session per chat.
 
-const registerExtensionApi = SillyTavern.getContext().registerExtensionApi;
+const registerExtensionApi = Luker.getContext().registerExtensionApi;
 import {
     ensureMemoryStoreLoaded,
     resolveChatKeyForSession,

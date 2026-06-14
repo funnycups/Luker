@@ -123,7 +123,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
                 // onlineStatus is exposed via getContext() (the script.js-local
                 // `online_status` isn't on window). 'no_connection' = no API
                 // selected or auth failure.
-                const ctx = window.SillyTavern?.getContext?.();
+                const ctx = window.Luker?.getContext?.();
                 const v = ctx?.onlineStatus ?? null;
                 return Boolean(v) && String(v) !== 'no_connection';
             } catch {
@@ -148,7 +148,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
             bodyTail: FIXTURE_BODY,
         });
         await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.executeExtractEmbed({
                 payload, targetScope: scope, conflictStrategies: {},
             });
@@ -159,7 +159,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
         // fixture onto the list so the resolver injects it into the catalog
         // block. We snapshot the previous shape for teardown.
         const previousVisibleSnapshot = await page.evaluate((name) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const settings = ctx?.extensionSettings?.orchestrator;
             const dir = settings?.directorProfile;
             if (!dir) return null;
@@ -310,7 +310,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
         // but it does leave residue for the next run to handle.
         try {
             await page.evaluate((before) => {
-                const ctx = window.SillyTavern?.getContext?.();
+                const ctx = window.Luker?.getContext?.();
                 const settings = ctx?.extensionSettings?.orchestrator;
                 if (settings?.directorProfile?.skills) {
                     settings.directorProfile.skills.visible = before;
@@ -336,7 +336,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
  */
 async function ensureDirectorMode(page) {
     await page.evaluate(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const settings = ctx?.extensionSettings?.orchestrator;
         if (!settings) throw new Error('orchestrator settings missing — extension not mounted');
         settings.enabled = true;

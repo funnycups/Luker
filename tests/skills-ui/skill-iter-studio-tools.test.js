@@ -28,7 +28,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 // ── Module-boundary mocks ────────────────────────────────────────────────
 // skill-iter-studio-tools.js captures both `skillsApi` and `yaml` from
-// `SillyTavern.getContext()` at module load (post upstream commit 571c529c2
+// `Luker.getContext()` at module load (post upstream commit 571c529c2
 // that reverted direct cross-boundary imports). Install a SillyTavern stub
 // BEFORE the dynamic import so the module gets a working bag.
 const mockSkillsApi = {
@@ -44,7 +44,7 @@ const mockSkillsApi = {
     moveScope: jest.fn(),
     delete: jest.fn(),
 };
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({
         skills: mockSkillsApi,
         lib: { yaml: { parse: parseYaml, stringify: stringifyYaml } },

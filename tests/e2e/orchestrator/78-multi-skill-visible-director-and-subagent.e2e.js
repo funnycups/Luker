@@ -59,7 +59,7 @@ test.describe('#78 — Multi-skill visible: director sees N skills; sub-agent in
 
         const result = await page.evaluate(async (names) => {
             const mod = await import('/scripts/extensions/orchestrator/skill-resolution.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             mod.invalidateSkillInventory();
             const orig = ctx.skills.list;
 
@@ -152,7 +152,7 @@ test.describe('#78 — Multi-skill visible: director sees N skills; sub-agent in
 
         const result = await page.evaluate(async (names) => {
             const mod = await import('/scripts/extensions/orchestrator/skill-resolution.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             mod.invalidateSkillInventory();
             const orig = ctx.skills.list;
 
@@ -201,7 +201,7 @@ test.describe('#78 — Multi-skill visible: director sees N skills; sub-agent in
         // sets them to empty lists by default for a clean baseline; we
         // explicitly opt into the 3-skill catalog here.
         await page.evaluate(async (names) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings.orchestrator;
             const presetLib = await import('/scripts/extensions/orchestrator/preset-library.js');
             const dirDefaults = await import('/scripts/extensions/orchestrator/director-defaults.js');
@@ -225,7 +225,7 @@ test.describe('#78 — Multi-skill visible: director sees N skills; sub-agent in
         // Install the skill inventory stub + invalidate the cache so the
         // director's resolver picks up our test skills on this turn.
         await page.evaluate(async (names) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import('/scripts/extensions/orchestrator/skill-resolution.js');
             mod.invalidateSkillInventory();
             window.__test78OrigSkillsList = ctx.skills.list;
@@ -262,7 +262,7 @@ test.describe('#78 — Multi-skill visible: director sees N skills; sub-agent in
 
         // Restore the skills.list stub so we don't pollute other tests.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             if (window.__test78OrigSkillsList) {
                 ctx.skills.list = window.__test78OrigSkillsList;
                 window.__test78OrigSkillsList = null;

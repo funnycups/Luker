@@ -58,7 +58,7 @@ test.describe('#112 — worldInfoCache key trim survives trailing-space book nam
         //    Retry on transient fetch failures (parallel-worker port reuse
         //    can briefly disconnect us from the server during a teardown).
         const onServer = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             async function tryFetch(url, body, attempts = 3) {
                 for (let i = 0; i < attempts; i++) {
                     try {

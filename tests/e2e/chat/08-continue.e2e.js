@@ -30,7 +30,7 @@ test.describe('#8 — /continue extends last message', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -43,7 +43,7 @@ test.describe('#8 — /continue extends last message', () => {
         // Fire /continue and wait for MESSAGE_RECEIVED (the continuation
         // emits the same event for the same message id).
         await page.evaluate(() => new Promise((resolve, reject) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const t = setTimeout(() => reject(new Error('continue timeout')), 30_000);
             const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, () => {
                 clearTimeout(t);

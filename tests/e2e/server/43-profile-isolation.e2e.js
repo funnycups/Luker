@@ -109,7 +109,7 @@ test.describe('#43 — switching profiles does not pollute settings on round-tri
 
         // Force a save so the disk state reflects the post-load settings.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/profile mock-A');
+            await window.Luker.getContext().executeSlashCommandsWithOptions('/profile mock-A');
             // Wait for the save-debounce + spinner.
         });
         await page.waitForTimeout(2000);
@@ -117,13 +117,13 @@ test.describe('#43 — switching profiles does not pollute settings on round-tri
 
         // Switch to B.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/profile mock-B');
+            await window.Luker.getContext().executeSlashCommandsWithOptions('/profile mock-B');
         });
         await page.waitForTimeout(2000);
 
         // Switch back to A.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/profile mock-A');
+            await window.Luker.getContext().executeSlashCommandsWithOptions('/profile mock-A');
         });
         await page.waitForTimeout(2000);
         const snapAfterReturnA = snapshotSettings(server.dataRoot);

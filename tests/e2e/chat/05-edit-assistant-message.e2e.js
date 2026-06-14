@@ -28,7 +28,7 @@ test.describe('#5 — edit assistant message', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -38,12 +38,12 @@ test.describe('#5 — edit assistant message', () => {
         const newText = '*Seraphina sets the brass spyglass down quietly.* "Edited reply: I no longer trust any chart older than four days on this stretch of coast."';
         await editMessageById(page, replyId, newText);
         await page.waitForFunction(({ id, want }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat[id]?.mes === want;
         }, { id: replyId, want: newText }, { timeout: 10_000 });
         // editMessageById fires saveChat without awaiting — flush.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().saveChat();
+            await window.Luker.getContext().saveChat();
         });
         await page.waitForTimeout(800);
 
@@ -51,7 +51,7 @@ test.describe('#5 — edit assistant message', () => {
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 2;
         }, { timeout: 15_000 });
 

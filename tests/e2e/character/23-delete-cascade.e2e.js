@@ -45,7 +45,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
         }, { timeout: 15_000 });
 
@@ -53,7 +53,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
 
         // Install a character-scope skill via the public skills API.
         const installSummary = await page.evaluate(async ({ scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             if (!ctx.skills?.executeExtractEmbed) return { ok: false, reason: 'skills API not exposed' };
             const payload = {
                 version: 1,
@@ -87,7 +87,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
 
         // Confirm skill is present under character scope before deletion.
         const beforeSkills = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const list = await ctx.skills.list({ scope });
             return (list || []).map(s => s.name);
         }, charScope);
@@ -105,7 +105,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
         // listener (the cascade) fires, just like the real client path
         // does at the end of deleteCharacter().
         const deleteResult = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/delete', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),
@@ -137,7 +137,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
         // paths produce that outcome; the event path is just the wrapper
         // around the same helper.
         const stillThere = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const list = await ctx.skills.list({ scope });
             return (list || []).some(s => s.name === 'cartographer-protocol');
         }, charScope);
@@ -145,7 +145,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
             await page.evaluate(async (avatar) => {
                 try {
                     const mod = await import('/scripts/skills/embed-lifecycle.js');
-                    const ctx = window.SillyTavern.getContext();
+                    const ctx = window.Luker.getContext();
                     await mod.cascadeDeleteSkillsInScope({
                         context: ctx,
                         scope: { kind: 'character', characterFile: avatar },
@@ -158,7 +158,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
         // After cascade: the character-scope list must be empty (or at
         // least the fixture skill must be gone).
         const afterSkills = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             try {
                 const list = await ctx.skills.list({ scope });
                 return (list || []).map(s => s.name);

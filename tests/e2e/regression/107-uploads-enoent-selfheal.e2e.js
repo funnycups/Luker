@@ -60,7 +60,7 @@ test.describe('#107 — _uploads/ ENOENT self-heal', () => {
 
         async function doImport(label) {
             return await page.evaluate(async ({ b64, name }) => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 const headers = ctx.getRequestHeaders();
                 // Drop content-type so the browser sets the multipart boundary.
                 delete headers['Content-Type'];

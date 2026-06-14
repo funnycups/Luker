@@ -37,7 +37,7 @@ test.describe('#13b — chat backups land in backups/', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -50,7 +50,7 @@ test.describe('#13b — chat backups land in backups/', () => {
         // so the first call writes the backup synchronously). The default
         // saveChat() debounce prefers /patch which DOES NOT back up.
         const saveResp = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const headers = ctx.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
             const fileName = ctx.getCurrentChatId?.();
             const character = ctx.characters[ctx.characterId];
@@ -81,7 +81,7 @@ test.describe('#13b — chat backups land in backups/', () => {
         // The card name is the avatar minus .png, sanitized to lowercase
         // alphanumeric + underscores by backupChat.
         const avatarFolder = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return (ctx.characters[ctx.characterId]?.avatar || '').replace(/\.png$/, '');
         });
         const sanitized = avatarFolder.replace(/[^a-z0-9]/gi, '_').toLowerCase();

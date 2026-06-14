@@ -9,7 +9,7 @@
  * else can call `i18n` synchronously after that.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const addLocaleData = __ctx.addLocaleData;
 const translate = __ctx.translate;
 

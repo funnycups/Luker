@@ -77,7 +77,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
         });
 
         await page.evaluate(async ({ scope, payload }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.executeExtractEmbed({
                 payload,
                 targetScope: scope,
@@ -114,7 +114,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
 
         // ── 2. Move global -> preset ─────────────────────────────────────
         await page.evaluate(async ({ name, from, to }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.moveScope(name, from, to);
         }, { name: FIXTURE_SKILL_NAME, from: scopes.global, to: scopes.preset });
 
@@ -130,7 +130,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
 
         // ── 3. Move preset -> character ──────────────────────────────────
         await page.evaluate(async ({ name, from, to }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.moveScope(name, from, to);
         }, { name: FIXTURE_SKILL_NAME, from: scopes.preset, to: scopes.character });
 
@@ -150,7 +150,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
         // moves), but we verify the resolver still finds it after the
         // character move — proving the walk reached the character row.
         const resolved = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const all = await ctx.skills.list({ scope: 'all' });
             return (all || []).find(s => s.name === name) || null;
         }, FIXTURE_SKILL_NAME);
@@ -192,7 +192,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
  */
 async function assertSkillScope(page, name, expectedKind) {
     const entry = await page.evaluate(async (name) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const all = await ctx.skills.list({ scope: 'all' });
         return (all || []).find(s => s.name === name) || null;
     }, name);

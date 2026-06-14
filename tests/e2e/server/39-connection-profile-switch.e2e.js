@@ -90,7 +90,7 @@ test.describe('#39 — connection profile switching routes per backend', () => {
 
         // Wait for greeting to settle so MESSAGE_RECEIVED later belongs to /send.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -107,7 +107,7 @@ test.describe('#39 — connection profile switching routes per backend', () => {
 
         // Switch to profile B via slash command.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/profile mock-B');
+            await window.Luker.getContext().executeSlashCommandsWithOptions('/profile mock-B');
         });
         // Give the apply-spinner a beat to finish the slash chain.
         await page.waitForTimeout(500);
@@ -126,7 +126,7 @@ test.describe('#39 — connection profile switching routes per backend', () => {
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         const persisted = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const cm = ctx.extensionSettings?.connectionManager;
             return {
                 count: cm?.profiles?.length || 0,

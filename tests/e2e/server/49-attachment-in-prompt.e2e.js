@@ -48,7 +48,7 @@ test.describe('#49 — chat attachment → upload → referenced in prompt body'
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -81,7 +81,7 @@ test.describe('#49 — chat attachment → upload → referenced in prompt body'
         const userText = 'Take a look at this reef log I picked up at the headland.';
         const before = mock.requests.length;
         await page.evaluate(async ({ text, fileUrl, fileName, fileText }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Append the user message manually with extra.files populated.
             ctx.chat.push({
                 name: ctx.name1 || 'You',
@@ -104,7 +104,7 @@ test.describe('#49 — chat attachment → upload → referenced in prompt body'
 
         // Wait for the reply event.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const last = ctx.chat?.[ctx.chat.length - 1];
             return last && !last.is_user && (last.mes || '').length > 0;
         }, { timeout: 30_000 });

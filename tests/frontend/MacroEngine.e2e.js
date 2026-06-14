@@ -3076,7 +3076,7 @@ test.describe('MacroEngine', () => {
             const output = await page.evaluate(async (id) => {
                 const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
                 const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
-                const ctx = SillyTavern.getContext();
+                const ctx = Luker.getContext();
 
                 ctx.variables.local.del(id);
 
@@ -3099,7 +3099,7 @@ test.describe('MacroEngine', () => {
             const output = await page.evaluate(async (id) => {
                 const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
                 const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
-                const ctx = SillyTavern.getContext();
+                const ctx = Luker.getContext();
 
                 ctx.variables.local.del(id);
 
@@ -3121,7 +3121,7 @@ test.describe('MacroEngine', () => {
             const output = await page.evaluate(async (id) => {
                 const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
                 const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
-                const ctx = SillyTavern.getContext();
+                const ctx = Luker.getContext();
 
                 ctx.variables.local.del(id);
 
@@ -3143,7 +3143,7 @@ test.describe('MacroEngine', () => {
             const output = await page.evaluate(async (id) => {
                 const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
                 const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
-                const ctx = SillyTavern.getContext();
+                const ctx = Luker.getContext();
 
                 ctx.variables.local.del(id);
 
@@ -3165,7 +3165,7 @@ test.describe('MacroEngine', () => {
             const output = await page.evaluate(async (id) => {
                 const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
                 const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
-                const ctx = SillyTavern.getContext();
+                const ctx = Luker.getContext();
 
                 ctx.variables.local.del(`${id}_a`);
                 ctx.variables.local.del(`${id}_b`);
@@ -3190,7 +3190,7 @@ test.describe('MacroEngine', () => {
             const output = await page.evaluate(async (id) => {
                 const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
                 const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
-                const ctx = SillyTavern.getContext();
+                const ctx = Luker.getContext();
 
                 ctx.variables.local.del(`${id}_outer`);
                 ctx.variables.local.del(`${id}_inner`);
@@ -3216,7 +3216,7 @@ test.describe('MacroEngine', () => {
             const output = await page.evaluate(async (id) => {
                 const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
                 const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
-                const ctx = SillyTavern.getContext();
+                const ctx = Luker.getContext();
 
                 ctx.variables.local.set(`${id}_flag`, '');
                 ctx.variables.local.del(`${id}_result`);
@@ -3364,7 +3364,7 @@ async function evaluateWithEngineAndCaptureMacroLogs(page, input) {
 
 /**
  * Evaluates the given input string with pre-set variables.
- * Variables are set via SillyTavern.getContext().variables which is where
+ * Variables are set via Luker.getContext().variables which is where
  * the variable macros read/write their data.
  *
  * @param {import('@playwright/test').Page} page
@@ -3380,7 +3380,7 @@ async function evaluateWithEngineAndVariables(page, input, variables) {
         const { MacroEnvBuilder } = await import('./scripts/macros/engine/MacroEnvBuilder.js');
 
         // Get the SillyTavern context for variable access
-        const ctx = SillyTavern.getContext();
+        const ctx = Luker.getContext();
 
         // Pre-set local variables
         if (variables.local) {

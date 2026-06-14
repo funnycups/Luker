@@ -9,10 +9,10 @@
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
 
 // agenda-runtime.js + defaults.js consume core symbols via
-// `SillyTavern.getContext()` after upstream commit 571c529c2. Provide a
+// `Luker.getContext()` after upstream commit 571c529c2. Provide a
 // shim with the constants + the shared `extensionSettings` binding the
 // runtime captures at module-load time. Mutating
-// `globalThis.SillyTavern.__settings.orchestrator` in beforeEach
+// `globalThis.Luker.__settings.orchestrator` in beforeEach
 // propagates because the runtime stores the live object reference.
 const __sillyTavernSettings = {
     orchestrator: {
@@ -22,7 +22,7 @@ const __sillyTavernSettings = {
         nodeIterationMaxRounds: 3,
     },
 };
-globalThis.SillyTavern = {
+globalThis.Luker = {
     __settings: __sillyTavernSettings,
     getContext: () => ({
         constants: {

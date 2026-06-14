@@ -39,7 +39,7 @@
  *     envelope agenda mode produces.
  */
 
-const extension_settings = SillyTavern.getContext().extensionSettings;
+const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
 import {

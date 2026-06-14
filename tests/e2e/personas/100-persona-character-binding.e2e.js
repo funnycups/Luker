@@ -63,14 +63,14 @@ test.describe('#100 — persona auto-switches with character + bindings persist'
         // slash command can complete.
         await selectCharacterByName(page, 'Char1Ash');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const cid = Number(ctx.characterId);
             return Number.isFinite(cid) && ctx.characters[cid]?.name === 'Char1Ash';
         }, { timeout: 10_000 });
         await page.evaluate(async (avatarId) => {
             const mod = await import('/scripts/personas.js');
             await mod.setUserAvatar(avatarId);
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Auto-click any incoming "Keep Global Persona?" popup.
             const observer = new MutationObserver(() => {
                 for (const btn of document.querySelectorAll('.popup .persona-binding-popup-button')) {
@@ -94,19 +94,19 @@ test.describe('#100 — persona auto-switches with character + bindings persist'
         // editor — selectCharacterByName's rm_print_characters_block becomes
         // hidden.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Char2Bryn');
             await ctx.selectCharacterById(idx);
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const cid = Number(ctx.characterId);
             return Number.isFinite(cid) && ctx.characters[cid]?.name === 'Char2Bryn';
         }, { timeout: 10_000 });
         await page.evaluate(async (avatarId) => {
             const mod = await import('/scripts/personas.js');
             await mod.setUserAvatar(avatarId);
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const observer = new MutationObserver(() => {
                 for (const btn of document.querySelectorAll('.popup .persona-binding-popup-button')) {
                     if (/Keep Global/i.test(btn.textContent || '')) {
@@ -129,21 +129,21 @@ test.describe('#100 — persona auto-switches with character + bindings persist'
         // session the right nav drawer ends up on the character editor
         // panel and the .character_select list is hidden.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Char1Ash');
             await ctx.selectCharacterById(idx);
         });
-        await page.waitForFunction(() => window.SillyTavern.getContext().name1 === 'PersonaA', { timeout: 10_000 });
-        expect(await page.evaluate(() => window.SillyTavern.getContext().name1)).toBe('PersonaA');
+        await page.waitForFunction(() => window.Luker.getContext().name1 === 'PersonaA', { timeout: 10_000 });
+        expect(await page.evaluate(() => window.Luker.getContext().name1)).toBe('PersonaA');
 
         // Switch to Char2 -> auto-flip to B.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Char2Bryn');
             await ctx.selectCharacterById(idx);
         });
-        await page.waitForFunction(() => window.SillyTavern.getContext().name1 === 'PersonaB', { timeout: 10_000 });
-        expect(await page.evaluate(() => window.SillyTavern.getContext().name1)).toBe('PersonaB');
+        await page.waitForFunction(() => window.Luker.getContext().name1 === 'PersonaB', { timeout: 10_000 });
+        expect(await page.evaluate(() => window.Luker.getContext().name1)).toBe('PersonaB');
 
         // Restart server. Bindings live on the character card extension JSON
         // on disk plus power_user.personas / persona_descriptions[].connections
@@ -152,19 +152,19 @@ test.describe('#100 — persona auto-switches with character + bindings persist'
         await reloadAndAwait(page, server.baseURL);
 
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Char1Ash');
             await ctx.selectCharacterById(idx);
         });
-        await page.waitForFunction(() => window.SillyTavern.getContext().name1 === 'PersonaA', { timeout: 15_000 });
-        expect(await page.evaluate(() => window.SillyTavern.getContext().name1)).toBe('PersonaA');
+        await page.waitForFunction(() => window.Luker.getContext().name1 === 'PersonaA', { timeout: 15_000 });
+        expect(await page.evaluate(() => window.Luker.getContext().name1)).toBe('PersonaA');
 
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Char2Bryn');
             await ctx.selectCharacterById(idx);
         });
-        await page.waitForFunction(() => window.SillyTavern.getContext().name1 === 'PersonaB', { timeout: 15_000 });
-        expect(await page.evaluate(() => window.SillyTavern.getContext().name1)).toBe('PersonaB');
+        await page.waitForFunction(() => window.Luker.getContext().name1 === 'PersonaB', { timeout: 15_000 });
+        expect(await page.evaluate(() => window.Luker.getContext().name1)).toBe('PersonaB');
     });
 });

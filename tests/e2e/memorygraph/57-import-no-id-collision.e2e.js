@@ -81,7 +81,7 @@ test.describe('#57 — MG import never produces ID collisions; nodeSeq is rederi
         // make the "ORIG-* gone" assertion below indistinguishable from
         // a normalization step).
         const before = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             const mg = ctx.getExtensionApi?.('memory-graph');
@@ -113,7 +113,7 @@ test.describe('#57 — MG import never produces ID collisions; nodeSeq is rederi
         // monkeypatching `callGenericPopup` for the duration of this
         // evaluate, returning the "Restore Exported Floor" result.
         const importResult = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import('/scripts/extensions/memory-graph/main.js');
             // importMemoryGraphStore is a module-private async fn; instead
             // exercise the same persistence boundary it uses by invoking

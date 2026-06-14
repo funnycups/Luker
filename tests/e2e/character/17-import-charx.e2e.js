@@ -64,7 +64,7 @@ test.describe('#17 — Import charx character card', () => {
         await awaitMainUI(page, server.baseURL);
 
         const importResult = await page.evaluate(async ({ b64, name }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const binary = atob(b64);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -92,12 +92,12 @@ test.describe('#17 — Import charx character card', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction((name) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === name);
         }, CARD.data.name, { timeout: 15_000 });
 
         const full = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const shallow = ctx.characters.find(c => c?.name === name);
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
@@ -118,7 +118,7 @@ test.describe('#17 — Import charx character card', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const persisted = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const shallow = ctx.characters.find(c => c?.name === name);
             if (!shallow) return null;
             const res = await fetch('/api/characters/get', {

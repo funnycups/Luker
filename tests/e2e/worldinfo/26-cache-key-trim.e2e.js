@@ -131,7 +131,7 @@ test.describe('#26 — WorldInfo cache key trim regression', () => {
         // own client-side fetch helpers so we cover the same path the
         // editor uses.
         const fetched = await page.evaluate(async (name) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             // First: list-lite shows the file is on disk (after the import-name sanitizer trim, server uses tolerant lookup)
             const listRes = await fetch('/api/worldinfo/list-lite', { method: 'POST', headers, body: JSON.stringify({}) });
             const list = await listRes.json();
@@ -162,7 +162,7 @@ test.describe('#26 — WorldInfo cache key trim regression', () => {
         await awaitMainUI(page, server.baseURL);
 
         const persisted = await page.evaluate(async (name) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name }) });
             const data = await res.json();
             return Object.keys(data?.entries || {}).length;

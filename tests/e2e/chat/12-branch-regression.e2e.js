@@ -42,7 +42,7 @@ test.describe('#12 — /branch-create regression', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -56,7 +56,7 @@ test.describe('#12 — /branch-create regression', () => {
         const originalLen = beforeBranch.length;
         expect(originalLen).toBeGreaterThanOrEqual(8); // greeting + 4 user + 4 assistant
         const avatarFolder = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return (ctx.characters[ctx.characterId]?.avatar || '').replace(/\.png$/, '');
         });
         const chatsDir = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder);
@@ -71,7 +71,7 @@ test.describe('#12 — /branch-create regression', () => {
 
         // /branch-create <mesId>
         const branchEventP = page.evaluate(() => new Promise((resolve) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const t = setTimeout(() => resolve('timeout'), 30_000);
             const handler = (data) => {
                 clearTimeout(t);
@@ -81,14 +81,14 @@ test.describe('#12 — /branch-create regression', () => {
             ctx.eventSource.on(ctx.eventTypes.CHAT_BRANCH_CREATED, handler);
         }));
         await page.evaluate(async (id) => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions(`/branch-create ${id}`);
+            await window.Luker.getContext().executeSlashCommandsWithOptions(`/branch-create ${id}`);
         }, branchAt);
         await branchEventP;
 
         // After branch-create, Luker opens the new branch chat. Wait for
         // chat-changed.
         await page.waitForFunction((origId) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const cur = ctx.getCurrentChatId?.();
             return cur && cur !== origId;
         }, originalChatId, { timeout: 15_000 });
@@ -119,21 +119,21 @@ test.describe('#12 — /branch-create regression', () => {
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 15_000 });
 
         // After reload, character will load most-recent chat (likely the
         // branch). Switch back to the original via openCharacterChat.
         const switched = await page.evaluate(async (origId) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const fn = ctx.openCharacterChat || (await import('/script.js')).openCharacterChat;
             await fn(origId);
             return ctx.getCurrentChatId?.();
         }, originalChatId);
         expect(switched).toBe(originalChatId);
         await page.waitForFunction(({ id, len }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.getCurrentChatId?.() === id && ctx.chat.length >= len;
         }, { id: originalChatId, len: originalLen }, { timeout: 10_000 });
 

@@ -34,7 +34,7 @@
  * orchestrator owns at the main.js level.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const extension_prompt_roles = __ctx.constants.promptRoles;
 const extension_prompt_types = __ctx.constants.promptTypes;
 const extension_settings = __ctx.extensionSettings;

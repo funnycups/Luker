@@ -36,7 +36,7 @@ test.describe('#92 — Quick Reply triggers slash command', () => {
 
         // Wait for greeting so MESSAGE_RECEIVED later is the QR reply.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -68,7 +68,7 @@ test.describe('#92 — Quick Reply triggers slash command', () => {
 
         // Subscribe to MESSAGE_RECEIVED before clicking.
         const replyHandle = page.evaluateHandle(() => new Promise((resolve, reject) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const t = setTimeout(() => reject(new Error('reply timeout')), 60_000);
             const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, (id) => {
                 clearTimeout(t);
@@ -86,7 +86,7 @@ test.describe('#92 — Quick Reply triggers slash command', () => {
         expect(typeof replyId === 'number' || typeof replyId === 'string').toBe(true);
 
         const lastUser = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const u = [...ctx.chat].reverse().find(m => m.is_user);
             return u?.mes || '';
         });

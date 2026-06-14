@@ -41,18 +41,18 @@ test('sanity: dedicated server + mock backend + first-turn happy path', async ({
     // Wait for the first_mes to settle (so MESSAGE_RECEIVED later is the
     // /send reply, not the greeting). Greeting fires as a chat-load event.
     await page.waitForFunction(() => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
     }, { timeout: 10_000 }).catch(() => {});
 
     const before = mock.requests.length;
-    const initialChatLen = await page.evaluate(() => window.SillyTavern.getContext().chat?.length || 0);
+    const initialChatLen = await page.evaluate(() => window.Luker.getContext().chat?.length || 0);
 
     await sendMessageAndAwaitReply(page, 'I walked the cliff path. The wind is cold but the lantern holds.');
 
     // chat should now contain at least: greeting + user + assistant
     const finalChat = await page.evaluate(() => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return ctx.chat.map(m => ({ is_user: !!m.is_user, mes: String(m.mes || '').slice(0, 80) }));
     });
     expect(finalChat.length).toBeGreaterThanOrEqual(initialChatLen + 2);

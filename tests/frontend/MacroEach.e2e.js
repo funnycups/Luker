@@ -55,7 +55,7 @@ test.describe('{{each}} macro', () => {
     test('iterates a variable holding JSON-stringified data', async ({ page }) => {
         const out = await page.evaluate(async () => {
             const { MacroEngine } = await import('./scripts/macros/engine/MacroEngine.js');
-            const ctx = SillyTavern.getContext();
+            const ctx = Luker.getContext();
             ctx.variables.local.set('npcs_test', '{"alice":{"hp":50},"bob":{"hp":30}}');
             try {
                 const env = {

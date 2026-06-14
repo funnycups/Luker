@@ -11,7 +11,7 @@ test.describe('Stage 5 — Orchestrator iteration module smoke', () => {
         });
 
         await page.goto('/', { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => Boolean(window.SillyTavern?.getContext), { timeout: 30000 });
+        await page.waitForFunction(() => Boolean(window.Luker?.getContext), { timeout: 30000 });
         await page.waitForTimeout(1000);
 
         const orchPageErrors = pageErrors.filter(e => /orchestrator|orch[-_ ]iteration|iter[-_ ]studio|could not be cloned/i.test(e));
@@ -23,10 +23,10 @@ test.describe('Stage 5 — Orchestrator iteration module smoke', () => {
 
     test('iterationLibrary surface still intact post-Stage 5', async ({ page }) => {
         await page.goto('/', { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => Boolean(window.SillyTavern?.getContext), { timeout: 30000 });
+        await page.waitForFunction(() => Boolean(window.Luker?.getContext), { timeout: 30000 });
 
         const exposed = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const lib = ctx?.iterationLibrary;
             return {
                 hasApplyEdits: typeof lib?.applyEdits === 'function',

@@ -132,7 +132,7 @@ test.describe('#68 — Run Panel: stream → final commit 1:1', () => {
         // strips markdown asterisks while displaying — the 1:1
         // contract is about what got persisted, not the rendered form.
         const lastMes = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const chat = ctx.chat || [];
             for (let i = chat.length - 1; i >= 0; i--) {
                 if (!chat[i]?.is_user) return chat[i]?.mes || '';

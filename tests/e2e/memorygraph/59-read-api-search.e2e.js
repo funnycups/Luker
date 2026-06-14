@@ -71,7 +71,7 @@ test.describe('#59 — MG read-api search surface: orchestrator can grep + find 
         }
 
         const seeded = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             const mg = ctx.getExtensionApi?.('memory-graph');

@@ -72,19 +72,19 @@ test.describe('#35 — preset bound to character auto-switches with character', 
 
         // Reload character list so Ash + Iyana show up in window.characters.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import('/script.js');
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ['Ash the Cartographer', 'Iyana the Watchwoman']
                 .every(name => ctx.characters.some(c => c?.name === name));
         }, { timeout: 15_000 });
 
         // ── Step 1: Create preset-A and preset-B as distinct snapshots. ──
         const presetsCreated = await page.evaluate(async ({ presetA, presetB, valsA, valsB }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const oai = ctx.chatCompletionSettings;
             const snapshot = (vals) => {
@@ -115,7 +115,7 @@ test.describe('#35 — preset bound to character auto-switches with character', 
         // dialog. Effect is identical: writes
         // `character.data.extensions.luker.chat_completion_preset = { name, preset }`.
         const bindResult = await page.evaluate(async ({ presetA, presetB }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const ashIdx = ctx.characters.findIndex(c => c?.name === 'Ash the Cartographer');
             const iyanaIdx = ctx.characters.findIndex(c => c?.name === 'Iyana the Watchwoman');
@@ -171,7 +171,7 @@ test.describe('#35 — preset bound to character auto-switches with character', 
         // (public/scripts/openai.js). The wait-fors below read the
         // runtime-side keys.
         const selectAsh = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Ash the Cartographer');
             await ctx.selectCharacterById(idx);
             return idx;
@@ -179,7 +179,7 @@ test.describe('#35 — preset bound to character auto-switches with character', 
         expect(selectAsh).toBeGreaterThanOrEqual(0);
         // Allow autoSelectPreset / maybeApplyCharacterBoundPreset to settle.
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9
                 && Math.abs((oai.top_p_openai ?? -1) - vals.top_p) < 1e-9;
@@ -187,12 +187,12 @@ test.describe('#35 — preset bound to character auto-switches with character', 
 
         // ── Step 4: Switch to Iyana → preset-B's values must apply.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Iyana the Watchwoman');
             await ctx.selectCharacterById(idx);
         });
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9
                 && Math.abs((oai.top_p_openai ?? -1) - vals.top_p) < 1e-9;
@@ -200,12 +200,12 @@ test.describe('#35 — preset bound to character auto-switches with character', 
 
         // ── Step 5: Back to Ash → preset-A re-applies.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Ash the Cartographer');
             await ctx.selectCharacterById(idx);
         });
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9
                 && Math.abs((oai.top_p_openai ?? -1) - vals.top_p) < 1e-9;
@@ -223,13 +223,13 @@ test.describe('#35 — preset bound to character auto-switches with character', 
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ['Ash the Cartographer', 'Iyana the Watchwoman']
                 .every(name => ctx.characters.some(c => c?.name === name));
         }, { timeout: 15_000 });
 
         const persistedBindings = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Force a fresh server-side read via /api/characters/get
             // (the cached in-memory list may not reflect deep merges
             // before reloadAndAwait re-bootstraps everything).
@@ -254,12 +254,12 @@ test.describe('#35 — preset bound to character auto-switches with character', 
 
         // After restart: selecting Ash must still auto-apply preset-A.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === 'Ash the Cartographer');
             await ctx.selectCharacterById(idx);
         });
         await page.waitForFunction((vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             return Math.abs((oai.temp_openai ?? -1) - vals.temperature) < 1e-9
                 && Math.abs((oai.top_p_openai ?? -1) - vals.top_p) < 1e-9;

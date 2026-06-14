@@ -28,7 +28,7 @@ export async function awaitMainUI(page, baseURL) {
     } catch { /* auto-login path */ }
     await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 60_000 });
     // Give late-bound extensions a beat to register listeners.
-    await page.waitForFunction(() => !!window.SillyTavern?.getContext, { timeout: 30_000 });
+    await page.waitForFunction(() => !!window.Luker?.getContext, { timeout: 30_000 });
     // Kick the connect handshake. The CUSTOM backend bypasses the live
     // probe and just flips online_status to a non-"no_connection" string,
     // which is enough for #send_but to un-hide.
@@ -120,7 +120,7 @@ export async function selectCharacterByName(page, name) {
     } catch {
         // DOM card not found — try programmatic selection.
         const picked = await page.evaluate((wantName) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const idx = ctx.characters.findIndex(c => c?.name === wantName);
             if (idx < 0) return false;
             // Mirror what setCharacterId + selectCharacter does — fire the
@@ -134,7 +134,7 @@ export async function selectCharacterByName(page, name) {
 
     // Wait for chat panel to populate or welcome panel to refresh.
     await page.waitForFunction(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         return ctx && (typeof ctx.characterId === 'number' || typeof ctx.characterId === 'string');
     }, { timeout: 10_000 }).catch(() => { /* welcome panel path is ok */ });
 }
@@ -152,7 +152,7 @@ export async function selectCharacterByName(page, name) {
  */
 export async function sendMessageAndAwaitReply(page, text, { timeoutMs = 120_000 } = {}) {
     const replyPromise = page.evaluate((to) => new Promise((resolve, reject) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const t = setTimeout(() => reject(new Error('reply timeout')), to);
         const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, (id) => {
             clearTimeout(t);
@@ -162,7 +162,7 @@ export async function sendMessageAndAwaitReply(page, text, { timeoutMs = 120_000
     }), timeoutMs);
 
     await page.evaluate(async (msg) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         // Mirror what the send button does: append user message, trigger
         // generation. Using the slash-command runtime is the most reliable
         // entry point that's stable across versions.
@@ -171,7 +171,7 @@ export async function sendMessageAndAwaitReply(page, text, { timeoutMs = 120_000
 
     const replyId = await replyPromise;
     const reply = await page.evaluate((id) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return ctx.chat[id]?.mes || '';
     }, replyId);
     return { replyId, text: reply };
@@ -184,7 +184,7 @@ export async function sendMessageAndAwaitReply(page, text, { timeoutMs = 120_000
  */
 export async function sendMessageViaButtonAndAwaitReply(page, text, { timeoutMs = 120_000 } = {}) {
     const replyPromise = page.evaluate((to) => new Promise((resolve, reject) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const t = setTimeout(() => reject(new Error('reply timeout')), to);
         const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, (id) => {
             clearTimeout(t);
@@ -200,7 +200,7 @@ export async function sendMessageViaButtonAndAwaitReply(page, text, { timeoutMs 
     await page.locator('#send_but').click();
     const replyId = await replyPromise;
     const reply = await page.evaluate((id) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return ctx.chat[id]?.mes || '';
     }, replyId);
     return { replyId, text: reply };
@@ -212,7 +212,7 @@ export async function sendMessageViaButtonAndAwaitReply(page, text, { timeoutMs 
  */
 export async function swipeRightOnLatest(page, { timeoutMs = 120_000 } = {}) {
     const swipePromise = page.evaluate((to) => new Promise((resolve, reject) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const t = setTimeout(() => reject(new Error('swipe timeout')), to);
         const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_SWIPED, (id) => {
             clearTimeout(t);
@@ -224,7 +224,7 @@ export async function swipeRightOnLatest(page, { timeoutMs = 120_000 } = {}) {
     await right.click();
     const swipeId = await swipePromise;
     const text = await page.evaluate((id) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return ctx.chat[id]?.mes || '';
     }, swipeId);
     return { swipeId, text };
@@ -236,7 +236,7 @@ export async function swipeRightOnLatest(page, { timeoutMs = 120_000 } = {}) {
  */
 export async function deleteLastMessage(page) {
     await page.evaluate(async () => {
-        await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/cut last');
+        await window.Luker.getContext().executeSlashCommandsWithOptions('/cut last');
     });
 }
 
@@ -245,7 +245,7 @@ export async function deleteLastMessage(page) {
  */
 export async function editMessageById(page, messageId, newText) {
     await page.evaluate(({ id, text }) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         ctx.chat[id].mes = text;
         ctx.saveChat();
         ctx.eventSource.emit(ctx.eventTypes.MESSAGE_EDITED, id);
@@ -259,7 +259,7 @@ export async function editMessageById(page, messageId, newText) {
  */
 export async function getChatSnapshot(page) {
     return page.evaluate(() => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return {
             chatId: ctx.getCurrentChatId?.(),
             length: ctx.chat?.length,
@@ -315,7 +315,7 @@ export async function installMinimalDirectorProfile(page, {
     tools = null,
 } = {}) {
     await page.evaluate(async ({ mainSystemPrompt, subAgents, tools }) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const settings = ctx.extensionSettings?.orchestrator;
         if (!settings) throw new Error('orchestrator settings missing — extension not loaded');
 

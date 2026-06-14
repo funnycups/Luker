@@ -64,7 +64,7 @@ test.describe('#16 — Import JSON character card', () => {
         await awaitMainUI(page, server.baseURL);
 
         const importResult = await page.evaluate(async ({ json, name }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const file = new File([json], `${name}.json`, { type: 'application/json' });
             const form = new FormData();
             form.append('avatar', file);
@@ -89,12 +89,12 @@ test.describe('#16 — Import JSON character card', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction((name) => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === name);
         }, CARD.name, { timeout: 15_000 });
 
         const full = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const shallow = ctx.characters.find(c => c?.name === name);
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
@@ -122,7 +122,7 @@ test.describe('#16 — Import JSON character card', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const afterRestart = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const shallow = ctx.characters.find(c => c?.name === name);
             if (!shallow) return null;
             const res = await fetch('/api/characters/get', {

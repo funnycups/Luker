@@ -100,7 +100,7 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
 
         // Mirror cpa-iteration/studio.js's `commitLiveToPreset` exactly.
         const result = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ref = { collection: 'openai', name: 'Default' };
             const stored = ctx.presets.getStored?.(ref);
             const live = stored?.body
@@ -136,7 +136,7 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
         // expected /api/settings/save. directSave forces a full settings.json
         // rewrite, which is the path the studio actually uses internally.
         const result = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings.memory_graph;
             if (!ext) return { ok: false, reason: 'memory_graph ext settings missing' };
             const schema = Array.isArray(ext.nodeTypeSchema) ? ext.nodeTypeSchema.slice() : [];
@@ -179,7 +179,7 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
         // fields BEFORE the apply so we can prove they are not the write
         // target post-apply.
         const baseline = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const s = ctx.extensionSettings.orchestrator;
             if (!s) throw new Error('orchestrator settings missing');
             s.enabled = true;
@@ -206,7 +206,7 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
         // applyAiIterationSessionToGlobal for director mode).
         const NEW_PROMPT = '*Ash narrates the night reef.* Stay in scene; one tactile beat per turn.';
         const apply = await page.evaluate(async (newPrompt) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const presetLib = await import(
                 '/scripts/extensions/orchestrator/preset-library.js'
             );
@@ -229,7 +229,7 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
 
         // Verify legacy flat fields were NOT touched by the canonical write.
         const after = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const s = ctx.extensionSettings.orchestrator;
             return {
                 hasDirectorProfile: Object.prototype.hasOwnProperty.call(s, 'directorProfile'),
@@ -268,7 +268,7 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
         const before = await fetchLogLength(page);
 
         const result = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import(
                 '/scripts/extensions/character-editor-assistant/main.js'
             );

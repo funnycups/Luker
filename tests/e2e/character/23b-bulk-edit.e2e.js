@@ -43,7 +43,7 @@ test.describe('#23b — Bulk edit (delete two, tag the survivor)', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const names = (ctx?.characters || []).map(c => c?.name).filter(Boolean);
             return ['Ash the Cartographer', 'Bryn the Reefwarden', 'Cael of the Causeway'].every(n => names.includes(n));
         }, { timeout: 20_000 });
@@ -51,7 +51,7 @@ test.describe('#23b — Bulk edit (delete two, tag the survivor)', () => {
         // ── Step 1: delete Bryn and Cael (keep Ash) ───────────────────
         for (const avatar of [av2, av3]) {
             const r = await page.evaluate(async (avatar) => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 const res = await fetch('/api/characters/delete', {
                     method: 'POST',
                     headers: ctx.getRequestHeaders(),
@@ -76,7 +76,7 @@ test.describe('#23b — Bulk edit (delete two, tag the survivor)', () => {
             await mod.getCharacters();
         });
         const namesAfterRestart = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return (ctx.characters || []).map(c => c?.name);
         });
         expect(namesAfterRestart).toContain('Ash the Cartographer');
@@ -86,7 +86,7 @@ test.describe('#23b — Bulk edit (delete two, tag the survivor)', () => {
         // ── Step 2: bulk merge-attributes — apply a custom extension tag
         //   on the survivor (mode: avatars[] array). ────────────────────
         const bulkMerge = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const body = {
                 avatars: [avatar],
                 data: {
@@ -113,7 +113,7 @@ test.describe('#23b — Bulk edit (delete two, tag the survivor)', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const marker = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST', headers: ctx.getRequestHeaders(),
                 body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache',

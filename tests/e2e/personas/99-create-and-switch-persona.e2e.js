@@ -59,12 +59,12 @@ test.describe('#99 — persona switch propagates to user name and prompt', () =>
         await selectCharacterByName(page, 'Ash the Cartographer');
 
         // Wait for the greeting to settle so we don't race MESSAGE_RECEIVED.
-        await page.waitForFunction(() => (window.SillyTavern?.getContext?.()?.chat?.length ?? 0) >= 1,
+        await page.waitForFunction(() => (window.Luker?.getContext?.()?.chat?.length ?? 0) >= 1,
             { timeout: 10_000 }).catch(() => {});
 
         // Sanity: the seeded persona is in power_user.personas.
         const personaPresent = await page.evaluate((avatarId) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const power = ctx.powerUserSettings ?? window.power_user;
             return power?.personas && power.personas[avatarId];
         }, PERSONA_AVATAR_ID);
@@ -77,9 +77,9 @@ test.describe('#99 — persona switch propagates to user name and prompt', () =>
             await mod.setUserAvatar(avatarId);
         }, PERSONA_AVATAR_ID);
 
-        await page.waitForFunction((expected) => window.SillyTavern.getContext().name1 === expected,
+        await page.waitForFunction((expected) => window.Luker.getContext().name1 === expected,
             PERSONA_NAME, { timeout: 10_000 });
-        expect(await page.evaluate(() => window.SillyTavern.getContext().name1)).toBe(PERSONA_NAME);
+        expect(await page.evaluate(() => window.Luker.getContext().name1)).toBe(PERSONA_NAME);
 
         // Send a turn — {{user}} should resolve to Iyana in the prompt body.
         const before = mock.requests.length;
@@ -89,7 +89,7 @@ test.describe('#99 — persona switch propagates to user name and prompt', () =>
 
         // The user-attributed message in the chat must carry name=Iyana.
         const lastUserBubble = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const last = [...ctx.chat].reverse().find(m => m.is_user);
             return last ? { name: last.name, mes: last.mes } : null;
         });

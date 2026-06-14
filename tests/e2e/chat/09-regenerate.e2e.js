@@ -39,7 +39,7 @@ test.afterAll(async () => {
 
 async function swipeRight(page) {
     return page.evaluate(() => new Promise((resolve, reject) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const t = setTimeout(() => reject(new Error('swipe timeout')), 30_000);
         const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, (id) => {
             clearTimeout(t);
@@ -55,7 +55,7 @@ test.describe('#9 — /regenerate at swipe #2', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -63,7 +63,7 @@ test.describe('#9 — /regenerate at swipe #2', () => {
         await swipeRight(page); // → swipe_id 1, variant B
         // ensure we're on swipe_id 1
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const last = ctx.chat[ctx.chat.length - 1];
             return last && last.swipe_id === 1;
         }, { timeout: 10_000 });
@@ -77,7 +77,7 @@ test.describe('#9 — /regenerate at swipe #2', () => {
         // /regenerate.
         const beforeLen = before.length;
         await page.evaluate(() => new Promise((resolve, reject) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const t = setTimeout(() => reject(new Error('regen timeout')), 30_000);
             const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, () => {
                 clearTimeout(t);

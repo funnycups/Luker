@@ -66,14 +66,14 @@ test.describe('#61 — One turn / multiple var_ops mutations → floor end-state
         // Wait for the greeting (Seraphina's first_mes) to land before we
         // send our turn so we can address the assistant reply unambiguously.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
         await sendMessageAndAwaitReply(page, 'I will hold the lantern. Tell me what the breaker is doing.');
 
         const observed = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Locate the most recent assistant message
             let asstId = -1;
             for (let i = ctx.chat.length - 1; i >= 0; i--) {
@@ -156,12 +156,12 @@ test.describe('#61 — One turn / multiple var_ops mutations → floor end-state
         // will run rebuildVariablesFromChat against the persisted ops, which
         // re-materializes chat_metadata.variables in memory.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length >= 2;
         }, { timeout: 15_000 });
 
         const afterRestart = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             let asstId = -1;
             for (let i = ctx.chat.length - 1; i >= 0; i--) {
                 if (!ctx.chat[i]?.is_user) { asstId = i; break; }

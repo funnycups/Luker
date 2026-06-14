@@ -20,12 +20,12 @@
 import { jest } from '@jest/globals';
 
 // defaults.js (transitively imported by editor-state.js) reads
-// `SillyTavern.getContext().constants.{promptRoles,wiPosition}` at module
+// `Luker.getContext().constants.{promptRoles,wiPosition}` at module
 // load time after upstream commit 571c529c2. character-overrides.js and
 // editor-state.js also pull `extensionSettings` from the context shim, so
 // surface a single live reference both `getSettings()` paths share.
 const __sillyTavernSettings = { orchestrator: {} };
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },

@@ -67,7 +67,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
             bodyTail: FIXTURE_BODY_ANCHOR,
         });
         await page.evaluate(async ({ scope, payload }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.executeExtractEmbed({
                 payload, targetScope: scope, conflictStrategies: {},
             });
@@ -84,7 +84,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
 
         // ── 2. Pack via the export helper ───────────────────────────────
         const exportedPayload = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import('/scripts/skills/embed-export-helper.js');
             return await mod.packSkillsForExport({ context: ctx, targetScope: scope });
         }, SOURCE_PRESET);
@@ -97,7 +97,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
         // Bonus assertion: prove the attach side of the export hook deposits
         // the payload at the canonical extensions.luker.embedded_skills_source.
         const attachedShape = await page.evaluate(async ({ scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import('/scripts/skills/embed-export-helper.js');
             const fakePresetBody = { name: 'pw-export-target', some_field: 42 };
             const payload = await mod.packAndAttachSkillsForExport({
@@ -115,7 +115,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
 
         // ── 4. Preview against the reimport scope — must classify as new ─
         const preview = await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.previewExtractEmbed({ payload, targetScope: scope });
         }, { payload: exportedPayload, scope: REIMPORT_PRESET });
         const fixturePreview = (preview?.items || []).find(it => it && it.name === FIXTURE_SKILL_NAME);
@@ -124,7 +124,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
 
         // ── 5. Execute the extract ──────────────────────────────────────
         await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.executeExtractEmbed({
                 payload, targetScope: scope, conflictStrategies: {},
             });
@@ -132,7 +132,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
 
         // ── 6. Verify body round-trip + scope isolation ────────────────
         const roundTripped = await page.evaluate(async ({ scope, name }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const all = await ctx.skills.list({ scope });
             const entry = (all || []).find(s => s.name === name);
             if (!entry) return null;
@@ -152,7 +152,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
         // installation; we expect exactly two rows (source preset + reimport
         // preset), both preset-kind.
         const fixtureInstances = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const all = await ctx.skills.list({ scope: 'all' });
             return (all || []).filter(s => s.name === name).map(s => s.scope);
         }, FIXTURE_SKILL_NAME);

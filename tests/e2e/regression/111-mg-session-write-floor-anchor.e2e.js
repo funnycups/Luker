@@ -75,7 +75,7 @@ test.describe('#111 — MG session-write anchors to in-flight floor; deletion tr
         }
 
         // 1. Snapshot chat length.
-        const chatLenBefore = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
         expect(chatLenBefore, 'expected at least the greeting + 4 user/asst pairs after 5 sends').toBeGreaterThanOrEqual(8);
 
         // 2. Open a memory-graph session. Write a marker node tagged
@@ -84,7 +84,7 @@ test.describe('#111 — MG session-write anchors to in-flight floor; deletion tr
         //    the in-flight turn so deleting that turn's tail truncates
         //    the node.
         const writeResult = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mg = ctx.getExtensionApi && ctx.getExtensionApi('memory-graph');
             if (!mg || typeof mg.openSession !== 'function') {
                 return { error: 'memory-graph openSession API not available' };
@@ -135,7 +135,7 @@ test.describe('#111 — MG session-write anchors to in-flight floor; deletion tr
         //    is >= the deleted floor.
         await page.evaluate(async () => {
             for (let i = 0; i < 4; i++) {
-                await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/cut last');
+                await window.Luker.getContext().executeSlashCommandsWithOptions('/cut last');
             }
         });
         // Give the async invalidation a moment to settle (the
@@ -145,7 +145,7 @@ test.describe('#111 — MG session-write anchors to in-flight floor; deletion tr
         // 4. Re-open a session and verify the marker is gone via the same
         //    candidate listing.
         const afterDelete = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mg = ctx.getExtensionApi && ctx.getExtensionApi('memory-graph');
             const session = await mg.openSession(ctx);
             if (!session) return { error: 'openSession returned null after delete' };

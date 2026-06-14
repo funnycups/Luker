@@ -36,7 +36,7 @@ async function awaitMainUI(page) {
         await gate.click();
     } catch { /* auto-login path */ }
     await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 0 });
-    await page.waitForFunction(() => Boolean(window.SillyTavern?.getContext), { timeout: 30000 });
+    await page.waitForFunction(() => Boolean(window.Luker?.getContext), { timeout: 30000 });
 }
 
 test.describe('iteration-library text-diff renderer — real-browser smoke', () => {
@@ -49,7 +49,7 @@ test.describe('iteration-library text-diff renderer — real-browser smoke', () 
         // MG Schema / Orchestrator), in the real browser, with the real
         // stylesheet — but without spinning up a fake LLM round-trip.
         const result = await page.evaluate(async ({ description }) => {
-            const lib = window.SillyTavern.getContext().iterationLibrary;
+            const lib = window.Luker.getContext().iterationLibrary;
             if (!lib?.textDiff?.renderInlineTextDiffHtml) {
                 return { error: 'textDiff namespace missing from iterationLibrary' };
             }
@@ -111,7 +111,7 @@ test.describe('iteration-library text-diff renderer — real-browser smoke', () 
         await awaitMainUI(page);
 
         const result = await page.evaluate(async () => {
-            const lib = window.SillyTavern.getContext().iterationLibrary;
+            const lib = window.Luker.getContext().iterationLibrary;
             const before = {
                 modules: ['greet', 'memory', 'world'],
                 params: { temperature: 0.7, top_p: 0.95 },

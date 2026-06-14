@@ -42,7 +42,7 @@ test.describe('#94 — TTS reaches playback pipeline on new reply', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -51,7 +51,7 @@ test.describe('#94 — TTS reaches playback pipeline on new reply', () => {
         // outgoing audio call so the test doesn't depend on a real
         // backend or browser SpeechSynthesis.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             ctx.extensionSettings.tts = ctx.extensionSettings.tts || {};
             ctx.extensionSettings.tts.enabled = true;
             ctx.extensionSettings.tts.auto_generation = true;
@@ -114,7 +114,7 @@ test.describe('#94 — TTS reaches playback pipeline on new reply', () => {
         // still pushes onto ttsJobQueue — which we can observe via a
         // monkey-patched eventSource hook before the queue gets shifted.
         const tapHandle = await page.evaluateHandle(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const recorded = { processed: 0, jobStarted: 0, audioReady: 0 };
             // CHARACTER_MESSAGE_RENDERED is the actual trigger the TTS
             // module subscribes to. We listen alongside to confirm it

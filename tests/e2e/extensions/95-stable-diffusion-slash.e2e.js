@@ -135,7 +135,7 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -144,7 +144,7 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
         // upstream test note flagged that the stock localhost:7860 default
         // unreachability is what makes other batches' SD tests throw.
         await page.evaluate((sdBaseURL) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             ctx.extensionSettings.sd = ctx.extensionSettings.sd || {};
             const sd = ctx.extensionSettings.sd;
             sd.source = 'auto';            // WebUI source
@@ -174,19 +174,19 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
         }, sdMock.baseURL);
 
         const before = sdMock.requests.length;
-        const chatLenBefore = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
 
         // Run the slash. /sd is an alias of /imagine. Use quiet=false so a
         // chat message is appended for our assertion.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions('/sd quiet=false a brass spyglass laid across a folded reef chart at dusk');
         });
 
         // The image generation is async — wait until either a new chat
         // message lands (sendMessage) or 60s elapse.
         await page.waitForFunction((targetLen) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat.length > targetLen;
         }, chatLenBefore, { timeout: 60_000 });
 
@@ -203,7 +203,7 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
 
         // ===== Assert the chat message has the expected attachment. =====
         const tail = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const m = ctx.chat[ctx.chat.length - 1];
             return {
                 name: m?.name,

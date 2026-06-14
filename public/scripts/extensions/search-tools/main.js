@@ -23,7 +23,7 @@ import {
 } from './persistence.js';
 import { registerSearchToolsOrchestrationTools } from './orchestrator-tools.js';
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
 const event_types = __ctx.eventTypes;
 const extension_prompt_roles = __ctx.constants.promptRoles;
@@ -31,7 +31,7 @@ const getRequestHeaders = __ctx.getRequestHeaders;
 const saveSettings = __ctx.saveSettings;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const addLocaleData = __ctx.addLocaleData;
 const translate = __ctx.translate;
 const SECRET_KEYS = __ctx.secrets.KEYS;

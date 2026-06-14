@@ -125,7 +125,7 @@ test.describe('#58 — MG vector-index rebuild + retrieval (mock embedder)', () 
         // "Full Rebuild" button uses. Returns a snapshot of the
         // generated node ids so paraphrase queries can assert against them.
         const seeded = await page.evaluate(async (records) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgApi = ctx.getExtensionApi?.('memory-graph');
             if (!mgApi) return { ok: false, reason: 'extension api missing' };
             const settings = ctx.extensionSettings?.memory_graph;
@@ -193,7 +193,7 @@ test.describe('#58 — MG vector-index rebuild + retrieval (mock embedder)', () 
         // smoke test in PR description).
         for (const rec of SEED_RECORDS) {
             const hits = await page.evaluate(async ({ query }) => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 const mgApi = ctx.getExtensionApi?.('memory-graph');
                 const session = await mgApi.openSession?.(ctx);
                 if (!session) return { ok: false, reason: 'no session' };
@@ -222,21 +222,21 @@ test.describe('#58 — MG vector-index rebuild + retrieval (mock embedder)', () 
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return ctx && Array.isArray(ctx.chat);
         }, { timeout: 10_000 });
 
         // Re-enable MG (settings re-hydrate from disk but the runtime
         // `settings.enabled` may need re-flipping after the cold load).
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
         });
 
         for (const rec of SEED_RECORDS) {
             const hits = await page.evaluate(async ({ query }) => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 const mgApi = ctx.getExtensionApi?.('memory-graph');
                 const session = await mgApi.openSession?.(ctx);
                 if (!session) return { ok: false, reason: 'no session post-restart' };

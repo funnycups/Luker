@@ -28,7 +28,7 @@ test.describe('#4 — edit user message', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -42,13 +42,13 @@ test.describe('#4 — edit user message', () => {
 
         // Wait for save round-trip (saveChat is debounced).
         await page.waitForFunction(({ idx, want }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat[idx]?.mes === want;
         }, { idx: userIdx, want: newText }, { timeout: 10_000 });
         // Force a synchronous saveChat round-trip — editMessageById's
         // saveChat call is fire-and-forget. Then settle.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().saveChat();
+            await window.Luker.getContext().saveChat();
         });
         await page.waitForTimeout(800);
 
@@ -56,7 +56,7 @@ test.describe('#4 — edit user message', () => {
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 2;
         }, { timeout: 15_000 });
 

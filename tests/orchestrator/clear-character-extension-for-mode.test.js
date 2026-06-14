@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },

@@ -85,7 +85,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // Ensure ctx.skills is wired. If not, fail loud — the rest of the
         // case is meaningless.
         const hasSkills = await page.evaluate(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Boolean(ctx?.skills && typeof ctx.skills.list === 'function');
         });
         expect(hasSkills, 'context.skills should be exposed').toBe(true);
@@ -93,7 +93,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // ── Step 1: Create the source preset. The preset only needs to
         // exist as a scope owner for the skill — minimal body is fine.
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const base = mgr.getCompletionPresetByName('Default') || {};
             const clone = JSON.parse(JSON.stringify(base));
@@ -107,7 +107,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
 
         // ── Step 2: Install the fixture skill into the source preset scope.
         const installed = await page.evaluate(async ({ scope, payload }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.executeExtractEmbed({
                 payload, targetScope: scope, conflictStrategies: {},
             });
@@ -127,7 +127,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         //   This is the exact path the OAI_PRESET_EXPORT_READY hook
         //   drives in production via `packAndAttachSkillsForExport`.
         const exportPayload = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import('/scripts/skills/embed-export-helper.js');
             return await mod.packSkillsForExport({ context: ctx, targetScope: scope });
         }, SOURCE_SCOPE);
@@ -139,7 +139,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // ── Step 4: Attach to a freshly-built preset export object,
         // mirroring what the OAI preset Export-to-file hook does.
         const attachedShape = await page.evaluate(async ({ scope, sourceName }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import('/scripts/skills/embed-export-helper.js');
             const mgr = ctx.getPresetManager('openai');
             const baseBody = mgr.getCompletionPresetByName(sourceName);
@@ -161,7 +161,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // First, ensure the target preset scope exists by saving an empty
         // preset under that name (so the skill scope has somewhere to land).
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const base = mgr.getCompletionPresetByName('Default') || {};
             const clone = JSON.parse(JSON.stringify(base));
@@ -173,7 +173,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         }, TARGET_PRESET_NAME, { timeout: 5000 });
 
         const preview = await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.previewExtractEmbed({ payload, targetScope: scope });
         }, { payload: exportPayload, scope: TARGET_SCOPE });
         const previewItem = (preview?.items || []).find(it => it && it.name === FIXTURE_SKILL_NAME);
@@ -181,7 +181,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         expect(previewItem.conflict, 'preview classifies fixture as new in target scope').toBe('new');
 
         await page.evaluate(async ({ payload, scope }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.skills.executeExtractEmbed({
                 payload, targetScope: scope, conflictStrategies: {},
             });
@@ -189,7 +189,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
 
         // ── Step 6: Body must match through the round-trip.
         const roundTripped = await page.evaluate(async ({ scope, name }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const all = await ctx.skills.list({ scope });
             const entry = (all || []).find(s => s.name === name);
             if (!entry) return null;
@@ -203,7 +203,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
 
         // ── Step 7: Scope isolation — fixture must NOT leak to global.
         const fixtureInstances = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const all = await ctx.skills.list({ scope: 'all' });
             return (all || []).filter(s => s.name === name).map(s => s.scope);
         }, FIXTURE_SKILL_NAME);
@@ -219,7 +219,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const afterRestart = await page.evaluate(async ({ scope, name }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const list = await ctx.skills.list({ scope });
             const entry = (list || []).find(s => s.name === name);
             if (!entry) return null;
@@ -246,7 +246,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // earlier test failed and left no preset, fall back to creating
         // one so this case can still drive its own assertions.
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             if (!mgr.getCompletionPresetByName(name)) {
                 const base = mgr.getCompletionPresetByName('Default') || {};
@@ -265,7 +265,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         ];
 
         const bindResult = await page.evaluate(async ({ wiName, wiEntries, presetName }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // saveWorldInfo from ctx accepts the same { entries: { uid: {...} } }
             // shape /api/worldinfo/edit writes.
             const entries = {};
@@ -318,7 +318,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // binding landed at `extensions.preset_lorebook` with the WI
         // name + the three entries we wrote.
         const sourceShape = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const body = mgr.getCompletionPresetByName(name);
             return {
@@ -338,7 +338,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // (the same path `onExportPresetClick` reads) and stringify it.
         // The exported JSON must include the embed block.
         const exportedJson = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const body = mgr.getCompletionPresetByName(name);
             // Mirror onExportPresetClick: structuredClone + JSON.stringify.
@@ -355,7 +355,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // does after OAI_PRESET_IMPORT_READY fires.
         const IMPORTED_PRESET = 'p36-imported-with-wi';
         await page.evaluate(async ({ name, body }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             await mgr.savePreset(name, JSON.parse(body));
         }, { name: IMPORTED_PRESET, body: exportedJson });
@@ -367,7 +367,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // ── Step 6: The imported preset must carry the same binding
         // (verbatim — same WI name, same entries).
         const importedShape = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const body = mgr.getCompletionPresetByName(name);
             return {
@@ -399,7 +399,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         }, WI_BOOK);
 
         const materializeResult = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const body = mgr.getCompletionPresetByName(name);
             return await ctx.presetLorebook.applyFromPresetBody({
@@ -414,7 +414,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         // same three entries. Read via /api/worldinfo/get (the same path
         // the editor uses).
         const materialized = await page.evaluate(async (wiName) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name: wiName }) });
             return res.json();
         }, WI_BOOK);
@@ -428,7 +428,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const afterRestart = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const body = mgr.getCompletionPresetByName(name);
             return {
@@ -444,7 +444,7 @@ test.describe('#36 — preset with embedded skills round-trips', () => {
         expect(afterRestart.entryCount).toBe(3);
 
         const wiAfterRestart = await page.evaluate(async (wiName) => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name: wiName }) });
             return res.json();
         }, WI_BOOK);

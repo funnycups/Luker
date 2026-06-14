@@ -32,7 +32,7 @@ import {
     unregisterOrchestrationTool,
 } from './register-custom-tool.js';
 import { gatherGrepMatches } from './grep-tool.js';
-const skillsApi = SillyTavern.getContext().skills;
+const skillsApi = Luker.getContext().skills;
 
 const SKILL_TOOL_NAMES = ['skill_list', 'skill_read', 'skill_search'];
 

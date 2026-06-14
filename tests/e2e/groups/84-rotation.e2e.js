@@ -55,7 +55,7 @@ test.describe('#84 — Group rotation across 3 members', () => {
 
         // Verify all three characters loaded into the running session.
         const loadedNames = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return (ctx.characters || []).map(c => c?.name).filter(Boolean);
         });
         for (const c of trio) {

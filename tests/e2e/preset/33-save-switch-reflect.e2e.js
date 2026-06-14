@@ -49,7 +49,7 @@ test.describe('#33 — preset save → switch → field roundtrip', () => {
         // fiddling each input element (the UI write-back path is what we'll
         // verify on the SECOND read; this first save is the seed).
         await page.evaluate(async (vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             oai.temperature = vals.temperature;
             oai.top_p = vals.top_p;
@@ -67,7 +67,7 @@ test.describe('#33 — preset save → switch → field roundtrip', () => {
         // registers the new option in openai_setting_names so subsequent
         // switching can find it.
         const saveOk = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             if (!mgr?.savePreset) return { ok: false, reason: 'no savePreset' };
             try {
@@ -93,7 +93,7 @@ test.describe('#33 — preset save → switch → field roundtrip', () => {
 
         // DEBUG: read the persisted preset body back through the manager.
         const storedAfterSave = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const body = mgr.getCompletionPresetByName(name);
             return { temperature: body?.temperature, top_p: body?.top_p, openai_max_tokens: body?.openai_max_tokens };
@@ -106,13 +106,13 @@ test.describe('#33 — preset save → switch → field roundtrip', () => {
 
         // Step 2: switch to Default (the seed preset always present).
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const val = mgr.findPreset('Default');
             mgr.selectPreset(val);
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatCompletionSettings.preset_settings_openai === 'Default';
         }, { timeout: 5000 });
 
@@ -120,19 +120,19 @@ test.describe('#33 — preset save → switch → field roundtrip', () => {
         // saved values. The OAI preset change handler writes the preset
         // body into chatCompletionSettings (and into the matching inputs).
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const val = mgr.findPreset(name);
             mgr.selectPreset(val);
         }, PRESET_A);
         await page.waitForFunction((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatCompletionSettings.preset_settings_openai === name;
         }, PRESET_A, { timeout: 5000 });
 
         // Verify in-memory chatCompletionSettings matches the values we saved.
         const inMem = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             const main = Array.isArray(oai.prompts) ? oai.prompts.find(p => p?.identifier === 'main') : null;
             return {
@@ -167,7 +167,7 @@ test.describe('#33 — preset save → switch → field roundtrip', () => {
         // Re-select preset-A (default activation after reload may pick whatever
         // was last persisted — make sure we're on preset-A explicitly).
         await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const cur = ctx.chatCompletionSettings.preset_settings_openai;
             if (cur !== name) {
@@ -176,12 +176,12 @@ test.describe('#33 — preset save → switch → field roundtrip', () => {
             }
         }, PRESET_A);
         await page.waitForFunction((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatCompletionSettings.preset_settings_openai === name;
         }, PRESET_A, { timeout: 5000 });
 
         const inMem2 = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             const main = Array.isArray(oai.prompts) ? oai.prompts.find(p => p?.identifier === 'main') : null;
             return {

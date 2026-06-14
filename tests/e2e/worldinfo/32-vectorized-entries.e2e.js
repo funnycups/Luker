@@ -105,7 +105,7 @@ test.describe('#32 — Vectorized WI entries', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash Navigator');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;
@@ -113,7 +113,7 @@ test.describe('#32 — Vectorized WI entries', () => {
         }, { timeout: 10_000 });
         // Settle the first_mes so MESSAGE_RECEIVED is from our /trigger.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -133,7 +133,7 @@ test.describe('#32 — Vectorized WI entries', () => {
         await awaitMainUI(page, server.baseURL);
 
         const persisted = await page.evaluate(async () => {
-            const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
             const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name: 'vector-book' }) });
             const data = await res.json();
             return Object.values(data.entries || {}).map(e => ({
@@ -161,14 +161,14 @@ test.describe('#32 — Vectorized WI entries', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash Navigator');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;
             return ctx.characters?.[id]?.data?.extensions?.world === 'vector-book';
         }, { timeout: 10_000 });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -181,7 +181,7 @@ test.describe('#32 — Vectorized WI entries', () => {
         // `#vectors_container` on init, so the element exists even when
         // the extension drawer is closed).
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings?.vectors;
             if (!ext) throw new Error('vectors extension settings missing');
 

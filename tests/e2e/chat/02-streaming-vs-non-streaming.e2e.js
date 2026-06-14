@@ -71,7 +71,7 @@ async function startSlowStreamMock({ chunkDelayMs = 80 } = {}) {
 
 async function captureGrowthCurve(page, { samplePeriodMs = 80, maxSamples = 120 } = {}) {
     return page.evaluate(async ({ samplePeriodMs, maxSamples }) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const startLen = ctx.chat.length;
         const samples = [];
         let assistantIdx = -1;
@@ -116,7 +116,7 @@ async function captureGrowthCurve(page, { samplePeriodMs = 80, maxSamples = 120 
 async function sendAndSample(page, text) {
     const samplerP = captureGrowthCurve(page);
     await page.evaluate(async (msg) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         await ctx.executeSlashCommandsWithOptions(`/send ${msg.replace(/\n/g, ' ')} | /trigger`);
     }, text);
     return await samplerP;
@@ -135,7 +135,7 @@ test.describe('#2 — streaming vs non-streaming bubble growth', () => {
             await awaitMainUI(page, server.baseURL);
             await selectCharacterByName(page, 'Seraphina');
             await page.waitForFunction(() => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
             }, { timeout: 10_000 }).catch(() => {});
 
@@ -168,7 +168,7 @@ test.describe('#2 — streaming vs non-streaming bubble growth', () => {
             await awaitMainUI(page, server.baseURL);
             await selectCharacterByName(page, 'Seraphina');
             await page.waitForFunction(() => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
             }, { timeout: 10_000 }).catch(() => {});
 

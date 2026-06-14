@@ -155,7 +155,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
         const activatedProfile = await activateConnectionProfile(page);
         expect(activatedProfile, 'CPA spec needs a usable connection profile').toBeTruthy();
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const v = ctx?.onlineStatus ?? null;
             return Boolean(v) && String(v) !== 'no_connection';
         }, null, { timeout: 30000 });
@@ -168,7 +168,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
         // bootstrap surfaces as a precise spec failure rather than a Lambert
         // "AI request failed" later.
         let presetMeta = await page.evaluate(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const ref = ctx?.presets?.getSelected?.('openai');
             return ref && typeof ref === 'object' ? { name: String(ref.name || '') } : null;
         });
@@ -186,7 +186,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
         const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
         if (!SAFE_SEGMENT.test(presetMeta.name)) {
             const candidate = await page.evaluate((re) => {
-                const ctx = window.SillyTavern?.getContext?.();
+                const ctx = window.Luker?.getContext?.();
                 const all = (ctx?.presets?.list?.('openai') || [])
                     .map(r => String(r?.name || ''))
                     .filter(Boolean);
@@ -211,7 +211,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
                 $el.val(opt.value).trigger('change');
             }, candidate);
             await page.waitForFunction((wantName) => {
-                const ctx = window.SillyTavern?.getContext?.();
+                const ctx = window.Luker?.getContext?.();
                 const ref = ctx?.presets?.getSelected?.('openai');
                 return ref && String(ref.name || '') === wantName;
             }, candidate, { timeout: 10000 });
@@ -333,7 +333,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
 
         // ── Step 9: skills API surfaces it at the same scope. ──────────
         const apiSeen = await page.evaluate(async ({ name, scopeName }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const all = await ctx.skills.list({ scope: 'all' });
             return (all || []).filter(s => s.name === name).map(s => ({ name: s.name, scope: s.scope }));
         }, { name: SKILL_NAME, scopeName: presetMeta.name });

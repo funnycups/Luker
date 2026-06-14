@@ -21,7 +21,7 @@
  * `ctx.getReferencePresetBody(name)` so this module stays pure.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const lodash = __ctx.lib.lodash;
 const generateQuietPrompt = __ctx.generateQuietPrompt;
 import { openSimulationReview } from '../../../iteration-library/simulation-review/index.js';

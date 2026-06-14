@@ -43,7 +43,7 @@ async function loadAllEnabledEntries(context) {
         const result = await context.__getSortedEntriesFn();
         return Array.isArray(result) ? result : [];
     }
-    const getSorted = SillyTavern.getContext().worldInfoEntry?.getSorted;
+    const getSorted = Luker.getContext().worldInfoEntry?.getSorted;
     if (typeof getSorted !== 'function') return [];
     const entries = await getSorted();
     return Array.isArray(entries) ? entries : [];

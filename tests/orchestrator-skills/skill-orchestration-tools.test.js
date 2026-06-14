@@ -3,8 +3,8 @@ import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 
 /**
  * Unit tests for `skill-orchestration-tools.js`. The source captures
- * `skillsApi` at module-load via `SillyTavern.getContext().skills` (post
- * upstream commit 571c529c2), so we install a `globalThis.SillyTavern`
+ * `skillsApi` at module-load via `Luker.getContext().skills` (post
+ * upstream commit 571c529c2), so we install a `globalThis.Luker`
  * stub BEFORE the dynamic import. `registerOrchestrationTool` is mocked
  * via `jest.unstable_mockModule` so each call writes into a local
  * `registered` table the tests can inspect.
@@ -38,7 +38,7 @@ const skillsApi = {
     listFiles: jest.fn(async () => ({ files: [{ path: 'SKILL.md', size: 4, isBinary: false }] })),
 };
 
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({ skills: skillsApi }),
 };
 

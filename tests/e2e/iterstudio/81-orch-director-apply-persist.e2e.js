@@ -71,7 +71,7 @@ test.describe('#81 — Orchestrator iter-studio Apply → director profile persi
         // Enable orchestrator + director mode so the studio button surfaces
         // for the right mode.
         await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const s = ctx.extensionSettings?.orchestrator;
             if (!s) throw new Error('orchestrator settings missing');
             s.enabled = true;
@@ -97,7 +97,7 @@ test.describe('#81 — Orchestrator iter-studio Apply → director profile persi
         // can call writeActivePreset() exactly as applyAiIterationSessionToGlobal
         // does in production.
         const applyResult = await page.evaluate(async (newPrompt) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const presetLib = await import(
                 '/scripts/extensions/orchestrator/preset-library.js'
             );
@@ -155,7 +155,7 @@ test.describe('#81 — Orchestrator iter-studio Apply → director profile persi
 
         // In-memory: orchestrator preset library still has the new prompt.
         const inMem = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const presetLib = await import(
                 '/scripts/extensions/orchestrator/preset-library.js'
             );

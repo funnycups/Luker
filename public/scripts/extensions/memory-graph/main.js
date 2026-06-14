@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const event_types = __ctx.eventTypes;
 const eventSource = __ctx.eventSource;
 const extension_prompt_roles = __ctx.constants.promptRoles;
@@ -10,7 +10,7 @@ const resolveChatStateTarget = __ctx.resolveChatStateTarget;
 const saveSettings = __ctx.saveSettings;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const performFuzzySearch = __ctx.performFuzzySearch;
 const download = __ctx.download;
 const getFileText = __ctx.getFileText;

@@ -134,7 +134,7 @@ test.describe('#75 — Abort mid-run', () => {
         // run, and verify the chat array is still parseable + same length.
         const result = await page.evaluate(async () => {
             const mod = await import('/scripts/extensions/orchestrator/run-state/store.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
 
             const chatBefore = Array.isArray(ctx.chat) ? ctx.chat.length : 0;
 
@@ -284,7 +284,7 @@ test.describe('#75 — Abort mid-run', () => {
             // into (preserved on abort by handle.abort()). We check
             // that the array exists and is iterable.
             const ok = await page.evaluate(() => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 return Array.isArray(ctx.chat);
             });
             expect(ok).toBe(true);

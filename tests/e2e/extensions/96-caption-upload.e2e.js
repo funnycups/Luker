@@ -69,14 +69,14 @@ test.describe('#96 — Caption: upload → auto-caption → chat bubble', () => 
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
         // Configure the caption extension. show_in_chat=true so the image
         // is rendered inline. The local source uses /api/extra/caption.
         await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             ctx.extensionSettings.caption = ctx.extensionSettings.caption || {};
             const cap = ctx.extensionSettings.caption;
             cap.source = 'local';
@@ -93,7 +93,7 @@ test.describe('#96 — Caption: upload → auto-caption → chat bubble', () => 
         const fileInput = page.locator('#img_file');
         await fileInput.waitFor({ state: 'attached', timeout: 15_000 });
 
-        const chatLenBefore = await page.evaluate(() => window.SillyTavern.getContext().chat.length);
+        const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
 
         // Set the file. setInputFiles with a buffer is the Playwright
         // canonical way; the caption extension wires `change` → onSelectImage.
@@ -108,7 +108,7 @@ test.describe('#96 — Caption: upload → auto-caption → chat bubble', () => 
         // saveBase64AsFile → sendCaptionedMessage. Wait for the new chat
         // message to appear at the tail.
         await page.waitForFunction((targetLen) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat.length > targetLen;
         }, chatLenBefore, { timeout: 30_000 });
 
@@ -119,7 +119,7 @@ test.describe('#96 — Caption: upload → auto-caption → chat bubble', () => 
 
         // ===== Assert the captioned user message has the right shape. =====
         const tail = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const m = ctx.chat[ctx.chat.length - 1];
             return {
                 isUser: !!m?.is_user,

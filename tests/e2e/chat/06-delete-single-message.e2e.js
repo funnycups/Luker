@@ -33,7 +33,7 @@ test.describe('#6 — delete single message via /cut', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -53,10 +53,10 @@ test.describe('#6 — delete single message via /cut', () => {
         expect(targetText).toContain('Reply 2');
 
         await page.evaluate(async (id) => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions(`/cut ${id}`);
+            await window.Luker.getContext().executeSlashCommandsWithOptions(`/cut ${id}`);
         }, target);
         await page.waitForFunction(({ len }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat.length === len;
         }, { len: before.length - 1 }, { timeout: 10_000 });
         await page.waitForTimeout(400);
@@ -65,7 +65,7 @@ test.describe('#6 — delete single message via /cut', () => {
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 2;
         }, { timeout: 15_000 });
 

@@ -17,13 +17,13 @@
 import { jest } from '@jest/globals';
 
 // defaults.js (transitively imported by editor-persist.js) reads
-// `SillyTavern.getContext().constants.{promptRoles,wiPosition}` at module
+// `Luker.getContext().constants.{promptRoles,wiPosition}` at module
 // load time after upstream commit 571c529c2. editor-persist.js also
-// captures `SillyTavern.getContext().saveSettings` and `.constants.unset`
+// captures `Luker.getContext().saveSettings` and `.constants.unset`
 // at module-load. Expose stubs + the shared `extensionSettings` so
 // beforeEach() mutations propagate.
 const extensionSettings = { orchestrator: {} };
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },

@@ -35,7 +35,7 @@
  * shared `html-utils.js` helper if/when more modules want it.
  */
 
-const extension_settings = SillyTavern.getContext().extensionSettings;
+const extension_settings = Luker.getContext().extensionSettings;
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { throwIfAborted } from './abort-utils.js';
 import { i18n } from './i18n.js';

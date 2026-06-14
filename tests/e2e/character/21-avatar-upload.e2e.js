@@ -38,7 +38,7 @@ test.describe('#21 — Avatar upload + thumbnail', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
         }, { timeout: 15_000 });
 
@@ -61,7 +61,7 @@ test.describe('#21 — Avatar upload + thumbnail', () => {
         // bytes-on-disk will differ from the original input.
 
         const uploadResult = await page.evaluate(async ({ avatar, b64 }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const binary = atob(b64);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -88,7 +88,7 @@ test.describe('#21 — Avatar upload + thumbnail', () => {
 
         // Trigger thumbnail generation by hitting /thumbnail?type=avatar.
         const thumbResult = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch(`/thumbnail?type=avatar&file=${encodeURIComponent(avatar)}`, {
                 method: 'GET',
                 headers: ctx.getRequestHeaders(),

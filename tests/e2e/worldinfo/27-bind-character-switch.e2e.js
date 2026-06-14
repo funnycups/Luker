@@ -94,7 +94,7 @@ async function settleFirstMes(page) {
     // Wait for the just-selected character's greeting to populate ctx.chat so
     // the next MESSAGE_RECEIVED is from our /trigger, not the chat-load event.
     await page.waitForFunction(() => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
     }, { timeout: 10_000 }).catch(() => { /* welcome panel path is ok */ });
 }
@@ -122,7 +122,7 @@ async function selectByNameProgrammatic(page, name) {
     // being visible. Returns true if a character with the matching name was
     // found and selected.
     return page.evaluate(async (wantName) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const idx = ctx.characters.findIndex(c => c?.name === wantName || c?.data?.name === wantName);
         if (idx < 0) return false;
         await ctx.selectCharacterById(idx);
@@ -138,7 +138,7 @@ test.describe('#27 — Bind WI to character → switch character', () => {
         // --- Ash turn: only OAKWOOD_LORE ---
         await selectCharacterByName(page, 'Ash Cartographer');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;
@@ -154,7 +154,7 @@ test.describe('#27 — Bind WI to character → switch character', () => {
         const switched = await selectByNameProgrammatic(page, 'Rhonin Warden');
         expect(switched, 'expected Rhonin Warden to be present in characters list').toBe(true);
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;
@@ -175,7 +175,7 @@ test.describe('#27 — Bind WI to character → switch character', () => {
         const ashOk = await selectByNameProgrammatic(page, 'Ash Cartographer');
         expect(ashOk, 'expected Ash Cartographer to be in the post-restart characters list').toBe(true);
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;
@@ -190,7 +190,7 @@ test.describe('#27 — Bind WI to character → switch character', () => {
         const rhoninOk = await selectByNameProgrammatic(page, 'Rhonin Warden');
         expect(rhoninOk).toBe(true);
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
             const id = ctx.characterId;
             if (typeof id !== 'number' && typeof id !== 'string') return false;

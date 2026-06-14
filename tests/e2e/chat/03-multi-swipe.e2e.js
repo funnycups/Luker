@@ -34,7 +34,7 @@ test.afterAll(async () => {
 
 async function swipeRightSlash(page) {
     return page.evaluate(() => new Promise((resolve, reject) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const t = setTimeout(() => reject(new Error('swipe timeout')), 30_000);
         const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, (id) => {
             clearTimeout(t);
@@ -50,7 +50,7 @@ test.describe('#3 — multi-swipe persistence', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -62,10 +62,10 @@ test.describe('#3 — multi-swipe persistence', () => {
 
         // Now step left once to land on swipe #2 (index 1).
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().executeSlashCommandsWithOptions('/swipe direction=left');
+            await window.Luker.getContext().executeSlashCommandsWithOptions('/swipe direction=left');
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const last = ctx.chat[ctx.chat.length - 1];
             return last && last.swipe_id === 1;
         }, { timeout: 10_000 });
@@ -83,7 +83,7 @@ test.describe('#3 — multi-swipe persistence', () => {
         // /swipe direction=left only updates in-memory state; nothing emits
         // a chat-save. Explicitly persist before restarting.
         await page.evaluate(async () => {
-            await window.SillyTavern.getContext().saveChat();
+            await window.Luker.getContext().saveChat();
         });
         await page.waitForTimeout(500);
 
@@ -91,7 +91,7 @@ test.describe('#3 — multi-swipe persistence', () => {
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 2;
         }, { timeout: 15_000 });
 

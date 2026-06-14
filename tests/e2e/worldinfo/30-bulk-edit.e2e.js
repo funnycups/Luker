@@ -54,7 +54,7 @@ test.afterAll(async () => {
 
 async function loadBook(page, name) {
     return page.evaluate(async (n) => {
-        const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+        const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
         const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name: n }) });
         return res.json();
     }, name);
@@ -62,7 +62,7 @@ async function loadBook(page, name) {
 
 async function saveBook(page, name, data) {
     return page.evaluate(async ({ n, d }) => {
-        const headers = { 'Content-Type': 'application/json', ...window.SillyTavern.getContext().getRequestHeaders() };
+        const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
         const res = await fetch('/api/worldinfo/edit', { method: 'POST', headers, body: JSON.stringify({ name: n, data: d }) });
         return res.json();
     }, { n: name, d: data });

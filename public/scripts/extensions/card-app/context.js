@@ -4,7 +4,7 @@
 
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../regex/engine.js';
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
 const event_types = __ctx.eventTypes;
 const chat = __ctx.chat;
@@ -26,7 +26,7 @@ const lukerDeleteChatState = __ctx.deleteChatState;
 const deleteCharacterChatByName = __ctx.deleteCharacterChat;
 const lukerRenameChat = __ctx.renameChat;
 const lukerSetVariable = __ctx.setVariable;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const extension_settings = __ctx.extensionSettings;
 const lukerGetCharacterState = __ctx.getCharacterState;
 const lukerSetCharacterState = __ctx.setCharacterState;

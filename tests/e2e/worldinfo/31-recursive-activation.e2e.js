@@ -109,7 +109,7 @@ async function sendAndCaptureBody(page, text) {
 
 async function settleFirstMes(page) {
     await page.waitForFunction(() => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
     }, { timeout: 10_000 }).catch(() => {});
 }
@@ -125,7 +125,7 @@ test.describe('#31 — Recursive activation boundaries', () => {
         await page.evaluate(async () => {
             // Settings live on `power_user`/world-info module exports.
             const mod = await import('/scripts/world-info.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Patch settings.json's world-info module by editing the
             // live setting (the values are stored in the module's let bindings,
             // updated via the settings drawer events).

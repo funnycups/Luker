@@ -83,7 +83,7 @@ let server, mock;
 // Helper: run a slash pipeline and return its string return value.
 async function runSlash(page, pipeline) {
     return await page.evaluate(async (cmd) => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         const res = await ctx.executeSlashCommandsWithOptions(cmd);
         return { pipeText: res?.pipe ?? '', state: res?.isError ? 'error' : 'ok' };
     }, pipeline);
@@ -92,7 +92,7 @@ async function runSlash(page, pipeline) {
 // Helper: snapshot the current chat tail for assertions.
 async function chatSnapshot(page) {
     return await page.evaluate(() => {
-        const ctx = window.SillyTavern.getContext();
+        const ctx = window.Luker.getContext();
         return {
             length: ctx.chat.length,
             messages: ctx.chat.map(m => ({
@@ -165,7 +165,7 @@ test.describe('#97 — Slash commands regression', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         // Wait for greeting.
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         const before = await chatSnapshot(page);
         await runSlash(page, '/send The lantern wick is fraying again.');
         const after = await chatSnapshot(page);
@@ -178,10 +178,10 @@ test.describe('#97 — Slash commands regression', () => {
     test('/sysgen appends a system narrator message via the LLM', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         const before = await chatSnapshot(page);
         await runSlash(page, '/sysgen Describe what the wind is doing at this very moment.');
-        await page.waitForFunction((n) => window.SillyTavern.getContext().chat.length > n, before.length, { timeout: 30_000 });
+        await page.waitForFunction((n) => window.Luker.getContext().chat.length > n, before.length, { timeout: 30_000 });
         const after = await chatSnapshot(page);
         const tail = after.messages[after.length - 1];
         // sendNarratorMessage tags the message with extra.type === 'narrator'.
@@ -198,7 +198,7 @@ test.describe('#97 — Slash commands regression', () => {
         await selectCharacterByName(page, 'Seraphina');
         // Confirm we start on Seraphina.
         const startName = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.characters[ctx.characterId]?.name;
         });
         expect(startName).toBe('Seraphina');
@@ -206,12 +206,12 @@ test.describe('#97 — Slash commands regression', () => {
         await runSlash(page, '/go Bryn the Keeper');
         // /go fires CHAT_CHANGED — wait for ctx.characterId to point at Bryn.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.characters[ctx.characterId]?.name === 'Bryn the Keeper';
         }, { timeout: 15_000 });
 
         const newName = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.characters[ctx.characterId]?.name;
         });
         expect(newName).toBe('Bryn the Keeper');
@@ -220,7 +220,7 @@ test.describe('#97 — Slash commands regression', () => {
     test('/send + /trigger produces an assistant reply', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         const before = await chatSnapshot(page);
         // /trigger needs await=true for the slash batch to wait for the
         // reply before returning — otherwise the assertion races the LLM.
@@ -238,7 +238,7 @@ test.describe('#97 — Slash commands regression', () => {
     test('/swipe adds a second variant and switches to it', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         // Generate a reply first.
         await runSlash(page, '/send Tell me about the gull rocks. | /trigger await=true');
         const beforeSwipe = await chatSnapshot(page);
@@ -249,7 +249,7 @@ test.describe('#97 — Slash commands regression', () => {
         // Swipe right (next variant). Await so the LLM call completes.
         await runSlash(page, '/swipe direction=right await=true');
         await page.waitForFunction((startCount) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const m = ctx.chat[ctx.chat.length - 1];
             return Array.isArray(m?.swipes) && m.swipes.length > startCount;
         }, initialSwipes, { timeout: 30_000 });
@@ -266,7 +266,7 @@ test.describe('#97 — Slash commands regression', () => {
         // Even with await, the swipe handler dispatches via a setTimeout —
         // wait until swipe_id actually moves before asserting.
         await page.waitForFunction((target) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const m = ctx.chat[ctx.chat.length - 1];
             return typeof m?.swipe_id === 'number' && m.swipe_id < target;
         }, midSwipeId, { timeout: 10_000 });
@@ -278,7 +278,7 @@ test.describe('#97 — Slash commands regression', () => {
     test('/cut <id> removes a specific message (brief mentioned /cut last; impl needs a numeric id)', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         await runSlash(page, '/send sentinel-cut-target');
         const before = await chatSnapshot(page);
         const cutTargetId = before.length - 1;
@@ -293,7 +293,7 @@ test.describe('#97 — Slash commands regression', () => {
     test('/continue extends the last assistant message via the LLM', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         await runSlash(page, '/send Walk me through what you see north of the headland. | /trigger await=true');
         const before = await chatSnapshot(page);
         const beforeTail = before.messages[before.length - 1];
@@ -310,7 +310,7 @@ test.describe('#97 — Slash commands regression', () => {
     test('/regenerate re-rolls the last assistant message in place', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         await runSlash(page, '/send What is the wind doing right now? | /trigger await=true');
         const before = await chatSnapshot(page);
         const beforeTail = before.messages[before.length - 1];
@@ -336,7 +336,7 @@ test.describe('#97 — Slash commands regression', () => {
         // observing that a step after /abort doesn't run.
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         await runSlash(page, '/setvar key=abort_sentinel before');
         await runSlash(page, '/abort | /setvar key=abort_sentinel after').catch(() => {});
         const res = await runSlash(page, '/getvar abort_sentinel');
@@ -347,21 +347,21 @@ test.describe('#97 — Slash commands regression', () => {
     test('/branch-create forks the chat from a message id', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => window.SillyTavern.getContext().chat.length >= 1, { timeout: 10_000 });
+        await page.waitForFunction(() => window.Luker.getContext().chat.length >= 1, { timeout: 10_000 });
         // Make sure there's a deterministic message to branch off.
         await runSlash(page, '/send Branch off this turn. | /trigger await=true');
         const before = await chatSnapshot(page);
         const targetId = before.length - 1;
-        const beforeChatId = await page.evaluate(() => window.SillyTavern.getContext().getCurrentChatId?.());
+        const beforeChatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId?.());
         const res = await runSlash(page, `/branch-create ${targetId}`);
         // Returned pipe is the new branch name.
         expect(res.pipeText).toBeTruthy();
         // The branch auto-opens in Luker. Wait for chatId to change.
         await page.waitForFunction((prev) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.getCurrentChatId?.() !== prev;
         }, beforeChatId, { timeout: 15_000 });
-        const afterChatId = await page.evaluate(() => window.SillyTavern.getContext().getCurrentChatId?.());
+        const afterChatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId?.());
         expect(afterChatId).not.toBe(beforeChatId);
     });
 

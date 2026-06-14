@@ -70,13 +70,13 @@ test.describe('#93 — Translate auto-mode both', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
         // Enable translate auto-mode 'both' (translate input AND responses).
         await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             ctx.extensionSettings.translate = ctx.extensionSettings.translate || {};
             ctx.extensionSettings.translate.target_language = 'en';
             ctx.extensionSettings.translate.internal_language = 'en';
@@ -103,13 +103,13 @@ test.describe('#93 — Translate auto-mode both', () => {
         // Luker stores the translation in message.extra.display_text and
         // keeps the original `mes` intact.
         await page.waitForFunction((id) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const m = ctx.chat[id];
             return !!m?.extra?.display_text;
         }, replyId, { timeout: 15_000 });
 
         const msg = await page.evaluate((id) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const m = ctx.chat[id];
             return { mes: m?.mes, displayText: m?.extra?.display_text };
         }, replyId);

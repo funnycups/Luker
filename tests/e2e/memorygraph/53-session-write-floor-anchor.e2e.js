@@ -73,7 +73,7 @@ test.describe('#53 — session-write floor anchor (FIXED 2026-05-28)', () => {
         }
 
         const seeded = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             const mgApi = ctx.getExtensionApi?.('memory-graph');
@@ -121,13 +121,13 @@ test.describe('#53 — session-write floor anchor (FIXED 2026-05-28)', () => {
         // Give MG's CHAT_CHANGED / MESSAGE_DELETED listeners a beat to
         // settle before we re-open the session.
         await page.waitForFunction(
-            (prev) => window.SillyTavern.getContext().chat.length === prev - 1,
+            (prev) => window.Luker.getContext().chat.length === prev - 1,
             seeded.chatLen,
             { timeout: 10_000 },
         ).catch(() => { /* fall through and let the assertion surface the gap */ });
         // Then nudge the load by re-opening the session.
         const afterDelete = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Force the cached MG store to drop so the next openSession
             // re-loads from the (now-truncated) log on disk.
             const mod = await import('/scripts/extensions/memory-graph/main.js').catch(() => null);

@@ -8,7 +8,7 @@
  * `registerLocaleData` is called once at module bootstrap; everything
  * else can call `i18n` synchronously after that.
  *
- * `SillyTavern.getContext()` is resolved lazily on first call so the
+ * `Luker.getContext()` is resolved lazily on first call so the
  * runners (loop / agenda / spec / director) can import this module
  * under Jest where the SillyTavern global is not set up.
  */
@@ -17,7 +17,7 @@ let _addLocaleData = null;
 let _translate = null;
 function ctx() {
     if (_addLocaleData && _translate) return;
-    const c = (typeof SillyTavern !== 'undefined') ? SillyTavern.getContext() : null;
+    const c = (typeof Luker !== 'undefined') ? Luker.getContext() : null;
     _addLocaleData = c?.addLocaleData || (() => {});
     _translate = c?.translate || ((s) => String(s || ''));
 }

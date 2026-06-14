@@ -67,7 +67,7 @@ test.describe('#52 — from-empty MG → seed → render → persist across rest
         // Enable MG (settings default disabled=false) and write 3 seeded
         // nodes through the same Layer-1 session API the orchestrator uses.
         const seeded = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgApi = ctx.getExtensionApi?.('memory-graph');
             if (!mgApi) return { ok: false, reason: 'extension api missing' };
 
@@ -199,7 +199,7 @@ test.describe('#52 — from-empty MG → seed → render → persist across rest
         // one chat in our scratch dataRoot; the selectCharacter call lands
         // on the latest chat automatically.
         const afterRestart = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings?.memory_graph;
             if (settings) settings.enabled = true;
             const mgApi = ctx.getExtensionApi?.('memory-graph');

@@ -72,7 +72,7 @@ test.describe('#80 — MG Schema iter-studio Apply → settings.json mutated →
         // We snapshot the in-memory length (the source of truth the studio
         // mutates), and confirm our new id isn't already present.
         const baseline = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const arr = Array.isArray(ctx.extensionSettings?.memory_graph?.nodeTypeSchema)
                 ? ctx.extensionSettings.memory_graph.nodeTypeSchema
                 : [];
@@ -107,7 +107,7 @@ test.describe('#80 — MG Schema iter-studio Apply → settings.json mutated →
         // serialized at boot. directSave forces a full settings.json
         // rewrite that doesn't depend on patch parentage.
         const applyResult = await page.evaluate(async (newType) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const ext = ctx.extensionSettings.memory_graph;
             if (!ext) return { ok: false, reason: 'memory_graph ext settings missing' };
             const schema = Array.isArray(ext.nodeTypeSchema) ? ext.nodeTypeSchema.slice() : [];
@@ -151,7 +151,7 @@ test.describe('#80 — MG Schema iter-studio Apply → settings.json mutated →
 
         // In-memory rehydration: the MG settings registered the new schema.
         const inMem = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const schema = ctx.extensionSettings?.memory_graph?.nodeTypeSchema || [];
             return Array.isArray(schema)
                 ? schema.map(t => ({ id: t?.id, label: t?.label }))

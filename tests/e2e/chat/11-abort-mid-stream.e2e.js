@@ -38,7 +38,7 @@ test.describe('#11 — abort mid-stream', () => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -46,7 +46,7 @@ test.describe('#11 — abort mid-stream', () => {
         // sendMessageAndAwaitReply doesn't bother with the DOM button.
         // Kick a send and DO NOT await its reply.
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Don't await — we'll abort.
             ctx.executeSlashCommandsWithOptions('/send The wind is cold; please tell me everything you saw on the path. | /trigger');
         });
@@ -59,7 +59,7 @@ test.describe('#11 — abort mid-stream', () => {
         const inFlight = await page.evaluate(() => {
             const w = window;
             // window.is_send_press is sometimes exported on Luker's scope.
-            const ctx = w.SillyTavern.getContext();
+            const ctx = w.Luker.getContext();
             const chat = ctx.chat;
             const stopBtn = document.querySelector('#mes_stop');
             // Stop button is visible whenever generation is active.
@@ -70,7 +70,7 @@ test.describe('#11 — abort mid-stream', () => {
 
         // Click the stop button.
         const stoppedEvP = page.evaluate(() => new Promise((resolve) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const t = setTimeout(() => resolve('timeout'), 6000);
             const handler = (...args) => {
                 clearTimeout(t);

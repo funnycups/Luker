@@ -158,7 +158,7 @@ test.describe('#76 — Re-run from step N', () => {
             ]).map(el => el.getAttribute('data-action') || el.getAttribute('data-orch-round-action') || '');
 
             // Look for a slash command. The orchestrator registers none today.
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const knownCommandNames = Array.isArray(ctx?.SlashCommandParser?.commands)
                 ? ctx.SlashCommandParser.commands.map(c => String(c?.name || ''))
                 : Object.keys(ctx?.SlashCommandParser?.commands || {});

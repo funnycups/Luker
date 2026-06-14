@@ -15,7 +15,7 @@ import { applyEdits } from '../../../lib/edits/index.js';
 import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const characters = __ctx.characters;
 const saveMetadata = __ctx.saveMetadata;
 const getRequestHeaders = __ctx.getRequestHeaders;
@@ -31,7 +31,7 @@ const importEmbeddedWorldInfo = __ctx.importEmbeddedWorldInfo;
 const getCharacterEmbeddedWorld = __ctx.getCharacterEmbeddedWorld;
 const getCharaFilename = __ctx.getCharaFilename;
 const SlashCommandParser = __ctx.SlashCommandParser;
-const getContext = SillyTavern.getContext;
+const getContext = Luker.getContext;
 const extension_settings = __ctx.extensionSettings;
 const writeExtensionField = __ctx.writeExtensionField;
 const uuidv4 = __ctx.uuidv4;

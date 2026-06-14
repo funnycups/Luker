@@ -64,7 +64,7 @@ test.describe('#34 — preset export → import (under different connection prof
 
         // ── Step 1: Seed the source preset under the primary profile ────
         await page.evaluate(async (vals) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const oai = ctx.chatCompletionSettings;
             oai.temperature = vals.temperature;
             oai.top_p = vals.top_p;
@@ -77,7 +77,7 @@ test.describe('#34 — preset export → import (under different connection prof
         }, SOURCE_VALUES);
 
         const saveResult = await page.evaluate(async (name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             await mgr.savePreset(name, ctx.chatCompletionSettings);
             return true;
@@ -95,7 +95,7 @@ test.describe('#34 — preset export → import (under different connection prof
         // canonical in-memory copy under `openai_settings[i]`, which
         // `getCompletionPresetByName` exposes verbatim.
         const exportedBody = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             const body = mgr.getCompletionPresetByName(name);
             return body ? JSON.parse(JSON.stringify(body)) : null;
@@ -114,7 +114,7 @@ test.describe('#34 — preset export → import (under different connection prof
         // preset body must NOT have stale `custom_url` baked in (the
         // preset manager strips connection-coupled fields on save).
         await page.evaluate(async (url) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             ctx.chatCompletionSettings.custom_url = url;
             // Persist the runtime change so it survives in case the
             // savePreset path reads from disk for diff purposes.
@@ -123,7 +123,7 @@ test.describe('#34 — preset export → import (under different connection prof
 
         // ── Step 4: Import — save the exported body under a fresh name.
         const importOk = await page.evaluate(async ({ name, body }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             try {
                 await mgr.savePreset(name, body);
@@ -141,7 +141,7 @@ test.describe('#34 — preset export → import (under different connection prof
 
         // Read back the imported preset body and assert field equality.
         const importedBody = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             return mgr.getCompletionPresetByName(name);
         }, TARGET_PRESET);
@@ -170,7 +170,7 @@ test.describe('#34 — preset export → import (under different connection prof
         await reloadAndAwait(page, server.baseURL);
 
         const reloaded = await page.evaluate((name) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mgr = ctx.getPresetManager('openai');
             return mgr.getCompletionPresetByName(name);
         }, TARGET_PRESET);

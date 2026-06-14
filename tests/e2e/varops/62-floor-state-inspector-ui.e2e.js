@@ -57,7 +57,7 @@ test.describe('#62 — Floor-state inspector UI shows current floor full state',
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -72,7 +72,7 @@ test.describe('#62 — Floor-state inspector UI shows current floor full state',
 
         // Per-floor recorded ops (source of truth) — assistant messages only.
         const recorded = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chat.map((m, idx) => ({
                 idx,
                 isUser: !!m.is_user,
@@ -153,7 +153,7 @@ test.describe('#62 — Floor-state inspector UI shows current floor full state',
         // all surviving ops from every floor we sent — this is the "full
         // state" the inspector shadows.
         const fullState = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatMetadata?.variables ?? null;
         });
         // hp=50 (turn 1) → +1 (turn 2) → 51

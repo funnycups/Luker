@@ -40,13 +40,13 @@ test.describe('#22 — Duplicate character — no cross-pollution', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
         }, { timeout: 15_000 });
 
         // Duplicate.
         const dupResult = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/duplicate', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),
@@ -72,7 +72,7 @@ test.describe('#22 — Duplicate character — no cross-pollution', () => {
 
         // Edit Ash's description (source only).
         const baseline = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),
@@ -83,7 +83,7 @@ test.describe('#22 — Duplicate character — no cross-pollution', () => {
         }, avatar);
 
         const editResult = await page.evaluate(async ({ avatar, baseline, newDesc }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const form = new FormData();
             form.append('avatar_url', avatar);
             form.append('ch_name', baseline.name || baseline.data?.name || 'Ash the Cartographer');
@@ -119,13 +119,13 @@ test.describe('#22 — Duplicate character — no cross-pollution', () => {
 
         // Verify Ash's description changed AND duplicate's description is unchanged.
         const sourceDesc = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', { method: 'POST', headers: ctx.getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache' });
             const body = await res.json();
             return body.description || body.data?.description || '';
         }, avatar);
         const dupDesc = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', { method: 'POST', headers: ctx.getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache' });
             const body = await res.json();
             return body.description || body.data?.description || '';
@@ -145,13 +145,13 @@ test.describe('#22 — Duplicate character — no cross-pollution', () => {
         });
 
         const sourceAfter = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', { method: 'POST', headers: ctx.getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache' });
             const body = await res.json();
             return body.description || body.data?.description || '';
         }, avatar);
         const dupAfter = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', { method: 'POST', headers: ctx.getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar }), cache: 'no-cache' });
             const body = await res.json();
             return body.description || body.data?.description || '';

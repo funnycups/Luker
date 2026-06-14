@@ -70,7 +70,7 @@ test.describe('#114 — branch chat keeps source MG intact and stays independent
 
         // Let the greeting message settle before turning on the metronome.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -82,7 +82,7 @@ test.describe('#114 — branch chat keeps source MG intact and stays independent
         // the public session API. This marker proves the source MG stays
         // intact after the branch operation.
         const sourceState = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mg = ctx.getExtensionApi && ctx.getExtensionApi('memory-graph');
             if (!mg) return { error: 'no memory-graph api' };
             const session = await mg.openSession(ctx);
@@ -109,7 +109,7 @@ test.describe('#114 — branch chat keeps source MG intact and stays independent
         //    (the greeting); branching off the very start is enough to
         //    trigger the legacy-fallback bug if it regresses.
         const branchResult = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions('/branch-create 1');
             await new Promise(r => setTimeout(r, 1000));
             return { branchChatId: ctx.getCurrentChatId?.() || '' };
@@ -122,7 +122,7 @@ test.describe('#114 — branch chat keeps source MG intact and stays independent
         //        but the branch is now its own scope.
         //    (b) Mutating branch MG must NOT touch the source.
         const branchState = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mg = ctx.getExtensionApi && ctx.getExtensionApi('memory-graph');
             const session = await mg.openSession(ctx);
             if (!session) return { error: 'openSession in branch returned null' };
@@ -147,7 +147,7 @@ test.describe('#114 — branch chat keeps source MG intact and stays independent
         //        delete source MG via the legacy fallback).
         //    (b) The branch marker is NOT there (branch is independent).
         const restoreSource = await page.evaluate(async ({ sourceId }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions(`/go ${sourceId}`);
             await new Promise(r => setTimeout(r, 1500));
             const mg = ctx.getExtensionApi && ctx.getExtensionApi('memory-graph');

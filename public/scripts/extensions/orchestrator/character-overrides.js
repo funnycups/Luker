@@ -35,7 +35,7 @@
  * dispatch flows.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
 import {

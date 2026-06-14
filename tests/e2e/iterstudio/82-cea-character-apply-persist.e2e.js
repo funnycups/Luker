@@ -118,7 +118,7 @@ test.describe('#82 — CEA Character iter-studio Apply → character description
         // Read pre-edit description to prove the Apply actually changed it
         // (the bundled card has a non-empty description).
         const beforeDesc = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const c = ctx.characters?.[ctx.characterId] || null;
             return {
                 name: c?.name || '',
@@ -138,7 +138,7 @@ test.describe('#82 — CEA Character iter-studio Apply → character description
         // (post-`rebasePathToTarget` strips the `card.` prefix to a bare
         // field name).
         const applyResult = await page.evaluate(async (args) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const mod = await import(
                 '/scripts/extensions/character-editor-assistant/main.js'
             );
@@ -175,7 +175,7 @@ test.describe('#82 — CEA Character iter-studio Apply → character description
         // In-memory: character object now carries the new description.
         await expect.poll(async () => {
             return await page.evaluate(() => {
-                const ctx = window.SillyTavern.getContext();
+                const ctx = window.Luker.getContext();
                 const c = ctx.characters?.[ctx.characterId] || null;
                 return c?.data?.description || c?.description || '';
             });
@@ -186,7 +186,7 @@ test.describe('#82 — CEA Character iter-studio Apply → character description
         // description because the server's toStoredV2Character normalization
         // re-promoted the stale v1 legacy root over the new data.description.
         const beforeRestartFromApi = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const resp = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),
@@ -207,13 +207,13 @@ test.describe('#82 — CEA Character iter-studio Apply → character description
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const c = ctx?.characters?.[ctx?.characterId];
             return !!c && (c.description || c.data?.description);
         }, { timeout: 15_000 });
 
         const afterRestartCard = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const c = ctx.characters?.[ctx.characterId] || null;
             return {
                 description: c?.description || '',
@@ -225,7 +225,7 @@ test.describe('#82 — CEA Character iter-studio Apply → character description
 
         // Also confirm via API after restart (cache invalidation sanity).
         const afterRestartFromApi = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const resp = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),

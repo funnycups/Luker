@@ -73,7 +73,7 @@ test.describe('#65 — var_ops failure does NOT pollute next turn', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -105,7 +105,7 @@ test.describe('#65 — var_ops failure does NOT pollute next turn', () => {
         await sendMessageAndAwaitReply(page, 'Read me the wind tonight.');
 
         const turn1 = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             let asstId = -1;
             for (let i = ctx.chat.length - 1; i >= 0; i--) {
                 if (!ctx.chat[i]?.is_user) { asstId = i; break; }
@@ -153,7 +153,7 @@ test.describe('#65 — var_ops failure does NOT pollute next turn', () => {
         await sendMessageAndAwaitReply(page, 'Trim the wick, then tell me how it sits.');
 
         const turn2 = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             let asstId = -1;
             for (let i = ctx.chat.length - 1; i >= 0; i--) {
                 if (!ctx.chat[i]?.is_user) { asstId = i; break; }

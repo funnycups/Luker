@@ -50,7 +50,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         // Anchor the chat: ensure greeting is in chat array first so the
         // chat file is actually created on disk before we /setvar into it.
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
@@ -61,7 +61,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
 
         // ── Set three variables via the slash-command surface ─────────
         await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             await ctx.executeSlashCommandsWithOptions('/setvar key=watch_count 3');
             await ctx.executeSlashCommandsWithOptions('/setvar key=keeper_name Briallen');
             await ctx.executeSlashCommandsWithOptions('/setvar key=lantern_oil whale-oil');
@@ -72,7 +72,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         // Verify cache reflects the writes — both via direct metadata and the public API.
         // /setvar with no `as=number` keeps the value as the literal string.
         const beforeRestart = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 metadata: ctx.chatMetadata?.variables ?? null,
                 viaApi: {
@@ -95,7 +95,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         // Resolve the avatar folder dynamically (Seraphina's avatar is
         // default_Seraphina.png so the folder is "default_Seraphina").
         const avatarFolder = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return (ctx.characters[ctx.characterId]?.avatar || '').replace(/\.png$/, '');
         });
         const chatDir = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder);
@@ -103,7 +103,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         const files = readdirSync(chatDir).filter(f => f.endsWith('.jsonl'));
         expect(files.length, 'at least one jsonl chat persisted').toBeGreaterThan(0);
         // Find the file matching our active chatId.
-        const chatId = await page.evaluate(() => window.SillyTavern.getContext().getCurrentChatId());
+        const chatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId());
         const targetFile = chatId && files.includes(`${chatId}.jsonl`) ? `${chatId}.jsonl` : files[0];
         const headerOnDisk = JSON.parse(readFileSync(resolve(chatDir, targetFile), 'utf8').split('\n')[0]);
         const persistedVars = headerOnDisk?.chat_metadata?.variables ?? {};
@@ -119,12 +119,12 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         await selectCharacterByName(page, 'Seraphina');
 
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length > 0;
         }, { timeout: 15_000 });
 
         const afterRestart = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return {
                 metadata: ctx.chatMetadata?.variables ?? null,
                 viaApi: {
@@ -150,7 +150,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         await sendMessageAndAwaitReply(page, 'And the tally still stands at three. Confirm.');
 
         const afterNextTurn = await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return ctx.chatMetadata?.variables ?? null;
         });
         expect(afterNextTurn, 'slash-set keys survive the post-turn rebuild').toMatchObject({

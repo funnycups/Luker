@@ -6,8 +6,8 @@
  */
 
 function getDefaultResolver() {
-    const ctx = typeof globalThis.SillyTavern?.getContext === 'function'
-        ? globalThis.SillyTavern.getContext()
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
         : null;
     return ctx?.connectionProfiles?.resolve || null;
 }
@@ -15,37 +15,37 @@ function getDefaultResolver() {
 const SUPPORTED_APIS = new Set(['openai', 'kobold', 'koboldhorde', 'novel', 'textgenerationwebui']);
 
 function getDefaultRawPromptBuilder() {
-    const ctx = typeof globalThis.SillyTavern?.getContext === 'function'
-        ? globalThis.SillyTavern.getContext()
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
         : null;
     return typeof ctx?.createRawPrompt === 'function' ? ctx.createRawPrompt : null;
 }
 
 function getDefaultBuilder() {
-    const ctx = typeof globalThis.SillyTavern?.getContext === 'function'
-        ? globalThis.SillyTavern.getContext()
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
         : null;
     return typeof ctx?.buildPresetAwarePromptMessages === 'function' ? ctx.buildPresetAwarePromptMessages : null;
 }
 
 function getDefaultWorldInfoResolver() {
-    const ctx = typeof globalThis.SillyTavern?.getContext === 'function'
-        ? globalThis.SillyTavern.getContext()
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
         : null;
     return typeof ctx?.resolveWorldInfoForMessages === 'function' ? ctx.resolveWorldInfoForMessages : null;
 }
 
 function getDefaultSenders() {
-    const ctx = typeof globalThis.SillyTavern?.getContext === 'function'
-        ? globalThis.SillyTavern.getContext()
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
         : null;
     if (!ctx) return null;
     return ctx.generateTaskSenders || null;
 }
 
 function getDefaultSubstituteParams() {
-    const ctx = typeof globalThis.SillyTavern?.getContext === 'function'
-        ? globalThis.SillyTavern.getContext()
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
         : null;
     return typeof ctx?.substituteParams === 'function' ? ctx.substituteParams : null;
 }
@@ -165,7 +165,7 @@ export class GenerateTaskError extends Error {
  * injection seam so tests can mock the resolver without setting up live settings.
  *
  * Fully synchronous: when `options.resolver` is omitted, the default resolver is
- * looked up at call time via `globalThis.SillyTavern.getContext().connectionProfiles.resolve`.
+ * looked up at call time via `globalThis.Luker.getContext().connectionProfiles.resolve`.
  *
  * @param {string} apiPresetName
  * @param {object} [options]
@@ -183,7 +183,7 @@ export function resolveProfile(apiPresetName, {
     if (typeof effectiveResolver !== 'function') {
         throw new GenerateTaskError(
             'unknown',
-            'No connection-profile resolver available (SillyTavern.getContext().connectionProfiles.resolve missing). Inject `resolver` or call generateTask after Luker boot.',
+            'No connection-profile resolver available (Luker.getContext().connectionProfiles.resolve missing). Inject `resolver` or call generateTask after Luker boot.',
         );
     }
     const resolution = effectiveResolver({
@@ -322,7 +322,7 @@ export function assembleMessages({
  * - any other requestApi: throws unsupported_api
  *
  * The default rawPromptBuilder is looked up at runtime via
- * globalThis.SillyTavern.getContext().createRawPrompt (wired in Task 0.9).
+ * globalThis.Luker.getContext().createRawPrompt (wired in Task 0.9).
  * Tests must inject `rawPromptBuilder`.
  *
  * @param {string} requestApi
@@ -347,7 +347,7 @@ export function renderForApi(requestApi, messages, { rawPromptBuilder = null } =
     if (typeof builder !== 'function') {
         throw new GenerateTaskError(
             'unsupported_api',
-            `requestApi '${requestApi}' folding requires a rawPromptBuilder (createRawPrompt). Inject one or expose it via SillyTavern.getContext().createRawPrompt.`,
+            `requestApi '${requestApi}' folding requires a rawPromptBuilder (createRawPrompt). Inject one or expose it via Luker.getContext().createRawPrompt.`,
         );
     }
     return builder(messages, requestApi, false, false, '', '');

@@ -65,7 +65,7 @@ test.describe('#110 — iter-popups carry the no-content-duplication hint', () =
         // mode since that's the canonical multi-agent scope where the
         // dedup hint matters most.
         await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             // Force director mode so the studio opens in the director
             // adapter (the hint applies to all modes, but director is
             // the one with sub-agents).

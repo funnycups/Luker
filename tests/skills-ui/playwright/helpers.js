@@ -162,7 +162,7 @@ export async function openSkillManagerPanel(page) {
  */
 export async function ensureSkillsApiAvailable(page) {
     const hasApi = await page.evaluate(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         return Boolean(ctx?.skills && typeof ctx.skills.list === 'function');
     });
     test.skip(!hasApi, 'context.skills API not exposed — skill UI features disabled in this build');
@@ -192,7 +192,7 @@ export async function activateConnectionProfile(page) {
     // settings at all, the dropdown waitForFunction below burns 30s for
     // nothing. Probe the settings shape first (no DOM access).
     const hasAnyProfile = await page.evaluate(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const profiles = ctx?.extensionSettings?.connectionManager?.profiles;
         return Array.isArray(profiles) && profiles.length > 0;
     }).catch(() => false);
@@ -211,7 +211,7 @@ export async function activateConnectionProfile(page) {
         // returns '' which the caller treats as "skip".
     }
     return await page.evaluate(async () => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         if (!ctx) return '';
         const profiles = ctx.extensionSettings?.connectionManager?.profiles;
         if (!Array.isArray(profiles) || !profiles.length) return '';
@@ -248,7 +248,7 @@ export async function activateConnectionProfile(page) {
  */
 export async function ensureCharacterLoaded(page) {
     return await page.evaluate(async () => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         if (!ctx) return '';
         const cur = ctx.characters?.[ctx.characterId];
         if (cur?.avatar) return String(cur.avatar);
@@ -290,7 +290,7 @@ export async function ensureCharacterLoaded(page) {
 export async function ensureDirectorProfileInitialized(page) {
     // Step 1: wait for the orchestrator settings bucket to exist.
     await page.waitForFunction(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const settings = ctx?.extensionSettings?.orchestrator;
         return Boolean(settings && typeof settings === 'object');
     }, null, { timeout: 30000 });
@@ -299,7 +299,7 @@ export async function ensureDirectorProfileInitialized(page) {
     // setting it inline (idempotently — only when absent) is faster
     // and less brittle than driving a UI path that triggers the lazy.
     await page.evaluate(async () => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const settings = ctx.extensionSettings.orchestrator;
         if (settings.directorProfile && typeof settings.directorProfile === 'object') return;
         try {
@@ -374,7 +374,7 @@ export function buildSyntheticEmbed({ name, description, bodyTail = '' }) {
 export async function cleanupSkill(page, scope, name) {
     await page.evaluate(async ({ scope, name }) => {
         try {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const api = ctx?.skills;
             if (!api || typeof api.delete !== 'function') return;
             await api.delete(scope, name);

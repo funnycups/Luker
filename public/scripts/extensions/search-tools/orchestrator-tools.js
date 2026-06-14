@@ -215,7 +215,7 @@ export const SEARCH_TOOL_NAMES = Object.freeze(SCHEMAS.map(s => s.name));
  * can no-op without throwing.
  */
 function loadOrchestratorRegistrar() {
-    const orch = SillyTavern.getContext().getExtensionApi('orchestrator');
+    const orch = Luker.getContext().getExtensionApi('orchestrator');
     if (!orch || typeof orch.registerOrchestrationTool !== 'function') return null;
     return orch;
 }

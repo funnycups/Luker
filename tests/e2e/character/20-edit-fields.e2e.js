@@ -39,14 +39,14 @@ test.describe('#20 — Edit existing character fields', () => {
             await mod.getCharacters();
         });
         await page.waitForFunction(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
         }, { timeout: 15_000 });
 
         // Pull current full record to use as baseline (alternate_greetings,
         // tags etc. must be preserved on the edit).
         const baseline = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),
@@ -62,7 +62,7 @@ test.describe('#20 — Edit existing character fields', () => {
         // POST /api/characters/edit with the updated fields. Multipart
         // form, no avatar file (only fields changed).
         const editResult = await page.evaluate(async ({ avatar, baseline, newDesc, newFirstMes, newGreetings }) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const form = new FormData();
             form.append('avatar_url', avatar);
             form.append('ch_name', baseline.name || baseline.data?.name || 'Ash the Cartographer');
@@ -98,7 +98,7 @@ test.describe('#20 — Edit existing character fields', () => {
 
         // Verify in-memory + on-disk match.
         const reread = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),
@@ -124,7 +124,7 @@ test.describe('#20 — Edit existing character fields', () => {
         await reloadAndAwait(page, server.baseURL);
 
         const persisted = await page.evaluate(async (avatar) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const res = await fetch('/api/characters/get', {
                 method: 'POST',
                 headers: ctx.getRequestHeaders(),

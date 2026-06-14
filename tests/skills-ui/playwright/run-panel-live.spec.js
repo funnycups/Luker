@@ -72,7 +72,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         if (!profile) return; // belt-and-suspenders
 
         const llmReady = await page.evaluate(() => {
-            const ctx = window.SillyTavern?.getContext?.();
+            const ctx = window.Luker?.getContext?.();
             const v = ctx?.onlineStatus ?? null;
             return Boolean(v) && String(v).toLowerCase() !== 'no_connection';
         });
@@ -235,7 +235,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
             const profile = await activateConnectionProfile(page);
             if (!profile) { test.skip(true, 'no usable connection profile (skipped same as primary test)'); return; }
             const llmReady = await page.evaluate(() => {
-                const ctx = window.SillyTavern?.getContext?.();
+                const ctx = window.Luker?.getContext?.();
                 const v = ctx?.onlineStatus ?? null;
                 return Boolean(v) && String(v).toLowerCase() !== 'no_connection';
             });
@@ -341,7 +341,7 @@ async function activateConnectionProfile(page) {
     // settings at all, the dropdown waitForFunction below will burn
     // 30s for nothing. Probe the settings shape first (no DOM access).
     const hasAnyProfile = await page.evaluate(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const profiles = ctx?.extensionSettings?.connectionManager?.profiles;
         return Array.isArray(profiles) && profiles.length > 0;
     }).catch(() => false);
@@ -360,7 +360,7 @@ async function activateConnectionProfile(page) {
         // returns '' which the caller treats as "skip".
     }
     return await page.evaluate(async () => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         if (!ctx) return '';
         const profiles = ctx.extensionSettings?.connectionManager?.profiles;
         if (!Array.isArray(profiles) || !profiles.length) return '';
@@ -391,7 +391,7 @@ async function activateConnectionProfile(page) {
  */
 async function ensureCharacterLoaded(page) {
     return await page.evaluate(async () => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         if (!ctx) return '';
         const cur = ctx.characters?.[ctx.characterId];
         if (cur?.avatar) return String(cur.avatar);
@@ -426,7 +426,7 @@ async function ensureCharacterLoaded(page) {
  */
 async function ensureOrchestratorEnabledDirectorMode(page) {
     await page.evaluate(() => {
-        const ctx = window.SillyTavern?.getContext?.();
+        const ctx = window.Luker?.getContext?.();
         const settings = ctx?.extensionSettings?.orchestrator;
         if (!settings) throw new Error('orchestrator settings missing — extension not mounted (check that the extension is enabled in this build)');
         settings.enabled = true;

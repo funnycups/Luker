@@ -19,17 +19,16 @@ if (!globalThis.DATA_ROOT) {
     globalThis.DATA_ROOT = path.resolve(__dirname, '../public');
 }
 
-if (typeof globalThis.SillyTavern === 'undefined') {
+if (typeof globalThis.Luker === 'undefined') {
     // ---------------------------------------------------------------------
-    // SillyTavern / Luker / st global stub.
+    // Luker / SillyTavern / st global stub.
     //
     // Browser-side modules in public/scripts/extensions/** capture references
-    // at module-load time via `const x = SillyTavern.getContext().y;` (or
-    // increasingly via `Luker.getContext()` — public/script.js binds
-    // `globalThis.{Luker,st,SillyTavern}` to the same object so all three
-    // are user-facing aliases). Under jest (Node ESM) none of those globals
-    // exist, so the import-time evaluation throws ReferenceError and the
-    // entire test suite fails to load.
+    // at module-load time via `const x = Luker.getContext().y;`.
+    // public/script.js binds `globalThis.{Luker,st,SillyTavern}` to the same
+    // object so all three are user-facing aliases. Under jest (Node ESM) none
+    // of those globals exist, so the import-time evaluation throws
+    // ReferenceError and the entire test suite fails to load.
     //
     // We install a recursive Proxy that synthesizes any accessed field as a
     // callable no-op (or as a nested proxy when accessed as an object).
@@ -44,7 +43,7 @@ if (typeof globalThis.SillyTavern === 'undefined') {
     // search-tools `register*OrchestrationTools()` populate the same
     // registry the tests then introspect via `__getExtensionRegistryForTest`.
     // ---------------------------------------------------------------------
-    const SENTINEL = Symbol('jest-setup:sillytavern-stub');
+    const SENTINEL = Symbol('jest-setup:luker-stub');
     const cache = new WeakMap();
     function makeProxy() {
         const target = function () {};
@@ -53,7 +52,7 @@ if (typeof globalThis.SillyTavern === 'undefined') {
             get(t, prop) {
                 if (prop === SENTINEL) return true;
                 if (prop === 'then') return undefined; // never look thenable
-                if (prop === Symbol.toPrimitive) return () => 'silly-tavern-stub';
+                if (prop === Symbol.toPrimitive) return () => 'luker-stub';
                 if (prop === Symbol.iterator) return undefined;
                 if (!cache.has(t)) cache.set(t, new Map());
                 const memo = cache.get(t);
@@ -90,9 +89,9 @@ if (typeof globalThis.SillyTavern === 'undefined') {
         // Common ctx fields where production code does `c?.fn || fallback`
         // for capability detection. The Proxy default is truthy, so without
         // explicit identity / null defaults the fallback never fires and
-        // tests get the Proxy stringified to "silly-tavern-stub" in
+        // tests get the Proxy stringified to "luker-stub" in
         // unexpected places (i18n strings, lib helpers, etc.). Override
-        // any of these in a test by assigning a new globalThis.SillyTavern.
+        // any of these in a test by assigning a new globalThis.Luker.
         const base = {
             getExtensionApi,
             // i18n helpers (e.g. orchestrator/i18n.js)
@@ -106,7 +105,7 @@ if (typeof globalThis.SillyTavern === 'undefined') {
             get(t, prop) {
                 if (prop in t) return t[prop];
                 if (prop === 'then') return undefined;
-                if (prop === Symbol.toPrimitive) return () => 'silly-tavern-ctx-stub';
+                if (prop === Symbol.toPrimitive) return () => 'luker-ctx-stub';
                 if (prop === Symbol.iterator) return undefined;
                 if (!cache.has(t)) cache.set(t, new Map());
                 const memo = cache.get(t);
@@ -120,10 +119,10 @@ if (typeof globalThis.SillyTavern === 'undefined') {
         getContext: () => makeContextProxy(),
     };
     // Mirror public/script.js:338-340 — Luker / st / SillyTavern are all
-    // aliases for the same plugin-facing API object. Plugins still pick
-    // whichever name they were last touched with (see
-    // `grep -rn "Luker\\.getContext\\b" public/scripts/extensions/`), so
-    // all three must resolve to the same stub.
+    // aliases for the same plugin-facing API object. Plugin and test code
+    // consumes `Luker.getContext()`; the SillyTavern / st aliases remain
+    // for compatibility with any third-party extension that still expects
+    // them, so the stub installs all three.
     globalThis.Luker = stub;
     globalThis.st = stub;
     globalThis.SillyTavern = stub;

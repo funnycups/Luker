@@ -64,7 +64,7 @@ test.describe('#70 — Spec / agenda / loop are three independent executionMode 
         await awaitMainUI(page, server.baseURL);
 
         const result = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings.orchestrator;
 
             // Switch to spec mode via the user-facing setting.
@@ -114,7 +114,7 @@ test.describe('#70 — Spec / agenda / loop are three independent executionMode 
         await awaitMainUI(page, server.baseURL);
 
         const result = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings.orchestrator;
 
             settings.executionMode = 'agenda';
@@ -170,7 +170,7 @@ test.describe('#70 — Spec / agenda / loop are three independent executionMode 
 
         // First — profile-shape check via the dispatcher's mode-selection path.
         const profileInfo = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings.orchestrator;
 
             settings.executionMode = 'loop';
@@ -315,7 +315,7 @@ test.describe('#70 — Spec / agenda / loop are three independent executionMode 
         // appears in exactly one mode — that is the "alternatives, not
         // pipeline" contract.
         const sweep = await page.evaluate(async () => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             const settings = ctx.extensionSettings.orchestrator;
             settings.singleAgentModeEnabled = false;
 

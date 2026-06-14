@@ -83,7 +83,7 @@ test.describe('Skills: card-bound preset materializes to character scope + clean
         // character index. The end-state on disk is the contract we care about.
         const installResult = await page.evaluate(async ({ ownPayload, presetPayload, avatar }) => {
             const mod = await import('/scripts/skills/embed-lifecycle.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
 
             // Build the synthetic character — schema mirrors the real entry
             // in ctx.characters[chid].
@@ -121,7 +121,7 @@ test.describe('Skills: card-bound preset materializes to character scope + clean
         // ── 3. Both skills must live in character scope. The bound-preset
         //      skill MUST NOT have landed in preset scope (spec §3.3 contract). ─
         const charSkills = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.list({ scope });
         }, characterScope);
         const charNames = (charSkills || []).map(s => s.name).sort();
@@ -130,7 +130,7 @@ test.describe('Skills: card-bound preset materializes to character scope + clean
         );
 
         const negativeScopeContents = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.list({ scope });
         }, negativePresetScope);
         const negativeNames = (negativeScopeContents || []).map(s => s.name);
@@ -152,7 +152,7 @@ test.describe('Skills: card-bound preset materializes to character scope + clean
         //      handler's body), then verify both rows are gone. ──────────
         const cascadeResult = await page.evaluate(async (avatar) => {
             const mod = await import('/scripts/skills/embed-lifecycle.js');
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await mod.cascadeDeleteSkillsInScope({
                 context: ctx,
                 scope: { kind: 'character', characterFile: avatar },
@@ -162,7 +162,7 @@ test.describe('Skills: card-bound preset materializes to character scope + clean
         expect(cascadeResult.failed, 'cascade had no failures').toBe(0);
 
         const charSkillsAfter = await page.evaluate(async (scope) => {
-            const ctx = window.SillyTavern.getContext();
+            const ctx = window.Luker.getContext();
             return await ctx.skills.list({ scope });
         }, characterScope);
         const namesAfter = (charSkillsAfter || []).map(s => s.name);

@@ -69,7 +69,7 @@ test.describe('#86 — Disable / re-enable group member', () => {
 
         // --- Disable Rhonin (index 1). ---
         await page.evaluate(async ({ id, disableAvatar }) => {
-            const headers = window.SillyTavern.getContext().getRequestHeaders();
+            const headers = window.Luker.getContext().getRequestHeaders();
             // Fetch the current group, mutate disabled_members, push back.
             const all = await fetch('/api/groups/all', { method: 'POST', headers, body: JSON.stringify({}) }).then(r => r.json());
             const g = (all || []).find(x => x.id === id);
@@ -81,7 +81,7 @@ test.describe('#86 — Disable / re-enable group member', () => {
                 body: JSON.stringify(g),
             });
             // Refresh in-memory state.
-            await window.SillyTavern.getContext().getCharacters();
+            await window.Luker.getContext().getCharacters();
         }, { id: groupId, disableAvatar: trio[1].avatar });
 
         // --- Round 2: only Ash + Kestrel should rotate. ---
@@ -93,7 +93,7 @@ test.describe('#86 — Disable / re-enable group member', () => {
 
         // --- Re-enable Rhonin. ---
         await page.evaluate(async ({ id }) => {
-            const headers = window.SillyTavern.getContext().getRequestHeaders();
+            const headers = window.Luker.getContext().getRequestHeaders();
             const all = await fetch('/api/groups/all', { method: 'POST', headers, body: JSON.stringify({}) }).then(r => r.json());
             const g = (all || []).find(x => x.id === id);
             g.disabled_members = [];
@@ -102,7 +102,7 @@ test.describe('#86 — Disable / re-enable group member', () => {
                 headers,
                 body: JSON.stringify(g),
             });
-            await window.SillyTavern.getContext().getCharacters();
+            await window.Luker.getContext().getCharacters();
         }, { id: groupId });
 
         // --- Round 3: full rotation should resume. ---

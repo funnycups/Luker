@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 
 // Shared, mutable extension settings — main.js binds `extension_settings`
-// from `SillyTavern.getContext().extensionSettings` at module-load time
+// from `Luker.getContext().extensionSettings` at module-load time
 // (line 9 in main.js). Exposing the same reference here lets each test
 // mutate `extensionSettings.orchestrator` before invoking ensureSettings.
 const extensionSettings = { orchestrator: {} };
@@ -19,7 +19,7 @@ globalThis.toastr = { error: () => {}, info: () => {}, success: () => {}, warnin
 // hydrate constants, settings handles, and the extension-API registrar.
 // Provide just enough surface for module evaluation + ensureSettings to
 // run without hitting `undefined` accessors.
-globalThis.SillyTavern = {
+globalThis.Luker = {
     getContext: () => ({
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
@@ -75,7 +75,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-res
 // ST core modules main.js transitively pulls in.
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettings,
-    getContext: () => globalThis.SillyTavern.getContext(),
+    getContext: () => globalThis.Luker.getContext(),
     writeExtensionField: async () => {},
     UNSET_VALUE: Symbol('unset'),
     renderExtensionTemplateAsync: async () => '',

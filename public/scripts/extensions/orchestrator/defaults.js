@@ -16,7 +16,7 @@
  * now and will move into more specific modules in later refactors.
  */
 
-const __ctx = SillyTavern.getContext();
+const __ctx = Luker.getContext();
 const extension_prompt_roles = __ctx.constants.promptRoles;
 const world_info_position = __ctx.constants.wiPosition;
 
