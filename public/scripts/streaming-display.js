@@ -20,7 +20,7 @@
 
 import { SVGInject } from '../lib.js';
 import { t } from './i18n.js';
-import { animation_duration, messageFormatting } from '/script.js';
+import { animation_duration, messageFormatting } from '../script.js';
 
 /** CSS class prefix */
 const CSS_PREFIX = 'streaming-display';

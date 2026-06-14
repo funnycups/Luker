@@ -1,7 +1,7 @@
 import { name1, name2, characters, getCharacterCardFieldsLazy, getGeneratingModel } from '../../../script.js';
 import { groups, selected_group } from '../../../scripts/group-chats.js';
 import { logMacroGeneralError } from './MacroDiagnostics.js';
-import { getStringHash } from '/scripts/utils.js';
+import { getStringHash } from '../../utils.js';
 /**
  * MacroEnvBuilder is responsible for constructing the MacroEnv object
  * that is passed to macro handlers.

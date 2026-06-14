@@ -1,6 +1,6 @@
 import { MacroRegistry, MacroCategory } from '../engine/MacroRegistry.js';
 import { eventSource, event_types } from '../../events.js';
-import { findExtension } from '/scripts/extensions.js';
+import { findExtension } from '../../extensions.js';
 
 let lastGenerationTypeValue = '';
 let lastGenerationTypeTrackingInitialized = false;

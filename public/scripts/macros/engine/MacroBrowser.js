@@ -5,7 +5,7 @@
 
 import { MacroRegistry, MacroCategory } from './MacroRegistry.js';
 import { performFuzzySearch } from '../../power-user.js';
-import { escapeRegex } from '/scripts/utils.js';
+import { escapeRegex } from '../../utils.js';
 
 /** @typedef {import('./MacroRegistry.js').MacroDefinition} MacroDefinition */
 /** @typedef {import('./MacroRegistry.js').MacroValueType} MacroValueType */
