@@ -215,6 +215,97 @@ export function markOnboarded({ dataRoot, handle = 'default-user' }) {
 }
 
 /**
+ * Wire the mock LLM's `/v1/embeddings` endpoint into Luker's vector pipeline.
+ *
+ * Adds a Connection-Manager embed profile (`source: 'openai'` with
+ * `api-url` pointing at the mock) and patches the vectors / memory-graph
+ * extension settings so:
+ *   - `extension_settings.vectors.embeddingProfileId` selects that profile
+ *   - `extension_settings.memory_graph.embeddingProfileId` selects the
+ *     same profile (so MG's `vectorSearch` / `syncVectorIndex` resolve it)
+ *
+ * NB: Luker's settings.json uses `extension_settings` (snake_case) as the
+ * persisted key — the client hydrates `extension_settings` from
+ * `settings.extension_settings` on load and serializes back to the same
+ * key on save. Earlier fixtures (`appendConnectionProfile`) wrote to a
+ * camelCase `extensionSettings` slot which the client silently ignores;
+ * this helper writes under the snake_case key the client actually reads.
+ *
+ * `enabled_world_info` is NOT flipped here — the vectors WI semantic
+ * path is opt-in and several specs that share the same dataRoot
+ * bootstrap specifically assert it stays off. Tests that want the WI
+ * path enabled should toggle the `#vectors_enabled_world_info` checkbox
+ * via `page.evaluate` (the canonical handler updates the module-scope
+ * mirror that the interceptor actually reads).
+ *
+ * The `proxy-password` is any non-empty token; the openai vector
+ * backend uses it verbatim as the bearer key when `reverse_proxy` is
+ * set, and the mock ignores authorization entirely.
+ *
+ * @param {object} opts
+ * @param {string} opts.dataRoot
+ * @param {string} [opts.handle]
+ * @param {string} opts.baseURL  Mock LLM base URL (ends in /v1)
+ * @param {string} [opts.model]  Embedding model name string
+ * @param {string} [opts.profileName]
+ * @returns {{ profileId: string, profileName: string }}
+ */
+export function bootstrapVectorsBackend({
+    dataRoot,
+    handle = 'default-user',
+    baseURL,
+    model = 'mock-embed',
+    profileName = 'e2e-mock-embed',
+}) {
+    const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
+    if (!existsSync(settingsPath)) {
+        throw new Error(`settings.json not found at ${settingsPath} — start the server once before adding embed profiles`);
+    }
+    const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    // Persisted shape (what the client hydrates from): snake_case.
+    s.extension_settings = s.extension_settings || {};
+
+    // Connection-manager profile shared between vectors + memory-graph.
+    s.extension_settings.connectionManager = s.extension_settings.connectionManager || { profiles: [], selectedProfile: null };
+    const profiles = Array.isArray(s.extension_settings.connectionManager.profiles)
+        ? s.extension_settings.connectionManager.profiles
+        : [];
+    const profileId = `e2e-embed-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+    profiles.push({
+        id: profileId,
+        mode: 'embed',
+        name: profileName,
+        source: 'openai',
+        model,
+        // api-url + proxy-password ⇒ server takes `<api-url>/embeddings`
+        // and uses `proxy-password` as the bearer key. Any non-empty
+        // password works; the mock ignores Authorization entirely.
+        'api-url': baseURL,
+        'proxy-password': 'mock-embed-key',
+    });
+    s.extension_settings.connectionManager.profiles = profiles;
+
+    // Vectors extension wiring: select the profile.
+    s.extension_settings.vectors = s.extension_settings.vectors || {};
+    s.extension_settings.vectors.embeddingProfileId = profileId;
+    // The mock embedder (cf. mockLLM.js — bag-of-tokens hash) produces
+    // cosine similarities clustered in [0.0, 0.7] with a clear gap
+    // around 0.2 between "topical match" and "unrelated". Setting the
+    // threshold there keeps semantic-miss entries out of the prompt
+    // without requiring a real semantic embedder. Tests that need a
+    // different threshold can override via page.evaluate.
+    s.extension_settings.vectors.score_threshold = 0.2;
+    s.extension_settings.vectors.max_entries = 5;
+
+    // Memory-graph extension wiring: same profile, shared collection backend.
+    s.extension_settings.memory_graph = s.extension_settings.memory_graph || {};
+    s.extension_settings.memory_graph.embeddingProfileId = profileId;
+
+    writeFileSync(settingsPath, JSON.stringify(s, null, 4));
+    return { profileId, profileName };
+}
+
+/**
  * List characters present in a dataRoot (for assertions across restart).
  */
 export function listCharacters({ dataRoot, handle = 'default-user' }) {

@@ -3,25 +3,27 @@
 // Vectorized WI entries get added to the vectors extension's semantic
 // pool: (1) embedded into a per-world collection, (2) queried by the
 // recent chat tail, (3) top-K appended back into the prompt context.
-// This requires a working embedding backend (transformers / openai-embed
-// / ollama / etc.) — the in-process mock LLM does not implement
-// /v1/embeddings, so we can't end-to-end the semantic ranking path.
+// This requires a working embedding backend; tests/e2e/_lib/mockLLM.js
+// implements a deterministic /v1/embeddings endpoint (bag-of-tokens
+// hash → 384-dim unit vector) wired in via bootstrapVectorsBackend so
+// shared tokens cluster by cosine similarity — exactly what the WI
+// vector path needs to score "navigate the coast" against "Coastal
+// navigation in fog" without a real embedder.
 //
-// What this test verifies deterministically without an embedder:
+// What this test verifies:
 //   - The vectorized flag persists on disk (round-trip via /worldinfo/get).
 //   - The flag does NOT prevent keyword activation — i.e. when a primary
 //     key matches in the user message, a vectorized entry still injects
 //     via the keyword path. The vectorized flag is an OPT-IN ADDITION to
 //     the semantic pool, not a replacement for keyword matching.
-//   - A vectorized entry with EMPTY key array does not inject when the
-//     vectors extension's WI feature is disabled (its default).
-//
-// The full end-to-end (embed → query → inject) is marked test.fixme()
-// with a documented plan for how to plumb a mock embedder.
+//   - With the vectors extension's WI flag enabled and the mock embedder
+//     wired in, an empty-key vectorized entry whose content is
+//     semantically near the user's turn DOES inject via the semantic
+//     pool, while a semantically distant empty-key entry does not.
 
 import { test, expect } from '@playwright/test';
 import { startMockLLM } from '../_lib/mockLLM.js';
-import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
+import { bootstrapCustomBackend, appendConnectionProfile, bootstrapVectorsBackend, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 import { writeCharacterWithBinding, startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
 
@@ -61,7 +63,7 @@ const VECTOR_ENTRIES = [
 
 test.beforeAll(async () => {
     mock = await startMockLLM({
-        scriptedReplies: Array.from({ length: 6 }, (_, i) =>
+        scriptedReplies: Array.from({ length: 10 }, (_, i) =>
             `*A reply tuned to the wind.* Acknowledged (${i + 1}).`,
         ),
     });
@@ -69,6 +71,7 @@ test.beforeAll(async () => {
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
     writeWorldBook({ dataRoot: server.dataRoot, name: 'vector-book', entries: VECTOR_ENTRIES });
     writeCharacterWithBinding({
@@ -147,32 +150,113 @@ test.describe('#32 — Vectorized WI entries', () => {
         expect(baseline?.vectorized).toBe(false);
     });
 
-    test.fixme('full embed → query → inject pipeline (needs mock embedder backend)', async ({ page }) => {
-        // BLOCKED: requires a real embedding backend that implements
-        // /v1/embeddings (or a stub for one of vectors_source = openai /
-        // transformers / nomicai / ollama / llamacpp / vllm / webllm).
-        //
-        // Plumbing plan (for the follow-up agent):
-        //   1. Extend tests/e2e/_lib/mockLLM.js to also respond to
-        //      /v1/embeddings with deterministic per-string vectors
-        //      (e.g. hash → fixed-dim float[] so cosine similarity is
-        //      deterministic for the test corpus).
-        //   2. In bootstrapCustomBackend(), additionally set
-        //        s.extensionSettings.vectors = {
-        //          source: 'openai',
-        //          enabled_world_info: true,
-        //          openai_model: 'mock-embed',
-        //        };
-        //      so the vectors extension targets the mock for embeddings.
-        //   3. In the spec, ensure the vectors extension's activate() runs
-        //      after the connection profile is selected; the mock will
-        //      receive an /v1/embeddings burst for each WI entry's content.
-        //   4. Send a turn whose semantic content matches VECTOR_NAV
-        //      (e.g. "How do mariners find their way through thick fog?").
-        //   5. Assert chatReq.body.messages JSON contains VECTOR_NAV even
-        //      though no keyword matched.
-        //
-        // Until that plumbing is in place, this scenario is fundamentally
-        // blocked by a missing test-double, NOT a product bug.
+    test('semantic injection: empty-key vectorized entry near the query injects, distant one does not', async ({ page }) => {
+        // The vectors-extension WI path: when `enabled_world_info` is true
+        // and a vectorized entry's content is in the semantic top-K for
+        // the recent chat tail, the entry is force-activated via
+        // WORLDINFO_FORCE_ACTIVATE — even with an empty `key` array. We
+        // flip the flag at runtime (the WI vector path reads it live) so
+        // the earlier "WI flag stays off" assertions in tests 1+2 remain
+        // valid; the same dataRoot now backs all three cases.
+        await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Ash Navigator');
+        await page.waitForFunction(() => {
+            const ctx = window.SillyTavern?.getContext?.();
+            if (!ctx) return false;
+            const id = ctx.characterId;
+            if (typeof id !== 'number' && typeof id !== 'string') return false;
+            return ctx.characters?.[id]?.data?.extensions?.world === 'vector-book';
+        }, { timeout: 10_000 });
+        await page.waitForFunction(() => {
+            const ctx = window.SillyTavern.getContext();
+            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
+        }, { timeout: 10_000 }).catch(() => {});
+
+        // Flip the vectors-extension WI flag on at runtime. The vectors
+        // extension keeps a module-scope `settings` mirror that diverges
+        // from `extension_settings.vectors` after init — mutating the
+        // latter alone won't reach the interceptor. The
+        // `#vectors_enabled_world_info` checkbox's input handler is the
+        // canonical write path (settings.html is appended to
+        // `#vectors_container` on init, so the element exists even when
+        // the extension drawer is closed).
+        await page.evaluate(async () => {
+            const ctx = window.SillyTavern.getContext();
+            const ext = ctx.extensionSettings?.vectors;
+            if (!ext) throw new Error('vectors extension settings missing');
+
+            const $ = window.jQuery || window.$;
+            // Bootstrap wrote the embed profile into settings.json so
+            // init's refreshEmbeddingProfileSelect should have picked
+            // it up. If for any reason the dropdown didn't bind it (UI
+            // hadn't mounted on first init), force-bind via the
+            // canonical change handler so the vectors module-scope
+            // settings get the id.
+            const cm = ctx.extensionSettings?.connectionManager;
+            const embedProfiles = (cm?.profiles || []).filter(p => p.mode === 'embed');
+            if (embedProfiles.length === 0) {
+                throw new Error('no embed profile found in connectionManager — bootstrap did not land');
+            }
+            const sel = $('#vectors_embedding_profile');
+            if (sel.length && String(sel.val() || '') !== embedProfiles[0].id) {
+                if (!sel.find(`option[value="${embedProfiles[0].id}"]`).length) {
+                    sel.append(new Option(embedProfiles[0].name, embedProfiles[0].id));
+                }
+                sel.val(embedProfiles[0].id).trigger('change');
+            }
+
+            // The score_threshold input writes to the module-scope
+            // settings mirror; setting it via `.val(...).trigger('input')`
+            // matches the slider's canonical path. Bootstrap also wrote
+            // 0.2 to settings.json, but that may have been clobbered
+            // if init re-read defaults.
+            const thresh = $('#vectors_score_threshold');
+            if (thresh.length) thresh.val('0.2').trigger('input');
+
+            const checkbox = $('#vectors_enabled_world_info');
+            if (!checkbox.length) {
+                throw new Error('vectors enabled_world_info checkbox not mounted');
+            }
+            checkbox.prop('checked', true).trigger('input');
+        });
+
+        // Pose a question whose content overlaps "Coastal navigation in
+        // fog" / "harbor markers" / "mariners" — none of those are keys
+        // on any WI entry, so the only path that can pull VECTOR_NAV in
+        // is the semantic one. Also avoid every keyword from the
+        // baseline / VECTOR_KEYWORD / "always" entries so this test is
+        // genuinely measuring the vector path, not a keyword leak.
+        const navBody = await sendAndCaptureBody(
+            page,
+            'Mariners cannot see the harbor markers tonight; tell me how to use the rhythmic pings to navigate through this fog.',
+        );
+
+        // Semantic hit: VECTOR_NAV must inject even though no key matched.
+        expect(navBody, 'NAV entry should be force-activated by semantic similarity').toContain('VECTOR_NAV');
+        // Semantic miss: the inland-husbandry entry shares no tokens with
+        // the query, so its cosine ranks low and it must NOT inject.
+        expect(navBody, 'FARM entry should NOT inject when query is about coastal navigation').not.toContain('VECTOR_FARM');
+        // None of the baseline-keyword triggers were in the query, so
+        // the keyword path must stay quiet — proves we're really
+        // measuring the semantic injection.
+        expect(navBody, 'baseline keyword should NOT inject (no "always" in the query)').not.toContain('BASELINE_LORE');
+        expect(navBody, 'VECTOR_KEYWORD should NOT inject (no "kelp"/"south reef" in the query)').not.toContain('VECTOR_KEYWORD');
+
+        // Sanity check: the mock saw at least one embeddings burst after
+        // the WI flag flipped. Without this, a regression that silently
+        // bypasses the embedder would still let the keyword assertions
+        // above pass (false negatives elsewhere).
+        const embedCalls = mock.requests.filter(r => r.url.includes('/embeddings'));
+        expect(embedCalls.length, 'expected the mock to receive embeddings requests').toBeGreaterThan(0);
+
+        // Now ask the inverse: a query whose tokens overlap FARM, not
+        // NAV. FARM should inject and NAV should not — the same vector
+        // pool ranks differently for different queries.
+        const farmBody = await sendAndCaptureBody(
+            page,
+            'Tell me about inland sheep husbandry — how does the highland grazing rotation align with the rainfall pattern?',
+        );
+        expect(farmBody, 'FARM entry should inject when query is about inland husbandry').toContain('VECTOR_FARM');
+        expect(farmBody, 'NAV entry should NOT inject when query has no coastal-navigation tokens').not.toContain('VECTOR_NAV');
     });
 });

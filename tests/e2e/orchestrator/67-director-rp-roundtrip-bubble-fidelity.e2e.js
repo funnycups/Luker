@@ -3,27 +3,22 @@
 // Spec:
 //   - Enable orchestrator + director mode.
 //   - Send an RP-immersive turn.
-//   - The director main agent runs; each chat-completion call against the
-//     mock returns a scripted reply.
+//   - The director main agent runs; the mock LLM router answers each
+//     /chat/completions hit by sequencing: write_message(FINAL_REPLY) →
+//     finalize(). The runtime commits the handle's buffered draft as
+//     the chat bubble.
 //   - The final chat bubble in the chat list MUST equal the model's final
 //     text byte-for-byte (per `feedback_no_silent_truncation`).
 //   - Restart the server; the chat history is rehydrated and the bubble
 //     text is still preserved.
 //
-// Notes on env discipline:
-//   - We do NOT pre-script tool calls. The mock returns plain assistant
-//     replies; the director's main agent will receive them and (per the
-//     production runtime) treat the no-tool reply as the final message
-//     candidate. This is the most deterministic way to exercise the
-//     "final text -> bubble" path without needing a real LLM that drives
-//     skill_read / dispatch_subagent decisions.
-//   - Some director sub-agents may dispatch (the default profile ships
-//     critics that the main agent CAN call); the mock backs each with a
-//     queued reply so the loop progresses to a finalize.
-//
-// If the director runtime requires a tool_calls finalize cycle to commit
-// (i.e. the no-tool plain reply never becomes the chat bubble), this
-// scenario is marked `test.fixme` with the precise reason.
+// What unlocked this:
+//   The mock LLM now supports a director-aware router (`scriptDirectorRun`)
+//   that distinguishes main-agent vs sub-agent requests by the presence
+//   of director-only tools (write_message / finalize / dispatch_subagent)
+//   in the tools array. Each call gets a per-role turn counter so the
+//   spec can sequence the two-step write→finalize protocol deterministically.
+//   See `_lib/mockLLM.js` header comment for the full API.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -39,6 +34,7 @@ import {
     sendMessageAndAwaitReply,
     reloadAndAwait,
     getChatSnapshot,
+    installMinimalDirectorProfile,
 } from '../_lib/page.js';
 
 // The reply text needs to be distinctive so the byte-equality assertion
@@ -51,19 +47,7 @@ const FINAL_REPLY =
 let server, mock;
 
 test.beforeAll(async () => {
-    // Five spare scripted replies — the director may invoke sub-agents
-    // before producing the final main-agent message; each sub-agent call
-    // pops one from this queue. The LAST plain assistant reply the main
-    // agent receives becomes the committed message.
-    mock = await startMockLLM({
-        scriptedReplies: [
-            FINAL_REPLY,           // main agent's first plain reply (likely the finalize)
-            FINAL_REPLY,           // backup if a sub-agent runs first
-            FINAL_REPLY,           // backup for additional sub-agent calls
-            FINAL_REPLY,           // backup
-            FINAL_REPLY,           // backup
-        ],
-    });
+    mock = await startMockLLM({});
     server = await startServer({ batchKey: 'orchestrator', scenarioId: '67-bubble-fidelity' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -76,31 +60,36 @@ test.afterAll(async () => {
 });
 
 test.describe('#67 — Director RP one full round → 1:1 bubble fidelity', () => {
-    // The director runtime is heavily dependent on real tool_calls to know
-    // when to finalize; a plain assistant reply from the mock typically
-    // gets treated as additional reasoning, not the committed message.
-    // The mock cannot synthesize a coherent tool_call sequence
-    // (write_message + finalize) without the test knowing the exact
-    // schema the runtime will accept. Mark fixme with the reason.
-    test.fixme('director run commits scripted reply 1:1 to chat bubble + persists across restart', async ({ page }) => {
+    test('director run commits scripted reply 1:1 to chat bubble + persists across restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
-        // Flip orchestrator on + director mode via the extension settings hook.
-        await page.evaluate(() => {
-            const ctx = window.SillyTavern.getContext();
-            const s = ctx.extensionSettings?.orchestrator;
-            if (!s) throw new Error('orchestrator settings missing — extension not loaded');
-            s.enabled = true;
-            s.executionMode = 'director';
-            ctx.saveSettingsDebounced?.();
+        await installMinimalDirectorProfile(page);
+
+        // Two-step director protocol: write the entire body into the
+        // handle, then finalize to commit. Anything else (sub-agent
+        // dispatches, additional write_message calls, patches) would
+        // also work, but for this 1:1 fidelity check the simplest
+        // possible main-agent script is the right one. Each step pops
+        // one turn off the router's per-role counter.
+        mock.scriptDirectorRun({
+            route: ({ role, turn }) => {
+                if (role === 'director-main' && turn === 0) {
+                    return { tool: 'write_message', arguments: { text: FINAL_REPLY, mode: 'replace' } };
+                }
+                if (role === 'director-main' && turn === 1) {
+                    return { tool: 'finalize', arguments: {} };
+                }
+                return null;
+            },
         });
 
-        // Send a single RP-immersive prompt.
+        // Send a single RP-immersive prompt and wait for the assistant
+        // bubble to materialize.
         const { text: bubble } = await sendMessageAndAwaitReply(
             page,
             '*I cup my hand to the lantern, shielding the flame from the wind, and lean toward Ash.* "What do you read in the reef tonight?"',
-            { timeoutMs: 240_000 },
+            { timeoutMs: 60_000 },
         );
 
         // Byte-equality (post-trim — the renderer trims trailing newlines).

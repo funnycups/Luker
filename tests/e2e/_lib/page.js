@@ -282,3 +282,103 @@ export async function abortGeneration(page) {
     const stop = page.locator('#mes_stop');
     await stop.click({ trial: false }).catch(() => {});
 }
+
+/**
+ * Install a minimal director-mode orchestrator profile. The default
+ * profile ships with 12 mandatory sub-agents whose system prompts pull
+ * in skills via lazy resolvers — fine for production but expensive to
+ * drive from a mock LLM router. This helper writes a lean profile that
+ * has only the sub-agents the test cares about, then activates director
+ * mode.
+ *
+ * Pass `subAgents: []` (the default) for a single-main-agent profile —
+ * the simplest possible director run, useful when the test only wants to
+ * exercise write_message → finalize. Pass an array of `{ id, description,
+ * systemPrompt, tools? }` to define sub-agents the main agent can
+ * dispatch via `dispatch_subagent({ subagentId, task })`.
+ *
+ * The profile also disables every default sub-agent skill (`skills:
+ * { visible: [], deny: [] }`) so the resolver doesn't append a giant
+ * `<available_skills>` catalog block to each prompt — keeps the
+ * sub-agent payload predictable for assertions.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {object} [opts]
+ * @param {string} [opts.mainSystemPrompt]
+ * @param {Array<object>} [opts.subAgents]
+ * @param {object} [opts.tools]   Optional override of profile.tools — by
+ *                                default everything is OFF except collab.
+ */
+export async function installMinimalDirectorProfile(page, {
+    mainSystemPrompt = 'You are the test director. Use the available tools to drive the turn to completion.',
+    subAgents = [],
+    tools = null,
+} = {}) {
+    await page.evaluate(async ({ mainSystemPrompt, subAgents, tools }) => {
+        const ctx = window.SillyTavern.getContext();
+        const settings = ctx.extensionSettings?.orchestrator;
+        if (!settings) throw new Error('orchestrator settings missing — extension not loaded');
+
+        settings.enabled = true;
+        settings.executionMode = 'director';
+        settings.singleAgentModeEnabled = false;
+        // Force streaming OFF so the mock can answer with plain JSON
+        // (deterministic; one body, no SSE assembly). Tests that want
+        // streaming should flip this back on themselves after calling.
+        settings.useStreamingTransport = false;
+        // Cap retries so a misconfigured router fails fast instead of
+        // burning a long timeout pumping the no-tool-call retry loop.
+        settings.toolCallRetryMax = 1;
+
+        const presetLib = await import('/scripts/extensions/orchestrator/preset-library.js');
+        const dirDefaults = await import('/scripts/extensions/orchestrator/director-defaults.js');
+
+        // Build a flat director profile that goes through the canonical
+        // sanitizer so the runtime sees the expected shape regardless of
+        // what the per-spec hand-written input looked like.
+        const minimalProfile = {
+            mode: 'director',
+            skills: { visible: [], deny: [] },
+            mainAgent: {
+                promptPresetName: '',
+                apiPresetName: '',
+                systemPrompt: mainSystemPrompt,
+                skills: { visible: [], deny: [] },
+            },
+            subAgents: (subAgents || []).map(a => ({
+                id: String(a.id),
+                description: String(a.description || ''),
+                systemPrompt: String(a.systemPrompt || ''),
+                promptPresetName: '',
+                apiPresetName: '',
+                tools: a.tools || null,
+                maxRounds: a.maxRounds ?? null,
+                skills: { visible: [], deny: [] },
+            })),
+            tools: tools || {
+                // Bare-minimum tool set: collaboration (so dispatch tools
+                // appear when subAgents are present) + nothing else. The
+                // sanitizer fills in canonical false-defaults for every
+                // namespace not listed.
+                collab: { dispatch_subagent: true, dispatch_inline_subagent: true },
+            },
+            maxRounds: 8,
+            maxConcurrentSubagents: 4,
+            maxTotalSubagentRuns: 8,
+            discardOnAbort: false,
+        };
+        const sanitized = dirDefaults.sanitizeDirectorProfile(minimalProfile);
+        // Overwrite the active preset with the sanitized minimal profile.
+        // The active preset is what `getEffectiveProfile()` reads on every
+        // GENERATE_TAKEOVER_DISPATCH, so this replaces the default ship-
+        // of-twelve sub-agents with the lean test fixture for the rest of
+        // the spec's lifetime.
+        const ok = presetLib.writeActivePreset(settings, 'director', 'global', sanitized);
+        if (!ok) throw new Error('writeActivePreset failed; library not seeded');
+        // saveSettings(0, { directSave: true }) is the positional form
+        // (per lessons memo). Flushes to disk so a server restart in
+        // the spec can rehydrate the profile if it needs to.
+        try { await ctx.saveSettings?.(0, { directSave: true }); } catch (_) { /* best-effort */ }
+        ctx.saveSettingsDebounced?.();
+    }, { mainSystemPrompt, subAgents, tools });
+}
