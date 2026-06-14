@@ -89,6 +89,7 @@ import {
 } from './system-prompts.js';
 import { augmentCpaPromptWithSkills } from './skill-prompt.js';
 const skillsApi = Luker.getContext().skills;
+import { commitApprovedSkillProposal } from '../../../skills/iter-studio-tools.js';
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { CPA_TOOL_DISPLAY } from './tool-display.js';
 
@@ -401,6 +402,7 @@ function buildPopupHtml({
     <div class="luker-iter-workspace-grid">
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="cpa_it_messages" data-cpa-it-messages></div>
+            <div class="cpa_it_skl_summary" data-cpa-it-skl-summary></div>
             <div class="cpa_it_composer">
                 <textarea class="text_pole" rows="2" data-cpa-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="cpa_it_composer_actions">
@@ -504,6 +506,17 @@ export async function openCpaIterationStudio(deps) {
         live: null,         // current preset body (cloned from getStored)
         reference: null,    // when referencePresetName is set, the loaded reference body
         pendingEdits: [],
+        // Pending skill authoring proposals captured from the 8 authoring
+        // tools (skill_create / skill_update_content / skill_edit_content /
+        // skill_update_frontmatter / skill_rename / skill_change_scope /
+        // skill_delete / skill_extract_from_text). Each:
+        // { id, kind, skillName, scope, path?, before, after, op, status,
+        //   sourceCallId, createdAt }. Session-local — reset on session
+        // load. Approved entries commit at Apply time via
+        // commitApprovedSkillProposal (re-derives against current on-disk
+        // state so parallel-session drift surfaces as a fresh error);
+        // rejected entries are discarded.
+        pendingSkillEdits: [],
         isBusy: false,
         aborting: false,
         abortController: null,
@@ -603,6 +616,10 @@ export async function openCpaIterationStudio(deps) {
         state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
         state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
         state.pendingEdits = state.session.pendingEdits.slice();
+        // Skill authoring proposals are session-local — they target on-disk
+        // skill files which a parallel session could have edited, so don't
+        // restore a snapshot across loads; the user re-proposes if needed.
+        state.pendingSkillEdits = [];
         // Re-read the preset body so the new session's preview + next-turn
         // oldValue snapshots reflect disk state, not the prior session's
         // staged live (N4 fix).
@@ -620,6 +637,8 @@ export async function openCpaIterationStudio(deps) {
         state.session = createNewSession();
         state.session._transient = true;
         state.pendingEdits = [];
+        // Session-local skill proposals — a fresh session starts empty.
+        state.pendingSkillEdits = [];
         state.reference = null;
         await loadLive();
         // Don't save the blank session yet — persistSession's _transient
@@ -675,6 +694,119 @@ export async function openCpaIterationStudio(deps) {
             i18n: tf,
             live: isLatestUnapplied ? state.live : undefined,
         });
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Skill authoring proposals. Same per-card approve/reject + Apply-time
+    // commit pattern the orchestrator iter-studio uses; the actual disk
+    // write happens at Apply time via commitApprovedSkillProposal, which
+    // re-derives against current on-disk state so a parallel session that
+    // edited the same file between proposal and apply surfaces as a fresh
+    // error.
+    // ──────────────────────────────────────────────────────────────────
+    const SKILL_KIND_META = Object.freeze({
+        content: { icon: '✏️', label: () => t('Update skill file') },
+        frontmatter: { icon: '🏷️', label: () => t('Update skill frontmatter') },
+        create: { icon: '✨', label: () => t('Create skill') },
+        rename: { icon: '🔤', label: () => t('Rename skill') },
+        change_scope: { icon: '📦', label: () => t('Move skill scope') },
+        delete: { icon: '🗑️', label: () => t('Delete skill') },
+    });
+
+    function scopeDisplay(scope) {
+        if (!scope || typeof scope !== 'object') return t('(unknown scope)');
+        if (scope.kind === 'global') return t('global');
+        if (scope.kind === 'preset' && scope.name) return tf('preset:${0}', String(scope.name));
+        if (scope.kind === 'character' && scope.characterFile) {
+            return tf('character:${0}', String(scope.characterFile));
+        }
+        return String(scope.kind || '?');
+    }
+
+    function renderSkillStructuralBody(edit) {
+        if (edit.kind === 'rename') {
+            return `<div class="cpa_it_skl_meta_row">
+                <span class="cpa_it_skl_meta_label">${escapeHtmlLocal(t('Name'))}:</span>
+                <span class="cpa_it_skl_meta_was">${escapeHtmlLocal(String(edit.before?.name || edit.skillName || ''))}</span>
+                <span class="cpa_it_skl_meta_arrow">→</span>
+                <span class="cpa_it_skl_meta_now">${escapeHtmlLocal(String(edit.after?.name || ''))}</span>
+            </div>`;
+        }
+        if (edit.kind === 'change_scope') {
+            return `<div class="cpa_it_skl_meta_row">
+                <span class="cpa_it_skl_meta_label">${escapeHtmlLocal(t('Scope'))}:</span>
+                <span class="cpa_it_skl_meta_was">${escapeHtmlLocal(scopeDisplay(edit.before?.scope))}</span>
+                <span class="cpa_it_skl_meta_arrow">→</span>
+                <span class="cpa_it_skl_meta_now">${escapeHtmlLocal(scopeDisplay(edit.after?.scope))}</span>
+            </div>`;
+        }
+        if (edit.kind === 'delete') {
+            return `<div class="cpa_it_skl_meta_row cpa_it_skl_meta_destructive">
+                ${escapeHtmlLocal(tf('Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.',
+        String(edit.skillName || ''), scopeDisplay(edit.scope)))}
+            </div>`;
+        }
+        return '';
+    }
+
+    function renderSkillDiffBody(edit) {
+        const path = String(edit.path || 'SKILL.md');
+        const diffEdit = {
+            op: 'set',
+            path,
+            oldValue: typeof edit.before === 'string' ? edit.before : '',
+            newValue: typeof edit.after === 'string' ? edit.after : '',
+        };
+        const html = ITER_UI.diff.renderDiffCard([diffEdit], { i18n: tf });
+        if (!html) {
+            return `<div class="cpa_it_skl_nochange">${escapeHtmlLocal(t('No content change'))}</div>`;
+        }
+        const extrasList = edit.kind === 'create' && Array.isArray(edit.extras?.extraFiles) && edit.extras.extraFiles.length > 0
+            ? `<div class="cpa_it_skl_extras">${escapeHtmlLocal(tf('Plus ${0} additional file(s): ${1}',
+                String(edit.extras.extraFiles.length), edit.extras.extraFiles.join(', ')))}</div>`
+            : '';
+        return `${html}${extrasList}`;
+    }
+
+    function renderSkillPendingCard(edit) {
+        const status = String(edit?.status || 'pending');
+        const kind = String(edit?.kind || '');
+        const meta = SKILL_KIND_META[kind] || { icon: '🔧', label: () => kind };
+        const statusLabel = status === 'approved'
+            ? `<span class="cpa_it_skl_status approved">✓ ${escapeHtmlLocal(t('Approved'))}</span>`
+            : status === 'rejected'
+                ? `<span class="cpa_it_skl_status rejected">✗ ${escapeHtmlLocal(t('Rejected'))}</span>`
+                : `<span class="cpa_it_skl_status pending">${escapeHtmlLocal(t('Pending approval'))}</span>`;
+        const body = (kind === 'rename' || kind === 'change_scope' || kind === 'delete')
+            ? renderSkillStructuralBody(edit)
+            : renderSkillDiffBody(edit);
+        const idAttr = escapeHtmlLocal(String(edit?.id || ''));
+        const controls = (status === 'approved' || status === 'rejected')
+            ? `<button class="menu_button cpa_it_skl_btn" data-cpa-it-action="reset-skill-decision" data-cpa-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Undo decision'))}</button>`
+            : `<button class="menu_button cpa_it_skl_btn cpa_it_skl_btn_approve" data-cpa-it-action="approve-skill" data-cpa-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Approve'))}</button>
+               <button class="menu_button cpa_it_skl_btn cpa_it_skl_btn_reject" data-cpa-it-action="reject-skill" data-cpa-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Reject'))}</button>`;
+        const target = `${escapeHtmlLocal(String(edit?.skillName || ''))} <span class="cpa_it_skl_scope">(${escapeHtmlLocal(scopeDisplay(edit?.scope))})</span>${edit?.path ? ` <span class="cpa_it_skl_path">${escapeHtmlLocal(String(edit.path))}</span>` : ''}`;
+        return `<div class="cpa_it_skl_card cpa_it_skl_card_${escapeHtmlLocal(status)}" data-cpa-it-pending-id="${idAttr}">
+            <div class="cpa_it_skl_header">
+                <span class="cpa_it_skl_icon">${meta.icon}</span>
+                <span class="cpa_it_skl_label">${escapeHtmlLocal(meta.label())}</span>
+                <span class="cpa_it_skl_target">${target}</span>
+                ${statusLabel}
+            </div>
+            <div class="cpa_it_skl_body">${body}</div>
+            <div class="cpa_it_skl_controls">${controls}</div>
+        </div>`;
+    }
+
+    function renderSkillPendingForMessage(message) {
+        if (!message || message.role !== 'assistant') return '';
+        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+        if (toolCalls.length === 0) return '';
+        const callIds = new Set(toolCalls.map(tc => String(tc?.id || '')).filter(Boolean));
+        const pending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
+        const matched = pending.filter(p => callIds.has(String(p?.sourceCallId || '')));
+        if (matched.length === 0) return '';
+        return `<div class="cpa_it_skl_list">${matched.map(renderSkillPendingCard).join('')}</div>`;
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -755,7 +887,8 @@ export async function openCpaIterationStudio(deps) {
         // apply. The shared component emits its own `<div
         // class="luker_lib_message">` inner wrapper; click delegation
         // resolves msgId from both attributes (see handler block below).
-        return `<div class="cpa_it_msg ${roleCls}${autoCls}" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">${innerHtml}</div>`;
+        const skillHtml = renderSkillPendingForMessage(message);
+        return `<div class="cpa_it_msg ${roleCls}${autoCls}" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">${innerHtml}${skillHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -935,6 +1068,44 @@ export async function openCpaIterationStudio(deps) {
                 `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('Preview unavailable'))}</div>`,
             );
         }
+
+        // Skill summary row — same pattern the orchestrator uses. Shows
+        // pending counts and exposes a "Commit skill" button when there
+        // are approved entries but no preset edits waiting (the regular
+        // Apply button covers the common case where both are in flight
+        // together).
+        try {
+            const $summary = $root.find('[data-cpa-it-skl-summary]');
+            if ($summary.length) {
+                const allPending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
+                const pendCount = allPending.filter(p => p?.status === 'pending').length;
+                const apprCount = allPending.filter(p => p?.status === 'approved').length;
+                const rejCount = allPending.filter(p => p?.status === 'rejected').length;
+                const presetPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+                if (allPending.length === 0) {
+                    $summary.empty();
+                } else {
+                    const parts = [];
+                    if (pendCount > 0) parts.push(tf('${0} pending', String(pendCount)));
+                    if (apprCount > 0) parts.push(tf('${0} approved', String(apprCount)));
+                    if (rejCount > 0) parts.push(tf('${0} rejected', String(rejCount)));
+                    const summaryLabel = `${t('Skill proposals')}: ${parts.join(', ')}`;
+                    const decisionCount = apprCount + rejCount;
+                    const showBtn = decisionCount > 0 && !presetPending;
+                    let btnHtml = '';
+                    if (showBtn) {
+                        const btnLabel = apprCount > 0
+                            ? tf('Commit ${0} skill decision(s)', String(decisionCount))
+                            : tf('Clear ${0} rejected', String(rejCount));
+                        btnHtml = `<button class="menu_button cpa_it_skl_commit_btn" data-cpa-it-action="commit-skill-only">${escapeHtmlLocal(btnLabel)}</button>`;
+                    }
+                    $summary.html(`<span class="cpa_it_skl_summary_text">${escapeHtmlLocal(summaryLabel)}</span>${btnHtml}`);
+                }
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] skill summary render failed`, err);
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1100,8 +1271,7 @@ export async function openCpaIterationStudio(deps) {
         // tools are still in the catalog, the AI just lacks the discipline
         // block telling it when to prefer them.
         const skillScopeHint = getSkillScopeHint ? (() => {
-            try { return getSkillScopeHint() || {}; }
-            catch { return {}; }
+            try { return getSkillScopeHint() || {}; } catch { return {}; }
         })() : {};
         const systemPrompt = await augmentCpaPromptWithSkills(
             baseSystemPrompt,
@@ -1293,9 +1463,12 @@ export async function openCpaIterationStudio(deps) {
         // Execute skill tools inline. Each call hits the skills HTTP API
         // through `runCpaSkillTool`; results are bound to the call's
         // tool_call_id so the next round's `role: 'tool'` reply matches the
-        // assistant's `tool_calls` entry. Skill tools are profile-
-        // independent in CPA's catalog (no working-profile mutation), so the
-        // result envelope is just `{ ok, result }` or `{ ok: false, error }`.
+        // assistant's `tool_calls` entry. Tool returns one of two shapes:
+        //   - { ok, result }                       inventory tools, just a read
+        //   - { ok, result, pendingSkillEdit }     authoring tools — proposal
+        //     envelope parked on state.pendingSkillEdits for user approval;
+        //     commit happens at Apply time via commitApprovedSkillProposal,
+        //     never directly to disk.
         for (const call of skillCalls) {
             const callId = String(call?.id || `skill_${persistedToolResults.length}_${Date.now().toString(36)}`);
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
@@ -1304,6 +1477,24 @@ export async function openCpaIterationStudio(deps) {
             try {
                 const out = await runCpaSkillTool({ id: callId, name: call?.name, args });
                 if (out?.ok) {
+                    if (out.pendingSkillEdit) {
+                        const pendingId = `skl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+                        if (!Array.isArray(state.pendingSkillEdits)) state.pendingSkillEdits = [];
+                        state.pendingSkillEdits.push({
+                            id: pendingId,
+                            kind: out.pendingSkillEdit.kind,
+                            skillName: out.pendingSkillEdit.skillName,
+                            scope: out.pendingSkillEdit.scope,
+                            path: out.pendingSkillEdit.path,
+                            before: out.pendingSkillEdit.before,
+                            after: out.pendingSkillEdit.after,
+                            extras: out.pendingSkillEdit.extras,
+                            op: out.pendingSkillEdit.op,
+                            status: 'pending',
+                            sourceCallId: callId,
+                            createdAt: Date.now(),
+                        });
+                    }
                     resultPayload = out.result;
                 } else {
                     resultPayload = { error: String(out?.error || 'unknown error') };
@@ -1493,6 +1684,7 @@ export async function openCpaIterationStudio(deps) {
                         alreadyDone: outcome.alreadyDone,
                         cleanEdits: outcome.cleanEdits,
                         autoApply: true,
+                        skill: outcome.skill,
                     });
                     state.session.messages.push({
                         id: makeMessageId(),
@@ -1533,9 +1725,118 @@ export async function openCpaIterationStudio(deps) {
     // assistant message so renderMessageCard can show the Applied label
     // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Mirror of orchestrator's commitApprovedSkillEdits — walks
+     * state.pendingSkillEdits in order and commits approved entries via
+     * commitApprovedSkillProposal. Successful commits drop from the list;
+     * rejected drop unconditionally; pending entries survive. On
+     * per-entry failure the walk halts and remaining approved entries
+     * stay queued for retry.
+     */
+    async function commitApprovedSkillEdits() {
+        const all = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
+        const approved = all.filter(p => p?.status === 'approved');
+        const rejected = all.filter(p => p?.status === 'rejected');
+        const stillPending = all.filter(p => p?.status === 'pending');
+        const snap = (e) => ({ kind: e.kind, skillName: e.skillName, scope: e.scope, path: e.path });
+        const decisionsToDrop = (p) => p?.status === 'rejected';
+        if (approved.length === 0) {
+            const kept = all.filter(p => !decisionsToDrop(p));
+            const droppedRejected = all.length - kept.length;
+            state.pendingSkillEdits = kept;
+            return {
+                committed: 0,
+                failed: 0,
+                failedAt: null,
+                droppedRejected,
+                verdict: {
+                    committed: [],
+                    rejected_dropped: rejected.map(snap),
+                    still_approved: [],
+                    still_pending: stillPending.map(snap),
+                    failed: null,
+                },
+            };
+        }
+        const committedIds = new Set();
+        let failedAt = null;
+        let failedError = null;
+        for (const entry of approved) {
+            try {
+                await commitApprovedSkillProposal(entry.op);
+                committedIds.add(entry.id);
+            } catch (err) {
+                failedAt = entry;
+                failedError = err;
+                break;
+            }
+        }
+        state.pendingSkillEdits = all.filter(p => {
+            if (committedIds.has(p?.id)) return false;
+            if (decisionsToDrop(p)) return false;
+            return true;
+        });
+        if (failedAt) {
+            const errText = String(failedError?.message || failedError || 'unknown error');
+            try {
+                toastr.error(tf('Skill commit failed for ${0} (${1}): ${2}',
+                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText));
+            } catch { /* toastr may be unavailable in tests */ }
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'system',
+                content: tf('Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved entries left in the pending list for retry.',
+                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText),
+                at: Date.now(),
+            });
+        } else if (committedIds.size > 0) {
+            try {
+                toastr.success(tf('Committed ${0} skill edit(s)', String(committedIds.size)));
+            } catch { /* ignore */ }
+        }
+        const committedSnaps = approved.filter(a => committedIds.has(a.id)).map(snap);
+        const stillApprovedSnaps = approved.filter(a => !committedIds.has(a.id)).map(snap);
+        return {
+            committed: committedIds.size,
+            failed: failedAt ? 1 : 0,
+            failedAt,
+            verdict: {
+                committed: committedSnaps,
+                rejected_dropped: rejected.map(snap),
+                still_approved: stillApprovedSnaps,
+                still_pending: stillPending.map(snap),
+                failed: failedAt
+                    ? {
+                        kind: failedAt.kind,
+                        skillName: failedAt.skillName,
+                        scope: failedAt.scope,
+                        path: failedAt.path,
+                        error: String(failedError?.message || failedError || 'unknown error'),
+                    }
+                    : null,
+            },
+        };
+    }
+
     async function applyPendingEdits({ skipRender = false } = {}) {
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
+        const hasPresetPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        const hasApprovedSkill = Array.isArray(state.pendingSkillEdits)
+            && state.pendingSkillEdits.some(p => p?.status === 'approved');
+        const hasRejectedSkill = Array.isArray(state.pendingSkillEdits)
+            && state.pendingSkillEdits.some(p => p?.status === 'rejected');
+        if (!hasPresetPending && !hasApprovedSkill && !hasRejectedSkill) {
             return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
+        }
+        if (!hasPresetPending) {
+            // Skill-only path: handles approved commits and rejected-flush
+            // when the user has no preset edits in flight. commitApproved-
+            // SkillEdits drops rejected entries unconditionally, so this
+            // path is reachable whether or not any approved entries exist.
+            const skillResult = await commitApprovedSkillEdits();
+            await persistSession();
+            if (!skipRender) await render();
+            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [], skill: skillResult };
         }
         if (!state.live) await loadLive();
         const liveSnapshot = state.live;
@@ -1613,9 +1914,14 @@ export async function openCpaIterationStudio(deps) {
         }
 
         state.pendingEdits = [];
+        // Skill commit phase: only runs once the preset commit succeeded
+        // (or there was nothing to commit on the preset side). Approved
+        // entries write to disk via skillsApi; rejected drop; pending
+        // survive into the next Apply so the user can return to them.
+        const skillResult = await commitApprovedSkillEdits();
         await persistSession();
         if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits };
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits, skill: skillResult };
     }
 
     async function discardPendingEdits() {
@@ -1641,7 +1947,7 @@ export async function openCpaIterationStudio(deps) {
      * so the LLM can correct its next round (fix the anchor, re-read
      * the field, etc) instead of looping the same broken call.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, autoApply = false }) {
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, autoApply = false, skill = null }) {
         const conflictArr = Array.isArray(conflicts) ? conflicts : [];
         const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
         const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
@@ -1733,14 +2039,46 @@ export async function openCpaIterationStudio(deps) {
                 lines.push(`  - ${describeClean(e)}`);
             }
         }
+        // Skill decisions — load-bearing for the next round so the AI sees
+        // which proposals the user accepted/rejected and stops re-issuing
+        // declined edits.
+        if (skill && skill.verdict) {
+            const v = skill.verdict;
+            const fmtSkill = (e) => `    - ${String(e.skillName || '')} [${String(e.kind || '?')}]${e.path ? ` ${String(e.path)}` : ''}`;
+            const hasAny = (v.committed?.length || 0) + (v.rejected_dropped?.length || 0)
+                + (v.still_approved?.length || 0) + (v.still_pending?.length || 0)
+                + (v.failed ? 1 : 0);
+            if (hasAny > 0) {
+                lines.push('Skill decisions from this Apply:');
+                if (Array.isArray(v.committed) && v.committed.length > 0) {
+                    lines.push('  Committed (now live on disk):');
+                    for (const e of v.committed) lines.push(fmtSkill(e));
+                }
+                if (Array.isArray(v.rejected_dropped) && v.rejected_dropped.length > 0) {
+                    lines.push('  Rejected by user (dropped, never written to disk; do NOT re-propose without addressing the reason the user might have rejected — they likely have a reason):');
+                    for (const e of v.rejected_dropped) lines.push(fmtSkill(e));
+                }
+                if (Array.isArray(v.still_approved) && v.still_approved.length > 0) {
+                    lines.push('  Still approved but not yet committed (a commit failure halted the walk; the user can retry):');
+                    for (const e of v.still_approved) lines.push(fmtSkill(e));
+                }
+                if (Array.isArray(v.still_pending) && v.still_pending.length > 0) {
+                    lines.push('  Still pending user decision (not yet approved or rejected):');
+                    for (const e of v.still_pending) lines.push(fmtSkill(e));
+                }
+                if (v.failed) {
+                    lines.push(`  Commit failed for ${String(v.failed.skillName || '')} [${String(v.failed.kind || '?')}]: ${String(v.failed.error || 'unknown')}`);
+                }
+            }
+        }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
 
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits, skill = null }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits })
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, skill })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -1821,6 +2159,10 @@ export async function openCpaIterationStudio(deps) {
         state.session.messages = messages.slice(0, userIdx);
         state.pendingEdits = [];
         state.session.pendingEdits = [];
+        // Skill proposals belonged to the round being regenerated; drop
+        // them so the resend produces fresh proposals against the (now
+        // truncated) conversation state.
+        state.pendingSkillEdits = [];
         await persistSession();
         await render();
         const $textarea = $root.find('[data-cpa-it-input]');
@@ -1977,6 +2319,8 @@ export async function openCpaIterationStudio(deps) {
                 state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
                 state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
                 state.pendingEdits = state.session.pendingEdits.slice();
+                // Skill proposals are session-local — reset on session reload.
+                state.pendingSkillEdits = [];
                 await reloadReference();
                 return;
             }
@@ -2123,6 +2467,7 @@ export async function openCpaIterationStudio(deps) {
                 conflicts: outcome?.conflicts,
                 alreadyDone: outcome?.alreadyDone,
                 cleanEdits: outcome?.cleanEdits,
+                skill: outcome?.skill,
             });
         }
     });
@@ -2142,6 +2487,43 @@ export async function openCpaIterationStudio(deps) {
     $root.on('click.cpaIt', '[data-cpa-it-action="new-session"]', async (e) => {
         e.preventDefault();
         await startNewSession();
+    });
+
+    // Per-proposal approve/reject/undo for pending skill authoring edits.
+    // Flips the local status flag; commit happens at apply-batch time
+    // (after the preset commit) via commitApprovedSkillProposal.
+    $root.on('click.cpaIt', '[data-cpa-it-action="approve-skill"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-cpa-it-pending-id') || '');
+        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'approved';
+        await render();
+    });
+
+    $root.on('click.cpaIt', '[data-cpa-it-action="reject-skill"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-cpa-it-pending-id') || '');
+        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'rejected';
+        await render();
+    });
+
+    $root.on('click.cpaIt', '[data-cpa-it-action="reset-skill-decision"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-cpa-it-pending-id') || '');
+        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'pending';
+        await render();
+    });
+
+    // Commit approved skill proposals when there's no preset commit in
+    // flight. Goes through applyPendingEdits' skill-only path.
+    $root.on('click.cpaIt', '[data-cpa-it-action="commit-skill-only"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await applyPendingEdits();
     });
     $root.on('click.cpaIt', '[data-cpa-it-action="help-reference"]', async (e) => {
         // Sits inside the reference `<label>`; without preventDefault the label

@@ -454,6 +454,151 @@
     background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
 }
 
+/* ── Skill authoring proposal cards ──────────────────────────────────
+   Mirror of orch_it_lbk_* for skill_create / skill_update_content /
+   skill_edit_content / skill_update_frontmatter / skill_rename /
+   skill_change_scope / skill_delete / skill_extract_from_text. Body
+   is either an ITER_UI.diff card (content / frontmatter / create) or
+   a one-line structural strip (rename / change_scope / delete). */
+.orch_it_skl_list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-sm);
+    margin-top: var(--it-space-sm);
+}
+.orch_it_skl_card {
+    border: 1px solid color-mix(in oklab, var(--it-accent-primary) 25%, transparent);
+    border-radius: var(--it-radius-md, 6px);
+    padding: var(--it-space-sm);
+    background: color-mix(in oklab, var(--it-accent-primary) 4%, transparent);
+}
+.orch_it_skl_card_approved {
+    border-color: color-mix(in oklab, #2db86b 55%, transparent);
+    background: color-mix(in oklab, #2db86b 10%, transparent);
+}
+.orch_it_skl_card_rejected {
+    border-color: color-mix(in oklab, #d04848 55%, transparent);
+    background: color-mix(in oklab, #d04848 8%, transparent);
+}
+.orch_it_skl_card_rejected .orch_it_skl_body { opacity: 0.55; }
+.orch_it_skl_header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--it-space-xs);
+    font-size: 0.92em;
+    margin-bottom: var(--it-space-xs);
+}
+.orch_it_skl_label { font-weight: 600; }
+.orch_it_skl_target {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.88em;
+    opacity: 0.85;
+}
+.orch_it_skl_scope, .orch_it_skl_path {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+.orch_it_skl_status {
+    margin-left: auto;
+    font-size: 0.82em;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: color-mix(in oklab, currentColor 12%, transparent);
+}
+.orch_it_skl_status.approved { color: #2db86b; }
+.orch_it_skl_status.rejected { color: #d04848; }
+.orch_it_skl_status.pending  { opacity: 0.75; }
+
+.orch_it_skl_body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-xs);
+    margin: var(--it-space-xs) 0;
+}
+.orch_it_skl_nochange {
+    font-style: italic;
+    opacity: 0.6;
+    font-size: 0.9em;
+}
+.orch_it_skl_meta_row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--it-space-xs);
+    align-items: baseline;
+    font-size: 0.9em;
+}
+.orch_it_skl_meta_label { font-weight: 600; opacity: 0.8; }
+.orch_it_skl_meta_was {
+    text-decoration: line-through;
+    opacity: 0.7;
+    font-family: var(--monoFontFamily, monospace);
+}
+.orch_it_skl_meta_arrow { opacity: 0.6; }
+.orch_it_skl_meta_now {
+    font-family: var(--monoFontFamily, monospace);
+}
+.orch_it_skl_meta_destructive {
+    color: #d04848;
+    font-style: italic;
+}
+.orch_it_skl_extras {
+    font-size: 0.85em;
+    opacity: 0.75;
+    margin-top: var(--it-space-xs);
+}
+
+.orch_it_skl_controls {
+    display: flex;
+    gap: var(--it-space-xs);
+    justify-content: flex-end;
+    margin-top: var(--it-space-xs);
+}
+.orch_it_skl_btn {
+    padding: 4px 12px;
+    font-size: 0.88em;
+}
+.orch_it_skl_btn_approve {
+    background: color-mix(in oklab, #2db86b 18%, transparent);
+    border-color: color-mix(in oklab, #2db86b 55%, transparent);
+}
+.orch_it_skl_btn_approve:hover:not(:disabled) {
+    background: color-mix(in oklab, #2db86b 28%, transparent);
+}
+.orch_it_skl_btn_reject {
+    background: color-mix(in oklab, #d04848 18%, transparent);
+    border-color: color-mix(in oklab, #d04848 55%, transparent);
+}
+.orch_it_skl_btn_reject:hover:not(:disabled) {
+    background: color-mix(in oklab, #d04848 28%, transparent);
+}
+
+.orch_it_skl_summary {
+    display: flex;
+    align-items: center;
+    gap: var(--it-space-sm);
+    padding: var(--it-space-xs) var(--it-space-sm);
+}
+.orch_it_skl_summary:empty {
+    display: none;
+}
+.orch_it_skl_summary_text {
+    font-size: 0.88em;
+    opacity: 0.85;
+    flex: 1;
+}
+.orch_it_skl_commit_btn {
+    background: color-mix(in oklab, var(--it-accent-primary) 18%, transparent);
+    border: 1px solid color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
+    border-radius: var(--it-radius-sm, 4px);
+    padding: 4px 12px;
+    font-size: 0.88em;
+    cursor: pointer;
+}
+.orch_it_skl_commit_btn:hover {
+    background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
+}
+
 /* ── Skill-visibility context strip ───────────────────────────────────
    Prepended above the raw structural diff card for skill_bind_to_agent /
    skill_unbind_from_agent / skill_set_mode_defaults edits. Surfaces the

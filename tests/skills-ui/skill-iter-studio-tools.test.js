@@ -68,6 +68,7 @@ const {
     runSkillIterStudioTool,
     applyFrontmatterPatch,
     buildSkillVisibilityChange,
+    commitApprovedSkillProposal,
 } = await import('../../public/scripts/skills/iter-studio-tools.js');
 
 const {
@@ -255,25 +256,35 @@ describe('runSkillIterStudioTool — inventory inspection', () => {
 
 // ── Authoring ───────────────────────────────────────────────────────────
 
-describe('runSkillIterStudioTool — authoring', () => {
-    test('skill_create wraps frontmatter around body and installs', async () => {
-        mockSkillsApi.install.mockResolvedValue({ installed: ['new-skill'] });
+describe('runSkillIterStudioTool — authoring (proposal-mode)', () => {
+    // All 7 authoring tools (+ skill_extract_from_text which composes
+    // skill_create) MUST be proposal-mode: the inline call captures a
+    // before/after envelope and returns a slim ack to the LLM, but does
+    // NOT touch disk. Disk-write only happens at Apply time via
+    // commitApprovedSkillProposal — the next describe block exercises
+    // that replay path.
+    test('skill_create returns a pendingSkillEdit and does NOT install', async () => {
         const out = await runSkillIterStudioTool(
             { name: 'skill_create', args: { name: 'new-skill', description: 'does X', body: '# X\n\nrules.' } },
             { getWorkingProfile: () => ({}) },
         );
         expect(out.ok).toBe(true);
-        expect(mockSkillsApi.install).toHaveBeenCalledTimes(1);
-        const callArg = mockSkillsApi.install.mock.calls[0][0];
-        expect(callArg.scope).toEqual({ kind: 'global' });
-        expect(callArg.payload.files[0].path).toBe('SKILL.md');
-        expect(callArg.payload.files[0].content).toMatch(/^---\nname: new-skill\ndescription: does X\n---\n/);
-        expect(callArg.payload.files[0].content).toMatch(/# X/);
+        expect(mockSkillsApi.install).not.toHaveBeenCalled();
+        expect(out.result.proposed).toBe(true);
+        expect(out.result.tool).toBe('skill_create');
+        expect(out.pendingSkillEdit).toBeTruthy();
+        expect(out.pendingSkillEdit.kind).toBe('create');
+        expect(out.pendingSkillEdit.skillName).toBe('new-skill');
+        expect(out.pendingSkillEdit.scope).toEqual({ kind: 'global' });
+        expect(out.pendingSkillEdit.path).toBe('SKILL.md');
+        expect(out.pendingSkillEdit.before).toBe('');
+        expect(out.pendingSkillEdit.after).toMatch(/^---\nname: new-skill\ndescription: does X\n---\n/);
+        expect(out.pendingSkillEdit.after).toMatch(/# X/);
+        expect(out.pendingSkillEdit.op.name).toBe('skill_create');
     });
 
-    test('skill_create attaches extra files (skipping SKILL.md duplicates)', async () => {
-        mockSkillsApi.install.mockResolvedValue({ installed: ['multi'] });
-        await runSkillIterStudioTool(
+    test('skill_create with extra files records them on op + ack but skips disk', async () => {
+        const out = await runSkillIterStudioTool(
             {
                 name: 'skill_create',
                 args: {
@@ -287,24 +298,23 @@ describe('runSkillIterStudioTool — authoring', () => {
             },
             { getWorkingProfile: () => ({}) },
         );
-        const callArg = mockSkillsApi.install.mock.calls[0][0];
-        expect(callArg.payload.files.map(f => f.path)).toEqual(['SKILL.md', 'helpers.md', 'logo.png']);
-        expect(callArg.payload.files[2].encoding).toBe('base64');
+        expect(mockSkillsApi.install).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit.op.args.files).toBeTruthy();
+        expect(out.pendingSkillEdit.extras.extraFiles).toEqual(['helpers.md', 'logo.png']);
     });
 
-    test('skill_update_content wraps skillsApi.writeFile', async () => {
-        mockSkillsApi.writeFile.mockResolvedValue({ ok: true, sha256: 'x' });
-        await runSkillIterStudioTool(
-            { name: 'skill_update_content', args: { name: 'foo', path: 'SKILL.md', content: 'new', expectedSha256: 'abc' } },
+    test('skill_update_content reads before, captures after, does NOT write', async () => {
+        mockSkillsApi.readFile.mockResolvedValue('OLD BODY');
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_update_content', args: { name: 'foo', path: 'SKILL.md', content: 'NEW BODY', expectedSha256: 'abc' } },
             { getWorkingProfile: () => ({}) },
         );
-        expect(mockSkillsApi.writeFile).toHaveBeenCalledWith({
-            scope: { kind: 'global' },
-            name: 'foo',
-            path: 'SKILL.md',
-            content: 'new',
-            expectedSha256: 'abc',
-        });
+        expect(out.ok).toBe(true);
+        expect(mockSkillsApi.writeFile).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit.before).toBe('OLD BODY');
+        expect(out.pendingSkillEdit.after).toBe('NEW BODY');
+        expect(out.pendingSkillEdit.kind).toBe('content');
+        expect(out.pendingSkillEdit.op.args.expectedSha256).toBe('abc');
     });
 
     test('skill_edit_content rejects empty oldString', async () => {
@@ -316,50 +326,71 @@ describe('runSkillIterStudioTool — authoring', () => {
         expect(out.error).toMatch(/oldString/);
     });
 
-    test('skill_edit_content wraps skillsApi.editFile', async () => {
-        mockSkillsApi.editFile.mockResolvedValue({ ok: true });
-        await runSkillIterStudioTool(
-            { name: 'skill_edit_content', args: { name: 'foo', path: 'SKILL.md', oldString: 'a', newString: 'b', replaceAll: true } },
+    test('skill_edit_content errors when oldString not found in file', async () => {
+        mockSkillsApi.readFile.mockResolvedValue('current content');
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_edit_content', args: { name: 'foo', path: 'SKILL.md', oldString: 'missing', newString: 'x' } },
             { getWorkingProfile: () => ({}) },
         );
-        expect(mockSkillsApi.editFile).toHaveBeenCalledWith({
-            scope: { kind: 'global' },
-            name: 'foo',
-            path: 'SKILL.md',
-            oldString: 'a',
-            newString: 'b',
-            replaceAll: true,
-        });
+        expect(out.ok).toBe(false);
+        expect(out.error).toMatch(/oldString not found/);
+        expect(mockSkillsApi.editFile).not.toHaveBeenCalled();
     });
 
-    test('skill_update_frontmatter reads, merges, writes', async () => {
+    test('skill_edit_content computes after via single-replace (default)', async () => {
+        mockSkillsApi.readFile.mockResolvedValue('aaa bbb aaa');
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_edit_content', args: { name: 'foo', path: 'SKILL.md', oldString: 'aaa', newString: 'X' } },
+            { getWorkingProfile: () => ({}) },
+        );
+        expect(out.ok).toBe(true);
+        expect(mockSkillsApi.editFile).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit.before).toBe('aaa bbb aaa');
+        expect(out.pendingSkillEdit.after).toBe('X bbb aaa');
+        expect(out.pendingSkillEdit.op.args.replaceAll).toBe(false);
+    });
+
+    test('skill_edit_content computes after via replaceAll=true', async () => {
+        mockSkillsApi.readFile.mockResolvedValue('aaa bbb aaa');
+        const out = await runSkillIterStudioTool(
+            { name: 'skill_edit_content', args: { name: 'foo', path: 'SKILL.md', oldString: 'aaa', newString: 'X', replaceAll: true } },
+            { getWorkingProfile: () => ({}) },
+        );
+        expect(out.ok).toBe(true);
+        expect(out.pendingSkillEdit.after).toBe('X bbb X');
+        expect(out.pendingSkillEdit.op.args.replaceAll).toBe(true);
+    });
+
+    test('skill_update_frontmatter reads, merges, captures, does NOT write', async () => {
         mockSkillsApi.readFile.mockResolvedValue(
             '---\nname: foo\ndescription: old\ntags:\n  - one\n---\nbody text\n',
         );
-        mockSkillsApi.writeFile.mockResolvedValue({ ok: true });
         const out = await runSkillIterStudioTool(
             { name: 'skill_update_frontmatter', args: { name: 'foo', patch: { description: 'new', tags: ['two'] } } },
             { getWorkingProfile: () => ({}) },
         );
         expect(out.ok).toBe(true);
-        const writeArg = mockSkillsApi.writeFile.mock.calls[0][0];
-        expect(writeArg.content).toContain('description: new');
-        expect(writeArg.content).toContain('body text');
-        expect(writeArg.content).not.toContain('old');
+        expect(mockSkillsApi.writeFile).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit.before).toMatch(/description: old/);
+        expect(out.pendingSkillEdit.after).toMatch(/description: new/);
+        expect(out.pendingSkillEdit.after).toContain('body text');
+        expect(out.pendingSkillEdit.kind).toBe('frontmatter');
     });
 
-    test('skill_rename wraps skillsApi.rename', async () => {
-        mockSkillsApi.rename.mockResolvedValue({ ok: true });
-        await runSkillIterStudioTool(
+    test('skill_rename emits a structural proposal without disk touch', async () => {
+        const out = await runSkillIterStudioTool(
             { name: 'skill_rename', args: { fromName: 'old', toName: 'new' } },
             { getWorkingProfile: () => ({}) },
         );
-        expect(mockSkillsApi.rename).toHaveBeenCalledWith({ kind: 'global' }, 'old', 'new');
+        expect(out.ok).toBe(true);
+        expect(mockSkillsApi.rename).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit.kind).toBe('rename');
+        expect(out.pendingSkillEdit.before).toEqual({ name: 'old' });
+        expect(out.pendingSkillEdit.after).toEqual({ name: 'new' });
     });
 
-    test('skill_change_scope wraps skillsApi.moveScope', async () => {
-        mockSkillsApi.moveScope.mockResolvedValue({ ok: true });
-        await runSkillIterStudioTool(
+    test('skill_change_scope emits a structural proposal without disk touch', async () => {
+        const out = await runSkillIterStudioTool(
             {
                 name: 'skill_change_scope',
                 args: {
@@ -370,20 +401,144 @@ describe('runSkillIterStudioTool — authoring', () => {
             },
             { getWorkingProfile: () => ({}) },
         );
-        expect(mockSkillsApi.moveScope).toHaveBeenCalledWith(
-            'foo',
-            { kind: 'global' },
-            { kind: 'character', characterFile: 'alice.png' },
-        );
+        expect(out.ok).toBe(true);
+        expect(mockSkillsApi.moveScope).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit.kind).toBe('change_scope');
+        expect(out.pendingSkillEdit.before).toEqual({ scope: { kind: 'global' } });
+        expect(out.pendingSkillEdit.after).toEqual({ scope: { kind: 'character', characterFile: 'alice.png' } });
     });
 
-    test('skill_delete wraps skillsApi.delete', async () => {
-        mockSkillsApi.delete.mockResolvedValue({ ok: true });
-        await runSkillIterStudioTool(
+    test('skill_delete emits a structural proposal without disk touch', async () => {
+        const out = await runSkillIterStudioTool(
             { name: 'skill_delete', args: { name: 'foo' } },
             { getWorkingProfile: () => ({}) },
         );
+        expect(out.ok).toBe(true);
+        expect(mockSkillsApi.delete).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit.kind).toBe('delete');
+        expect(out.pendingSkillEdit.before).toEqual({ exists: true });
+        expect(out.pendingSkillEdit.after).toEqual({ exists: false });
+    });
+});
+
+// ── Authoring commit at Apply time ──────────────────────────────────────
+
+describe('commitApprovedSkillProposal — Apply-time disk writes', () => {
+    test('skill_create commit installs SKILL.md + extra files', async () => {
+        mockSkillsApi.install.mockResolvedValue({ installed: ['new'] });
+        await commitApprovedSkillProposal({
+            name: 'skill_create',
+            args: {
+                name: 'new', description: 'd', body: 'b',
+                scope: { kind: 'global' },
+                files: [{ path: 'helpers.md', encoding: 'utf8', content: 'h' }],
+            },
+        });
+        expect(mockSkillsApi.install).toHaveBeenCalledTimes(1);
+        const callArg = mockSkillsApi.install.mock.calls[0][0];
+        expect(callArg.scope).toEqual({ kind: 'global' });
+        expect(callArg.payload.files.map(f => f.path)).toEqual(['SKILL.md', 'helpers.md']);
+        expect(callArg.payload.files[0].content).toMatch(/^---\nname: new\ndescription: d\n---\n/);
+    });
+
+    test('skill_update_content commit replays writeFile with expectedSha256', async () => {
+        mockSkillsApi.writeFile.mockResolvedValue({ ok: true });
+        await commitApprovedSkillProposal({
+            name: 'skill_update_content',
+            args: { name: 'foo', scope: { kind: 'global' }, path: 'SKILL.md', content: 'new', expectedSha256: 'abc' },
+        });
+        expect(mockSkillsApi.writeFile).toHaveBeenCalledWith({
+            scope: { kind: 'global' },
+            name: 'foo',
+            path: 'SKILL.md',
+            content: 'new',
+            expectedSha256: 'abc',
+        });
+    });
+
+    test('skill_edit_content commit replays editFile with replaceAll flag', async () => {
+        mockSkillsApi.editFile.mockResolvedValue({ ok: true });
+        await commitApprovedSkillProposal({
+            name: 'skill_edit_content',
+            args: { name: 'foo', scope: { kind: 'global' }, path: 'SKILL.md', oldString: 'a', newString: 'b', replaceAll: true },
+        });
+        expect(mockSkillsApi.editFile).toHaveBeenCalledWith({
+            scope: { kind: 'global' },
+            name: 'foo',
+            path: 'SKILL.md',
+            oldString: 'a',
+            newString: 'b',
+            replaceAll: true,
+        });
+    });
+
+    test('skill_update_frontmatter commit re-reads current SKILL.md and merges patch', async () => {
+        // Drift scenario: SKILL.md changed between proposal and apply.
+        // The commit re-derives the new content against the current
+        // on-disk state, so a parallel-session edit lands on top of the
+        // patched fields cleanly.
+        mockSkillsApi.readFile.mockResolvedValue(
+            '---\nname: foo\ndescription: old\nextra: untouched\n---\nbody\n',
+        );
+        mockSkillsApi.writeFile.mockResolvedValue({ ok: true });
+        await commitApprovedSkillProposal({
+            name: 'skill_update_frontmatter',
+            args: { name: 'foo', scope: { kind: 'global' }, patch: { description: 'new' } },
+        });
+        const writeArg = mockSkillsApi.writeFile.mock.calls[0][0];
+        expect(writeArg.content).toContain('description: new');
+        // The parallel-session field survives the merge.
+        expect(writeArg.content).toContain('extra: untouched');
+    });
+
+    test('skill_update_frontmatter commit throws when SKILL.md vanished', async () => {
+        mockSkillsApi.readFile.mockRejectedValue(new Error('404 not found'));
+        await expect(commitApprovedSkillProposal({
+            name: 'skill_update_frontmatter',
+            args: { name: 'foo', scope: { kind: 'global' }, patch: { description: 'new' } },
+        })).rejects.toThrow(/SKILL\.md not found/);
+        expect(mockSkillsApi.writeFile).not.toHaveBeenCalled();
+    });
+
+    test('skill_rename commit calls skillsApi.rename', async () => {
+        mockSkillsApi.rename.mockResolvedValue({ ok: true });
+        await commitApprovedSkillProposal({
+            name: 'skill_rename',
+            args: { scope: { kind: 'global' }, fromName: 'old', toName: 'new' },
+        });
+        expect(mockSkillsApi.rename).toHaveBeenCalledWith({ kind: 'global' }, 'old', 'new');
+    });
+
+    test('skill_change_scope commit calls skillsApi.moveScope', async () => {
+        mockSkillsApi.moveScope.mockResolvedValue({ ok: true });
+        await commitApprovedSkillProposal({
+            name: 'skill_change_scope',
+            args: { name: 'foo', fromScope: { kind: 'global' }, toScope: { kind: 'character', characterFile: 'a.png' } },
+        });
+        expect(mockSkillsApi.moveScope).toHaveBeenCalledWith(
+            'foo',
+            { kind: 'global' },
+            { kind: 'character', characterFile: 'a.png' },
+        );
+    });
+
+    test('skill_delete commit calls skillsApi.delete', async () => {
+        mockSkillsApi.delete.mockResolvedValue({ ok: true });
+        await commitApprovedSkillProposal({
+            name: 'skill_delete',
+            args: { name: 'foo', scope: { kind: 'global' } },
+        });
         expect(mockSkillsApi.delete).toHaveBeenCalledWith({ kind: 'global' }, 'foo');
+    });
+
+    test('throws on unknown op name', async () => {
+        await expect(commitApprovedSkillProposal({ name: 'bogus', args: {} }))
+            .rejects.toThrow(/unknown op bogus/);
+    });
+
+    test('throws on missing op object', async () => {
+        await expect(commitApprovedSkillProposal(null)).rejects.toThrow(/invalid op/);
+        await expect(commitApprovedSkillProposal({ args: {} })).rejects.toThrow(/invalid op/);
     });
 });
 
@@ -530,10 +685,9 @@ describe('runSkillIterStudioTool — policy binding', () => {
 // ── Migration helpers ───────────────────────────────────────────────────
 
 describe('runSkillIterStudioTool — migration helpers', () => {
-    test('skill_extract_from_text creates a skill verbatim from sourceText', async () => {
-        mockSkillsApi.install.mockResolvedValue({ installed: ['extracted-rules'] });
+    test('skill_extract_from_text proposes a skill verbatim from sourceText', async () => {
         const sourceText = 'IMPORTANT RULES:\n1. Never break character.\n2. Always preserve voice.\n';
-        await runSkillIterStudioTool(
+        const out = await runSkillIterStudioTool(
             {
                 name: 'skill_extract_from_text',
                 args: {
@@ -544,12 +698,18 @@ describe('runSkillIterStudioTool — migration helpers', () => {
             },
             { getWorkingProfile: () => ({}) },
         );
-        expect(mockSkillsApi.install).toHaveBeenCalledTimes(1);
-        const installCallArg = mockSkillsApi.install.mock.calls[0][0];
+        expect(out.ok).toBe(true);
+        // Proposal-mode — does NOT touch disk; user reviews + Apply later.
+        expect(mockSkillsApi.install).not.toHaveBeenCalled();
+        expect(out.pendingSkillEdit).toBeTruthy();
+        expect(out.pendingSkillEdit.kind).toBe('create');
+        expect(out.pendingSkillEdit.skillName).toBe('extracted-rules');
         // Body is verbatim — no paraphrasing.
-        expect(installCallArg.payload.files[0].content).toContain('IMPORTANT RULES:');
-        expect(installCallArg.payload.files[0].content).toContain('1. Never break character.');
-        expect(installCallArg.payload.files[0].content).toContain('2. Always preserve voice.');
+        expect(out.pendingSkillEdit.after).toContain('IMPORTANT RULES:');
+        expect(out.pendingSkillEdit.after).toContain('1. Never break character.');
+        expect(out.pendingSkillEdit.after).toContain('2. Always preserve voice.');
+        // op replays as skill_create at Apply time.
+        expect(out.pendingSkillEdit.op.name).toBe('skill_create');
     });
 
     test('skill_replace_in_systemprompt splices out ranges and inserts replacement', async () => {

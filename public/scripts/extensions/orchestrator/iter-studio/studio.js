@@ -104,13 +104,21 @@ import { ORCH_TOOL_DISPLAY } from './tool-display.js';
 import { applyLorebookProposal } from '../../../iteration-library/tools/lorebook-writes.js';
 // Plan 2 Unit 7: iter-studio skill management catalog. Spliced into the
 // tool catalog alongside CONTROL_TOOL_DEFS + lorebook reads/writes, routed
-// through the inline-executed path. 14 tools only touch server state and
-// return their result to the AI; the 3 policy-binding tools emit a
-// sandbox-diff pending edit the user reviews + applies via the normal flow.
+// through the inline-executed path. Three execution shapes:
+//   - 4 inventory tools just return read-only data
+//   - 3 policy-binding + 1 systemPrompt-splice tool emit a sandbox-diff
+//     `pendingEdit` (mutates the working profile, applies through the
+//     standard apply pipeline)
+//   - 7 authoring tools (+ skill_extract_from_text which composes
+//     skill_create) emit a `pendingSkillEdit` blob captured on
+//     state.pendingSkillEdits — same per-card Approve/Reject + Apply-time
+//     commit pattern lorebook proposals use, so the user sees a line-by-line
+//     diff card instead of a silent direct-to-disk write.
 import {
     SKILL_ITER_STUDIO_TOOL_DEFS,
     isSkillIterStudioTool,
     runSkillIterStudioTool,
+    commitApprovedSkillProposal,
 } from '../../../skills/iter-studio-tools.js';
 import { augmentIterStudioPromptWithSkills } from '../skill-iter-studio-prompt.js';
 import { buildSkillRuntimeContext } from '../skill-resolution.js';
@@ -167,9 +175,10 @@ function isSimulateTool(name) {
 // (luker_orch_set_*) do not — they become diff proposals the user
 // reviews + applies via the popup, never reaching the model directly.
 // Skill iter-studio tools (Plan 2 Unit 7) also use the inline-executed
-// path: 12 server-side tools just return results, and the 3 policy-binding
-// tools synthesize their own sandbox-diff edit so they slot into the
-// existing pendingEdits flow without a separate review affordance.
+// path: 4 inventory tools just return server state, 4 working-profile
+// tools (3 policy bindings + skill_replace_in_systemprompt) emit a
+// sandbox-diff pending edit, and 8 authoring tools (7 spec + extract)
+// emit a `pendingSkillEdit` blob parked on state.pendingSkillEdits.
 function isInlineExecutedTool(name) {
     return isLorebookReadTool(name)
         || isLorebookWriteTool(name)
@@ -862,6 +871,7 @@ function buildPopupHtml({
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="orch_it_messages" data-orch-it-messages></div>
             <div class="orch_it_lbk_summary" data-orch-it-lbk-summary></div>
+            <div class="orch_it_skl_summary" data-orch-it-skl-summary></div>
             <div class="orch_it_composer">
                 <textarea class="text_pole" rows="2" data-orch-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="orch_it_composer_actions">
@@ -1018,6 +1028,16 @@ export async function openOrchestratorIterationStudio(deps) {
         // Approved entries commit at Apply time via
         // applyLorebookProposal; rejected entries are discarded.
         pendingLorebookEdits: [],
+        // Pending skill authoring proposals captured from the 8 authoring
+        // tools (skill_create / skill_update_content / skill_edit_content /
+        // skill_update_frontmatter / skill_rename / skill_change_scope /
+        // skill_delete / skill_extract_from_text). Each: { id, kind, skillName,
+        // scope, path?, before, after, op:{name, args}, status, sourceCallId,
+        // createdAt }. Reset on session load. Approved entries commit at
+        // Apply time via commitApprovedSkillProposal (re-derives against
+        // current on-disk state so parallel-session drift surfaces as a
+        // fresh error); rejected entries are discarded.
+        pendingSkillEdits: [],
         isBusy: false,
         aborting: false,
         abortController: null,
@@ -1277,6 +1297,11 @@ export async function openOrchestratorIterationStudio(deps) {
         // session swap avoids applying a stale after-image against drifted
         // entry state.
         state.pendingLorebookEdits = [];
+        // Pending skill authoring proposals are session-local for the same
+        // reason: they target on-disk skill files, which a parallel session
+        // could have edited. Re-propose after session load rather than
+        // committing a stale snapshot against drifted file state.
+        state.pendingSkillEdits = [];
         // Re-read live so a parallel editor doesn't leave the popup with
         // stale state when the user reopens an older session.
         loadLive();
@@ -1300,6 +1325,8 @@ export async function openOrchestratorIterationStudio(deps) {
         // through the "commit lorebook only" button even though their
         // sourceCallId no longer matches any rendered message).
         state.pendingLorebookEdits = [];
+        // Skill authoring proposals share the same session-local model.
+        state.pendingSkillEdits = [];
         loadLive();
         // Don't save the blank session yet — persistSession's _transient
         // guard defers the write until the first user message.
@@ -1593,6 +1620,139 @@ export async function openOrchestratorIterationStudio(deps) {
         return `<div class="orch_it_lbk_list">${matched.map(renderLorebookPendingCard).join('')}</div>`;
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Skill authoring proposals. Pattern mirrors lorebook: per-card
+    // approve/reject buttons; the actual disk-write happens at Apply
+    // time via commitApprovedSkillProposal, which re-derives against
+    // current on-disk state so parallel-session drift surfaces as a
+    // fresh error.
+    //
+    // Card layout splits by kind:
+    //   - content / frontmatter / create: SKILL.md (or other file)
+    //     before/after rendered through ITER_UI.diff.renderDiffCard,
+    //     which runs the same line-by-line LCS that lorebook + orch
+    //     profile cards use. Empty `before` (create) renders as
+    //     (empty) → full text — useful to scan the new file.
+    //   - rename / change_scope / delete: structural — no body diff;
+    //     just a one-line metadata strip describing the change.
+    // ──────────────────────────────────────────────────────────────────
+    const SKILL_KIND_META = Object.freeze({
+        content: { icon: '✏️', label: () => t('Update skill file') },
+        frontmatter: { icon: '🏷️', label: () => t('Update skill frontmatter') },
+        create: { icon: '✨', label: () => t('Create skill') },
+        rename: { icon: '🔤', label: () => t('Rename skill') },
+        change_scope: { icon: '📦', label: () => t('Move skill scope') },
+        delete: { icon: '🗑️', label: () => t('Delete skill') },
+    });
+
+    function scopeDisplay(scope) {
+        if (!scope || typeof scope !== 'object') return t('(unknown scope)');
+        if (scope.kind === 'global') return t('global');
+        if (scope.kind === 'preset' && scope.name) return tf('preset:${0}', String(scope.name));
+        if (scope.kind === 'character' && scope.characterFile) {
+            return tf('character:${0}', String(scope.characterFile));
+        }
+        return String(scope.kind || '?');
+    }
+
+    function renderSkillStructuralBody(edit) {
+        if (edit.kind === 'rename') {
+            return `<div class="orch_it_skl_meta_row">
+                <span class="orch_it_skl_meta_label">${escapeHtmlLocal(t('Name'))}:</span>
+                <span class="orch_it_skl_meta_was">${escapeHtmlLocal(String(edit.before?.name || edit.skillName || ''))}</span>
+                <span class="orch_it_skl_meta_arrow">→</span>
+                <span class="orch_it_skl_meta_now">${escapeHtmlLocal(String(edit.after?.name || ''))}</span>
+            </div>`;
+        }
+        if (edit.kind === 'change_scope') {
+            return `<div class="orch_it_skl_meta_row">
+                <span class="orch_it_skl_meta_label">${escapeHtmlLocal(t('Scope'))}:</span>
+                <span class="orch_it_skl_meta_was">${escapeHtmlLocal(scopeDisplay(edit.before?.scope))}</span>
+                <span class="orch_it_skl_meta_arrow">→</span>
+                <span class="orch_it_skl_meta_now">${escapeHtmlLocal(scopeDisplay(edit.after?.scope))}</span>
+            </div>`;
+        }
+        if (edit.kind === 'delete') {
+            return `<div class="orch_it_skl_meta_row orch_it_skl_meta_destructive">
+                ${escapeHtmlLocal(tf('Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.',
+        String(edit.skillName || ''), scopeDisplay(edit.scope)))}
+            </div>`;
+        }
+        return '';
+    }
+
+    function renderSkillDiffBody(edit) {
+        // For content / frontmatter / create, hand the before/after strings
+        // to the shared diff card so the popup renders the same line-by-
+        // line LCS the lorebook + orch profile cards use. The path scope is
+        // captured on the synthetic edit envelope so the renderer's header
+        // surfaces the file name.
+        const path = String(edit.path || 'SKILL.md');
+        const diffEdit = {
+            op: 'set',
+            path,
+            oldValue: typeof edit.before === 'string' ? edit.before : '',
+            newValue: typeof edit.after === 'string' ? edit.after : '',
+        };
+        const html = ITER_UI.diff.renderDiffCard([diffEdit], {
+            i18n: tf,
+            // No live snapshot — the renderer falls back to before-as-source,
+            // which is correct for a file-level diff (we already captured
+            // the pre-edit content via skillsApi.readFile in the handler).
+        });
+        if (!html) {
+            return `<div class="orch_it_skl_nochange">${escapeHtmlLocal(t('No content change'))}</div>`;
+        }
+        // For skill_create, also surface any extra files that will be
+        // staged so the user sees the full payload, not just SKILL.md.
+        const extrasList = edit.kind === 'create' && Array.isArray(edit.extras?.extraFiles) && edit.extras.extraFiles.length > 0
+            ? `<div class="orch_it_skl_extras">${escapeHtmlLocal(tf('Plus ${0} additional file(s): ${1}',
+                String(edit.extras.extraFiles.length), edit.extras.extraFiles.join(', ')))}</div>`
+            : '';
+        return `${html}${extrasList}`;
+    }
+
+    function renderSkillPendingCard(edit) {
+        const status = String(edit?.status || 'pending');
+        const kind = String(edit?.kind || '');
+        const meta = SKILL_KIND_META[kind] || { icon: '🔧', label: () => kind };
+        const statusLabel = status === 'approved'
+            ? `<span class="orch_it_skl_status approved">✓ ${escapeHtmlLocal(t('Approved'))}</span>`
+            : status === 'rejected'
+                ? `<span class="orch_it_skl_status rejected">✗ ${escapeHtmlLocal(t('Rejected'))}</span>`
+                : `<span class="orch_it_skl_status pending">${escapeHtmlLocal(t('Pending approval'))}</span>`;
+        const body = (kind === 'rename' || kind === 'change_scope' || kind === 'delete')
+            ? renderSkillStructuralBody(edit)
+            : renderSkillDiffBody(edit);
+        const idAttr = escapeHtmlLocal(String(edit?.id || ''));
+        const controls = (status === 'approved' || status === 'rejected')
+            ? `<button class="menu_button orch_it_skl_btn" data-orch-it-action="reset-skill-decision" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Undo decision'))}</button>`
+            : `<button class="menu_button orch_it_skl_btn orch_it_skl_btn_approve" data-orch-it-action="approve-skill" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Approve'))}</button>
+               <button class="menu_button orch_it_skl_btn orch_it_skl_btn_reject" data-orch-it-action="reject-skill" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Reject'))}</button>`;
+        const target = `${escapeHtmlLocal(String(edit?.skillName || ''))} <span class="orch_it_skl_scope">(${escapeHtmlLocal(scopeDisplay(edit?.scope))})</span>${edit?.path ? ` <span class="orch_it_skl_path">${escapeHtmlLocal(String(edit.path))}</span>` : ''}`;
+        return `<div class="orch_it_skl_card orch_it_skl_card_${escapeHtmlLocal(status)}" data-orch-it-pending-id="${idAttr}">
+            <div class="orch_it_skl_header">
+                <span class="orch_it_skl_icon">${meta.icon}</span>
+                <span class="orch_it_skl_label">${escapeHtmlLocal(meta.label())}</span>
+                <span class="orch_it_skl_target">${target}</span>
+                ${statusLabel}
+            </div>
+            <div class="orch_it_skl_body">${body}</div>
+            <div class="orch_it_skl_controls">${controls}</div>
+        </div>`;
+    }
+
+    function renderSkillPendingForMessage(message) {
+        if (!message || message.role !== 'assistant') return '';
+        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+        if (toolCalls.length === 0) return '';
+        const callIds = new Set(toolCalls.map(tc => String(tc?.id || '')).filter(Boolean));
+        const pending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
+        const matched = pending.filter(p => callIds.has(String(p?.sourceCallId || '')));
+        if (matched.length === 0) return '';
+        return `<div class="orch_it_skl_list">${matched.map(renderSkillPendingCard).join('')}</div>`;
+    }
+
     function renderMessageCard(message, idx, allMessages) {
         if (!message) return '';
         const role = String(message.role || 'user');
@@ -1664,7 +1824,8 @@ export async function openOrchestratorIterationStudio(deps) {
         // class="luker_lib_message">` inner wrapper; click delegation
         // resolves msgId from both attributes (see handler block below).
         const lorebookHtml = renderLorebookPendingForMessage(message);
-        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}${lorebookHtml}</div>`;
+        const skillHtml = renderSkillPendingForMessage(message);
+        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}${lorebookHtml}${skillHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -1798,6 +1959,42 @@ export async function openOrchestratorIterationStudio(deps) {
         } catch (err) {
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}:${mode}] lorebook summary render failed`, err);
+        }
+
+        // Skill summary: same pattern as lorebook, with its own button hook.
+        // The "commit-skill-only" action routes through applyPendingEdits
+        // which now drives both lorebook + skill commit phases.
+        try {
+            const $summary = $root.find('[data-orch-it-skl-summary]');
+            if ($summary.length) {
+                const allPending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
+                const pendCount = allPending.filter(p => p?.status === 'pending').length;
+                const apprCount = allPending.filter(p => p?.status === 'approved').length;
+                const rejCount = allPending.filter(p => p?.status === 'rejected').length;
+                const orchPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+                if (allPending.length === 0) {
+                    $summary.empty();
+                } else {
+                    const parts = [];
+                    if (pendCount > 0) parts.push(tf('${0} pending', String(pendCount)));
+                    if (apprCount > 0) parts.push(tf('${0} approved', String(apprCount)));
+                    if (rejCount > 0) parts.push(tf('${0} rejected', String(rejCount)));
+                    const summaryLabel = `${t('Skill proposals')}: ${parts.join(', ')}`;
+                    const decisionCount = apprCount + rejCount;
+                    const showBtn = decisionCount > 0 && !orchPending;
+                    let btnHtml = '';
+                    if (showBtn) {
+                        const btnLabel = apprCount > 0
+                            ? tf('Commit ${0} skill decision(s)', String(decisionCount))
+                            : tf('Clear ${0} rejected', String(rejCount));
+                        btnHtml = `<button class="menu_button orch_it_skl_commit_btn" data-orch-it-action="commit-skill-only">${escapeHtmlLocal(btnLabel)}</button>`;
+                    }
+                    $summary.html(`<span class="orch_it_skl_summary_text">${escapeHtmlLocal(summaryLabel)}</span>${btnHtml}`);
+                }
+            }
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}:${mode}] skill summary render failed`, err);
         }
 
         // Pending edits — single Apply button per spec §3.4. The label
@@ -2179,6 +2376,12 @@ export async function openOrchestratorIterationStudio(deps) {
                             // the old design's output contract; resetting
                             // the working profile invalidates that contract.
                             state.pendingLorebookEdits = [];
+                            // Skill proposals targeted on-disk files; their
+                            // before-snapshots were captured against the
+                            // previous design's reasoning, so drop them too
+                            // and let the AI re-propose against the fresh
+                            // blank shell if it still wants the change.
+                            state.pendingSkillEdits = [];
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -2204,6 +2407,8 @@ export async function openOrchestratorIterationStudio(deps) {
                             // See resetToBlank above — lorebook proposals
                             // belonged to the old design and are invalid now.
                             state.pendingLorebookEdits = [];
+                            // Same reasoning applies to skill proposals.
+                            state.pendingSkillEdits = [];
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -2325,9 +2530,18 @@ export async function openOrchestratorIterationStudio(deps) {
                     }
                 } else if (isSkillIterStudioTool(call?.name)) {
                     // Plan 2 Unit 7: dispatch the skill iter-studio tool.
-                    // Policy-binding tools mutate a clone of the working
-                    // profile and return a coarse sandbox-diff edit; the
-                    // 12 server-side tools return their result verbatim.
+                    // Three result shapes:
+                    //   - pendingEdit: policy-binding / systemPrompt-splice
+                    //     tools mutate a clone of the working profile and
+                    //     return a coarse sandbox-diff edit.
+                    //   - pendingSkillEdit: 7 authoring tools (+
+                    //     skill_extract_from_text) emit a per-file proposal
+                    //     envelope; parked on state.pendingSkillEdits for
+                    //     user approval, committed at Apply time via
+                    //     commitApprovedSkillProposal.
+                    //   - plain result: 4 inventory tools return server
+                    //     state verbatim.
+                    //
                     // The mutationCtx's getWorkingProfile returns the
                     // chained skill-side working profile so sequential
                     // skill mutations in the same round compose.
@@ -2342,6 +2556,29 @@ export async function openOrchestratorIterationStudio(deps) {
                             // policy-binding tool in this round sees the
                             // prior tool's mutations as its baseline.
                             skillToolChainedLive = out.pendingEdit.newValue;
+                        }
+                        if (out.pendingSkillEdit) {
+                            // Park the authoring proposal on the per-session
+                            // queue. The model still sees only the slim ack
+                            // payload (out.result) — full before/after blobs
+                            // would pad context for no gain; the user
+                            // reviews the diff in the UI, not the model.
+                            const pendingId = `skl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+                            if (!Array.isArray(state.pendingSkillEdits)) state.pendingSkillEdits = [];
+                            state.pendingSkillEdits.push({
+                                id: pendingId,
+                                kind: out.pendingSkillEdit.kind,
+                                skillName: out.pendingSkillEdit.skillName,
+                                scope: out.pendingSkillEdit.scope,
+                                path: out.pendingSkillEdit.path,
+                                before: out.pendingSkillEdit.before,
+                                after: out.pendingSkillEdit.after,
+                                extras: out.pendingSkillEdit.extras,
+                                op: out.pendingSkillEdit.op,
+                                status: 'pending',
+                                sourceCallId: callId,
+                                createdAt: Date.now(),
+                            });
                         }
                         resultPayload = out.result;
                     } else {
@@ -2594,6 +2831,7 @@ export async function openOrchestratorIterationStudio(deps) {
                         target: getApplyScopeLabel(),
                         autoApply: true,
                         lorebook: outcome.lorebook,
+                        skill: outcome.skill,
                     });
                     state.session.messages.push({
                         id: makeMessageId(),
@@ -2765,27 +3003,129 @@ export async function openOrchestratorIterationStudio(deps) {
         };
     }
 
+    /**
+     * Mirror of commitApprovedLorebookEdits for skill authoring proposals.
+     * Walks state.pendingSkillEdits in order, calls
+     * commitApprovedSkillProposal for each approved entry. Successful
+     * commits drop from the list; rejected entries drop unconditionally;
+     * pending (undecided) entries survive. On per-entry failure the walk
+     * halts and surviving approved entries stay in the list for retry.
+     *
+     * Called from applyPendingEdits AFTER the orch profile + lorebook
+     * commit phases succeed, and from the "Commit skill only" button
+     * when there are no orch profile edits in flight.
+     */
+    async function commitApprovedSkillEdits() {
+        const all = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
+        const approved = all.filter(p => p?.status === 'approved');
+        const rejected = all.filter(p => p?.status === 'rejected');
+        const stillPending = all.filter(p => p?.status === 'pending');
+        const snap = (e) => ({ kind: e.kind, skillName: e.skillName, scope: e.scope, path: e.path });
+        const decisionsToDrop = (p) => p?.status === 'rejected';
+        if (approved.length === 0) {
+            const kept = all.filter(p => !decisionsToDrop(p));
+            const droppedRejected = all.length - kept.length;
+            state.pendingSkillEdits = kept;
+            return {
+                committed: 0,
+                failed: 0,
+                failedAt: null,
+                droppedRejected,
+                verdict: {
+                    committed: [],
+                    rejected_dropped: rejected.map(snap),
+                    still_approved: [],
+                    still_pending: stillPending.map(snap),
+                    failed: null,
+                },
+            };
+        }
+        const committedIds = new Set();
+        let failedAt = null;
+        let failedError = null;
+        for (const entry of approved) {
+            try {
+                await commitApprovedSkillProposal(entry.op);
+                committedIds.add(entry.id);
+            } catch (err) {
+                failedAt = entry;
+                failedError = err;
+                break;
+            }
+        }
+        state.pendingSkillEdits = all.filter(p => {
+            if (committedIds.has(p?.id)) return false;
+            if (decisionsToDrop(p)) return false;
+            return true;
+        });
+        if (failedAt) {
+            const errText = String(failedError?.message || failedError || 'unknown error');
+            try {
+                toastr.error(tf('Skill commit failed for ${0} (${1}): ${2}',
+                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText));
+            } catch { /* toastr may be unavailable in tests */ }
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'system',
+                content: tf('Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved entries left in the pending list for retry.',
+                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText),
+                at: Date.now(),
+            });
+        } else if (committedIds.size > 0) {
+            try {
+                toastr.success(tf('Committed ${0} skill edit(s)', String(committedIds.size)));
+            } catch { /* ignore */ }
+        }
+        const committedSnaps = approved.filter(a => committedIds.has(a.id)).map(snap);
+        const stillApprovedSnaps = approved.filter(a => !committedIds.has(a.id)).map(snap);
+        return {
+            committed: committedIds.size,
+            failed: failedAt ? 1 : 0,
+            failedAt,
+            verdict: {
+                committed: committedSnaps,
+                rejected_dropped: rejected.map(snap),
+                still_approved: stillApprovedSnaps,
+                still_pending: stillPending.map(snap),
+                failed: failedAt
+                    ? {
+                        kind: failedAt.kind,
+                        skillName: failedAt.skillName,
+                        scope: failedAt.scope,
+                        path: failedAt.path,
+                        error: String(failedError?.message || failedError || 'unknown error'),
+                    }
+                    : null,
+            },
+        };
+    }
+
     async function applyPendingEdits({ skipRender = false } = {}) {
         const hasOrchPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
         const hasApprovedLorebook = Array.isArray(state.pendingLorebookEdits)
             && state.pendingLorebookEdits.some(p => p?.status === 'approved');
         const hasRejectedLorebook = Array.isArray(state.pendingLorebookEdits)
             && state.pendingLorebookEdits.some(p => p?.status === 'rejected');
-        if (!hasOrchPending && !hasApprovedLorebook && !hasRejectedLorebook) {
+        const hasApprovedSkill = Array.isArray(state.pendingSkillEdits)
+            && state.pendingSkillEdits.some(p => p?.status === 'approved');
+        const hasRejectedSkill = Array.isArray(state.pendingSkillEdits)
+            && state.pendingSkillEdits.some(p => p?.status === 'rejected');
+        if (!hasOrchPending && !hasApprovedLorebook && !hasRejectedLorebook && !hasApprovedSkill && !hasRejectedSkill) {
             return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
         }
         if (!hasOrchPending) {
-            // Lorebook-only path: handles both approved commits and the
+            // Lorebook + skill only path: handles approved commits and the
             // rejected-flush cleanup (which the user can trigger
             // independently when there are no committable proposals but
             // their declined decisions are still cluttering the summary
-            // row). commitApprovedLorebookEdits drops rejected entries
-            // unconditionally; that path is reachable whether or not any
+            // row). Both commit helpers drop rejected entries
+            // unconditionally; either path is reachable whether or not any
             // approved entries exist.
             const lorebookResult = await commitApprovedLorebookEdits();
+            const skillResult = await commitApprovedSkillEdits();
             await persistSession();
             if (!skipRender) await render();
-            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [], lorebook: lorebookResult };
+            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [], lorebook: lorebookResult, skill: skillResult };
         }
         if (!state.live) await loadLive();
         const liveSnapshot = state.live;
@@ -2892,9 +3232,13 @@ export async function openOrchestratorIterationStudio(deps) {
         // entries are dropped; pending (undecided) entries survive into
         // the next Apply so the user can return to them.
         const lorebookResult = await commitApprovedLorebookEdits();
+        // Skill commit phase: same gating as lorebook — approved entries
+        // commit through skillsApi via commitApprovedSkillProposal,
+        // rejected drop, pending survive.
+        const skillResult = await commitApprovedSkillEdits();
         await persistSession();
         if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits, lorebook: lorebookResult };
+        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits, lorebook: lorebookResult, skill: skillResult };
     }
 
     async function discardPendingEdits() {
@@ -2919,7 +3263,7 @@ export async function openOrchestratorIterationStudio(deps) {
      * this verbatim — keep the per-edit "skipped because X" detail intact
      * so the LLM can correct its next round.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'profile', autoApply = false, lorebook = null }) {
+    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'profile', autoApply = false, lorebook = null, skill = null }) {
         const conflictArr = Array.isArray(conflicts) ? conflicts : [];
         const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
         const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
@@ -2998,14 +3342,46 @@ export async function openOrchestratorIterationStudio(deps) {
                 }
             }
         }
+        // Skill decisions — same shape as lorebook: list every group so
+        // the AI doesn't re-propose entries the user already declined and
+        // knows what still needs attention.
+        if (skill && skill.verdict) {
+            const v = skill.verdict;
+            const fmtSkill = (e) => `    - ${String(e.skillName || '')} [${String(e.kind || '?')}]${e.path ? ` ${String(e.path)}` : ''}`;
+            const hasAny = (v.committed?.length || 0) + (v.rejected_dropped?.length || 0)
+                + (v.still_approved?.length || 0) + (v.still_pending?.length || 0)
+                + (v.failed ? 1 : 0);
+            if (hasAny > 0) {
+                lines.push('Skill decisions from this Apply:');
+                if (Array.isArray(v.committed) && v.committed.length > 0) {
+                    lines.push('  Committed (now live on disk):');
+                    for (const e of v.committed) lines.push(fmtSkill(e));
+                }
+                if (Array.isArray(v.rejected_dropped) && v.rejected_dropped.length > 0) {
+                    lines.push('  Rejected by user (dropped, never written to disk; do NOT re-propose without addressing the reason the user might have rejected — they likely have a reason):');
+                    for (const e of v.rejected_dropped) lines.push(fmtSkill(e));
+                }
+                if (Array.isArray(v.still_approved) && v.still_approved.length > 0) {
+                    lines.push('  Still approved but not yet committed (a commit failure halted the walk; the user can retry):');
+                    for (const e of v.still_approved) lines.push(fmtSkill(e));
+                }
+                if (Array.isArray(v.still_pending) && v.still_pending.length > 0) {
+                    lines.push('  Still pending user decision (not yet approved or rejected):');
+                    for (const e of v.still_pending) lines.push(fmtSkill(e));
+                }
+                if (v.failed) {
+                    lines.push(`  Commit failed for ${String(v.failed.skillName || '')} [${String(v.failed.kind || '?')}]: ${String(v.failed.error || 'unknown')}`);
+                }
+            }
+        }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         return lines.join('\n');
     }
 
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits, lorebook = null }) {
+    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits, lorebook = null, skill = null }) {
         if (state.isBusy) return;
         const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: getApplyScopeLabel(), lorebook })
+            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: getApplyScopeLabel(), lorebook, skill })
             : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
 
         state.session.messages.push({
@@ -3368,6 +3744,43 @@ export async function openOrchestratorIterationStudio(deps) {
         await applyPendingEdits();
     });
 
+    // Per-proposal approve/reject/undo for pending skill authoring edits.
+    // Mirror of the lorebook hooks above — flips the local status flag;
+    // commit happens at apply-batch time (after orch profile + lorebook
+    // commits) via commitApprovedSkillProposal.
+    $root.on('click.orchIt', '[data-orch-it-action="approve-skill"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
+        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'approved';
+        await render();
+    });
+
+    $root.on('click.orchIt', '[data-orch-it-action="reject-skill"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
+        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'rejected';
+        await render();
+    });
+
+    $root.on('click.orchIt', '[data-orch-it-action="reset-skill-decision"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
+        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
+        if (!entry) return;
+        entry.status = 'pending';
+        await render();
+    });
+
+    // Skill-only flush path: same routing trick as lorebook-only.
+    $root.on('click.orchIt', '[data-orch-it-action="commit-skill-only"]', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await applyPendingEdits();
+    });
+
     $root.on('click.orchIt', '[data-orch-it-action="apply-batch"]', async (e) => {
         e.preventDefault();
         const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
@@ -3389,6 +3802,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 alreadyDone: outcome?.alreadyDone,
                 cleanEdits: outcome?.cleanEdits,
                 lorebook: outcome?.lorebook,
+                skill: outcome?.skill,
             });
         }
     });

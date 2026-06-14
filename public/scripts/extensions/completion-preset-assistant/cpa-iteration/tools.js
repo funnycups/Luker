@@ -101,21 +101,39 @@ export function isCpaSkillTool(name) {
 }
 
 /**
- * Dispatch one skill tool call. CPA exposes the iter-studio's pure server-side
- * handlers (inventory + authoring + verbatim extract); none of them need a
- * working profile, so `mutationCtx.getWorkingProfile` returns null. The result
- * shape mirrors `runSkillIterStudioTool` minus the `pendingEdit` branch —
- * none of the CPA-exposed handlers mutate a profile.
+ * Dispatch one skill tool call. CPA exposes 12 of the 16 iter-studio
+ * skill tools (the 3 policy-binding tools + skill_replace_in_systemprompt
+ * are orchestrator-only — they need a working profile, which CPA does not
+ * have). Result shapes that can come back:
+ *
+ *   { ok: true, result: ... }                            inventory + ack
+ *   { ok: true, result: ..., pendingSkillEdit: {...} }   authoring proposal
+ *   { ok: false, error: '...' }                          handled failure
+ *
+ * The 4 working-profile tools are filtered out of CPA's catalog upstream,
+ * so `pendingEdit` should never appear here; we strip it defensively in
+ * case a future catalog refactor surfaces one. `pendingSkillEdit` is
+ * threaded through verbatim — studio.js parks it on its own
+ * `pendingSkillEdits` queue and commits at Apply time, same as
+ * orchestrator iter-studio.
  *
  * @param {{ id?: string, name: string, args: object }} call
- * @returns {Promise<{ok: true, result: *} | {ok: false, error: string}>}
+ * @returns {Promise<
+ *   | {ok: true, result: *}
+ *   | {ok: true, result: *, pendingSkillEdit: {kind:string, skillName:string, scope:object, path?:string, before:*, after:*, op:{name:string, args:object}}}
+ *   | {ok: false, error: string}
+ * >}
  */
 export async function runCpaSkillTool(call) {
     const out = await runSkillIterStudioTool(call, { getWorkingProfile: () => null });
-    if (out && out.ok && 'pendingEdit' in out) {
-        // Defensive: the 12 tools CPA exposes never produce pendingEdit, but
-        // strip it if anything ever leaks so studio.js doesn't try to thread
-        // an orchestrator-shaped edit into the preset's edit pipeline.
+    if (!out || !out.ok) return out;
+    if ('pendingSkillEdit' in out) {
+        return { ok: true, result: out.result, pendingSkillEdit: out.pendingSkillEdit };
+    }
+    if ('pendingEdit' in out) {
+        // Defensive: the 12 tools CPA exposes should never produce
+        // pendingEdit (those come from the 4 working-profile tools, which
+        // CPA doesn't surface). Strip if anything ever leaks.
         return { ok: true, result: out.result };
     }
     return out;

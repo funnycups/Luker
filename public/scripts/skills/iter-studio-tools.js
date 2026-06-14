@@ -11,12 +11,15 @@
  *   Inventory inspection (4 — read-only):
  *     skill_list_visible, skill_inspect, skill_read_content, skill_search_content
  *
- *   Authoring (7 — server-side writes through skillsApi):
+ *   Authoring (7 — emit a `pendingSkillEdit` proposal envelope; the
+ *   actual disk write happens at Apply time via
+ *   `commitApprovedSkillProposal` so the user sees a per-card diff and
+ *   can approve or reject before anything lands on disk):
  *     skill_create, skill_update_content, skill_edit_content,
  *     skill_update_frontmatter, skill_rename, skill_change_scope, skill_delete
  *
  *   Policy binding (3 — mutates the caller's working profile in place;
- *   surfaces as a pending edit the user reviews + applies):
+ *   surfaces as a `pendingEdit` the user reviews + applies):
  *     skill_bind_to_agent, skill_unbind_from_agent, skill_set_mode_defaults
  *
  *   Migration helpers (2 — assist long-systemPrompt extraction without
@@ -39,15 +42,20 @@
  *     supplies `getWorkingProfile: () => null` when dispatching). Other
  *     popups that want skill management may do the same.
  *
- *   - Returns one of three shapes from `runSkillIterStudioTool`:
- *       { ok: true, result: ... }                    plain server-side result
- *       { ok: true, result: ..., pendingEdit: {...} }  mutated working profile
- *       { ok: false, error: '...' }                    handled failure
+ *   - Returns one of four shapes from `runSkillIterStudioTool`:
+ *       { ok: true, result: ... }                          plain server-side read
+ *       { ok: true, result: ..., pendingEdit: {...} }      mutated working profile
+ *       { ok: true, result: ..., pendingSkillEdit: {...} } skill authoring proposal
+ *       { ok: false, error: '...' }                        handled failure
  *
- *     The pendingEdit shape uses a coarse `{op:'set', path:'', oldValue,
- *     newValue}` so it slots directly into the popup's pendingEdits array
- *     and applies through whatever applyPendingEdits path the popup
- *     already runs — no special-casing in apply.
+ *     `pendingEdit` uses a coarse `{op:'set', path:'', oldValue, newValue}`
+ *     so it slots directly into the popup's pendingEdits array.
+ *
+ *     `pendingSkillEdit` carries `{kind, skillName, scope, path?, before,
+ *     after, op:{name,args}, extras?}`. The popup parks it on its own
+ *     `pendingSkillEdits` queue, renders a per-card diff, lets the user
+ *     approve/reject, and at Apply time replays approved entries through
+ *     `commitApprovedSkillProposal(op)` against current on-disk state.
  *
  *   - The popup owns the working-profile mutation surface; this module
  *     receives a `mutationCtx` bag with the current working profile and
@@ -174,6 +182,153 @@ export function applyFrontmatterPatch(content, patch) {
     const merged = mergeFrontmatterPatch(parsed, patch);
     const newYaml = yaml.stringify(merged).replace(/\n$/, '');
     return `---\n${newYaml}\n---\n${body}`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Skill authoring proposal envelope. Each of the 7 authoring tools (+
+// skill_extract_from_text which composes skill_create) captures a
+// before/after pair against current on-disk state and returns a
+// `pendingSkillEdit` shaped like:
+//
+//   { kind, skillName, scope, path?, before, after, op:{name,args}, extras? }
+//
+// The popup parks the envelope on `state.pendingSkillEdits`, renders a
+// per-card diff for the user to approve/reject, and at Apply time
+// replays approved entries through `commitApprovedSkillProposal(op)`.
+// That replay re-derives against current on-disk state so a parallel
+// session that edited the same file between proposal and apply surfaces
+// as a fresh validation error (writeFile sha256 mismatch / editFile
+// substring missing) instead of clobbering with a stale after-image.
+// ────────────────────────────────────────────────────────────────────────────
+
+function composeSkillMd(name, description, body) {
+    const safeBody = String(body || '');
+    return `---\nname: ${name}\ndescription: ${description}\n---\n${safeBody.startsWith('\n') ? safeBody : `\n${safeBody}`}`;
+}
+
+async function readFileSafe(scope, name, path) {
+    try {
+        const raw = await skillsApi.readFile({ scope, name, path });
+        if (typeof raw === 'string') return raw;
+        if (raw && typeof raw.content === 'string') return raw.content;
+        return null;
+    } catch (err) {
+        // Treat any read failure (typically a 404 for newly-created files)
+        // as "not present" so callers can decide whether that's a soft
+        // "before is empty" (frontmatter patch on a missing file is an
+        // error; edit_content on a missing file is an error; create with
+        // a name that already exists shouldn't end up here).
+        if (String(err?.message || err).match(/404|not found/i)) return null;
+        throw err;
+    }
+}
+
+function proposalReturn({ kind, skillName, scope, path, before, after, op, extras }) {
+    return {
+        result: buildProposalAck({ kind, skillName, scope, path, op }),
+        pendingSkillEdit: {
+            kind,
+            skillName,
+            scope,
+            path,
+            before,
+            after,
+            op,
+            ...(extras && typeof extras === 'object' ? { extras } : {}),
+        },
+    };
+}
+
+function buildProposalAck({ kind, skillName, scope, path, op }) {
+    return {
+        ok: true,
+        proposed: true,
+        kind,
+        skill: skillName,
+        scope,
+        ...(path ? { path } : {}),
+        tool: op?.name,
+        message: 'Proposed for user approval. The change is NOT live yet — the user will review the diff card in the popup and approve or reject it before it is committed at Apply time.',
+    };
+}
+
+/**
+ * Commit a single approved skill proposal at Apply time. studio.js walks
+ * the approved entries in order and calls this per entry. The op shape is
+ * the one the handler captured at proposal time. Each branch replays the
+ * tool args against current on-disk state via skillsApi, so a parallel
+ * session that edited the same file between proposal and apply surfaces
+ * as a fresh validation error (writeFile expectedSha256 / editFile
+ * substring-missing) instead of clobbering with a stale after-image.
+ *
+ * Throws on failure so the caller can halt the walk and leave the
+ * remaining approved entries pending.
+ */
+export async function commitApprovedSkillProposal(op) {
+    if (!op || typeof op !== 'object' || !op.name) {
+        throw new Error('commitApprovedSkillProposal: invalid op');
+    }
+    const args = op.args && typeof op.args === 'object' ? op.args : {};
+    switch (op.name) {
+        case 'skill_create': {
+            const files = [{
+                path: 'SKILL.md',
+                encoding: 'utf8',
+                content: composeSkillMd(String(args.name), String(args.description), String(args.body || '')),
+            }];
+            if (Array.isArray(args.files)) {
+                for (const f of args.files) {
+                    if (!f || typeof f !== 'object') continue;
+                    if (!f.path || f.path === 'SKILL.md') continue;
+                    files.push({
+                        path: String(f.path),
+                        encoding: f.encoding === 'base64' ? 'base64' : 'utf8',
+                        content: String(f.content || ''),
+                    });
+                }
+            }
+            return skillsApi.install({ scope: args.scope, payload: { files } });
+        }
+        case 'skill_update_content':
+            return skillsApi.writeFile({
+                scope: args.scope,
+                name: args.name,
+                path: args.path,
+                content: args.content,
+                expectedSha256: args.expectedSha256,
+            });
+        case 'skill_edit_content':
+            return skillsApi.editFile({
+                scope: args.scope,
+                name: args.name,
+                path: args.path,
+                oldString: args.oldString,
+                newString: args.newString,
+                replaceAll: Boolean(args.replaceAll),
+            });
+        case 'skill_update_frontmatter': {
+            // Re-derive after-image against current on-disk SKILL.md so a
+            // parallel-session edit lands cleanly. If the file vanished
+            // between proposal and apply, surface that as the error.
+            const current = await readFileSafe(args.scope, args.name, 'SKILL.md');
+            if (current === null) throw new Error(`SKILL.md not found at apply time: ${args.name}`);
+            const newContent = applyFrontmatterPatch(current, args.patch);
+            return skillsApi.writeFile({
+                scope: args.scope,
+                name: args.name,
+                path: 'SKILL.md',
+                content: newContent,
+            });
+        }
+        case 'skill_rename':
+            return skillsApi.rename(args.scope, args.fromName, args.toName);
+        case 'skill_change_scope':
+            return skillsApi.moveScope(args.name, args.fromScope, args.toScope);
+        case 'skill_delete':
+            return skillsApi.delete(args.scope, args.name);
+        default:
+            throw new Error(`commitApprovedSkillProposal: unknown op ${op.name}`);
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -648,7 +803,8 @@ const HANDLERS = {
         const name = String(args.name);
         const description = String(args.description);
         const body = String(args.body);
-        const skillMd = `---\nname: ${name}\ndescription: ${description}\n---\n${body.startsWith('\n') ? body : `\n${body}`}`;
+        const scope = normalizeScope(args.scope);
+        const skillMd = composeSkillMd(name, description, body);
         const files = [{ path: 'SKILL.md', encoding: 'utf8', content: skillMd }];
         if (Array.isArray(args.files)) {
             for (const f of args.files) {
@@ -661,19 +817,47 @@ const HANDLERS = {
                 });
             }
         }
-        return skillsApi.install({ scope: normalizeScope(args.scope), payload: { files } });
+        const op = { name: 'skill_create', args: { name, description, body, scope, files: args.files } };
+        return proposalReturn({
+            kind: 'create',
+            skillName: name,
+            scope,
+            path: 'SKILL.md',
+            // For create, the diff card shows SKILL.md going from empty
+            // string to its full body so the user sees the new file's
+            // shape verbatim — same renderer the content-edit tools use.
+            before: '',
+            after: skillMd,
+            extras: files.length > 1 ? { extraFiles: files.slice(1).map(f => f.path) } : null,
+            op,
+        });
     },
 
     async skill_update_content(args) {
         if (!args?.name) throw new Error('name is required');
         if (!args?.path) throw new Error('path is required');
         if (typeof args?.content !== 'string') throw new Error('content is required');
-        return skillsApi.writeFile({
-            scope: normalizeScope(args.scope),
-            name: String(args.name),
-            path: String(args.path),
-            content: String(args.content),
-            expectedSha256: args.expectedSha256,
+        const scope = normalizeScope(args.scope);
+        const name = String(args.name);
+        const path = String(args.path);
+        const before = await readFileSafe(scope, name, path);
+        return proposalReturn({
+            kind: 'content',
+            skillName: name,
+            scope,
+            path,
+            before,
+            after: String(args.content),
+            op: {
+                name: 'skill_update_content',
+                args: {
+                    name,
+                    scope,
+                    path,
+                    content: String(args.content),
+                    expectedSha256: args.expectedSha256,
+                },
+            },
         });
     },
 
@@ -684,13 +868,38 @@ const HANDLERS = {
             throw new Error('oldString is required (non-empty)');
         }
         if (typeof args?.newString !== 'string') throw new Error('newString is required');
-        return skillsApi.editFile({
-            scope: normalizeScope(args.scope),
-            name: String(args.name),
-            path: String(args.path),
-            oldString: String(args.oldString),
-            newString: String(args.newString),
-            replaceAll: Boolean(args.replaceAll),
+        const scope = normalizeScope(args.scope);
+        const name = String(args.name);
+        const path = String(args.path);
+        const replaceAll = Boolean(args.replaceAll);
+        const before = await readFileSafe(scope, name, path);
+        if (before === null) {
+            throw new Error(`file not found: ${name}/${path}`);
+        }
+        if (!before.includes(args.oldString)) {
+            throw new Error('oldString not found in file (substring must appear at least once)');
+        }
+        const after = replaceAll
+            ? before.split(args.oldString).join(args.newString)
+            : before.replace(args.oldString, args.newString);
+        return proposalReturn({
+            kind: 'content',
+            skillName: name,
+            scope,
+            path,
+            before,
+            after,
+            op: {
+                name: 'skill_edit_content',
+                args: {
+                    name,
+                    scope,
+                    path,
+                    oldString: String(args.oldString),
+                    newString: String(args.newString),
+                    replaceAll,
+                },
+            },
         });
     },
 
@@ -701,35 +910,74 @@ const HANDLERS = {
         }
         const scope = normalizeScope(args.scope);
         const name = String(args.name);
-        const current = await skillsApi.readFile({ scope, name, path: 'SKILL.md' });
-        const currentContent = typeof current === 'string'
-            ? current
-            : (current && typeof current.content === 'string' ? current.content : '');
-        const newContent = applyFrontmatterPatch(currentContent, args.patch);
-        return skillsApi.writeFile({
+        const before = await readFileSafe(scope, name, 'SKILL.md');
+        if (before === null) {
+            throw new Error(`SKILL.md not found: ${name}`);
+        }
+        const after = applyFrontmatterPatch(before, args.patch);
+        return proposalReturn({
+            kind: 'frontmatter',
+            skillName: name,
             scope,
-            name,
             path: 'SKILL.md',
-            content: newContent,
+            before,
+            after,
+            op: {
+                name: 'skill_update_frontmatter',
+                args: { name, scope, patch: args.patch },
+            },
         });
     },
 
     async skill_rename(args) {
         if (!args?.fromName) throw new Error('fromName is required');
         if (!args?.toName) throw new Error('toName is required');
-        return skillsApi.rename(normalizeScope(args.scope), String(args.fromName), String(args.toName));
+        const scope = normalizeScope(args.scope);
+        const fromName = String(args.fromName);
+        const toName = String(args.toName);
+        return proposalReturn({
+            kind: 'rename',
+            skillName: fromName,
+            scope,
+            // Structural ops (rename/scope/delete) have no body diff — the
+            // renderer surfaces a compact metadata card instead. We still
+            // pass identity strings as `before`/`after` so the same data
+            // shape works for tests that snapshot the proposal.
+            before: { name: fromName },
+            after: { name: toName },
+            op: { name: 'skill_rename', args: { scope, fromName, toName } },
+        });
     },
 
     async skill_change_scope(args) {
         if (!args?.name) throw new Error('name is required');
         if (!args?.fromScope) throw new Error('fromScope is required');
         if (!args?.toScope) throw new Error('toScope is required');
-        return skillsApi.moveScope(String(args.name), normalizeScope(args.fromScope), normalizeScope(args.toScope));
+        const fromScope = normalizeScope(args.fromScope);
+        const toScope = normalizeScope(args.toScope);
+        const name = String(args.name);
+        return proposalReturn({
+            kind: 'change_scope',
+            skillName: name,
+            scope: fromScope,
+            before: { scope: fromScope },
+            after: { scope: toScope },
+            op: { name: 'skill_change_scope', args: { name, fromScope, toScope } },
+        });
     },
 
     async skill_delete(args) {
         if (!args?.name) throw new Error('name is required');
-        return skillsApi.delete(normalizeScope(args.scope), String(args.name));
+        const scope = normalizeScope(args.scope);
+        const name = String(args.name);
+        return proposalReturn({
+            kind: 'delete',
+            skillName: name,
+            scope,
+            before: { exists: true },
+            after: { exists: false },
+            op: { name: 'skill_delete', args: { name, scope } },
+        });
     },
 
     // ── Policy binding ──────────────────────────────────────────────────
@@ -858,7 +1106,9 @@ const HANDLERS = {
  *   getWorkingProfile: () => object|null,
  * }} mutationCtx
  * @returns {Promise<
- *   | {ok: true, result: *, pendingEdit?: {op:string, path:string, oldValue:*, newValue:*}}
+ *   | {ok: true, result: *}
+ *   | {ok: true, result: *, pendingEdit: {op:string, path:string, oldValue:*, newValue:*}}
+ *   | {ok: true, result: *, pendingSkillEdit: {kind:string, skillName:string, scope:object, path?:string, before:*, after:*, op:{name:string, args:object}}}
  *   | {ok: false, error: string}
  * >}
  */
@@ -873,6 +1123,9 @@ export async function runSkillIterStudioTool(call, mutationCtx = {}) {
         const out = await handler(args, mutationCtx);
         if (out && typeof out === 'object' && 'pendingEdit' in out) {
             return { ok: true, result: out.result, pendingEdit: out.pendingEdit };
+        }
+        if (out && typeof out === 'object' && 'pendingSkillEdit' in out) {
+            return { ok: true, result: out.result, pendingSkillEdit: out.pendingSkillEdit };
         }
         return { ok: true, result: out };
     } catch (err) {

@@ -499,3 +499,149 @@
 .cpa_it_popup.luker-iter-workspace .cpa_it_composer button {
     align-self: auto;
 }
+
+/* ── Skill authoring proposal cards ──────────────────────────────────
+   Per-card approve/reject + Apply-time commit for skill_create /
+   skill_update_content / skill_edit_content / skill_update_frontmatter /
+   skill_rename / skill_change_scope / skill_delete /
+   skill_extract_from_text. Same visual language as orchestrator
+   iter-studio's orch_it_skl_* tree. Body is either an ITER_UI.diff
+   card or a one-line structural strip. */
+.cpa_it_skl_list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-sm);
+    margin-top: var(--it-space-sm);
+}
+.cpa_it_skl_card {
+    border: 1px solid color-mix(in oklab, var(--it-accent-primary) 25%, transparent);
+    border-radius: var(--it-radius-md, 6px);
+    padding: var(--it-space-sm);
+    background: color-mix(in oklab, var(--it-accent-primary) 4%, transparent);
+}
+.cpa_it_skl_card_approved {
+    border-color: color-mix(in oklab, #2db86b 55%, transparent);
+    background: color-mix(in oklab, #2db86b 10%, transparent);
+}
+.cpa_it_skl_card_rejected {
+    border-color: color-mix(in oklab, #d04848 55%, transparent);
+    background: color-mix(in oklab, #d04848 8%, transparent);
+}
+.cpa_it_skl_card_rejected .cpa_it_skl_body { opacity: 0.55; }
+.cpa_it_skl_header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--it-space-xs);
+    font-size: 0.92em;
+    margin-bottom: var(--it-space-xs);
+}
+.cpa_it_skl_label { font-weight: 600; }
+.cpa_it_skl_target {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.88em;
+    opacity: 0.85;
+}
+.cpa_it_skl_scope, .cpa_it_skl_path {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+.cpa_it_skl_status {
+    margin-left: auto;
+    font-size: 0.82em;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: color-mix(in oklab, currentColor 12%, transparent);
+}
+.cpa_it_skl_status.approved { color: #2db86b; }
+.cpa_it_skl_status.rejected { color: #d04848; }
+.cpa_it_skl_status.pending  { opacity: 0.75; }
+
+.cpa_it_skl_body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--it-space-xs);
+    margin: var(--it-space-xs) 0;
+}
+.cpa_it_skl_nochange {
+    font-style: italic;
+    opacity: 0.6;
+    font-size: 0.9em;
+}
+.cpa_it_skl_meta_row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--it-space-xs);
+    align-items: baseline;
+    font-size: 0.9em;
+}
+.cpa_it_skl_meta_label { font-weight: 600; opacity: 0.8; }
+.cpa_it_skl_meta_was {
+    text-decoration: line-through;
+    opacity: 0.7;
+    font-family: var(--monoFontFamily, monospace);
+}
+.cpa_it_skl_meta_arrow { opacity: 0.6; }
+.cpa_it_skl_meta_now {
+    font-family: var(--monoFontFamily, monospace);
+}
+.cpa_it_skl_meta_destructive {
+    color: #d04848;
+    font-style: italic;
+}
+.cpa_it_skl_extras {
+    font-size: 0.85em;
+    opacity: 0.75;
+    margin-top: var(--it-space-xs);
+}
+
+.cpa_it_skl_controls {
+    display: flex;
+    gap: var(--it-space-xs);
+    justify-content: flex-end;
+    margin-top: var(--it-space-xs);
+}
+.cpa_it_skl_btn {
+    padding: 4px 12px;
+    font-size: 0.88em;
+}
+.cpa_it_skl_btn_approve {
+    background: color-mix(in oklab, #2db86b 18%, transparent);
+    border-color: color-mix(in oklab, #2db86b 55%, transparent);
+}
+.cpa_it_skl_btn_approve:hover:not(:disabled) {
+    background: color-mix(in oklab, #2db86b 28%, transparent);
+}
+.cpa_it_skl_btn_reject {
+    background: color-mix(in oklab, #d04848 18%, transparent);
+    border-color: color-mix(in oklab, #d04848 55%, transparent);
+}
+.cpa_it_skl_btn_reject:hover:not(:disabled) {
+    background: color-mix(in oklab, #d04848 28%, transparent);
+}
+
+.cpa_it_skl_summary {
+    display: flex;
+    align-items: center;
+    gap: var(--it-space-sm);
+    padding: var(--it-space-xs) var(--it-space-sm);
+}
+.cpa_it_skl_summary:empty {
+    display: none;
+}
+.cpa_it_skl_summary_text {
+    font-size: 0.88em;
+    opacity: 0.85;
+    flex: 1;
+}
+.cpa_it_skl_commit_btn {
+    background: color-mix(in oklab, var(--it-accent-primary) 18%, transparent);
+    border: 1px solid color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
+    border-radius: var(--it-radius-sm, 4px);
+    padding: 4px 12px;
+    font-size: 0.88em;
+    cursor: pointer;
+}
+.cpa_it_skl_commit_btn:hover {
+    background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
+}
