@@ -19,15 +19,26 @@
  *
  * `persistSettings()` is whatever the plugin uses to flush extension_settings
  * (`saveSettingsDebounced` from the host, typically).
+ *
+ * `persistSettingsImmediate()` (optional) is the non-debounced sibling,
+ * used by `saveSessionFlush` / `flushPendingSession` at popup teardown so
+ * a session the user committed on the last turn actually hits disk before
+ * they refresh the page. Without it, the debounced timer resets every
+ * persist call and a close-then-refresh inside the debounce window drops
+ * the final write. Default: falls back to `persistSettings` (debounced),
+ * which preserves the pre-flush behaviour for callers that don't wire it.
  */
 
-export function createExtensionSettingsSessionStorage({ getBucket, persistSettings }) {
+export function createExtensionSettingsSessionStorage({ getBucket, persistSettings, persistSettingsImmediate }) {
     if (typeof getBucket !== 'function') {
         throw new TypeError('createExtensionSettingsSessionStorage: getBucket must be a function');
     }
     if (typeof persistSettings !== 'function') {
         throw new TypeError('createExtensionSettingsSessionStorage: persistSettings must be a function');
     }
+    const persistImmediate = typeof persistSettingsImmediate === 'function'
+        ? persistSettingsImmediate
+        : persistSettings;
 
     return {
         listSessions: async (scope) => {
@@ -51,6 +62,19 @@ export function createExtensionSettingsSessionStorage({ getBucket, persistSettin
             const bucket = getBucket(scope);
             bucket[String(session.id)] = structuredClone(session);
             persistSettings();
+        },
+        /**
+         * Same as `saveSession`, but skips the debounce — fires
+         * `persistSettingsImmediate` so the write hits disk before the
+         * caller awaits the returned promise. Use at popup teardown
+         * (close handlers, unmount). Awaitable if `persistSettingsImmediate`
+         * itself returns a promise.
+         */
+        saveSessionFlush: async (scope, session) => {
+            if (!session?.id) return;
+            const bucket = getBucket(scope);
+            bucket[String(session.id)] = structuredClone(session);
+            await persistImmediate();
         },
         deleteSession: async (scope, id) => {
             const bucket = getBucket(scope);

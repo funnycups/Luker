@@ -98,6 +98,7 @@ export function createOrchestratorIterationSessionStore({
     mode,
     getOrchestratorSettingsRoot,
     persistSettings,
+    persistSettingsImmediate,
     computeScope,
 }) {
     if (!mode) {
@@ -133,12 +134,17 @@ export function createOrchestratorIterationSessionStore({
             return root[SESSIONS_BUCKET_KEY][mode][scope];
         },
         persistSettings,
+        persistSettingsImmediate,
     });
 
     return {
         list: () => inner.listSessions(innerScope),
         load: (id) => inner.loadSession(innerScope, id),
         save: (session) => inner.saveSession(innerScope, session),
+        // Non-debounced save: bypasses the host's settings debounce so a
+        // close-then-refresh inside the debounce window doesn't lose the
+        // last in-popup mutation. Called from the popup teardown finally.
+        saveFlush: (session) => inner.saveSessionFlush(innerScope, session),
         delete: (id) => inner.deleteSession(innerScope, id),
         clearObsolete: async () => {
             const root = getOrchestratorSettingsRoot();

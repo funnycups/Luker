@@ -1001,6 +1001,25 @@ export async function openOrchestratorIterationStudio(deps) {
                 }
             } catch { /* ignore */ }
         },
+        // Non-debounced sibling used by the popup-close teardown flush.
+        // Without this the host's settings debounce can sit in its timer
+        // window when the user closes the popup and refreshes the page —
+        // dropping the last in-popup turn (the iter-studio simulate
+        // assistant bubble was the canonical repro).
+        persistSettingsImmediate: async () => {
+            try {
+                const ctx = (typeof globalThis !== 'undefined' && typeof globalThis.SillyTavern?.getContext === 'function')
+                    ? globalThis.SillyTavern.getContext()
+                    : null;
+                if (ctx && typeof ctx.saveSettings === 'function') {
+                    await ctx.saveSettings();
+                    return;
+                }
+                if (typeof globalThis !== 'undefined' && typeof globalThis.saveSettingsDebounced === 'function') {
+                    globalThis.saveSettingsDebounced();
+                }
+            } catch { /* ignore */ }
+        },
         computeScope: () => computeSessionScope(),
     });
     await sessionStore.clearObsolete();
@@ -1242,7 +1261,7 @@ export async function openOrchestratorIterationStudio(deps) {
     // Persistence. Session carries the latest surfaceState, messages, and
     // a derived title (first 50 chars of the first user message).
     // ──────────────────────────────────────────────────────────────────
-    async function persistSession() {
+    async function persistSession({ flush = false } = {}) {
         const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
         const hasPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
         if (state.session._transient && !hasMessages && !hasPending) {
@@ -1270,7 +1289,11 @@ export async function openOrchestratorIterationStudio(deps) {
                 state.session.title = String(firstUser.content || '').slice(0, 50);
             }
         }
-        await sessionStore.save(state.session);
+        if (flush && typeof sessionStore.saveFlush === 'function') {
+            await sessionStore.saveFlush(state.session);
+        } else {
+            await sessionStore.save(state.session);
+        }
     }
 
     async function loadSession(id) {
@@ -3982,7 +4005,12 @@ export async function openOrchestratorIterationStudio(deps) {
         // ensures every teardown step (resizer unbind, zoom-overlay unbind,
         // in-flight abort, final persist) runs even if rendering throws or
         // the popup is force-closed; ordering puts persistSession LAST so
-        // the abort flag is cleared before disk write.
+        // the abort flag is cleared before disk write. The teardown
+        // persist passes `{flush:true}` so the host's settings debounce
+        // is bypassed — otherwise a close-then-refresh inside the
+        // debounce window drops the last in-popup turn (canonical repro:
+        // simulate finishes, user closes popup + refreshes within ~1s,
+        // assistant bubble was in memory but never hit disk).
         await popupPromise;
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
@@ -3992,6 +4020,6 @@ export async function openOrchestratorIterationStudio(deps) {
         state.isBusy = false;
         state.aborting = false;
         state.abortController = null;
-        try { await persistSession(); } catch { /* ignore */ }
+        try { await persistSession({ flush: true }); } catch { /* ignore */ }
     }
 }
