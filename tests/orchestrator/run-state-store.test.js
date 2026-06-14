@@ -59,7 +59,17 @@ describe('RunStateStore — subscribe / unsubscribe', () => {
         const events = [];
         const unsub = subscribe((e) => events.push(e));
         const runId = startRun({ mode: 'director', chatKey: 'chatA' });
-        expect(events).toContainEqual({ type: evt.RUN_STARTED, runId, mode: 'director' });
+        expect(events).toContainEqual({ type: evt.RUN_STARTED, runId, mode: 'director', quiet: false });
+        unsub();
+    });
+
+    test('RUN_STARTED carries quiet=true when the run was started with {quiet:true}', async () => {
+        const { subscribe, getCurrentRun: getRun } = await import('../../public/scripts/extensions/orchestrator/run-state/store.js');
+        const events = [];
+        const unsub = subscribe((e) => events.push(e));
+        const runId = startRun({ mode: 'director', chatKey: 'chatA', quiet: true });
+        expect(events).toContainEqual({ type: evt.RUN_STARTED, runId, mode: 'director', quiet: true });
+        expect(getRun().quiet).toBe(true);
         unsub();
     });
 
