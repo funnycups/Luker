@@ -28,6 +28,7 @@ const TARGET_EVENTS = [
 
 const defaultSettings = {
     orderByEvent: {},
+    migratedFromAutoDiscover: false,
 };
 
 function i18n(text) {
@@ -162,9 +163,17 @@ function getDiscoveredPluginsForEvent(context, eventName) {
     return discovered;
 }
 
+function getStoredPluginOrder(eventName) {
+    const settings = getSettings();
+    const entry = settings.orderByEvent[eventName];
+    if (!entry || typeof entry !== 'object') {
+        return [];
+    }
+    return normalizeOrderList(entry.pluginOrder);
+}
+
 function getOrderedPluginList(context, eventName) {
-    const entry = getEventOrderEntry(eventName);
-    const ordered = normalizeOrderList(entry.pluginOrder);
+    const ordered = getStoredPluginOrder(eventName);
     const discovered = getDiscoveredPluginsForEvent(context, eventName);
 
     const finalOrder = [];
@@ -182,7 +191,6 @@ function getOrderedPluginList(context, eventName) {
         }
     }
 
-    entry.pluginOrder = finalOrder;
     return finalOrder;
 }
 
@@ -202,9 +210,12 @@ function applyOrderConfig(context) {
     }
 }
 
-function movePlugin(eventName, pluginId, direction) {
+function movePlugin(context, eventName, pluginId, direction) {
     const entry = getEventOrderEntry(eventName);
-    const order = normalizeOrderList(entry.pluginOrder);
+    let order = normalizeOrderList(entry.pluginOrder);
+    if (order.length === 0) {
+        order = getOrderedPluginList(context, eventName);
+    }
     const index = order.indexOf(pluginId);
     if (index < 0) {
         return false;
@@ -219,9 +230,9 @@ function movePlugin(eventName, pluginId, direction) {
     return true;
 }
 
-function resetEventOrder(context, eventName) {
-    const discovered = getDiscoveredPluginsForEvent(context, eventName);
-    getEventOrderEntry(eventName).pluginOrder = discovered;
+function resetEventOrder(_context, eventName) {
+    const settings = getSettings();
+    delete settings.orderByEvent[eventName];
 }
 
 function renderEventCard(context, eventDef) {
@@ -278,7 +289,7 @@ function bindUi() {
         }
 
         if (action === 'move-up' || action === 'move-down') {
-            const moved = movePlugin(eventName, pluginId, action === 'move-up' ? 'up' : 'down');
+            const moved = movePlugin(context, eventName, pluginId, action === 'move-up' ? 'up' : 'down');
             if (moved) {
                 applyOrderConfig(context);
                 saveSettingsDebounced();
@@ -376,10 +387,20 @@ function ensureUi() {
     bindUi();
 }
 
+function migrateAutoDiscoveredOrders() {
+    const settings = getSettings();
+    if (settings.migratedFromAutoDiscover) {
+        return;
+    }
+    settings.orderByEvent = {};
+    settings.migratedFromAutoDiscover = true;
+}
+
 jQuery(() => {
     const context = getContext();
     registerLocaleData();
     ensureSettings();
+    migrateAutoDiscoveredOrders();
     applyOrderConfig(context);
     saveSettingsDebounced();
     ensureUi();
