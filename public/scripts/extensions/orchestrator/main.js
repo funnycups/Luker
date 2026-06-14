@@ -4152,20 +4152,48 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     }
     // Resolve final text + run status from the handle outcome — same
     // mapping the production handler uses (committed → completed,
-    // aborted / discarded → cancelled). runMainAgentLoop already calls
-    // finishRun via its own finally block (it sees deps.runId), so we
-    // just snapshot the store and return what the popup needs.
+    // aborted / discarded → cancelled). Unlike production, the simulation
+    // path calls `runMainAgentLoop` directly rather than going through
+    // `handleDirectorDispatch` — and the `finishRun` call lives in that
+    // dispatcher's IIFE, not in the loop itself. Without an explicit
+    // finishRun here the store stays `status: 'running'`, RUN_FINISHED
+    // never fires, the panel keeps ticking the elapsed timer and shows
+    // a live stop button that aborts nothing. Mirror the dispatcher's
+    // outcome→status mapping inline so the snapshot the popup reads has
+    // a terminal status before it returns.
     let finalText = '';
+    let resolvedStatus = 'completed';
+    let resolvedError = null;
     try {
         const outcome = await handle.complete;
-        finalText = typeof outcome?.finalText === 'string' && outcome.finalText.length > 0
-            ? outcome.finalText
-            : latestText;
-    } catch (_) {
+        const handleStatus = String(outcome?.status || '');
+        if (handleStatus === 'committed') {
+            resolvedStatus = 'committed';
+            finalText = String(outcome?.finalText ?? '') || latestText;
+        } else if (handleStatus === 'aborted' || handleStatus === 'discarded') {
+            resolvedStatus = 'aborted';
+            finalText = latestText;
+        } else {
+            resolvedStatus = handleStatus || 'completed';
+            finalText = typeof outcome?.finalText === 'string' && outcome.finalText.length > 0
+                ? outcome.finalText
+                : latestText;
+        }
+    } catch (handleErr) {
+        resolvedStatus = 'error';
+        resolvedError = String(handleErr?.message || handleErr);
         finalText = latestText;
     }
     void latestReasoning;
     try { linkedSimAbort.cleanup(); } catch (_) { /* best-effort */ }
+    try {
+        finishRun({
+            runId: directorRunId,
+            status: resolvedStatus,
+            finalText,
+            error: resolvedError,
+        });
+    } catch (_) { /* store may already be cleared */ }
     const liveRun = getCurrentRun();
     // structuredClone strips the abortFn (functions are non-clonable) and
     // gives the caller a stable snapshot independent of the live store —
