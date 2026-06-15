@@ -17722,6 +17722,9 @@ export async function processDroppedFiles(files, data = new Map()) {
     if (avatarFileNames.length > 0) {
         await importCharactersTags(avatarFileNames);
         selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
+        for (const avatarFileName of avatarFileNames) {
+            await eventSource.emit(event_types.CHARACTER_IMPORTED, { avatar: avatarFileName });
+        }
     }
 }
 
@@ -17821,6 +17824,7 @@ async function importCharacter(file, { preserveFileName = '', importTags = false
             if (importTags) {
                 await importCharactersTags([avatarFileName]);
                 selectImportedChar(data.file_name);
+                await eventSource.emit(event_types.CHARACTER_IMPORTED, { avatar: avatarFileName });
             }
             return avatarFileName;
         }
@@ -20295,6 +20299,9 @@ jQuery(async function () {
         if (avatarFileNames.length > 0) {
             await importCharactersTags(avatarFileNames);
             selectImportedChar(avatarFileNames[avatarFileNames.length - 1]);
+            for (const avatarFileName of avatarFileNames) {
+                await eventSource.emit(event_types.CHARACTER_IMPORTED, { avatar: avatarFileName });
+            }
         }
 
         // Clear the file input value to allow re-uploading the same file

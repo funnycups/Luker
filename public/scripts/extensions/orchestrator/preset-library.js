@@ -46,6 +46,23 @@ function makePresetId() {
     return `preset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Callback fired after `migrateLegacyCardOverrideForMode` mutates a
+ * card's `data.extensions.orchestrator` blob into the new preset-library
+ * shape. main.js wires this to a debounced write through
+ * `persistOrchestratorCharacterExtension` so the migrated shape settles
+ * to disk instead of being re-derived on every reload.
+ *
+ * Kept as an opt-in hook (rather than a direct import of the persistence
+ * helper) to avoid a `preset-library → editor-persist → preset-library`
+ * import cycle. Default no-op so unit tests that exercise the migration
+ * in isolation don't need to stub the side effect.
+ */
+let migrationPersistHook = () => {};
+export function setMigrationPersistHook(fn) {
+    migrationPersistHook = typeof fn === 'function' ? fn : () => {};
+}
+
 function sanitizePresetEntry(mode, entry) {
     const raw = entry && typeof entry === 'object' ? entry : {};
     const name = String(raw.name || DEFAULT_PRESET_NAME).trim() || DEFAULT_PRESET_NAME;
@@ -153,7 +170,7 @@ export function setActivePresetId(settings, mode, scope, presetId, { context, av
  * trigger a debounced save), false otherwise. Pure-ish: only mutates
  * the supplied character's extension blob in place.
  */
-function migrateLegacyCardOverrideForMode(context, avatar, mode) {
+export function migrateLegacyCardOverrideForMode(context, avatar, mode) {
     if (!context || !avatar) return false;
     const character = (context.characters || []).find(c => String(c?.avatar || '') === String(avatar));
     if (!character) return false;
@@ -224,9 +241,33 @@ function migrateLegacyCardOverrideForMode(context, avatar, mode) {
     return true;
 }
 
+/**
+ * Convenience wrapper used by callers that want the migration AND its
+ * persistence side effect in one call (probe paths in
+ * `character-overrides.js`, the seed step in `ensureDefaultSeeded`).
+ * Returns the boolean from the underlying migration so callers can fold
+ * it into their own control flow if needed.
+ *
+ * The persist hook is best-effort: a failing hook (e.g. write error)
+ * must not tank the read path that is also returning the migrated data
+ * to the caller. The caller already has the right shape in memory;
+ * persistence is a separate concern.
+ */
+export function migrateAndPersistLegacyCardOverrideForMode(context, avatar, mode) {
+    const migrated = migrateLegacyCardOverrideForMode(context, avatar, mode);
+    if (migrated) {
+        try {
+            migrationPersistHook(context, avatar, mode);
+        } catch (err) {
+            console.warn('[orchestrator] preset-library: migration persist hook threw:', err);
+        }
+    }
+    return migrated;
+}
+
 function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
     if (scope === 'character' && context && avatar) {
-        migrateLegacyCardOverrideForMode(context, avatar, mode);
+        migrateAndPersistLegacyCardOverrideForMode(context, avatar, mode);
     }
     const c = getScopeContainer(settings, scope, { context, avatar });
     if (!c) return null;

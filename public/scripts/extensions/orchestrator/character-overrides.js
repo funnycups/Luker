@@ -48,6 +48,7 @@ import {
 } from './defaults.js';
 import { i18n } from './i18n.js';
 import { getCurrentAvatar } from './snapshot-cache.js';
+import { migrateAndPersistLegacyCardOverrideForMode } from './preset-library.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -206,14 +207,39 @@ export function getCharacterActivePresetId(context, avatar, mode) {
  * True when the card's preset library for this mode should override the
  * global active preset. Requires both (a) a `presetLibraries.<mode>`
  * entry exists, and (b) `overrideEnabled.<mode>` is true.
+ *
+ * Cards freshly imported under the legacy `override.<mode>` shape (no
+ * preset library, no `overrideEnabled` container) are migrated in place
+ * on first read so the probe and the downstream `getActivePreset` call
+ * both see the new shape. Without this, the runtime gate in
+ * `getEffectiveProfile` would short-circuit before the lazy migration
+ * inside `getActivePreset(scope:'character')` ever runs.
  */
 export function isCharacterPresetActiveOverrideEnabled(context, avatar, mode) {
     const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
+    if (hasLegacyOverridePayload(ext, mode)) {
+        migrateAndPersistLegacyCardOverrideForMode(context, avatar, mode);
+    }
     if (!readOverrideEnabledFlag(ext, mode)) return false;
     const id = getCharacterActivePresetId(context, avatar, mode);
     if (!id) return false;
     const lib = getCharacterPresetLibrary(context, avatar, mode);
     return Boolean(lib[id]);
+}
+
+function hasLegacyOverridePayload(ext, mode) {
+    const override = ext?.override;
+    if (!override || typeof override !== 'object') return false;
+    if (mode === ORCH_EXECUTION_MODE_SPEC) {
+        return Boolean(
+            (override.spec && typeof override.spec === 'object')
+            || (override.presets && typeof override.presets === 'object')
+            || (override.presetPatch && typeof override.presetPatch === 'object')
+            || typeof override.enabled === 'boolean',
+        );
+    }
+    const sub = override[mode];
+    return Boolean(sub && typeof sub === 'object');
 }
 
 /**

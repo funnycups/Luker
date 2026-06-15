@@ -124,4 +124,60 @@ describe('character-overrides — preset library reads', () => {
         });
         expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
     });
+
+    test('freshly imported legacy card with only override.<mode>.enabled is recognized as enabled', () => {
+        // Regression: imports through /api/characters/import write the
+        // card's `data.extensions.orchestrator` blob verbatim, no
+        // migration. A legacy card whose loop override was authored under
+        // the pre-preset-library shape has the on/off flag at
+        // `override.loop.enabled`, not the new `overrideEnabled.loop`
+        // container. Without this probe falling back, the runtime path
+        // (main.js:getEffectiveProfile) silently discards the override
+        // and runs the global profile.
+        const ctx = makeCtx('alice.png', {
+            override: { mode: 'loop', loop: { enabled: true, system_prompt: 'LEGACY' } },
+        });
+        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(true);
+    });
+
+    test('legacy spec card uses top-level override.enabled as the fallback flag', () => {
+        // Spec mode never had a per-mode sub-payload in the legacy shape
+        // — its enable flag lived at `override.enabled` (alongside
+        // `override.spec`, `override.presets`). Same regression as the
+        // loop case above: import drops the user's "spec override is on"
+        // intent unless the probe reads the legacy flag.
+        const ctx = makeCtx('alice.png', {
+            override: {
+                mode: 'spec',
+                enabled: true,
+                spec: { stages: [{ id: 's1', mode: 'serial', nodes: [{ id: 'n1', preset: 'p1' }] }] },
+                presets: { p1: { systemPrompt: 'KEEP' } },
+            },
+        });
+        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'spec')).toBe(true);
+    });
+
+    test('legacy override.<mode>.enabled=false on import stays disabled', () => {
+        // The fallback must read the legacy flag literally — a card whose
+        // creator turned the override off must NOT flip on just because
+        // the payload exists.
+        const ctx = makeCtx('alice.png', {
+            override: { mode: 'loop', loop: { enabled: false, system_prompt: 'LEGACY' } },
+        });
+        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
+    });
+
+    test('new-shape overrideEnabled.<mode> takes precedence over the legacy flag', () => {
+        // If both the new flag and a stale legacy flag are present
+        // (mid-migration card), the explicit new value wins. Otherwise
+        // the user's flick-the-toggle-off action from after the migration
+        // would be silently overridden by the pre-migration default.
+        const ctx = makeCtx('alice.png', {
+            override: { mode: 'loop', loop: { enabled: true } },
+            overrideEnabled: { loop: false },
+            presetLibraries: { loop: { id1: { name: 'A' } } },
+            activePresetIds: { loop: 'id1' },
+        });
+        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
+    });
 });

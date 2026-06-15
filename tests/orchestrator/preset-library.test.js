@@ -345,3 +345,86 @@ describe('preset-library — legacy override migration', () => {
         expect(character.data.extensions.orchestrator.overrideEnabled.loop).toBe(false);
     });
 });
+
+describe('preset-library — migration persistence hook', () => {
+    afterEach(() => {
+        // Reset to default no-op so cross-test pollution doesn't survive.
+        lib.setMigrationPersistHook(null);
+    });
+
+    test('hook fires once per migration with (context, avatar, mode)', () => {
+        // Gap 2: migrateLegacyCardOverrideForMode mutates the in-memory
+        // card blob into the new shape, but until something writes the
+        // card back to disk the legacy fields keep getting re-migrated
+        // on every reload. The hook is how main.js wires a debounced
+        // persistOrchestratorCharacterExtension into the migration so
+        // the new shape actually settles.
+        const calls = [];
+        lib.setMigrationPersistHook((context, avatar, mode) => {
+            calls.push({ avatar, mode });
+        });
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            override: { mode: 'loop', loop: { enabled: true, system_prompt: 'NEEDS-PERSIST' } },
+        } } } };
+        const ctx = { characters: [character] };
+
+        lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+
+        expect(calls).toEqual([{ avatar: 'alice.png', mode: 'loop' }]);
+    });
+
+    test('hook is NOT fired on a second read (migration was already done)', () => {
+        const calls = [];
+        lib.setMigrationPersistHook((context, avatar, mode) => {
+            calls.push({ avatar, mode });
+        });
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            override: { mode: 'loop', loop: { enabled: true, system_prompt: 'P' } },
+        } } } };
+        const ctx = { characters: [character] };
+
+        lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+        lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+
+        // First read migrates and fires the hook. Second read sees the
+        // already-populated library and is a no-op.
+        expect(calls).toHaveLength(1);
+    });
+
+    test('hook is NOT fired when there is no legacy payload to migrate', () => {
+        const calls = [];
+        lib.setMigrationPersistHook((context, avatar, mode) => {
+            calls.push({ avatar, mode });
+        });
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            presetLibraries: { loop: { existing: { name: 'Existing', system_prompt: 'ALREADY' } } },
+            activePresetIds: { loop: 'existing' },
+        } } } };
+        const ctx = { characters: [character] };
+
+        lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+
+        expect(calls).toEqual([]);
+    });
+
+    test('hook is tolerant of being unregistered (null clears it)', () => {
+        const calls = [];
+        lib.setMigrationPersistHook((context, avatar, mode) => {
+            calls.push({ avatar, mode });
+        });
+        lib.setMigrationPersistHook(null);
+
+        const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
+        const character = { avatar: 'alice.png', data: { extensions: { orchestrator: {
+            override: { mode: 'loop', loop: { enabled: true, system_prompt: 'P' } },
+        } } } };
+        const ctx = { characters: [character] };
+
+        // Must not throw; just no callback fired.
+        lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+        expect(calls).toEqual([]);
+    });
+});

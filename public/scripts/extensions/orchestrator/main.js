@@ -199,6 +199,10 @@ import { openCustomToolEditor } from './custom-tool-editor.js';
 import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
 import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
 import { reviewIncomingCustomTools } from './character-import-tools-review.js';
+import {
+    collectCustomToolsFromCardExtension,
+    planImportedCardCustomToolsReview,
+} from './card-import-custom-tools.js';
 import { mountNotesPanel } from './notes-panel.js';
 const skillsApi = __ctx.skills;
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
@@ -223,6 +227,7 @@ import {
     migrateGlobalLegacyToLibraries,
     renamePreset,
     setActivePresetId,
+    setMigrationPersistHook,
     writeActivePreset,
 } from './preset-library.js';
 import {
@@ -550,6 +555,89 @@ export function ensureSettings() {
     );
     if (!extension_settings[MODULE_NAME].chatOverrides || typeof extension_settings[MODULE_NAME].chatOverrides !== 'object') {
         extension_settings[MODULE_NAME].chatOverrides = {};
+    }
+}
+
+/**
+ * Wire the preset-library migration persist hook so that whenever a
+ * card's legacy `override.<mode>` payload is migrated into the new
+ * preset-library shape on first read, the new shape is written back to
+ * the card on disk. Without this, the migration is recomputed on every
+ * reload and `customTools[]` / preset bodies keep living under the
+ * legacy keys forever even though the runtime now ignores them.
+ *
+ * Coalesces multiple per-mode migrations on the same card into a single
+ * writeExtensionField call via a microtask flush — boot-time path that
+ * touches all four modes for the active card writes once, not four
+ * times.
+ */
+function wirePresetLibraryMigrationPersist() {
+    const pending = new Set();
+    let scheduled = false;
+    setMigrationPersistHook((context, avatar /*, mode */) => {
+        if (!context || !avatar) return;
+        pending.add(String(avatar));
+        if (scheduled) return;
+        scheduled = true;
+        queueMicrotask(async () => {
+            scheduled = false;
+            const avatars = [...pending];
+            pending.clear();
+            for (const a of avatars) {
+                try {
+                    const idx = getCharacterIndexByAvatar(context, a);
+                    if (idx < 0) continue;
+                    const ext = getCharacterExtensionDataByAvatar(context, a);
+                    if (!ext || typeof ext !== 'object') continue;
+                    await persistOrchestratorCharacterExtension(context, idx, { ...ext });
+                } catch (err) {
+                    console.warn(`[${MODULE_NAME}] failed to persist migrated card override for ${a}:`, err);
+                }
+            }
+        });
+    });
+}
+
+/**
+ * CHARACTER_IMPORTED listener body. Scans the freshly-imported card for
+ * any embedded `customTools[]` (legacy `override.<mode>` shape AND new
+ * `presetLibraries.<mode>.<id>` shape), prompts the user with the same
+ * review popup the "apply iter-studio session → character" path uses,
+ * and persists the user's call back to the card on disk.
+ *
+ *   - "with"    : leave the tools in place (already on disk verbatim
+ *                 from /api/characters/import); no further write needed.
+ *   - "without" : strip every `customTools[]` location and write the
+ *                 stripped extension blob back through
+ *                 persistOrchestratorCharacterExtension.
+ *   - "cancel"  : drop the orchestrator extension entirely; the card
+ *                 stays imported but its orchestrator profile is gone.
+ *
+ * No-op when the imported card has no orchestrator data or no embedded
+ * tools — the popup is only shown when there is something to review.
+ */
+async function reviewImportedCardCustomTools(avatar) {
+    const target = String(avatar || '').trim();
+    if (!target) return;
+    const ctx = getContext();
+    const idx = getCharacterIndexByAvatar(ctx, target);
+    if (idx < 0) return;
+    const ext = getCharacterExtensionDataByAvatar(ctx, target);
+    if (!ext || typeof ext !== 'object') return;
+    const { tools } = collectCustomToolsFromCardExtension(ext);
+    if (tools.length === 0) return;
+
+    const decision = await reviewIncomingCustomTools({ tools, t: i18n });
+    const plan = planImportedCardCustomToolsReview(ext, decision);
+    if (plan.action === 'keep') return;
+    try {
+        if (plan.action === 'drop') {
+            await persistOrchestratorCharacterExtension(ctx, idx, null);
+        } else {
+            await persistOrchestratorCharacterExtension(ctx, idx, plan.nextExt);
+        }
+    } catch (err) {
+        console.warn(`[${MODULE_NAME}] failed to persist customTools review (${plan.action}) for ${target}:`, err);
     }
 }
 
@@ -7743,6 +7831,7 @@ jQuery(() => {
     initRunPanel();
     ensureSettings();
     saveSettingsDebounced();
+    wirePresetLibraryMigrationPersist();
     void rehydrateBridgedSillyTavernTools(extension_settings[MODULE_NAME]);
     // Register skill_list / skill_read / skill_search on the orchestrator's
     // Layer-2 extension registry so `executeLoopTool` can dispatch them.
@@ -8069,5 +8158,23 @@ jQuery(() => {
     ].filter(Boolean);
     for (const eventName of characterRefreshEvents) {
         context.eventSource.on(eventName, () => ensureUi());
+    }
+
+    // Imported character cards land on disk verbatim via
+    // /api/characters/import — `customTools[]` embedded in the card's
+    // orchestrator profile would otherwise register and run at the next
+    // dispatch without ever being shown to the user. Same risk surface
+    // as the iter-studio "apply to character" path; same review popup
+    // (`reviewIncomingCustomTools`). On "without" / "cancel" we strip
+    // the tools (or the whole orchestrator blob for cancel) and persist
+    // back to the card so the card on disk reflects the user's call.
+    if (context.eventTypes?.CHARACTER_IMPORTED) {
+        context.eventSource.on(context.eventTypes.CHARACTER_IMPORTED, async (payload) => {
+            try {
+                await reviewImportedCardCustomTools(payload?.avatar);
+            } catch (err) {
+                console.warn(`[${MODULE_NAME}] CHARACTER_IMPORTED review failed:`, err);
+            }
+        });
     }
 });
