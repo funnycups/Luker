@@ -16320,7 +16320,6 @@ export async function saveMetadata(options = {}) {
     }
 
     try {
-        cancelDebouncedChatSave();
         const saveContext = buildActiveChatSaveContext({ withMetadata, withMessages: false });
         if (!saveContext) {
             return;
