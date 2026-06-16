@@ -2599,6 +2599,8 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
     if (profile.tools?.note?.close) enabledTools.push('note_close');
     if (profile.tools?.chat?.read_range) enabledTools.push('chat_read_range');
     if (profile.tools?.chat?.search) enabledTools.push('chat_search');
+    if (profile.tools?.lorebook?.world_book_list) enabledTools.push('world_book_list');
+    if (profile.tools?.lorebook?.list) enabledTools.push('lorebook_list');
     if (profile.tools?.lorebook?.search) enabledTools.push('lorebook_search');
     if (profile.tools?.lorebook?.get) enabledTools.push('lorebook_get');
     // memory_* / search_* live in Layer-2; this also picks up Layer-3
@@ -2648,6 +2650,8 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
         if (tools.note?.close) out.push('note_close');
         if (tools.chat?.read_range) out.push('chat_read_range');
         if (tools.chat?.search) out.push('chat_search');
+        if (tools.lorebook?.world_book_list) out.push('world_book_list');
+        if (tools.lorebook?.list) out.push('lorebook_list');
         if (tools.lorebook?.search) out.push('lorebook_search');
         if (tools.lorebook?.get) out.push('lorebook_get');
         // memory_* / search_* / Layer-3 user tools / Layer-2 bridges all
@@ -2825,21 +2829,46 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '',
     '## Anti-duplication: do NOT hardcode runtime-fetchable content into systemPrompt',
     '',
-    'A systemPrompt is a STATIC IDENTITY layer. It tells the agent who it is, what discipline it follows, and how to use its tools. It is NOT a runtime data dump. The agent\'s context at execution time already carries — for free — the chat history, the character card, world-info entries activated for this scene, and (for sub-agents) the task brief the main agent passes in. Do not paste any of that into systemPrompt.',
+    'A systemPrompt is a STATIC IDENTITY layer. It tells the agent who it is, what discipline it follows, and how to use its tools. It is NOT a runtime data dump. Do not paste into systemPrompt: chat history, the character card, world-info entries, or (for sub-agents) the task brief the main agent passes at dispatch time.',
     '',
     'Concrete violations to refuse:',
-    '- ✗ Pasting a world-info / lorebook entry\'s body into the systemPrompt because "the agent needs to follow it". The runtime already injects activated lorebook entries; the agent reads them in-context or queries `lorebook_get` for full bodies when a partial activation reference is not enough.',
+    '- ✗ Pasting a lorebook entry\'s body into systemPrompt. If the agent needs an entry, point it at the entry by name and let it call `lorebook_get` (by key or uid).',
     '- ✗ Restating the main agent\'s task brief inside a sub-agent\'s systemPrompt ("your job this turn is to scan for X about character Y"). The main agent passes the brief at dispatch time; if the sub-agent\'s role is well-defined, the brief fills the slots — do not pre-bake one turn\'s slots into the persistent identity.',
-    '- ✗ Mirroring the user\'s last message, the character\'s description, or the scene context into the systemPrompt. All of that is in the chat snapshot the runtime already provides.',
+    '- ✗ Mirroring the user\'s last message, the character\'s description, or the scene context into the systemPrompt.',
     '- ✗ Listing every specific story fact ("Alice is 17 and afraid of dogs"). That is character-card / memory-graph / lorebook content, not identity.',
     '',
     'What systemPrompt SHOULD contain instead:',
     '- The agent\'s role and the discipline it brings (e.g. "you are a voice-consistency analyst; surface observations + Maybe-fix, do not rewrite").',
-    '- HOW to read the runtime context the agent will receive ("the chat snapshot is in your context; the task brief from the main agent will name the target character and dimension focus").',
+    '- HOW to read its inputs ("the task brief from the main agent names the target character and dimension focus").',
     '- WHICH tools to use for what ("call `lorebook_get` to fetch full entry bodies when you need them; call `memory_find_by_name` before creating to avoid duplicates").',
     '- The output shape the agent must emit ("per-line observations with citations; no rewrites").',
     '',
     'When the user says "make the agent follow lorebook entry X" or "tell the sub-agent the main agent\'s task includes Y", DO NOT bake X or Y into the systemPrompt. Either (a) teach the agent how to FETCH X at runtime, or (b) leave the slot in the systemPrompt and let the main agent fill it via the task brief.',
+    '',
+    '## Runtime agent lorebook tools (what the profile you design actually has)',
+    '',
+    'The runtime agent — the one that runs when this profile dispatches — has exactly these read-only lorebook tools, gated by profile.tools.lorebook.{world_book_list, list, search, get}:',
+    '',
+    '- `world_book_list` — lists visible world books with scope tags and entry counts.',
+    '- `lorebook_list({book_name, range?})` — entry index lines "[{book}] uid={n} name={comment} key={k1|k2}". Skips entries the main flow already injected this turn.',
+    '- `lorebook_search({pattern, flags?, book?})` — regex over entry content. Output is grep -n format "[{book}] {entry_name}:{lineno}: {line}". Also skips already-injected entries.',
+    '- `lorebook_get({uid OR entry_key, book?})` — fetches one entry. Returns {book, uid, name, key, content}. Does NOT skip already-injected entries — use it when you want the structured view of an entry the agent already sees in context.',
+    '',
+    'The runtime DOES NOT have: a keyword-search tool (compose `list` + `search` instead); any write tools (writes only happen here in iter-studio); any way to enumerate disabled / constant entries (only enabled entries are loadable; constant entries are filtered out of list / search because they are always-on injected, while `get` by uid returns them normally).',
+    '',
+    '## No meta-narration in runtime agent prompts',
+    '',
+    'The runtime agent reads what is in its context. Do NOT explain the runtime to it. NEVER write into a runtime agent\'s systemPrompt any of:',
+    '',
+    '- "the world-info system injects activated entries..."',
+    '- "don\'t call lorebook_search because uid N is already in your context"',
+    '- "the runtime will provide X — so you don\'t need to..."',
+    '- "lorebook entries with constant=true are auto-injected..."',
+    '- any "the agent sees / does not see / will be given" framing',
+    '',
+    'The runtime agent sees its context — it does not need to be told why. If you want the agent to use a tool, name the tool and the purpose. If you want it NOT to chase something that is already in context, just don\'t mention it — instructing "you already have X, so don\'t fetch X" wastes tokens and confuses the agent (it sees X without needing to be told that seeing X is why it should not fetch X).',
+    '',
+    'The only legitimate "runtime info" in a runtime agent\'s systemPrompt is: which tools exist, what each does, what output shape to produce. Mechanism explanation belongs in iter-studio\'s context, not in the profile you author.',
     '',
     '## Mutation sub-agents (the post-draft graph editors)',
     '',
@@ -2954,7 +2983,22 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '- Leave planner/agent promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
     '- If you set planner/agent promptPresetName, use only a name from available_chat_completion_presets.',
     '- Prefer targeted edits. Do not rewrite the full planner preset unless necessary.',
-    '- Anti-duplication: a planner / agent systemPrompt is a STATIC IDENTITY layer — role, discipline, output shape, tool usage hints. Do NOT paste runtime-fetchable content into it: activated world-info / lorebook entries are already in-context, the planner\'s per-turn instructions land in the planner\'s userPromptTemplate, and the planner\'s task brief for each downstream agent is constructed at dispatch time. Concrete violations to refuse: pasting a lorebook entry\'s body into systemPrompt because "the agent should follow it" (the runtime injects activated entries and the agent can `lorebook_get` for the full body), restating the planner\'s task brief inside an agent\'s systemPrompt (the planner passes the brief at dispatch — do not pre-bake one turn\'s slots into persistent identity), mirroring chat / character-card / scene context (all already in the context the agent receives). When the user says "make the agent follow lorebook X" or "tell the agent the planner\'s task includes Y", teach the agent how to FETCH X / leave the Y slot to the planner — do not bake either into systemPrompt.',
+    '- Anti-duplication: a planner / agent systemPrompt is a STATIC IDENTITY layer — role, discipline, output shape, tool usage hints. Do NOT paste lorebook bodies, the planner\'s per-turn task brief, or chat / character-card / scene context into it. When the user says "make the agent follow lorebook X" or "tell the agent the planner\'s task includes Y", teach the agent how to FETCH X via its own lorebook tools / leave the Y slot to the planner — do not bake either into systemPrompt.',
+    '',
+    '## Runtime agent lorebook tools (what the planner / agenda agents actually have)',
+    '',
+    'The runtime agents — both the planner and each agenda agent — have exactly these read-only lorebook tools, gated by tools.lorebook.{world_book_list, list, search, get} (in defaultTools or per-agent overrides):',
+    '',
+    '- `world_book_list` — lists visible world books with scope tags and entry counts.',
+    '- `lorebook_list({book_name, range?})` — entry index lines "[{book}] uid={n} name={comment} key={k1|k2}". Skips entries the main flow already injected this turn.',
+    '- `lorebook_search({pattern, flags?, book?})` — regex over entry content. Output is grep -n format "[{book}] {entry_name}:{lineno}: {line}". Also skips already-injected entries.',
+    '- `lorebook_get({uid OR entry_key, book?})` — fetches one entry. Returns {book, uid, name, key, content}. Does NOT skip already-injected entries.',
+    '',
+    'The runtime DOES NOT have: a keyword-search tool (compose `list` + `search`); write tools; any way to enumerate disabled / constant entries.',
+    '',
+    '## No meta-narration in runtime agent prompts',
+    '',
+    'The runtime agents read what is in their context. Do NOT explain the runtime to them. NEVER write into a runtime agent\'s systemPrompt any of: "the world-info system injects activated entries...", "don\'t call lorebook_search because uid N is already in your context", "the runtime will provide X — so you don\'t need to...", "lorebook entries with constant=true are auto-injected...", or any "the agent sees / does not see / will be given" framing. If you want the agent to use a tool, name the tool and the purpose. If you want it NOT to chase something already in context, just don\'t mention it. The only legitimate "runtime info" in a runtime agent\'s systemPrompt is: which tools exist, what each does, what output shape to produce.',
     '- Keep the planner preset as the main orchestration contract and keep agent prompts concrete and task-oriented.',
     '- Use luker_orch_set_agenda_planner to create or update the agenda planner preset.',
     '- Use luker_orch_set_agenda_agent to create or update one agenda agent at a time.',
@@ -2993,7 +3037,22 @@ export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '- Leave preset promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
     '- If you set preset promptPresetName, use only a name from available_chat_completion_presets.',
     `- Runtime prepends previous orchestration result and approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` before node template text; do not use placeholders for that context.`,
-    '- Anti-duplication: a preset systemPrompt is a STATIC IDENTITY layer — node role, discipline, output shape, tool usage hints. Do NOT paste runtime-fetchable content into it: activated world-info / lorebook entries are already in-context, the previous stage\'s output is prepended by the runtime, and per-turn instructions belong in the node\'s `userPromptTemplate` (or in the user / upstream node\'s message), not in the preset identity. Concrete violations to refuse: pasting a lorebook entry\'s body into systemPrompt because "the node should follow it" (the runtime injects activated entries and the node can `lorebook_get` for the full body), restating upstream stage output inside a downstream node\'s systemPrompt (the runtime already prepends it), mirroring chat / character-card / scene context. When the user says "make node X follow lorebook Y" or "tell node X that the previous stage produced Z", teach node X how to FETCH Y at runtime / rely on the prepended upstream output — do not bake Y or Z into systemPrompt.',
+    '- Anti-duplication: a preset systemPrompt is a STATIC IDENTITY layer — node role, discipline, output shape, tool usage hints. Do NOT paste lorebook bodies, upstream stage output, or chat / character-card / scene context into it. When the user says "make node X follow lorebook Y" or "tell node X that the previous stage produced Z", teach node X how to FETCH Y via its own lorebook tools / rely on the prepended upstream output — do not bake Y or Z into systemPrompt.',
+    '',
+    '## Runtime agent lorebook tools (what each node actually has)',
+    '',
+    'Each runtime node (worker or review) has exactly these read-only lorebook tools, gated by spec.defaultTools.lorebook.{world_book_list, list, search, get} or per-node overrides:',
+    '',
+    '- `world_book_list` — lists visible world books with scope tags and entry counts.',
+    '- `lorebook_list({book_name, range?})` — entry index lines "[{book}] uid={n} name={comment} key={k1|k2}". Skips entries the main flow already injected this turn.',
+    '- `lorebook_search({pattern, flags?, book?})` — regex over entry content. Output is grep -n format "[{book}] {entry_name}:{lineno}: {line}". Also skips already-injected entries.',
+    '- `lorebook_get({uid OR entry_key, book?})` — fetches one entry. Returns {book, uid, name, key, content}. Does NOT skip already-injected entries.',
+    '',
+    'The runtime DOES NOT have: a keyword-search tool (compose `list` + `search`); write tools; any way to enumerate disabled / constant entries.',
+    '',
+    '## No meta-narration in runtime node prompts',
+    '',
+    'The runtime nodes read what is in their context. Do NOT explain the runtime to them. NEVER write into a node\'s systemPrompt any of: "the world-info system injects activated entries...", "don\'t call lorebook_search because uid N is already in your context", "the runtime will provide X — so you don\'t need to...", "lorebook entries with constant=true are auto-injected...", or any "the node sees / does not see / will be given" framing. If you want the node to use a tool, name the tool and the purpose. If you want it NOT to chase something already in context, just don\'t mention it. The only legitimate "runtime info" in a node\'s systemPrompt is: which tools exist, what each does, what output shape to produce.',
     '- Treat the working profile as hierarchical layers. Preserve or improve that layering when editing.',
     `- Nodes can be worker or review. Review nodes inspect only the directly adjacent previous worker layer, may rerun only specific node ids from that layer, and must emit mandatory \`${ORCH_REVIEW_FEEDBACK_FIELD}\`.`,
     ...getCriticPromptReminderLines().map(line => `- ${line}`),
@@ -3338,6 +3397,8 @@ function buildAiIterationToolSet(session = null) {
             lorebook: {
                 type: 'object',
                 properties: {
+                    world_book_list: { type: 'boolean' },
+                    list: { type: 'boolean' },
                     search: { type: 'boolean' },
                     get: { type: 'boolean' },
                 },
@@ -3602,6 +3663,8 @@ function buildAiIterationToolSet(session = null) {
                                     lorebook: {
                                         type: 'object',
                                         properties: {
+                                            world_book_list: { type: 'boolean' },
+                                            list: { type: 'boolean' },
                                             search: { type: 'boolean' },
                                             get: { type: 'boolean' },
                                         },

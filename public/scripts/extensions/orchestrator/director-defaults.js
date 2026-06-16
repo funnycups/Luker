@@ -165,7 +165,7 @@ function buildDefaultDirectorSubAgents() {
             promptPresetName: '',
             tools: {
                 chat: { read_range: true, search: true },
-                lorebook: { search: true, get: true },
+                lorebook: { world_book_list: true, list: true, search: true, get: true },
             },
         },
         {
@@ -224,7 +224,7 @@ function buildDefaultDirectorSubAgents() {
             apiPresetName: '',
             promptPresetName: '',
             tools: {
-                lorebook: { search: true, get: true },
+                lorebook: { world_book_list: true, list: true, search: true, get: true },
             },
         },
         {
@@ -275,7 +275,7 @@ function buildDefaultDirectorSubAgents() {
             promptPresetName: '',
             tools: {
                 chat: { read_range: true },
-                lorebook: { search: true, get: true },
+                lorebook: { world_book_list: true, list: true, search: true, get: true },
                 memory: {
                     keyword_search: true,
                     find_by_name: true,
@@ -327,7 +327,7 @@ function buildDefaultDirectorSubAgents() {
             promptPresetName: '',
             tools: {
                 chat: { read_range: true, search: true },
-                lorebook: { search: true },
+                lorebook: { world_book_list: true, list: true, search: true },
                 memory: {
                     keyword_search: true,
                     node_brief: true,

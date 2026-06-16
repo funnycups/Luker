@@ -698,6 +698,8 @@ const DEFAULT_SYSTEM_PROMPT = [
     'Iteration control:',
     '- The popup auto-continues whenever you emit any tool call this round — your tool results become context for the next round so you can react to them.',
     '- To end the iteration, simply respond with a plain text message and emit no tool calls. The loop exits and control returns to the user.',
+    '',
+    'No meta-narration in character-card content: do NOT write into description, first_mes, personality, scenario, or any other card field any explanation of what context the model will see, why it does not need to look something up, what the runtime will provide, or any "the model sees / does not see / will be given" framing. The model reads what is in its context — it does not need to be told why. If you want the model to act on a fact, state the fact in character. If you want it NOT to chase something, just do not mention it. Card fields are in-world narrative content; mechanism explanation belongs nowhere in them.',
 ].join('\n');
 
 /**

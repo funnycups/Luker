@@ -37,7 +37,7 @@
 import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
 import { getExtensionRegistry } from './register-custom-tool.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
-import { execLorebookSearch, execLorebookGet } from './loop-tools/lorebook.js';
+import { execLorebookSearch, execLorebookGet, execWorldBookList, execLorebookList } from './loop-tools/lorebook.js';
 import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
 
 /**
@@ -199,20 +199,59 @@ registerTool('lorebook_get', execLorebookGet, {
     type: 'function',
     function: {
         name: 'lorebook_get',
-        description: 'Fetch a lorebook entry by key. Returns full content. Does NOT dedup against activated entries — use this when you need to quote an injected entry verbatim.',
+        description: 'Fetch one lorebook entry, addressed by uid OR entry_key (pass exactly one). Returns {book, uid, name, key, content}. Does NOT dedup against activated entries — use this when you need the structured view of an entry already in your context.',
         parameters: {
             type: 'object',
             properties: {
                 entry_key: {
                     type: 'string',
-                    description: 'Exact key string (case-sensitive) appearing in the entry\'s key array.',
+                    description: 'Exact key string (case-sensitive) appearing in the entry\'s key array. Mutually exclusive with uid.',
+                },
+                uid: {
+                    type: 'integer',
+                    description: 'Stable numeric handle from lorebook_list output. Mutually exclusive with entry_key.',
                 },
                 book: {
                     type: 'string',
                     description: 'Optional: narrow by lorebook name (entry.world). First match wins if omitted.',
                 },
             },
-            required: ['entry_key'],
+            additionalProperties: false,
+        },
+    },
+}, { mode: 'read' });
+
+registerTool('world_book_list', execWorldBookList, {
+    type: 'function',
+    function: {
+        name: 'world_book_list',
+        description: 'List world books visible to this chat. Returns grep-style lines: "[{scope}] {book_name} ({n} entries)". Use this first to discover which book names exist before calling lorebook_list or lorebook_get with a book filter.',
+        parameters: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+        },
+    },
+}, { mode: 'read' });
+
+registerTool('lorebook_list', execLorebookList, {
+    type: 'function',
+    function: {
+        name: 'lorebook_list',
+        description: 'List entry index rows for one world book. Returns grep-style lines: "[{book}] uid={n} name={comment} key={k1|k2|...}". Skips entries the main flow already injected this turn. Use lorebook_get to read full content for a specific uid or key.',
+        parameters: {
+            type: 'object',
+            properties: {
+                book_name: {
+                    type: 'string',
+                    description: 'Required. Target world book name (entry.world). Call world_book_list to discover available books.',
+                },
+                range: {
+                    type: 'string',
+                    description: 'Optional inclusive uid window: "0~100", "50~", "~100", or a single uid like "42".',
+                },
+            },
+            required: ['book_name'],
             additionalProperties: false,
         },
     },
@@ -332,6 +371,14 @@ export function getEnabledToolSchemas(profile, customToolRegistry = null) {
     for (const schema of TOOL_SCHEMAS) {
         const fullName = String(schema?.function?.name || '');
         if (!fullName) continue;
+        // Special case: world_book_list lives under the lorebook flag bag
+        // even though its name does not start with `lorebook_`. The
+        // first-underscore split would route it to flags.world.book_list,
+        // which would never be set.
+        if (fullName === 'world_book_list') {
+            if (flags?.lorebook?.world_book_list) out.push(schema);
+            continue;
+        }
         const sep = fullName.indexOf('_');
         if (sep < 0) {
             if (flags?.[fullName]) out.push(schema);

@@ -7,6 +7,7 @@
 ### Orchestrator
 
 - **Search tools support regex** — `draft_search` (new) and the existing `chat_search` / `lorebook_search` / `skill_search` all accept a `pattern` (JavaScript RegExp source) and return grep `-n` style output. Critics use this to systematically scan for vocabulary patterns instead of relying on eye-reading.
+- **Runtime lorebook browse tools** — orchestration agents (loop / director main + sub-agents / agenda agents / spec nodes) gain `world_book_list` (visible books overview) and `lorebook_list` (per-book entry index, grep-style `uid name key` rows); `lorebook_get` now accepts a `uid` handle alongside `entry_key`. Iteration Studio prompts updated so the editor's tool surface and the runtime agent's tool surface are no longer conflated, and a hard rule forbids meta-narration of runtime mechanism inside the prompts that runtime agents read.
 - Custom tools — extend agents in any of the four orchestration modes with handwritten tools, tools from other Luker extensions, or bridged SillyTavern function tools.
 - Handwritten custom tools travel with the profile; profile-scoped tools attached to a character override are exported with the card.
 - Iteration Studio sees the visible custom tools and can toggle them on or off per profile.

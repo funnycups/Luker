@@ -320,6 +320,8 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
 </fieldset>
 <fieldset class="luker_orch_loop_tools_group">
     <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
+    ${cb('lorebook.world_book_list', lorebook.world_book_list, 'world_book_list')}
+    ${cb('lorebook.list', lorebook.list, 'lorebook_list')}
     ${cb('lorebook.search', lorebook.search, 'lorebook_search')}
     ${cb('lorebook.get', lorebook.get, 'lorebook_get')}
 </fieldset>${collabFieldset}${customsFieldset}`;
@@ -744,6 +746,8 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
+                ${checkbox('lorebook.world_book_list', lorebook.world_book_list, 'world_book_list')}
+                ${checkbox('lorebook.list', lorebook.list, 'lorebook_list')}
                 ${checkbox('lorebook.search', lorebook.search, 'lorebook_search')}
                 ${checkbox('lorebook.get', lorebook.get, 'lorebook_get')}
             </fieldset>

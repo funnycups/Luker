@@ -179,6 +179,56 @@ describe('execLorebookGet (Task 9)', () => {
     });
 });
 
+describe('execLorebookGet uid addressing + richer output', () => {
+    const FIXTURE = [
+        { world: 'global', uid: 1, comment: 'Autumn', key: ['autumn'], content: 'fall lore' },
+        { world: 'side',   uid: 2, comment: 'Scribe', key: ['scribe'], content: 'scribe lore' },
+    ];
+
+    test('fetches by uid and returns {book, uid, name, key, content}', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const result = await execLorebookGet({ uid: 1 }, ctx);
+        expect(result).toEqual({
+            book: 'global', uid: 1, name: 'Autumn', key: ['autumn'], content: 'fall lore',
+        });
+    });
+
+    test('fetches by entry_key and still returns uid + name', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const result = await execLorebookGet({ entry_key: 'scribe' }, ctx);
+        expect(result.uid).toBe(2);
+        expect(result.name).toBe('Scribe');
+        expect(result.content).toBe('scribe lore');
+    });
+
+    test('throws ToolError when both uid and entry_key are provided', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        await expect(execLorebookGet({ uid: 1, entry_key: 'autumn' }, ctx))
+            .rejects.toThrow(/exactly one of/i);
+    });
+
+    test('throws ToolError when neither uid nor entry_key is provided', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        await expect(execLorebookGet({}, ctx)).rejects.toThrow(/exactly one of/i);
+    });
+
+    test('uid addressing honors optional book filter', async () => {
+        const entries = [
+            { world: 'a', uid: 1, comment: 'A', key: ['x'], content: 'in-a' },
+            { world: 'b', uid: 1, comment: 'B', key: ['x'], content: 'in-b' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries };
+        const result = await execLorebookGet({ uid: 1, book: 'b' }, ctx);
+        expect(result.book).toBe('b');
+        expect(result.content).toBe('in-b');
+    });
+
+    test('throws ToolError when uid not found', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        await expect(execLorebookGet({ uid: 999 }, ctx)).rejects.toThrow(/not found/i);
+    });
+});
+
 describe('central dispatcher includes lorebook tools (Task 9)', () => {
     test('executeLoopTool dispatches lorebook_search', async () => {
         const ctx = makeFixture(SAMPLE_ENTRIES);
@@ -214,6 +264,283 @@ describe('central dispatcher includes lorebook tools (Task 9)', () => {
         const names = schemas.map(s => s?.function?.name);
         expect(names).not.toContain('lorebook_search');
         expect(names).not.toContain('lorebook_get');
+    });
+
+    test('executeLoopTool dispatches world_book_list', async () => {
+        const entries = [
+            { world: 'global', uid: 1, key: ['a'], content: 'x' },
+            { world: 'global', uid: 2, key: ['b'], content: 'y' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries };
+        const result = await executeLoopTool('world_book_list', {}, ctx);
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('[unknown] global (2 entries)');
+    });
+
+    test('executeLoopTool dispatches lorebook_list', async () => {
+        const entries = [
+            { world: 'global', uid: 1, comment: 'A', key: ['a'], content: 'x' },
+        ];
+        const ctx = { __getSortedEntriesFn: async () => entries };
+        const result = await executeLoopTool('lorebook_list', { book_name: 'global' }, ctx);
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('uid=1 name=A key=a');
+    });
+
+    test('getEnabledToolSchemas includes world_book_list and lorebook_list when flagged on', () => {
+        const schemas = getEnabledToolSchemas({
+            tools: {
+                finalize: true,
+                lorebook: {
+                    search: false, get: false,
+                    list: true, world_book_list: true,
+                },
+            },
+        });
+        const names = schemas.map(s => s?.function?.name);
+        expect(names).toEqual(expect.arrayContaining(['world_book_list', 'lorebook_list']));
+    });
+
+    test('getEnabledToolSchemas omits world_book_list and lorebook_list when flagged off', () => {
+        const schemas = getEnabledToolSchemas({
+            tools: {
+                finalize: true,
+                lorebook: {
+                    search: false, get: false,
+                    list: false, world_book_list: false,
+                },
+            },
+        });
+        const names = schemas.map(s => s?.function?.name);
+        expect(names).not.toContain('world_book_list');
+        expect(names).not.toContain('lorebook_list');
+    });
+});
+
+describe('execWorldBookList', () => {
+    test('emits grep-style line per book with scope tag and entry count', async () => {
+        const entries = [
+            { world: 'global', uid: 1, key: ['a'], content: 'x' },
+            { world: 'global', uid: 2, key: ['b'], content: 'y' },
+            { world: 'character', uid: 3, key: ['c'], content: 'z' },
+        ];
+        const ctx = {
+            __getSortedEntriesFn: async () => entries,
+            __getWorldScopesFn: async () => ({ global: 'global', character: 'character' }),
+        };
+        const { execWorldBookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execWorldBookList({}, ctx);
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('[global] global (2 entries)');
+        expect(result.output).toContain('[character] character (1 entry)');
+    });
+
+    test('returns ok=true with empty output when no books visible', async () => {
+        const ctx = {
+            __getSortedEntriesFn: async () => [],
+            __getWorldScopesFn: async () => ({}),
+        };
+        const { execWorldBookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execWorldBookList({}, ctx);
+        expect(result).toEqual({ ok: true, output: '' });
+    });
+
+    test('skips entries whose world field is empty', async () => {
+        const entries = [
+            { world: '', uid: 1, key: ['a'], content: 'x' },
+            { world: 'real', uid: 2, key: ['b'], content: 'y' },
+        ];
+        const ctx = {
+            __getSortedEntriesFn: async () => entries,
+            __getWorldScopesFn: async () => ({ real: 'chat' }),
+        };
+        const { execWorldBookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execWorldBookList({}, ctx);
+        expect(result.output).toContain('[chat] real (1 entry)');
+        expect(result.output).not.toMatch(/\(0 entries?\)|^\[[^\]]*\]\s+\(/m);
+    });
+
+    test('falls back to [unknown] per-book when scope map omits the book', async () => {
+        const entries = [
+            { world: 'orphan', uid: 1, key: ['a'], content: 'x' },
+            { world: 'orphan', uid: 2, key: ['b'], content: 'y' },
+            { world: 'global', uid: 3, key: ['c'], content: 'z' },
+        ];
+        const ctx = {
+            __getSortedEntriesFn: async () => entries,
+            // scope map only knows about 'global'; 'orphan' should fall back.
+            __getWorldScopesFn: async () => ({ global: 'global' }),
+        };
+        const { execWorldBookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execWorldBookList({}, ctx);
+        expect(result.output).toContain('[unknown] orphan (2 entries)');
+        expect(result.output).toContain('[global] global (1 entry)');
+    });
+});
+
+describe('execLorebookList', () => {
+    const FIXTURE = [
+        { world: 'global', uid: 1, comment: 'Autumn',   key: ['autumn'],      content: 'fall lore' },
+        { world: 'global', uid: 2, comment: 'Winter',   key: ['winter'],      content: 'snow lore' },
+        { world: 'global', uid: 7, comment: 'Festival', key: ['fest', 'jubilee'], content: 'fest lore' },
+        { world: 'side',   uid: 3, comment: 'Scribe',   key: ['scribe'],      content: 'scribe lore' },
+    ];
+
+    test('emits grep-style index line per entry in the named book', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'global' }, ctx);
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('[global] uid=1 name=Autumn key=autumn');
+        expect(result.output).toContain('[global] uid=2 name=Winter key=winter');
+        expect(result.output).toContain('[global] uid=7 name=Festival key=fest|jubilee');
+        expect(result.output).not.toContain('[side]');
+    });
+
+    test('activated entries are excluded silently', async () => {
+        const ctx = {
+            __getSortedEntriesFn: async () => FIXTURE,
+            __lukerRun: { activatedEntryKeys: new Set(['global.2']) },
+        };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'global' }, ctx);
+        expect(result.output).toContain('uid=1');
+        expect(result.output).not.toContain('uid=2');
+        expect(result.output).toContain('uid=7');
+    });
+
+    test('range "0~5" narrows to inclusive uid window', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'global', range: '0~5' }, ctx);
+        expect(result.output).toContain('uid=1');
+        expect(result.output).toContain('uid=2');
+        expect(result.output).not.toContain('uid=7');
+    });
+
+    test('range "5~" includes entries with uid >= 5', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'global', range: '5~' }, ctx);
+        expect(result.output).not.toContain('uid=1');
+        expect(result.output).toContain('uid=7');
+    });
+
+    test('range "~2" includes entries with uid <= 2', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'global', range: '~2' }, ctx);
+        expect(result.output).toContain('uid=1');
+        expect(result.output).toContain('uid=2');
+        expect(result.output).not.toContain('uid=7');
+    });
+
+    test('single-uid range "7" narrows to one entry', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'global', range: '7' }, ctx);
+        expect(result.output).toContain('uid=7');
+        expect(result.output).not.toContain('uid=1');
+        expect(result.output).not.toContain('uid=2');
+    });
+
+    test('throws ToolError when book_name missing', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const { ToolError } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-runtime.js'
+        );
+        await expect(execLorebookList({}, ctx)).rejects.toBeInstanceOf(ToolError);
+    });
+
+    test('returns ok=true with empty output when book has no entries', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'no-such-book' }, ctx);
+        expect(result).toEqual({ ok: true, output: '' });
+    });
+
+    test('entry with no comment falls back to empty name field', async () => {
+        const entries = [{ world: 'global', uid: 1, comment: '', key: ['k'], content: 'c' }];
+        const ctx = { __getSortedEntriesFn: async () => entries };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result = await execLorebookList({ book_name: 'global' }, ctx);
+        expect(result.output).toContain('[global] uid=1 name= key=k');
+    });
+
+    test('throws ToolError on malformed range "abc~5"', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const { ToolError } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-runtime.js'
+        );
+        await expect(execLorebookList({ book_name: 'global', range: 'abc~5' }, ctx))
+            .rejects.toBeInstanceOf(ToolError);
+    });
+
+    test('throws ToolError on reversed range "5~3"', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const { ToolError } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-runtime.js'
+        );
+        await expect(execLorebookList({ book_name: 'global', range: '5~3' }, ctx))
+            .rejects.toBeInstanceOf(ToolError);
+    });
+
+    test('throws ToolError on fractional range "2.5~7"', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const { ToolError } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-runtime.js'
+        );
+        await expect(execLorebookList({ book_name: 'global', range: '2.5~7' }, ctx))
+            .rejects.toBeInstanceOf(ToolError);
+    });
+
+    test('accepts alternative separators "-" and ".."', async () => {
+        const ctx = { __getSortedEntriesFn: async () => FIXTURE };
+        const { execLorebookList } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js'
+        );
+        const result1 = await execLorebookList({ book_name: 'global', range: '0-5' }, ctx);
+        expect(result1.output).toContain('uid=1');
+        expect(result1.output).not.toContain('uid=7');
+        const result2 = await execLorebookList({ book_name: 'global', range: '0..5' }, ctx);
+        expect(result2.output).toContain('uid=1');
+        expect(result2.output).not.toContain('uid=7');
     });
 });
 
@@ -286,5 +613,120 @@ describe('runLoopOrchestration propagates payload.__lukerRun into tool context (
         expect(parsed.ok).toBe(true);
         expect(parsed.output).toContain('[global] autumn:1: Autumn is cold and crisp.');
         expect(parsed.output).not.toContain('autumn-fest');
+    });
+});
+
+describe('sanitizeAgentToolFlags lorebook shape', () => {
+    test('defaultAllOn=true seeds all 4 lorebook flags on', async () => {
+        const { sanitizeAgentToolFlags } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const result = sanitizeAgentToolFlags({}, { defaultAllOn: true });
+        expect(result.lorebook).toEqual({
+            world_book_list: true,
+            list: true,
+            search: true,
+            get: true,
+        });
+    });
+
+    test('defaultAllOn=false seeds all 4 lorebook flags off', async () => {
+        const { sanitizeAgentToolFlags } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const result = sanitizeAgentToolFlags({}, { defaultAllOn: false });
+        expect(result.lorebook).toEqual({
+            world_book_list: false,
+            list: false,
+            search: false,
+            get: false,
+        });
+    });
+
+    test('explicit false on one flag overrides the default-on seed', async () => {
+        const { sanitizeAgentToolFlags } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const result = sanitizeAgentToolFlags(
+            { lorebook: { list: false } },
+            { defaultAllOn: true },
+        );
+        expect(result.lorebook).toEqual({
+            world_book_list: true,
+            list: false,
+            search: true,
+            get: true,
+        });
+    });
+
+    test('sanitizeLoopProfile round-trips the 4 lorebook flags', async () => {
+        const { sanitizeLoopProfile } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const profile = sanitizeLoopProfile({});
+        expect(profile.tools.lorebook).toEqual({
+            world_book_list: true,
+            list: true,
+            search: true,
+            get: true,
+        });
+    });
+
+    test('sanitizer accepts explicit toggles on all 4 lorebook flags (iter-studio AI patch path)', async () => {
+        const { sanitizeAgentToolFlags } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const result = sanitizeAgentToolFlags(
+            { lorebook: { world_book_list: false, list: false, search: false, get: false } },
+            { defaultAllOn: true },
+        );
+        expect(result.lorebook).toEqual({
+            world_book_list: false,
+            list: false,
+            search: false,
+            get: false,
+        });
+    });
+});
+
+describe('applyLoopProfilePatchArgs lorebook merge', () => {
+    test('merges world_book_list and list from partial patch', async () => {
+        const { applyLoopProfilePatchArgs } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-iteration.js'
+        );
+        const { sanitizeLoopProfile } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const current = sanitizeLoopProfile({});
+        const patched = applyLoopProfilePatchArgs(current, {
+            tools: { lorebook: { world_book_list: false, list: false } },
+        });
+        expect(patched.tools.lorebook).toEqual({
+            world_book_list: false,
+            list: false,
+            search: true,
+            get: true,
+        });
+    });
+
+    test('omitted lorebook flags inherit from current profile', async () => {
+        const { applyLoopProfilePatchArgs } = await import(
+            '../../public/scripts/extensions/orchestrator/loop-iteration.js'
+        );
+        const { sanitizeLoopProfile } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const current = sanitizeLoopProfile({
+            tools: { lorebook: { list: false } },
+        });
+        const patched = applyLoopProfilePatchArgs(current, {
+            tools: { lorebook: { get: false } },
+        });
+        expect(patched.tools.lorebook).toEqual({
+            world_book_list: true,
+            list: false,
+            search: true,
+            get: false,
+        });
     });
 });

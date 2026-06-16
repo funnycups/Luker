@@ -7,6 +7,7 @@
 ### 編排器
 
 - **搜尋工具支援正則** —— `draft_search`（新增）以及既有的 `chat_search` / `lorebook_search` / `skill_search` 都接受 `pattern` 參數（JavaScript 正則表達式來源），並回傳 grep `-n` 風格輸出。批評者用它系統性地掃描詞彙模式，而不再仰賴肉眼通讀。
+- **執行階段世界書瀏覽工具** —— 編排執行階段 agent（loop / director 主 agent 與子 agent / agenda agent / spec 節點）新增 `world_book_list`（可見世界書概覽）與 `lorebook_list`（按書索引條目，grep 風格的 `uid name key` 行）；`lorebook_get` 現在也接受 `uid` 作為定位代號，與 `entry_key` 擇一傳入。同步重寫迭代工作台提示詞：編輯器視角與執行階段視角的世界書工具集不再混為一談；並在所有迭代模板中加入一條硬規則，禁止把「執行階段如何注入上下文」之類的元描述寫進執行階段 agent 的提示詞。
 - 自訂工具 —— 四個編排模式都能呼叫三種來源的工具：手寫工具、其他 Luker 擴充貢獻的工具，以及橋接進來的 SillyTavern function tool。
 - 手寫工具跟隨編排走；角色卡覆寫裡的工具會隨角色卡一起匯出。
 - AI 迭代會看到這些自訂工具，並按編排開關。

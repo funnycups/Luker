@@ -208,7 +208,8 @@ export function getCriticReviewNodeContractShape() {
 }
 
 export const LOREBOOK_READ_GUIDANCE_LINES = Object.freeze([
-    'Do NOT copy lorebook / world-info content into any node\'s systemPrompt or userPromptTemplate. The runtime injects active world-info entries into every sub-agent automatically. Use the lorebook read tools (world_book_list / lorebook_list / lorebook_query / lorebook_get) to understand the *shape* of constraints (taboo lexicon, POV rules, scene-anchoring facts, NSFW gating, etc.) and design agents whose reasoning handles that shape — duplicate the reasoning, not the content. A `lorebook_reader` node, for example, should be instructed in *what kind* of constraints to surface and *how* to phrase them as writing rules, not be pre-loaded with the lorebook text itself.',
+    'You — the iteration AI — have editor-side lorebook tools to explore and edit the world books visible right now: read (world_book_list / lorebook_list / lorebook_query / lorebook_get) and write (lorebook_str_replace_in_entry / lorebook_update_entry, both propose-mode, user-approved). These serve YOUR audit and editing. They are NOT the runtime agent\'s tool surface. The runtime agent\'s lorebook surface is described in each mode block below; do not assume parity.',
+    'Do NOT copy lorebook entry bodies into any field of the profile you edit. If a runtime agent needs an entry, design it to fetch the entry at runtime through its OWN tools (named in the mode block below); do not paste content.',
     'You MAY propose lorebook entry edits when an entry hard-constrains output in a way that conflicts with the orchestration you are designing. Classify each conflict before repairing: process coercion (directives that pin HOW the agent thinks during the run — every-round CoT templates, mandatory thinking blocks, "always check X before answering") versus final-output shape (directives that pin the FORM of the final committed reply — wrapping tags, closing recaps, "speak in poetry"). Process coercion poisons the agent loop and must be stripped, its cognitive intent harvested as worldbuilding / persona / scene-anchor content the agent reads as narrative input — not as a new rule. Final-output shape is legitimate and should be kept, rewritten to make the finalize semantics explicit so intermediate orchestration nodes stay free. Use `lorebook_str_replace_in_entry` for surgical clause-level edits that preserve the rest of the entry; reserve `lorebook_update_entry` with `{ "disable": true }` for entries that are pure format coercion with no salvageable content. Never delete entries. Both write tools are approval-gated: each call captures a {before, after} proposal envelope and returns it to you, while the popup renders a diff card the user reviews and approves or rejects. Nothing reaches the on-disk world book until the user approves the card AND clicks Apply. Treat your tool result as "captured for review", not as "applied" — your next round can keep designing without waiting for the disk write to land.',
 ]);
 
@@ -487,7 +488,7 @@ export const defaultLoopProfile = {
     tools: {
         note: { add: true },
         chat: { read_range: true, search: true },
-        lorebook: { search: true, get: true },
+        lorebook: { world_book_list: true, list: true, search: true, get: true },
         memory: {
             schema: true,
             list_candidates: true,

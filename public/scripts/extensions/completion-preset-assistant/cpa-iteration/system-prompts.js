@@ -794,6 +794,8 @@ export function buildBaseSystemPrompt() {
         'Multi-round iteration control:',
         '- The popup auto-continues whenever you emit any tool call this round — your tool results become context for the next round so you can react to them.',
         '- To end the iteration, simply respond with a plain text message and emit no tool calls. The loop exits and control returns to the user.',
+        '',
+        'No meta-narration in agent-facing prompt content: do NOT write into a preset\'s prompt fields any explanation of what context the model will see, why it does not need to look something up, what the runtime will provide, or any "the model sees / does not see / will be given" framing. The model reads what is in its context — it does not need to be told why. If you want the model to use a feature, instruct the feature. If you want it NOT to chase something already in context, just do not mention it. The only legitimate "runtime info" in a preset prompt field is direct instruction; mechanism explanation wastes tokens and confuses the model.',
     ].join('\n');
 }
 

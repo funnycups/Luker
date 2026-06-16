@@ -121,7 +121,7 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *                            superseded) so the system-prompt note block
  *                            doesn't degenerate into noise
  *   - tools.chat.{read_range, search}  in-chat history tools
- *   - tools.lorebook.{search, get}      world-info lookup tools
+ *   - tools.lorebook.{world_book_list, list, search, get}  world-info lookup tools
  *   - tools.custom.{memory_*, search_*, ...}  Layer-2 extension tools
  *                            (registered by memory-graph / search-tools)
  *                            and any Layer-3 character-card customTools.
@@ -222,7 +222,7 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
     tools: Object.freeze({
         note: Object.freeze({ open: true, close: true }),
         chat: Object.freeze({ read_range: true, search: true }),
-        lorebook: Object.freeze({ search: true, get: true }),
+        lorebook: Object.freeze({ world_book_list: true, list: true, search: true, get: true }),
         custom: { ...DEFAULT_LAYER2_CUSTOMS },
         finalize: true,
     }),
@@ -377,6 +377,8 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
             search: readBooleanFlag(chatIn.search, def),
         },
         lorebook: {
+            world_book_list: readBooleanFlag(lorebookIn.world_book_list, def),
+            list: readBooleanFlag(lorebookIn.list, def),
             search: readBooleanFlag(lorebookIn.search, def),
             get: readBooleanFlag(lorebookIn.get, def),
         },
@@ -501,7 +503,7 @@ function sanitizeLoopCapsuleInject(input) {
  *   tools: {
  *     note: { open: boolean, close: boolean },
  *     chat: { read_range: boolean, search: boolean },
- *     lorebook: { search: boolean, get: boolean },
+ *     lorebook: { world_book_list: boolean, list: boolean, search: boolean, get: boolean },
  *     custom: { [toolName: string]: boolean },
  *     finalize: true,
  *   },
