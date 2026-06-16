@@ -1,7 +1,7 @@
 // tests/cpa-iteration/tools.test.js
 import { describe, test, expect, beforeAll, jest } from '@jest/globals';
 
-// skills/iter-studio-tools.js captures `skillsApi` + `yaml` from
+// iteration-library/tools/skill-iter-studio.js captures `skillsApi` + `yaml` from
 // `Luker.getContext()` at module load. Stub it before the dynamic
 // import so the module's eval succeeds. The CPA-exposed tools all touch
 // these (skill_list_visible / skill_inspect / skill_create / etc), but
@@ -42,9 +42,38 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return {
         lodash,
+        // iteration-library/tools/skill-iter-studio.js (pulled in transitively
+        // for the CPA skill toolset) imports `yaml` for skill_update_frontmatter.
+        // That handler never fires under these unit tests; stub the parse/
+        // stringify pair so the module link succeeds.
         yaml: { parse: () => ({}), stringify: () => '' },
     };
 });
+
+// cpa-iteration/tools.js captures SillyTavern.getContext() at module load.
+// Install a stub bag BEFORE the dynamic imports in beforeAll so the module
+// links cleanly. getContext returns a STABLE object so mutations from
+// individual tests survive across calls.
+const { default: __lodash } = await import('lodash');
+const __testCtx = {
+    lib: { lodash: __lodash, yaml: { parse: () => ({}), stringify: () => '' } },
+    skills: {
+        list: () => Promise.resolve([]),
+        get: () => Promise.resolve(null),
+        listFiles: () => Promise.resolve({ files: [] }),
+        readFile: () => Promise.resolve(''),
+        search: () => Promise.resolve({ hits: [] }),
+        writeFile: () => Promise.resolve({ ok: true }),
+        editFile: () => Promise.resolve({ ok: true }),
+        install: () => Promise.resolve({ ok: true }),
+        rename: () => Promise.resolve({ ok: true }),
+        moveScope: () => Promise.resolve({ ok: true }),
+        delete: () => Promise.resolve({ ok: true }),
+    },
+};
+globalThis.SillyTavern = globalThis.SillyTavern || {
+    getContext: () => __testCtx,
+};
 
 // public/script.js cascades into the macro engine and other browser-only
 // runtime that doesn't resolve under jest. tools.js only uses
@@ -59,9 +88,10 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     eventSource: { on: jest.fn(), makeLast: jest.fn(), removeListener: jest.fn() },
     event_types: { CHAT_COMPLETION_PROMPT_READY: 'chat_completion_prompt_ready', GENERATION_WORLD_INFO_FINALIZED: 'generation_world_info_finalized' },
     // skills/api.js (pulled transitively via cpa-iteration/tools.js →
-    // skills/iter-studio-tools.js → skills/api.js) wraps every fetch with
-    // getRequestHeaders(). The skill tools never fire under these tests
-    // (no HTTP available), but module link requires the export to exist.
+    // iteration-library/tools/skill-iter-studio.js → skills/api.js) wraps
+    // every fetch with getRequestHeaders(). The skill tools never fire
+    // under these tests (no HTTP available), but module link requires the
+    // export to exist.
     getRequestHeaders: jest.fn(() => ({})),
 }));
 
@@ -77,6 +107,20 @@ jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-revi
         chainText: '<simulation_result kind="cpa" ok="true">mock</simulation_result>',
     })),
     buildSimulationToolResult: jest.fn(() => '<simulation_result kind="cpa" ok="true">mock</simulation_result>'),
+}));
+
+// iteration-library/tools/skill-iter-studio.js — CPA tools.js now imports
+// runSkillIterStudioTool + commitApprovedSkillProposal directly from
+// iter-lib (no more orchestrator getExtensionApi bridge). Mock the module
+// so the auto-commit / proposal-stripping / error-passthrough behaviour
+// is observable per-test via __mockRunSkill / __mockCommitSkill.
+const __mockRunSkill = jest.fn();
+const __mockCommitSkill = jest.fn();
+jest.unstable_mockModule('../../public/scripts/iteration-library/tools/skill-iter-studio.js', () => ({
+    SKILL_ITER_STUDIO_TOOL_DEFS: [],
+    isSkillIterStudioTool: () => true,
+    runSkillIterStudioTool: __mockRunSkill,
+    commitApprovedSkillProposal: __mockCommitSkill,
 }));
 
 let buildToolCatalog;
@@ -215,7 +259,7 @@ describe('CPA control tools — program-driven auto-continue', () => {
     });
 });
 
-describe('CPA — preset_clone_to_new (restored as side-effecting read tool)', () => {
+describe('CPA — preset_clone_to_new (proposal-mode read tool)', () => {
     test('buildToolCatalog exposes preset_clone_to_new with or without reference', () => {
         for (const hasReference of [false, true]) {
             const names = buildToolCatalog({ hasReference }).map(d => d.function?.name);
@@ -241,17 +285,26 @@ describe('CPA — preset_clone_to_new (restored as side-effecting read tool)', (
         expect(READ_TOOL_NAMES.has('preset_clone_to_new')).toBe(true);
     });
 
-    test('runCpaReadTool calls ctx.cloneAndSwitchTarget with the new name on success', async () => {
-        let receivedName = null;
-        const ctx = {
-            cloneAndSwitchTarget: async (name) => {
-                receivedName = name;
-                return { ok: true };
-            },
-        };
+    test('runCpaReadTool returns a pendingCloneEdit envelope and does NOT invoke ctx.cloneAndSwitchTarget', async () => {
+        // The dispatcher defers the actual clone to Apply time — studio.js
+        // parks the pending envelope on state.pendingCloneEdits for user
+        // review, then commitApprovedCloneEditsForCpa calls
+        // ctx.cloneAndSwitchTarget at that point. The dispatcher must NOT
+        // call it here; verify by spying.
+        const spy = jest.fn(async () => ({ ok: true }));
+        const ctx = { cloneAndSwitchTarget: spy, presetName: 'source-preset' };
         const out = await runCpaReadTool({ name: 'preset_clone_to_new', args: { new_name: 'foo' } }, ctx);
-        expect(receivedName).toBe('foo');
-        expect(out).toEqual({ ok: true, result: { new_name: 'foo', cloned: true } });
+        expect(spy).not.toHaveBeenCalled();
+        expect(out.ok).toBe(true);
+        expect(out.result.proposed).toBe(true);
+        expect(out.result.new_preset_name).toBe('foo');
+        expect(out.result.source_preset_name).toBe('source-preset');
+        expect(out.pendingCloneEdit).toEqual({
+            kind: 'clone',
+            sourceName: 'source-preset',
+            newName: 'foo',
+            op: { newName: 'foo' },
+        });
     });
 
     test('runCpaReadTool reports unavailable when ctx.cloneAndSwitchTarget is missing', async () => {
@@ -271,28 +324,25 @@ describe('CPA — preset_clone_to_new (restored as side-effecting read tool)', (
         expect(empty.error).toMatch(/non-empty new_name/);
     });
 
-    test('runCpaReadTool surfaces the host error path to the AI', async () => {
-        // When the host's cloneAndSwitchTarget returns { ok: false, error },
-        // the dispatcher must propagate that error verbatim instead of
-        // throwing or replacing it — the AI sees the actionable message.
+    test('runCpaReadTool surfaces the host duplicate-name pre-check error before proposing', async () => {
+        // When the host exposes checkPresetNameAvailable, a duplicate name
+        // is rejected synchronously — the AI never sees a pending card for
+        // a clone that would fail at commit time anyway.
         const ctx = {
-            cloneAndSwitchTarget: async () => ({
-                ok: false,
-                error: 'Preset save failed: server unreachable.',
+            cloneAndSwitchTarget: async () => ({ ok: true }),
+            checkPresetNameAvailable: (name) => ({
+                exists: name === 'taken',
+                canonical: name === 'taken' ? 'Taken' : null,
             }),
+            presetName: 'source-preset',
         };
-        const out = await runCpaReadTool({ name: 'preset_clone_to_new', args: { new_name: 'foo' } }, ctx);
+        const out = await runCpaReadTool({ name: 'preset_clone_to_new', args: { new_name: 'taken' } }, ctx);
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/server unreachable/);
-    });
-
-    test('runCpaReadTool catches synchronous throws from cloneAndSwitchTarget', async () => {
-        const ctx = {
-            cloneAndSwitchTarget: async () => { throw new Error('boom'); },
-        };
-        const out = await runCpaReadTool({ name: 'preset_clone_to_new', args: { new_name: 'foo' } }, ctx);
-        expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/boom/);
+        expect(out.error).toMatch(/already exists/);
+        // Fresh name still proposes normally.
+        const freshOut = await runCpaReadTool({ name: 'preset_clone_to_new', args: { new_name: 'fresh' } }, ctx);
+        expect(freshOut.ok).toBe(true);
+        expect(freshOut.pendingCloneEdit).toBeDefined();
     });
 });
 
@@ -331,5 +381,86 @@ describe('CPA — preset_str_insert / preset_str_delete expected_count (CPA-9)',
             { live: { main: 'before gone after' } },
         );
         expect(edits[0]).toMatchObject({ op: 'str_delete', path: 'main', find: 'gone' });
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// runCpaSkillTool — delegates to iteration-library/tools/skill-iter-studio
+// (the shared tool dispatcher). The iter-studio's authoring tools moved
+// to proposal-mode (return pendingSkillEdit instead of writing inline),
+// and CPA now mirrors orch iter-studio: park the proposal on
+// state.pendingSkillEdits for per-card user review, commit at Apply time
+// through commitApprovedSkillProposal. The dispatcher transparently
+// forwards the envelope to studio.js.
+//
+// The iter-lib module is mocked at the top of this file so
+// __mockRunSkill / __mockCommitSkill can be tuned per-test.
+// ─────────────────────────────────────────────────────────────────────
+describe('CPA — runCpaSkillTool (proposal-mode passthrough)', () => {
+    let runCpaSkillTool;
+
+    beforeAll(async () => {
+        ({ runCpaSkillTool } = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/tools.js'));
+    });
+
+    beforeEach(() => {
+        __mockRunSkill.mockReset();
+        __mockCommitSkill.mockReset();
+    });
+
+    test('proposal-mode (pendingSkillEdit) → passes envelope through, does NOT commit', async () => {
+        const proposal = {
+            kind: 'content',
+            skillName: 'foo',
+            scope: { kind: 'global' },
+            path: 'SKILL.md',
+            before: 'OLD',
+            after: 'NEW',
+            op: { name: 'skill_update_content', args: { scope: { kind: 'global' }, name: 'foo', path: 'SKILL.md', content: 'NEW' } },
+        };
+        __mockRunSkill.mockResolvedValue({
+            ok: true,
+            result: { ok: true, proposed: true, kind: 'content', skill: 'foo' },
+            pendingSkillEdit: proposal,
+        });
+        const out = await runCpaSkillTool({ name: 'skill_update_content', args: { name: 'foo', path: 'SKILL.md', content: 'NEW' } });
+        expect(out.ok).toBe(true);
+        // Commit happens at Apply time inside studio.js, NOT here.
+        expect(__mockCommitSkill).not.toHaveBeenCalled();
+        // The pendingSkillEdit envelope rides through to studio so it can
+        // park the proposal on state.pendingSkillEdits.
+        expect(out.pendingSkillEdit).toEqual(proposal);
+        expect(out.result.proposed).toBe(true);
+    });
+
+    test('pendingEdit (from policy-binding tools) is stripped — never reaches CPA preset pipeline', async () => {
+        __mockRunSkill.mockResolvedValue({
+            ok: true,
+            result: { ok: true, agentId: 'main', skillName: 'foo', list: 'visible' },
+            pendingEdit: { op: 'set', path: '', oldValue: {}, newValue: {} },
+        });
+        const out = await runCpaSkillTool({ name: 'skill_bind_to_agent', args: { agentId: 'main', skillName: 'foo', list: 'visible' } });
+        expect(out.ok).toBe(true);
+        expect(out).not.toHaveProperty('pendingEdit');
+        expect(__mockCommitSkill).not.toHaveBeenCalled();
+    });
+
+    test('inventory tools (no proposal) pass through verbatim', async () => {
+        __mockRunSkill.mockResolvedValue({
+            ok: true,
+            result: { inventory: [{ name: 'foo', description: 'd' }] },
+        });
+        const out = await runCpaSkillTool({ name: 'skill_list_visible', args: {} });
+        expect(out.ok).toBe(true);
+        expect(out.result.inventory).toHaveLength(1);
+        expect(__mockCommitSkill).not.toHaveBeenCalled();
+    });
+
+    test('failed dispatch surfaces unchanged', async () => {
+        __mockRunSkill.mockResolvedValue({ ok: false, error: 'bad args' });
+        const out = await runCpaSkillTool({ name: 'skill_create', args: {} });
+        expect(out.ok).toBe(false);
+        expect(out.error).toBe('bad args');
+        expect(__mockCommitSkill).not.toHaveBeenCalled();
     });
 });

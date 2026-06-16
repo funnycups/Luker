@@ -500,13 +500,16 @@
     align-self: auto;
 }
 
-/* ── Skill authoring proposal cards ──────────────────────────────────
-   Per-card approve/reject + Apply-time commit for skill_create /
-   skill_update_content / skill_edit_content / skill_update_frontmatter /
-   skill_rename / skill_change_scope / skill_delete /
-   skill_extract_from_text. Same visual language as orchestrator
-   iter-studio's orch_it_skl_* tree. Body is either an ITER_UI.diff
-   card or a one-line structural strip. */
+/* ── Skill proposal cards (3 of Bug 1 fix) ─────────────────────────────
+   Rendered by renderSkillPendingForMessage / renderSkillPendingCard in
+   studio.js, attached to each assistant message that emitted skill
+   authoring tool calls (skill_create / skill_update_content / etc).
+   Mirrors orchestrator/iter-studio/studio.css L463-574 with .cpa_it_skl_*
+   prefix so both popups can be mounted in the same session without
+   class collisions. Body is either an ITER_UI.diff card (content /
+   frontmatter / create) or a one-line structural strip (rename /
+   change_scope / delete).
+   --------------------------------------------------------------------- */
 .cpa_it_skl_list {
     display: flex;
     flex-direction: column;
@@ -618,30 +621,4 @@
 }
 .cpa_it_skl_btn_reject:hover:not(:disabled) {
     background: color-mix(in oklab, #d04848 28%, transparent);
-}
-
-.cpa_it_skl_summary {
-    display: flex;
-    align-items: center;
-    gap: var(--it-space-sm);
-    padding: var(--it-space-xs) var(--it-space-sm);
-}
-.cpa_it_skl_summary:empty {
-    display: none;
-}
-.cpa_it_skl_summary_text {
-    font-size: 0.88em;
-    opacity: 0.85;
-    flex: 1;
-}
-.cpa_it_skl_commit_btn {
-    background: color-mix(in oklab, var(--it-accent-primary) 18%, transparent);
-    border: 1px solid color-mix(in oklab, var(--it-accent-primary) 55%, transparent);
-    border-radius: var(--it-radius-sm, 4px);
-    padding: 4px 12px;
-    font-size: 0.88em;
-    cursor: pointer;
-}
-.cpa_it_skl_commit_btn:hover {
-    background: color-mix(in oklab, var(--it-accent-primary) 28%, transparent);
 }

@@ -177,5 +177,81 @@ export function createCpaIterationSessionStore({ getContext, getTargetRef }) {
             store.currentSessionId = id ?? null;
             await writeStore(store);
         },
+
+        /**
+         * Move one session from the `fromRef` preset's bucket into the
+         * `toRef` preset's bucket (Bug 2 fix). Used after a successful
+         * `preset_clone_to_new` Apply: the AI's conversation lived in
+         * the source preset's history, but now the target has switched
+         * to the clone — without this migration the session would split
+         * (clone-time snapshot stranded in the source bucket, post-clone
+         * messages written into the clone bucket by persistSession's
+         * current-ref read).
+         *
+         * Bypasses the factory's getTargetRef-based readStore/writeStore
+         * (which always operate on the current ref) by passing explicit
+         * refs to ctx.presets.state directly. The migration is
+         * idempotent against the trivial `fromRef === toRef` case.
+         *
+         * Idempotent guarantees:
+         *   - source bucket missing the id → returns {ok:false, missing:true}
+         *     so the caller can decide whether to abort or fall through;
+         *     no destructive writes happen in that branch.
+         *   - target bucket already has the id → overwrites and warns
+         *     (in practice this only happens if the target somehow
+         *     pre-existed with stale state, which a freshly-cloned
+         *     preset can't).
+         *   - source/target ref equal → no-op success (we still bump
+         *     currentSessionId to the same value so callers don't have
+         *     to special-case it).
+         */
+        moveSessionTo: async (id, fromRef, toRef) => {
+            if (!id) return { ok: false, error: 'session id is required' };
+            if (!fromRef || !toRef) return { ok: false, error: 'fromRef and toRef are required' };
+            const sameRef = fromRef.collection === toRef.collection && fromRef.name === toRef.name;
+            const ctx = getContext();
+
+            const fromStore = (await ctx.presets.state.get(SESSION_NAMESPACE, { target: fromRef }))
+                || { version: 1, currentSessionId: null, sessions: [] };
+            const session = (fromStore.sessions || []).find(s => s.id === id);
+            if (!session) {
+                return { ok: false, missing: true, error: `session not found in source bucket: ${id}` };
+            }
+            const sessionClone = structuredClone(session);
+
+            if (sameRef) {
+                // Trivial path — set currentSessionId and bail. We still
+                // run the read to validate the session exists.
+                fromStore.currentSessionId = id;
+                await ctx.presets.state.update(SESSION_NAMESPACE, () => fromStore, { target: fromRef });
+                return { ok: true, moved: false };
+            }
+
+            // Remove from source. If the source's currentSessionId pointed
+            // at this id, clear it so a future open of the source preset
+            // doesn't try to load a session that's no longer there.
+            fromStore.sessions = (fromStore.sessions || []).filter(s => s.id !== id);
+            if (fromStore.currentSessionId === id) fromStore.currentSessionId = null;
+            await ctx.presets.state.update(SESSION_NAMESPACE, () => fromStore, { target: fromRef });
+
+            // Write into target. A duplicate id in the target bucket
+            // shouldn't happen (clone creates a brand-new preset, so its
+            // bucket starts empty), but guard against it explicitly so
+            // a corrupt store doesn't get silently merged.
+            const toStore = (await ctx.presets.state.get(SESSION_NAMESPACE, { target: toRef }))
+                || { version: 1, currentSessionId: null, sessions: [] };
+            const existsIdx = (toStore.sessions || []).findIndex(s => s.id === id);
+            if (existsIdx >= 0) {
+                // eslint-disable-next-line no-console
+                console.warn(`[cpa-session-store] moveSessionTo: id ${id} already exists in target bucket ${toRef.name}; overwriting`);
+                toStore.sessions[existsIdx] = sessionClone;
+            } else {
+                if (!Array.isArray(toStore.sessions)) toStore.sessions = [];
+                toStore.sessions.push(sessionClone);
+            }
+            toStore.currentSessionId = id;
+            await ctx.presets.state.update(SESSION_NAMESPACE, () => toStore, { target: toRef });
+            return { ok: true, moved: true };
+        },
     };
 }

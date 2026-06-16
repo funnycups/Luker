@@ -90,18 +90,30 @@ import {
     tools as ITER_TOOLS,
     ui as ITER_UI,
     zoomOverlay as ITER_ZOOM_OVERLAY,
+    proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
+import { createProfileEditHandler } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
+import { createLorebookWriteHandler } from '../../../iteration-library/proposal-bus/kinds/lorebook-write.js';
+import { createSkillAuthorHandler } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
 import {
     createOrchestratorIterationSessionStore,
     makeMessageId,
     normalizeMessageShape,
 } from './session-store.js';
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
-// Lorebook read/write tools and the apply-proposal commit are
-// plugin-agnostic and live in `iteration-library/tools/`. Orchestrator
-// iter-studio no longer needs `getExtensionApi('character-editor-assistant')`
-// — disabling CEA does not break orch iter-studio.
-import { applyLorebookProposal } from '../../../iteration-library/tools/lorebook-writes.js';
+// auto-continue gate is now `bus.hasOutstanding()` — the standalone
+// gate module + its unit test were retired during the ProposalBus migration.
+// Character-editor-assistant publishes its helper-tool surface via
+// `registerExtensionApi('character-editor-assistant', {...})`. Resolved
+// per-call so a missing CEA install fails at the iter-studio entry
+// rather than at module load.
+function getCea() {
+    const api = __ctx.getExtensionApi('character-editor-assistant');
+    if (!api) {
+        throw new Error('Orchestrator iter-studio requires the character-editor-assistant extension to be installed and enabled.');
+    }
+    return api;
+}
 // Plan 2 Unit 7: iter-studio skill management catalog. Spliced into the
 // tool catalog alongside CONTROL_TOOL_DEFS + lorebook reads/writes, routed
 // through the inline-executed path. Three execution shapes:
@@ -119,7 +131,7 @@ import {
     isSkillIterStudioTool,
     runSkillIterStudioTool,
     commitApprovedSkillProposal,
-} from '../../../skills/iter-studio-tools.js';
+} from '../../../iteration-library/tools/skill-iter-studio.js';
 import { augmentIterStudioPromptWithSkills } from '../skill-iter-studio-prompt.js';
 import { buildSkillRuntimeContext } from '../skill-resolution.js';
 import { getActivePreset } from '../preset-library.js';
@@ -870,8 +882,6 @@ function buildPopupHtml({
     <div class="luker-iter-workspace-grid">
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="orch_it_messages" data-orch-it-messages></div>
-            <div class="orch_it_lbk_summary" data-orch-it-lbk-summary></div>
-            <div class="orch_it_skl_summary" data-orch-it-skl-summary></div>
             <div class="orch_it_composer">
                 <textarea class="text_pole" rows="2" data-orch-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="orch_it_composer_actions">
@@ -1030,33 +1040,14 @@ export async function openOrchestratorIterationStudio(deps) {
 
     // ──────────────────────────────────────────────────────────────────
     // Closure-local state. `live` is the working profile cloned from the
-    // active editor. `pendingEdits` mirrors state.session.pendingEdits so
-    // popup close mid-batch reloads the same staged edits; it usually
-    // holds 0 or 1 entries since the sandbox-diff emits one coarse
-    // `set('', newProfile)` per turn but multi-tool turns can stack.
+    // active editor. Pending writes (profile sandbox-diff, lorebook,
+    // skill) are owned by the ProposalBus mounted below — no per-bucket
+    // arrays on state any more.
     // ──────────────────────────────────────────────────────────────────
     const state = {
         mode,
         session: createNewSession(mode),
         live: null,
-        pendingEdits: [],
-        // Pending lorebook edits captured from lorebook_update_entry /
-        // lorebook_str_replace_in_entry tool calls. Each: { id, kind,
-        // bookName, uid, before, after, status: 'pending'|'approved'|'rejected',
-        // sourceCallId, createdAt }. Reset on session load and on Apply.
-        // Approved entries commit at Apply time via
-        // applyLorebookProposal; rejected entries are discarded.
-        pendingLorebookEdits: [],
-        // Pending skill authoring proposals captured from the 8 authoring
-        // tools (skill_create / skill_update_content / skill_edit_content /
-        // skill_update_frontmatter / skill_rename / skill_change_scope /
-        // skill_delete / skill_extract_from_text). Each: { id, kind, skillName,
-        // scope, path?, before, after, op:{name, args}, status, sourceCallId,
-        // createdAt }. Reset on session load. Approved entries commit at
-        // Apply time via commitApprovedSkillProposal (re-derives against
-        // current on-disk state so parallel-session drift surfaces as a
-        // fresh error); rejected entries are discarded.
-        pendingSkillEdits: [],
         isBusy: false,
         aborting: false,
         abortController: null,
@@ -1064,6 +1055,189 @@ export async function openOrchestratorIterationStudio(deps) {
 
     function loadLive() {
         state.live = loadLiveProfile();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // ProposalBus mount. Three kinds:
+    //   - 'profile-edit'    — sandbox-diff working-profile replacement,
+    //                         committed via commitLiveToActiveEditor
+    //   - 'lorebook-write'  — lorebook update / str_replace proposals,
+    //                         committed via applyCharacterEditorLorebook
+    //                         Proposal (re-derives current state)
+    //   - 'skill-author'    — skill authoring writes, committed via the
+    //                         shared commitApprovedSkillProposal helper
+    //                         (also re-derives current disk state)
+    //
+    // Bus owns persistence (state.session.proposalBus), drift detection
+    // (per-kind fingerprint), click delegation, and auto-approve.
+    // ──────────────────────────────────────────────────────────────────
+    const bus = ITER_PROPOSAL_BUS.createProposalBus({
+        mode: `orch-${mode}`,
+        i18n: tf,
+        onChange: () => {
+            if (state.__suspendBusOnChange) return;
+            scheduleBusRender();
+        },
+    });
+
+    let busRenderScheduled = false;
+    function scheduleBusRender() {
+        if (busRenderScheduled) return;
+        busRenderScheduled = true;
+        queueMicrotask(async () => {
+            busRenderScheduled = false;
+            try { await persistSession(); } catch { /* surface elsewhere */ }
+            try { await render(); } catch { /* surface elsewhere */ }
+            await drainBusOutcomes();
+        });
+    }
+
+    bus.registerKind('profile-edit', createProfileEditHandler({
+        commitLive: async (newProfile) => {
+            state.live = newProfile;
+            const scope = getIterationDefaultScope(context);
+            if (scope === 'character') await commitLiveToCharacter();
+            else await commitLiveToGlobal();
+        },
+        readLive: async () => {
+            loadLive();
+            return state.live;
+        },
+        renderDiff: (before, after) => {
+            const edit = { op: 'set', path: '', oldValue: before, newValue: after };
+            return ITER_UI.diff.renderDiffCard([edit], { i18n: tf, live: state.live });
+        },
+        label: () => t('Profile change'),
+        icon: () => '✏',
+        target: () => String(TITLES_BY_MODE[mode] || mode),
+    }));
+    bus.registerKind('lorebook-write', createLorebookWriteHandler({
+        applyProposal: async (_ctx, opPayload) => {
+            return getCea().applyCharacterEditorLorebookProposal(context, opPayload);
+        },
+        loadWorldInfo: async (bookName) => context.loadWorldInfo(bookName),
+        renderDiff: (before, op) => {
+            const after = op?.args || null;
+            return renderLorebookDiffCardFromBeforeAfter(before, after, op?.kind);
+        },
+    }));
+    bus.registerKind('skill-author', createSkillAuthorHandler({
+        commitOp: commitApprovedSkillProposal,
+        readFile: async ({ scope, name, path }) => {
+            const skillsApi = __ctx.skills;
+            try {
+                const raw = await skillsApi.readFile({ scope, name, path });
+                if (typeof raw === 'string') return raw;
+                if (raw && typeof raw.content === 'string') return raw.content;
+                return null;
+            } catch (err) {
+                if (/404|not found/i.test(String(err?.message || err || ''))) return null;
+                throw err;
+            }
+        },
+        renderDiff: (before, op) => {
+            return renderSkillDiffCardForOp(before, op);
+        },
+    }));
+    bus.setMessageResolver((messageId) => {
+        const msgs = state.session?.messages || [];
+        const m = msgs.find((x) => String(x?.id || '') === String(messageId));
+        return m || { id: messageId, toolCalls: [] };
+    });
+
+    // Placeholder diff renderers — wired to the popup's existing lorebook /
+    // skill diff cards. Both helpers already exist below; declared here
+    // as forward references so bus mount doesn't have to wait for the
+    // function declarations later in this scope (JS function-hoisting
+    // covers `function` decls; these are inline helpers).
+    function renderLorebookDiffCardFromBeforeAfter(before, _after, kind) {
+        // We deliberately don't try to recompute the after-image here —
+        // the source of truth is the args carried on entry.op, which the
+        // CEA proposal helper re-derives at approve time. For the per-
+        // card body, render a slim "kind + book/uid" line until the full
+        // diff card is wired into the bus stylesheet pass.
+        const bookName = before?.book_name ?? '';
+        const uid = before?.uid != null ? String(before.uid) : '';
+        return `<div class="iter_lorebook_proposal_inline">${escapeHtmlLocal(tf('${0} on ${1}#${2}', String(kind || 'update'), String(bookName), uid))}</div>`;
+    }
+    function renderSkillDiffCardForOp(before, op) {
+        const name = op?.args?.name ?? '';
+        const path = op?.args?.path ?? '';
+        const label = `${op?.name || 'skill'} ${name}${path ? `/${path}` : ''}`;
+        return `<div class="iter_skill_proposal_inline">${escapeHtmlLocal(label)}</div>`;
+    }
+
+    // Bus drain pump — re-fires the iteration loop after the user resolves
+    // any batch of proposals. Replaces the legacy continueAfterReviewDecision.
+    let drainScheduled = false;
+    const __pendingDrainStash = [];
+    async function drainBusOutcomes() {
+        if (drainScheduled) return;
+        const outcomes = bus.drainOutcomes();
+        if (!outcomes.length) return;
+        if (state.isBusy) {
+            __pendingDrainStash.push(...outcomes);
+            return;
+        }
+        const allOutcomes = __pendingDrainStash.length
+            ? [...__pendingDrainStash.splice(0), ...outcomes]
+            : outcomes;
+        const committed = allOutcomes.filter((o) => o.status === 'committed');
+        const rejected = allOutcomes.filter((o) => o.status === 'rejected');
+        const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
+        const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
+        if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
+        const lines = [];
+        const total = committed.length + rejected.length + conflicts.length + rolledBack.length;
+        lines.push(`[User reviewed ${total} proposal(s):`);
+        const fmt = (o) => `  - ${o.kind}${o.target ? ` (${o.target})` : ''}${o.error ? ` — ${o.error}` : ''}`;
+        if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
+        if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
+        if (conflicts.length) { lines.push(`Conflict — disk changed externally; retry or reject (${conflicts.length}):`); for (const o of conflicts) lines.push(fmt(o)); }
+        if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        drainScheduled = true;
+        try {
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: lines.join('\n'),
+                at: Date.now(),
+                auto: true,
+            });
+            state.isBusy = true;
+            state.abortController = new AbortController();
+            await persistSession();
+            await render();
+            try {
+                let turn = await runIterationTurn();
+                while (turn?.hadAnyToolCall && !bus.hasOutstanding()) {
+                    await persistSession();
+                    await render();
+                    if (state.abortController?.signal?.aborted) break;
+                    turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                }
+            } catch (err) {
+                if (!isAbortError(err, state.abortController?.signal)) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[${MODULE}:${mode}] drainBusOutcomes`, err);
+                    state.session.messages.push({
+                        id: makeMessageId(),
+                        role: 'system',
+                        content: tf('Error: ${0}', String(err?.message || err)),
+                        at: Date.now(),
+                    });
+                }
+            } finally {
+                state.isBusy = false;
+                state.aborting = false;
+                state.abortController = null;
+                await persistSession();
+                await render();
+            }
+        } finally {
+            drainScheduled = false;
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1143,7 +1317,7 @@ export async function openOrchestratorIterationStudio(deps) {
             '   - **Final-output shape** — directives that describe the FORM of the final committed reply, not how the agent thinks on the way there. Examples: "all output must be markdown", "wrap the response in <content>", "always end with a closing summary block", "use bullet points throughout", "她说话用诗的格式". These are legitimate stylistic preferences and should be KEPT — but rewritten so the finalize semantics are explicit, so intermediate orchestration nodes (planner, tool-callers, reviewers) are not dragged into the same shape. The orchestration\'s last node is the one that commits the user-facing reply; that is where the form belongs. Example: "她说话用诗的格式" → "她最终回答用户时偏好以诗的形式表达，押上几个韵脚" (conditioned on the final commit, with persona-flavor wording so it reads as a habit rather than a hard rule). Or, when the constraint is purely cosmetic, scope it explicitly: "all output must be markdown" → "the orchestration\'s final reply to the user is formatted as markdown" so it does not constrain intermediate nodes.',
             '   When unsure whether a clause is process coercion or final-output shape, err toward preserving and ask the user. The decision test: does this require the agent to think or output in a specific shape BEFORE making its decision or calling a tool? Yes → process coercion. No (only describes the final reply\'s form) → final-output shape.',
             '4. Pick the repair tool by scope. Surgical clause-level edits (rewriting just the offending sentence while preserving the rest of the entry — worldbuilding facts, persona traits, scene anchors) use `lorebook_str_replace_in_entry`. Whole-entry disable via `lorebook_update_entry` with `{ "disable": true }` is reserved for entries that are pure format coercion with no salvageable content (e.g. an entry whose entire body is "all output must be in markdown"). Disabling a content-rich entry to mute one sentence loses information. Never delete entries.',
-            '5. Approval flow — important: both write tools are PROPOSAL-mode, not direct writes. Each call you make captures a {before, after} envelope, returns it to you, and pushes a diff card into the popup for the user to review. The user approves or rejects per card; only approved cards commit to the on-disk world book when the user clicks Apply. You will receive a tool result with `"proposed": true` and a message saying "Proposed for user approval" — treat that as the success contract. Continue designing the orchestration on the assumption your proposals will land if accepted, but do NOT block on disk-level confirmation. If the user rejects a proposal, your next round will see the rejection (the lorebook stayed unchanged) — adjust strategy accordingly.',
+            '5. Approval flow — important: both write tools are PROPOSAL-mode, not direct writes. Each call you make captures a {before, after} envelope, returns it to you, and pushes a diff card into the popup for the user to review. The user approves or rejects per card; only approved cards commit to the on-disk world book when the user clicks Apply. The iter-studio PAUSES the auto-continue loop the moment any write proposal (profile edit, lorebook, skill) is staged — the next round will not fire until the user has fully resolved every pending card. You will then receive a synthetic user message describing which proposals committed, which were rejected, and which surfaced commit errors. Plan further work in your reasoning but do NOT stack additional unrelated write proposals in this same round expecting them to commit alongside this one — review is per-card, and the next round only fires after the full batch is settled. If the user rejects a proposal, the lorebook stayed unchanged — adjust strategy accordingly.',
             '6. Skip this audit entirely if the user explicitly said not to touch the lorebook, or if the orchestration imposes no specific output format.',
         ].join('\n');
     }
@@ -1169,7 +1343,7 @@ export async function openOrchestratorIterationStudio(deps) {
             '   - **Final-output shape** — directives that describe the FORM of the final committed reply, not how the agent thinks on the way there. Examples: "all output must be markdown", "wrap the response in <content>", "always end with a closing summary block", "use bullet points throughout". These are legitimate stylistic preferences and should be KEPT — but rewritten so the finalize semantics are explicit, so intermediate orchestration nodes (planner, tool-callers, reviewers) are not dragged into the same shape. The orchestration\'s last node is the one that commits the user-facing reply; that is where the form belongs. Example: "all output must be markdown" → "the orchestration\'s final reply to the user is formatted as markdown" so it does not constrain intermediate nodes.',
             '   When unsure whether a clause is process coercion or final-output shape, err toward preserving and ask the user. The decision test: does this require the agent to think or output in a specific shape BEFORE making its decision or calling a tool? Yes → process coercion. No (only describes the final reply\'s form) → final-output shape.',
             '4. Pick the repair tool by scope. Surgical clause-level edits (rewriting just the offending sentence while preserving the rest of the entry) use `lorebook_str_replace_in_entry`. Whole-entry disable via `lorebook_update_entry` with `{ "disable": true }` is reserved for entries that are pure format coercion with no salvageable content. Disabling a content-rich entry to mute one sentence loses information. Never delete entries.',
-            '5. Approval flow — important: both write tools are PROPOSAL-mode, not direct writes. Each call you make captures a {before, after} envelope, returns it to you, and pushes a diff card into the popup for the user to review. The user approves or rejects per card; only approved cards commit to the on-disk world book when the user clicks Apply. You will receive a tool result with `"proposed": true` and a message saying "Proposed for user approval" — treat that as the success contract. Continue designing the orchestration on the assumption your proposals will land if accepted, but do NOT block on disk-level confirmation. If the user rejects a proposal, your next round will see the rejection (the lorebook stayed unchanged) — adjust strategy accordingly.',
+            '5. Approval flow — important: both write tools are PROPOSAL-mode, not direct writes. Each call you make captures a {before, after} envelope, returns it to you, and pushes a diff card into the popup for the user to review. The user approves or rejects per card; only approved cards commit to the on-disk world book when the user clicks Apply. The iter-studio PAUSES the auto-continue loop the moment any write proposal (profile edit, lorebook, skill) is staged — the next round will not fire until the user has fully resolved every pending card. You will then receive a synthetic user message describing which proposals committed, which were rejected, and which surfaced commit errors. Plan further work in your reasoning but do NOT stack additional unrelated write proposals in this same round expecting them to commit alongside this one — review is per-card, and the next round only fires after the full batch is settled. If the user rejects a proposal, the lorebook stayed unchanged — adjust strategy accordingly.',
             '6. Skip this audit entirely if the user explicitly said not to touch any world book, or if the orchestration imposes no specific output format. Prefer narrow, well-justified edits over sweeping ones — global books are shared across every chat.',
         ].join('\n');
     }
@@ -1263,7 +1437,7 @@ export async function openOrchestratorIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     async function persistSession({ flush = false } = {}) {
         const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
-        const hasPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        const hasPending = bus.hasOutstanding();
         if (state.session._transient && !hasMessages && !hasPending) {
             return;
         }
@@ -1272,17 +1446,14 @@ export async function openOrchestratorIterationStudio(deps) {
         }
         state.session.updatedAt = Date.now();
         state.session.mode = mode;
-        // Mirror runtime pendingEdits onto the persisted session so a popup
-        // close mid-batch reloads with the same staged edits. Structured-
-        // clone so a subsequent in-place mutation can't poison the saved
-        // copy via the same reference.
-        try {
-            state.session.pendingEdits = Array.isArray(state.pendingEdits)
-                ? structuredClone(state.pendingEdits)
-                : [];
-        } catch {
-            state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
-        }
+        // Bus owns the staging queue; serialize() returns a v2 blob
+        // (entries + outcomeQueue) we round-trip through the session
+        // store. Drop legacy per-bucket fields if any sneak in from an
+        // older session payload.
+        state.session.proposalBus = bus.serialize();
+        if (state.session.pendingEdits !== undefined) delete state.session.pendingEdits;
+        if (state.session.pendingLorebookEdits !== undefined) delete state.session.pendingLorebookEdits;
+        if (state.session.pendingSkillEdits !== undefined) delete state.session.pendingSkillEdits;
         if (!state.session.title) {
             const firstUser = state.session.messages.find(m => m.role === 'user' && !m.auto);
             if (firstUser) {
@@ -1310,21 +1481,36 @@ export async function openOrchestratorIterationStudio(deps) {
                 ...(loaded.surfaceState || {}),
             },
             messages: loadedMessages.map(m => normalizeMessageShape(m, fallbackAt)),
-            pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
-        state.pendingEdits = state.session.pendingEdits.slice();
-        // Pending lorebook edits are deliberately session-local (never
-        // persisted): they are proposals against on-disk world books, and
-        // those books may have been edited in a parallel session since the
-        // proposal was captured. Forcing the user to re-propose after a
-        // session swap avoids applying a stale after-image against drifted
-        // entry state.
-        state.pendingLorebookEdits = [];
-        // Pending skill authoring proposals are session-local for the same
-        // reason: they target on-disk skill files, which a parallel session
-        // could have edited. Re-propose after session load rather than
-        // committing a stale snapshot against drifted file state.
-        state.pendingSkillEdits = [];
+        // Hydrate the bus. Prefer the new proposalBus blob; otherwise
+        // fall back to a one-shot migration of the legacy pendingEdits
+        // array (per-profile-edit). Legacy pendingLorebookEdits /
+        // pendingSkillEdits were never persisted in the orch popup,
+        // matching the pre-migration behavior.
+        state.__suspendBusOnChange = true;
+        try {
+            if (loaded.proposalBus && typeof loaded.proposalBus === 'object') {
+                bus.hydrate(loaded.proposalBus);
+            } else if (Array.isArray(loaded.pendingEdits) && loaded.pendingEdits.length > 0) {
+                for (const edit of loaded.pendingEdits) {
+                    if (edit?.op !== 'set' || edit?.path !== '') continue;
+                    await bus.propose({
+                        kind: 'profile-edit',
+                        op: { op: 'set', path: '', newValue: edit.newValue },
+                        snapshot: edit.oldValue ?? null,
+                        sourceCallId: null,
+                    });
+                }
+            } else {
+                bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+        delete state.session.pendingEdits;
+        delete state.session.pendingLorebookEdits;
+        delete state.session.pendingSkillEdits;
         // Re-read live so a parallel editor doesn't leave the popup with
         // stale state when the user reopens an older session.
         loadLive();
@@ -1341,15 +1527,13 @@ export async function openOrchestratorIterationStudio(deps) {
         if (priorAutoApply) {
             state.session.surfaceState.autoApply = true;
         }
-        state.pendingEdits = [];
-        // Lorebook proposals are session-local — a new session starts with
-        // an empty review queue. Without this reset, stale cards from the
-        // prior session linger in the summary row (and remain committable
-        // through the "commit lorebook only" button even though their
-        // sourceCallId no longer matches any rendered message).
-        state.pendingLorebookEdits = [];
-        // Skill authoring proposals share the same session-local model.
-        state.pendingSkillEdits = [];
+        state.__suspendBusOnChange = true;
+        try {
+            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
         loadLive();
         // Don't save the blank session yet — persistSession's _transient
         // guard defers the write until the first user message.
@@ -1524,257 +1708,6 @@ export async function openOrchestratorIterationStudio(deps) {
         return String(appliedTarget || '');
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // Pending lorebook edits — approval cards.
-    // Lorebook write tools (lorebook_update_entry / _str_replace_in_entry)
-    // do NOT commit on call; the inline-executed dispatcher captures each
-    // {before, after} envelope into state.pendingLorebookEdits and renders
-    // it inline below the assistant message that proposed it. The user
-    // approves/rejects per card; only approved cards commit at Apply time
-    // via applyLorebookProposal. This mirrors the orch
-    // profile sandbox-diff flow but targets external (on-disk) world-info
-    // state — the diff card shows full before/after so the user can judge
-    // the impact before authorizing the disk write.
-    //
-    // Both write tools deliver `before`/`after` as full entry objects, so
-    // the body delegates to the shared `iteration-library/ui/diff`
-    // renderer (same visuals + per-field LCS + empty-noise filtering used
-    // by every other diff card in the popup). The renderer walks the
-    // diff into per-leaf sub-cards: scalar fields (disable / order / keys)
-    // get a compact card, long content gets the side-by-side LCS table.
-    // ──────────────────────────────────────────────────────────────────
-    const LOREBOOK_FIELD_LABELS = Object.freeze({
-        content: 'content',
-        comment: 'label',
-        disable: 'disabled',
-        key: 'keys',
-        keysecondary: 'secondary keys',
-        constant: 'always-active',
-        order: 'order',
-        position: 'position',
-        depth: 'depth',
-        probability: 'probability',
-        useProbability: 'use probability',
-        selectiveLogic: 'selective logic',
-        excludeRecursion: 'exclude recursion',
-        preventRecursion: 'prevent recursion',
-        delayUntilRecursion: 'delay until recursion',
-        scanDepth: 'scan depth',
-        caseSensitive: 'case sensitive',
-        matchWholeWords: 'match whole words',
-        useGroupScoringSourceForCheck: 'use group scoring',
-        automationId: 'automation id',
-    });
-
-    function renderLorebookDiffBody(before, after) {
-        const beforeObj = (before && typeof before === 'object') ? before : {};
-        const afterObj = (after && typeof after === 'object') ? after : {};
-        // Strip uid before diffing — it's the address, not a payload field,
-        // and the lorebook write helpers carry it on both sides.
-        const stripUid = (obj) => {
-            if (!obj || typeof obj !== 'object') return obj;
-            // eslint-disable-next-line no-unused-vars
-            const { uid, ...rest } = obj;
-            return rest;
-        };
-        const edit = {
-            op: 'set',
-            path: '',
-            oldValue: stripUid(beforeObj),
-            newValue: stripUid(afterObj),
-        };
-        const html = ITER_UI.diff.renderDiffCard([edit], {
-            i18n: tf,
-            fieldLabels: LOREBOOK_FIELD_LABELS,
-            // Live snapshot is the BEFORE side itself: lorebook proposals
-            // re-derive against the on-disk entry at Apply time, so the
-            // diff renderer treating before as live is correct.
-            live: stripUid(beforeObj),
-        });
-        if (!html) {
-            return `<div class="orch_it_lbk_nochange">${escapeHtmlLocal(t('No field changes'))}</div>`;
-        }
-        return html;
-    }
-    // ──────────────────────────────────────────────────────────────────
-
-    function renderLorebookPendingCard(edit) {
-        const status = String(edit?.status || 'pending');
-        const kind = String(edit?.kind || '');
-        const icon = kind === 'update' ? '✏️' : '🩹';
-        const kindLabel = kind === 'update'
-            ? t('Update lorebook entry')
-            : t('Patch lorebook entry text');
-        const statusLabel = status === 'approved'
-            ? `<span class="orch_it_lbk_status approved">✓ ${escapeHtmlLocal(t('Approved'))}</span>`
-            : status === 'rejected'
-                ? `<span class="orch_it_lbk_status rejected">✗ ${escapeHtmlLocal(t('Rejected'))}</span>`
-                : `<span class="orch_it_lbk_status pending">${escapeHtmlLocal(t('Pending approval'))}</span>`;
-
-        const body = renderLorebookDiffBody(edit.before, edit.after);
-
-        const idAttr = escapeHtmlLocal(String(edit?.id || ''));
-        const controls = (status === 'approved' || status === 'rejected')
-            ? `<button class="menu_button orch_it_lbk_btn" data-orch-it-action="reset-lorebook-decision" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Undo decision'))}</button>`
-            : `<button class="menu_button orch_it_lbk_btn orch_it_lbk_btn_approve" data-orch-it-action="approve-lorebook" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Approve'))}</button>
-               <button class="menu_button orch_it_lbk_btn orch_it_lbk_btn_reject" data-orch-it-action="reject-lorebook" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Reject'))}</button>`;
-
-        const target = `${escapeHtmlLocal(String(edit?.bookName || ''))} #${escapeHtmlLocal(String(edit?.uid ?? ''))}`;
-        return `<div class="orch_it_lbk_card orch_it_lbk_card_${escapeHtmlLocal(status)}" data-orch-it-pending-id="${idAttr}">
-            <div class="orch_it_lbk_header">
-                <span class="orch_it_lbk_icon">${icon}</span>
-                <span class="orch_it_lbk_label">${escapeHtmlLocal(kindLabel)}</span>
-                <span class="orch_it_lbk_target">${target}</span>
-                ${statusLabel}
-            </div>
-            <div class="orch_it_lbk_body">${body}</div>
-            <div class="orch_it_lbk_controls">${controls}</div>
-        </div>`;
-    }
-
-    function renderLorebookPendingForMessage(message) {
-        if (!message || message.role !== 'assistant') return '';
-        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-        if (toolCalls.length === 0) return '';
-        const callIds = new Set(toolCalls.map(tc => String(tc?.id || '')).filter(Boolean));
-        const pending = Array.isArray(state.pendingLorebookEdits) ? state.pendingLorebookEdits : [];
-        const matched = pending.filter(p => callIds.has(String(p?.sourceCallId || '')));
-        if (matched.length === 0) return '';
-        return `<div class="orch_it_lbk_list">${matched.map(renderLorebookPendingCard).join('')}</div>`;
-    }
-
-    // ──────────────────────────────────────────────────────────────────
-    // Skill authoring proposals. Pattern mirrors lorebook: per-card
-    // approve/reject buttons; the actual disk-write happens at Apply
-    // time via commitApprovedSkillProposal, which re-derives against
-    // current on-disk state so parallel-session drift surfaces as a
-    // fresh error.
-    //
-    // Card layout splits by kind:
-    //   - content / frontmatter / create: SKILL.md (or other file)
-    //     before/after rendered through ITER_UI.diff.renderDiffCard,
-    //     which runs the same line-by-line LCS that lorebook + orch
-    //     profile cards use. Empty `before` (create) renders as
-    //     (empty) → full text — useful to scan the new file.
-    //   - rename / change_scope / delete: structural — no body diff;
-    //     just a one-line metadata strip describing the change.
-    // ──────────────────────────────────────────────────────────────────
-    const SKILL_KIND_META = Object.freeze({
-        content: { icon: '✏️', label: () => t('Update skill file') },
-        frontmatter: { icon: '🏷️', label: () => t('Update skill frontmatter') },
-        create: { icon: '✨', label: () => t('Create skill') },
-        rename: { icon: '🔤', label: () => t('Rename skill') },
-        change_scope: { icon: '📦', label: () => t('Move skill scope') },
-        delete: { icon: '🗑️', label: () => t('Delete skill') },
-    });
-
-    function scopeDisplay(scope) {
-        if (!scope || typeof scope !== 'object') return t('(unknown scope)');
-        if (scope.kind === 'global') return t('global');
-        if (scope.kind === 'preset' && scope.name) return tf('preset:${0}', String(scope.name));
-        if (scope.kind === 'character' && scope.characterFile) {
-            return tf('character:${0}', String(scope.characterFile));
-        }
-        return String(scope.kind || '?');
-    }
-
-    function renderSkillStructuralBody(edit) {
-        if (edit.kind === 'rename') {
-            return `<div class="orch_it_skl_meta_row">
-                <span class="orch_it_skl_meta_label">${escapeHtmlLocal(t('Name'))}:</span>
-                <span class="orch_it_skl_meta_was">${escapeHtmlLocal(String(edit.before?.name || edit.skillName || ''))}</span>
-                <span class="orch_it_skl_meta_arrow">→</span>
-                <span class="orch_it_skl_meta_now">${escapeHtmlLocal(String(edit.after?.name || ''))}</span>
-            </div>`;
-        }
-        if (edit.kind === 'change_scope') {
-            return `<div class="orch_it_skl_meta_row">
-                <span class="orch_it_skl_meta_label">${escapeHtmlLocal(t('Scope'))}:</span>
-                <span class="orch_it_skl_meta_was">${escapeHtmlLocal(scopeDisplay(edit.before?.scope))}</span>
-                <span class="orch_it_skl_meta_arrow">→</span>
-                <span class="orch_it_skl_meta_now">${escapeHtmlLocal(scopeDisplay(edit.after?.scope))}</span>
-            </div>`;
-        }
-        if (edit.kind === 'delete') {
-            return `<div class="orch_it_skl_meta_row orch_it_skl_meta_destructive">
-                ${escapeHtmlLocal(tf('Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.',
-        String(edit.skillName || ''), scopeDisplay(edit.scope)))}
-            </div>`;
-        }
-        return '';
-    }
-
-    function renderSkillDiffBody(edit) {
-        // For content / frontmatter / create, hand the before/after strings
-        // to the shared diff card so the popup renders the same line-by-
-        // line LCS the lorebook + orch profile cards use. The path scope is
-        // captured on the synthetic edit envelope so the renderer's header
-        // surfaces the file name.
-        const path = String(edit.path || 'SKILL.md');
-        const diffEdit = {
-            op: 'set',
-            path,
-            oldValue: typeof edit.before === 'string' ? edit.before : '',
-            newValue: typeof edit.after === 'string' ? edit.after : '',
-        };
-        const html = ITER_UI.diff.renderDiffCard([diffEdit], {
-            i18n: tf,
-            // No live snapshot — the renderer falls back to before-as-source,
-            // which is correct for a file-level diff (we already captured
-            // the pre-edit content via skillsApi.readFile in the handler).
-        });
-        if (!html) {
-            return `<div class="orch_it_skl_nochange">${escapeHtmlLocal(t('No content change'))}</div>`;
-        }
-        // For skill_create, also surface any extra files that will be
-        // staged so the user sees the full payload, not just SKILL.md.
-        const extrasList = edit.kind === 'create' && Array.isArray(edit.extras?.extraFiles) && edit.extras.extraFiles.length > 0
-            ? `<div class="orch_it_skl_extras">${escapeHtmlLocal(tf('Plus ${0} additional file(s): ${1}',
-                String(edit.extras.extraFiles.length), edit.extras.extraFiles.join(', ')))}</div>`
-            : '';
-        return `${html}${extrasList}`;
-    }
-
-    function renderSkillPendingCard(edit) {
-        const status = String(edit?.status || 'pending');
-        const kind = String(edit?.kind || '');
-        const meta = SKILL_KIND_META[kind] || { icon: '🔧', label: () => kind };
-        const statusLabel = status === 'approved'
-            ? `<span class="orch_it_skl_status approved">✓ ${escapeHtmlLocal(t('Approved'))}</span>`
-            : status === 'rejected'
-                ? `<span class="orch_it_skl_status rejected">✗ ${escapeHtmlLocal(t('Rejected'))}</span>`
-                : `<span class="orch_it_skl_status pending">${escapeHtmlLocal(t('Pending approval'))}</span>`;
-        const body = (kind === 'rename' || kind === 'change_scope' || kind === 'delete')
-            ? renderSkillStructuralBody(edit)
-            : renderSkillDiffBody(edit);
-        const idAttr = escapeHtmlLocal(String(edit?.id || ''));
-        const controls = (status === 'approved' || status === 'rejected')
-            ? `<button class="menu_button orch_it_skl_btn" data-orch-it-action="reset-skill-decision" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Undo decision'))}</button>`
-            : `<button class="menu_button orch_it_skl_btn orch_it_skl_btn_approve" data-orch-it-action="approve-skill" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Approve'))}</button>
-               <button class="menu_button orch_it_skl_btn orch_it_skl_btn_reject" data-orch-it-action="reject-skill" data-orch-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Reject'))}</button>`;
-        const target = `${escapeHtmlLocal(String(edit?.skillName || ''))} <span class="orch_it_skl_scope">(${escapeHtmlLocal(scopeDisplay(edit?.scope))})</span>${edit?.path ? ` <span class="orch_it_skl_path">${escapeHtmlLocal(String(edit.path))}</span>` : ''}`;
-        return `<div class="orch_it_skl_card orch_it_skl_card_${escapeHtmlLocal(status)}" data-orch-it-pending-id="${idAttr}">
-            <div class="orch_it_skl_header">
-                <span class="orch_it_skl_icon">${meta.icon}</span>
-                <span class="orch_it_skl_label">${escapeHtmlLocal(meta.label())}</span>
-                <span class="orch_it_skl_target">${target}</span>
-                ${statusLabel}
-            </div>
-            <div class="orch_it_skl_body">${body}</div>
-            <div class="orch_it_skl_controls">${controls}</div>
-        </div>`;
-    }
-
-    function renderSkillPendingForMessage(message) {
-        if (!message || message.role !== 'assistant') return '';
-        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-        if (toolCalls.length === 0) return '';
-        const callIds = new Set(toolCalls.map(tc => String(tc?.id || '')).filter(Boolean));
-        const pending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
-        const matched = pending.filter(p => callIds.has(String(p?.sourceCallId || '')));
-        if (matched.length === 0) return '';
-        return `<div class="orch_it_skl_list">${matched.map(renderSkillPendingCard).join('')}</div>`;
-    }
 
     function renderMessageCard(message, idx, allMessages) {
         if (!message) return '';
@@ -1815,19 +1748,16 @@ export async function openOrchestratorIterationStudio(deps) {
             toolDisplay: ORCH_TOOL_DISPLAY,
             renderEditCard: renderPendingEditCard,
             renderApplyControls: (m) => {
-                const isLatestUnapplied = String(m?.id || '') === state.__latestUnappliedAssistantId;
-                const passthroughEdits = isLatestUnapplied ? m.edits : [];
-                const applyLabel = getIterationDefaultScope(context) === 'character'
-                    ? tf('Apply to ${0} override', getApplyScopeLabel())
-                    : tf('Apply to ${0}', getApplyScopeLabel());
-                return ITER_UI.apply.renderApplyControls(
-                    { ...m, edits: passthroughEdits },
-                    {
-                        i18n: tf,
-                        applyLabel,
-                        actionAttribute: 'data-orch-it-action',
-                    },
-                );
+                // Bus renders per-card chrome (Approve / Reject / Conflict /
+                // Rollback) for every proposal tied to this message AND the
+                // turn-actions row that batches them. The legacy
+                // renderApplyControls / "Apply to <scope>" button has been
+                // retired — apply IS approve, fired per-card by the bus's
+                // click delegator.
+                const cards = bus.renderCardsForMessage(m) || '';
+                const turn = bus.renderTurnActions(m) || '';
+                if (!cards && !turn) return '';
+                return cards + turn;
             },
             isLast,
             i18n: tf,
@@ -1843,12 +1773,8 @@ export async function openOrchestratorIterationStudio(deps) {
 
         // Preserve Orch's outer flex-row container so the popup's
         // alignment / accent-color / max-width rules in studio.css still
-        // apply. The shared component emits its own `<div
-        // class="luker_lib_message">` inner wrapper; click delegation
-        // resolves msgId from both attributes (see handler block below).
-        const lorebookHtml = renderLorebookPendingForMessage(message);
-        const skillHtml = renderSkillPendingForMessage(message);
-        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}${lorebookHtml}${skillHtml}</div>`;
+        // apply.
+        return `<div class="orch_it_msg ${roleCls}${autoCls}" data-orch-it-msg-id="${escapeHtmlLocal(message.id || '')}">${innerHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -1905,21 +1831,29 @@ export async function openOrchestratorIterationStudio(deps) {
         // for buildTaskMessages to feed the LLM, but the user shouldn't
         // see them as chat noise.
         const allMsgs = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
-        // `state.pendingEdits` is the source of truth for "this round is
-        // staged and awaiting review". When it's empty (Discard cleared
-        // it, or Apply landed with zero clean edits), no message should
-        // carry an Apply/Reject row — even though `m.edits` is still
-        // retained on the assistant message for diff history / rollback.
-        // Short-circuit before scanning so the inline controls disappear
-        // the moment the batch is resolved.
+        // Latest-unapplied = the most recent assistant turn that still
+        // owns at least one pending or conflict ProposalBus entry. Used
+        // to identify the assistant message whose live tail is current
+        // so renderDiffCard can resolve str-ops against state.live.
         let latestUnappliedAssistantId = '';
-        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
-            for (let i = allMsgs.length - 1; i >= 0; i--) {
-                const m = allMsgs[i];
-                if (m && m.role === 'assistant' && !m.auto
-                    && Array.isArray(m.edits) && m.edits.length > 0
-                    && !m.appliedAt && !m.rolledBackAt) {
-                    latestUnappliedAssistantId = String(m.id || '');
+        if (bus.hasOutstanding()) {
+            const callIdsToTurn = new Map();
+            for (const m of allMsgs) {
+                if (m?.role !== 'assistant' || m?.auto) continue;
+                if (m.appliedAt || m.rolledBackAt) continue;
+                const calls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
+                for (const tc of calls) {
+                    const id = String(tc?.id || '');
+                    if (id) callIdsToTurn.set(id, String(m.id || ''));
+                }
+            }
+            const busEntries = bus._testOnly_entries();
+            for (let i = busEntries.length - 1; i >= 0; i--) {
+                const e = busEntries[i];
+                if (e.status !== 'pending' && e.status !== 'conflict') continue;
+                const owningTurn = callIdsToTurn.get(String(e.sourceCallId || ''));
+                if (owningTurn) {
+                    latestUnappliedAssistantId = owningTurn;
                     break;
                 }
             }
@@ -1940,85 +1874,6 @@ export async function openOrchestratorIterationStudio(deps) {
                 node.scrollTop = node.scrollHeight;
             }
         } catch { /* DOM not attached (test) */ }
-
-        // Lorebook summary row — sits between the chat scroll area and the
-        // composer. Shows the pending counts and exposes a "Commit lorebook"
-        // button when there are approved entries but no orch profile edits
-        // waiting (the regular per-message Apply button covers the
-        // common case where both are in flight together).
-        try {
-            const $summary = $root.find('[data-orch-it-lbk-summary]');
-            if ($summary.length) {
-                const allPending = Array.isArray(state.pendingLorebookEdits) ? state.pendingLorebookEdits : [];
-                const pendCount = allPending.filter(p => p?.status === 'pending').length;
-                const apprCount = allPending.filter(p => p?.status === 'approved').length;
-                const rejCount = allPending.filter(p => p?.status === 'rejected').length;
-                const orchPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
-                if (allPending.length === 0) {
-                    $summary.empty();
-                } else {
-                    const parts = [];
-                    if (pendCount > 0) parts.push(tf('${0} pending', String(pendCount)));
-                    if (apprCount > 0) parts.push(tf('${0} approved', String(apprCount)));
-                    if (rejCount > 0) parts.push(tf('${0} rejected', String(rejCount)));
-                    const summaryLabel = `${t('Lorebook proposals')}: ${parts.join(', ')}`;
-                    // Surface the lorebook-only flush button when there's
-                    // something to act on AND no orch profile commit is
-                    // already covering it. Label adapts: "commit" when
-                    // there are approved entries to write, "clear" when
-                    // the only pending decisions are rejected ones.
-                    const decisionCount = apprCount + rejCount;
-                    const showBtn = decisionCount > 0 && !orchPending;
-                    let btnHtml = '';
-                    if (showBtn) {
-                        const btnLabel = apprCount > 0
-                            ? tf('Commit ${0} lorebook decision(s)', String(decisionCount))
-                            : tf('Clear ${0} rejected', String(rejCount));
-                        btnHtml = `<button class="menu_button orch_it_lbk_commit_btn" data-orch-it-action="commit-lorebook-only">${escapeHtmlLocal(btnLabel)}</button>`;
-                    }
-                    $summary.html(`<span class="orch_it_lbk_summary_text">${escapeHtmlLocal(summaryLabel)}</span>${btnHtml}`);
-                }
-            }
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}:${mode}] lorebook summary render failed`, err);
-        }
-
-        // Skill summary: same pattern as lorebook, with its own button hook.
-        // The "commit-skill-only" action routes through applyPendingEdits
-        // which now drives both lorebook + skill commit phases.
-        try {
-            const $summary = $root.find('[data-orch-it-skl-summary]');
-            if ($summary.length) {
-                const allPending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
-                const pendCount = allPending.filter(p => p?.status === 'pending').length;
-                const apprCount = allPending.filter(p => p?.status === 'approved').length;
-                const rejCount = allPending.filter(p => p?.status === 'rejected').length;
-                const orchPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
-                if (allPending.length === 0) {
-                    $summary.empty();
-                } else {
-                    const parts = [];
-                    if (pendCount > 0) parts.push(tf('${0} pending', String(pendCount)));
-                    if (apprCount > 0) parts.push(tf('${0} approved', String(apprCount)));
-                    if (rejCount > 0) parts.push(tf('${0} rejected', String(rejCount)));
-                    const summaryLabel = `${t('Skill proposals')}: ${parts.join(', ')}`;
-                    const decisionCount = apprCount + rejCount;
-                    const showBtn = decisionCount > 0 && !orchPending;
-                    let btnHtml = '';
-                    if (showBtn) {
-                        const btnLabel = apprCount > 0
-                            ? tf('Commit ${0} skill decision(s)', String(decisionCount))
-                            : tf('Clear ${0} rejected', String(rejCount));
-                        btnHtml = `<button class="menu_button orch_it_skl_commit_btn" data-orch-it-action="commit-skill-only">${escapeHtmlLocal(btnLabel)}</button>`;
-                    }
-                    $summary.html(`<span class="orch_it_skl_summary_text">${escapeHtmlLocal(summaryLabel)}</span>${btnHtml}`);
-                }
-            }
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}:${mode}] skill summary render failed`, err);
-        }
 
         // Pending edits — single Apply button per spec §3.4. The label
         // resolves to the active iteration scope (character name when a card
@@ -2050,9 +1905,17 @@ export async function openOrchestratorIterationStudio(deps) {
         try {
             const $previewPane = $root.find('[data-iter-preview-pane]');
             if ($previewPane.length) {
+                const pendingEditsForPreview = [];
+                for (const entry of bus._testOnly_entries()) {
+                    if (entry.status !== 'pending' && entry.status !== 'conflict') continue;
+                    if (entry.kind !== 'profile-edit') continue;
+                    const newValue = entry?.op?.newValue;
+                    if (typeof newValue === 'undefined') continue;
+                    pendingEditsForPreview.push({ op: 'set', path: '', oldValue: entry.snapshot, newValue });
+                }
                 const previewHtml = renderOrchPreviewPane(
                     state.live,
-                    state.pendingEdits || [],
+                    pendingEditsForPreview,
                     state.session.mode || mode,
                     t,
                 );
@@ -2394,17 +2257,17 @@ export async function openOrchestratorIterationStudio(deps) {
                         const helper = buildHelperSession(state.live);
                         if (helper.scope === 'character' && !helper.hasOverride) {
                             state.live = createBlankProfileForMode();
-                            state.pendingEdits = [];
-                            // Pending lorebook edits were proposed against
-                            // the old design's output contract; resetting
-                            // the working profile invalidates that contract.
-                            state.pendingLorebookEdits = [];
-                            // Skill proposals targeted on-disk files; their
-                            // before-snapshots were captured against the
-                            // previous design's reasoning, so drop them too
-                            // and let the AI re-propose against the fresh
-                            // blank shell if it still wants the change.
-                            state.pendingSkillEdits = [];
+                            // Reset invalidates all in-flight proposals
+                            // (profile, lorebook, skill) — they were
+                            // composed against the pre-reset design.
+                            state.__suspendBusOnChange = true;
+                            try {
+                                for (const entry of bus._testOnly_entries()) {
+                                    if (entry.status === 'pending' || entry.status === 'conflict') bus.reject(entry.id);
+                                }
+                            } finally {
+                                state.__suspendBusOnChange = false;
+                            }
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -2426,12 +2289,14 @@ export async function openOrchestratorIterationStudio(deps) {
                         const helper = buildHelperSession(state.live);
                         if (helper.scope === 'character' && helper.hasOverride) {
                             state.live = loadGlobalProfileForMode();
-                            state.pendingEdits = [];
-                            // See resetToBlank above — lorebook proposals
-                            // belonged to the old design and are invalid now.
-                            state.pendingLorebookEdits = [];
-                            // Same reasoning applies to skill proposals.
-                            state.pendingSkillEdits = [];
+                            state.__suspendBusOnChange = true;
+                            try {
+                                for (const entry of bus._testOnly_entries()) {
+                                    if (entry.status === 'pending' || entry.status === 'conflict') bus.reject(entry.id);
+                                }
+                            } finally {
+                                state.__suspendBusOnChange = false;
+                            }
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -2581,26 +2446,33 @@ export async function openOrchestratorIterationStudio(deps) {
                             skillToolChainedLive = out.pendingEdit.newValue;
                         }
                         if (out.pendingSkillEdit) {
-                            // Park the authoring proposal on the per-session
-                            // queue. The model still sees only the slim ack
-                            // payload (out.result) — full before/after blobs
-                            // would pad context for no gain; the user
-                            // reviews the diff in the UI, not the model.
-                            const pendingId = `skl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-                            if (!Array.isArray(state.pendingSkillEdits)) state.pendingSkillEdits = [];
-                            state.pendingSkillEdits.push({
-                                id: pendingId,
-                                kind: out.pendingSkillEdit.kind,
-                                skillName: out.pendingSkillEdit.skillName,
-                                scope: out.pendingSkillEdit.scope,
-                                path: out.pendingSkillEdit.path,
-                                before: out.pendingSkillEdit.before,
-                                after: out.pendingSkillEdit.after,
-                                extras: out.pendingSkillEdit.extras,
+                            // Skill authoring proposal → ProposalBus.
+                            // Snapshot is the prior file content (for
+                            // file-mutating ops) or null (for create /
+                            // rename / change_scope / delete). The kind
+                            // handler's readCurrent re-reads disk at
+                            // approve time and refuses to commit if the
+                            // file content drifted.
+                            const snapshot = (out.pendingSkillEdit.before != null
+                                && typeof out.pendingSkillEdit.before === 'object'
+                                && typeof out.pendingSkillEdit.before.content === 'string')
+                                ? { content: out.pendingSkillEdit.before.content }
+                                : (typeof out.pendingSkillEdit.before === 'string'
+                                    ? { content: out.pendingSkillEdit.before }
+                                    : null);
+                            await bus.propose({
+                                kind: 'skill-author',
                                 op: out.pendingSkillEdit.op,
-                                status: 'pending',
+                                snapshot,
                                 sourceCallId: callId,
-                                createdAt: Date.now(),
+                                meta: {
+                                    skillName: out.pendingSkillEdit.skillName,
+                                    scope: out.pendingSkillEdit.scope,
+                                    path: out.pendingSkillEdit.path,
+                                    before: out.pendingSkillEdit.before,
+                                    after: out.pendingSkillEdit.after,
+                                    extras: out.pendingSkillEdit.extras || null,
+                                },
                             });
                         }
                         resultPayload = out.result;
@@ -2613,34 +2485,27 @@ export async function openOrchestratorIterationStudio(deps) {
                     if (out?.ok && out.result && typeof out.result === 'object' && out.result.before && out.result.after) {
                         // Proposal mode: the write tool's helper-api invoke
                         // returned a {before, after, kind} envelope and did
-                        // NOT touch disk. Capture it as a pending lorebook
-                        // edit and hand the model a slim ack — full
-                        // before/after blobs would pad context for no gain,
-                        // since the user reviews the diff in the UI, not
-                        // the model.
-                        const pendingId = `lbk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-                        if (!Array.isArray(state.pendingLorebookEdits)) state.pendingLorebookEdits = [];
-                        state.pendingLorebookEdits.push({
-                            id: pendingId,
+                        // NOT touch disk. Stage it as a ProposalBus
+                        // lorebook-write entry — the bus's commit path
+                        // re-derives the after-image against current state
+                        // (concurrent drift surfaces as a fresh validation
+                        // error rather than clobbering with a stale
+                        // after-image).
+                        const op = {
                             kind: out.result.kind,
-                            bookName: out.result.book_name,
-                            uid: out.result.uid,
-                            before: out.result.before,
-                            after: out.result.after,
-                            // Carry the original tool args so the Apply
-                            // path can re-derive the after-image against
-                            // the entry's CURRENT state. This lets multiple
-                            // approved proposals targeting the same
-                            // book#uid chain correctly (each commit reads
-                            // the prior commit's mutation) and surfaces
-                            // concurrent drift as a fresh validation error.
-                            op: {
-                                kind: out.result.kind,
-                                args: (call?.args && typeof call.args === 'object') ? call.args : {},
-                            },
-                            status: 'pending',
+                            args: (call?.args && typeof call.args === 'object') ? call.args : {},
+                        };
+                        const { id: pendingId } = await bus.propose({
+                            kind: 'lorebook-write',
+                            op,
+                            snapshot: out.result.before,
                             sourceCallId: callId,
-                            createdAt: Date.now(),
+                            meta: {
+                                bookName: out.result.book_name,
+                                uid: out.result.uid,
+                                before: out.result.before,
+                                after: out.result.after,
+                            },
                         });
                         const summary = out.result.kind === 'update'
                             ? { updated_fields: Array.isArray(out.result.updated_fields) ? out.result.updated_fields : [] }
@@ -2653,7 +2518,7 @@ export async function openOrchestratorIterationStudio(deps) {
                             uid: out.result.uid,
                             kind: out.result.kind,
                             ...summary,
-                            message: 'Proposed for user approval. The edit is NOT live yet — the user will review the diff card in the popup and approve or reject it before it is committed at Apply time.',
+                            message: 'Proposed for user approval. The edit is NOT live yet — the user reviews this diff card and approves or rejects it; nothing reaches disk until the user clicks Approve. The iter-studio PAUSES the auto-continue loop the moment any write proposal (profile edit, lorebook, skill) is staged: the next round will not fire until the user has fully resolved every pending card. You will then receive a synthetic user message describing exactly which proposals committed, which were rejected, and which surfaced commit errors. Continue planning subsequent work in your reasoning, but do not stack additional unrelated write proposals in this same round expecting them to commit alongside this one — the user reviews each card independently and the loop only resumes after the batch is settled.',
                         };
                     } else if (out?.ok) {
                         // Defensive: helper api returned ok without the
@@ -2823,52 +2688,26 @@ export async function openOrchestratorIterationStudio(deps) {
         }
         state.session.messages.push(assistantMsg);
 
-        // Replace pendingEdits with this round's batch. We don't append:
-        // staging is per-round so the user can Apply or Discard cleanly
-        // before the next AI request fires.
-        state.pendingEdits = combinedEdits;
+        // Stage the chained-live profile edit as a single ProposalBus
+        // proposal. The orch sandbox-diff coalesces 1-or-N empty-path-set
+        // edits per turn into a final cumulative newValue; the bus card
+        // represents that one cumulative change.
+        if (combinedEdits.length > 0) {
+            const lastEdit = combinedEdits[combinedEdits.length - 1];
+            const firstCallId = (editToolCalls.find((c) => c?.id)?.id) || assistantMsg.id;
+            bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+            await bus.propose({
+                kind: 'profile-edit',
+                op: { op: 'set', path: '', newValue: lastEdit.newValue },
+                snapshot: state.live,
+                sourceCallId: firstCallId,
+            });
+        }
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
         // forcing a tab switch.
         bumpChatBadge();
-
-        // Composer-row auto-apply: if enabled AND this turn produced edits,
-        // AND we are not finalized, apply immediately. When auto-apply runs
-        // we still push a synthetic apply-outcome user message so the next
-        // round's buildTaskMessages can replay it and the model sees which
-        // edits actually took effect — same truthful signal review-mode
-        // gets via continueAfterReviewDecision.
-        const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
-        if (autoApplyOn && state.pendingEdits.length > 0) {
-            const autoCount = state.pendingEdits.length;
-            try {
-                const outcome = await applyPendingEdits({ skipRender: true });
-                if (outcome) {
-                    const text = buildApplyOutcomeUserText({
-                        count: autoCount,
-                        applied: outcome.applied,
-                        conflicts: outcome.conflicts,
-                        alreadyDone: outcome.alreadyDone,
-                        cleanEdits: outcome.cleanEdits,
-                        target: getApplyScopeLabel(),
-                        autoApply: true,
-                        lorebook: outcome.lorebook,
-                        skill: outcome.skill,
-                    });
-                    state.session.messages.push({
-                        id: makeMessageId(),
-                        role: 'user',
-                        content: text,
-                        at: Date.now(),
-                        auto: true,
-                    });
-                }
-            } catch (err) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}:${mode}] auto-apply failed`, err);
-            }
-        }
 
         // Build a synthetic execution result the auto-continue prompt
         // builder can consume. We pass a minimal shape — the orchestrator's
@@ -2892,563 +2731,6 @@ export async function openOrchestratorIterationStudio(deps) {
         };
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // Apply pending edits. `applyEdits(edits, live)` returns
-    // `{ newLive, clean, conflicts, alreadyDone }`. Per sub-spec §6 / §9
-    // we do NOT surface a conflict UI: just commit `newLive` and silently
-    // drop any conflicting / already-done edits. The pre-call live is
-    // re-read so a parallel editor (e.g. user swapped characters) doesn't
-    // blow away their work.
-    //
-    // `state.live` is snapshotted before applyEdits/applyEmptyPathSet so
-    // a commit failure restores the pre-apply value — otherwise the
-    // preview would lie about what's on disk until the next loadLive()
-    // reload. `state.pendingEdits` is cleared only after commit resolves
-    // so a failed save leaves the staged batch for the user to retry.
-    //
-    // Scope is derived from `getIterationDefaultScope(context)` so the
-    // single Apply button can't commit to the wrong target after a parallel
-    // character switch — character scope when an avatar is selected, global
-    // otherwise. On success we toast the user and mark the most recent
-    // unapplied assistant message so renderMessageCard can show the
-    // Applied label and a Rollback button.
-    // ──────────────────────────────────────────────────────────────────
-    /**
-     * Commit approved pending lorebook proposals to disk. Walks the
-     * approved entries in order and calls
-     * applyLorebookProposal for each — successful commits are
-     * dropped from state.pendingLorebookEdits; rejected entries are also
-     * dropped (decision is final); pending (undecided) entries are
-     * preserved so the user can come back to them. On per-entry failure,
-     * the walk halts and the remaining un-committed approved entries stay
-     * in the list so the user can investigate and retry.
-     *
-     * Called from applyPendingEdits AFTER the orch profile commit phase
-     * succeeds (so a half-applied profile never coexists with newly
-     * committed lorebook entries), and also from the "Commit lorebook
-     * only" button when there are no orch profile edits in flight.
-     */
-    async function commitApprovedLorebookEdits() {
-        const all = Array.isArray(state.pendingLorebookEdits) ? state.pendingLorebookEdits : [];
-        // Snapshot all groups BEFORE mutation so the verdict can report
-        // exactly what the user saw in the panel at click time.
-        const approved = all.filter(p => p?.status === 'approved');
-        const rejected = all.filter(p => p?.status === 'rejected');
-        const stillPending = all.filter(p => p?.status === 'pending');
-        const snap = (e) => ({ bookName: e.bookName, uid: e.uid, kind: e.kind });
-        const decisionsToDrop = (p) => p?.status === 'rejected';
-        if (approved.length === 0) {
-            // No commits to attempt, but still flush rejected decisions so
-            // the panel doesn't grow stale across multiple Apply clicks.
-            const kept = all.filter(p => !decisionsToDrop(p));
-            const droppedRejected = all.length - kept.length;
-            state.pendingLorebookEdits = kept;
-            return {
-                committed: 0,
-                failed: 0,
-                failedAt: null,
-                droppedRejected,
-                verdict: {
-                    committed: [],
-                    rejected_dropped: rejected.map(snap),
-                    still_approved: [],
-                    still_pending: stillPending.map(snap),
-                    failed: null,
-                },
-            };
-        }
-        const committedIds = new Set();
-        let failedAt = null;
-        let failedError = null;
-        for (const entry of approved) {
-            try {
-                // Re-derive the after-image against the entry's CURRENT
-                // on-disk state via applyLorebookProposal — not the
-                // snapshot `entry.after` captured at proposal time. This
-                // makes multi-proposal chains for the same book#uid commit
-                // correctly (proposal B's mutation lands on top of proposal
-                // A's already-committed state) and surfaces parallel-session
-                // drift as a fresh validation error.
-                await applyLorebookProposal(context, {
-                    kind: entry.op?.kind ?? entry.kind,
-                    args: entry.op?.args ?? {},
-                });
-                committedIds.add(entry.id);
-            } catch (err) {
-                failedAt = entry;
-                failedError = err;
-                break;
-            }
-        }
-        state.pendingLorebookEdits = all.filter(p => {
-            if (committedIds.has(p?.id)) return false;
-            if (decisionsToDrop(p)) return false;
-            return true;
-        });
-        if (failedAt) {
-            const errText = String(failedError?.message || failedError || 'unknown error');
-            try {
-                toastr.error(tf('Lorebook commit failed at ${0} #${1}: ${2}',
-                    String(failedAt.bookName || ''), String(failedAt.uid ?? ''), errText));
-            } catch { /* toastr may be unavailable in tests */ }
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Lorebook commit halted: ${0} #${1} failed (${2}). Remaining approved entries left in the pending list for retry.',
-                    String(failedAt.bookName || ''), String(failedAt.uid ?? ''), errText),
-                at: Date.now(),
-            });
-        } else if (committedIds.size > 0) {
-            try {
-                toastr.success(tf('Committed ${0} lorebook edit(s)', String(committedIds.size)));
-            } catch { /* ignore */ }
-        }
-        const committedSnaps = approved.filter(a => committedIds.has(a.id)).map(snap);
-        const stillApprovedSnaps = approved.filter(a => !committedIds.has(a.id)).map(snap);
-        return {
-            committed: committedIds.size,
-            failed: failedAt ? 1 : 0,
-            failedAt,
-            verdict: {
-                committed: committedSnaps,
-                rejected_dropped: rejected.map(snap),
-                still_approved: stillApprovedSnaps,
-                still_pending: stillPending.map(snap),
-                failed: failedAt
-                    ? {
-                        bookName: failedAt.bookName,
-                        uid: failedAt.uid,
-                        kind: failedAt.kind,
-                        error: String(failedError?.message || failedError || 'unknown error'),
-                    }
-                    : null,
-            },
-        };
-    }
-
-    /**
-     * Mirror of commitApprovedLorebookEdits for skill authoring proposals.
-     * Walks state.pendingSkillEdits in order, calls
-     * commitApprovedSkillProposal for each approved entry. Successful
-     * commits drop from the list; rejected entries drop unconditionally;
-     * pending (undecided) entries survive. On per-entry failure the walk
-     * halts and surviving approved entries stay in the list for retry.
-     *
-     * Called from applyPendingEdits AFTER the orch profile + lorebook
-     * commit phases succeed, and from the "Commit skill only" button
-     * when there are no orch profile edits in flight.
-     */
-    async function commitApprovedSkillEdits() {
-        const all = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
-        const approved = all.filter(p => p?.status === 'approved');
-        const rejected = all.filter(p => p?.status === 'rejected');
-        const stillPending = all.filter(p => p?.status === 'pending');
-        const snap = (e) => ({ kind: e.kind, skillName: e.skillName, scope: e.scope, path: e.path });
-        const decisionsToDrop = (p) => p?.status === 'rejected';
-        if (approved.length === 0) {
-            const kept = all.filter(p => !decisionsToDrop(p));
-            const droppedRejected = all.length - kept.length;
-            state.pendingSkillEdits = kept;
-            return {
-                committed: 0,
-                failed: 0,
-                failedAt: null,
-                droppedRejected,
-                verdict: {
-                    committed: [],
-                    rejected_dropped: rejected.map(snap),
-                    still_approved: [],
-                    still_pending: stillPending.map(snap),
-                    failed: null,
-                },
-            };
-        }
-        const committedIds = new Set();
-        let failedAt = null;
-        let failedError = null;
-        for (const entry of approved) {
-            try {
-                await commitApprovedSkillProposal(entry.op);
-                committedIds.add(entry.id);
-            } catch (err) {
-                failedAt = entry;
-                failedError = err;
-                break;
-            }
-        }
-        state.pendingSkillEdits = all.filter(p => {
-            if (committedIds.has(p?.id)) return false;
-            if (decisionsToDrop(p)) return false;
-            return true;
-        });
-        if (failedAt) {
-            const errText = String(failedError?.message || failedError || 'unknown error');
-            try {
-                toastr.error(tf('Skill commit failed for ${0} (${1}): ${2}',
-                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText));
-            } catch { /* toastr may be unavailable in tests */ }
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved entries left in the pending list for retry.',
-                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText),
-                at: Date.now(),
-            });
-        } else if (committedIds.size > 0) {
-            try {
-                toastr.success(tf('Committed ${0} skill edit(s)', String(committedIds.size)));
-            } catch { /* ignore */ }
-        }
-        const committedSnaps = approved.filter(a => committedIds.has(a.id)).map(snap);
-        const stillApprovedSnaps = approved.filter(a => !committedIds.has(a.id)).map(snap);
-        return {
-            committed: committedIds.size,
-            failed: failedAt ? 1 : 0,
-            failedAt,
-            verdict: {
-                committed: committedSnaps,
-                rejected_dropped: rejected.map(snap),
-                still_approved: stillApprovedSnaps,
-                still_pending: stillPending.map(snap),
-                failed: failedAt
-                    ? {
-                        kind: failedAt.kind,
-                        skillName: failedAt.skillName,
-                        scope: failedAt.scope,
-                        path: failedAt.path,
-                        error: String(failedError?.message || failedError || 'unknown error'),
-                    }
-                    : null,
-            },
-        };
-    }
-
-    async function applyPendingEdits({ skipRender = false } = {}) {
-        const hasOrchPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
-        const hasApprovedLorebook = Array.isArray(state.pendingLorebookEdits)
-            && state.pendingLorebookEdits.some(p => p?.status === 'approved');
-        const hasRejectedLorebook = Array.isArray(state.pendingLorebookEdits)
-            && state.pendingLorebookEdits.some(p => p?.status === 'rejected');
-        const hasApprovedSkill = Array.isArray(state.pendingSkillEdits)
-            && state.pendingSkillEdits.some(p => p?.status === 'approved');
-        const hasRejectedSkill = Array.isArray(state.pendingSkillEdits)
-            && state.pendingSkillEdits.some(p => p?.status === 'rejected');
-        if (!hasOrchPending && !hasApprovedLorebook && !hasRejectedLorebook && !hasApprovedSkill && !hasRejectedSkill) {
-            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
-        }
-        if (!hasOrchPending) {
-            // Lorebook + skill only path: handles approved commits and the
-            // rejected-flush cleanup (which the user can trigger
-            // independently when there are no committable proposals but
-            // their declined decisions are still cluttering the summary
-            // row). Both commit helpers drop rejected entries
-            // unconditionally; either path is reachable whether or not any
-            // approved entries exist.
-            const lorebookResult = await commitApprovedLorebookEdits();
-            const skillResult = await commitApprovedSkillEdits();
-            await persistSession();
-            if (!skipRender) await render();
-            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [], lorebook: lorebookResult, skill: skillResult };
-        }
-        if (!state.live) await loadLive();
-        const liveSnapshot = state.live;
-        const editsBatch = state.pendingEdits.slice();
-        // Sandbox-diff emits coarse `{op:'set', path:'', newValue:<whole profile>}`
-        // edits — one per AI tool call, chained so each edit's newValue
-        // = previous edit's newValue + this tool's mutation. lodash.set
-        // with empty path is a no-op, so the multi-edit case CANNOT
-        // route through applyEdits (it would silently drop every edit
-        // and the commit would persist the pre-AI state, which is
-        // exactly the "saved global config to character" bug). Mirror
-        // rollback's loop: when every edit is an empty-path set, walk
-        // them in order with applyEmptyPathSet. After the chain fix in
-        // normalize, the LAST edit's newValue holds the cumulative
-        // state, so the loop's final iteration produces the correct
-        // result regardless of how many tool calls landed this round.
-        //
-        // Track per-edit outcomes so the apply truth (clean vs conflict
-        // vs already-done) can travel back to the AI through the
-        // synthetic feedback message.
-        const allEmptyPath = editsBatch.length > 0
-            && editsBatch.every(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
-        let cleanEdits = [];
-        let conflicts = [];
-        let alreadyDone = [];
-        if (allEmptyPath) {
-            for (const edit of editsBatch) {
-                state.live = applyEmptyPathSet(state.live, edit);
-                cleanEdits.push(edit);
-            }
-        } else {
-            const result = applyEdits(editsBatch, state.live);
-            state.live = result?.newLive ?? state.live;
-            cleanEdits = Array.isArray(result?.clean) ? result.clean : [];
-            conflicts = Array.isArray(result?.conflicts) ? result.conflicts : [];
-            alreadyDone = Array.isArray(result?.alreadyDone) ? result.alreadyDone : [];
-        }
-        const appliedCount = cleanEdits.length;
-
-        const scope = getIterationDefaultScope(context);
-        if (appliedCount > 0) {
-            try {
-                if (scope === 'character') {
-                    await commitLiveToCharacter();
-                } else {
-                    await commitLiveToGlobal();
-                }
-            } catch (err) {
-                state.live = liveSnapshot;
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}:${mode}] commit failed`, err);
-                try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Failed to save profile: ${0}', String(err?.message || err)),
-                    at: Date.now(),
-                });
-                await persistSession();
-                if (!skipRender) await render();
-                return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, commitFailed: true };
-            }
-        } else {
-            // Nothing landed → live stayed identical to liveSnapshot, no
-            // commit needed. Restore explicitly in case any partial mutation
-            // slipped through the (unreachable today) non-empty-path branch.
-            state.live = liveSnapshot;
-        }
-
-        try {
-            if (appliedCount === editsBatch.length) {
-                toastr.success(tf('Applied ${0} edit(s) to ${1}', String(appliedCount), getApplyScopeLabel()));
-            } else if (appliedCount > 0) {
-                toastr.warning(tf('Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped',
-                    String(appliedCount), String(editsBatch.length), getApplyScopeLabel(),
-                    String(conflicts.length + alreadyDone.length)));
-            } else {
-                toastr.warning(tf('No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)',
-                    getApplyScopeLabel(), String(editsBatch.length)));
-            }
-        } catch { /* ignore */ }
-
-        // Mark the most recent unapplied assistant message that owns these
-        // edits. Only stamp appliedAt when at least one edit actually
-        // landed — a zero-clean batch should not render the IDE-style "✓
-        // Applied" check.
-        if (appliedCount > 0) {
-            const messages = state.session.messages || [];
-            for (let i = messages.length - 1; i >= 0; i--) {
-                const m = messages[i];
-                if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
-                    m.appliedAt = Date.now();
-                    m.appliedTarget = scope;
-                    m.appliedCount = appliedCount;
-                    m.appliedProposed = editsBatch.length;
-                    break;
-                }
-            }
-        }
-
-        state.pendingEdits = [];
-        // Lorebook commit phase: only runs once the orch profile commit
-        // succeeded. Approved entries write to disk via CardApp; rejected
-        // entries are dropped; pending (undecided) entries survive into
-        // the next Apply so the user can return to them.
-        const lorebookResult = await commitApprovedLorebookEdits();
-        // Skill commit phase: same gating as lorebook — approved entries
-        // commit through skillsApi via commitApprovedSkillProposal,
-        // rejected drop, pending survive.
-        const skillResult = await commitApprovedSkillEdits();
-        await persistSession();
-        if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits, lorebook: lorebookResult, skill: skillResult };
-    }
-
-    async function discardPendingEdits() {
-        state.pendingEdits = [];
-        await persistSession();
-        await render();
-    }
-
-    /**
-     * Fire the next AI round after the user reviewed a paused batch
-     * (clicked Apply or Discard). `handleSendMessage`'s loop exits the
-     * moment the round produces pendingEdits, so without this resumer
-     * the AI never sees the outcome — even though its prior round was
-     * clearly "propose edits, then continue based on review". Pushes a
-     * synthetic user message describing the decision and re-enters the
-     * loop, mirroring the IDE pattern (approve → tool result lands →
-     * agent continues; reject → agent reconsiders).
-     */
-    /**
-     * Build the synthetic user-message text the next round sees after a
-     * batch is applied (review-mode click or auto-apply). The model reads
-     * this verbatim — keep the per-edit "skipped because X" detail intact
-     * so the LLM can correct its next round.
-     */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'profile', autoApply = false, lorebook = null, skill = null }) {
-        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
-        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
-        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
-        const appliedNum = Number.isInteger(applied) ? applied : count;
-        const skipped = conflictArr.length + alreadyArr.length;
-        const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
-        const lines = [];
-        if (skipped === 0) {
-            lines.push(`[${prefix}: all ${count} pending edit(s) took effect on the ${target}.`);
-        } else {
-            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect on the ${target}, ${skipped} skipped.`);
-            if (conflictArr.length > 0) {
-                lines.push('Skipped (conflicts):');
-                for (const c of conflictArr) {
-                    const edit = c?.edit || {};
-                    const op = String(edit.op || '?');
-                    const path = String(edit.path || '<root>');
-                    const reason = String(c?.reason || 'unknown');
-                    lines.push(`  - ${op}(${path}): ${reason}`);
-                }
-            }
-            if (alreadyArr.length > 0) {
-                lines.push('Already in desired state (no-op):');
-                for (const e of alreadyArr) {
-                    const op = String(e?.op || '?');
-                    const path = String(e?.path || '<root>');
-                    lines.push(`  - ${op}(${path})`);
-                }
-            }
-            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the path / value).');
-        }
-        // List the edits that actually moved state this round so the AI
-        // doesn't re-issue toggles it already made in an earlier auto-
-        // apply round.
-        if (cleanArr.length > 0 && appliedNum > 0) {
-            lines.push('Applied paths (state that moved this round):');
-            for (const e of cleanArr) {
-                const op = String(e?.op || '?');
-                const path = String(e?.path || '<root>');
-                const note = (op === 'set' && path === '')
-                    ? ' — whole profile replaced by a sandbox-diff tool; many fields may have shifted'
-                    : '';
-                lines.push(`  - ${op}(${path || '<root>'})${note}`);
-            }
-        }
-        // Lorebook decisions — load-bearing for the system-prompt promise
-        // that "your next round will see the rejection". The verdict lists
-        // every group separately so the AI can stop re-proposing entries
-        // the user already declined, and pick up the still-pending ones.
-        if (lorebook && lorebook.verdict) {
-            const v = lorebook.verdict;
-            const fmtEntry = (e) => `    - ${String(e.bookName || '')} #${String(e.uid ?? '')} (${String(e.kind || '?')})`;
-            const hasAny = (v.committed?.length || 0) + (v.rejected_dropped?.length || 0)
-                + (v.still_approved?.length || 0) + (v.still_pending?.length || 0)
-                + (v.failed ? 1 : 0);
-            if (hasAny > 0) {
-                lines.push('Lorebook decisions from this Apply:');
-                if (Array.isArray(v.committed) && v.committed.length > 0) {
-                    lines.push('  Committed (now live on disk):');
-                    for (const e of v.committed) lines.push(fmtEntry(e));
-                }
-                if (Array.isArray(v.rejected_dropped) && v.rejected_dropped.length > 0) {
-                    lines.push('  Rejected by user (dropped, never written to disk; do NOT re-propose without addressing the reason the user might have rejected — they likely have a reason):');
-                    for (const e of v.rejected_dropped) lines.push(fmtEntry(e));
-                }
-                if (Array.isArray(v.still_approved) && v.still_approved.length > 0) {
-                    lines.push('  Still approved but not yet committed (a commit failure halted the walk; the user can retry):');
-                    for (const e of v.still_approved) lines.push(fmtEntry(e));
-                }
-                if (Array.isArray(v.still_pending) && v.still_pending.length > 0) {
-                    lines.push('  Still pending user decision (not yet approved or rejected):');
-                    for (const e of v.still_pending) lines.push(fmtEntry(e));
-                }
-                if (v.failed) {
-                    lines.push(`  Commit failed at ${String(v.failed.bookName || '')} #${String(v.failed.uid ?? '')} (${String(v.failed.kind || '?')}): ${String(v.failed.error || 'unknown')}`);
-                }
-            }
-        }
-        // Skill decisions — same shape as lorebook: list every group so
-        // the AI doesn't re-propose entries the user already declined and
-        // knows what still needs attention.
-        if (skill && skill.verdict) {
-            const v = skill.verdict;
-            const fmtSkill = (e) => `    - ${String(e.skillName || '')} [${String(e.kind || '?')}]${e.path ? ` ${String(e.path)}` : ''}`;
-            const hasAny = (v.committed?.length || 0) + (v.rejected_dropped?.length || 0)
-                + (v.still_approved?.length || 0) + (v.still_pending?.length || 0)
-                + (v.failed ? 1 : 0);
-            if (hasAny > 0) {
-                lines.push('Skill decisions from this Apply:');
-                if (Array.isArray(v.committed) && v.committed.length > 0) {
-                    lines.push('  Committed (now live on disk):');
-                    for (const e of v.committed) lines.push(fmtSkill(e));
-                }
-                if (Array.isArray(v.rejected_dropped) && v.rejected_dropped.length > 0) {
-                    lines.push('  Rejected by user (dropped, never written to disk; do NOT re-propose without addressing the reason the user might have rejected — they likely have a reason):');
-                    for (const e of v.rejected_dropped) lines.push(fmtSkill(e));
-                }
-                if (Array.isArray(v.still_approved) && v.still_approved.length > 0) {
-                    lines.push('  Still approved but not yet committed (a commit failure halted the walk; the user can retry):');
-                    for (const e of v.still_approved) lines.push(fmtSkill(e));
-                }
-                if (Array.isArray(v.still_pending) && v.still_pending.length > 0) {
-                    lines.push('  Still pending user decision (not yet approved or rejected):');
-                    for (const e of v.still_pending) lines.push(fmtSkill(e));
-                }
-                if (v.failed) {
-                    lines.push(`  Commit failed for ${String(v.failed.skillName || '')} [${String(v.failed.kind || '?')}]: ${String(v.failed.error || 'unknown')}`);
-                }
-            }
-        }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
-        return lines.join('\n');
-    }
-
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits, lorebook = null, skill = null }) {
-        if (state.isBusy) return;
-        const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: getApplyScopeLabel(), lorebook, skill })
-            : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
-
-        state.session.messages.push({
-            id: makeMessageId(),
-            role: 'user',
-            content: userText,
-            at: Date.now(),
-            auto: true,
-        });
-
-        state.isBusy = true;
-        // Mirror handleSendMessage: seed the AbortController before the
-        // pre-flight awaits so a Stop click during persist+render is
-        // honored instead of dropped onto a null controller.
-        state.abortController = new AbortController();
-        await persistSession();
-        await render();
-        try {
-            let turn = await runIterationTurn();
-            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
-                await persistSession();
-                await render();
-                if (state.abortController?.signal?.aborted) break;
-                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
-            }
-        } catch (err) {
-            if (!isAbortError(err, state.abortController?.signal)) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] continueAfterReviewDecision`, err);
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
-                    at: Date.now(),
-                });
-            }
-        } finally {
-            state.isBusy = false;
-            state.aborting = false;
-            state.abortController = null;
-            await persistSession();
-            await render();
-        }
-    }
 
     // ──────────────────────────────────────────────────────────────────
     // Per-message actions.
@@ -3481,7 +2763,26 @@ export async function openOrchestratorIterationStudio(deps) {
         const userText = String(messages[userIdx].content || '');
         // Truncate before the user message; the resend will push it again.
         state.session.messages = messages.slice(0, userIdx);
-        state.pendingEdits = [];
+        // Reject bus proposals tied to discarded assistant turns — their
+        // sourceCallId points at tool calls that are about to vanish
+        // from the message stream.
+        const survivingCallIds = new Set();
+        for (const m of state.session.messages) {
+            if (Array.isArray(m?.toolCalls)) {
+                for (const tc of m.toolCalls) if (tc?.id) survivingCallIds.add(String(tc.id));
+            }
+        }
+        state.__suspendBusOnChange = true;
+        try {
+            for (const entry of bus._testOnly_entries()) {
+                const cid = String(entry.sourceCallId || '');
+                if (entry.status === 'pending' && cid && !survivingCallIds.has(cid)) {
+                    bus.reject(entry.id);
+                }
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
         await persistSession();
         await render();
         const $textarea = $root.find('[data-orch-it-input]');
@@ -3489,70 +2790,9 @@ export async function openOrchestratorIterationStudio(deps) {
         await handleSendMessage();
     }
 
-    async function rollbackBatch(messageId) {
-        if (state.isBusy) return;
-        const msg = (state.session.messages || []).find(m => m && m.id === messageId);
-        if (!msg) return;
-        if (!msg.appliedAt || msg.rolledBackAt) return;
-        if (!Array.isArray(msg.edits) || msg.edits.length === 0) return;
-        // eslint-disable-next-line no-alert
-        if (!confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
+    // rollbackBatch is now bus-driven via turn-actions on the assistant
+    // card; bus.rollbackAllInTurn(message) handles it.
 
-        loadLive();
-        let working = state.live;
-        // Build inverses up-front so an unsupported op fails BEFORE we
-        // partial-apply anything. Right-to-left inversion handles dependent
-        // edits (e.g. set then list_insert) cleanly.
-        const inverses = [];
-        for (const edit of msg.edits.slice().reverse()) {
-            try {
-                inverses.push(inverseEdit(edit));
-            } catch (err) {
-                console.warn(`[${MODULE}:${mode}] inverseEdit failed`, edit, err);
-                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* ignore */ }
-                return;
-            }
-        }
-        try {
-            // Orch sandbox-diff uses empty-path set edits; inverse is the same
-            // shape with oldValue/newValue swapped. Route the same way Apply
-            // does so the engine's lodash.set("") no-op doesn't strand us.
-            const allEmptyPath = inverses.length > 0
-                && inverses.every(e => e?.op === 'set' && e?.path === '' && typeof e?.newValue !== 'undefined');
-            if (allEmptyPath) {
-                for (const inv of inverses) {
-                    working = applyEmptyPathSet(working, inv);
-                }
-            } else {
-                const result = applyEdits(inverses, working);
-                working = result?.newLive ?? working;
-            }
-        } catch (err) {
-            console.warn(`[${MODULE}:${mode}] applyEdits(inverses) failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
-            return;
-        }
-        state.live = working;
-        // Route the commit through the same scope chooser as Apply.
-        const scope = msg.appliedTarget === 'character' || msg.appliedTarget === 'global'
-            ? msg.appliedTarget
-            : getIterationDefaultScope(context);
-        try {
-            if (scope === 'character') {
-                await commitLiveToCharacter();
-            } else {
-                await commitLiveToGlobal();
-            }
-        } catch (err) {
-            console.warn(`[${MODULE}:${mode}] commit(rollback) failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
-            return;
-        }
-        msg.rolledBackAt = Date.now();
-        await persistSession();
-        try { toastr.success(t('Rolled back')); } catch { /* ignore */ }
-        await render();
-    }
 
     // ──────────────────────────────────────────────────────────────────
     // Send-message handler. Q6: user message is pushed AND rendered
@@ -3566,9 +2806,11 @@ export async function openOrchestratorIterationStudio(deps) {
     //   1. The model responded with plain text and no tool calls.
     //   2. The user clicked Stop (abortController fires; isAbortError
     //      catches the resulting error in the catch block).
-    //   3. The model is staging edits and the user hasn't applied them yet
-    //      (pendingEdits non-empty halts the auto-continue so the user gets
-    //      to apply before the next round mutates `live`).
+    //   3. The model staged ANY write proposal the user hasn't fully
+    //      committed yet — profile edit, lorebook proposal, OR skill
+    //      proposal. The bucket has to be empty (committed + rejected
+    //      flushed by Apply, nothing left pending) before the loop
+    //      resumes. See hasOutstandingWriteProposals.
     // There is NO hard round cap — runaway loops are the user's problem
     // and a single Stop click ends them.
     // ──────────────────────────────────────────────────────────────────
@@ -3606,7 +2848,7 @@ export async function openOrchestratorIterationStudio(deps) {
         try {
             let turn = await runIterationTurn();
             while (turn?.hadAnyToolCall
-                && state.pendingEdits.length === 0) {
+                && !bus.hasOutstanding()) {
                 await persistSession();
                 await render();   // progressive: prior round visible before next
                 if (state.abortController?.signal?.aborted) break;
@@ -3704,16 +2946,20 @@ export async function openOrchestratorIterationStudio(deps) {
         await persistSession();
     });
 
-    // Auto-apply preference: persist per-session.
+    // Auto-apply preference: persist per-session AND mirror into bus.
     $root.on('change.orchIt', '[data-orch-it-action="toggle-auto-apply"]', async (e) => {
         const checked = Boolean(e.currentTarget?.checked);
         state.session.surfaceState = { ...(state.session.surfaceState || {}), autoApply: checked };
+        bus.setAutoApprove(checked);
         await persistSession();
-        // If we just enabled it and we already have pending edits, apply
-        // them immediately (consistent with the during-turn behavior).
-        if (checked && state.pendingEdits.length > 0) {
+        // If we just enabled it and proposals are already pending, fire
+        // approve on each so the queue drains immediately (matches the
+        // during-turn behavior of the bus's auto-approve scheduler).
+        if (checked) {
             try {
-                await applyPendingEdits();
+                for (const entry of bus._testOnly_entries()) {
+                    if (entry.status === 'pending') await bus.approve(entry.id);
+                }
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}:${mode}] auto-apply on toggle failed`, err);
@@ -3721,126 +2967,14 @@ export async function openOrchestratorIterationStudio(deps) {
         }
     });
 
-    // Apply / Discard the staged batch. Selectors use `apply-batch` /
-    // `discard-batch` because the row is rendered by
-    // `iteration-library/ui/apply.renderApplyControls`, which emits those
-    // values via the `actionAttribute: 'data-orch-it-action'` opt — the
-    // same convention M1.4's `renderMessageCard` uses for per-message
-    // rollback/regenerate buttons (handlers further down).
-
-    // Per-proposal approve/reject/undo for pending lorebook edits. These
-    // only flip the local status flag on state.pendingLorebookEdits; actual
-    // disk writes happen at apply-batch time (orch profile commits first,
-    // then approved lorebook proposals via applyLorebookProposal).
-    $root.on('click.orchIt', '[data-orch-it-action="approve-lorebook"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
-        const entry = (state.pendingLorebookEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'approved';
-        await render();
-    });
-
-    $root.on('click.orchIt', '[data-orch-it-action="reject-lorebook"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
-        const entry = (state.pendingLorebookEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'rejected';
-        await render();
-    });
-
-    $root.on('click.orchIt', '[data-orch-it-action="reset-lorebook-decision"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
-        const entry = (state.pendingLorebookEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'pending';
-        await render();
-    });
-
-    // Commit approved lorebook proposals when there's no orch profile
-    // commit in flight. Goes through applyPendingEdits' lorebook-only path,
-    // which short-circuits the orch-profile commit machinery.
-    $root.on('click.orchIt', '[data-orch-it-action="commit-lorebook-only"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        await applyPendingEdits();
-    });
-
-    // Per-proposal approve/reject/undo for pending skill authoring edits.
-    // Mirror of the lorebook hooks above — flips the local status flag;
-    // commit happens at apply-batch time (after orch profile + lorebook
-    // commits) via commitApprovedSkillProposal.
-    $root.on('click.orchIt', '[data-orch-it-action="approve-skill"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
-        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'approved';
-        await render();
-    });
-
-    $root.on('click.orchIt', '[data-orch-it-action="reject-skill"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
-        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'rejected';
-        await render();
-    });
-
-    $root.on('click.orchIt', '[data-orch-it-action="reset-skill-decision"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-orch-it-pending-id') || '');
-        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'pending';
-        await render();
-    });
-
-    // Skill-only flush path: same routing trick as lorebook-only.
-    $root.on('click.orchIt', '[data-orch-it-action="commit-skill-only"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        await applyPendingEdits();
-    });
-
-    $root.on('click.orchIt', '[data-orch-it-action="apply-batch"]', async (e) => {
-        e.preventDefault();
-        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        const outcome = await applyPendingEdits();
-        // After the user reviewed + applied a paused batch, fire the next
-        // AI round with a synthetic "user approved" message. The handle-
-        // SendMessage loop only paused because pendingEdits gated human
-        // review; the AI was mid-iteration and expects a result. Pass the
-        // real outcome (applied / conflicts / alreadyDone) so the AI sees
-        // truthful detail instead of just a proposed-count claim.
-        if (pendingCount > 0
-            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-            && !state.isBusy) {
-            await continueAfterReviewDecision({
-                action: 'apply',
-                count: pendingCount,
-                applied: outcome?.applied,
-                conflicts: outcome?.conflicts,
-                alreadyDone: outcome?.alreadyDone,
-                cleanEdits: outcome?.cleanEdits,
-                lorebook: outcome?.lorebook,
-                skill: outcome?.skill,
-            });
-        }
-    });
-    $root.on('click.orchIt', '[data-orch-it-action="discard-batch"]', async (e) => {
-        e.preventDefault();
-        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        await discardPendingEdits();
-        // Mirror the apply-batch resume — discard is the AI's signal to
-        // reconsider, not to stop entirely. User can still hit Stop or
-        // close the popup if they're truly done.
-        if (pendingCount > 0
-            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-            && !state.isBusy) {
-            await continueAfterReviewDecision({ action: 'discard', count: pendingCount });
-        }
+    // ProposalBus click delegation. Approve / reject / reset / rollback
+    // per-card AND approve-all / reject-all / rollback-turn turn-actions
+    // are all consumed here. Any click whose target carries
+    // `data-proposal-action` is handled by the bus; unmatched clicks fall
+    // through to the rest of the popup's handlers (session switch,
+    // workspace tabs, regenerate, etc.).
+    $root.on('click.orchIt', async (e) => {
+        await bus.handleClick(e);
     });
 
     // Session-switch handlers — abort in-flight LLM + reset busy flag before
@@ -3915,12 +3049,9 @@ export async function openOrchestratorIterationStudio(deps) {
         if (!msgId) return;
         await regenerateFromMessage(msgId);
     });
-    $root.on('click.orchIt', '[data-orch-it-action="rollback-batch"]', async (e) => {
-        e.preventDefault();
-        const msgId = resolveMsgId(e.currentTarget);
-        if (!msgId) return;
-        await rollbackBatch(msgId);
-    });
+    // Per-batch rollback is now bus-driven: turn-actions row rendered by
+    // bus.renderTurnActions emits `data-proposal-action="rollback-turn"`
+    // which the bus click delegator above consumes.
 
     // ── Workspace events ──────────────────────────────────────────────
     // Mobile tab switcher — only relevant when the < 900px media query

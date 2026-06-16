@@ -2,12 +2,11 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Plan 2 Unit 7 — iter-studio 15-tool skills catalog + system prompt
- * augmentation.
+ * iter-studio skills catalog + system prompt augmentation.
  *
  * Two source modules under test:
  *
- *   public/scripts/skills/iter-studio-tools.js
+ *   public/scripts/iteration-library/tools/skill-iter-studio.js
  *     - SKILL_ITER_STUDIO_TOOL_DEFS: tool catalog spliced into studio.js
  *     - isSkillIterStudioTool / SKILL_ITER_STUDIO_TOOL_NAMES
  *     - runSkillIterStudioTool dispatcher
@@ -27,10 +26,12 @@ import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 // ── Module-boundary mocks ────────────────────────────────────────────────
-// skill-iter-studio-tools.js captures both `skillsApi` and `yaml` from
-// `Luker.getContext()` at module load (post upstream commit 571c529c2
-// that reverted direct cross-boundary imports). Install a SillyTavern stub
-// BEFORE the dynamic import so the module gets a working bag.
+// skill-iter-studio.js resolves both `skills` and `lib.yaml` from
+// `SillyTavern.getContext()` lazily (per-call, via getSkillsApi() /
+// getYaml() inside each handler — iter-lib convention to avoid capturing
+// ctx at module load before the host is ready). Install a SillyTavern
+// stub BEFORE the dynamic import so every per-call resolve hits a working
+// bag.
 const mockSkillsApi = {
     list: jest.fn(),
     get: jest.fn(),
@@ -69,7 +70,7 @@ const {
     applyFrontmatterPatch,
     buildSkillVisibilityChange,
     commitApprovedSkillProposal,
-} = await import('../../public/scripts/skills/iter-studio-tools.js');
+} = await import('../../public/scripts/iteration-library/tools/skill-iter-studio.js');
 
 const {
     augmentIterStudioPromptWithSkills,

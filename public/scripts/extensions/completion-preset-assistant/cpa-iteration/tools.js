@@ -30,13 +30,17 @@ import {
     extractSystemFromCapturedPrompt,
     extractNonSystemFromCapturedPrompt,
 } from '../../../iteration-library/simulation-review/dry-run-capture.js';
-// Skill iter-studio tools live in the shared `public/scripts/skills/` layer
-// and are plugin-agnostic — orchestrator and CPA both import them directly
-// from there, without going through `getExtensionApi('orchestrator')`.
 import {
     SKILL_ITER_STUDIO_TOOL_DEFS,
     runSkillIterStudioTool,
-} from '../../../skills/iter-studio-tools.js';
+    commitApprovedSkillProposal,
+} from '../../../iteration-library/tools/skill-iter-studio.js';
+
+// Re-export so studio.js commits approved skill proposals at Apply time
+// through CPA's own surface rather than reaching into iteration-library
+// directly. Centralizing the iter-lib bridge here keeps studio.js from
+// needing to know which shared module hosts the commit helper.
+export { commitApprovedSkillProposal };
 
 // ────────────────────────────────────────────────────────────────────────────
 // Skill toolset exposed by CPA's iteration studio. Mirrors the orchestrator
@@ -87,13 +91,16 @@ const CPA_SKILL_TOOL_NAME_LIST = Object.freeze([
 export const CPA_SKILL_TOOL_NAMES = new Set(CPA_SKILL_TOOL_NAME_LIST);
 
 /**
- * Resolve the CPA-exposed subset of the shared iter-studio skill tool
- * catalog. Filters by tool name so CPA's catalog only includes the 12
- * profile-independent tools.
+ * Resolve the CPA-exposed subset of the iter-studio skill tool catalog
+ * (now hosted in iteration-library/tools/skill-iter-studio.js — both CPA
+ * and the orchestrator iter-studio consume the same source). Filters to
+ * CPA's narrower allow-list so the policy-binding + systemPrompt-splice
+ * tools that need an orchestrator working profile never reach the AI here.
  */
 function getCpaSkillToolDefs() {
-    if (!Array.isArray(SKILL_ITER_STUDIO_TOOL_DEFS)) return [];
-    return SKILL_ITER_STUDIO_TOOL_DEFS.filter((def) => CPA_SKILL_TOOL_NAMES.has(String(def?.function?.name || '')));
+    const defs = SKILL_ITER_STUDIO_TOOL_DEFS;
+    if (!Array.isArray(defs)) return [];
+    return defs.filter((def) => CPA_SKILL_TOOL_NAMES.has(String(def?.function?.name || '')));
 }
 
 export function isCpaSkillTool(name) {
@@ -106,21 +113,21 @@ export function isCpaSkillTool(name) {
  * are orchestrator-only — they need a working profile, which CPA does not
  * have). Result shapes that can come back:
  *
- *   { ok: true, result: ... }                            inventory + ack
- *   { ok: true, result: ..., pendingSkillEdit: {...} }   authoring proposal
- *   { ok: false, error: '...' }                          handled failure
+ * The 7 authoring tools (+ extract) return a `pendingSkillEdit` proposal
+ * envelope. CPA transparently forwards it to studio.js, which parks it on
+ * `state.pendingSkillEdits` for per-card user review and commits the
+ * approved entries through `commitApprovedSkillProposal` at Apply time.
+ * This mirrors how preset edits, lorebook proposals, and orchestrator iter-
+ * studio's own skill proposals work — no silent disk writes.
  *
- * The 4 working-profile tools are filtered out of CPA's catalog upstream,
- * so `pendingEdit` should never appear here; we strip it defensively in
- * case a future catalog refactor surfaces one. `pendingSkillEdit` is
- * threaded through verbatim — studio.js parks it on its own
- * `pendingSkillEdits` queue and commits at Apply time, same as
- * orchestrator iter-studio.
+ * The 3 policy-binding tools are not exposed to CPA, so `pendingEdit`
+ * should never appear here; strip it defensively so studio.js doesn't try
+ * to thread an orchestrator-shaped edit into the preset edit pipeline.
  *
  * @param {{ id?: string, name: string, args: object }} call
  * @returns {Promise<
- *   | {ok: true, result: *}
- *   | {ok: true, result: *, pendingSkillEdit: {kind:string, skillName:string, scope:object, path?:string, before:*, after:*, op:{name:string, args:object}}}
+ *     {ok: true, result: *}
+ *   | {ok: true, result: *, pendingSkillEdit: object}
  *   | {ok: false, error: string}
  * >}
  */
@@ -1102,13 +1109,38 @@ export async function runCpaReadTool(call, ctx = {}) {
         if (typeof ctx?.cloneAndSwitchTarget !== 'function') {
             return { ok: false, error: 'preset_clone_to_new is not wired in this popup (deps.cloneAndSwitchTarget missing).' };
         }
-        try {
-            const out = await ctx.cloneAndSwitchTarget(newName);
-            if (out?.ok) return { ok: true, result: { new_name: newName, cloned: true } };
-            return { ok: false, error: String(out?.error || 'clone failed') };
-        } catch (err) {
-            return { ok: false, error: String(err?.message || err || 'clone failed') };
+        const sourceName = String(ctx?.presetName || '').trim();
+        // Optional pre-check: host can expose `checkPresetNameAvailable`
+        // to reject duplicates before the user even sees a pending card
+        // for a clone that would fail anyway. When omitted we just let
+        // the actual clone (at Apply time) surface the duplicate error.
+        if (typeof ctx?.checkPresetNameAvailable === 'function') {
+            const availability = ctx.checkPresetNameAvailable(newName);
+            if (availability && availability.exists) {
+                return { ok: false, error: `Preset already exists: ${availability.canonical || newName}` };
+            }
         }
+        // Defer the actual clone to Apply time. studio.js parks the
+        // returned envelope on state.pendingCloneEdits for user review,
+        // and commitApprovedCloneEditsForCpa calls deps.cloneAndSwitchTarget
+        // when the user approves. The LLM sees `proposed: true` so it
+        // knows the new preset doesn't exist yet — same contract the 7
+        // authoring skill tools use.
+        return {
+            ok: true,
+            result: {
+                proposed: true,
+                new_preset_name: newName,
+                source_preset_name: sourceName,
+                message: 'Clone proposed for user approval. The new preset does NOT exist yet — the user will review a diff card in the popup and approve or reject before the clone runs at Apply time.',
+            },
+            pendingCloneEdit: {
+                kind: 'clone',
+                sourceName,
+                newName,
+                op: { newName },
+            },
+        };
     }
 
     return { ok: false, error: `Unknown read tool: ${name}` };

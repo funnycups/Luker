@@ -154,6 +154,44 @@ function registerLocaleData() {
         'working profile': '工作配置',
         '(root)': '（根）',
         '(${0}${1} bytes)': '（${0}${1} 字节）',
+        // Skill proposal cards (Bug 1 fix: skill authoring goes through
+        // per-card user review before commit). Strings consumed by
+        // cpa-iteration/studio.js's renderSkillPendingCard /
+        // commitApprovedSkillEditsForCpa / buildApplyOutcomeUserText.
+        'Update skill file': '更新 Skill 文件',
+        'Update skill frontmatter': '更新 Skill 元信息',
+        'Create skill': '新建 Skill',
+        'Rename skill': '重命名 Skill',
+        'Move skill scope': '移动 Skill 作用域',
+        'Delete skill': '删除 Skill',
+        'Approve': '通过',
+        'Reject': '拒绝',
+        'Undo decision': '撤销决定',
+        'Approved': '已通过',
+        'Rejected': '已拒绝',
+        'Pending approval': '等待审核',
+        'Name': '名称',
+        'Scope': '作用域',
+        '(unknown scope)': '（未知作用域）',
+        'global': '全局',
+        'preset:${0}': '预设：${0}',
+        'character:${0}': '角色卡：${0}',
+        'No content change': '内容无变化',
+        'Plus ${0} additional file(s): ${1}': '另含 ${0} 个附加文件：${1}',
+        'Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.': '应用后将删除 Skill「${0}」（${1}），所有文件都会被移除；该操作无法撤销。',
+        'Skill commit failed at ${0} (${1}): ${2}': 'Skill 提交失败：${0}（${1}）：${2}',
+        'Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved skill edits left in the pending list for retry.': 'Skill 提交中止：${0}（${1}）失败（${2}）。剩余已通过的 Skill 编辑保留在待审列表中供重试。',
+        'Committed ${0} skill edit(s)': '已提交 ${0} 项 Skill 编辑',
+        // Clone proposal cards (Bug 1 漏 A 修复:复制预设也走审批流程,
+        // 同时把当前会话整体迁移到新预设——Bug 2 修复)。
+        'Clone preset': '复制预设',
+        'On Apply: a new preset "${0}" will be created as a copy of "${1}", the popup target will switch to it, and this conversation will be migrated to the new preset.':
+            '应用后将以「${1}」为模板创建新预设「${0}」,弹窗目标会切换到新预设,当前会话也会一并迁移到该预设下。',
+        'Cloned preset to "${0}"': '已复制预设到「${0}」',
+        'Clone failed: cloneAndSwitchTarget is not available.': '复制失败：cloneAndSwitchTarget 不可用。',
+        'Clone failed: ${0}': '复制失败：${0}',
+        'Clone succeeded but session migration failed: ${0}': '复制成功,但会话迁移失败：${0}',
+        'Session moved to "${0}"': '会话已迁移到「${0}」',
     });
     addLocaleData('zh-tw', {
         'Completion Preset Assistant': '聊天補全預設助手',
@@ -215,6 +253,40 @@ function registerLocaleData() {
         'working profile': '工作設定',
         '(root)': '（根）',
         '(${0}${1} bytes)': '（${0}${1} 位元組）',
+        // Skill proposal cards (see zh-cn block for context).
+        'Update skill file': '更新 Skill 檔案',
+        'Update skill frontmatter': '更新 Skill 元資訊',
+        'Create skill': '新建 Skill',
+        'Rename skill': '重新命名 Skill',
+        'Move skill scope': '移動 Skill 作用域',
+        'Delete skill': '刪除 Skill',
+        'Approve': '通過',
+        'Reject': '拒絕',
+        'Undo decision': '撤銷決定',
+        'Approved': '已通過',
+        'Rejected': '已拒絕',
+        'Pending approval': '等待審核',
+        'Name': '名稱',
+        'Scope': '作用域',
+        '(unknown scope)': '（未知作用域）',
+        'global': '全域',
+        'preset:${0}': '預設：${0}',
+        'character:${0}': '角色卡：${0}',
+        'No content change': '內容無變化',
+        'Plus ${0} additional file(s): ${1}': '另含 ${0} 個附加檔案：${1}',
+        'Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.': '套用後將刪除 Skill「${0}」（${1}），所有檔案都會被移除；此操作無法撤銷。',
+        'Skill commit failed at ${0} (${1}): ${2}': 'Skill 提交失敗：${0}（${1}）：${2}',
+        'Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved skill edits left in the pending list for retry.': 'Skill 提交中止：${0}（${1}）失敗（${2}）。剩餘已通過的 Skill 編輯保留在待審列表中供重試。',
+        'Committed ${0} skill edit(s)': '已提交 ${0} 項 Skill 編輯',
+        // Clone proposal cards (見 zh-cn 區塊說明)。
+        'Clone preset': '複製預設',
+        'On Apply: a new preset "${0}" will be created as a copy of "${1}", the popup target will switch to it, and this conversation will be migrated to the new preset.':
+            '套用後將以「${1}」為範本建立新預設「${0}」,彈窗目標會切換到新預設,目前的對話也會一併遷移到該預設下。',
+        'Cloned preset to "${0}"': '已複製預設到「${0}」',
+        'Clone failed: cloneAndSwitchTarget is not available.': '複製失敗：cloneAndSwitchTarget 不可用。',
+        'Clone failed: ${0}': '複製失敗：${0}',
+        'Clone succeeded but session migration failed: ${0}': '複製成功,但對話遷移失敗：${0}',
+        'Session moved to "${0}"': '對話已遷移到「${0}」',
     });
 }
 
@@ -387,8 +459,10 @@ async function openCpaIteration() {
         // `preset_clone_to_new` tool wiring. Snapshots the popup's current
         // target body (stored on disk, not the sandbox), saves it under
         // `newName`, and `select: true` flips the popup's target so the
-        // AI's next edits land on the clone — matches the prompt-side
-        // "derive before destructive edit" safety pattern.
+        // studio's commitApprovedCloneEditsForCpa can migrate the session
+        // into the clone's bucket. Triggered at Apply time after the user
+        // approves the pending clone card — not inline on the AI's tool
+        // call.
         cloneAndSwitchTarget: async (newName) => {
             const trimmedName = String(newName || '').trim();
             if (!trimmedName) {
@@ -423,6 +497,20 @@ async function openCpaIteration() {
             } catch (err) {
                 return { ok: false, error: String(err?.message || err || 'clone failed') };
             }
+        },
+        // Synchronous duplicate-name pre-check exposed to the dispatcher
+        // so `preset_clone_to_new` can reject a doomed clone BEFORE
+        // pushing a pending card the user would just have to discard.
+        // Returns `{ exists: bool, canonical?: string }`. The dispatcher
+        // never relies on this — if absent, the duplicate is caught when
+        // cloneAndSwitchTarget runs at Apply time.
+        checkPresetNameAvailable: (name) => {
+            const trimmed = String(name || '').trim();
+            if (!trimmed) return { exists: false };
+            const canonical = findCanonicalPresetName(getOpenAIPresetNames(getContext()), trimmed);
+            return canonical
+                ? { exists: true, canonical }
+                : { exists: false };
         },
         // Skill tool wiring. Provides the active preset name so the
         // studio's skill-prompt augmentation can tell the AI to default

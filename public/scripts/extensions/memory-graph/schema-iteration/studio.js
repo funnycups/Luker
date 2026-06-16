@@ -66,7 +66,9 @@ import {
     tools as ITER_TOOLS,
     zoomOverlay as ITER_ZOOM_OVERLAY,
     ui as ITER_UI,
+    proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
+import { createProfileEditHandler } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
 import {
     TOOL_DEFS,
     TOOL_DISPLAY,
@@ -91,6 +93,8 @@ async function runLorebookReadTool(call, avatar = '') {
     return runLorebookReadToolShared(call, { context: __ctx, avatar });
 }
 const STYLESHEET_HREF = '/scripts/extensions/memory-graph/schema-iteration/studio.css';
+const PROPOSAL_BUS_STYLESHEET_ID = 'mg_schema_it_proposal_bus_stylesheet';
+const PROPOSAL_BUS_STYLESHEET_HREF = '/scripts/iteration-library/proposal-bus/proposal-bus.css';
 
 /**
  * Inject the popup stylesheet on first open. Subsequent opens are no-ops
@@ -101,12 +105,20 @@ const STYLESHEET_HREF = '/scripts/extensions/memory-graph/schema-iteration/studi
  */
 function ensureStylesheetInjected() {
     if (typeof document === 'undefined') return;
-    if (document.getElementById(STYLESHEET_ID)) return;
-    const link = document.createElement('link');
-    link.id = STYLESHEET_ID;
-    link.rel = 'stylesheet';
-    link.href = STYLESHEET_HREF;
-    document.head.appendChild(link);
+    if (!document.getElementById(STYLESHEET_ID)) {
+        const link = document.createElement('link');
+        link.id = STYLESHEET_ID;
+        link.rel = 'stylesheet';
+        link.href = STYLESHEET_HREF;
+        document.head.appendChild(link);
+    }
+    if (!document.getElementById(PROPOSAL_BUS_STYLESHEET_ID)) {
+        const link = document.createElement('link');
+        link.id = PROPOSAL_BUS_STYLESHEET_ID;
+        link.rel = 'stylesheet';
+        link.href = PROPOSAL_BUS_STYLESHEET_HREF;
+        document.head.appendChild(link);
+    }
 }
 
 /**
@@ -564,14 +576,13 @@ function createNewSession() {
         id: makeSessionId(),
         title: '',
         messages: [],
-        pendingEdits: [],
         surfaceState: { historyOpen: false, autoApply: false },
         updatedAt: now,
         createdAt: now,
         summary: '',
         // Skip-persist marker for empty draft sessions. persistSession's
         // guard reads this and short-circuits when the session has no
-        // messages + no pending edits — without it, mount-time popup
+        // messages + no pending proposals — without it, mount-time popup
         // open + close (without sending anything) would write a phantom
         // row to the history list. Cleared in persistSession the first
         // time the session has meaningful content.
@@ -721,18 +732,184 @@ export async function openSchemaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     // Closure-local state. `live` is the schema array (not an object like
     // CEA Character's card+lorebook); the MG sandbox-diff pattern operates
-    // on it directly. `pendingEdits` always contains 0 or 1 entries since
-    // the sandbox-diff emits one coarse `set('', newSchema)` per tool call
-    // (and Apply collapses them all in one shot).
+    // on it directly. Pending writes are owned by the ProposalBus mounted
+    // below — `state.pendingEdits` is no longer a separate cache.
     // ──────────────────────────────────────────────────────────────────
     const state = {
         session: createNewSession(),
         live: [],
-        pendingEdits: [],
         isBusy: false,
         aborting: false,
         abortController: null,
     };
+
+    // ──────────────────────────────────────────────────────────────────
+    // ProposalBus. Owns the per-popup queue of write proposals (status,
+    // gate predicate, click delegation, persistence). For MG the only kind
+    // is `profile-edit`: each AI turn collapses its 1-or-N chained empty-
+    // path-set edits into ONE proposal carrying the final newSchema as
+    // op.newValue and the live schema captured at turn start as snapshot.
+    //
+    // commitLive: applyEmptyPathSet over state.live then flush to disk
+    //   via commitLiveToSchema. Defined as a closure here so the kind
+    //   handler stays agnostic to MG's persistence path.
+    // readLive: re-read disk via loadLive + return the current state.live.
+    //
+    // Auto-approve mirrors the legacy surfaceState.autoApply checkbox.
+    // ──────────────────────────────────────────────────────────────────
+    const bus = ITER_PROPOSAL_BUS.createProposalBus({
+        mode: 'mg-schema',
+        i18n: tf,
+        onChange: () => {
+            // Render is the single source of truth for popup chrome; a
+            // bus mutation outside of an explicit user gesture (e.g.
+            // auto-approve fires after propose returns) still needs the
+            // UI to refresh + the session to persist.
+            if (state.__suspendBusOnChange) return;
+            scheduleBusRender();
+        },
+    });
+    bus.registerKind('profile-edit', createProfileEditHandler({
+        commitLive: async (newSchema) => {
+            state.live = newSchema;
+            await commitLiveToSchema();
+        },
+        readLive: async () => {
+            await loadLive();
+            return state.live;
+        },
+        renderDiff: (before, after) => renderSchemaArrayPendingCards(before, after),
+        label: () => t('Schema change'),
+        icon: () => '🧩',
+        target: () => t('schema'),
+    }));
+    bus.setMessageResolver((messageId) => {
+        const msgs = state.session?.messages || [];
+        const m = msgs.find((x) => String(x?.id || '') === String(messageId));
+        return m || { id: messageId, toolCalls: [] };
+    });
+
+    let busRenderScheduled = false;
+    function scheduleBusRender() {
+        if (busRenderScheduled) return;
+        busRenderScheduled = true;
+        queueMicrotask(async () => {
+            busRenderScheduled = false;
+            try {
+                await persistSession();
+            } catch { /* persistence errors surface elsewhere */ }
+            try {
+                await render();
+            } catch { /* render errors surface elsewhere */ }
+            await drainBusOutcomes();
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Bus outcome → AI feedback bridge. Bus enqueues an outcome on every
+    // status transition (commit / reject / conflict / rollback). When a
+    // batch of outcomes lands AND the popup isn't currently mid-turn, we
+    // synthesize one user message describing the user's decisions and
+    // re-fire the iteration loop so the AI sees how its prior proposals
+    // resolved.
+    //
+    // Mirrors the legacy `continueAfterReviewDecision` + auto-apply
+    // feedback paths; the bus is now the single trigger.
+    // ──────────────────────────────────────────────────────────────────
+    let drainScheduled = false;
+    async function drainBusOutcomes() {
+        if (drainScheduled) return;
+        const outcomes = bus.drainOutcomes();
+        if (!outcomes.length) return;
+        if (state.isBusy) {
+            // Re-queue: outcomes drained but isBusy was true. Push them
+            // back via the bus, so the next idle drain picks them up.
+            // The bus exposes no public re-queue; we keep a stash here
+            // and replay on the next call.
+            __pendingDrainStash.push(...outcomes);
+            return;
+        }
+        const allOutcomes = __pendingDrainStash.length
+            ? [...__pendingDrainStash.splice(0), ...outcomes]
+            : outcomes;
+        const committed = allOutcomes.filter((o) => o.status === 'committed');
+        const rejected = allOutcomes.filter((o) => o.status === 'rejected');
+        const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
+        const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
+        if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
+        const text = buildBusOutcomeUserText({ committed, rejected, conflicts, rolledBack });
+        if (!text) return;
+        drainScheduled = true;
+        try {
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: text,
+                at: Date.now(),
+                auto: true,
+            });
+            state.isBusy = true;
+            state.abortController = new AbortController();
+            await persistSession();
+            await render();
+            try {
+                let turn = await runIterationTurn();
+                while (turn?.hadAnyToolCall && !bus.hasOutstanding()) {
+                    await persistSession();
+                    await render();
+                    if (state.abortController?.signal?.aborted) break;
+                    turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                }
+            } catch (err) {
+                if (!isAbortError(err, state.abortController?.signal)) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[${MODULE}] drainBusOutcomes`, err);
+                    state.session.messages.push({
+                        id: makeMessageId(),
+                        role: 'system',
+                        content: tf('Error: ${0}', String(err?.message || err)),
+                        at: Date.now(),
+                    });
+                }
+            } finally {
+                state.isBusy = false;
+                state.aborting = false;
+                state.abortController = null;
+                await persistSession();
+                await render();
+            }
+        } finally {
+            drainScheduled = false;
+        }
+    }
+    const __pendingDrainStash = [];
+
+    function buildBusOutcomeUserText({ committed, rejected, conflicts, rolledBack }) {
+        const lines = [];
+        const total = committed.length + rejected.length + conflicts.length + rolledBack.length;
+        lines.push(`[User reviewed ${total} proposal(s) for the schema:`);
+        if (committed.length) {
+            lines.push(`Committed (${committed.length}):`);
+            for (const o of committed) lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}`);
+        }
+        if (rejected.length) {
+            lines.push(`Rejected (${rejected.length}):`);
+            for (const o of rejected) lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}`);
+        }
+        if (conflicts.length) {
+            lines.push(`Conflict — disk changed externally; user must retry or reject (${conflicts.length}):`);
+            for (const o of conflicts) {
+                const err = o.error ? ` — ${o.error}` : '';
+                lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}${err}`);
+            }
+        }
+        if (rolledBack.length) {
+            lines.push(`Rolled back (${rolledBack.length}):`);
+            for (const o of rolledBack) lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}`);
+        }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        return lines.join('\n');
+    }
 
     // ──────────────────────────────────────────────────────────────────
     // Live state — re-read on each turn so external edits (user manually
@@ -911,7 +1088,7 @@ export async function openSchemaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
         const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
-        const hasPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        const hasPending = bus.hasOutstanding();
         if (state.session._transient && !hasMessages && !hasPending) {
             return;
         }
@@ -919,11 +1096,16 @@ export async function openSchemaIterationStudio(deps) {
             delete state.session._transient;
         }
         state.session.updatedAt = Date.now();
-        // Mirror the top-level pendingEdits cache into the persisted bucket
-        // so closing mid-conversation preserves staged-but-not-applied edits
-        // (e.g. AI proposed changes, user closes the popup without clicking
-        // Apply or Discard — reopening shows the same pending block).
-        state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
+        // Bus state — entries + outcomeQueue — replaces the legacy
+        // session.pendingEdits cache. Closing the popup mid-conversation
+        // preserves staged proposals (proposalBus.entries[*].status='pending')
+        // exactly as the bus saw them; reopening hydrates from this blob.
+        state.session.proposalBus = bus.serialize();
+        // Drop the legacy field if it's still hanging around (loaded from
+        // a pre-migration session and not yet rewritten).
+        if (state.session.pendingEdits !== undefined) {
+            delete state.session.pendingEdits;
+        }
         if (!state.session.title) {
             const firstUser = state.session.messages.find(m => m.role === 'user');
             if (firstUser) {
@@ -954,9 +1136,35 @@ export async function openSchemaIterationStudio(deps) {
             messages: Array.isArray(loaded.messages)
                 ? loaded.messages.map(m => normalizeMessageShape(m, fallbackAt))
                 : [],
-            pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
-        state.pendingEdits = state.session.pendingEdits.slice();
+        // Hydrate the bus. Prefer the new proposalBus blob; fall back to a
+        // one-shot migration of the legacy `pendingEdits` array (each edit
+        // becomes a pending proposal whose snapshot is null — fingerprint
+        // mismatch is expected on first approve, which is the safe
+        // behavior since we have no record of the pre-edit live state).
+        state.__suspendBusOnChange = true;
+        try {
+            if (loaded.proposalBus && typeof loaded.proposalBus === 'object') {
+                bus.hydrate(loaded.proposalBus);
+            } else if (Array.isArray(loaded.pendingEdits) && loaded.pendingEdits.length > 0) {
+                // Legacy migration: stage each empty-path edit as a fresh
+                // proposal so the user can still review + apply them.
+                for (const edit of loaded.pendingEdits) {
+                    if (edit?.op !== 'set' || edit?.path !== '') continue;
+                    await bus.propose({
+                        kind: 'profile-edit',
+                        op: { op: 'set', path: '', newValue: edit.newValue },
+                        snapshot: edit.oldValue ?? null,
+                        sourceCallId: null,
+                    });
+                }
+            } else {
+                bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        delete state.session.pendingEdits;
         // Re-read the schema so the new session's preview + next-turn
         // oldValue snapshots reflect disk state, not the prior session's
         // staged live (N4 fix).
@@ -981,7 +1189,14 @@ export async function openSchemaIterationStudio(deps) {
                 autoApply: true,
             };
         }
-        state.pendingEdits = [];
+        // Reset bus to a clean slate. autoApprove follows surfaceState.
+        state.__suspendBusOnChange = true;
+        try {
+            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
         await loadLive();
         // Don't save the blank session yet — persistSession's _transient
         // guard defers the write until the first user message.
@@ -1150,16 +1365,14 @@ export async function openSchemaIterationStudio(deps) {
             toolDisplay: MG_SCHEMA_TOOL_DISPLAY,
             renderEditCard: renderPendingEditCard,
             renderApplyControls: (m) => {
-                const isLatestUnapplied = String(m?.id || '') === state.__latestUnappliedAssistantId;
-                const passthroughEdits = isLatestUnapplied ? m.edits : [];
-                return ITER_UI.apply.renderApplyControls(
-                    { ...m, edits: passthroughEdits },
-                    {
-                        i18n: tf,
-                        applyLabel: tf('Apply to ${0}', t('schema')),
-                        actionAttribute: 'data-mg-schema-it-action',
-                    },
-                );
+                // Bus owns per-card chrome + turn-actions. Render the
+                // per-card stack first (Approve / Reject / Conflict ribbon
+                // / Rollback for each proposal tied to this assistant
+                // message), then a turn-actions row that batches them.
+                const cards = bus.renderCardsForMessage(m) || '';
+                const turn = bus.renderTurnActions(m) || '';
+                if (!cards && !turn) return '';
+                return cards + turn;
             },
             isLast,
             i18n: tf,
@@ -1212,15 +1425,14 @@ export async function openSchemaIterationStudio(deps) {
         // for buildTaskMessages to feed the LLM, but the user shouldn't
         // see them as chat noise.
         const allMsgs = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
-        // `state.pendingEdits` is the source of truth for "this round is
-        // staged and awaiting review". When it's empty (Discard cleared
-        // it, or Apply landed with zero clean edits), no message should
-        // carry an Apply/Reject row — even though `m.edits` is still
-        // retained on the assistant message for diff history / rollback.
-        // Short-circuit before scanning so the inline controls disappear
-        // the moment the batch is resolved.
+        // Bus.hasOutstanding is the source of truth for "this round is
+        // staged and awaiting review". When the bus is empty no message
+        // should carry an Apply/Reject row — even though `m.edits` is
+        // still retained on the assistant message for diff history /
+        // rollback. Short-circuit before scanning so the inline controls
+        // disappear the moment the batch is resolved.
         let latestUnappliedAssistantId = '';
-        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
+        if (bus.hasOutstanding()) {
             for (let i = allMsgs.length - 1; i >= 0; i--) {
                 const m = allMsgs[i];
                 if (m && m.role === 'assistant' && !m.auto
@@ -1280,13 +1492,23 @@ export async function openSchemaIterationStudio(deps) {
         }
 
         // Workspace preview pane. Wrapped in try/catch so a malformed live
-        // schema or edit shape can't blank the workspace.
+        // schema or edit shape can't blank the workspace. The preview
+        // shows the bus's pending profile-edit proposals as one batch of
+        // pending edits — the bus is single-source-of-truth for staging.
         try {
             const $previewPane = $root.find('[data-iter-preview-pane]');
             if ($previewPane.length) {
+                const pendingEditsForPreview = [];
+                for (const entry of bus._testOnly_entries()) {
+                    if (entry.status !== 'pending' && entry.status !== 'conflict') continue;
+                    if (entry.kind !== 'profile-edit') continue;
+                    const newValue = entry?.op?.newValue;
+                    if (typeof newValue === 'undefined') continue;
+                    pendingEditsForPreview.push({ op: 'set', path: '', oldValue: entry.snapshot, newValue });
+                }
                 const previewHtml = renderMgSchemaPreviewPane(
                     state.live,
-                    state.pendingEdits || [],
+                    pendingEditsForPreview,
                     t,
                 );
                 $previewPane.html(previewHtml);
@@ -1537,7 +1759,6 @@ export async function openSchemaIterationStudio(deps) {
                         // already committed to one path.
                         if (turnSnapshot.helperSession.scope === 'character') {
                             state.live = createBlankSchemaShell();
-                            state.pendingEdits = [];
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -1558,7 +1779,6 @@ export async function openSchemaIterationStudio(deps) {
                         if (turnSnapshot.helperSession.scope === 'character'
                             && turnSnapshot.helperSession.hasOverride) {
                             state.live = normalizeNodeTypeSchema(structuredClone(turnSnapshot.globalSchema || []));
-                            state.pendingEdits = [];
                             state.session.messages.push({
                                 id: makeMessageId(),
                                 role: 'system',
@@ -1725,50 +1945,30 @@ export async function openSchemaIterationStudio(deps) {
         }
         state.session.messages.push(assistantMsg);
 
-        // Replace pendingEdits with this round's batch. We don't append:
-        // staging is per-round so the user can Apply or Discard cleanly
-        // before the next AI request fires.
-        state.pendingEdits = edits;
+        // Stage this turn as a single ProposalBus proposal. The MG sandbox-
+        // diff coalesces 1-or-N empty-path-set edits per turn (each call
+        // chained off the previous call's newValue), so the user-visible
+        // proposal is "the cumulative new schema replaces the live one".
+        // sourceCallId binds the proposal to the first edit tool call's id
+        // so renderTurnActions inside this message card can group correctly.
+        if (edits.length > 0) {
+            const lastEdit = edits[edits.length - 1];
+            const firstCallId = editToolCalls.find((c) => c?.id)?.id || assistantMsg.id;
+            // bus.setAutoApprove drives auto-commit; either way, propose
+            // here so the user (or the auto-approve microtask) sees a card.
+            bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+            await bus.propose({
+                kind: 'profile-edit',
+                op: { op: 'set', path: '', newValue: lastEdit.newValue },
+                snapshot: state.live,
+                sourceCallId: firstCallId,
+            });
+        }
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
         // forcing a tab switch.
         bumpChatBadge();
-
-        // Composer-row auto-apply: if enabled AND this turn produced edits,
-        // apply immediately. When auto-apply runs we still push a synthetic
-        // apply-outcome user message so the next round's buildTaskMessages
-        // can replay it and the model sees which edits actually took
-        // effect — same truthful signal review-mode gets via continueAfter-
-        // ReviewDecision.
-        const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
-        if (autoApplyOn && state.pendingEdits.length > 0) {
-            const autoCount = state.pendingEdits.length;
-            try {
-                const outcome = await applyPendingEdits({ skipRender: true });
-                if (outcome) {
-                    const text = buildApplyOutcomeUserText({
-                        count: autoCount,
-                        applied: outcome.applied,
-                        conflicts: outcome.conflicts,
-                        alreadyDone: outcome.alreadyDone,
-                        cleanEdits: outcome.cleanEdits,
-                        target: 'schema',
-                        autoApply: true,
-                    });
-                    state.session.messages.push({
-                        id: makeMessageId(),
-                        role: 'user',
-                        content: text,
-                        at: Date.now(),
-                        auto: true,
-                    });
-                }
-            } catch (err) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] auto-apply failed`, err);
-            }
-        }
 
         return {
             hadAnyToolCall,
@@ -1795,244 +1995,19 @@ export async function openSchemaIterationStudio(deps) {
     // assistant message so renderMessageCard can show the Applied label
     // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
-    async function applyPendingEdits({ skipRender = false } = {}) {
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) {
-            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
-        }
-        if (!state.live) await loadLive();
-        const liveSnapshot = state.live;
-        const editsBatch = state.pendingEdits.slice();
-        // Sandbox-diff emits a coarse {op:'set', path:'', newValue:<whole schema>}
-        // per tool call. lodash.set with empty path is a no-op, so the shared
-        // applyEdits engine silently skips empty-path edits — applyEmptyPathSet
-        // (a 3-way merge of cursor / oldValue / newValue) routes around that.
-        //
-        // Every-gate pattern (mirrors rollbackBatch's pre-flight): walk the
-        // batch building up a cumulative live cursor, recording per-edit
-        // outcomes (clean / conflict / already-done). If the walk itself
-        // throws — applyEdits dispatching to an unknown op, or a malformed
-        // edit shape — the entire batch is rejected and state.live is
-        // untouched, so partial application can never strand the schema in
-        // an inconsistent intermediate state.
-        let liveCursor = state.live;
-        const cleanEdits = [];
-        const conflicts = [];
-        const alreadyDone = [];
-        try {
-            for (const edit of editsBatch) {
-                if (edit?.op === 'set' && edit?.path === '' && typeof edit?.newValue !== 'undefined') {
-                    liveCursor = applyEmptyPathSet(liveCursor, edit);
-                    cleanEdits.push(edit);
-                } else {
-                    const result = applyEdits([edit], liveCursor);
-                    liveCursor = result?.newLive ?? liveCursor;
-                    if (Array.isArray(result?.clean)) cleanEdits.push(...result.clean);
-                    if (Array.isArray(result?.conflicts)) conflicts.push(...result.conflicts);
-                    if (Array.isArray(result?.alreadyDone)) alreadyDone.push(...result.alreadyDone);
-                }
-            }
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] applyPendingEdits batch walk failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Failed to apply edits: ${0}', String(err?.message || err)),
-                at: Date.now(),
-            });
-            await persistSession();
-            if (!skipRender) await render();
-            return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, batchRejected: true };
-        }
-        const appliedCount = cleanEdits.length;
-
-        if (appliedCount > 0) {
-            state.live = liveCursor;
-            try {
-                await commitLiveToSchema();
-            } catch (err) {
-                state.live = liveSnapshot;
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] commitLiveToSchema failed`, err);
-                try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Failed to save schema: ${0}', String(err?.message || err)),
-                    at: Date.now(),
-                });
-                await persistSession();
-                if (!skipRender) await render();
-                return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, commitFailed: true };
-            }
-        }
-
-        try {
-            if (appliedCount === editsBatch.length) {
-                toastr.success(tf('Applied ${0} edit(s) to ${1}', String(appliedCount), t('schema')));
-            } else if (appliedCount > 0) {
-                toastr.warning(tf('Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped',
-                    String(appliedCount), String(editsBatch.length), t('schema'),
-                    String(conflicts.length + alreadyDone.length)));
-            } else {
-                toastr.warning(tf('No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)',
-                    t('schema'), String(editsBatch.length)));
-            }
-        } catch { /* ignore */ }
-
-        // Mark the most recent unapplied assistant message that owns these
-        // edits. Only stamp appliedAt when at least one edit actually
-        // landed — a zero-clean batch should not render the IDE-style "✓
-        // Applied" check.
-        if (appliedCount > 0) {
-            const messages = state.session.messages || [];
-            for (let i = messages.length - 1; i >= 0; i--) {
-                const m = messages[i];
-                if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
-                    m.appliedAt = Date.now();
-                    m.appliedTarget = 'schema';
-                    m.appliedCount = appliedCount;
-                    m.appliedProposed = editsBatch.length;
-                    break;
-                }
-            }
-        }
-
-        state.pendingEdits = [];
-        await persistSession();
-        if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits };
-    }
-
-    async function discardPendingEdits() {
-        state.pendingEdits = [];
-        await persistSession();
-        await render();
-    }
-
-    /**
-     * Fire the next AI round after the user reviewed a paused batch
-     * (clicked Apply or Discard). `handleSendMessage`'s loop exits the
-     * moment the round produces pendingEdits, so without this resumer
-     * the AI never sees the outcome — even though its prior round was
-     * clearly "propose edits, then continue based on review". Pushes a
-     * synthetic user message describing the decision and re-enters the
-     * loop, mirroring the IDE pattern (approve → tool result lands →
-     * agent continues; reject → agent reconsiders).
-     */
-    /**
-     * Build the synthetic user-message text the next round sees after a
-     * batch is applied (review-mode click or auto-apply). The model reads
-     * this verbatim — keep the per-edit "skipped because X" detail intact
-     * so the LLM can correct its next round (fix the path / value / args)
-     * instead of looping the same broken call.
-     */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'schema', autoApply = false }) {
-        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
-        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
-        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
-        const appliedNum = Number.isInteger(applied) ? applied : count;
-        const skipped = conflictArr.length + alreadyArr.length;
-        const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
-        const lines = [];
-        if (skipped === 0) {
-            lines.push(`[${prefix}: all ${count} pending edit(s) took effect on the ${target}.`);
-        } else {
-            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect on the ${target}, ${skipped} skipped.`);
-            if (conflictArr.length > 0) {
-                lines.push('Skipped (conflicts):');
-                for (const c of conflictArr) {
-                    const edit = c?.edit || {};
-                    const op = String(edit.op || '?');
-                    const path = String(edit.path || '<root>');
-                    const reason = String(c?.reason || 'unknown');
-                    lines.push(`  - ${op}(${path}): ${reason}`);
-                }
-            }
-            if (alreadyArr.length > 0) {
-                lines.push('Already in desired state (no-op):');
-                for (const e of alreadyArr) {
-                    const op = String(e?.op || '?');
-                    const path = String(e?.path || '<root>');
-                    lines.push(`  - ${op}(${path})`);
-                }
-            }
-            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the path / value).');
-        }
-        // List the edits that actually changed state so the AI knows what
-        // moved this round. Without this, "all N took effect" leaves the
-        // AI guessing which paths mutated across rounds.
-        if (cleanArr.length > 0 && appliedNum > 0) {
-            lines.push('Applied paths (state that moved this round):');
-            for (const e of cleanArr) {
-                const op = String(e?.op || '?');
-                const path = String(e?.path || '<root>');
-                const note = (op === 'set' && path === '')
-                    ? ' — whole schema replaced by a sandbox-diff tool; node types / fields may have shifted'
-                    : '';
-                lines.push(`  - ${op}(${path || '<root>'})${note}`);
-            }
-        }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
-        return lines.join('\n');
-    }
-
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
-        if (state.isBusy) return;
-        const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target: 'schema' })
-            : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
-
-        state.session.messages.push({
-            id: makeMessageId(),
-            role: 'user',
-            content: userText,
-            at: Date.now(),
-            auto: true,
-        });
-
-        state.isBusy = true;
-        // Mirror handleSendMessage: seed the AbortController before the
-        // pre-flight awaits so a Stop click during persist+render is
-        // honored instead of dropped onto a null controller.
-        state.abortController = new AbortController();
-        await persistSession();
-        await render();
-        try {
-            let turn = await runIterationTurn();
-            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
-                await persistSession();
-                await render();
-                if (state.abortController?.signal?.aborted) break;
-                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
-            }
-        } catch (err) {
-            if (!isAbortError(err, state.abortController?.signal)) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] continueAfterReviewDecision`, err);
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
-                    at: Date.now(),
-                });
-            }
-        } finally {
-            state.isBusy = false;
-            state.aborting = false;
-            state.abortController = null;
-            await persistSession();
-            await render();
-        }
-    }
+    // Apply / discard / continue-after-review have moved to the bus.
+    // Approve = bus.approve (immediate commit + drift check); reject = bus.reject.
+    // The drainBusOutcomes pump (above) is the equivalent of the legacy
+    // continueAfterReviewDecision: after the user decides on any batch of
+    // proposals, it pushes a synthetic outcome message and re-fires the
+    // iteration loop.
 
     // ──────────────────────────────────────────────────────────────────
     // Per-message actions.
     //
     // regenerateFromMessage(msgId): truncate the chat back to the user
-    // turn that prompted this assistant message, drop staged pendingEdits
-    // (they belonged to the discarded turn), refill the textarea with the
+    // turn that prompted this assistant message, drop staged proposals
+    // tied to the discarded turn, refill the textarea with the
     // original prompt, and re-fire the send pipeline.
     //
     // rollbackBatch(msgId): inverse-apply each edit in the message's
@@ -2058,8 +2033,27 @@ export async function openSchemaIterationStudio(deps) {
         const userText = String(messages[userIdx].content || '');
         // Truncate before the user message; the resend will push it again.
         state.session.messages = messages.slice(0, userIdx);
-        state.pendingEdits = [];
-        state.session.pendingEdits = [];
+        // Discard any bus proposals tied to discarded assistant turns —
+        // their sourceCallId points at tool calls that are about to be
+        // removed from the message stream. Rejecting them is the cleanest
+        // way to drop them without losing the historical record.
+        const survivingCallIds = new Set();
+        for (const m of state.session.messages) {
+            if (Array.isArray(m?.toolCalls)) {
+                for (const tc of m.toolCalls) if (tc?.id) survivingCallIds.add(String(tc.id));
+            }
+        }
+        state.__suspendBusOnChange = true;
+        try {
+            for (const entry of bus._testOnly_entries()) {
+                const cid = String(entry.sourceCallId || '');
+                if (entry.status === 'pending' && cid && !survivingCallIds.has(cid)) {
+                    bus.reject(entry.id);
+                }
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
         await persistSession();
         await render();
         const $textarea = $root.find('[data-mg-schema-it-input]');
@@ -2067,63 +2061,9 @@ export async function openSchemaIterationStudio(deps) {
         await handleSendMessage();
     }
 
-    async function rollbackBatch(messageId) {
-        if (state.isBusy) return;
-        const msg = (state.session.messages || []).find(m => m && m.id === messageId);
-        if (!msg) return;
-        if (!msg.appliedAt || msg.rolledBackAt) return;
-        if (!Array.isArray(msg.edits) || msg.edits.length === 0) return;
-        // eslint-disable-next-line no-alert
-        if (!confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
-
-        await loadLive();
-        let working = state.live;
-        // Build inverses up-front so an unsupported op fails BEFORE we
-        // partial-apply anything. Right-to-left inversion handles dependent
-        // edits (e.g. set then list_insert) cleanly.
-        const inverses = [];
-        for (const edit of msg.edits.slice().reverse()) {
-            try {
-                inverses.push(inverseEdit(edit));
-            } catch (err) {
-                console.warn(`[${MODULE}] inverseEdit failed`, edit, err);
-                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* ignore */ }
-                return;
-            }
-        }
-        try {
-            // MG sandbox-diff uses empty-path set edits; inverse is the same
-            // shape with oldValue/newValue swapped. Chain-apply each inverse
-            // (empty-path edits route around lodash.set's empty-path no-op;
-            // fine-grained ops fall through to the shared applyEdits engine)
-            // so a multi-edit batch unwinds cleanly even when only some edits
-            // are coarse-grained.
-            for (const inv of inverses) {
-                if (inv?.op === 'set' && inv?.path === '' && typeof inv?.newValue !== 'undefined') {
-                    working = applyEmptyPathSet(working, inv);
-                } else {
-                    const result = applyEdits([inv], working);
-                    working = result?.newLive ?? working;
-                }
-            }
-        } catch (err) {
-            console.warn(`[${MODULE}] applyEdits(inverses) failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
-            return;
-        }
-        state.live = working;
-        try {
-            await commitLiveToSchema();
-        } catch (err) {
-            console.warn(`[${MODULE}] commitLiveToSchema(rollback) failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
-            return;
-        }
-        msg.rolledBackAt = Date.now();
-        await persistSession();
-        try { toastr.success(t('Rolled back')); } catch { /* ignore */ }
-        await render();
-    }
+    // rollbackBatch is now bus-driven: turn-actions card under the assistant
+    // message renders "Rollback this turn" when at least one of its
+    // proposals is in `committed` status, dispatched through bus.handleClick.
 
     // ──────────────────────────────────────────────────────────────────
     // Send-message handler. Q6: user message is pushed AND rendered
@@ -2173,7 +2113,7 @@ export async function openSchemaIterationStudio(deps) {
         await render();   // Q6: user message visible before LLM wait
         try {
             let turn = await runIterationTurn();
-            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
+            while (turn?.hadAnyToolCall && !bus.hasOutstanding()) {
                 await persistSession();
                 await render();   // progressive: prior round visible before next
                 if (state.abortController?.signal?.aborted) break;
@@ -2270,47 +2210,13 @@ export async function openSchemaIterationStudio(deps) {
         await persistSession();
     });
 
-    // Apply / Discard the staged batch. Selectors use `apply-batch` /
-    // `discard-batch` because the row is rendered by
-    // `iteration-library/ui/apply.renderApplyControls`, which emits those
-    // values via the `actionAttribute: 'data-mg-schema-it-action'` opt —
-    // the same convention `renderMessageCard` uses for per-message
-    // rollback / regenerate buttons (handlers further down).
-    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="apply-batch"]', async (e) => {
-        e.preventDefault();
-        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        const outcome = await applyPendingEdits();
-        // After the user reviewed + applied a paused batch, fire the next
-        // AI round with a synthetic "user approved" message. The handle-
-        // SendMessage loop only paused because pendingEdits gated human
-        // review; the AI was mid-iteration and expects a result. Pass the
-        // real outcome (applied / conflicts / alreadyDone) so the AI sees
-        // truthful detail instead of just a proposed-count claim.
-        if (pendingCount > 0
-            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-            && !state.isBusy) {
-            await continueAfterReviewDecision({
-                action: 'apply',
-                count: pendingCount,
-                applied: outcome?.applied,
-                conflicts: outcome?.conflicts,
-                alreadyDone: outcome?.alreadyDone,
-                cleanEdits: outcome?.cleanEdits,
-            });
-        }
-    });
-    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="discard-batch"]', async (e) => {
-        e.preventDefault();
-        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        await discardPendingEdits();
-        // Mirror the apply-batch resume — discard is the AI's signal to
-        // reconsider, not to stop entirely. User can still hit Stop or
-        // close the popup if they're truly done.
-        if (pendingCount > 0
-            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-            && !state.isBusy) {
-            await continueAfterReviewDecision({ action: 'discard', count: pendingCount });
-        }
+    // Proposal-bus click delegation. The bus owns approve / reject / reset
+    // / rollback per-card AND approve-all / reject-all / rollback-turn
+    // turn-actions; any click whose target carries `data-proposal-action`
+    // is consumed here. Returns false for unmatched clicks so the rest of
+    // the popup's handlers (workspace tabs, regenerate, etc.) still fire.
+    $root.on('click.mgSchemaIt', async (e) => {
+        await bus.handleClick(e);
     });
     $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="new-session"]', async (e) => {
         e.preventDefault();
@@ -2370,12 +2276,9 @@ export async function openSchemaIterationStudio(deps) {
         if (!msgId) return;
         await regenerateFromMessage(msgId);
     });
-    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="rollback-batch"]', async (e) => {
-        e.preventDefault();
-        const msgId = resolveMsgId(e.currentTarget);
-        if (!msgId) return;
-        await rollbackBatch(msgId);
-    });
+    // Per-batch rollback is now bus-driven: the turn-actions row rendered
+    // by bus.renderTurnActions emits `data-proposal-action="rollback-turn"`
+    // which the bus click delegator above consumes.
 
     // ── Workspace events ──────────────────────────────────────────────
     // Mobile tab switcher — only relevant when the < 900px media query
@@ -2388,8 +2291,9 @@ export async function openSchemaIterationStudio(deps) {
         setActiveTab(tab);
     });
 
-    // Composer-row auto-apply toggle. Persists per-session via surfaceState.
-    // Toggling ON when edits are already pending applies them immediately,
+    // Composer-row auto-apply toggle. Persists per-session via surfaceState
+    // and mirrors into bus.setAutoApprove. Toggling ON when proposals are
+    // already pending kicks each one through bus.approve immediately,
     // matching the orchestrator's existing behavior.
     $root.on('change.mgSchemaIt', '[data-mg-schema-it-action="toggle-auto-apply"]', async (e) => {
         const checked = Boolean(e.currentTarget?.checked);
@@ -2397,10 +2301,13 @@ export async function openSchemaIterationStudio(deps) {
             ...(state.session.surfaceState || {}),
             autoApply: checked,
         };
+        bus.setAutoApprove(checked);
         await persistSession();
-        if (checked && state.pendingEdits.length > 0) {
+        if (checked) {
             try {
-                await applyPendingEdits();
+                for (const entry of bus._testOnly_entries()) {
+                    if (entry.status === 'pending') await bus.approve(entry.id);
+                }
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] auto-apply on toggle failed`, err);

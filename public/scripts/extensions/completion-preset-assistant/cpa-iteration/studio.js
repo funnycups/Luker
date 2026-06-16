@@ -67,12 +67,17 @@ import {
     runner as ITER_RUNNER,
     zoomOverlay as ITER_ZOOM_OVERLAY,
     ui as ITER_UI,
+    proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
+import { createProfileEditHandler } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
+import { createSkillAuthorHandler } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
+import { createPresetCloneHandler } from '../../../iteration-library/proposal-bus/kinds/preset-clone.js';
 import {
     buildToolCatalog,
     normalizeToolCallToEdit,
     runCpaReadTool,
     runCpaSkillTool,
+    commitApprovedSkillProposal,
     EDITABLE_TOOL_NAMES,
     CONTROL_TOOL_NAMES,
     isCpaControlCall,
@@ -89,7 +94,6 @@ import {
 } from './system-prompts.js';
 import { augmentCpaPromptWithSkills } from './skill-prompt.js';
 const skillsApi = Luker.getContext().skills;
-import { commitApprovedSkillProposal } from '../../../skills/iter-studio-tools.js';
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { CPA_TOOL_DISPLAY } from './tool-display.js';
 
@@ -311,6 +315,27 @@ function createNewSession() {
         title: '',
         messages: [],
         pendingEdits: [],
+        // Per-card skill authoring proposals from the 7 authoring tools +
+        // skill_extract_from_text. Each entry: { id, kind, skillName,
+        // scope, path?, before, after, extras?, op:{name,args}, status:
+        // 'pending'|'approved'|'rejected', sourceCallId, createdAt }.
+        // Reviewed inline on the assistant message that emitted the call;
+        // approved entries commit at Apply time through
+        // commitApprovedSkillProposal (re-derives against on-disk state so
+        // parallel-session drift surfaces as a fresh error). Persisted
+        // alongside pendingEdits so closing mid-conversation preserves the
+        // staged proposals.
+        pendingSkillEdits: [],
+        // Per-card preset clone proposals from preset_clone_to_new. Each
+        // entry: { id, kind:'clone', sourceName, newName, op:{newName},
+        // status, sourceCallId, createdAt }. Approved entries trigger the
+        // real `cloneAndSwitchTarget` at Apply time AND migrate the
+        // current session from the source preset's bucket into the new
+        // preset's bucket so the AI conversation continues uninterrupted
+        // under the new target (Bug 2 fix). Multiple approved clones in
+        // one batch is rare; commit takes the last approved and reports
+        // the earlier ones as superseded.
+        pendingCloneEdits: [],
         surfaceState: {
             historyOpen: false,
             referencePresetName: '',
@@ -499,28 +524,192 @@ export async function openCpaIterationStudio(deps) {
     await ITER_RENDER.ensureMarkdownDeps();
 
     // ──────────────────────────────────────────────────────────────────
-    // Closure-local state.
+    // Closure-local state. Pending writes (preset profile-edit, skill
+    // authoring, preset clone) are owned by the ProposalBus mounted
+    // below — no per-bucket arrays on state any more.
     // ──────────────────────────────────────────────────────────────────
     const state = {
         session: createNewSession(),
         live: null,         // current preset body (cloned from getStored)
         reference: null,    // when referencePresetName is set, the loaded reference body
-        pendingEdits: [],
-        // Pending skill authoring proposals captured from the 8 authoring
-        // tools (skill_create / skill_update_content / skill_edit_content /
-        // skill_update_frontmatter / skill_rename / skill_change_scope /
-        // skill_delete / skill_extract_from_text). Each:
-        // { id, kind, skillName, scope, path?, before, after, op, status,
-        //   sourceCallId, createdAt }. Session-local — reset on session
-        // load. Approved entries commit at Apply time via
-        // commitApprovedSkillProposal (re-derives against current on-disk
-        // state so parallel-session drift surfaces as a fresh error);
-        // rejected entries are discarded.
-        pendingSkillEdits: [],
         isBusy: false,
         aborting: false,
         abortController: null,
     };
+
+    // ──────────────────────────────────────────────────────────────────
+    // ProposalBus mount. Three kinds:
+    //   - 'profile-edit'    — preset sandbox-diff, commits via the
+    //                         preset save path (commitLiveToPreset)
+    //   - 'skill-author'    — skill authoring writes, re-derives against
+    //                         current on-disk state at approve time
+    //   - 'preset-clone'    — cloneAndSwitchTarget + migrateCurrentSession
+    //                         AcrossClone (afterClone hook)
+    // ──────────────────────────────────────────────────────────────────
+    const bus = ITER_PROPOSAL_BUS.createProposalBus({
+        mode: 'cpa',
+        i18n: tf,
+        onChange: () => {
+            if (state.__suspendBusOnChange) return;
+            scheduleBusRender();
+        },
+    });
+
+    let busRenderScheduled = false;
+    function scheduleBusRender() {
+        if (busRenderScheduled) return;
+        busRenderScheduled = true;
+        queueMicrotask(async () => {
+            busRenderScheduled = false;
+            try { await persistSession(); } catch { /* surface elsewhere */ }
+            try { await render(); } catch { /* surface elsewhere */ }
+            await drainBusOutcomes();
+        });
+    }
+
+    bus.registerKind('profile-edit', createProfileEditHandler({
+        commitLive: async (newProfile) => {
+            state.live = newProfile;
+            await commitLiveToPreset();
+        },
+        readLive: async () => {
+            await loadLive();
+            return state.live;
+        },
+        renderDiff: (before, after) => {
+            const edit = { op: 'set', path: '', oldValue: before, newValue: after };
+            return ITER_UI.diff.renderDiffCard([edit], { i18n: tf, live: state.live });
+        },
+        label: () => t('Preset change'),
+        icon: () => '✏',
+        target: () => String(getTargetRef()?.name || ''),
+    }));
+    bus.registerKind('skill-author', createSkillAuthorHandler({
+        commitOp: commitApprovedSkillProposal,
+        readFile: async ({ scope, name, path }) => {
+            try {
+                const raw = await skillsApi.readFile({ scope, name, path });
+                if (typeof raw === 'string') return raw;
+                if (raw && typeof raw.content === 'string') return raw.content;
+                return null;
+            } catch (err) {
+                if (/404|not found/i.test(String(err?.message || err || ''))) return null;
+                throw err;
+            }
+        },
+    }));
+    bus.registerKind('preset-clone', createPresetCloneHandler({
+        cloneAndSwitchTarget: async (newName) => {
+            if (typeof cloneAndSwitchTarget !== 'function') {
+                return { ok: false, error: 'cloneAndSwitchTarget unavailable' };
+            }
+            return cloneAndSwitchTarget(newName);
+        },
+        readSourceSnapshot: async (op) => {
+            const ref = getTargetRef();
+            const stored = getContext()?.presets?.getStored?.(ref);
+            return {
+                sourceName: ref?.name ?? null,
+                exists: Boolean(stored?.body),
+                requestedNewName: op?.newName ?? null,
+            };
+        },
+        afterClone: async (op, _result) => {
+            const newRefRaw = getTargetRef();
+            const newRef = newRefRaw ? { collection: newRefRaw.collection, name: newRefRaw.name } : null;
+            const oldRef = op?._oldRef || null;
+            if (oldRef && newRef && (oldRef.name !== newRef.name || oldRef.collection !== newRef.collection)) {
+                await migrateCurrentSessionAcrossClone(oldRef, newRef);
+            }
+            await loadLive();
+        },
+    }));
+    bus.setMessageResolver((messageId) => {
+        const msgs = state.session?.messages || [];
+        const m = msgs.find((x) => String(x?.id || '') === String(messageId));
+        return m || { id: messageId, toolCalls: [] };
+    });
+
+    // Bus drain pump (matches MG/orch shape).
+    let drainScheduled = false;
+    const __pendingDrainStash = [];
+    async function drainBusOutcomes() {
+        if (drainScheduled) return;
+        const outcomes = bus.drainOutcomes();
+        if (!outcomes.length) return;
+        if (state.isBusy) {
+            __pendingDrainStash.push(...outcomes);
+            return;
+        }
+        const allOutcomes = __pendingDrainStash.length
+            ? [...__pendingDrainStash.splice(0), ...outcomes]
+            : outcomes;
+        const committed = allOutcomes.filter((o) => o.status === 'committed');
+        const rejected = allOutcomes.filter((o) => o.status === 'rejected');
+        const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
+        const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
+        if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
+        const fmt = (o) => `  - ${o.kind}${o.target ? ` (${o.target})` : ''}${o.error ? ` — ${o.error}` : ''}`;
+        const total = committed.length + rejected.length + conflicts.length + rolledBack.length;
+        const lines = [`[User reviewed ${total} proposal(s):`];
+        if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
+        if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
+        if (conflicts.length) { lines.push(`Conflict — retry or reject (${conflicts.length}):`); for (const o of conflicts) lines.push(fmt(o)); }
+        if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        drainScheduled = true;
+        try {
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: lines.join('\n'),
+                at: Date.now(),
+                auto: true,
+            });
+            state.isBusy = true;
+            state.abortController = new AbortController();
+            await persistSession();
+            await render();
+            try {
+                let turn = await runIterationTurn();
+                while (turn?.hadAnyToolCall && !bus.hasOutstanding()) {
+                    await persistSession();
+                    await render();
+                    if (state.abortController?.signal?.aborted) break;
+                    turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                }
+            } catch (err) {
+                if (!isAbortError(err, state.abortController?.signal)) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[${MODULE}] drainBusOutcomes`, err);
+                    state.session.messages.push({
+                        id: makeMessageId(),
+                        role: 'system',
+                        content: tf('Error: ${0}', String(err?.message || err)),
+                        at: Date.now(),
+                    });
+                }
+            } finally {
+                state.isBusy = false;
+                state.aborting = false;
+                state.abortController = null;
+                await persistSession();
+                await render();
+            }
+        } finally {
+            drainScheduled = false;
+        }
+    }
+
+    /**
+     * Predicate the iteration loop checks each round: pause as soon as
+     * ANY user-reviewable proposal is staged (preset edits OR skill
+     * authoring proposals OR preset clone proposals). Delegates to
+     * bus.hasOutstanding for the new single-source-of-truth check.
+     */
+    function hasAnyPendingDecision() {
+        return bus.hasOutstanding();
+    }
 
     // ──────────────────────────────────────────────────────────────────
     // Live state — read from presets.getStored on each turn so external
@@ -559,13 +748,8 @@ export async function openCpaIterationStudio(deps) {
     // call which batches with saveSettingsDebounced under the hood.
     // ──────────────────────────────────────────────────────────────────
     async function persistSession() {
-        // Skip the write when the session is still a transient draft (no
-        // messages, no pending edits). Without this gate, opening the popup
-        // without sending anything would still write an empty session to the
-        // store and bump it into the "recently used" list — accumulating
-        // blank rows across opens.
         const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
-        const hasPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
+        const hasPending = bus.hasOutstanding();
         if (state.session._transient && !hasMessages && !hasPending) {
             return;
         }
@@ -573,11 +757,13 @@ export async function openCpaIterationStudio(deps) {
             delete state.session._transient;
         }
         state.session.updatedAt = Date.now();
-        // Mirror the top-level pendingEdits cache into the persisted bucket
-        // so closing mid-conversation preserves staged-but-not-applied edits
-        // (e.g. AI proposed changes, user closes the popup without clicking
-        // Apply or Discard — reopening shows the same pending block).
-        state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
+        // Bus owns the staging queue; serialize() returns a v2 blob
+        // (entries + outcomeQueue). Drop legacy per-bucket fields if
+        // any sneak in from an older session payload.
+        state.session.proposalBus = bus.serialize();
+        if (state.session.pendingEdits !== undefined) delete state.session.pendingEdits;
+        if (state.session.pendingSkillEdits !== undefined) delete state.session.pendingSkillEdits;
+        if (state.session.pendingCloneEdits !== undefined) delete state.session.pendingCloneEdits;
         if (!state.session.title) {
             const firstUser = state.session.messages.find(m => m.role === 'user');
             if (firstUser) {
@@ -611,15 +797,37 @@ export async function openCpaIterationStudio(deps) {
             messages: Array.isArray(loaded.messages)
                 ? loaded.messages.map(m => normalizeMessageShape(m, fallbackAt))
                 : [],
-            pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
         };
         state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
         state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
-        state.pendingEdits = state.session.pendingEdits.slice();
-        // Skill authoring proposals are session-local — they target on-disk
-        // skill files which a parallel session could have edited, so don't
-        // restore a snapshot across loads; the user re-proposes if needed.
-        state.pendingSkillEdits = [];
+        state.__suspendBusOnChange = true;
+        try {
+            if (loaded.proposalBus && typeof loaded.proposalBus === 'object') {
+                bus.hydrate(loaded.proposalBus);
+            } else if (Array.isArray(loaded.pendingEdits) && loaded.pendingEdits.length > 0) {
+                // One-shot legacy migration: stage each empty-path edit
+                // as a profile-edit proposal so the user can still review
+                // + approve them. Legacy skill / clone pending arrays
+                // were session-local before — drop them.
+                for (const edit of loaded.pendingEdits) {
+                    if (edit?.op !== 'set' || edit?.path !== '') continue;
+                    await bus.propose({
+                        kind: 'profile-edit',
+                        op: { op: 'set', path: '', newValue: edit.newValue },
+                        snapshot: edit.oldValue ?? null,
+                        sourceCallId: null,
+                    });
+                }
+            } else {
+                bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+        delete state.session.pendingEdits;
+        delete state.session.pendingSkillEdits;
+        delete state.session.pendingCloneEdits;
         // Re-read the preset body so the new session's preview + next-turn
         // oldValue snapshots reflect disk state, not the prior session's
         // staged live (N4 fix).
@@ -636,9 +844,13 @@ export async function openCpaIterationStudio(deps) {
         state.abortController = null;
         state.session = createNewSession();
         state.session._transient = true;
-        state.pendingEdits = [];
-        // Session-local skill proposals — a fresh session starts empty.
-        state.pendingSkillEdits = [];
+        state.__suspendBusOnChange = true;
+        try {
+            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
         state.reference = null;
         await loadLive();
         // Don't save the blank session yet — persistSession's _transient
@@ -695,6 +907,7 @@ export async function openCpaIterationStudio(deps) {
             live: isLatestUnapplied ? state.live : undefined,
         });
     }
+
 
     // ──────────────────────────────────────────────────────────────────
     // Skill authoring proposals. Same per-card approve/reject + Apply-time
@@ -855,21 +1068,12 @@ export async function openCpaIterationStudio(deps) {
             toolDisplay: CPA_TOOL_DISPLAY,
             renderEditCard: renderPendingEditCard,
             renderApplyControls: (m) => {
-                // Render apply/rollback row for applied + rolled-back states
-                // on every assistant message; render the pending Apply/Reject
-                // buttons only on the latest unapplied assistant turn so
-                // earlier unapplied turns (superseded by a later round)
-                // don't show buttons that wouldn't operate on their own edits.
-                const isLatestUnapplied = String(m?.id || '') === state.__latestUnappliedAssistantId;
-                const passthroughEdits = isLatestUnapplied ? m.edits : [];
-                return ITER_UI.apply.renderApplyControls(
-                    { ...m, edits: passthroughEdits },
-                    {
-                        i18n: tf,
-                        applyLabel: tf('Apply to ${0}', t('preset')),
-                        actionAttribute: 'data-cpa-it-action',
-                    },
-                );
+                // Bus owns per-card chrome + turn-actions. Legacy Apply
+                // button + per-bucket renderers retired.
+                const cards = bus.renderCardsForMessage(m) || '';
+                const turn = bus.renderTurnActions(m) || '';
+                if (!cards && !turn) return '';
+                return cards + turn;
             },
             isLast,
             i18n: tf,
@@ -877,18 +1081,12 @@ export async function openCpaIterationStudio(deps) {
             actionAttribute: 'data-cpa-it-action',
         });
 
-        // The shared renderer returns '' for auto-continue user messages
-        // (internal plumbing, no user-visible content). Skip the outer
-        // wrapper too so the chat doesn't show empty padded cards.
         if (!innerHtml) return '';
 
         // Preserve CPA's outer flex-row container so the popup's
         // alignment / accent-color / max-width rules in studio.css still
-        // apply. The shared component emits its own `<div
-        // class="luker_lib_message">` inner wrapper; click delegation
-        // resolves msgId from both attributes (see handler block below).
-        const skillHtml = renderSkillPendingForMessage(message);
-        return `<div class="cpa_it_msg ${roleCls}${autoCls}" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">${innerHtml}${skillHtml}</div>`;
+        // apply.
+        return `<div class="cpa_it_msg ${roleCls}${autoCls}" data-cpa-it-msg-id="${escapeHtml(message.id || '')}">${innerHtml}</div>`;
     }
 
     function renderHistoryItem(meta) {
@@ -982,14 +1180,27 @@ export async function openCpaIterationStudio(deps) {
         // retained on the assistant message for diff history / rollback.
         // Short-circuit before scanning so the inline controls disappear
         // the moment the batch is resolved.
+        // Latest-unapplied = the most recent assistant turn that still
+        // owns at least one pending or conflict ProposalBus entry.
         let latestUnappliedAssistantId = '';
-        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
-            for (let i = allMsgs.length - 1; i >= 0; i--) {
-                const m = allMsgs[i];
-                if (m && m.role === 'assistant' && !m.auto
-                    && Array.isArray(m.edits) && m.edits.length > 0
-                    && !m.appliedAt && !m.rolledBackAt) {
-                    latestUnappliedAssistantId = String(m.id || '');
+        if (bus.hasOutstanding()) {
+            const callIdsToTurn = new Map();
+            for (const m of allMsgs) {
+                if (m?.role !== 'assistant' || m?.auto) continue;
+                if (m.appliedAt || m.rolledBackAt) continue;
+                const calls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
+                for (const tc of calls) {
+                    const id = String(tc?.id || '');
+                    if (id) callIdsToTurn.set(id, String(m.id || ''));
+                }
+            }
+            const busEntries = bus._testOnly_entries();
+            for (let i = busEntries.length - 1; i >= 0; i--) {
+                const e = busEntries[i];
+                if (e.status !== 'pending' && e.status !== 'conflict') continue;
+                const owningTurn = callIdsToTurn.get(String(e.sourceCallId || ''));
+                if (owningTurn) {
+                    latestUnappliedAssistantId = owningTurn;
                     break;
                 }
             }
@@ -1052,9 +1263,17 @@ export async function openCpaIterationStudio(deps) {
                     ? (getReferencePresets() || []).map(p => p?.name || '').filter(Boolean)
                     : [];
                 const activeRef = state.session.surfaceState?.referencePresetName || '';
+                const pendingEditsForPreview = [];
+                for (const entry of bus._testOnly_entries()) {
+                    if (entry.status !== 'pending' && entry.status !== 'conflict') continue;
+                    if (entry.kind !== 'profile-edit') continue;
+                    const newValue = entry?.op?.newValue;
+                    if (typeof newValue === 'undefined') continue;
+                    pendingEditsForPreview.push({ op: 'set', path: '', oldValue: entry.snapshot, newValue });
+                }
                 const previewHtml = renderCpaPreviewPane(
                     state.live,
-                    state.pendingEdits || [],
+                    pendingEditsForPreview,
                     savedPresetNames,
                     activeRef,
                     t,
@@ -1396,20 +1615,21 @@ export async function openCpaIterationStudio(deps) {
             presetName: String(getTargetRef?.()?.name || ''),
             context: getContext(),
             // Side-effecting clone hook for the `preset_clone_to_new` read
-            // tool. We wrap the host-provided callable to re-prime live /
-            // reference / preview state after a successful clone, so the
-            // next round's taskMessages already reflect the new target.
-            // Missing callable → null; the tool reports unavailable.
-            cloneAndSwitchTarget: cloneAndSwitchTarget
-                ? async (newName) => {
-                    const result = await cloneAndSwitchTarget(newName);
-                    if (result?.ok) {
-                        await loadLive();
-                        await reloadReference();
-                        await render();
-                    }
-                    return result;
-                }
+            // tool. Now used only as a presence marker — the dispatcher
+            // checks `typeof ctx.cloneAndSwitchTarget === 'function'` to
+            // decide whether to propose a clone, but the actual clone is
+            // deferred to commitApprovedCloneEditsForCpa at Apply time.
+            // We hand over the raw deps.cloneAndSwitchTarget; the
+            // re-priming wrap (loadLive + reloadReference + render) lives
+            // on the commit path so it fires AFTER the user has approved
+            // and the session has been migrated to the new bucket.
+            cloneAndSwitchTarget: cloneAndSwitchTarget || null,
+            // Optional pre-check that lets the dispatcher reject a clone
+            // with a duplicate name BEFORE showing the user a card for a
+            // commit that would fail anyway. Resolved synchronously from
+            // the host's current preset list.
+            checkPresetNameAvailable: typeof deps.checkPresetNameAvailable === 'function'
+                ? deps.checkPresetNameAvailable
                 : null,
         };
         for (const call of readCalls) {
@@ -1431,6 +1651,35 @@ export async function openCpaIterationStudio(deps) {
                             ? resultPayload
                             : { value: resultPayload };
                         resultPayload = { ...base, toolResultText: out.toolResultText };
+                    }
+                    // Park clone proposals on state.pendingCloneEdits so the
+                    // user can review them per-card and the iteration loop
+                    // pauses until they Apply / Discard. The actual clone +
+                    // session migration runs at Apply time in
+                    // commitApprovedCloneEditsForCpa (Bug 1 + Bug 2 fix).
+                    // result.proposed / pending_id already explain to the AI
+                    // that the new preset doesn't exist yet — same contract
+                    // skill authoring uses.
+                    if (out.pendingCloneEdit) {
+                        const oldRefRaw = getTargetRef();
+                        const oldRef = oldRefRaw ? { collection: oldRefRaw.collection, name: oldRefRaw.name } : null;
+                        const { id: pendingId } = await bus.propose({
+                            kind: 'preset-clone',
+                            op: {
+                                sourceName: out.pendingCloneEdit.sourceName,
+                                newName: out.pendingCloneEdit.newName,
+                                _oldRef: oldRef,
+                            },
+                            snapshot: { sourceName: oldRef?.name ?? null, requestedNewName: out.pendingCloneEdit.newName },
+                            sourceCallId: callId,
+                            meta: out.pendingCloneEdit,
+                        });
+                        // Annotate the AI's tool result with the pending_id
+                        // so a future tool call could reference it.
+                        const base = (resultPayload && typeof resultPayload === 'object' && !Array.isArray(resultPayload))
+                            ? resultPayload
+                            : { value: resultPayload };
+                        resultPayload = { ...base, pending_id: pendingId };
                     }
                 } else {
                     // Failures may also carry a tagged-text envelope (e.g. the
@@ -1463,12 +1712,19 @@ export async function openCpaIterationStudio(deps) {
         // Execute skill tools inline. Each call hits the skills HTTP API
         // through `runCpaSkillTool`; results are bound to the call's
         // tool_call_id so the next round's `role: 'tool'` reply matches the
-        // assistant's `tool_calls` entry. Tool returns one of two shapes:
-        //   - { ok, result }                       inventory tools, just a read
-        //   - { ok, result, pendingSkillEdit }     authoring tools — proposal
-        //     envelope parked on state.pendingSkillEdits for user approval;
-        //     commit happens at Apply time via commitApprovedSkillProposal,
-        //     never directly to disk.
+        // assistant's `tool_calls` entry.
+        //
+        // Inventory + verbatim-extract tools resolve to `{ ok, result }` and
+        // their result threads back to the LLM unchanged.
+        //
+        // The 7 authoring tools (+ skill_extract_from_text) resolve to
+        // `{ ok, result, pendingSkillEdit }` — we park the pendingSkillEdit
+        // on `state.pendingSkillEdits` for per-card user review, and tell
+        // the LLM the call was proposed (not yet on disk). Apply-time
+        // commit re-derives against current on-disk state through
+        // `commitApprovedSkillProposal` so parallel-session drift surfaces
+        // as a fresh validation error rather than clobbering with stale
+        // before/after snapshots.
         for (const call of skillCalls) {
             const callId = String(call?.id || `skill_${persistedToolResults.length}_${Date.now().toString(36)}`);
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
@@ -1478,24 +1734,52 @@ export async function openCpaIterationStudio(deps) {
                 const out = await runCpaSkillTool({ id: callId, name: call?.name, args });
                 if (out?.ok) {
                     if (out.pendingSkillEdit) {
-                        const pendingId = `skl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-                        if (!Array.isArray(state.pendingSkillEdits)) state.pendingSkillEdits = [];
-                        state.pendingSkillEdits.push({
-                            id: pendingId,
-                            kind: out.pendingSkillEdit.kind,
-                            skillName: out.pendingSkillEdit.skillName,
-                            scope: out.pendingSkillEdit.scope,
-                            path: out.pendingSkillEdit.path,
-                            before: out.pendingSkillEdit.before,
-                            after: out.pendingSkillEdit.after,
-                            extras: out.pendingSkillEdit.extras,
+                        // Stage as a ProposalBus skill-author entry. The
+                        // handler's readCurrent re-reads the file at
+                        // approve time and refuses to commit if it has
+                        // drifted; snapshot is the {content} captured by
+                        // the tool itself (or null for non-file ops).
+                        const snapshot = (out.pendingSkillEdit.before != null
+                            && typeof out.pendingSkillEdit.before === 'object'
+                            && typeof out.pendingSkillEdit.before.content === 'string')
+                            ? { content: out.pendingSkillEdit.before.content }
+                            : (typeof out.pendingSkillEdit.before === 'string'
+                                ? { content: out.pendingSkillEdit.before }
+                                : null);
+                        const { id: pendingId } = await bus.propose({
+                            kind: 'skill-author',
                             op: out.pendingSkillEdit.op,
-                            status: 'pending',
+                            snapshot,
                             sourceCallId: callId,
-                            createdAt: Date.now(),
+                            meta: {
+                                skillName: out.pendingSkillEdit.skillName,
+                                scope: out.pendingSkillEdit.scope,
+                                path: out.pendingSkillEdit.path,
+                                before: out.pendingSkillEdit.before,
+                                after: out.pendingSkillEdit.after,
+                                extras: out.pendingSkillEdit.extras || null,
+                            },
                         });
+                        // Slim ack to the LLM: keep the dispatcher's own
+                        // result fields (proposed:true / kind / skill /
+                        // scope / path / tool / message) so the
+                        // proposal-mode contract stays intact, and add the
+                        // pending_id so a future tool call could reference
+                        // it explicitly. The big before/after blobs stay
+                        // on the bus's entry meta only — never sent back
+                        // through tool_results to avoid bloating prompt
+                        // budget round-over-round.
+                        const baseResult = (out.result && typeof out.result === 'object' && !Array.isArray(out.result))
+                            ? out.result
+                            : { value: out.result };
+                        resultPayload = {
+                            ...baseResult,
+                            proposed: true,
+                            pending_id: pendingId,
+                        };
+                    } else {
+                        resultPayload = out.result;
                     }
-                    resultPayload = out.result;
                 } else {
                     resultPayload = { error: String(out?.error || 'unknown error') };
                     statusLabel = 'fail';
@@ -1654,51 +1938,26 @@ export async function openCpaIterationStudio(deps) {
         }
         state.session.messages.push(assistantMsg);
 
-        // Replace pendingEdits with this round's batch. We don't append:
-        // staging is per-round so the user can Apply or Discard cleanly
-        // before the next AI request fires.
-        state.pendingEdits = edits;
+        // Stage this turn's profile sandbox-diff as ONE ProposalBus
+        // proposal. The CPA preset sandbox-diff coalesces 1-or-N empty-
+        // path-set edits per turn (each call chained off the previous);
+        // the user-visible card represents the cumulative replace.
+        if (edits.length > 0) {
+            const lastEdit = edits[edits.length - 1];
+            const firstCallId = (editToolCalls.find((c) => c?.id)?.id) || assistantMsg.id;
+            bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+            await bus.propose({
+                kind: 'profile-edit',
+                op: { op: 'set', path: '', newValue: lastEdit.newValue },
+                snapshot: state.live,
+                sourceCallId: firstCallId,
+            });
+        }
 
         // Mobile workspace: if the user was on the Preview tab, bump the
         // chat-tab badge so they know new assistant content arrived without
         // forcing a tab switch.
         bumpChatBadge();
-
-        // Composer-row auto-apply: if enabled AND this turn produced edits,
-        // apply immediately. Errors land in the chat as a system note —
-        // applyPendingEdits already wraps commitLiveToPreset in try/catch.
-        // When auto-apply is on we still push a synthetic apply-outcome
-        // user message so the next round's buildTaskMessages can replay it
-        // and the model sees which edits actually took effect — same
-        // truthful signal review-mode gets via continueAfterReviewDecision.
-        const autoApplyOn = Boolean(state.session.surfaceState?.autoApply);
-        if (autoApplyOn && state.pendingEdits.length > 0) {
-            const autoCount = state.pendingEdits.length;
-            try {
-                const outcome = await applyPendingEdits({ skipRender: true });
-                if (outcome) {
-                    const text = buildApplyOutcomeUserText({
-                        count: autoCount,
-                        applied: outcome.applied,
-                        conflicts: outcome.conflicts,
-                        alreadyDone: outcome.alreadyDone,
-                        cleanEdits: outcome.cleanEdits,
-                        autoApply: true,
-                        skill: outcome.skill,
-                    });
-                    state.session.messages.push({
-                        id: makeMessageId(),
-                        role: 'user',
-                        content: text,
-                        at: Date.now(),
-                        auto: true,
-                    });
-                }
-            } catch (err) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] auto-apply failed`, err);
-            }
-        }
 
         return {
             hadAnyToolCall,
@@ -1727,208 +1986,77 @@ export async function openCpaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
 
     /**
-     * Mirror of orchestrator's commitApprovedSkillEdits — walks
-     * state.pendingSkillEdits in order and commits approved entries via
-     * commitApprovedSkillProposal. Successful commits drop from the list;
-     * rejected drop unconditionally; pending entries survive. On
-     * per-entry failure the walk halts and remaining approved entries
-     * stay queued for retry.
+     * Commit approved skill proposals (the 7 authoring tools +
+     * skill_extract_from_text) at Apply time. Walks `state.pendingSkillEdits`
+     * in order, calling `commitApprovedSkillProposal` per approved entry —
+     * that helper replays the original op against current on-disk state
+     * through skillsApi so parallel-session drift surfaces as a fresh
+     * validation error rather than a clobbering write.
+     *
+     * Drops rejected entries unconditionally. Approved entries that
+     * commit successfully leave the pending list; approved entries that
+     * follow a failed one stay so the user can investigate and retry.
+     * On per-entry failure pushes a system message + toastr.error and
+     * halts the walk.
+     *
+     * Mirrors orchestrator/iter-studio/studio.js#commitApprovedSkillEdits.
      */
-    async function commitApprovedSkillEdits() {
-        const all = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
-        const approved = all.filter(p => p?.status === 'approved');
-        const rejected = all.filter(p => p?.status === 'rejected');
-        const stillPending = all.filter(p => p?.status === 'pending');
-        const snap = (e) => ({ kind: e.kind, skillName: e.skillName, scope: e.scope, path: e.path });
-        const decisionsToDrop = (p) => p?.status === 'rejected';
-        if (approved.length === 0) {
-            const kept = all.filter(p => !decisionsToDrop(p));
-            const droppedRejected = all.length - kept.length;
-            state.pendingSkillEdits = kept;
-            return {
-                committed: 0,
-                failed: 0,
-                failedAt: null,
-                droppedRejected,
-                verdict: {
-                    committed: [],
-                    rejected_dropped: rejected.map(snap),
-                    still_approved: [],
-                    still_pending: stillPending.map(snap),
-                    failed: null,
-                },
-            };
-        }
-        const committedIds = new Set();
-        let failedAt = null;
-        let failedError = null;
-        for (const entry of approved) {
-            try {
-                await commitApprovedSkillProposal(entry.op);
-                committedIds.add(entry.id);
-            } catch (err) {
-                failedAt = entry;
-                failedError = err;
-                break;
-            }
-        }
-        state.pendingSkillEdits = all.filter(p => {
-            if (committedIds.has(p?.id)) return false;
-            if (decisionsToDrop(p)) return false;
-            return true;
-        });
-        if (failedAt) {
-            const errText = String(failedError?.message || failedError || 'unknown error');
-            try {
-                toastr.error(tf('Skill commit failed for ${0} (${1}): ${2}',
-                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText));
-            } catch { /* toastr may be unavailable in tests */ }
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'system',
-                content: tf('Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved entries left in the pending list for retry.',
-                    String(failedAt.skillName || ''), String(failedAt.kind || ''), errText),
-                at: Date.now(),
-            });
-        } else if (committedIds.size > 0) {
-            try {
-                toastr.success(tf('Committed ${0} skill edit(s)', String(committedIds.size)));
-            } catch { /* ignore */ }
-        }
-        const committedSnaps = approved.filter(a => committedIds.has(a.id)).map(snap);
-        const stillApprovedSnaps = approved.filter(a => !committedIds.has(a.id)).map(snap);
-        return {
-            committed: committedIds.size,
-            failed: failedAt ? 1 : 0,
-            failedAt,
-            verdict: {
-                committed: committedSnaps,
-                rejected_dropped: rejected.map(snap),
-                still_approved: stillApprovedSnaps,
-                still_pending: stillPending.map(snap),
-                failed: failedAt
-                    ? {
-                        kind: failedAt.kind,
-                        skillName: failedAt.skillName,
-                        scope: failedAt.scope,
-                        path: failedAt.path,
-                        error: String(failedError?.message || failedError || 'unknown error'),
-                    }
-                    : null,
-            },
-        };
-    }
 
-    async function applyPendingEdits({ skipRender = false } = {}) {
-        const hasPresetPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
-        const hasApprovedSkill = Array.isArray(state.pendingSkillEdits)
-            && state.pendingSkillEdits.some(p => p?.status === 'approved');
-        const hasRejectedSkill = Array.isArray(state.pendingSkillEdits)
-            && state.pendingSkillEdits.some(p => p?.status === 'rejected');
-        if (!hasPresetPending && !hasApprovedSkill && !hasRejectedSkill) {
-            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [] };
-        }
-        if (!hasPresetPending) {
-            // Skill-only path: handles approved commits and rejected-flush
-            // when the user has no preset edits in flight. commitApproved-
-            // SkillEdits drops rejected entries unconditionally, so this
-            // path is reachable whether or not any approved entries exist.
-            const skillResult = await commitApprovedSkillEdits();
-            await persistSession();
-            if (!skipRender) await render();
-            return { proposed: 0, applied: 0, conflicts: [], alreadyDone: [], skill: skillResult };
-        }
-        if (!state.live) await loadLive();
-        const liveSnapshot = state.live;
-        const editsBatch = state.pendingEdits.slice();
-        const result = applyEdits(editsBatch, state.live);
-        const cleanEdits = Array.isArray(result?.clean) ? result.clean : [];
-        const conflicts = Array.isArray(result?.conflicts) ? result.conflicts : [];
-        const alreadyDone = Array.isArray(result?.alreadyDone) ? result.alreadyDone : [];
-        const appliedCount = cleanEdits.length;
-
-        // Only persist live + commit when at least one edit actually changed
-        // state. When every edit was conflict/already-done, the new live is
-        // identical to the snapshot — committing is harmless but pointless,
-        // and stamping appliedAt would lie about effect.
-        if (appliedCount > 0) {
-            state.live = result?.newLive ?? state.live;
-            try {
-                await commitLiveToPreset();
-            } catch (err) {
-                state.live = liveSnapshot;
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] commitLiveToPreset failed`, err);
-                try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* toastr may be unavailable in tests */ }
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Failed to save preset: ${0}', String(err?.message || err)),
-                    at: Date.now(),
-                });
-                await persistSession();
-                if (!skipRender) await render();
-                return { proposed: editsBatch.length, applied: 0, conflicts, alreadyDone, commitFailed: true };
-            }
-        }
-
-        // Toast wording reflects truth, not intent. The synthetic feedback
-        // message built by `continueAfterReviewDecision` carries the full
-        // per-edit detail back to the AI on the next turn.
+    /**
+     * Move the current (non-transient) session from the old preset's
+     * bucket into the new preset's bucket so the AI conversation
+     * survives a `preset_clone_to_new` Apply uninterrupted. Bug 2 fix:
+     * before this hook, the session-store's getTargetRef-based read/
+     * write meant post-clone persistSession() wrote into the new
+     * bucket while the clone-time snapshot stayed stranded in the old
+     * bucket — re-opening either preset showed a partial chat.
+     *
+     * Skips when the session is still transient (no first message
+     * sent, never written to disk) since there's nothing to migrate.
+     * Failures don't abort the clone — the clone has already landed
+     * on disk; the worst case is the user finding the conversation
+     * back in the source preset and re-opening it manually.
+     */
+    async function migrateCurrentSessionAcrossClone(oldRef, newRef) {
+        if (!state.session?.id || state.session?._transient) return;
+        let result;
         try {
-            if (appliedCount === editsBatch.length) {
-                toastr.success(tf('Applied ${0} edit(s) to ${1}', String(appliedCount), t('preset')));
-            } else if (appliedCount > 0) {
-                toastr.warning(tf('Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped',
-                    String(appliedCount), String(editsBatch.length), t('preset'),
-                    String(conflicts.length + alreadyDone.length)));
-            } else {
-                toastr.warning(tf('No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)',
-                    t('preset'), String(editsBatch.length)));
-            }
-        } catch { /* ignore */ }
-
-        // Mark the most recent unapplied assistant message that owns these
-        // edits. We scan back from the end because the just-rendered turn
-        // is the typical target; rare cases (user clicks Apply on a stale
-        // session reopened with persisted pendingEdits) still hit a sane
-        // candidate as long as one exists. Only stamp appliedAt when at
-        // least one edit actually landed — a zero-clean batch should not
-        // render the IDE-style "✓ Applied" check.
-        if (appliedCount > 0) {
-            const messages = state.session.messages || [];
-            for (let i = messages.length - 1; i >= 0; i--) {
-                const m = messages[i];
-                if (m.role === 'assistant' && Array.isArray(m.edits) && m.edits.length > 0 && !m.appliedAt) {
-                    m.appliedAt = Date.now();
-                    m.appliedTarget = 'preset';
-                    // Record the truth of the apply: how many of the batch
-                    // actually changed state vs how many were conflicts /
-                    // already-done. UI can show "✓ Applied 2/4" when these
-                    // diverge; existing renderers ignore the extra fields.
-                    m.appliedCount = appliedCount;
-                    m.appliedProposed = editsBatch.length;
-                    break;
-                }
-            }
+            result = await sessionStore.moveSessionTo(state.session.id, oldRef, newRef);
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] migrateCurrentSessionAcrossClone threw`, err);
+            try { toastr.warning(tf('Clone succeeded but session migration failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
+            return;
         }
-
-        state.pendingEdits = [];
-        // Skill commit phase: only runs once the preset commit succeeded
-        // (or there was nothing to commit on the preset side). Approved
-        // entries write to disk via skillsApi; rejected drop; pending
-        // survive into the next Apply so the user can return to them.
-        const skillResult = await commitApprovedSkillEdits();
-        await persistSession();
-        if (!skipRender) await render();
-        return { proposed: editsBatch.length, applied: appliedCount, conflicts, alreadyDone, cleanEdits, skill: skillResult };
+        if (!result?.ok) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] migrateCurrentSessionAcrossClone reported`, result);
+            try { toastr.warning(tf('Clone succeeded but session migration failed: ${0}', String(result?.error || 'unknown'))); } catch { /* ignore */ }
+            return;
+        }
+        if (result.moved) {
+            try { toastr.info(tf('Session moved to "${0}"', String(newRef?.name || ''))); } catch { /* ignore */ }
+        }
     }
 
-    async function discardPendingEdits() {
-        state.pendingEdits = [];
-        await persistSession();
-        await render();
-    }
+    /**
+     * Commit approved clone proposals at Apply time. Walks
+     * `state.pendingCloneEdits`; when more than one approved clone
+     * exists in a single batch, the LAST approved wins (clones switch
+     * the popup target, so chaining them doesn't make sense) and the
+     * earlier ones get reported as superseded in the AI verdict.
+     *
+     * On success: calls the raw `deps.cloneAndSwitchTarget(newName)`
+     * (NOT the ctxForReads wrap — that wrap was used in pre-proposal
+     * inline-mode and re-primed live / reference / render, which we
+     * now do manually here AFTER the session has been migrated). Then
+     * runs migrateCurrentSessionAcrossClone before re-priming the
+     * popup's live / reference / preview state.
+     *
+     * Rejected entries are dropped unconditionally so a stale Reject
+     * doesn't hang around in the pending list.
+     */
+
 
     /**
      * Fire the next AI round after the user reviewed a paused batch
@@ -1947,182 +2075,7 @@ export async function openCpaIterationStudio(deps) {
      * so the LLM can correct its next round (fix the anchor, re-read
      * the field, etc) instead of looping the same broken call.
      */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, autoApply = false, skill = null }) {
-        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
-        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
-        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
-        const appliedNum = Number.isInteger(applied) ? applied : count;
-        const skipped = conflictArr.length + alreadyArr.length;
-        const prefix = autoApply
-            ? 'Auto-apply ran'
-            : 'User reviewed this round';
 
-        // Translate the raw engine conflict reason into something the AI
-        // can act on directly. The lib-level `value_drifted` on a string
-        // op always means "the path didn't resolve to a string" — most
-        // commonly because the AI keyed prompts[] by identifier
-        // (prompts['uuid'] returns undefined) or computed a stale array
-        // index. anchor_missing means the find text isn't there at all
-        // (often because earlier edits already removed it). anchor_
-        // ambiguous means the find text appears more than expected_count
-        // times. The hints below give the AI a concrete next action
-        // (which tool to try, whether to re-read first) so retries are
-        // productive instead of repeating the same broken call.
-        function explainReason(edit, reason) {
-            const isStrOp = edit?.op === 'str_replace' || edit?.op === 'str_insert' || edit?.op === 'str_delete';
-            if (reason === 'value_drifted' && isStrOp) {
-                return 'path_not_string (the path you targeted does not resolve to a string field; prompts[] is an Array — `prompts[<identifier>]` does not work. Either use the *_in_prompt tool family with the identifier, or look up the correct numeric index from the outline\'s @prompts[N] hint)';
-            }
-            if (reason === 'anchor_missing') {
-                return 'anchor_missing (the `find` / `after_text` substring does not exist in the target content; call preset_read_live_fields on this path before retrying — your prior edits may already have removed it)';
-            }
-            if (reason === 'anchor_ambiguous') {
-                return 'anchor_ambiguous (the substring appears more than expected_count times; pass a longer unique anchor or set expected_count explicitly)';
-            }
-            return reason;
-        }
-
-        // Summarize each clean edit so the model knows *what* changed,
-        // not just *how many*. Coarse `set` on `prompts` / `prompt_order`
-        // is what prompt-aware tools (upsert_prompt_entry,
-        // upsert_prompt_order_item, etc.) collapse into — make those
-        // legible so a later round doesn't re-run the same toggle.
-        function describeClean(edit) {
-            const op = String(edit?.op || '?');
-            const path = String(edit?.path || '<root>');
-            if (op === 'set' && (path === 'prompts' || path === 'prompt_order')) {
-                return `${op}(${path}) — array replaced wholesale by a prompt-aware tool; enabled flags / order positions / entries may all have shifted`;
-            }
-            if (op === 'set' && /^prompts\[\d+\]\.content$/.test(path)) {
-                return `${op}(${path}) — entry content overwritten`;
-            }
-            if ((op === 'str_replace' || op === 'str_insert' || op === 'str_delete') && path) {
-                return `${op}(${path})`;
-            }
-            return `${op}(${path})`;
-        }
-
-        const lines = [];
-        if (skipped === 0) {
-            lines.push(`[${prefix}: all ${count} pending edit(s) took effect.`);
-        } else {
-            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect, ${skipped} skipped.`);
-            if (conflictArr.length > 0) {
-                lines.push('Skipped (conflicts):');
-                for (const c of conflictArr) {
-                    const edit = c?.edit || {};
-                    const op = String(edit.op || '?');
-                    const path = String(edit.path || '<root>');
-                    const reason = explainReason(edit, String(c?.reason || 'unknown'));
-                    lines.push(`  - ${op}(${path}): ${reason}`);
-                }
-            }
-            if (alreadyArr.length > 0) {
-                lines.push('Already in desired state (no-op):');
-                for (const e of alreadyArr) {
-                    const op = String(e?.op || '?');
-                    const path = String(e?.path || '<root>');
-                    lines.push(`  - ${op}(${path})`);
-                }
-            }
-            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
-        }
-        // List the paths that actually changed so the AI carries a record
-        // of "what state moved this round" into the next turn. Without
-        // this, "all 2 took effect" leaves the AI guessing which paths
-        // mutated, and it commonly re-issues the same toggle in a later
-        // round (the bug that drove the 4-noop sequence in the prior
-        // session).
-        if (cleanArr.length > 0 && appliedNum > 0) {
-            lines.push('Applied paths (state that moved this round):');
-            for (const e of cleanArr) {
-                lines.push(`  - ${describeClean(e)}`);
-            }
-        }
-        // Skill decisions — load-bearing for the next round so the AI sees
-        // which proposals the user accepted/rejected and stops re-issuing
-        // declined edits.
-        if (skill && skill.verdict) {
-            const v = skill.verdict;
-            const fmtSkill = (e) => `    - ${String(e.skillName || '')} [${String(e.kind || '?')}]${e.path ? ` ${String(e.path)}` : ''}`;
-            const hasAny = (v.committed?.length || 0) + (v.rejected_dropped?.length || 0)
-                + (v.still_approved?.length || 0) + (v.still_pending?.length || 0)
-                + (v.failed ? 1 : 0);
-            if (hasAny > 0) {
-                lines.push('Skill decisions from this Apply:');
-                if (Array.isArray(v.committed) && v.committed.length > 0) {
-                    lines.push('  Committed (now live on disk):');
-                    for (const e of v.committed) lines.push(fmtSkill(e));
-                }
-                if (Array.isArray(v.rejected_dropped) && v.rejected_dropped.length > 0) {
-                    lines.push('  Rejected by user (dropped, never written to disk; do NOT re-propose without addressing the reason the user might have rejected — they likely have a reason):');
-                    for (const e of v.rejected_dropped) lines.push(fmtSkill(e));
-                }
-                if (Array.isArray(v.still_approved) && v.still_approved.length > 0) {
-                    lines.push('  Still approved but not yet committed (a commit failure halted the walk; the user can retry):');
-                    for (const e of v.still_approved) lines.push(fmtSkill(e));
-                }
-                if (Array.isArray(v.still_pending) && v.still_pending.length > 0) {
-                    lines.push('  Still pending user decision (not yet approved or rejected):');
-                    for (const e of v.still_pending) lines.push(fmtSkill(e));
-                }
-                if (v.failed) {
-                    lines.push(`  Commit failed for ${String(v.failed.skillName || '')} [${String(v.failed.kind || '?')}]: ${String(v.failed.error || 'unknown')}`);
-                }
-            }
-        }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
-        return lines.join('\n');
-    }
-
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits, skill = null }) {
-        if (state.isBusy) return;
-        const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, skill })
-            : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
-
-        state.session.messages.push({
-            id: makeMessageId(),
-            role: 'user',
-            content: userText,
-            at: Date.now(),
-            auto: true,
-        });
-
-        state.isBusy = true;
-        // Mirror handleSendMessage: seed the AbortController before the
-        // pre-flight awaits so a Stop click during persist+render is
-        // honored instead of dropped onto a null controller.
-        state.abortController = new AbortController();
-        await persistSession();
-        await render();
-        try {
-            let turn = await runIterationTurn();
-            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
-                await persistSession();
-                await render();
-                if (state.abortController?.signal?.aborted) break;
-                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
-            }
-        } catch (err) {
-            if (!isAbortError(err, state.abortController?.signal)) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] continueAfterReviewDecision`, err);
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
-                    at: Date.now(),
-                });
-            }
-        } finally {
-            state.isBusy = false;
-            state.aborting = false;
-            state.abortController = null;
-            await persistSession();
-            await render();
-        }
-    }
 
     // ──────────────────────────────────────────────────────────────────
     // Per-message actions.
@@ -2157,12 +2110,24 @@ export async function openCpaIterationStudio(deps) {
         const userText = String(messages[userIdx].content || '');
         // Truncate before the user message; the resend will push it again.
         state.session.messages = messages.slice(0, userIdx);
-        state.pendingEdits = [];
-        state.session.pendingEdits = [];
-        // Skill proposals belonged to the round being regenerated; drop
-        // them so the resend produces fresh proposals against the (now
-        // truncated) conversation state.
-        state.pendingSkillEdits = [];
+        // Reject bus proposals whose source tool call was just removed.
+        const survivingCallIds = new Set();
+        for (const m of state.session.messages) {
+            if (Array.isArray(m?.toolCalls)) {
+                for (const tc of m.toolCalls) if (tc?.id) survivingCallIds.add(String(tc.id));
+            }
+        }
+        state.__suspendBusOnChange = true;
+        try {
+            for (const entry of bus._testOnly_entries()) {
+                const cid = String(entry.sourceCallId || '');
+                if (entry.status === 'pending' && cid && !survivingCallIds.has(cid)) {
+                    bus.reject(entry.id);
+                }
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
         await persistSession();
         await render();
         const $textarea = $root.find('[data-cpa-it-input]');
@@ -2170,51 +2135,6 @@ export async function openCpaIterationStudio(deps) {
         await handleSendMessage();
     }
 
-    async function rollbackBatch(messageId) {
-        if (state.isBusy) return;
-        const msg = (state.session.messages || []).find(m => m && m.id === messageId);
-        if (!msg) return;
-        if (!msg.appliedAt || msg.rolledBackAt) return;
-        if (!Array.isArray(msg.edits) || msg.edits.length === 0) return;
-        // eslint-disable-next-line no-alert
-        if (!confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
-
-        await loadLive();
-        let working = state.live;
-        // Build inverses up-front so an unsupported op fails BEFORE we
-        // partial-apply anything. Right-to-left inversion handles dependent
-        // edits (e.g. set then list_insert) cleanly.
-        const inverses = [];
-        for (const edit of msg.edits.slice().reverse()) {
-            try {
-                inverses.push(inverseEdit(edit));
-            } catch (err) {
-                console.warn(`[${MODULE}] inverseEdit failed`, edit, err);
-                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* ignore */ }
-                return;
-            }
-        }
-        try {
-            const result = applyEdits(inverses, working);
-            working = result?.newLive ?? working;
-        } catch (err) {
-            console.warn(`[${MODULE}] applyEdits(inverses) failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
-            return;
-        }
-        state.live = working;
-        try {
-            await commitLiveToPreset();
-        } catch (err) {
-            console.warn(`[${MODULE}] commitLiveToPreset(rollback) failed`, err);
-            try { toastr.error(tf('Apply failed: ${0}', String(err?.message || err))); } catch { /* ignore */ }
-            return;
-        }
-        msg.rolledBackAt = Date.now();
-        await persistSession();
-        try { toastr.success(t('Rolled back')); } catch { /* ignore */ }
-        await render();
-    }
 
     // ──────────────────────────────────────────────────────────────────
     // Send-message handler. Q6: user message is pushed AND rendered
@@ -2264,7 +2184,7 @@ export async function openCpaIterationStudio(deps) {
         await render();   // Q6: user message visible before LLM wait
         try {
             let turn = await runIterationTurn();
-            while (turn?.hadAnyToolCall && state.pendingEdits.length === 0) {
+            while (turn?.hadAnyToolCall && !hasAnyPendingDecision()) {
                 await persistSession();
                 await render();   // progressive: prior round visible before next
                 if (state.abortController?.signal?.aborted) break;
@@ -2314,13 +2234,33 @@ export async function openCpaIterationStudio(deps) {
                     messages: Array.isArray(loaded.messages)
                         ? loaded.messages.map(m => normalizeMessageShape(m, fallbackAt))
                         : [],
-                    pendingEdits: Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [],
                 };
                 state.session.surfaceState.sessionMode = sanitizeSessionMode(state.session.surfaceState.sessionMode);
                 state.session.surfaceState.autoApply = !!state.session.surfaceState.autoApply;
-                state.pendingEdits = state.session.pendingEdits.slice();
-                // Skill proposals are session-local — reset on session reload.
-                state.pendingSkillEdits = [];
+                state.__suspendBusOnChange = true;
+                try {
+                    if (loaded.proposalBus && typeof loaded.proposalBus === 'object') {
+                        bus.hydrate(loaded.proposalBus);
+                    } else if (Array.isArray(loaded.pendingEdits) && loaded.pendingEdits.length > 0) {
+                        for (const edit of loaded.pendingEdits) {
+                            if (edit?.op !== 'set' || edit?.path !== '') continue;
+                            await bus.propose({
+                                kind: 'profile-edit',
+                                op: { op: 'set', path: '', newValue: edit.newValue },
+                                snapshot: edit.oldValue ?? null,
+                                sourceCallId: null,
+                            });
+                        }
+                    } else {
+                        bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+                    }
+                } finally {
+                    state.__suspendBusOnChange = false;
+                }
+                bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+                delete state.session.pendingEdits;
+                delete state.session.pendingSkillEdits;
+                delete state.session.pendingCloneEdits;
                 await reloadReference();
                 return;
             }
@@ -2441,49 +2381,14 @@ export async function openCpaIterationStudio(deps) {
         await persistSession();
     });
 
-    // Apply / Discard the staged batch. Selectors use `apply-batch` /
-    // `discard-batch` because the row is rendered by
-    // `iteration-library/ui/apply.renderApplyControls`, which emits those
-    // values via the `actionAttribute: 'data-cpa-it-action'` opt — the
-    // same convention M1.4's `renderMessageCard` uses for per-message
-    // rollback/regenerate buttons (handlers further down).
-    $root.on('click.cpaIt', '[data-cpa-it-action="apply-batch"]', async (e) => {
-        e.preventDefault();
-        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        const outcome = await applyPendingEdits();
-        // After the user reviewed + applied a paused batch, fire the next
-        // AI round with a synthetic "user approved" message. The handle-
-        // SendMessage loop only paused because pendingEdits gated human
-        // review; the AI was mid-iteration and expects a result. Pass the
-        // real outcome (applied / conflicts / alreadyDone) so the AI sees
-        // truthful detail instead of just a proposed-count claim.
-        if (pendingCount > 0
-            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-            && !state.isBusy) {
-            await continueAfterReviewDecision({
-                action: 'apply',
-                count: pendingCount,
-                applied: outcome?.applied,
-                conflicts: outcome?.conflicts,
-                alreadyDone: outcome?.alreadyDone,
-                cleanEdits: outcome?.cleanEdits,
-                skill: outcome?.skill,
-            });
-        }
+    // ProposalBus click delegation. Approve / reject / reset / rollback
+    // per-card AND approve-all / reject-all / rollback-turn turn-actions
+    // are consumed here. Unmatched clicks fall through to the popup's
+    // other handlers (session switch, regenerate, etc.).
+    $root.on('click.cpaIt', async (e) => {
+        await bus.handleClick(e);
     });
-    $root.on('click.cpaIt', '[data-cpa-it-action="discard-batch"]', async (e) => {
-        e.preventDefault();
-        const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-        await discardPendingEdits();
-        // Mirror the apply-batch resume — discard is the AI's signal to
-        // reconsider, not to stop entirely. User can still hit Stop or
-        // close the popup if they're truly done.
-        if (pendingCount > 0
-            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-            && !state.isBusy) {
-            await continueAfterReviewDecision({ action: 'discard', count: pendingCount });
-        }
-    });
+
     $root.on('click.cpaIt', '[data-cpa-it-action="new-session"]', async (e) => {
         e.preventDefault();
         await startNewSession();
@@ -2600,12 +2505,8 @@ export async function openCpaIterationStudio(deps) {
         if (!msgId) return;
         await regenerateFromMessage(msgId);
     });
-    $root.on('click.cpaIt', '[data-cpa-it-action="rollback-batch"]', async (e) => {
-        e.preventDefault();
-        const msgId = resolveMsgId(e.currentTarget);
-        if (!msgId) return;
-        await rollbackBatch(msgId);
-    });
+    // Per-batch rollback is now bus-driven via turn-actions on the
+    // assistant card; bus.rollbackAllInTurn(message) handles it.
 
     // ── Workspace events ──────────────────────────────────────────────
     // Mobile tab switcher — only relevant when the < 900px media query
@@ -2618,19 +2519,22 @@ export async function openCpaIterationStudio(deps) {
         setActiveTab(tab);
     });
 
-    // Composer-row auto-apply toggle. Persists per-session via surfaceState.
-    // Toggling ON when edits are already pending applies them immediately,
-    // matching the orchestrator's existing behavior.
+    // Composer-row auto-apply toggle. Persists per-session via surfaceState
+    // and mirrors into bus.setAutoApprove. Toggling ON kicks each pending
+    // proposal through bus.approve immediately.
     $root.on('change.cpaIt', '[data-cpa-it-action="toggle-auto-apply"]', async (e) => {
         const checked = Boolean(e.currentTarget?.checked);
         state.session.surfaceState = {
             ...(state.session.surfaceState || {}),
             autoApply: checked,
         };
+        bus.setAutoApprove(checked);
         await persistSession();
-        if (checked && state.pendingEdits.length > 0) {
+        if (checked) {
             try {
-                await applyPendingEdits();
+                for (const entry of bus._testOnly_entries()) {
+                    if (entry.status === 'pending') await bus.approve(entry.id);
+                }
             } catch (err) {
                 // eslint-disable-next-line no-console
                 console.warn(`[${MODULE}] auto-apply on toggle failed`, err);

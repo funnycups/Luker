@@ -64,6 +64,7 @@ import {
     runner as ITER_RUNNER,
     ui as ITER_UI,
     zoomOverlay as ITER_ZOOM_OVERLAY,
+    proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
 import {
     commitCharacterEditorOperations,
@@ -92,6 +93,8 @@ import { migrateLegacyCeaEditorSession } from './session-migration.js';
 const MODULE = 'cea-editor-unified';
 const STYLESHEET_ID = 'cea_editor_studio_stylesheet';
 const STYLESHEET_HREF = '/scripts/extensions/character-editor-assistant/editor-iteration/studio.css';
+const PROPOSAL_BUS_STYLESHEET_ID = 'cea_editor_proposal_bus_stylesheet';
+const PROPOSAL_BUS_STYLESHEET_HREF = '/scripts/iteration-library/proposal-bus/proposal-bus.css';
 
 /**
  * Loose AbortError detector. The runner may throw a DOMException with name
@@ -110,13 +113,20 @@ function isAbortError(err, signal) {
 
 function ensureStylesheetInjected() {
     if (typeof document === 'undefined') return;
-    if (!STYLESHEET_HREF) return;
-    if (document.getElementById(STYLESHEET_ID)) return;
-    const link = document.createElement('link');
-    link.id = STYLESHEET_ID;
-    link.rel = 'stylesheet';
-    link.href = STYLESHEET_HREF;
-    document.head.appendChild(link);
+    if (STYLESHEET_HREF && !document.getElementById(STYLESHEET_ID)) {
+        const link = document.createElement('link');
+        link.id = STYLESHEET_ID;
+        link.rel = 'stylesheet';
+        link.href = STYLESHEET_HREF;
+        document.head.appendChild(link);
+    }
+    if (!document.getElementById(PROPOSAL_BUS_STYLESHEET_ID)) {
+        const link = document.createElement('link');
+        link.id = PROPOSAL_BUS_STYLESHEET_ID;
+        link.rel = 'stylesheet';
+        link.href = PROPOSAL_BUS_STYLESHEET_HREF;
+        document.head.appendChild(link);
+    }
 }
 
 const HTML_ENTITY_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -1453,7 +1463,7 @@ async function loadSessionIntoState(state, sessionId, opts = {}) {
     if (state.isBusy) {
         try { state.abortController?.abort(); } catch { /* ignore */ }
     }
-    const { sessionStore, buildLiveSnapshot, context, avatar } = opts;
+    const { sessionStore, buildLiveSnapshot, context, avatar, hydrateBus } = opts;
     let loaded = null;
     try {
         if (sessionStore && typeof sessionStore.load === 'function') {
@@ -1465,7 +1475,20 @@ async function loadSessionIntoState(state, sessionId, opts = {}) {
     }
     if (!loaded) return false;
     state.session = loaded;
-    state.pendingEdits = Array.isArray(loaded.pendingEdits) ? loaded.pendingEdits.slice() : [];
+    state.pendingEdits = [];
+    // Hand the loaded session's bus blob (+ any legacy pendingEdits
+    // payload) to the popup's hydrate hook so the bus reflects what was
+    // on disk. The popup decides how to map legacy edits into the new
+    // kinds — we just thread the data through.
+    if (typeof hydrateBus === 'function') {
+        try {
+            await hydrateBus(loaded);
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] hydrateBus failed during load-session`, err);
+        }
+    }
+    if (state.session.pendingEdits !== undefined) delete state.session.pendingEdits;
     try {
         if (typeof buildLiveSnapshot === 'function') {
             const built = await buildLiveSnapshot(context, avatar);
@@ -1598,6 +1621,305 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         abortController: null,
     };
 
+    // ──────────────────────────────────────────────────────────────────
+    // ProposalBus. CEA edits are fine-grained (per-field path-keyed
+    // ops); rather than render one card per field, the bus groups each
+    // turn's roundEdits by target — character edits → one
+    // 'cea-character-edits' proposal, each book → one
+    // 'cea-lorebook-edits' proposal. Snapshot is the whole
+    // character/book at propose time; drift detection compares the
+    // sha256 of that snapshot against the same shape read at approve
+    // time. Approve commits through the existing module-level helpers
+    // (commitCharacterEditorOperations / commitLorebookOperations) so
+    // the per-edit conflict / already-done detail still flows back.
+    //
+    // state.pendingEdits is kept as the runtime accumulator (runIteration
+    // Turn writes into it); after each turn we group + propose to the
+    // bus and clear the accumulator. The bus is the source of truth
+    // for UI + the auto-continue gate.
+    // ──────────────────────────────────────────────────────────────────
+    const bus = ITER_PROPOSAL_BUS.createProposalBus({
+        mode: 'cea-editor',
+        i18n: tf,
+        onChange: () => {
+            if (state.__suspendBusOnChange) return;
+            scheduleBusRender();
+        },
+    });
+
+    let busRenderScheduled = false;
+    function scheduleBusRender() {
+        if (busRenderScheduled) return;
+        busRenderScheduled = true;
+        queueMicrotask(async () => {
+            busRenderScheduled = false;
+            try { await persistSession(); } catch { /* surface elsewhere */ }
+            try { await render(); } catch { /* surface elsewhere */ }
+            await drainBusOutcomes();
+        });
+    }
+
+    const { sha256OfJson } = ITER_PROPOSAL_BUS;
+    const fingerprintOfJson = sha256OfJson;
+
+    bus.registerKind('cea-character-edits', {
+        fingerprint: (snapshot) => fingerprintOfJson(snapshot ?? null),
+        readCurrent: async () => {
+            try {
+                const built = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                const snap = built?.character || {};
+                return { snapshot: snap, fingerprint: await fingerprintOfJson(snap) };
+            } catch {
+                return { snapshot: null, fingerprint: await fingerprintOfJson(null) };
+            }
+        },
+        commit: async (op) => {
+            const edits = Array.isArray(op?.edits) ? op.edits.map(rebasePathToTarget) : [];
+            if (edits.length === 0) return;
+            const result = await commitCharacterEditorOperations(
+                context,
+                String(avatar || state.session?.avatar || ''),
+                edits,
+                { liveCharacter: state.live?.character || {} },
+            );
+            if (result && Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+                const reasons = result.conflicts.map(c => c?.reason).filter(Boolean).join('; ');
+                throw new Error(`${result.conflicts.length} conflict(s)${reasons ? ': ' + reasons : ''}`);
+            }
+            // Refresh live so subsequent edits see committed state.
+            try {
+                const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                if (refreshed?.character) state.live.character = refreshed.character;
+            } catch { /* best-effort */ }
+        },
+        inverse: (op, snapshot) => {
+            if (!snapshot || typeof snapshot !== 'object') return null;
+            const edits = Array.isArray(op?.edits) ? op.edits : [];
+            if (edits.length === 0) return null;
+            const inverses = [];
+            try {
+                for (const e of [...edits].reverse()) {
+                    const inv = inverseEdit(e);
+                    if (inv) inverses.push(inv);
+                }
+            } catch {
+                return null;
+            }
+            if (inverses.length === 0) return null;
+            return { edits: inverses };
+        },
+        renderDiffCard: (entry, helpers) => {
+            const edits = Array.isArray(entry?.op?.edits) ? entry.op.edits : [];
+            if (edits.length === 0) return '';
+            const escape = helpers?.escapeHtml || ((s) => String(s ?? ''));
+            const body = edits.map((e) => ITER_UI.diff.renderDiffCard([e], {
+                i18n: tf,
+                fieldLabels: computeEditFieldLabels(e, state.live, t),
+                live: resolveLiveForEdit(e, state.live),
+            })).join('');
+            return `<div class="cea_proposal_edits_body">${body}</div>`;
+        },
+        label: () => t('Character edits'),
+        icon: () => '👤',
+        target: () => {
+            const name = state.live?.character?.name || avatar;
+            return String(name);
+        },
+        inverseAvailable: true,
+    });
+
+    bus.registerKind('cea-lorebook-edits', {
+        fingerprint: (snapshot) => fingerprintOfJson(snapshot ?? null),
+        readCurrent: async (op) => {
+            const bookName = op?.bookName ?? '';
+            try {
+                const built = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                const snap = built?.lorebooks?.[bookName] || null;
+                return { snapshot: snap, fingerprint: await fingerprintOfJson(snap) };
+            } catch {
+                return { snapshot: null, fingerprint: await fingerprintOfJson(null) };
+            }
+        },
+        commit: async (op) => {
+            const bookName = op?.bookName ?? '';
+            const edits = Array.isArray(op?.edits) ? op.edits.map(rebasePathToTarget) : [];
+            if (!bookName || edits.length === 0) return;
+            const liveBook = state.live?.lorebooks?.[bookName] || { entries: {} };
+            const result = await commitLorebookOperations(bookName, liveBook, edits, { context, settings });
+            if (result && Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+                const reasons = result.conflicts.map(c => c?.reason).filter(Boolean).join('; ');
+                throw new Error(`${result.conflicts.length} conflict(s)${reasons ? ': ' + reasons : ''}`);
+            }
+            try {
+                const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                if (refreshed?.lorebooks) state.live.lorebooks = refreshed.lorebooks;
+            } catch { /* best-effort */ }
+        },
+        inverse: (op, snapshot) => {
+            if (!snapshot || typeof snapshot !== 'object') return null;
+            const edits = Array.isArray(op?.edits) ? op.edits : [];
+            if (edits.length === 0) return null;
+            const inverses = [];
+            try {
+                for (const e of [...edits].reverse()) {
+                    const inv = inverseEdit(e);
+                    if (inv) inverses.push(inv);
+                }
+            } catch {
+                return null;
+            }
+            if (inverses.length === 0) return null;
+            return { bookName: op?.bookName, edits: inverses };
+        },
+        renderDiffCard: (entry, helpers) => {
+            const edits = Array.isArray(entry?.op?.edits) ? entry.op.edits : [];
+            if (edits.length === 0) return '';
+            const body = edits.map((e) => ITER_UI.diff.renderDiffCard([e], {
+                i18n: tf,
+                fieldLabels: computeEditFieldLabels(e, state.live, t),
+                live: resolveLiveForEdit(e, state.live),
+            })).join('');
+            return `<div class="cea_proposal_edits_body">${body}</div>`;
+        },
+        label: () => t('Lorebook edits'),
+        icon: () => '📚',
+        target: (entry) => String(entry?.op?.bookName || ''),
+        inverseAvailable: true,
+    });
+
+    bus.setMessageResolver((messageId) => {
+        const msgs = state.session?.messages || [];
+        const m = msgs.find((x) => String(x?.id || '') === String(messageId));
+        return m || { id: messageId, toolCalls: [] };
+    });
+
+    // Bus drain pump — push an outcome summary into the chat then re-fire
+    // a continuation round. Matches the orch/CPA/MG pattern.
+    let drainScheduled = false;
+    const __pendingDrainStash = [];
+    async function drainBusOutcomes() {
+        if (drainScheduled) return;
+        const outcomes = bus.drainOutcomes();
+        if (!outcomes.length) return;
+        if (state.isBusy) {
+            __pendingDrainStash.push(...outcomes);
+            return;
+        }
+        const allOutcomes = __pendingDrainStash.length
+            ? [...__pendingDrainStash.splice(0), ...outcomes]
+            : outcomes;
+        const committed = allOutcomes.filter((o) => o.status === 'committed');
+        const rejected = allOutcomes.filter((o) => o.status === 'rejected');
+        const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
+        const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
+        if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
+        const fmt = (o) => `  - ${o.kind}${o.target ? ` (${o.target})` : ''}${o.error ? ` — ${o.error}` : ''}`;
+        const total = allOutcomes.length;
+        const lines = [`[User reviewed ${total} proposal(s):`];
+        if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
+        if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
+        if (conflicts.length) { lines.push(`Conflict — disk changed externally; retry or reject (${conflicts.length}):`); for (const o of conflicts) lines.push(fmt(o)); }
+        if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
+        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        drainScheduled = true;
+        try {
+            state.session.messages.push({
+                id: makeMessageId(),
+                role: 'user',
+                content: lines.join('\n'),
+                at: Date.now(),
+                auto: true,
+            });
+            state.isBusy = true;
+            const ac = new AbortController();
+            state.abortController = ac;
+            await persistSession();
+            await render();
+            try {
+                await runIterationTurn(state, {
+                    userText: '',
+                    context,
+                    settings,
+                    helperApis,
+                    abortSignal: ac.signal,
+                    hasSearchTools,
+                    systemPrompt: settings?.editorIterationSystemPrompt,
+                    i18n: { t, tf },
+                    onTurnUpdate: async () => {
+                        await persistSession();
+                        await render();
+                    },
+                });
+                // Mirror any edits that runIterationTurn stacked.
+                await mirrorPendingEditsToBus();
+            } catch (err) {
+                if (!isAbortError(err, ac.signal)) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[${MODULE}] drainBusOutcomes`, err);
+                    state.session.messages.push({
+                        id: makeMessageId(),
+                        role: 'system',
+                        content: tf('Error: ${0}', String(err?.message || err)),
+                        at: Date.now(),
+                    });
+                }
+            } finally {
+                state.isBusy = false;
+                state.aborting = false;
+                state.abortController = null;
+                await persistSession();
+                await render();
+            }
+        } finally {
+            drainScheduled = false;
+        }
+    }
+
+    // Drain state.pendingEdits into bus proposals, grouped per target.
+    // sourceCallId is set to the most recent assistant turn's first
+    // tool-call id so turn-actions group correctly.
+    async function mirrorPendingEditsToBus() {
+        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return;
+        const grouped = groupEditsByTarget(state.pendingEdits);
+        // Find the most recent assistant message and its first tool call id.
+        let sourceCallId = null;
+        const msgs = state.session.messages || [];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+            const m = msgs[i];
+            if (m?.role !== 'assistant' || m?.auto) continue;
+            const tcs = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+            const first = tcs.find(tc => tc?.id);
+            if (first) { sourceCallId = String(first.id); break; }
+            sourceCallId = String(m.id || '');
+            break;
+        }
+        state.__suspendBusOnChange = true;
+        try {
+            if (grouped.character.length > 0) {
+                await bus.propose({
+                    kind: 'cea-character-edits',
+                    op: { edits: grouped.character.slice() },
+                    snapshot: state.live?.character || {},
+                    sourceCallId,
+                });
+            }
+            for (const [bookName, edits] of Object.entries(grouped.lorebooks)) {
+                if (!edits.length) continue;
+                await bus.propose({
+                    kind: 'cea-lorebook-edits',
+                    op: { bookName, edits: edits.slice() },
+                    snapshot: state.live?.lorebooks?.[bookName] || { entries: {} },
+                    sourceCallId,
+                });
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        // Clear the accumulator now that the bus owns these.
+        state.pendingEdits = [];
+        bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+    }
+
     // Test-only hook: lets the on-closing-abort test capture `state` BEFORE
     // popup mount so it can simulate `state.isBusy = true` and exercise the
     // close gate without driving a real LLM round. Production callers never
@@ -1614,29 +1936,21 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
 
     async function persistSession() {
         // Skip the write when the session is still a brand-new transient
-        // (no messages, no pending edits). This is what makes `clear-history`
-        // not leave a phantom empty row behind: the handler creates a fresh
-        // session and calls persistSession before any user interaction, and
-        // without this gate we'd write the just-deleted-then-recreated entry
-        // straight back to disk.
-        if (
-            state.session._transient
-            && (!Array.isArray(state.session.messages) || state.session.messages.length === 0)
-            && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-        ) {
+        // (no messages, no pending bus entries). This is what makes
+        // `clear-history` not leave a phantom empty row behind.
+        const hasMessages = Array.isArray(state.session.messages) && state.session.messages.length > 0;
+        const hasPending = bus.hasOutstanding() || (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0);
+        if (state.session._transient && !hasMessages && !hasPending) {
             return;
         }
-        // Any meaningful content → no longer transient. Drop the marker so
-        // the session is durable across reloads.
         if (state.session._transient) {
             delete state.session._transient;
         }
         state.session.updatedAt = Date.now();
-        try {
-            state.session.pendingEdits = structuredClone(state.pendingEdits);
-        } catch {
-            state.session.pendingEdits = Array.isArray(state.pendingEdits) ? state.pendingEdits.slice() : [];
-        }
+        // Bus owns staged proposals. Persist its v2 blob; legacy
+        // session.pendingEdits is dropped (one-shot migrated on load).
+        state.session.proposalBus = bus.serialize();
+        if (state.session.pendingEdits !== undefined) delete state.session.pendingEdits;
         if (!state.session.title) {
             const firstUser = state.session.messages.find(m => m.role === 'user' && !m.auto);
             if (firstUser) state.session.title = String(firstUser.content || '').slice(0, 50);
@@ -1776,35 +2090,15 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     });
                 },
                 renderApplyControls: (msg) => {
-                    const isLatestUnapplied = String(msg?.id || '') === state.__latestUnappliedAssistantId;
-                    // Latest unapplied message: prefer the runtime state.pendingEdits
-                    // over msg.edits. Pre-fix sessions persisted lorebook edits
-                    // without target.bookName when normalizeEdit treated a
-                    // falsy bookName as "drop the field"; reloading those
-                    // sessions surfaces empty Apply labels ('Apply N to ""')
-                    // and groupEditsByTarget silently drops the entry. The
-                    // in-memory state.pendingEdits is always populated by the
-                    // current round, so it carries the live bookName.
-                    const passthroughEdits = isLatestUnapplied
-                        ? (Array.isArray(state.pendingEdits) ? state.pendingEdits : [])
-                        : (Array.isArray(msg.edits) ? msg.edits : []);
-                    return ITER_UI.apply.renderApplyControls(
-                        { ...msg, edits: passthroughEdits },
-                        {
-                            i18n: tf,
-                            // computeApplyLabel does its own ${N} substitution
-                            // against the values it passes, so it needs the
-                            // RAW translate function (one-arg `t`). Passing
-                            // `tf` here would double-substitute: tf's own
-                            // pass eats the `${0}` / `${1}` placeholders
-                            // (with empty values, since tf was called with
-                            // no values) before computeApplyLabel's pass
-                            // ever runs — and the user sees a half-rendered
-                            // "将 应用到 「」" with both slots stripped.
-                            applyLabel: computeApplyLabel(passthroughEdits, t),
-                            actionAttribute: 'data-cea-editor-action',
-                        },
-                    );
+                    // Bus owns per-card chrome + turn-actions. Legacy
+                    // Apply / Discard / Rollback per-message button stack
+                    // retired in favor of per-target proposal cards
+                    // (one for character edits, one per affected book)
+                    // emitted under each assistant turn that produced them.
+                    const cards = bus.renderCardsForMessage(msg) || '';
+                    const turn = bus.renderTurnActions(msg) || '';
+                    if (!cards && !turn) return '';
+                    return cards + turn;
                 },
                 isLast: idx === lastAssistantIdx,
                 i18n: tf,
@@ -2165,14 +2459,20 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             state.aborting = false;
             state.abortController = null;
             await persistSession();
-            // If the round produced edits and the user has auto-apply on,
-            // commit them now so the surface state mirrors what the user
-            // expected when they ticked the box. applyPendingEdits owns
-            // the post-commit re-render, so we skip the render() below
-            // when it fires.
-            const autoApplied = await maybeAutoApply();
+            // Mirror any edits this turn stacked into bus proposals,
+            // grouped per target. Auto-approve is wired into the bus
+            // itself (setAutoApprove fires immediately after propose
+            // resolves the entry id), so we don't need a separate
+            // maybeAutoApply path any more.
+            try {
+                bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+                await mirrorPendingEditsToBus();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] mirrorPendingEditsToBus failed`, err);
+            }
             bumpChatBadge();
-            if (!autoApplied) await render();
+            await render();
         }
     }
 
@@ -2331,9 +2631,15 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             state.aborting = false;
             state.abortController = null;
             await persistSession();
-            const autoApplied = await maybeAutoApply();
+            try {
+                bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+                await mirrorPendingEditsToBus();
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] mirrorPendingEditsToBus failed (regenerate)`, err);
+            }
             bumpChatBadge();
-            if (!autoApplied) await render();
+            await render();
         }
     }
 
@@ -2348,65 +2654,13 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 await handleSendMessage();
             }
         });
-        $root.on('click.ceaEditor', '[data-cea-editor-action="apply-batch"]', async (e) => {
-            e.preventDefault();
-            const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-            const outcome = await applyPendingEdits(state, {
-                persistSession,
-                render,
-                i18n: { t, tf },
-                context,
-                settings,
-                avatar,
-            });
-            // After the user reviewed + applied a paused batch, fire the
-            // next AI round with a synthetic "user approved the edits"
-            // message. Without this the loop would stay dead until the
-            // user typed a new prompt — but the AI WAS in the middle of
-            // iterating; its previous round only stopped because the
-            // pendingEdits gate paused for human approval. Mirroring the
-            // IDE pattern: approve → next round fires with the outcome,
-            // AI either does more or wraps up with plain text. Pass the
-            // real outcome (applied / conflicts / alreadyDone) so the AI
-            // sees truthful detail instead of just a proposed-count claim.
-            if (pendingCount > 0
-                && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-                && !state.isBusy) {
-                await continueAfterReviewDecision({
-                    action: 'apply',
-                    count: pendingCount,
-                    applied: outcome?.applied,
-                    conflicts: outcome?.conflicts,
-                    alreadyDone: outcome?.alreadyDone,
-                    cleanEdits: outcome?.cleanEdits,
-                });
-            }
-        });
-        $root.on('click.ceaEditor', '[data-cea-editor-action="discard-batch"]', async (e) => {
-            e.preventDefault();
-            const pendingCount = Array.isArray(state.pendingEdits) ? state.pendingEdits.length : 0;
-            await discardPendingEdits(state, { persistSession, render });
-            // Mirror the apply-batch resume — discard is the AI's signal
-            // to reconsider, not to stop entirely. The user can still
-            // close the popup or click Stop if they're truly done.
-            if (pendingCount > 0
-                && (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0)
-                && !state.isBusy) {
-                await continueAfterReviewDecision({ action: 'discard', count: pendingCount });
-            }
-        });
-        $root.on('click.ceaEditor', '[data-cea-editor-action="rollback-batch"]', async (e) => {
-            e.preventDefault();
-            const id = String(e.currentTarget?.getAttribute('data-luker-lib-msg-id') || '');
-            if (!id) return;
-            await rollbackBatch(state, id, {
-                persistSession,
-                render,
-                i18n: { t, tf },
-                context,
-                settings,
-                avatar,
-            });
+        // ProposalBus click delegation. Approve / reject / reset /
+        // rollback per-card AND approve-all / reject-all / rollback-turn
+        // turn-actions are consumed here; unmatched clicks fall through
+        // to the rest of the popup's handlers (regenerate, session
+        // switch, etc.).
+        $root.on('click.ceaEditor', async (e) => {
+            await bus.handleClick(e);
         });
         $root.on('click.ceaEditor', '[data-cea-editor-action="regenerate"]', async (e) => {
             e.preventDefault();
@@ -2462,9 +2716,15 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 state.aborting = false;
                 state.abortController = null;
                 await persistSession();
-                const autoApplied = await maybeAutoApply();
+                try {
+                    bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+                    await mirrorPendingEditsToBus();
+                } catch (err) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[${MODULE}] mirrorPendingEditsToBus failed (autoSend)`, err);
+                }
                 bumpChatBadge();
-                if (!autoApplied) await render();
+                await render();
             }
         });
         $root.on('change.ceaEditor', '[data-cea-editor-action="toggle-auto-apply"]', async (e) => {
@@ -2474,8 +2734,16 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 autoApply: checked,
             };
             await persistSession();
-            if (checked && Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
-                try { await maybeAutoApply(); } catch { /* swallow — best-effort */ }
+            bus.setAutoApprove(checked);
+            if (checked) {
+                try {
+                    // Mirror any leftover state.pendingEdits then drain
+                    // by approving all pending bus entries.
+                    await mirrorPendingEditsToBus();
+                    for (const entry of bus._testOnly_entries()) {
+                        if (entry.status === 'pending') await bus.approve(entry.id);
+                    }
+                } catch { /* best-effort */ }
             }
         });
         $root.on('click.ceaEditor', '[data-iter-action="switch-tab"]', (e) => {
@@ -2526,6 +2794,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             }
             state.session = createNewSession(avatar);
             state.pendingEdits = [];
+            state.__suspendBusOnChange = true;
+            try { bus.hydrate({ version: 2, entries: [], outcomeQueue: [] }); }
+            finally { state.__suspendBusOnChange = false; }
+            bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
             await persistSession();
             await render();
         });
@@ -2546,6 +2818,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             }
             state.session = createNewSession(avatar);
             state.pendingEdits = [];
+            state.__suspendBusOnChange = true;
+            try { bus.hydrate({ version: 2, entries: [], outcomeQueue: [] }); }
+            finally { state.__suspendBusOnChange = false; }
+            bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
             await persistSession();
             await render();
         });
@@ -2567,6 +2843,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             if (wasActive) {
                 state.session = createNewSession(avatar);
                 state.pendingEdits = [];
+                state.__suspendBusOnChange = true;
+                try { bus.hydrate({ version: 2, entries: [], outcomeQueue: [] }); }
+                finally { state.__suspendBusOnChange = false; }
+                bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
                 await persistSession();
             }
             await render();
@@ -2579,6 +2859,26 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 buildLiveSnapshot: buildUnifiedCharacterEditorLiveSnapshot,
                 context,
                 avatar,
+                hydrateBus: async (loadedSession) => {
+                    state.__suspendBusOnChange = true;
+                    try {
+                        if (loadedSession?.proposalBus && typeof loadedSession.proposalBus === 'object') {
+                            bus.hydrate(loadedSession.proposalBus);
+                        } else if (Array.isArray(loadedSession?.pendingEdits) && loadedSession.pendingEdits.length > 0) {
+                            // Legacy migration: pretend each persisted edit
+                            // arrived this turn and re-mirror through the
+                            // bus's grouping path. state.pendingEdits is the
+                            // input groupEditsByTarget reads.
+                            state.pendingEdits = loadedSession.pendingEdits.slice();
+                            await mirrorPendingEditsToBus();
+                        } else {
+                            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+                        }
+                    } finally {
+                        state.__suspendBusOnChange = false;
+                    }
+                    bus.setAutoApprove(Boolean(state.session?.surfaceState?.autoApply));
+                },
             });
             if (loaded) await render();
         });
@@ -2624,9 +2924,15 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 state.aborting = false;
                 state.abortController = null;
                 await persistSession();
-                const autoApplied = await maybeAutoApply();
+                try {
+                    bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+                    await mirrorPendingEditsToBus();
+                } catch (err) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[${MODULE}] mirrorPendingEditsToBus failed (autoSend)`, err);
+                }
                 bumpChatBadge();
-                if (!autoApplied) await render();
+                await render();
             }
         });
     }
