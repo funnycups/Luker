@@ -16313,13 +16313,6 @@ export async function saveMetadata(options = {}) {
     const withMetadata = (options && typeof options === 'object') ? options.withMetadata : undefined;
 
     try {
-        await waitUntilCondition(() => !isChatSaving, DEFAULT_SAVE_EDIT_TIMEOUT, 100);
-    } catch {
-        console.warn('Timeout waiting for chat to save');
-        return;
-    }
-
-    try {
         const saveContext = buildActiveChatSaveContext({ withMetadata, withMessages: false });
         if (!saveContext) {
             return;
@@ -16349,13 +16342,6 @@ export async function saveMetadata(options = {}) {
 }
 
 export async function saveChatConditional() {
-    try {
-        await waitUntilCondition(() => !isChatSaving, DEFAULT_SAVE_EDIT_TIMEOUT, 100);
-    } catch {
-        console.warn('Timeout waiting for chat to save');
-        return;
-    }
-
     try {
         cancelDebouncedChatSave();
         const saveContext = buildActiveChatSaveContext();
