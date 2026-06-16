@@ -2643,21 +2643,12 @@ export async function openOrchestratorIterationStudio(deps) {
         }
 
         // Stage the assistant message with the full per-round audit trail.
-        // Falls back to a synthesized summary when the model emitted tool
-        // calls without text so the chat doesn't have empty bubbles. The
-        // toolCalls + edits + appliedAt fields drive renderMessageCard's
-        // collapsible details block, Apply marker, and Rollback button.
-        let content = assistantText;
-        if (!content && (editToolCalls.length > 0 || readToolCalls.length > 0)) {
-            const names = [...readToolCalls, ...editToolCalls]
-                .map(c => String(c?.name || ''))
-                .filter(Boolean)
-                .join(', ');
-            content = tf('Suggested actions: ${0}', names);
-        }
-        if (!content && hadAnyToolCall) {
-            content = t('Continuing...');
-        }
+        // The toolCalls + edits + appliedAt fields drive renderMessageCard's
+        // collapsible details block, Apply marker, and Rollback button. When
+        // the model emitted tool calls without text the chips themselves
+        // already display each call's friendly label + args, so we leave
+        // `content` empty rather than synthesising a redundant one-liner.
+        const content = assistantText;
         const assistantMsg = {
             id: makeMessageId(),
             role: 'assistant',

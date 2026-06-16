@@ -517,20 +517,11 @@ async function processRoundOutcome({
     }
 
     // Synthesize a user-facing assistant message that carries the full
-    // audit trail for the round. The fallback summary kicks in when the
-    // model emitted tool calls without any prose — without it the chat
-    // would have empty bubbles between tool-display chips.
-    let content = String(assistantText || '').trim();
-    if (!content) {
-        const toolNames = [...persistedToolCalls, ...persistedEditCalls]
-            .map(c => CEA_EDITOR_TOOL_DISPLAY[c.name]?.label || c.name)
-            .filter(Boolean);
-        if (toolNames.length > 0) {
-            content = tf('Suggested actions: ${0}', toolNames.join(', '));
-        } else if (hadAnyToolCall) {
-            content = t('Continuing...');
-        }
-    }
+    // audit trail for the round. When the model emitted tool calls without
+    // any prose we leave `content` empty rather than synthesising a
+    // redundant one-liner — the chips themselves already display each
+    // call's friendly label + args.
+    const content = String(assistantText || '').trim();
 
     const assistantMsg = normalizeMessageShape({
         id: makeMessageId(),

@@ -5561,8 +5561,6 @@
     ,"No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)": "未应用任何编辑到 ${0}：全部 ${1} 条都被跳过（冲突或已是期望状态）"
     ,"No edits applied: all ${0} were skipped (conflicts or already in desired state)": "未应用任何编辑：全部 ${0} 条都被跳过（冲突或已是期望状态）"
     ,"Edit error: ${0}": "编辑错误：${0}"
-    ,"Suggested actions: ${0}": "建议操作：${0}"
-    ,"Continuing...": "继续中……"
     ,"Failed to save preset: ${0}": "保存预设失败：${0}"
     ,"Failed to save schema: ${0}": "保存结构失败：${0}"
     ,"Failed to save profile: ${0}": "保存配置失败：${0}"

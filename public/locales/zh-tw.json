@@ -5400,8 +5400,6 @@
     ,"No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)": "未套用任何編輯到 ${0}：全部 ${1} 條都被跳過（衝突或已是期望狀態）"
     ,"No edits applied: all ${0} were skipped (conflicts or already in desired state)": "未套用任何編輯：全部 ${0} 條都被跳過（衝突或已是期望狀態）"
     ,"Edit error: ${0}": "編輯錯誤：${0}"
-    ,"Suggested actions: ${0}": "建議操作：${0}"
-    ,"Continuing...": "繼續中……"
     ,"Failed to save preset: ${0}": "儲存預設失敗：${0}"
     ,"Failed to save schema: ${0}": "儲存結構失敗：${0}"
     ,"Failed to save profile: ${0}": "儲存設定失敗：${0}"
