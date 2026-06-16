@@ -4,9 +4,9 @@ import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import _ from 'lodash';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
-import { normalizeLookupText, tryParse } from '../util.js';
-import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
+import { normalizeLookupText } from '../util.js';
+import { getWorldInfoRepo } from '../storage/index.js';
+import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 
 /**
  * Reads a World Info file and returns its contents
@@ -95,69 +95,14 @@ export function resolveWorldInfoFilename(directory, worldInfoName) {
 
 export const router = express.Router();
 
-/**
- * Applies RFC6902 patch operations to world info payload.
- * @param {object} state Current world info object.
- * @param {object[]} operations Patch operations.
- * @returns {{applied:number,state:object}}
- */
-function applyWorldInfoPatch(state, operations) {
-    const root = _.isObjectLike(state) && !Array.isArray(state) ? state : { entries: {} };
-    const patchResult = applyJsonPatch(root, operations, true, false);
-    const patched = patchResult.newDocument;
-    if (!_.isObjectLike(patched) || Array.isArray(patched)) {
-        throw new Error('World info patch must produce an object root.');
-    }
-    if (!('entries' in patched) || !_.isObjectLike(patched.entries) || Array.isArray(patched.entries)) {
-        throw new Error('World info patch must keep a valid entries object.');
-    }
-    return { applied: operations.length, state: patched };
-}
-
-function isJsonPatchConflictError(error) {
-    const message = String(error?.message || '');
-    return message.includes('JSON Patch test failed')
-        || message.includes('Invalid JSON Patch replace path.')
-        || message.includes('Invalid JSON Patch remove path.')
-        || message.includes('Array index out of bounds');
-}
-
-function isJsonPatchValidationError(error) {
-    const message = String(error?.message || '');
-    return message.includes('JSON Patch operation is missing op.')
-        || message.includes('JSON Patch operation must be an object.')
-        || message.includes('JSON Patch document must be an array.')
-        || message.includes('JSON Patch add operation requires value.')
-        || message.includes('JSON Patch replace operation requires value.')
-        || message.includes('Invalid JSON Patch path.')
-        || message.includes('Unsupported JSON Patch operation:');
-}
-
 router.post('/list', async (request, response) => {
     try {
-        const data = [];
-        const jsonFiles = (await fs.promises.readdir(request.user.directories.worlds, { withFileTypes: true }))
-            .filter((file) => file.isFile() && path.extname(file.name).toLowerCase() === '.json')
-            .sort((a, b) => a.name.localeCompare(b.name));
-
-        for (const file of jsonFiles) {
-            try {
-                const filePath = path.join(request.user.directories.worlds, file.name);
-                const fileContents = await fs.promises.readFile(filePath, 'utf8');
-                const fileContentsParsed = tryParse(fileContents) || {};
-                const fileExtensions = fileContentsParsed?.extensions || {};
-                const fileNameWithoutExt = path.parse(file.name).name;
-                const fileData = {
-                    file_id: fileNameWithoutExt,
-                    name: fileContentsParsed?.name || fileNameWithoutExt,
-                    extensions: _.isObjectLike(fileExtensions) ? fileExtensions : {},
-                };
-                data.push(fileData);
-            } catch (err) {
-                console.warn(`Error reading or parsing World Info file ${file.name}:`, err);
-            }
-        }
-
+        const items = await getWorldInfoRepo().list(request.user.profile.handle);
+        const data = items.map(({ key, name, extensions }) => ({
+            file_id: key.name,
+            name,
+            extensions,
+        }));
         return response.send(data);
     } catch (err) {
         console.error('Error reading World Info directory:', err);
@@ -167,11 +112,8 @@ router.post('/list', async (request, response) => {
 
 router.post('/list-lite', async (request, response) => {
     try {
-        const names = (await fs.promises.readdir(request.user.directories.worlds, { withFileTypes: true }))
-            .filter((file) => file.isFile() && path.extname(file.name).toLowerCase() === '.json')
-            .map((file) => path.parse(file.name).name)
-            .sort((a, b) => a.localeCompare(b));
-
+        const items = await getWorldInfoRepo().list(request.user.profile.handle);
+        const names = items.map((item) => item.key.name);
         return response.send({ names });
     } catch (err) {
         console.error('Error reading World Info names:', err);
@@ -179,17 +121,27 @@ router.post('/list-lite', async (request, response) => {
     }
 });
 
-router.post('/get', (request, response) => {
+router.post('/get', async (request, response) => {
     if (!request.body?.name) {
         return response.sendStatus(400);
     }
 
-    const file = readWorldInfoFile(request.user.directories, request.body.name, true);
-
+    const repo = getWorldInfoRepo();
+    const handle = request.user.profile.handle;
+    const canonical = await repo.resolveName(handle, request.body.name);
+    if (canonical == null) {
+        // File truly missing — legacy readWorldInfoFile(..., allowDummy=true) returned {entries:{}}.
+        return response.send({ entries: {} });
+    }
+    const file = await repo.get(handle, request.body.name);
+    // file === null here means parse failure / corrupt JSON / non-object root.
+    // Legacy 500'd via uncaught JSON.parse throw. Returning null is strictly safer:
+    // the frontend already filters via isPlainObject and treats null as "skip" rather
+    // than overwriting the user's data with an empty world.
     return response.send(file);
 });
 
-router.post('/get-batch', (request, response) => {
+router.post('/get-batch', async (request, response) => {
     const names = [...new Set((Array.isArray(request.body?.names) ? request.body.names : [])
         .map((name) => String(name || '').trim())
         .filter(Boolean))];
@@ -198,34 +150,38 @@ router.post('/get-batch', (request, response) => {
         return response.send({ data: {} });
     }
 
+    const repo = getWorldInfoRepo();
+    const handle = request.user.profile.handle;
     const data = {};
     for (const name of names) {
-        const file = readWorldInfoFile(request.user.directories, name, true);
-        data[name] = _.isObjectLike(file) && !Array.isArray(file) ? file : null;
+        const canonical = await repo.resolveName(handle, name);
+        if (canonical == null) {
+            // Missing — match allowDummy=true semantics.
+            data[name] = { entries: {} };
+        } else {
+            const file = await repo.get(handle, name);
+            // null means corrupt; the frontend's isPlainObject filter handles it.
+            data[name] = file;
+        }
     }
 
     return response.send({ data });
 });
 
-router.post('/delete', (request, response) => {
+router.post('/delete', async (request, response) => {
     if (!request.body?.name) {
         return response.sendStatus(400);
     }
 
-    const worldInfoName = request.body.name;
-    const filename = resolveWorldInfoFilename(request.user.directories.worlds, worldInfoName);
-    const pathToWorldInfo = path.join(request.user.directories.worlds, filename);
-
-    if (!fs.existsSync(pathToWorldInfo)) {
-        throw new Error(`World info file ${filename} doesn't exist.`);
+    const deleted = await getWorldInfoRepo().delete(request.user.profile.handle, request.body.name);
+    if (!deleted) {
+        throw new Error(`World info file ${request.body.name} doesn't exist.`);
     }
-
-    fs.unlinkSync(pathToWorldInfo);
 
     return response.sendStatus(200);
 });
 
-router.post('/import', (request, response) => {
+router.post('/import', async (request, response) => {
     if (!request.file) return response.sendStatus(400);
 
     const filename = sanitizeImportedWorldInfoFilename(request.file.originalname);
@@ -240,27 +196,32 @@ router.post('/import', (request, response) => {
         fs.unlinkSync(pathToUpload);
     }
 
+    let worldContent;
     try {
-        const worldContent = JSON.parse(fileContents);
-        if (!('entries' in worldContent)) {
-            throw new Error('File must contain a world info entries list');
-        }
+        worldContent = JSON.parse(fileContents);
     } catch (err) {
         return response.status(400).send('Is not a valid world info file');
     }
+    if (!_.isObjectLike(worldContent) || Array.isArray(worldContent)
+        || !_.isObjectLike(worldContent.entries) || Array.isArray(worldContent.entries)) {
+        return response.status(400).send('Is not a valid world info file');
+    }
 
-    const pathToNewFile = path.join(request.user.directories.worlds, filename);
-    const worldName = path.parse(pathToNewFile).name;
-
+    const worldName = path.parse(filename).name;
     if (!worldName) {
         return response.status(400).send('World file must have a name');
     }
 
-    writeFileAtomicSync(pathToNewFile, fileContents);
+    try {
+        await getWorldInfoRepo().save(request.user.profile.handle, worldName, worldContent);
+    } catch (err) {
+        console.error('Error importing world info:', err);
+        return response.sendStatus(500);
+    }
     return response.send({ name: worldName });
 });
 
-router.post('/edit', (request, response) => {
+router.post('/edit', async (request, response) => {
     if (!request.body) {
         return response.sendStatus(400);
     }
@@ -269,23 +230,21 @@ router.post('/edit', (request, response) => {
         return response.status(400).send('World file must have a name');
     }
 
-    try {
-        if (!('entries' in request.body.data)) {
-            throw new Error('World info must contain an entries list');
-        }
-    } catch (err) {
+    if (!_.isObjectLike(request.body.data) || Array.isArray(request.body.data)
+        || !_.isObjectLike(request.body.data.entries) || Array.isArray(request.body.data.entries)) {
         return response.status(400).send('Is not a valid world info file');
     }
 
-    const filename = resolveWorldInfoFilename(request.user.directories.worlds, request.body.name);
-    const pathToFile = path.join(request.user.directories.worlds, filename);
-
-    writeFileAtomicSync(pathToFile, JSON.stringify(request.body.data, null, 4));
-
-    return response.send({ ok: true });
+    try {
+        await getWorldInfoRepo().save(request.user.profile.handle, request.body.name, request.body.data);
+        return response.send({ ok: true });
+    } catch (err) {
+        console.error('Error editing world info:', err);
+        return response.sendStatus(500);
+    }
 });
 
-router.post('/patch', (request, response) => {
+router.post('/patch', async (request, response) => {
     try {
         const worldInfoName = String(request.body?.name || '').trim();
         if (!worldInfoName) {
@@ -302,23 +261,13 @@ router.post('/patch', (request, response) => {
             return response.status(400).send({ error: 'No world info patch operations found. Expected body.operations or body.operation.' });
         }
 
-        const filename = resolveWorldInfoFilename(request.user.directories.worlds, worldInfoName);
-        const pathToFile = path.join(request.user.directories.worlds, filename);
-        let current = { entries: {} };
-        if (fs.existsSync(pathToFile)) {
-            const raw = fs.readFileSync(pathToFile, 'utf8');
-            const parsed = JSON.parse(raw);
-            current = _.isObjectLike(parsed) && !Array.isArray(parsed) ? parsed : { entries: {} };
-        }
-
-        const { applied, state } = applyWorldInfoPatch(current, operations);
-        writeFileAtomicSync(pathToFile, JSON.stringify(state, null, 4), 'utf8');
-        return response.send({ ok: true, applied });
+        await getWorldInfoRepo().patch(request.user.profile.handle, worldInfoName, operations);
+        return response.send({ ok: true, applied: operations.length });
     } catch (error) {
-        if (isJsonPatchConflictError(error)) {
+        if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
             return response.status(409).send({ error: 'World info patch test conflict.', code: 'patch_test_failed', details: String(error?.message || '') });
         }
-        if (isJsonPatchValidationError(error)) {
+        if (error instanceof UnsupportedPatchOpError) {
             return response.status(400).send({ error: 'Invalid world info patch payload.', code: 'patch_payload_invalid', details: String(error?.message || '') });
         }
         console.error('Error patching world info:', error);

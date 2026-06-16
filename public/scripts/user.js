@@ -2729,6 +2729,103 @@ async function openAdminPanel() {
         }
     }
 
+    async function fetchStorageBackendStatus() {
+        const response = await fetch('/api/users/storage/status', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+        });
+        if (!response.ok) {
+            throw new Error(`status ${response.status}`);
+        }
+        return response.json();
+    }
+
+    async function triggerStorageBackendMigration(targetMode) {
+        const response = await fetch('/api/users/storage/migrate', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ targetMode }),
+        });
+        const data = await response.json().catch(() => ({}));
+        return { ok: response.ok, status: response.status, data };
+    }
+
+    function renderStorageMigrationResult(el, result) {
+        const lines = [];
+        if (typeof result.durationMs === 'number') {
+            lines.push(`${t`Duration:`} ${result.durationMs}ms`);
+        }
+        if (result.message) {
+            lines.push(result.message);
+        }
+        if (result.perUser) {
+            lines.push('');
+            for (const [handle, stats] of Object.entries(result.perUser)) {
+                if (stats?.error) {
+                    lines.push(`${handle}: FAIL ${stats.error}`);
+                } else {
+                    const counts = [
+                        `chats=${stats.chats ?? 0}`,
+                        `chat_states=${stats.chat_states ?? 0}`,
+                        `settings=${stats.settings ?? 0}`,
+                        `presets=${stats.presets ?? 0}`,
+                        `preset_states=${stats.preset_states ?? 0}`,
+                        `worlds=${stats.worlds ?? 0}`,
+                        `named_docs=${stats.named_docs ?? 0}`,
+                        `groups=${stats.groups ?? 0}`,
+                        `stats=${stats.stats ?? 0}`,
+                    ].join(' ');
+                    const verifyMark = stats.verified ? 'OK' : 'UNVERIFIED';
+                    lines.push(`${handle}: ${verifyMark} ${counts}`);
+                    if (stats.backupPath) {
+                        lines.push(`  backup: ${stats.backupPath}`);
+                    }
+                }
+            }
+        }
+        el.text(lines.join('\n'));
+    }
+
+    async function renderStorageBackend() {
+        const section = template.find('.storageBackendTab');
+        const currentEl = section.find('.storageBackendCurrentMode');
+        const readOnlyEl = section.find('.storageBackendReadOnly');
+        const lastEl = section.find('.storageBackendLastMigration');
+        const targetRadios = section.find('.storageBackendTargetMode');
+        const migrateButton = section.find('.storageBackendMigrateButton');
+
+        currentEl.text(t`Loading...`);
+        readOnlyEl.text(t`Loading...`);
+        lastEl.text(t`Loading...`);
+        targetRadios.prop('disabled', true).prop('checked', false);
+        migrateButton.addClass('disabled').prop('disabled', true);
+
+        try {
+            const status = await fetchStorageBackendStatus();
+            currentEl.text(status.currentMode || '-');
+            readOnlyEl.text(status.readOnly ? t`yes` : t`no`);
+            lastEl.text(status.lastMigration || t`(none)`);
+
+            // Enable every radio except the one matching the current mode (no self-migration).
+            targetRadios.each(function () {
+                const isCurrent = String($(this).val()) === String(status.currentMode);
+                $(this).prop('disabled', isCurrent);
+            });
+            migrateButton.removeClass('disabled').prop('disabled', false);
+
+            if (status.migrationInProgress) {
+                migrateButton.addClass('disabled').prop('disabled', true);
+                section.find('.storageBackendResult').text(t`A migration is currently in progress on the server. Please wait.`);
+            }
+        } catch (err) {
+            console.error('Failed to load storage backend status:', err);
+            currentEl.text('-');
+            readOnlyEl.text('-');
+            lastEl.text('-');
+            toastr.error(t`Failed to load storage backend status.`);
+        }
+    }
+
     async function renderUsers() {
         const users = await getUsers();
         template.find('.usersList').empty();
@@ -2806,11 +2903,64 @@ async function openAdminPanel() {
             renderRuntimeConfig();
         } else if (target === 'announcementsTab') {
             renderAnnouncements();
+        } else if (target === 'storageBackendTab') {
+            renderStorageBackend();
         }
     });
 
     template.find('.overviewRefreshButton').on('click', renderOverview);
     template.find('.refreshServerPluginsButton').on('click', renderServerPlugins);
+    template.find('.storageBackendRefreshButton').on('click', renderStorageBackend);
+
+    template.find('.storageBackendMigrateButton').on('click', async function () {
+        const button = $(this);
+        if (button.hasClass('disabled')) {
+            return;
+        }
+
+        const targetMode = String(template.find('.storageBackendTargetMode:checked').val() || '');
+        if (!targetMode) {
+            toastr.warning(t`Select a target backend mode.`);
+            return;
+        }
+
+        const confirmed = await callGenericPopup(
+            t`Migrate ALL user data to ${targetMode}? A backup will be saved permanently under the data-root _storage-migrations directory. This may take several minutes for large installs and the server will reject writes until it finishes.`,
+            POPUP_TYPE.CONFIRM,
+            '',
+            { okButton: t`Migrate Now`, cancelButton: t`Cancel`, wide: false, large: false },
+        );
+        if (confirmed !== POPUP_RESULT.AFFIRMATIVE) {
+            return;
+        }
+
+        const label = button.find('.storageBackendMigrateButtonLabel');
+        const originalLabel = label.text();
+        const resultEl = template.find('.storageBackendResult');
+
+        button.addClass('disabled').prop('disabled', true);
+        label.text(t`Migration in progress, do not refresh...`);
+        resultEl.text(t`Migration in progress. This may take several minutes.`);
+
+        try {
+            const response = await triggerStorageBackendMigration(targetMode);
+            if (response.ok && response.data?.ok) {
+                toastr.success(t`Migration complete.`);
+                renderStorageMigrationResult(resultEl, response.data);
+            } else {
+                toastr.error(response.data?.message || t`Migration failed for one or more users. Source backend retained.`);
+                renderStorageMigrationResult(resultEl, response.data || { message: t`Migration failed.` });
+            }
+        } catch (err) {
+            console.error('Storage migration request failed:', err);
+            toastr.error(err.message || t`Migration failed.`);
+            resultEl.text(String(err.message || err));
+        } finally {
+            label.text(originalLabel);
+            // Refresh status — this also re-disables the radio matching the new current mode.
+            await renderStorageBackend();
+        }
+    });
 
     template.find('.saveAuthQuotaSettingsButton').on('click', async () => {
         const payload = collectAuthSettingsForm();

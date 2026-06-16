@@ -12,8 +12,8 @@ router.post('/bootstrap', async (request, response) => {
     try {
         const directories = request.user.directories;
         const charactersPromise = getCharactersSnapshot(directories, { useShallowCharacters: true });
-        const groups = getGroupsSnapshot(directories);
-        const settings = buildSettingsResponse(request, {
+        const groupsPromise = getGroupsSnapshot(request.user.profile.handle);
+        const settings = await buildSettingsResponse(request, {
             includePresetContents: false,
             includeQuickReplyPresets: false,
         });
@@ -22,6 +22,7 @@ router.post('/bootstrap', async (request, response) => {
         // render the key manager without an extra shape conversion step.
         const secret_state = new SecretManager(directories).getSecretState();
         const characters = await charactersPromise;
+        const groups = await groupsPromise;
 
         return response.send({
             settings,

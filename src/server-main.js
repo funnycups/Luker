@@ -80,6 +80,7 @@ import {
     getCookieSecret,
     getCookieSessionName,
     ensurePublicDirectoriesExist,
+    getUserDirectories,
     getUserDirectoriesList,
     migrateSystemPrompts,
     migrateUserData,
@@ -93,6 +94,7 @@ import {
     loginPageMiddleware,
     migratePublicOverrides,
 } from './users.js';
+import { initStorage } from './storage/index.js';
 
 import getWebpackServeMiddleware from './middleware/webpack-serve.js';
 import basicAuthMiddleware from './middleware/basicAuth.js';
@@ -105,6 +107,7 @@ import cacheBuster from './middleware/cacheBuster.js';
 import corsProxyMiddleware from './middleware/corsProxy.js';
 import hostWhitelistMiddleware from './middleware/hostWhitelist.js';
 import userCssMiddleware from './middleware/userCss.js';
+import { storageErrorHandler } from './middleware/storage-errors.js';
 import {
     getVersion,
     checkRemoteVersion,
@@ -589,6 +592,15 @@ app.post('/api/system/update-check', async function (_, response) {
 
 setupPrivateEndpoints(app);
 
+// Storage-layer typed errors (StorageReadOnlyError / ConflictError /
+// NotFoundError) thrown or forwarded by any of the routers above are mapped
+// to clean HTTP responses here. Must come AFTER all route mounts and BEFORE
+// `apply404Middleware` (which is registered by `.then(apply404Middleware)`
+// after `preSetupTasks`) so unhandled errors don't fall through to a generic
+// 500. Anything not recognized is passed through to Express's default error
+// handler.
+app.use(storageErrorHandler);
+
 /**
  * Tasks that need to be run before the server starts listening.
  * @returns {Promise<void>}
@@ -835,6 +847,12 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(migrateSystemPrompts)
     .then(migratePublicOverrides)
     .then(verifySecuritySettings)
+    .then(() => initStorage({
+        mode: getConfigValue('storage.mode', 'fs'),
+        directoriesByHandle: getUserDirectories,
+        mysql: getConfigValue('storage.mysql', null),
+        postgres: getConfigValue('storage.postgres', null),
+    }))
     .then(preSetupTasks)
     .then(apply404Middleware)
     .then(() => new ServerStartup(app, cliArgs).start())

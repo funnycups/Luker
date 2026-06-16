@@ -18,6 +18,9 @@
         <button type="button" class="configEditorButton menu_button menu_button_icon" data-target-tab="configEditorTab">
             <h4 data-i18n="Config">Config</h4>
         </button>
+        <button type="button" class="storageBackendButton menu_button menu_button_icon" data-target-tab="storageBackendTab">
+            <h4 data-i18n="Storage Backend">Storage Backend</h4>
+        </button>
         <button type="button" class="newUserButton menu_button menu_button_icon" data-target-tab="registerNewUserBlock">
             <h4 data-i18n="New User">New User</h4>
         </button>
@@ -229,6 +232,40 @@
         </div>
         <textarea class="runtimeConfigEditor text_pole" spellcheck="false" rows="20" placeholder="config.yaml content" data-i18n="[placeholder]config.yaml content"></textarea>
         <small class="runtimeConfigHint" data-i18n="Changes are validated as YAML before save. Some settings may require backend restart.">Changes are validated as YAML before save. Some settings may require backend restart.</small>
+    </div>
+
+    <div class="navTab storageBackendTab flex-container flexFlowColumn flexGap10" style="display: none;">
+        <div class="flex-container alignItemsCenter spaceBetween">
+            <h4 class="margin0" data-i18n="Storage Backend">Storage Backend</h4>
+            <div class="storageBackendRefreshButton menu_button menu_button_icon">
+                <i class="fa-fw fa-solid fa-arrows-rotate"></i>
+                <span data-i18n="Refresh">Refresh</span>
+            </div>
+        </div>
+        <div class="flex-container flexFlowColumn flexNoGap">
+            <div><strong data-i18n="Current Mode:">Current Mode:</strong> <span class="storageBackendCurrentMode">-</span></div>
+            <div><strong data-i18n="Read-Only:">Read-Only:</strong> <span class="storageBackendReadOnly">-</span></div>
+            <div><strong data-i18n="Last Migration:">Last Migration:</strong> <span class="storageBackendLastMigration">-</span></div>
+        </div>
+
+        <h4 class="margin0" data-i18n="Switch Backend">Switch Backend</h4>
+        <div class="flex-container flexFlowColumn flexGap10">
+            <div class="flex-container alignItemsCenter flexGap10">
+                <span data-i18n="Target:">Target:</span>
+                <label><input type="radio" name="storageBackendTargetMode" class="storageBackendTargetMode" value="fs"> <span data-i18n="Filesystem">Filesystem</span></label>
+                <label><input type="radio" name="storageBackendTargetMode" class="storageBackendTargetMode" value="sqlite"> <span data-i18n="SQLite">SQLite</span></label>
+            </div>
+            <div class="flex-container alignItemsCenter flexGap10">
+                <button type="button" class="storageBackendMigrateButton menu_button menu_button_icon">
+                    <i class="fa-fw fa-solid fa-database"></i>
+                    <span class="storageBackendMigrateButtonLabel" data-i18n="Migrate Now">Migrate Now</span>
+                </button>
+            </div>
+            <small data-i18n="storageBackendMigrationWarning">This will copy ALL user data to the target backend. A backup is preserved at &lt;dataRoot&gt;/_storage-migrations/ and is NEVER auto-deleted. Edit config.yaml (storage.mode) and restart the server so new logins use the new mode.</small>
+        </div>
+
+        <h4 class="margin0" data-i18n="Result">Result</h4>
+        <pre class="storageBackendResult" style="white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow: auto; padding: 8px;"></pre>
     </div>
 
     <div class="navTab registerNewUserBlock" style="display: none;">

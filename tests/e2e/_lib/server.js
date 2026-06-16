@@ -49,16 +49,35 @@ function cloneDataDir(targetDir) {
  * root `config.yaml`, applying simple top-level key overrides from
  * `extraConfig`. Naive text substitution — top-level boolean/scalar lines
  * only. That's enough for the personas / multi-user batch's needs
- * (`enableUserAccounts`, etc). Nested keys would need a YAML round-trip.
+ * (`enableUserAccounts`, etc).
+ *
+ * Also supports a tiny dotted notation for nested scalars (single level
+ * deep, e.g. `storage.mode`). The leaf line must be the only line in the
+ * file whose key matches that leaf name — true for `storage.mode` today
+ * (it's the only `mode:` key in default config.yaml). If a second `mode:`
+ * key ever lands, this regex needs path context.
  *
  * @param {string} targetPath  absolute path to write the new config.yaml
- * @param {Record<string,any>} extraConfig  flat top-level overrides
+ * @param {Record<string,any>} extraConfig  flat top-level overrides; keys
+ *   may also be dotted "parent.child" to overwrite a nested scalar.
  */
 function writeScenarioConfig(targetPath, extraConfig) {
     const raw = readFileSync(SEED_CONFIG, 'utf8');
     let out = raw;
     for (const [key, value] of Object.entries(extraConfig)) {
         const yamlValue = value === true ? 'true' : value === false ? 'false' : String(value);
+        if (key.includes('.')) {
+            const leaf = key.slice(key.lastIndexOf('.') + 1);
+            // Match an indented "leaf: <scalar>" line (under a parent
+            // block). Preserve original indentation via the capture group.
+            const re = new RegExp(`^(\\s+${leaf}\\s*):\\s*[^\\n]*$`, 'm');
+            if (re.test(out)) {
+                out = out.replace(re, `$1: ${yamlValue}`);
+            } else {
+                throw new Error(`writeScenarioConfig: nested key "${key}" not found in seed config.yaml`);
+            }
+            continue;
+        }
         const re = new RegExp(`^(${key}\\s*):\\s*(true|false|[^\\n]*)$`, 'm');
         if (re.test(out)) {
             out = out.replace(re, `$1: ${yamlValue}`);

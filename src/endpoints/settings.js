@@ -3,14 +3,15 @@ import path from 'node:path';
 
 import express from 'express';
 import _ from 'lodash';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import bytes from 'bytes';
 
 import { SETTINGS_FILE } from '../constants.js';
 import { getConfigValue, generateTimestamp, removeOldBackups } from '../util.js';
 import { getAllUserHandles, getUserDirectories } from '../users.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
+import { getSettingsRepo } from '../storage/index.js';
+import { applyJsonPatch } from '../storage/repositories/json-patch.js';
+import { NotFoundError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 
 const ENABLE_EXTENSIONS = !!getConfigValue('extensions.enabled', true, 'boolean');
 const ENABLE_EXTENSIONS_AUTO_UPDATE = !!getConfigValue('extensions.autoUpdate', true, 'boolean');
@@ -174,11 +175,13 @@ function retainSelectedPresetContents(fileContents, fileNames, selectedName) {
     return fileNames.map((name, index) => name === selectedName ? fileContents[index] : null);
 }
 
-export function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
-    let settings;
-    const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-    settings = fs.readFileSync(pathToSettings, 'utf8');
-    const parsedSettings = JSON.parse(settings);
+export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
+    const handle = request.user.profile.handle;
+    const parsedSettings = await getSettingsRepo().get(handle);
+    if (parsedSettings == null) {
+        throw new Error(`settings missing for handle ${handle}`);
+    }
+    const settings = JSON.stringify(parsedSettings);
 
     const { fileContents: novelai_settings, fileNames: novelai_setting_names }
         = readPresetsFromDirectory(request.user.directories.novelAI_Settings, {
@@ -342,41 +345,9 @@ function getLatestBackup(handle) {
     return path.join(userDirectories.backups, latestBackup);
 }
 
-/**
- * Applies patch operations to settings object.
- * Uses RFC6902 operations (add/remove/replace/test).
- * @param {object} state Current settings object.
- * @param {object[]} operations Patch operations.
- * @returns {{applied:number,state:object}}
- */
-function applySettingsPatch(state, operations) {
-    const root = _.isObjectLike(state) && !Array.isArray(state) ? state : {};
-    const patchResult = applyJsonPatch(root, operations, true, false);
-    return { applied: operations.length, state: patchResult.newDocument };
-}
-
-function isJsonPatchConflictError(error) {
-    const message = String(error?.message || '');
-    return message.includes('JSON Patch test failed')
-        || message.includes('Invalid JSON Patch replace path.')
-        || message.includes('Invalid JSON Patch remove path.')
-        || message.includes('Array index out of bounds');
-}
-
-function isJsonPatchValidationError(error) {
-    const message = String(error?.message || '');
-    return message.includes('JSON Patch operation is missing op.')
-        || message.includes('JSON Patch operation must be an object.')
-        || message.includes('JSON Patch document must be an array.')
-        || message.includes('JSON Patch add operation requires value.')
-        || message.includes('JSON Patch replace operation requires value.')
-        || message.includes('Invalid JSON Patch path.')
-        || message.includes('Unsupported JSON Patch operation:');
-}
-
 export const router = express.Router();
 
-router.post('/patch', function (request, response) {
+router.post('/patch', async function (request, response) {
     try {
         const operations = Array.isArray(request.body?.operations)
             ? request.body.operations
@@ -388,35 +359,45 @@ router.post('/patch', function (request, response) {
             return response.status(400).send({ error: 'No settings patch operations found. Expected body.operations or body.operation.' });
         }
 
-        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        let currentSettings = {};
-        if (fs.existsSync(pathToSettings)) {
-            const raw = fs.readFileSync(pathToSettings, 'utf8');
-            const parsed = JSON.parse(raw);
-            currentSettings = _.isObjectLike(parsed) && !Array.isArray(parsed) ? parsed : {};
+        const handle = request.user.profile.handle;
+        const repo = getSettingsRepo();
+        try {
+            await repo.patch(handle, operations);
+        } catch (err) {
+            if (err instanceof NotFoundError) {
+                const seeded = applyJsonPatch({}, operations);
+                await repo.save(handle, seeded);
+            } else {
+                throw err;
+            }
         }
-
-        const { applied, state } = applySettingsPatch(currentSettings, operations);
-        writeFileAtomicSync(pathToSettings, JSON.stringify(state, null, 4), 'utf8');
-        triggerAutoSave(request.user.profile.handle);
-        return response.send({ result: 'ok', applied });
+        triggerAutoSave(handle);
+        return response.send({ result: 'ok', applied: operations.length });
     } catch (error) {
-        if (isJsonPatchConflictError(error)) {
-            return response.status(409).send({ error: 'Settings patch test conflict.', code: 'patch_test_failed', details: String(error?.message || '') });
+        if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
+            return response.status(409).send({
+                error: 'Settings patch test conflict.',
+                code: 'patch_test_failed',
+                details: String(error?.message || ''),
+            });
         }
-        if (isJsonPatchValidationError(error)) {
-            return response.status(400).send({ error: 'Invalid settings patch payload.', code: 'patch_payload_invalid', details: String(error?.message || '') });
+        if (error instanceof UnsupportedPatchOpError) {
+            return response.status(400).send({
+                error: 'Invalid settings patch payload.',
+                code: 'patch_payload_invalid',
+                details: String(error?.message || ''),
+            });
         }
         console.error('Error patching settings:', error);
         return response.status(500).send({ error: 'Failed to patch settings.' });
     }
 });
 
-router.post('/save', function (request, response) {
+router.post('/save', async function (request, response) {
     try {
-        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        writeFileAtomicSync(pathToSettings, JSON.stringify(request.body, null, 4), 'utf8');
-        triggerAutoSave(request.user.profile.handle);
+        const handle = request.user.profile.handle;
+        await getSettingsRepo().save(handle, request.body);
+        triggerAutoSave(handle);
         response.send({ result: 'ok' });
     } catch (err) {
         console.error(err);
@@ -425,17 +406,17 @@ router.post('/save', function (request, response) {
 });
 
 // Wintermute's code
-router.post('/get', (request, response) => {
+router.post('/get', async (request, response) => {
     try {
-        return response.send(buildSettingsResponse(request));
+        return response.send(await buildSettingsResponse(request));
     } catch (e) {
         return response.sendStatus(500);
     }
 });
 
-router.post('/bootstrap', (request, response) => {
+router.post('/bootstrap', async (request, response) => {
     try {
-        return response.send(buildSettingsResponse(request, {
+        return response.send(await buildSettingsResponse(request, {
             includePresetContents: false,
             includeQuickReplyPresets: false,
         }));
@@ -444,6 +425,7 @@ router.post('/bootstrap', (request, response) => {
     }
 });
 
+// TODO(storage-phase-2): route through engine-level snapshot API
 router.post('/get-snapshots', async (request, response) => {
     try {
         const snapshots = fs.readdirSync(request.user.directories.backups);
@@ -462,6 +444,7 @@ router.post('/get-snapshots', async (request, response) => {
     }
 });
 
+// TODO(storage-phase-2): route through engine-level snapshot API
 router.post('/load-snapshot', getFileNameValidationFunction('name'), async (request, response) => {
     try {
         const userFilesPattern = getSettingsBackupFilePrefix(request.user.profile.handle);
@@ -486,6 +469,7 @@ router.post('/load-snapshot', getFileNameValidationFunction('name'), async (requ
     }
 });
 
+// TODO(storage-phase-2): route through engine-level snapshot API
 router.post('/make-snapshot', async (request, response) => {
     try {
         backupUserSettings(request.user.profile.handle, false);
@@ -496,6 +480,7 @@ router.post('/make-snapshot', async (request, response) => {
     }
 });
 
+// TODO(storage-phase-2): route through engine-level snapshot API
 router.post('/restore-snapshot', getFileNameValidationFunction('name'), async (request, response) => {
     try {
         const userFilesPattern = getSettingsBackupFilePrefix(request.user.profile.handle);

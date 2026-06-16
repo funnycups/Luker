@@ -1,32 +1,26 @@
-import fs from 'node:fs';
-import path from 'node:path';
-
 import express from 'express';
-import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { getNamedDocRepo } from '../storage/index.js';
 
 export const router = express.Router();
 
-router.post('/save', (request, response) => {
-    if (!request.body || !request.body.name) {
-        return response.sendStatus(400);
+router.post('/save', async (request, response) => {
+    if (!request.body || !request.body.name) return response.sendStatus(400);
+    try {
+        await getNamedDocRepo().save(request.user.profile.handle, 'quickReplies', request.body.name, request.body);
+        return response.sendStatus(200);
+    } catch (err) {
+        console.error('Error saving quick-reply preset:', err);
+        return response.sendStatus(500);
     }
-
-    const filename = path.join(request.user.directories.quickreplies, sanitize(`${request.body.name}.json`));
-    writeFileAtomicSync(filename, JSON.stringify(request.body, null, 4), 'utf8');
-
-    return response.sendStatus(200);
 });
 
-router.post('/delete', (request, response) => {
-    if (!request.body || !request.body.name) {
-        return response.sendStatus(400);
+router.post('/delete', async (request, response) => {
+    if (!request.body || !request.body.name) return response.sendStatus(400);
+    try {
+        await getNamedDocRepo().delete(request.user.profile.handle, 'quickReplies', request.body.name);
+        return response.sendStatus(200);
+    } catch (err) {
+        console.error('Error deleting quick-reply preset:', err);
+        return response.sendStatus(500);
     }
-
-    const filename = path.join(request.user.directories.quickreplies, sanitize(`${request.body.name}.json`));
-    if (fs.existsSync(filename)) {
-        fs.unlinkSync(filename);
-    }
-
-    return response.sendStatus(200);
 });

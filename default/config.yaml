@@ -5,6 +5,27 @@ dataRoot: ./data
 serverPluginsPath: ./plugins
 # Directory for global third-party extensions
 globalExtensionsPath: ./public/scripts/extensions/third-party
+# -- STORAGE BACKEND --
+# Choose how user data is persisted.
+# - 'fs' (default): legacy file-system storage; one file per chat/preset/world/etc. under <dataRoot>/<handle>/
+# - 'sqlite': per-user SQLite database at <dataRoot>/<handle>/luker-storage.sqlite
+# - 'mysql': shared MySQL 8.0+ database; all users live in one schema, keyed by handle column.
+# - 'postgres': shared PostgreSQL 14+ database; all users live in one schema, keyed by handle column.
+# WARNING: switching modes on a populated install requires running the migration tool.
+# The migration tool currently supports fs <-> sqlite only; mysql/postgres targets require
+# a fresh dataRoot or an external dump+load. Switching modes on populated data without
+# migration will make existing data invisible.
+storage:
+  mode: fs
+  # The mysql / postgres sub-blocks are only consulted when `mode` matches.
+  # Both expect a single connection-string URL; pool size caps concurrent
+  # connections (raise for high-concurrency multi-user installs).
+  mysql:
+    url: mysql://user:pass@host:3306/luker
+    poolSize: 10
+  postgres:
+    url: postgresql://user:pass@host:5432/luker
+    poolSize: 10
 # -- SERVER CONFIGURATION --
 # Listen for incoming connections
 listen: false

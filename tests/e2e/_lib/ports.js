@@ -23,6 +23,7 @@ export const PORT_RANGES = {
     extensions:     { base: 8551, count: 4 },  // Batch 11
     personas:       { base: 8561, count: 6 },  // Batch 12 (multi-user)
     regression:     { base: 8571, count: 4 },  // Batch 13
+    storage:        { base: 8581, count: 6 },  // Batch 14 (migration round-trips need 2+)
 };
 
 let nextOffsetByBatch = new Map();

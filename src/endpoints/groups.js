@@ -4,11 +4,12 @@ import path from 'node:path';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync, default as writeFileAtomic } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 
 import { color, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { invalidateRecentChatIndex } from './chats.js';
+import { getGroupRepo } from '../storage/index.js';
 
 export const router = express.Router();
 
@@ -111,54 +112,29 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
     }
 }
 
-export function getGroupsSnapshot(directories) {
-    const groups = [];
-
-    if (!fs.existsSync(directories.groups)) {
-        fs.mkdirSync(directories.groups);
-    }
-
-    const files = fs.readdirSync(directories.groups).filter(x => path.extname(x) === '.json');
-    const chats = fs.readdirSync(directories.groupChats).filter(x => path.extname(x) === '.jsonl');
-
-    files.forEach(function (file) {
-        try {
-            const filePath = path.join(directories.groups, file);
-            const fileContents = fs.readFileSync(filePath, 'utf8');
-            const group = JSON.parse(fileContents);
-            const groupStat = fs.statSync(filePath);
-            group.date_added = groupStat.birthtimeMs;
-            group.create_date = new Date(groupStat.birthtimeMs).toISOString();
-
-            let chat_size = 0;
-            let date_last_chat = 0;
-
-            if (Array.isArray(group.chats) && Array.isArray(chats)) {
-                for (const chat of chats) {
-                    if (group.chats.includes(path.parse(chat).name)) {
-                        const chatStat = fs.statSync(path.join(directories.groupChats, chat));
-                        chat_size += chatStat.size;
-                        date_last_chat = Math.max(date_last_chat, chatStat.mtimeMs);
-                    }
-                }
-            }
-
-            group.date_last_chat = date_last_chat;
-            group.chat_size = chat_size;
-            groups.push(group);
-        } catch (error) {
-            console.error(error);
-        }
-    });
-
-    return groups;
+/**
+ * Returns a snapshot of all groups for the given user handle, joined with
+ * member-chat file stats (chat_size + date_last_chat). Previously a sync
+ * function that took the raw directories struct; now async-routed through
+ * GroupRepo so the storage engine remains the single source of truth.
+ * @param {string} handle User profile handle
+ * @returns {Promise<object[]>}
+ */
+export async function getGroupsSnapshot(handle) {
+    return getGroupRepo().listWithChatStats(handle);
 }
 
-router.post('/all', (request, response) => {
-    return response.send(getGroupsSnapshot(request.user.directories));
+router.post('/all', async (request, response) => {
+    try {
+        const groups = await getGroupRepo().listWithChatStats(request.user.profile.handle);
+        return response.send(groups);
+    } catch (error) {
+        console.error('Error listing groups:', error);
+        return response.sendStatus(500);
+    }
 });
 
-router.post('/create', (request, response) => {
+router.post('/create', async (request, response) => {
     if (!request.body) {
         return response.sendStatus(400);
     }
@@ -181,28 +157,29 @@ router.post('/create', (request, response) => {
         generation_mode_join_prefix: request.body.generation_mode_join_prefix ?? '',
         generation_mode_join_suffix: request.body.generation_mode_join_suffix ?? '',
     };
-    const pathToFile = path.join(request.user.directories.groups, sanitize(`${id}.json`));
-    const fileData = JSON.stringify(groupMetadata, null, 4);
 
-    if (!fs.existsSync(request.user.directories.groups)) {
-        fs.mkdirSync(request.user.directories.groups);
+    try {
+        await getGroupRepo().save(request.user.profile.handle, id, groupMetadata);
+        return response.send(groupMetadata);
+    } catch (error) {
+        console.error('Error creating group:', error);
+        return response.sendStatus(500);
     }
-
-    writeFileAtomicSync(pathToFile, fileData);
-    return response.send(groupMetadata);
 });
 
-router.post('/edit', getFileNameValidationFunction('id'), (request, response) => {
+router.post('/edit', getFileNameValidationFunction('id'), async (request, response) => {
     if (!request.body || !request.body.id) {
         return response.sendStatus(400);
     }
     warnOnGroupMetadata(request.body);
-    const id = request.body.id;
-    const pathToFile = path.join(request.user.directories.groups, sanitize(`${id}.json`));
-    const fileData = JSON.stringify(request.body, null, 4);
 
-    writeFileAtomicSync(pathToFile, fileData);
-    return response.send({ ok: true });
+    try {
+        await getGroupRepo().save(request.user.profile.handle, request.body.id, request.body);
+        return response.send({ ok: true });
+    } catch (error) {
+        console.error('Error editing group:', error);
+        return response.sendStatus(500);
+    }
 });
 
 router.post('/delete', getFileNameValidationFunction('id'), async (request, response) => {
@@ -210,35 +187,27 @@ router.post('/delete', getFileNameValidationFunction('id'), async (request, resp
         return response.sendStatus(400);
     }
 
+    const handle = request.user.profile.handle;
     const id = request.body.id;
-    const pathToGroup = path.join(request.user.directories.groups, sanitize(`${id}.json`));
-
     try {
-        // Delete group chats
-        const group = JSON.parse(fs.readFileSync(pathToGroup, 'utf8'));
-
-        if (group && Array.isArray(group.chats)) {
-            for (const chat of group.chats) {
-                console.info('Deleting group chat', chat);
-                const pathToFile = path.join(request.user.directories.groupChats, sanitize(`${chat}.jsonl`));
-
-                if (fs.existsSync(pathToFile)) {
-                    fs.unlinkSync(pathToFile);
-                }
-            }
-            // Recent-chat cache caches absolute group-chat paths that just got
-            // unlinked; invalidate so the next /api/chats/recent rebuilds clean.
-            if (group.chats.length > 0) {
-                await invalidateRecentChatIndex(request);
-            }
+        const result = await getGroupRepo().delete(handle, id);
+        // Recent-chat cache caches absolute group-chat paths that just got unlinked;
+        // invalidate so the next /api/chats/recent rebuilds clean.
+        if (result.chatsDeleted > 0) {
+            await invalidateRecentChatIndex(request);
         }
+        return response.send({ ok: true });
     } catch (error) {
-        console.error('Could not delete group chats. Clean them up manually.', error);
+        // Cascade failed -> group file still on disk (atomic). Surface the group id and
+        // its referenced chats so an operator can clean up the remnants if needed.
+        let chatList = [];
+        try {
+            const group = await getGroupRepo().get(handle, id);
+            if (group && Array.isArray(group.chats)) chatList = group.chats;
+        } catch {
+            // ignore — best-effort diagnostics
+        }
+        console.error(`Error deleting group ${id}; group file and these chat files may need manual cleanup: ${chatList.join(', ')}`, error);
+        return response.sendStatus(500);
     }
-
-    if (fs.existsSync(pathToGroup)) {
-        fs.unlinkSync(pathToGroup);
-    }
-
-    return response.send({ ok: true });
 });

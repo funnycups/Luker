@@ -25,6 +25,8 @@ import {
     isPathUnderParent,
 } from '../util.js';
 import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
+import { getChatRepo, getStorageEngine } from '../storage/index.js';
+import { ConflictError, NotFoundError } from '../storage/errors.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
 const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
@@ -1027,6 +1029,15 @@ function sendIntegrityConflict(response, error) {
     });
 }
 
+function sendRepoIntegrityConflict(response, error) {
+    console.warn(error.message);
+    const actual = typeof error?.details?.actual === 'string' ? error.details.actual : '';
+    return response.status(409).send({
+        error: 'integrity',
+        current_integrity: actual,
+    });
+}
+
 /**
  * Creates a chat header object.
  * @param {object} [metadata] Chat metadata.
@@ -1126,26 +1137,6 @@ function getAllChatStateSidecarPaths(chatFilePath) {
         .map(fileName => path.join(parsed.dir, fileName));
 }
 
-function readChatStateData(chatFilePath, namespace) {
-    const stateFilePath = getChatStateSidecarPath(chatFilePath, namespace);
-    if (!stateFilePath || !fs.existsSync(stateFilePath)) {
-        return null;
-    }
-
-    const raw = tryReadFileSync(stateFilePath);
-    if (!raw) {
-        return null;
-    }
-
-    const parsed = tryParse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-        console.warn(`Invalid chat state sidecar JSON: ${stateFilePath}`);
-        return null;
-    }
-
-    return parsed;
-}
-
 /**
  * Renames all state sidecars from one chat base name to another.
  * @param {string} sourceChatFilePath Source chat file path.
@@ -1186,31 +1177,27 @@ function deleteAllChatStateSidecars(chatFilePath) {
 }
 
 /**
- * Resolves a chat jsonl file path from state target payload.
+ * Resolves a ChatRepo storage key from a state target payload.
+ * Sanitizes avatar_url + file_name (or group id) the same way the legacy
+ * direct-file path did, so the storage layer (which does not re-sanitize)
+ * inherits the same path-safety guarantees.
  * @param {import('express').Request} request Express request.
  * @param {object} target Target payload.
- * @returns {string|null} Chat file path or null if invalid.
+ * @returns {{handle:string,charDir?:string,name:string,isGroup:boolean,groupId?:string}|null}
  */
-function resolveChatFilePathForStateTarget(request, target) {
+function resolveChatStateRepoKey(request, target) {
+    const handle = request.user.profile.handle;
     if (target?.is_group) {
-        const groupId = String(target?.id || '').trim();
-        if (!groupId) {
-            return null;
-        }
-        const safeGroupId = sanitize(groupId);
-        if (!safeGroupId) {
-            return null;
-        }
-        return path.join(request.user.directories.groupChats, `${safeGroupId}.jsonl`);
+        const safeGroupId = sanitize(String(target?.id || '').trim());
+        if (!safeGroupId) return null;
+        return { handle, isGroup: true, groupId: safeGroupId, name: safeGroupId };
     }
-
     const avatarDir = resolveAvatarDirectoryName(target?.avatar_url);
     const fileName = normalizeJsonlFileName(target?.file_name);
-    if (!avatarDir || !fileName) {
-        return null;
-    }
-
-    return path.join(request.user.directories.chats, avatarDir, fileName);
+    if (!avatarDir || !fileName) return null;
+    const baseName = path.basename(fileName, '.jsonl');
+    if (!baseName) return null;
+    return { handle, charDir: avatarDir, name: baseName, isGroup: false };
 }
 
 /**
@@ -1880,14 +1867,52 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
             return response.sendStatus(400);
         }
 
-        if (Array.isArray(chatData)) {
-            const integrity = await trySaveChat(chatData, chatFilePath, request.body.force, handle, cardName, request.user.directories.backups);
-            await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
-            acknowledgeGenerationFromValueOrPersistTarget(request, chatData, buildCharacterPersistTargetHint(request));
-            return response.send({ ok: true, integrity });
-        } else {
+        if (!Array.isArray(chatData)) {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });
         }
+        if (chatData.length === 0) {
+            throw new Error('Cannot save empty chat payload.');
+        }
+
+        const force = Boolean(request.body.force);
+        const headerInput = _.isObjectLike(chatData[0]) ? chatData[0] : createChatHeader({});
+        const body = chatData.slice(1);
+
+        const doIntegrityCheck = (checkIntegrity && !force);
+        const slugFromHeader = doIntegrityCheck
+            ? String(headerInput?.chat_metadata?.integrity ?? '').trim()
+            : '';
+        const expectedIntegrity = slugFromHeader || null;
+
+        let integrity;
+        try {
+            ({ integrity } = await getChatRepo().save(handle, cardName, String(request.body.file_name), headerInput, body, expectedIntegrity));
+        } catch (err) {
+            if (err instanceof NotFoundError && expectedIntegrity !== null) {
+                // Existing semantic: missing file means no current integrity to mismatch — write succeeds.
+                ({ integrity } = await getChatRepo().save(handle, cardName, String(request.body.file_name), headerInput, body, null));
+            } else if (err instanceof ConflictError) {
+                return sendRepoIntegrityConflict(response, err);
+            } else {
+                throw err;
+            }
+        }
+
+        writeChatSyncState(chatFilePath, { integrity, updated_at: Date.now() });
+        try {
+            const headerWithIntegrity = {
+                ...headerInput,
+                chat_metadata: applyIntegrityToMetadata(headerInput.chat_metadata, integrity),
+            };
+            const jsonlData = [headerWithIntegrity, ...body].map(m => JSON.stringify(m)).join('\n');
+            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+        } catch (backupErr) {
+            console.error('Chat backup after save failed', backupErr);
+        }
+
+        await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
+        acknowledgeGenerationFromValueOrPersistTarget(request, chatData, buildCharacterPersistTargetHint(request));
+        return response.send({ ok: true, integrity });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -1899,12 +1924,17 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
 
 router.post('/append', validateAvatarUrlMiddleware, async function (request, response) {
     try {
+        const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
+        const fileNameRaw = String(request.body.file_name);
+        const chatFileName = `${fileNameRaw}.jsonl`;
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
-        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
         const force = Boolean(request.body.force);
+        const slugRaw = typeof request.body.integrity === 'string' ? request.body.integrity.trim() : '';
+        const incomingId = typeof request.body.luker_generation_id === 'string'
+            ? request.body.luker_generation_id.trim()
+            : '';
         const messages = Array.isArray(request.body.messages)
             ? request.body.messages
             : (_.isObjectLike(request.body.message) ? [request.body.message] : []);
@@ -1913,18 +1943,85 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
             return response.status(400).send({ error: 'No message payload found. Expected body.messages or body.message.' });
         }
 
-        const result = await appendMessagesToChatFile({
-            filePath: chatFilePath,
-            messages,
-            chatMetadata,
-            integritySlug,
-            force,
-            incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
-        });
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, cardName, fileNameRaw);
+
+        if (slugRaw && !force && existing && existing.integrity !== slugRaw) {
+            throw createIntegrityMismatchError(chatFilePath, slugRaw);
+        }
+
+        const cleanedMessages = messages.map(m => stripLukerGenerationIdFromMessage(_.cloneDeep(m)));
+
+        if (!existing) {
+            const header = createChatHeader(_.isObjectLike(chatMetadata) ? chatMetadata : {});
+            const { integrity: newIntegrity } = await repo.save(handle, cardName, fileNameRaw, header, cleanedMessages, null);
+            writeChatSyncState(chatFilePath, { integrity: newIntegrity, updated_at: Date.now() });
+            if (incomingId) {
+                writeLastChatGenerationId(chatFilePath, incomingId);
+            }
+            await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
+            acknowledgeGenerationFromValueOrPersistTarget(request, messages, buildCharacterPersistTargetHint(request));
+            return response.send({ ok: true, appended: cleanedMessages.length, created: true, integrity: newIntegrity });
+        }
+
+        const dedupedMessages = cleanedMessages.slice();
+        const lastStoredMessage = existing.body.length > 0 ? existing.body[existing.body.length - 1] : null;
+        const sidecarLastGenerationId = readLastChatGenerationId(chatFilePath);
+        let matchedExistingGenerationId = false;
+        while (dedupedMessages.length > 0) {
+            const lastStoredStripped = isChatMessageLike(lastStoredMessage)
+                ? stripLukerGenerationIdFromMessage(_.cloneDeep(lastStoredMessage))
+                : null;
+            if (lastStoredStripped && isChatMessageLike(dedupedMessages[0]) && _.isEqual(lastStoredStripped, dedupedMessages[0])) {
+                dedupedMessages.shift();
+                continue;
+            }
+            if (!sidecarLastGenerationId || !incomingId || incomingId !== sidecarLastGenerationId) {
+                break;
+            }
+            matchedExistingGenerationId = true;
+            dedupedMessages.shift();
+        }
+
+        if (dedupedMessages.length === 0) {
+            await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
+            acknowledgeGenerationFromValueOrPersistTarget(request, messages, buildCharacterPersistTargetHint(request));
+            return response.send({
+                ok: true,
+                appended: 0,
+                created: false,
+                skipped: cleanedMessages.length,
+                matched_existing_generation_id: matchedExistingGenerationId,
+                integrity: existing.integrity,
+            });
+        }
+
+        const mergedBody = existing.body.concat(dedupedMessages);
+        const expectedForSave = (slugRaw && !force) ? slugRaw : null;
+        let newIntegrity;
+        try {
+            ({ integrity: newIntegrity } = await repo.save(handle, cardName, fileNameRaw, existing.header, mergedBody, expectedForSave));
+        } catch (err) {
+            if (err instanceof ConflictError) {
+                return sendRepoIntegrityConflict(response, err);
+            }
+            throw err;
+        }
+        writeChatSyncState(chatFilePath, { integrity: newIntegrity, updated_at: Date.now() });
+        if (incomingId) {
+            writeLastChatGenerationId(chatFilePath, incomingId);
+        }
 
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
         acknowledgeGenerationFromValueOrPersistTarget(request, messages, buildCharacterPersistTargetHint(request));
-        return response.send({ ok: true, ...result });
+        return response.send({
+            ok: true,
+            appended: dedupedMessages.length,
+            created: false,
+            skipped: cleanedMessages.length - dedupedMessages.length,
+            matched_existing_generation_id: matchedExistingGenerationId,
+            integrity: newIntegrity,
+        });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -1936,12 +2033,17 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
 
 router.post('/patch', validateAvatarUrlMiddleware, async function (request, response) {
     try {
+        const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
+        const fileNameRaw = String(request.body.file_name);
+        const chatFileName = `${fileNameRaw}.jsonl`;
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
-        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
+        const slugRaw = typeof request.body.integrity === 'string' ? request.body.integrity.trim() : '';
         const force = Boolean(request.body.force);
+        const incomingId = typeof request.body.luker_generation_id === 'string'
+            ? request.body.luker_generation_id.trim()
+            : '';
         const operations = Array.isArray(request.body.operations)
             ? request.body.operations
             : (_.isObjectLike(request.body.operations)
@@ -1952,16 +2054,49 @@ router.post('/patch', validateAvatarUrlMiddleware, async function (request, resp
             return response.status(400).send({ error: 'No patch operations found. Expected body.operations or body.operation.' });
         }
 
-        let result;
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, cardName, fileNameRaw);
+
+        if (slugRaw && !force && existing && existing.integrity !== slugRaw) {
+            throw createIntegrityMismatchError(chatFilePath, slugRaw);
+        }
+
+        const sanitizedOperations = sanitizeOperationsAgainstLukerGenerationId(operations);
+        if (sanitizedOperations.length === 0) {
+            if (incomingId) writeLastChatGenerationId(chatFilePath, incomingId);
+            const currentIntegrity = existing ? existing.integrity : '';
+            await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
+            acknowledgeGenerationFromValueOrPersistTarget(request, operations, buildCharacterPersistTargetHint(request));
+            return response.send({ ok: true, applied: 0, total_messages: 0, integrity: currentIntegrity });
+        }
+
+        const currentHeader = existing?.header
+            ? (_.isObjectLike(existing.header) ? existing.header : createChatHeader(chatMetadata))
+            : createChatHeader(chatMetadata);
+        const currentMessages = existing?.body ? existing.body : [];
+
+        const mergedHeader = (() => {
+            const base = _.isObjectLike(currentHeader) ? { ...currentHeader } : createChatHeader(chatMetadata);
+            if (_.isObjectLike(chatMetadata) && Object.keys(chatMetadata).length > 0) {
+                base.chat_metadata = {
+                    ...(_.isObjectLike(base.chat_metadata) ? base.chat_metadata : {}),
+                    ...chatMetadata,
+                };
+            } else if (!_.isObjectLike(base.chat_metadata)) {
+                base.chat_metadata = {};
+            }
+            return base;
+        })();
+
+        let patchedMessages;
+        let idempotentOperations;
         try {
-            result = await patchChatMessagesInFile({
-                filePath: chatFilePath,
-                operations,
-                chatMetadata,
-                integritySlug,
-                force,
-                incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
-            });
+            idempotentOperations = buildIdempotentMessagePatchOperations(currentMessages, sanitizedOperations);
+            const patchResult = applyJsonPatch(currentMessages, idempotentOperations, true, false);
+            patchedMessages = patchResult.newDocument;
+            if (!Array.isArray(patchedMessages)) {
+                throw new Error('Message patch must produce an array root.');
+            }
         } catch (error) {
             if (isChatStatePatchConflictError(error)) {
                 return response.status(409).send({ error: 'Chat patch conflict.' });
@@ -1972,9 +2107,27 @@ router.post('/patch', validateAvatarUrlMiddleware, async function (request, resp
             throw error;
         }
 
+        const expectedForSave = existing ? ((slugRaw && !force) ? slugRaw : null) : null;
+        let newIntegrity;
+        try {
+            ({ integrity: newIntegrity } = await repo.save(handle, cardName, fileNameRaw, mergedHeader, patchedMessages, expectedForSave));
+        } catch (err) {
+            if (err instanceof ConflictError) {
+                return sendRepoIntegrityConflict(response, err);
+            }
+            throw err;
+        }
+        writeChatSyncState(chatFilePath, { integrity: newIntegrity, updated_at: Date.now() });
+        if (incomingId) writeLastChatGenerationId(chatFilePath, incomingId);
+
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
         acknowledgeGenerationFromValueOrPersistTarget(request, operations, buildCharacterPersistTargetHint(request));
-        return response.send({ ok: true, ...result });
+        return response.send({
+            ok: true,
+            applied: idempotentOperations.length,
+            total_messages: patchedMessages.length,
+            integrity: newIntegrity,
+        });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -2105,7 +2258,7 @@ export function getChatData(chatFilePath) {
     return attachCurrentIntegrityToChatData(chatData, chatFilePath);
 }
 
-router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
+router.post('/get', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         const dirName = String(request.body.avatar_url).replace('.png', '');
         const directoryPath = path.join(request.user.directories.chats, dirName);
@@ -2124,10 +2277,24 @@ router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
             return response.send({ new_chat: true });
         }
 
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
-        const chatFilePath = path.join(directoryPath, sanitize(chatFileName));
-
-        return response.send(getChatData(chatFilePath));
+        const handle = request.user.profile.handle;
+        const fetched = await getChatRepo().get(handle, dirName, String(request.body.file_name));
+        if (!fetched) {
+            const chatFilePath = path.join(directoryPath, sanitize(`${String(request.body.file_name)}.jsonl`));
+            if (fs.existsSync(chatFilePath)) {
+                console.warn(`Chat file is empty or has no valid JSON lines (corrupted): ${chatFilePath}`);
+                return response.send({ corrupted: true });
+            }
+            return response.send({ new_chat: true });
+        }
+        const headerWithIntegrity = {
+            ...fetched.header,
+            chat_metadata: {
+                ...(fetched.header.chat_metadata ?? {}),
+                integrity: fetched.integrity,
+            },
+        };
+        return response.send([headerWithIntegrity, ...fetched.body]);
     } catch (error) {
         console.error(error);
         return response.status(500).send({ corrupted: true });
@@ -2170,40 +2337,52 @@ router.post('/get-delta', validateAvatarUrlMiddleware, function (request, respon
     }
 });
 
-router.post('/state/get', function (request, response) {
+router.post('/state/get', async function (request, response) {
     try {
-        const chatFilePath = resolveChatFilePathForStateTarget(request, request.body || {});
-        const namespace = normalizeChatStateNamespace(request.body?.namespace);
-        if (!chatFilePath) {
+        const target = request.body || {};
+        const repoKey = resolveChatStateRepoKey(request, target);
+        const namespace = normalizeChatStateNamespace(target?.namespace);
+        if (!repoKey) {
             return response.status(400).send({ error: 'Invalid state target payload.' });
         }
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
-        return response.send({ ok: true, data: readChatStateData(chatFilePath, namespace) });
+        const data = await getChatRepo().getState(
+            repoKey.handle,
+            repoKey.charDir,
+            repoKey.name,
+            namespace,
+            { isGroup: repoKey.isGroup, groupId: repoKey.groupId },
+        );
+        return response.send({ ok: true, data });
     } catch (error) {
         console.error('Error reading chat state sidecar:', error);
         return response.status(500).send({ error: true });
     }
 });
 
-router.post('/state/get-batch', function (request, response) {
+router.post('/state/get-batch', async function (request, response) {
     try {
-        const chatFilePath = resolveChatFilePathForStateTarget(request, request.body || {});
-        const namespaces = [...new Set((Array.isArray(request.body?.namespaces) ? request.body.namespaces : [])
+        const target = request.body || {};
+        const repoKey = resolveChatStateRepoKey(request, target);
+        const namespaces = [...new Set((Array.isArray(target?.namespaces) ? target.namespaces : [])
             .map((namespace) => normalizeChatStateNamespace(namespace))
             .filter(Boolean))];
-        if (!chatFilePath) {
+        if (!repoKey) {
             return response.status(400).send({ error: 'Invalid state target payload.' });
         }
         if (!namespaces.length) {
             return response.status(400).send({ error: 'Expected body.namespaces array.' });
         }
 
-        const data = {};
-        for (const namespace of namespaces) {
-            data[namespace] = readChatStateData(chatFilePath, namespace);
-        }
+        const data = await getChatRepo().getStateBatch(
+            repoKey.handle,
+            repoKey.charDir,
+            repoKey.name,
+            namespaces,
+            { isGroup: repoKey.isGroup, groupId: repoKey.groupId },
+        );
 
         return response.send({ ok: true, data });
     } catch (error) {
@@ -2212,79 +2391,80 @@ router.post('/state/get-batch', function (request, response) {
     }
 });
 
-router.post('/state/patch', function (request, response) {
+router.post('/state/patch', async function (request, response) {
     try {
-        const chatFilePath = resolveChatFilePathForStateTarget(request, request.body || {});
-        const namespace = normalizeChatStateNamespace(request.body?.namespace);
-        if (!chatFilePath) {
+        const target = request.body || {};
+        const repoKey = resolveChatStateRepoKey(request, target);
+        const namespace = normalizeChatStateNamespace(target?.namespace);
+        if (!repoKey) {
             return response.status(400).send({ error: 'Invalid state target payload.' });
         }
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
-        const operations = Array.isArray(request.body?.operations)
-            ? request.body.operations
-            : (_.isObjectLike(request.body?.operations)
-                ? [request.body.operations]
-                : (_.isObjectLike(request.body?.operation) ? [request.body.operation] : []));
+        const operations = Array.isArray(target?.operations)
+            ? target.operations
+            : (_.isObjectLike(target?.operations)
+                ? [target.operations]
+                : (_.isObjectLike(target?.operation) ? [target.operation] : []));
         if (operations.length === 0) {
             return response.status(400).send({ error: 'No state patch operations found. Expected body.operations or body.operation.' });
         }
 
-        const stateFilePath = getChatStateSidecarPath(chatFilePath, namespace);
-        if (!stateFilePath) {
-            return response.status(400).send({ error: 'Invalid namespace for state sidecar path.' });
-        }
-
-        let state = {};
-        const existed = fs.existsSync(stateFilePath);
-        if (existed) {
-            const raw = tryReadFileSync(stateFilePath);
-            const parsed = raw ? tryParse(raw) : null;
-            if (_.isObjectLike(parsed) && !Array.isArray(parsed)) {
-                state = parsed;
-            }
-        }
-
-        let result;
-        try {
-            result = applyChatStatePatch(state, operations);
-        } catch (error) {
-            if (isChatStatePatchConflictError(error)) {
-                return response.status(409).send({ error: 'Chat state patch conflict.' });
-            }
-            if (isJsonPatchValidationError(error)) {
-                return response.status(400).send({ error: 'Invalid chat state patch payload.' });
-            }
-            throw error;
-        }
-
-        fs.mkdirSync(path.dirname(stateFilePath), { recursive: true });
-        writeFileAtomicSync(stateFilePath, JSON.stringify(result.state), 'utf8');
-        return response.send({
-            ok: true,
-            applied: result.applied,
-            created: !existed,
+        // Use the storage engine transaction directly: legacy behavior is permissive and
+        // allows writing a sidecar even when the parent chat does not exist, which the
+        // ChatRepo.setState wrapper guards against with a NotFoundError.
+        const engine = getStorageEngine();
+        const repoKeyForEngine = {
+            kind: 'chat',
+            handle: repoKey.handle,
+            charDir: repoKey.charDir,
+            name: repoKey.name,
+            isGroup: repoKey.isGroup,
+            groupId: repoKey.groupId,
+        };
+        const { applied, created } = await engine.withTransaction(repoKey.handle, async (tx) => {
+            const existing = await tx.getChatState(repoKeyForEngine, namespace);
+            const existed = existing !== null && existing !== undefined;
+            const state = (_.isObjectLike(existing) && !Array.isArray(existing)) ? existing : {};
+            const result = applyChatStatePatch(state, operations);
+            await tx.putChatState(repoKeyForEngine, namespace, result.state);
+            return { applied: result.applied, created: !existed };
         });
+        return response.send({ ok: true, applied, created });
     } catch (error) {
+        if (isChatStatePatchConflictError(error)) {
+            return response.status(409).send({ error: 'Chat state patch conflict.' });
+        }
+        if (isJsonPatchValidationError(error)) {
+            return response.status(400).send({ error: 'Invalid chat state patch payload.' });
+        }
         console.error('Error patching chat state sidecar:', error);
         return response.status(500).send({ error: true });
     }
 });
 
-router.post('/state/delete', function (request, response) {
+router.post('/state/delete', async function (request, response) {
     try {
-        const chatFilePath = resolveChatFilePathForStateTarget(request, request.body || {});
-        const namespace = normalizeChatStateNamespace(request.body?.namespace);
-        if (!chatFilePath) {
+        const target = request.body || {};
+        const repoKey = resolveChatStateRepoKey(request, target);
+        const namespace = normalizeChatStateNamespace(target?.namespace);
+        if (!repoKey) {
             return response.status(400).send({ error: 'Invalid state target payload.' });
         }
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
-        const stateFilePath = getChatStateSidecarPath(chatFilePath, namespace);
-        const deleted = stateFilePath ? tryDeleteFile(stateFilePath) : false;
-        return response.send({ ok: true, deleted: Boolean(deleted) });
+        // deleteState returns void; report `deleted: true` on success to preserve the
+        // legacy contract — the frontend reads `response.ok` only.
+        await getChatRepo().deleteState(
+            repoKey.handle,
+            repoKey.charDir,
+            repoKey.name,
+            namespace,
+            { isGroup: repoKey.isGroup, groupId: repoKey.groupId },
+        );
+        return response.send({ ok: true, deleted: true });
     } catch (error) {
         console.error('Error deleting chat state sidecar:', error);
         return response.status(500).send({ error: true });
@@ -2297,14 +2477,19 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
             return response.sendStatus(400);
         }
 
-        const pathToFolder = request.body.is_group
+        const handle = request.user.profile.handle;
+        const isGroup = Boolean(request.body.is_group);
+        const charDir = isGroup ? '' : String(request.body.avatar_url).replace('.png', '');
+        const pathToFolder = isGroup
             ? request.user.directories.groupChats
-            : path.join(request.user.directories.chats, String(request.body.avatar_url).replace('.png', ''));
-        if (!request.body.is_group && !isPathUnderParent(request.user.directories.chats, pathToFolder)) {
+            : path.join(request.user.directories.chats, charDir);
+        if (!isGroup && !isPathUnderParent(request.user.directories.chats, pathToFolder)) {
             return response.sendStatus(400);
         }
-        const pathToOriginalFile = path.join(pathToFolder, sanitize(request.body.original_file));
-        const pathToRenamedFile = path.join(pathToFolder, sanitize(request.body.renamed_file));
+        const safeOriginal = sanitize(String(request.body.original_file));
+        const safeRenamed = sanitize(String(request.body.renamed_file));
+        const pathToOriginalFile = path.join(pathToFolder, safeOriginal);
+        const pathToRenamedFile = path.join(pathToFolder, safeRenamed);
         const sanitizedFileName = path.parse(pathToRenamedFile).name;
         console.debug('Old chat name', pathToOriginalFile);
         console.debug('New chat name', pathToRenamedFile);
@@ -2316,13 +2501,24 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 
         const existingIndexState = await getReadyRecentChatIndexState(request);
         const previousRecentEntry = existingIndexState?.entries?.get(path.resolve(pathToOriginalFile)) || null;
-        fs.copyFileSync(pathToOriginalFile, pathToRenamedFile);
-        fs.unlinkSync(pathToOriginalFile);
+        const oldName = path.parse(safeOriginal).name;
+        const newName = path.parse(safeRenamed).name;
+        try {
+            await getChatRepo().rename(handle, charDir, oldName, newName, { isGroup });
+        } catch (err) {
+            if (err instanceof NotFoundError) {
+                return response.status(400).send({ error: true });
+            }
+            if (err instanceof ConflictError) {
+                return response.status(409).send({ error: err.code });
+            }
+            throw err;
+        }
         renameAllChatStateSidecars(pathToOriginalFile, pathToRenamedFile);
         await deleteRecentChatIndexEntry(request, pathToOriginalFile);
         await refreshRecentChatIndexEntry(request, pathToRenamedFile, {
-            avatar: request.body.is_group ? '' : String(request.body.avatar_url || ''),
-            group: request.body.is_group ? String(previousRecentEntry?.group || '') : '',
+            avatar: isGroup ? '' : String(request.body.avatar_url || ''),
+            group: isGroup ? String(previousRecentEntry?.group || '') : '',
         });
 
         console.info('Successfully renamed chat file.');
@@ -2339,21 +2535,23 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
             request.body.chatfile += '.jsonl';
         }
 
+        const handle = request.user.profile.handle;
         const dirName = String(request.body.avatar_url).replace('.png', '');
         const chatFileName = String(request.body.chatfile);
-        const chatFilePath = path.join(request.user.directories.chats, dirName, sanitize(chatFileName));
+        const safeFileName = sanitize(chatFileName);
+        const chatFilePath = path.join(request.user.directories.chats, dirName, safeFileName);
         if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
             return response.sendStatus(400);
         }
-        //Return success if the file was deleted.
-        if (tryDeleteFile(chatFilePath)) {
-            deleteAllChatStateSidecars(chatFilePath);
-            await deleteRecentChatIndexEntry(request, chatFilePath);
-            return response.send({ ok: true });
-        } else {
+        if (!fs.existsSync(chatFilePath)) {
             console.error('The chat file was not deleted.');
             return response.sendStatus(400);
         }
+        const name = path.parse(safeFileName).name;
+        await getChatRepo().delete(handle, dirName, name);
+        deleteAllChatStateSidecars(chatFilePath);
+        await deleteRecentChatIndexEntry(request, chatFilePath);
+        return response.send({ ok: true });
     } catch (error) {
         console.error(error);
         return response.sendStatus(500);

@@ -1,47 +1,18 @@
-import fs from 'node:fs';
-import path from 'node:path';
-
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
-import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
+
+import { NotFoundError, ConflictError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
+import { applyJsonPatch } from '../storage/repositories/json-patch.js';
+import { getPresetRepo } from '../storage/index.js';
+import { PRESET_FOLDER_BY_API_ID } from '../storage/repositories/preset-repo.js';
 
 import { getDefaultPresetFile, getDefaultPresets } from './content-manager.js';
 
-const PRESET_STATE_FILE_PREFIX = '.luker-state.';
-const PRESET_STATE_FILE_SUFFIX = '.json';
-
-/**
- * Gets the folder and extension for the preset settings based on the API source ID.
- * @param {string} apiId API source ID
- * @param {import('../users.js').UserDirectoryList} directories User directories
- * @returns {{folder: string?, extension: string?}} Object containing the folder and extension for the preset settings
- */
-function getPresetSettingsByAPI(apiId, directories) {
-    switch (apiId) {
-        case 'kobold':
-        case 'koboldhorde':
-            return { folder: directories.koboldAI_Settings, extension: '.json' };
-        case 'novel':
-            return { folder: directories.novelAI_Settings, extension: '.json' };
-        case 'textgenerationwebui':
-            return { folder: directories.textGen_Settings, extension: '.json' };
-        case 'openai':
-            return { folder: directories.openAI_Settings, extension: '.json' };
-        case 'instruct':
-            return { folder: directories.instruct, extension: '.json' };
-        case 'context':
-            return { folder: directories.context, extension: '.json' };
-        case 'sysprompt':
-            return { folder: directories.sysprompt, extension: '.json' };
-        case 'reasoning':
-            return { folder: directories.reasoning, extension: '.json' };
-        default:
-            return { folder: null, extension: null };
-    }
-}
-
 export const router = express.Router();
+
+function isValidApiId(apiId) {
+    return Object.prototype.hasOwnProperty.call(PRESET_FOLDER_BY_API_ID, apiId);
+}
 
 function normalizePresetStateNamespace(namespace) {
     const raw = String(namespace || '').trim().toLowerCase();
@@ -51,177 +22,101 @@ function normalizePresetStateNamespace(namespace) {
     return raw.replace(/[^a-z0-9._-]/g, '_').slice(0, 96);
 }
 
-function resolvePresetFilePath(apiId, directories, name) {
-    const safeName = sanitize(String(name || '').trim());
-    const settings = getPresetSettingsByAPI(apiId, directories);
-    if (!safeName || !settings.folder || !settings.extension) {
-        return null;
-    }
-    return path.join(settings.folder, `${safeName}${settings.extension}`);
+function presetFolderForApiId(apiId, directories) {
+    const dirKey = PRESET_FOLDER_BY_API_ID[apiId];
+    if (!dirKey) return null;
+    return directories[dirKey] ?? null;
 }
 
-function getPresetStateSidecarPath(presetFilePath, namespace) {
-    const safeNamespace = normalizePresetStateNamespace(namespace);
-    if (!safeNamespace) {
-        return '';
+function mapPatchError(error, response) {
+    if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
+        return response.status(409).send({
+            error: 'Preset patch test conflict.',
+            code: 'patch_test_failed',
+            details: String(error?.message || ''),
+        });
     }
-    const parsed = path.parse(presetFilePath);
-    return path.join(parsed.dir, `${parsed.name}${PRESET_STATE_FILE_PREFIX}${safeNamespace}${PRESET_STATE_FILE_SUFFIX}`);
+    if (error instanceof UnsupportedPatchOpError) {
+        return response.status(400).send({
+            error: 'Invalid preset patch payload.',
+            code: 'patch_payload_invalid',
+            details: String(error?.message || ''),
+        });
+    }
+    return null;
 }
 
-function getAllPresetStateSidecarPaths(presetFilePath) {
-    const parsed = path.parse(presetFilePath);
-    if (!fs.existsSync(parsed.dir)) {
-        return [];
+function mapStatePatchError(error, response) {
+    if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
+        return response.status(409).send({ error: 'Preset state patch conflict.' });
     }
-    const prefix = `${parsed.name}${PRESET_STATE_FILE_PREFIX}`;
-    const files = fs.readdirSync(parsed.dir, { withFileTypes: true });
-    return files
-        .filter(entry => entry.isFile())
-        .map(entry => entry.name)
-        .filter(fileName => fileName.startsWith(prefix) && fileName.endsWith(PRESET_STATE_FILE_SUFFIX))
-        .map(fileName => path.join(parsed.dir, fileName));
+    if (error instanceof UnsupportedPatchOpError) {
+        return response.status(400).send({ error: 'Invalid preset state patch payload.' });
+    }
+    return null;
 }
 
-function readJsonObjectFile(filePath, label) {
+router.post('/save', async function (request, response) {
+    const name = sanitize(String(request.body?.name || ''));
+    const apiId = request.body?.apiId;
+    if (!request.body?.preset || !name) {
+        return response.sendStatus(400);
+    }
+    if (!isValidApiId(apiId)) {
+        return response.sendStatus(400);
+    }
+
     try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        if (!raw) {
-            return null;
-        }
-
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            return parsed;
-        }
-
-        console.warn(`Invalid ${label} JSON: ${filePath}`);
-        return null;
+        const handle = request.user.profile.handle;
+        await getPresetRepo().save(handle, apiId, name, request.body.preset);
+        return response.send({ name });
     } catch (error) {
-        console.warn(`Failed to read ${label}: ${filePath}`, error);
-        return null;
+        console.error('Error saving preset:', error);
+        return response.sendStatus(500);
     }
-}
-
-function readPresetStateData(presetFilePath, namespace) {
-    const stateFilePath = getPresetStateSidecarPath(presetFilePath, namespace);
-    if (!stateFilePath || !fs.existsSync(stateFilePath)) {
-        return null;
-    }
-
-    return readJsonObjectFile(stateFilePath, 'preset state sidecar');
-}
-
-function deleteAllPresetStateSidecars(presetFilePath) {
-    const sidecars = getAllPresetStateSidecarPaths(presetFilePath);
-    let deleted = 0;
-    for (const sidecarPath of sidecars) {
-        try {
-            fs.unlinkSync(sidecarPath);
-            deleted += 1;
-        } catch (error) {
-            console.warn('Failed to delete preset state sidecar:', sidecarPath, error);
-        }
-    }
-    return deleted;
-}
-
-function renameAllPresetStateSidecars(sourcePresetFilePath, targetPresetFilePath) {
-    const sourceParsed = path.parse(sourcePresetFilePath);
-    const targetParsed = path.parse(targetPresetFilePath);
-    const sourcePrefix = `${sourceParsed.name}${PRESET_STATE_FILE_PREFIX}`;
-    const targetPrefix = `${targetParsed.name}${PRESET_STATE_FILE_PREFIX}`;
-    const sourceFiles = getAllPresetStateSidecarPaths(sourcePresetFilePath);
-    if (sourceFiles.length === 0) {
-        return 0;
-    }
-
-    let renamed = 0;
-    for (const sourceFilePath of sourceFiles) {
-        const sourceName = path.basename(sourceFilePath);
-        const namespaceWithSuffix = sourceName.slice(sourcePrefix.length);
-        const targetName = `${targetPrefix}${namespaceWithSuffix}`;
-        const targetFilePath = path.join(targetParsed.dir, targetName);
-        if (fs.existsSync(targetFilePath)) {
-            const error = new Error(`Preset state sidecar rename collision: ${targetFilePath}`);
-            error.code = 'preset_state_rename_collision';
-            throw error;
-        }
-        fs.mkdirSync(path.dirname(targetFilePath), { recursive: true });
-        fs.copyFileSync(sourceFilePath, targetFilePath);
-        fs.unlinkSync(sourceFilePath);
-        renamed += 1;
-    }
-    return renamed;
-}
-
-function isJsonPatchConflictError(error) {
-    const message = String(error?.message || '');
-    return message.includes('JSON Patch test failed')
-        || message.includes('Invalid JSON Patch replace path.')
-        || message.includes('Invalid JSON Patch remove path.')
-        || message.includes('Array index out of bounds');
-}
-
-function isJsonPatchValidationError(error) {
-    const message = String(error?.message || '');
-    return message.includes('JSON Patch operation is missing op.')
-        || message.includes('JSON Patch operation must be an object.')
-        || message.includes('JSON Patch document must be an array.')
-        || message.includes('JSON Patch add operation requires value.')
-        || message.includes('JSON Patch replace operation requires value.')
-        || message.includes('Invalid JSON Patch path.')
-        || message.includes('Unsupported JSON Patch operation:');
-}
-
-router.post('/save', function (request, response) {
-    const name = sanitize(request.body.name);
-    if (!request.body.preset || !name) {
-        return response.sendStatus(400);
-    }
-
-    const fullpath = resolvePresetFilePath(request.body.apiId, request.user.directories, name);
-    if (!fullpath) {
-        return response.sendStatus(400);
-    }
-
-    writeFileAtomicSync(fullpath, JSON.stringify(request.body.preset, null, 4), 'utf-8');
-    return response.send({ name });
 });
 
-router.post('/state/get', function (request, response) {
+router.post('/state/get', async function (request, response) {
     try {
-        const presetFilePath = resolvePresetFilePath(request.body?.apiId, request.user.directories, request.body?.name);
+        const apiId = request.body?.apiId;
+        const name = sanitize(String(request.body?.name || ''));
         const namespace = normalizePresetStateNamespace(request.body?.namespace);
-        if (!presetFilePath) {
+        if (!isValidApiId(apiId) || !name) {
             return response.status(400).send({ error: 'Invalid preset target payload.' });
         }
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
-        return response.send({ ok: true, data: readPresetStateData(presetFilePath, namespace) });
+
+        const handle = request.user.profile.handle;
+        const data = await getPresetRepo().getState(handle, apiId, name, namespace);
+        return response.send({ ok: true, data });
     } catch (error) {
         console.error('Error reading preset state sidecar:', error);
         return response.status(500).send({ error: true });
     }
 });
 
-router.post('/state/get-batch', function (request, response) {
+router.post('/state/get-batch', async function (request, response) {
     try {
-        const presetFilePath = resolvePresetFilePath(request.body?.apiId, request.user.directories, request.body?.name);
-        const namespaces = [...new Set((Array.isArray(request.body?.namespaces) ? request.body.namespaces : [])
-            .map((namespace) => normalizePresetStateNamespace(namespace))
-            .filter(Boolean))];
-        if (!presetFilePath) {
+        const apiId = request.body?.apiId;
+        const name = sanitize(String(request.body?.name || ''));
+        if (!isValidApiId(apiId) || !name) {
             return response.status(400).send({ error: 'Invalid preset target payload.' });
         }
+
+        const namespaces = [...new Set((Array.isArray(request.body?.namespaces) ? request.body.namespaces : [])
+            .map((ns) => normalizePresetStateNamespace(ns))
+            .filter(Boolean))];
         if (!namespaces.length) {
             return response.status(400).send({ error: 'Expected body.namespaces array.' });
         }
 
+        const handle = request.user.profile.handle;
+        const repo = getPresetRepo();
         const data = {};
-        for (const namespace of namespaces) {
-            data[namespace] = readPresetStateData(presetFilePath, namespace);
+        for (const ns of namespaces) {
+            data[ns] = await repo.getState(handle, apiId, name, ns);
         }
 
         return response.send({ ok: true, data });
@@ -231,16 +126,18 @@ router.post('/state/get-batch', function (request, response) {
     }
 });
 
-router.post('/state/patch', function (request, response) {
+router.post('/state/patch', async function (request, response) {
     try {
-        const presetFilePath = resolvePresetFilePath(request.body?.apiId, request.user.directories, request.body?.name);
+        const apiId = request.body?.apiId;
+        const name = sanitize(String(request.body?.name || ''));
         const namespace = normalizePresetStateNamespace(request.body?.namespace);
-        if (!presetFilePath) {
+        if (!isValidApiId(apiId) || !name) {
             return response.status(400).send({ error: 'Invalid preset target payload.' });
         }
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
+
         const operations = Array.isArray(request.body?.operations)
             ? request.body.operations
             : (request.body?.operation && typeof request.body.operation === 'object' ? [request.body.operation] : []);
@@ -248,39 +145,27 @@ router.post('/state/patch', function (request, response) {
             return response.status(400).send({ error: 'No preset state patch operations found. Expected body.operations or body.operation.' });
         }
 
-        const stateFilePath = getPresetStateSidecarPath(presetFilePath, namespace);
-        if (!stateFilePath) {
-            return response.status(400).send({ error: 'Invalid namespace for preset state sidecar path.' });
-        }
+        const handle = request.user.profile.handle;
+        const repo = getPresetRepo();
+        const existing = await repo.getState(handle, apiId, name, namespace);
+        const seed = existing ?? {};
 
-        let state = {};
-        const existed = fs.existsSync(stateFilePath);
-        if (existed) {
-            const parsed = readJsonObjectFile(stateFilePath, 'preset state sidecar');
-            if (parsed) {
-                state = parsed;
-            }
-        }
-
-        let patchResult;
+        let next;
         try {
-            patchResult = applyJsonPatch(state, operations, true, false);
+            next = applyJsonPatch(seed, operations);
         } catch (error) {
-            if (isJsonPatchConflictError(error)) {
-                return response.status(409).send({ error: 'Preset state patch conflict.' });
-            }
-            if (isJsonPatchValidationError(error)) {
-                return response.status(400).send({ error: 'Invalid preset state patch payload.' });
+            const mapped = mapStatePatchError(error, response);
+            if (mapped) {
+                return mapped;
             }
             throw error;
         }
 
-        fs.mkdirSync(path.dirname(stateFilePath), { recursive: true });
-        writeFileAtomicSync(stateFilePath, JSON.stringify(patchResult.newDocument, null, 4), 'utf8');
+        await repo.setState(handle, apiId, name, namespace, next);
         return response.send({
             ok: true,
             applied: operations.length,
-            created: !existed,
+            created: existing == null,
         });
     } catch (error) {
         console.error('Error patching preset state sidecar:', error);
@@ -288,22 +173,20 @@ router.post('/state/patch', function (request, response) {
     }
 });
 
-router.post('/state/delete', function (request, response) {
+router.post('/state/delete', async function (request, response) {
     try {
-        const presetFilePath = resolvePresetFilePath(request.body?.apiId, request.user.directories, request.body?.name);
+        const apiId = request.body?.apiId;
+        const name = sanitize(String(request.body?.name || ''));
         const namespace = normalizePresetStateNamespace(request.body?.namespace);
-        if (!presetFilePath) {
+        if (!isValidApiId(apiId) || !name) {
             return response.status(400).send({ error: 'Invalid preset target payload.' });
         }
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
-        const stateFilePath = getPresetStateSidecarPath(presetFilePath, namespace);
-        let deleted = false;
-        if (stateFilePath && fs.existsSync(stateFilePath)) {
-            fs.unlinkSync(stateFilePath);
-            deleted = true;
-        }
+
+        const handle = request.user.profile.handle;
+        const deleted = await getPresetRepo().deleteState(handle, apiId, name, namespace);
         return response.send({ ok: true, deleted });
     } catch (error) {
         console.error('Error deleting preset state sidecar:', error);
@@ -311,13 +194,16 @@ router.post('/state/delete', function (request, response) {
     }
 });
 
-router.post('/state/delete-all', function (request, response) {
+router.post('/state/delete-all', async function (request, response) {
     try {
-        const presetFilePath = resolvePresetFilePath(request.body?.apiId, request.user.directories, request.body?.name);
-        if (!presetFilePath) {
+        const apiId = request.body?.apiId;
+        const name = sanitize(String(request.body?.name || ''));
+        if (!isValidApiId(apiId) || !name) {
             return response.status(400).send({ error: 'Invalid preset target payload.' });
         }
-        const deleted = deleteAllPresetStateSidecars(presetFilePath);
+
+        const handle = request.user.profile.handle;
+        const deleted = await getPresetRepo().deleteAllStates(handle, apiId, name);
         return response.send({ ok: true, deleted });
     } catch (error) {
         console.error('Error deleting preset state sidecars:', error);
@@ -325,22 +211,23 @@ router.post('/state/delete-all', function (request, response) {
     }
 });
 
-router.post('/state/rename', function (request, response) {
+router.post('/state/rename', async function (request, response) {
     try {
         const apiId = request.body?.apiId;
-        const sourcePresetFilePath = resolvePresetFilePath(apiId, request.user.directories, request.body?.oldName);
-        const targetPresetFilePath = resolvePresetFilePath(apiId, request.user.directories, request.body?.newName);
-        if (!sourcePresetFilePath || !targetPresetFilePath) {
+        const oldName = sanitize(String(request.body?.oldName || ''));
+        const newName = sanitize(String(request.body?.newName || ''));
+        if (!isValidApiId(apiId) || !oldName || !newName) {
             return response.status(400).send({ error: 'Invalid preset state rename payload.' });
         }
-        if (sourcePresetFilePath === targetPresetFilePath) {
+        if (oldName === newName) {
             return response.send({ ok: true, renamed: 0 });
         }
 
-        const renamed = renameAllPresetStateSidecars(sourcePresetFilePath, targetPresetFilePath);
+        const handle = request.user.profile.handle;
+        const renamed = await getPresetRepo().renameStates(handle, apiId, oldName, newName);
         return response.send({ ok: true, renamed });
     } catch (error) {
-        if (String(error?.code || '') === 'preset_state_rename_collision') {
+        if (error instanceof ConflictError && error.code === 'preset_state_rename_collision') {
             return response.status(409).send({ error: 'Preset state rename collision.' });
         }
         console.error('Error renaming preset state sidecars:', error);
@@ -348,9 +235,10 @@ router.post('/state/rename', function (request, response) {
     }
 });
 
-router.post('/patch', function (request, response) {
+router.post('/patch', async function (request, response) {
     try {
-        const name = sanitize(request.body?.name);
+        const apiId = request.body?.apiId;
+        const name = sanitize(String(request.body?.name || ''));
         const operations = Array.isArray(request.body?.operations)
             ? request.body.operations
             : (request.body?.operation ? [request.body.operation] : []);
@@ -358,64 +246,69 @@ router.post('/patch', function (request, response) {
         if (!name) {
             return response.status(400).send({ error: 'Preset name is required.' });
         }
-
         if (!Array.isArray(operations) || operations.length === 0) {
             return response.status(400).send({ error: 'No preset patch operations found. Expected body.operations or body.operation.' });
         }
-
-        const fullpath = resolvePresetFilePath(request.body?.apiId, request.user.directories, name);
-        if (!fullpath) {
+        if (!isValidApiId(apiId)) {
             return response.sendStatus(400);
         }
-        if (!fs.existsSync(fullpath)) {
-            return response.status(404).send({ error: 'Preset file not found.' });
+
+        const handle = request.user.profile.handle;
+        try {
+            await getPresetRepo().patch(handle, apiId, name, operations);
+        } catch (error) {
+            if (error instanceof NotFoundError) {
+                return response.status(404).send({ error: 'Preset file not found.' });
+            }
+            const mapped = mapPatchError(error, response);
+            if (mapped) {
+                return mapped;
+            }
+            throw error;
         }
 
-        const raw = fs.readFileSync(fullpath, 'utf8');
-        const parsed = JSON.parse(raw);
-        const currentPreset = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-        const patchResult = applyJsonPatch(currentPreset, operations, true, false);
-        writeFileAtomicSync(fullpath, JSON.stringify(patchResult.newDocument, null, 4), 'utf-8');
         return response.send({ result: 'ok', applied: operations.length, name });
     } catch (error) {
-        if (isJsonPatchConflictError(error)) {
-            return response.status(409).send({ error: 'Preset patch test conflict.', code: 'patch_test_failed', details: String(error?.message || '') });
-        }
-        if (isJsonPatchValidationError(error)) {
-            return response.status(400).send({ error: 'Invalid preset patch payload.', code: 'patch_payload_invalid', details: String(error?.message || '') });
-        }
         console.error('Error patching preset:', error);
         return response.status(500).send({ error: 'Failed to patch preset.' });
     }
 });
 
-router.post('/delete', function (request, response) {
-    const name = sanitize(request.body.name);
+router.post('/delete', async function (request, response) {
+    const apiId = request.body?.apiId;
+    const name = sanitize(String(request.body?.name || ''));
     if (!name) {
         return response.sendStatus(400);
     }
-
-    const fullpath = resolvePresetFilePath(request.body.apiId, request.user.directories, name);
-    if (!fullpath) {
+    if (!isValidApiId(apiId)) {
         return response.sendStatus(400);
     }
 
-    if (fs.existsSync(fullpath)) {
-        deleteAllPresetStateSidecars(fullpath);
-        fs.unlinkSync(fullpath);
+    try {
+        const handle = request.user.profile.handle;
+        const repo = getPresetRepo();
+        if (!(await repo.exists(handle, apiId, name))) {
+            return response.sendStatus(404);
+        }
+        await repo.delete(handle, apiId, name);
         return response.sendStatus(200);
-    } else {
-        return response.sendStatus(404);
+    } catch (error) {
+        console.error('Error deleting preset:', error);
+        return response.sendStatus(500);
     }
 });
 
 router.post('/restore', function (request, response) {
     try {
-        const settings = getPresetSettingsByAPI(request.body.apiId, request.user.directories);
+        const apiId = request.body.apiId;
+        const directories = request.user.directories;
         const name = sanitize(request.body.name);
-        const defaultPresets = getDefaultPresets(request.user.directories);
+        const defaultPresets = getDefaultPresets(directories);
 
-        const defaultPreset = defaultPresets.find(p => p.name === name && p.folder === settings.folder);
+        const folder = presetFolderForApiId(apiId, directories);
+        const defaultPreset = folder
+            ? defaultPresets.find(p => p.name === name && p.folder === folder)
+            : null;
 
         const result = { isDefault: false, preset: {} };
 

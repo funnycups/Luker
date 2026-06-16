@@ -47,6 +47,21 @@ import {
     updateServerPlugin,
 } from '../plugin-loader.js';
 import { SERVER_PLUGINS_DIRECTORY } from '../constants.js';
+import {
+    getStorageEngine,
+    initStorage,
+    isReadOnly,
+} from '../storage/index.js';
+import { FsEngine } from '../storage/engines/fs-engine.js';
+import { SqliteEngine } from '../storage/engines/sqlite-engine.js';
+import { ChatRepo } from '../storage/repositories/chat-repo.js';
+import { SettingsRepo } from '../storage/repositories/settings-repo.js';
+import { PresetRepo } from '../storage/repositories/preset-repo.js';
+import { WorldInfoRepo } from '../storage/repositories/world-info-repo.js';
+import { NamedDocRepo } from '../storage/repositories/named-doc-repo.js';
+import { GroupRepo } from '../storage/repositories/group-repo.js';
+import { StatsRepo } from '../storage/repositories/stats-repo.js';
+import { MigrationRunner } from '../storage/migration/runner.js';
 
 export const router = express.Router();
 
@@ -945,5 +960,164 @@ router.post('/announcements/delete', requireAdminMiddleware, async (request, res
         return response.sendStatus(204);
     } catch (error) {
         return respondAnnouncementError(error, response);
+    }
+});
+
+// ----------------------------------------------------------------------------
+// Storage engine status / migration (Phase 3)
+// ----------------------------------------------------------------------------
+//
+// Two admin endpoints back the migration UI / CLI. They live in this file so
+// they pick up `requireAdminMiddleware` automatically (same pattern as the
+// existing /storage/* user-account endpoints above).
+//
+// Concurrency model: a single module-level guard (`_migrationInProgress`)
+// blocks overlapping migrations. The migration itself is synchronous from the
+// HTTP caller's perspective — we don't return until the full per-user copy +
+// verify pass is done. That matches the Phase 3 simplification (no SSE /
+// progress stream). The MigrationRunner flips the global read-only flag for
+// the duration; the storage error middleware turns the resulting
+// StorageReadOnlyError from concurrent writers into a 503.
+
+let _migrationInProgress = false;
+let _lastMigrationAt = null;
+
+/**
+ * Return the current engine mode by inspecting the live engine instance.
+ * Kept here rather than in storage/index.js so the storage module doesn't
+ * grow a dependency on the engine subclasses for an admin-only concern.
+ */
+function detectCurrentMode() {
+    const engine = getStorageEngine();
+    if (engine instanceof SqliteEngine) return 'sqlite';
+    if (engine instanceof FsEngine) return 'fs';
+    return 'unknown';
+}
+
+function buildRepos(engine) {
+    return {
+        chat: new ChatRepo({ engine }),
+        settings: new SettingsRepo({ engine }),
+        preset: new PresetRepo({ engine }),
+        worldInfo: new WorldInfoRepo({ engine }),
+        namedDoc: new NamedDocRepo({ engine }),
+        group: new GroupRepo({ engine }),
+        stats: new StatsRepo({ engine }),
+    };
+}
+
+router.post('/storage/status', requireAdminMiddleware, async (_request, response) => {
+    return response.send({
+        currentMode: detectCurrentMode(),
+        migrationInProgress: _migrationInProgress,
+        readOnly: isReadOnly(),
+        lastMigration: _lastMigrationAt,
+    });
+});
+
+router.post('/storage/migrate', requireAdminMiddleware, async (request, response) => {
+    const targetMode = request.body?.targetMode;
+    if (targetMode !== 'sqlite' && targetMode !== 'fs') {
+        return response.status(400).send({
+            error: 'invalid_target_mode',
+            message: 'targetMode must be "sqlite" or "fs"',
+        });
+    }
+    if (_migrationInProgress) {
+        return response.status(409).send({ error: 'migration_in_progress' });
+    }
+
+    _migrationInProgress = true;
+    const startedAt = Date.now();
+    let destEngine = null;
+
+    try {
+        const sourceEngine = getStorageEngine();
+        const sourceMode = detectCurrentMode();
+        if (sourceMode === targetMode) {
+            return response.status(400).send({
+                error: 'already_in_target_mode',
+                currentMode: sourceMode,
+            });
+        }
+
+        destEngine = targetMode === 'sqlite'
+            ? new SqliteEngine({ directoriesByHandle: getUserDirectories })
+            : new FsEngine({ directoriesByHandle: getUserDirectories });
+
+        const dataRoot = globalThis.DATA_ROOT;
+        if (!dataRoot) {
+            return response.status(500).send({
+                error: 'data_root_missing',
+                message: 'globalThis.DATA_ROOT is not set; server bootstrap incomplete',
+            });
+        }
+        // Permanent on-disk backup tree, one timestamped directory per user
+        // per migration. See storage/migration/backup.js.
+        const backupRoot = path.join(dataRoot, '_storage-migrations');
+
+        const handles = await getAllUserHandles();
+        const runner = new MigrationRunner({
+            sourceRepos: buildRepos(sourceEngine),
+            destRepos: buildRepos(destEngine),
+            snapshotPaths: {
+                dataRoot,
+                backupRoot,
+                getUserRoot: (h) => getUserDirectories(h).root,
+            },
+        });
+
+        const perUser = await runner.migrateAllUsers(handles);
+
+        // Any user that failed (caught error OR verification didn't pass)
+        // aborts the swap. The source engine remains the live one and the
+        // destination engine is torn down. Backups remain on disk for manual
+        // recovery if needed.
+        const allOk = Object.values(perUser).every(r => !r.error && r.verified);
+        if (!allOk) {
+            if (destEngine?.close) {
+                try { await destEngine.close(); } catch { /* best-effort */ }
+            }
+            destEngine = null;
+            return response.status(500).send({
+                ok: false,
+                perUser,
+                durationMs: Date.now() - startedAt,
+                currentMode: sourceMode,
+                message: 'one or more users failed to migrate; source engine retained',
+            });
+        }
+
+        // All users verified — swap the live engine. initStorage() rebuilds
+        // every Repo singleton against the new engine, so subsequent route
+        // handlers transparently see the new backend. Close the old engine
+        // last so any in-flight read on it completes against a live handle.
+        const oldEngine = sourceEngine;
+        initStorage({ mode: targetMode, directoriesByHandle: getUserDirectories });
+        // Ownership of `destEngine` has now transferred to the storage module;
+        // null our local handle so the catch/finally don't double-close it.
+        destEngine = null;
+        if (oldEngine?.close) {
+            try { await oldEngine.close(); } catch { /* best-effort */ }
+        }
+        _lastMigrationAt = new Date().toISOString();
+
+        return response.send({
+            ok: true,
+            perUser,
+            durationMs: Date.now() - startedAt,
+            currentMode: targetMode,
+        });
+    } catch (err) {
+        console.error('Storage migration error:', err);
+        if (destEngine?.close) {
+            try { await destEngine.close(); } catch { /* best-effort */ }
+        }
+        return response.status(500).send({
+            error: 'migration_error',
+            message: err?.message || String(err),
+        });
+    } finally {
+        _migrationInProgress = false;
     }
 });

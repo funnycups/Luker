@@ -2,11 +2,23 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, test } from '@jest/globals';
+import { afterEach, beforeAll, describe, expect, test } from '@jest/globals';
 
 import { buildSettingsResponse } from '../src/endpoints/settings.js';
+import { initStorage } from '../src/storage/index.js';
 
 const tempRoots = [];
+const directoriesByHandle = new Map();
+
+beforeAll(() => {
+    initStorage({
+        directoriesByHandle: (handle) => {
+            const dirs = directoriesByHandle.get(handle);
+            if (!dirs) throw new Error(`unknown handle ${handle}`);
+            return dirs;
+        },
+    });
+});
 
 function writeJson(filePath, value) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -41,6 +53,8 @@ function createRequestFixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-settings-test-'));
     tempRoots.push(root);
     const directories = createDirectories(root);
+    const handle = `test-${path.basename(root)}`;
+    directoriesByHandle.set(handle, directories);
 
     writeJson(path.join(directories.root, 'settings.json'), {
         oai_settings: {
@@ -51,6 +65,7 @@ function createRequestFixture() {
     return {
         user: {
             directories,
+            profile: { handle },
         },
     };
 }
@@ -59,10 +74,11 @@ afterEach(() => {
     for (const root of tempRoots.splice(0, tempRoots.length)) {
         fs.rmSync(root, { recursive: true, force: true });
     }
+    directoriesByHandle.clear();
 });
 
 describe('buildSettingsResponse', () => {
-    test('excludes preset state sidecars from preset collections', () => {
+    test('excludes preset state sidecars from preset collections', async () => {
         const request = createRequestFixture();
         const { directories } = request.user;
 
@@ -82,7 +98,7 @@ describe('buildSettingsResponse', () => {
             { version: 1 },
         );
 
-        const response = buildSettingsResponse(request);
+        const response = await buildSettingsResponse(request);
 
         expect(response.openai_setting_names).toEqual(['Default']);
         expect(response.openai_settings).toHaveLength(1);

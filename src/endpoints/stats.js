@@ -3,14 +3,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import express from 'express';
-import writeFileAtomic from 'write-file-atomic';
 
-const readFile = fs.promises.readFile;
 const readdir = fs.promises.readdir;
 
 import { getAllUserHandles, getUserDirectories } from '../users.js';
-
-const STATS_FILE = 'stats.json';
+import { getStatsRepo } from '../storage/index.js';
 
 const monthNames = [
     'January',
@@ -165,16 +162,14 @@ export async function init() {
         for (const handle of userHandles) {
             const directories = getUserDirectories(handle);
             try {
-                const statsFilePath = path.join(directories.root, STATS_FILE);
-                const statsFileContent = await readFile(statsFilePath, 'utf-8');
-                STATS.set(handle, JSON.parse(statsFileContent));
-            } catch (err) {
-                // If the file doesn't exist or is invalid, initialize stats
-                if (err.code === 'ENOENT' || err instanceof SyntaxError) {
+                const stats = await getStatsRepo().get(handle);
+                if (stats == null) {
                     await recreateStats(handle, directories.chats, directories.characters);
                 } else {
-                    throw err; // Rethrow the error if it's something we didn't expect
+                    STATS.set(handle, stats);
                 }
+            } catch (err) {
+                console.error(`Failed to initialize stats for user ${handle}:`, err);
             }
         }
     } catch (err) {
@@ -196,9 +191,7 @@ async function saveStatsToFile() {
         const lastSaveTimestamp = TIMESTAMPS.get(handle) || 0;
         if (charStats.timestamp > lastSaveTimestamp) {
             try {
-                const directories = getUserDirectories(handle);
-                const statsFilePath = path.join(directories.root, STATS_FILE);
-                await writeFileAtomic(statsFilePath, JSON.stringify(charStats));
+                await getStatsRepo().save(handle, charStats);
                 TIMESTAMPS.set(handle, Date.now());
             } catch (error) {
                 console.error('Failed to save stats to file.', error);
