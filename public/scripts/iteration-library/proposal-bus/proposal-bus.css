@@ -1,0 +1,62 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ * Copyright (C) 2026 FunnyCups
+ *
+ * Card chrome + status chips + turn-actions row. Per-card diff body
+ * styling is owned by the kind handler's renderDiffCard call (which
+ * typically delegates to ITER_UI.diff renderDiffCard CSS).
+ */
+
+.iter_proposal_card {
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    border-radius: 6px;
+    padding: 8px;
+    margin: 8px 0;
+    background: color-mix(in oklab, var(--SmartThemeBlurTintColor, #1a1a1a) 92%, transparent);
+}
+.iter_proposal_card_pending { border-color: color-mix(in oklab, var(--SmartThemeBorderColor, #888) 70%, #88c); }
+.iter_proposal_card_committed { border-color: color-mix(in oklab, var(--SmartThemeBorderColor, #555) 70%, #6c6); }
+.iter_proposal_card_rejected { border-color: color-mix(in oklab, var(--SmartThemeBorderColor, #555) 70%, #c66); opacity: 0.85; }
+.iter_proposal_card_conflict { border-color: color-mix(in oklab, var(--SmartThemeBorderColor, #555) 50%, #d04848); }
+.iter_proposal_card_rolledBack { border-color: color-mix(in oklab, var(--SmartThemeBorderColor, #555) 70%, #888); opacity: 0.7; }
+
+.iter_proposal_card_header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9em;
+    margin-bottom: 6px;
+}
+.iter_proposal_card_label { font-weight: 600; }
+.iter_proposal_card_target { opacity: 0.75; font-size: 0.88em; flex: 1; }
+
+.iter_proposal_card_status { padding: 2px 8px; border-radius: 4px; font-size: 0.84em; }
+.iter_proposal_card_status_pending { background: color-mix(in oklab, #88c 25%, transparent); }
+.iter_proposal_card_status_committed { background: color-mix(in oklab, #6c6 25%, transparent); }
+.iter_proposal_card_status_rejected { background: color-mix(in oklab, #c66 25%, transparent); }
+.iter_proposal_card_status_conflict { background: color-mix(in oklab, #d04848 30%, transparent); font-weight: 600; }
+.iter_proposal_card_status_rolledBack { background: color-mix(in oklab, #888 25%, transparent); }
+
+.iter_proposal_card_body { margin: 6px 0; }
+
+.iter_proposal_card_conflict {
+    margin: 6px 0;
+    padding: 6px 8px;
+    background: color-mix(in oklab, #d04848 14%, transparent);
+    border-radius: 4px;
+    font-size: 0.88em;
+}
+.iter_proposal_conflict_error { margin-top: 4px; opacity: 0.85; font-family: monospace; }
+
+.iter_proposal_card_controls { display: flex; gap: 6px; margin-top: 6px; }
+.iter_proposal_btn { padding: 4px 12px; font-size: 0.88em; }
+.iter_proposal_btn_approve { background: color-mix(in oklab, #6c6 25%, transparent); border-color: color-mix(in oklab, #6c6 60%, transparent); }
+.iter_proposal_btn_reject  { background: color-mix(in oklab, #d04848 22%, transparent); border-color: color-mix(in oklab, #d04848 60%, transparent); }
+
+.iter_proposal_turn_actions {
+    display: flex;
+    gap: 8px;
+    padding: 6px 0;
+    margin: 4px 0;
+    border-top: 1px dashed color-mix(in oklab, var(--SmartThemeBorderColor, #555) 50%, transparent);
+}
+.iter_proposal_turn_btn { padding: 3px 10px; font-size: 0.85em; }

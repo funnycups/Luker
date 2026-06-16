@@ -187,6 +187,8 @@ const ITERATION_LIBRARY_API = Object.freeze({
     textDiff: ITERATION_LIBRARY_API_NS.textDiff,
     zoomOverlay: ITERATION_LIBRARY_API_NS.zoomOverlay,
     ui: ITERATION_LIBRARY_API_NS.ui,
+    tools: ITERATION_LIBRARY_API_NS.tools,
+    proposalBus: ITERATION_LIBRARY_API_NS.proposalBus,
     bindIterWorkspaceResizer: ITERATION_LIBRARY_API_NS.bindIterWorkspaceResizer,
 });
 

@@ -27,5 +27,6 @@ export * as textDiff from './text-diff.js';
 export * as zoomOverlay from './zoom-overlay.js';
 export * as ui from './ui/index.js';
 export * as tools from './tools/index.js';
+export * as proposalBus from './proposal-bus/index.js';
 
 export { bindIterWorkspaceResizer } from './workspace-resizer.js';

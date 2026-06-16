@@ -2,24 +2,22 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * iter-studio skill management tool catalog.
+ * iter-studio-side skill management tool catalog.
  *
- * Exposes the spec §6.1 skill tools to any iteration AI that wants to
- * manage skills as part of its design conversation. Four categories
- * totalling 16 tools — 4 inventory + 7 authoring + 3 policy + 2 migration:
+ * Plan 2 Unit 7. Exposes the spec §6.1 tools to the iter-studio AI so it
+ * can manage skills as part of the orchestrator design conversation.
+ * Four categories totalling 16 tools — 4 inventory + 7 authoring + 3
+ * policy + 2 migration:
  *
  *   Inventory inspection (4 — read-only):
  *     skill_list_visible, skill_inspect, skill_read_content, skill_search_content
  *
- *   Authoring (7 — emit a `pendingSkillEdit` proposal envelope; the
- *   actual disk write happens at Apply time via
- *   `commitApprovedSkillProposal` so the user sees a per-card diff and
- *   can approve or reject before anything lands on disk):
+ *   Authoring (7 — captured as user-reviewed proposals; commit only at Apply):
  *     skill_create, skill_update_content, skill_edit_content,
  *     skill_update_frontmatter, skill_rename, skill_change_scope, skill_delete
  *
- *   Policy binding (3 — mutates the caller's working profile in place;
- *   surfaces as a `pendingEdit` the user reviews + applies):
+ *   Policy binding (3 — mutates the iter-studio working profile in place;
+ *   surfaces as a pending edit the user reviews + applies):
  *     skill_bind_to_agent, skill_unbind_from_agent, skill_set_mode_defaults
  *
  *   Migration helpers (2 — assist long-systemPrompt extraction without
@@ -29,42 +27,67 @@
  *   not a regex in this module):
  *     skill_extract_from_text, skill_replace_in_systemprompt
  *
- * Sharing model:
+ * Wire model:
  *
- *   - Plugin-agnostic: only depends on the global `skillsApi`
- *     (`Luker.getContext().skills`) and `yaml`. Any iter popup may
- *     import this directly.
+ *   - studio.js's `runIterationTurn` splits tool calls into inline-executed
+ *     (lorebook reads/writes, simulate) vs sandbox-diff edit tools. ALL 16
+ *     skill tools are inline-executed. They split three ways:
+ *       a) 4 inventory tools just return server data
+ *       b) 3 policy-binding + 1 systemPrompt-splice tool mutate the working
+ *          profile and emit a sandbox-diff `pendingEdit` so they ride
+ *          state.pendingEdits + the apply / discard buttons
+ *       c) 7 authoring tools (+ skill_extract_from_text which composes
+ *          skill_create) DO NOT touch disk inline. They compute the
+ *          before/after, attach a `pendingSkillEdit` blob (id, op{name,args},
+ *          kind, before, after, identity), and return a slim ack to the LLM.
+ *          The popup parks the blob on `state.pendingSkillEdits` for
+ *          per-card Approve / Reject. Approved entries commit at Apply
+ *          time by replaying the original op against current on-disk state
+ *          — matching how lorebook proposals re-derive at commit so
+ *          parallel-session drift surfaces as a fresh validation error
+ *          instead of clobbering with a stale snapshot.
  *
- *   - Consumers today: orchestrator iter-studio (uses all 16) and CPA
- *     iter-studio (uses 12 — the 3 policy-binding tools and
- *     skill_replace_in_systemprompt depend on a working profile, which
- *     CPA does not have; CPA filters by tool-name when splicing defs and
- *     supplies `getWorkingProfile: () => null` when dispatching). Other
- *     popups that want skill management may do the same.
+ *   - This module exports `SKILL_ITER_STUDIO_TOOL_DEFS` (OpenAI-shape tool
+ *     defs spliced into the catalog by studio.js), `isSkillIterStudioTool`
+ *     (predicate routing into the inline-executed path), and
+ *     `runSkillIterStudioTool` (the dispatcher studio.js calls per matched
+ *     tool call).
  *
- *   - Returns one of four shapes from `runSkillIterStudioTool`:
- *       { ok: true, result: ... }                          plain server-side read
- *       { ok: true, result: ..., pendingEdit: {...} }      mutated working profile
- *       { ok: true, result: ..., pendingSkillEdit: {...} } skill authoring proposal
- *       { ok: false, error: '...' }                        handled failure
+ *   - `runSkillIterStudioTool` returns one of three shapes:
+ *       { ok: true, result: ... }                              read-only result
+ *       { ok: true, result: ..., pendingEdit: {...} }          working-profile mutation
+ *       { ok: true, result: ..., pendingSkillEdit: {...} }     authoring proposal
+ *       { ok: false, error: '...' }                            handled failure
  *
- *     `pendingEdit` uses a coarse `{op:'set', path:'', oldValue, newValue}`
- *     so it slots directly into the popup's pendingEdits array.
+ *     The pendingEdit shape mirrors normalizeToolCallToEditInline's coarse
+ *     `{op:'set', path:'', oldValue, newValue}` so it slots directly into
+ *     state.pendingEdits. pendingSkillEdit lives in its own bucket because
+ *     the commit semantics differ (disk re-derive at Apply time, not
+ *     profile-level diff merge).
  *
- *     `pendingSkillEdit` carries `{kind, skillName, scope, path?, before,
- *     after, op:{name,args}, extras?}`. The popup parks it on its own
- *     `pendingSkillEdits` queue, renders a per-card diff, lets the user
- *     approve/reject, and at Apply time replays approved entries through
- *     `commitApprovedSkillProposal(op)` against current on-disk state.
- *
- *   - The popup owns the working-profile mutation surface; this module
+ *   - studio.js owns the working-profile mutation API surface; this module
  *     receives a `mutationCtx` bag with the current working profile and
- *     never touches popup internals directly. Tests stub the bag.
+ *     mode, and never touches studio internals directly. Tests stub the bag.
+ *
+ *   - `commitApprovedSkillProposal` is the disk-write helper studio.js
+ *     calls at Apply time per approved entry. It's exported here (not
+ *     inlined in studio.js) so the replay-against-disk logic and the
+ *     compute-after logic stay in one module, matching the spec for each
+ *     authoring tool.
  */
 
-const __ctx = Luker.getContext();
-const skillsApi = __ctx.skills;
-const yaml = __ctx.lib.yaml;
+// iteration-library convention (mirrors lorebook-reads / lorebook-writes
+// and the rest of iter-lib): never capture SillyTavern.getContext() at
+// module load — the context may not be ready when the module first
+// evaluates, and resolving lazily lets tests stub the surface per-call.
+// The two helpers below resolve fresh each time; downstream callers
+// invoke them directly (cheap — getContext() returns a stable singleton).
+function getSkillsApi() {
+    return SillyTavern.getContext().skills;
+}
+function getYaml() {
+    return SillyTavern.getContext().lib.yaml;
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tool names (kept in a frozen set so isSkillIterStudioTool is a fast lookup
@@ -177,6 +200,7 @@ function mergeFrontmatterPatch(currentObj, patch) {
  * @returns {string} merged SKILL.md content
  */
 export function applyFrontmatterPatch(content, patch) {
+    const yaml = getYaml();
     const { yamlBlock, body } = splitFrontmatter(content);
     const parsed = yaml.parse(yamlBlock) || {};
     const merged = mergeFrontmatterPatch(parsed, patch);
@@ -185,20 +209,15 @@ export function applyFrontmatterPatch(content, patch) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Skill authoring proposal envelope. Each of the 7 authoring tools (+
-// skill_extract_from_text which composes skill_create) captures a
-// before/after pair against current on-disk state and returns a
-// `pendingSkillEdit` shaped like:
-//
-//   { kind, skillName, scope, path?, before, after, op:{name,args}, extras? }
-//
-// The popup parks the envelope on `state.pendingSkillEdits`, renders a
-// per-card diff for the user to approve/reject, and at Apply time
-// replays approved entries through `commitApprovedSkillProposal(op)`.
-// That replay re-derives against current on-disk state so a parallel
-// session that edited the same file between proposal and apply surfaces
-// as a fresh validation error (writeFile sha256 mismatch / editFile
-// substring missing) instead of clobbering with a stale after-image.
+// Authoring proposal helpers. The 7 authoring tools + `skill_extract_from_text`
+// (which composes `skill_create`) capture an op + before/after as a
+// `pendingSkillEdit` and return a slim ack to the LLM. studio.js parks the
+// blob on state.pendingSkillEdits and renders per-card approve/reject. At
+// Apply time, studio.js calls `commitApprovedSkillProposal(op)` per approved
+// entry — that function replays the original op against current on-disk
+// state through skillsApi so parallel-session drift surfaces as a fresh
+// validation error instead of clobbering with a stale snapshot. Mirrors how
+// lorebook proposals re-derive at commit time.
 // ────────────────────────────────────────────────────────────────────────────
 
 function composeSkillMd(name, description, body) {
@@ -207,6 +226,7 @@ function composeSkillMd(name, description, body) {
 }
 
 async function readFileSafe(scope, name, path) {
+    const skillsApi = getSkillsApi();
     try {
         const raw = await skillsApi.readFile({ scope, name, path });
         if (typeof raw === 'string') return raw;
@@ -248,7 +268,7 @@ function buildProposalAck({ kind, skillName, scope, path, op }) {
         scope,
         ...(path ? { path } : {}),
         tool: op?.name,
-        message: 'Proposed for user approval. The change is NOT live yet — the user will review the diff card in the popup and approve or reject it before it is committed at Apply time.',
+        message: 'Proposed for user approval. The change is NOT live yet — the user reviews this diff card and approves or rejects it; nothing reaches disk until the user clicks Apply. The iter-studio will PAUSE the auto-continue loop the moment any write proposal (profile edit, lorebook, skill) is staged: the next round will not fire until the user has fully resolved every pending card via Apply. You will then receive a synthetic user message describing exactly which proposals committed, which were rejected, and which surfaced commit errors. Continue planning subsequent work in your reasoning, but do not stack additional unrelated write proposals in this same round expecting them to commit alongside this one — the user reviews each card independently and the loop only resumes after the batch is settled.',
     };
 }
 
@@ -268,6 +288,7 @@ export async function commitApprovedSkillProposal(op) {
     if (!op || typeof op !== 'object' || !op.name) {
         throw new Error('commitApprovedSkillProposal: invalid op');
     }
+    const skillsApi = getSkillsApi();
     const args = op.args && typeof op.args === 'object' ? op.args : {};
     switch (op.name) {
         case 'skill_create': {
@@ -545,7 +566,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     // ── Authoring ────────────────────────────────────────────────────────
     fn(
         'skill_create',
-        'Create a brand-new skill from a description and an initial SKILL.md body. Optional `files` array stages additional non-SKILL.md files (each {path, encoding:\'utf8\'|\'base64\', content}).',
+        'PROPOSAL: stage creation of a brand-new skill from a description and an initial SKILL.md body. Optional `files` array stages additional non-SKILL.md files (each {path, encoding:\'utf8\'|\'base64\', content}). The skill is NOT written to disk by this call — the user reviews a proposal card and the create commits at Apply time. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -564,7 +585,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_update_content',
-        'Replace the entire content of a file inside an existing skill. Pair with expectedSha256 (optional) for optimistic concurrency.',
+        'PROPOSAL: stage a full-file replacement of a file inside an existing skill. The change is NOT written to disk by this call — the user reviews a line-by-line diff card and the write commits at Apply time. Pair with expectedSha256 (optional) for optimistic concurrency at commit time. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -579,7 +600,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_edit_content',
-        'Find-and-replace a substring inside a single file. Default replaces the FIRST occurrence; set replaceAll=true for all. The substring must appear at least once or the edit fails.',
+        'PROPOSAL: stage a find-and-replace inside a single file. Default replaces the FIRST occurrence; set replaceAll=true for all. The substring must appear at least once or the proposal fails. The change is NOT written to disk by this call — the user reviews a line-by-line diff card and the write commits at Apply time. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -595,7 +616,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_update_frontmatter',
-        'Patch SKILL.md frontmatter without touching the body. Patch keys with non-null values are assigned; null values delete the key.',
+        'PROPOSAL: stage a frontmatter patch on SKILL.md without touching the body. Patch keys with non-null values are assigned; null values delete the key. The change is NOT written to disk by this call — the user reviews a line-by-line diff card and the write commits at Apply time. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -608,7 +629,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_rename',
-        'Rename a skill within its current scope. The new name must match [a-z0-9_-]+ and not collide with an existing skill in that scope.',
+        'PROPOSAL: stage a rename of a skill within its current scope. The new name must match [a-z0-9_-]+ and not collide with an existing skill in that scope. The rename is NOT applied to disk by this call — the user reviews a proposal card and it commits at Apply time. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -621,7 +642,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_change_scope',
-        'Move a skill from one scope to another (e.g. global → character). The skill keeps its name.',
+        'PROPOSAL: stage a scope move (e.g. global → character). The skill keeps its name. The move is NOT applied to disk by this call — the user reviews a proposal card and it commits at Apply time. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -634,7 +655,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_delete',
-        'Permanently delete a skill (all files). Cannot be undone — confirm with the user before calling.',
+        'PROPOSAL: stage permanent deletion of a skill (all files). Cannot be undone once the user approves AND clicks Apply. The deletion is NOT applied to disk by this call — the user reviews a proposal card and it commits at Apply time. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -687,7 +708,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     // ── Migration helpers ────────────────────────────────────────────────
     fn(
         'skill_extract_from_text',
-        'Create a new skill from a verbatim text block (typically a slice of an agent\'s systemPrompt that you selected yourself by reading working_state — there is no candidate-proposer tool). The skill\'s SKILL.md body is the supplied text exactly — DO NOT paraphrase, compress, or reword. Follow up with skill_replace_in_systemprompt to remove the slice and splice in a per-skill contextual pointer.',
+        'PROPOSAL: create a new skill from a verbatim text block (typically a slice of an agent\'s systemPrompt that you selected yourself by reading working_state — there is no candidate-proposer tool). The skill\'s SKILL.md body is the supplied text exactly — DO NOT paraphrase, compress, or reword. The skill is NOT written to disk by this call — the user reviews a proposal card and the create commits at Apply time. Follow up with skill_replace_in_systemprompt to remove the slice and splice in a per-skill contextual pointer. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -733,6 +754,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
 
 const HANDLERS = {
     async skill_list_visible(args, mctx) {
+        const skillsApi = getSkillsApi();
         const profile = mctx.getWorkingProfile?.();
         const agentId = args?.agentId ? String(args.agentId) : null;
         const all = await skillsApi.list({ scope: 'all' });
@@ -754,6 +776,7 @@ const HANDLERS = {
 
     async skill_inspect(args) {
         if (!args?.name) throw new Error('name is required');
+        const skillsApi = getSkillsApi();
         const scope = normalizeScope(args.scope);
         const [entry, fileTree] = await Promise.all([
             skillsApi.get(args.name, scope),
@@ -777,7 +800,7 @@ const HANDLERS = {
 
     async skill_read_content(args) {
         if (!args?.name) throw new Error('name is required');
-        return skillsApi.readFile({
+        return getSkillsApi().readFile({
             scope: normalizeScope(args.scope),
             name: String(args.name),
             path: args.path,
@@ -789,7 +812,7 @@ const HANDLERS = {
     async skill_search_content(args) {
         if (!args?.name) throw new Error('name is required');
         if (!args?.query) throw new Error('query is required');
-        return skillsApi.search({
+        return getSkillsApi().search({
             scope: normalizeScope(args.scope),
             name: String(args.name),
             query: String(args.query),
@@ -1054,6 +1077,8 @@ const HANDLERS = {
         }
         if (!args?.suggestedName) throw new Error('suggestedName is required');
         if (!args?.description) throw new Error('description is required');
+        // Compose through skill_create so the same proposal shape (+ commit
+        // path) handles both extraction-driven creates and direct creates.
         return HANDLERS.skill_create({
             name: String(args.suggestedName),
             description: String(args.description),
