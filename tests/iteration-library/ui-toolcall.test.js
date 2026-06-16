@@ -117,17 +117,46 @@ describe('renderToolCallChip', () => {
         expect(html).not.toMatch(/<details class="luker_lib_toolcall_result" open/);
     });
 
-    it('renders multi-field object result as labeled rows, not single-line summary', () => {
+    it('renders multi-field object result as full JSON, expanding nested values instead of collapsing to {…}', () => {
         const html = renderToolCallChip(
             { id: 'cr3', name: 'r', args: {} },
-            { toolDisplay: {}, result: { alpha: 'a', beta: 'b', gamma: 'g' }, i18n: ident },
+            {
+                toolDisplay: {},
+                result: {
+                    book_name: 'lore',
+                    total_hits: 2,
+                    entries: [
+                        { uid: 7, comment: 'first', matched_excerpt: 'alpha snippet' },
+                        { uid: 9, comment: 'second', matched_excerpt: 'beta snippet' },
+                    ],
+                },
+                i18n: ident,
+            },
         );
-        expect(html).toContain('luker_lib_toolcall_arg_row');
-        expect(html).toContain('alpha');
-        expect(html).toContain('beta');
-        expect(html).toContain('gamma');
-        // Not collapsed to single-line { alpha: ... }:
-        expect(html).not.toMatch(/<code[^>]*>\{\s*alpha/);
+        // Pretty-printed JSON should expose every nested field — the bug was
+        // that arrays of objects rendered as `[ {…}, {…} ]` so users on mobile
+        // could never read the actual returned values.
+        expect(html).toContain('luker_lib_toolcall_result_pre');
+        expect(html).toContain('book_name');
+        expect(html).toContain('total_hits');
+        expect(html).toContain('entries');
+        expect(html).toContain('first');
+        expect(html).toContain('alpha snippet');
+        expect(html).toContain('second');
+        expect(html).toContain('beta snippet');
+        // No `{…}` collapse anywhere in the result body:
+        expect(html).not.toContain('{…}');
+    });
+
+    it('renders string results verbatim so newlines and structure survive', () => {
+        const html = renderToolCallChip(
+            { id: 'cr3s', name: 'r', args: {} },
+            { toolDisplay: {}, result: 'line one\nline two\nline three', i18n: ident },
+        );
+        expect(html).toContain('luker_lib_toolcall_result_pre');
+        expect(html).toContain('line one');
+        expect(html).toContain('line two');
+        expect(html).toContain('line three');
     });
 
     it('truncatedKvSummary always emits at least one (truncated) pair on overflow', () => {

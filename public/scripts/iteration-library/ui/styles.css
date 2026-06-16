@@ -90,6 +90,13 @@
 .luker_lib_toolcall_short_value {
     word-break: break-word;
 }
+.luker_lib_toolcall_result_pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.88em;
+}
 
 /* Type-tinted left border helps the reader scan rounds: */
 .luker_lib_toolcall_edit    { border-left: 3px solid var(--SmartThemeQuoteColor, #4a90e2); }

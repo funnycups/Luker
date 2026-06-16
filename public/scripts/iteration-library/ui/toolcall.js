@@ -152,16 +152,33 @@ function formatScalar(v) {
 }
 
 function renderResultDetails(result, i18n) {
-    const isPlainObject = result !== null
-        && typeof result === 'object'
-        && !Array.isArray(result);
-    const keyCount = isPlainObject ? Object.keys(result).length : 0;
+    // Tool results need the full nested payload — collapsing arrays of
+    // objects to `[ {…}, {…} ]` (what renderArgValue does for arg previews)
+    // makes them unreadable, especially on mobile where users can't easily
+    // re-run the tool to inspect. Pretty-print everything as JSON in a
+    // scrollable <pre>. Strings render verbatim to keep newlines readable.
     // Default to closed — tool results are reference material, not the
     // user's primary focus. They can expand on demand.
     const open = false;
-    const bodyHtml = (isPlainObject && keyCount > 0)
-        ? `<div class="luker_lib_toolcall_arg_rows">\n${renderFieldRows(result)}\n</div>`
-        : renderArgValue(result);
+    let bodyHtml;
+    if (typeof result === 'string') {
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(result)}</pre>`;
+    } else if (result === null || result === undefined) {
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(String(result))}</pre>`;
+    } else if (typeof result === 'object') {
+        let json;
+        try {
+            json = JSON.stringify(result, null, 2);
+        } catch {
+            // Cyclic refs / non-serialisable values — fall back to the
+            // previous compact rendering for these so users still see
+            // something.
+            json = String(result);
+        }
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(json)}</pre>`;
+    } else {
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(String(result))}</pre>`;
+    }
     return [
         `<details class="luker_lib_toolcall_result"${open ? ' open' : ''}>`,
         `<summary>${escapeHtml(i18n('Result'))}</summary>`,
