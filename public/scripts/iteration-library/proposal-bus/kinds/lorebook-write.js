@@ -18,7 +18,7 @@
  * propose and approve).
  */
 
-import { sha256OfJson } from '../fingerprint.js';
+import { sha256OfJson } from '../drift-hash.js';
 
 const DEFAULT_LABEL = 'Lorebook write';
 const DEFAULT_ICON = '📚';

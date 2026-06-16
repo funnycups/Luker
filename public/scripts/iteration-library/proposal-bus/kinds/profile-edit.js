@@ -18,7 +18,7 @@
  * diverge and the bus parks the entry in conflict.
  */
 
-import { sha256OfJson } from '../fingerprint.js';
+import { sha256OfJson } from '../drift-hash.js';
 
 function defaultLabel() { return 'Profile change'; }
 function defaultIcon() { return '✏'; }

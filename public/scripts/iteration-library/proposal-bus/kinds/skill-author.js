@@ -20,7 +20,7 @@
  *   - everything else -> null (no clean inverse).
  */
 
-import { sha256OfJson } from '../fingerprint.js';
+import { sha256OfJson } from '../drift-hash.js';
 
 const FILE_OPS = new Set(['skill_update_content', 'skill_edit_content', 'skill_update_frontmatter']);
 

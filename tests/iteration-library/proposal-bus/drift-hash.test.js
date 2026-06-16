@@ -3,9 +3,9 @@ import {
     sha256OfJson,
     sha256OfString,
     canonicalJson,
-} from '../../../public/scripts/iteration-library/proposal-bus/fingerprint.js';
+} from '../../../public/scripts/iteration-library/proposal-bus/drift-hash.js';
 
-describe('proposal-bus fingerprint', () => {
+describe('proposal-bus drift-hash', () => {
     test('sha256OfString returns 64-hex digest for an ASCII payload', async () => {
         const out = await sha256OfString('hello');
         expect(out).toMatch(/^[0-9a-f]{64}$/);

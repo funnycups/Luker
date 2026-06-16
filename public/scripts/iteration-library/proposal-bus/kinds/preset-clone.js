@@ -28,7 +28,7 @@
  * step) without making the bus aware of those subsystems.
  */
 
-import { sha256OfJson } from '../fingerprint.js';
+import { sha256OfJson } from '../drift-hash.js';
 
 const DEFAULT_LABEL = 'Clone preset';
 const DEFAULT_ICON = '⎘';

@@ -7,7 +7,7 @@
  * so popups import one symbol and get the complete bus.
  *
  * Additional re-exports for popup-defined custom kinds:
- *   - sha256OfJson / canonicalJson / sha256OfString from `fingerprint.js`
+ *   - sha256OfJson / canonicalJson / sha256OfString from `drift-hash.js`
  *     so popups can reuse the same hash function the built-in kinds use
  *     (and stay drift-compatible across kinds).
  *   - createProfileEditHandler / createLorebookWriteHandler /
@@ -20,7 +20,7 @@
 
 import { createBus } from './bus.js';
 
-export { sha256OfJson, sha256OfString, canonicalJson } from './fingerprint.js';
+export { sha256OfJson, sha256OfString, canonicalJson } from './drift-hash.js';
 export { createProfileEditHandler } from './kinds/profile-edit.js';
 export { createLorebookWriteHandler } from './kinds/lorebook-write.js';
 export { createSkillAuthorHandler } from './kinds/skill-author.js';
