@@ -38,6 +38,20 @@ async function awaitMainUI(page) {
         await page.waitForURL('http://127.0.0.1:8000');
     } catch { /* auto-login path */ }
     await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 0 });
+    // First-run on a fresh data dir surfaces a "Welcome to Luker!"
+    // persona-setup popup that intercepts pointer events on the
+    // navbar's drawer toggles. The Save button is wired to persist a
+    // default persona and close the dialog. Best-effort dismissal:
+    // present → Save; absent → skip.
+    try {
+        const welcomeSave = page.locator('dialog.popup .popup-button-ok').first();
+        await welcomeSave.waitFor({ state: 'visible', timeout: 1500 });
+        await welcomeSave.click();
+        await page.waitForFunction(
+            () => !document.querySelector('dialog.popup[open]'),
+            { timeout: 5000 },
+        );
+    } catch { /* already configured */ }
 }
 
 // Errors we capture as "shell errors" must be related to the iter-studio

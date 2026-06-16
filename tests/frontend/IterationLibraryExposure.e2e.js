@@ -49,7 +49,7 @@ test.describe('iteration-library exposure', () => {
         });
 
         expect(exposed.error).toBeUndefined();
-        expect(exposed.keys).toEqual(expect.arrayContaining(['applyEdits', 'inverseEdit', 'registerOp', 'BUILT_IN_OPS', 'render', 'runner', 'storage', 'textDiff', 'zoomOverlay', 'showConflictResolution', 'bindIterWorkspaceResizer']));
+        expect(exposed.keys).toEqual(expect.arrayContaining(['applyEdits', 'inverseEdit', 'registerOp', 'BUILT_IN_OPS', 'render', 'runner', 'storage', 'textDiff', 'zoomOverlay', 'showConflictResolution', 'bindIterWorkspaceResizer', 'proposalBus', 'tools']));
         expect(exposed.applyEditsIsFunction).toBe(true);
         expect(exposed.renderIsNamespace).toBe(true);
         expect(exposed.runnerIsNamespace).toBe(true);
