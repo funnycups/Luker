@@ -99,4 +99,130 @@ describe('ProposalBus — rollback', () => {
         const entry = bus._testOnly_entries().find((e) => e.id === id);
         expect(entry.status).toBe('committed');
     });
+
+    test('approve records afterFingerprint from a post-commit readCurrent', async () => {
+        let readCount = 0;
+        const readCurrent = jest.fn(async () => {
+            readCount++;
+            return readCount === 1
+                ? { snapshot: { v: 1 }, fingerprint: 'fp:before' }   // approve drift check
+                : { snapshot: { v: 2 }, fingerprint: 'fp:after' };    // post-commit snapshot
+        });
+        const handler = makeHandler({
+            fingerprint: async () => 'fp:before',
+            readCurrent,
+        });
+        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        bus.registerKind('k', handler);
+        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: { v: 1 } });
+        await bus.approve(id);
+        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        expect(entry.afterFingerprint).toBe('fp:after');
+        expect(readCurrent).toHaveBeenCalledTimes(2);
+    });
+
+    test('rollback parks the entry in conflict when current state drifted from afterFingerprint', async () => {
+        let readCount = 0;
+        const readCurrent = jest.fn(async () => {
+            readCount++;
+            // approve drift check, post-commit snapshot, rollback drift check
+            if (readCount === 1) return { snapshot: { v: 1 }, fingerprint: 'fp:before' };
+            if (readCount === 2) return { snapshot: { v: 2 }, fingerprint: 'fp:after' };
+            return { snapshot: { v: 9 }, fingerprint: 'fp:external' };
+        });
+        const inverse = jest.fn(() => ({ undo: true }));
+        const commit = jest.fn(async () => {});
+        const handler = makeHandler({
+            fingerprint: async () => 'fp:before',
+            readCurrent,
+            commit,
+            inverse,
+        });
+        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        bus.registerKind('k', handler);
+        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: { v: 1 } });
+        await bus.approve(id);
+        commit.mockClear();
+
+        const out = await bus.rollback(id);
+        expect(out.ok).toBe(false);
+        expect(out.status).toBe('conflict');
+        expect(commit).not.toHaveBeenCalled();
+
+        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        expect(entry.status).toBe('conflict');
+        expect(entry.conflictInfo).toMatchObject({
+            expectedFingerprint: 'fp:after',
+            actualFingerprint: 'fp:external',
+            actualSnapshot: { v: 9 },
+        });
+    });
+
+    test('rollback parks the entry in conflict when post-commit readCurrent throws', async () => {
+        let readCount = 0;
+        const readCurrent = jest.fn(async () => {
+            readCount++;
+            if (readCount === 1) return { snapshot: null, fingerprint: 'fp:before' };
+            if (readCount === 2) return { snapshot: null, fingerprint: 'fp:after' };
+            throw new Error('disk gone');
+        });
+        const inverse = jest.fn(() => ({ undo: true }));
+        const commit = jest.fn(async () => {});
+        const handler = makeHandler({
+            fingerprint: async () => 'fp:before',
+            readCurrent,
+            commit,
+            inverse,
+        });
+        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        bus.registerKind('k', handler);
+        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        await bus.approve(id);
+        commit.mockClear();
+
+        const out = await bus.rollback(id);
+        expect(out.ok).toBe(false);
+        expect(out.status).toBe('conflict');
+        expect(out.error).toContain('disk gone');
+        expect(commit).not.toHaveBeenCalled();
+    });
+
+    test('rollback proceeds without a drift check when afterFingerprint is null (legacy hydrated entry)', async () => {
+        const commit = jest.fn(async () => {});
+        const inverse = jest.fn(() => ({ undo: true }));
+        const readCurrent = jest.fn(async () => ({ snapshot: null, fingerprint: 'fp:null' }));
+        const handler = makeHandler({ commit, inverse, readCurrent });
+        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        bus.registerKind('k', handler);
+
+        // Simulate a v2 snapshot taken before afterFingerprint existed: one
+        // committed entry with no afterFingerprint field, hydrated into a
+        // fresh bus.
+        bus.hydrate({
+            version: 2,
+            entries: [{
+                id: 'k_1_legacy',
+                kind: 'k',
+                sourceCallId: null,
+                status: 'committed',
+                op: { do: 'x' },
+                snapshot: null,
+                fingerprint: 'fp:null',
+                meta: null,
+                createdAt: 1,
+                decidedAt: 2,
+                committedAt: 2,
+                rolledBackAt: null,
+                conflictInfo: null,
+            }],
+            outcomeQueue: [],
+        });
+        readCurrent.mockClear();
+
+        const out = await bus.rollback('k_1_legacy');
+        expect(out.ok).toBe(true);
+        expect(out.status).toBe('rolledBack');
+        expect(readCurrent).not.toHaveBeenCalled();
+        expect(commit).toHaveBeenCalledWith({ undo: true }, undefined);
+    });
 });

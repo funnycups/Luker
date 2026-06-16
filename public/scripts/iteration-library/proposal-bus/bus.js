@@ -17,6 +17,14 @@
  * fingerprints don't match, the bus parks the entry in status='conflict'
  * and refuses to commit. User resolves manually by re-approving (which
  * re-reads current state for a fresh snapshot/fingerprint) or rejecting.
+ *
+ * The same check fires on rollback: after a successful commit the bus
+ * records `afterFingerprint` (the state immediately after our write); a
+ * later rollback re-reads current state and refuses to apply the inverse
+ * if anything has changed in the meantime, so we never silently overwrite
+ * a concurrent edit while undoing our own. Entries hydrated from older
+ * sessions that predate `afterFingerprint` fall back to the previous
+ * unchecked rollback path.
  */
 
 function makeId(kindId, seq) {
@@ -62,6 +70,7 @@ export function createBus(opts = {}) {
             op,
             snapshot,
             fingerprint,
+            afterFingerprint: null,
             meta: meta ?? null,
             createdAt: Date.now(),
             decidedAt: null,
@@ -156,6 +165,15 @@ export function createBus(opts = {}) {
         entry.decidedAt = Date.now();
         entry.committedAt = Date.now();
         entry.conflictInfo = null;
+        try {
+            const post = await handler.readCurrent(entry.op, ctx);
+            entry.afterFingerprint = String(post.fingerprint);
+        } catch {
+            // Best-effort: a post-commit read failure leaves afterFingerprint
+            // null, which makes rollback() fall back to its unchecked behaviour
+            // for this entry (same as pre-existing hydrated entries).
+            entry.afterFingerprint = null;
+        }
         enqueueOutcome(entry);
         onChange();
         return { ok: true, status: 'committed' };
@@ -197,6 +215,42 @@ export function createBus(opts = {}) {
         const inverseOp = handler.inverse(entry.op, entry.snapshot, ctx);
         if (!inverseOp) {
             return { ok: false, status: entry.status };
+        }
+        // Only check drift against the post-commit fingerprint when we
+        // actually recorded one. Entries committed before this field
+        // existed (or whose post-commit readCurrent failed) hydrate with
+        // afterFingerprint=null; for those we keep the legacy unchecked
+        // rollback path rather than blocking every old entry.
+        if (entry.afterFingerprint != null) {
+            let current;
+            try {
+                current = await handler.readCurrent(entry.op, ctx);
+            } catch (err) {
+                const msg = String(err?.message || err || 'readCurrent failed');
+                entry.status = 'conflict';
+                entry.conflictInfo = {
+                    expectedFingerprint: entry.afterFingerprint,
+                    actualFingerprint: null,
+                    actualSnapshot: null,
+                    error: msg,
+                    at: Date.now(),
+                };
+                enqueueOutcome(entry, { error: msg });
+                onChange();
+                return { ok: false, status: 'conflict', error: msg };
+            }
+            if (String(current.fingerprint) !== String(entry.afterFingerprint)) {
+                entry.status = 'conflict';
+                entry.conflictInfo = {
+                    expectedFingerprint: entry.afterFingerprint,
+                    actualFingerprint: String(current.fingerprint),
+                    actualSnapshot: current.snapshot,
+                    at: Date.now(),
+                };
+                enqueueOutcome(entry);
+                onChange();
+                return { ok: false, status: 'conflict' };
+            }
         }
         try {
             await handler.commit(inverseOp, ctx);
