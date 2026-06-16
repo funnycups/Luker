@@ -184,6 +184,30 @@ backups:
 - `throttleInterval`: Backup throttle interval in milliseconds to avoid excessive backups
 - `maxTotalBackups`: Maximum number of chat backups; `-1` means unlimited
 
+## Storage Backend
+
+```yaml
+storage:
+  mode: fs
+  mysql:
+    url: mysql://user:pass@host:3306/luker
+    poolSize: 10
+  postgres:
+    url: postgresql://user:pass@host:5432/luker
+    poolSize: 10
+```
+
+Luker can persist user data through one of four backends. The `mode` key chooses which one; the matching sub-block is only consulted when its mode is selected.
+
+- `fs` (default): one file per chat / preset / world / etc. under `<dataRoot>/<handle>/`. Recommended for single-user installs and the easiest backend to inspect by hand.
+- `sqlite`: one self-contained `luker-storage.sqlite` file per user under `<dataRoot>/<handle>/`. Suits installs that want a single transactional file without operating a separate database service.
+- `mysql`: one shared MySQL 8.0+ database; all users live in the same schema, keyed by a `handle` column. Suitable for multi-user deployments that already run MySQL.
+- `postgres`: one shared PostgreSQL 14+ database; same shape as MySQL but using PostgreSQL.
+
+Switching backends requires running the migration tool first; the admin panel exposes a Storage Backend tab that walks through `fs ↔ sqlite` migration with a permanent backup taken at `<dataRoot>/_storage-migrations/`. Switching to or from `mysql` / `postgres` is supported by setting `storage.mode` in `config.yaml` and restarting the server; the migration tool itself currently only routes between `fs` and `sqlite`, so moving an existing install to MySQL or PostgreSQL means either starting fresh or staging through SQLite.
+
+A headless equivalent of the admin panel migration is available at `node scripts/storage-migrate.js --from fs --to sqlite` (and the reverse).
+
 ## Other Settings
 
 ```yaml

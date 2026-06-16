@@ -184,6 +184,30 @@ backups:
 - `throttleInterval`：備份節流間隔（毫秒），避免頻繁備份
 - `maxTotalBackups`：聊天備份最大數量，`-1` 表示不限制
 
+## 儲存後端
+
+```yaml
+storage:
+  mode: fs
+  mysql:
+    url: mysql://user:pass@host:3306/luker
+    poolSize: 10
+  postgres:
+    url: postgresql://user:pass@host:5432/luker
+    poolSize: 10
+```
+
+Luker 支援四種使用者資料持久化後端，由 `mode` 選擇；只有對應的子區塊會被讀取。
+
+- `fs`（預設）：每筆聊天/預設/世界書等都是 `<dataRoot>/<handle>/` 下的一個檔案。最適合單使用者安裝，也是最方便手動檢視的後端。
+- `sqlite`：每位使用者一個獨立的 `luker-storage.sqlite` 檔案，位於 `<dataRoot>/<handle>/`。適合希望使用單檔案交易式儲存、又不想額外運行資料庫服務的安裝。
+- `mysql`：所有使用者共用一個 MySQL 8.0+ 資料庫，以 `handle` 欄位區分。適合已經在跑 MySQL 的多使用者部署。
+- `postgres`：所有使用者共用一個 PostgreSQL 14+ 資料庫，結構與 MySQL 相同，使用 PostgreSQL。
+
+切換後端前需先執行遷移工具。管理面板的「儲存後端」分頁提供 `fs ↔ sqlite` 的可視化遷移流程，並在 `<dataRoot>/_storage-migrations/` 留下永久備份。切換到/離開 `mysql` 或 `postgres` 時，可在 `config.yaml` 修改 `storage.mode` 後重啟伺服器；遷移工具目前只在 `fs` 與 `sqlite` 之間路由，因此把既有安裝遷到 MySQL 或 PostgreSQL 需要從空資料庫開始，或以 SQLite 中轉。
+
+無圖形介面時，可用 `node scripts/storage-migrate.js --from fs --to sqlite`（以及反向方向）執行同樣的遷移流程。
+
 ## 其他設定
 
 ```yaml

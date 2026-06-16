@@ -26,6 +26,7 @@
 - **Preset Decoupling** — Connection parameters and presets managed independently
 - **Incremental Sync** — RFC 6902 incremental data transfer
 - **Backend Storage** — Data changes persisted in real time
+- **Optional Database Backends** — Filesystem (default), SQLite, MySQL, or PostgreSQL selectable via `storage.mode`; admin panel migrates `fs ↔ sqlite` round-trip with permanent backups
 - **Function Call Runtime** — Native + plain-text dual modes
 - **Unified Generation Layer** — Single envelope for multiple backends
 - **Request Inspector** — Full-lifecycle generation-request tracing
