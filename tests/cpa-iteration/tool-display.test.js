@@ -192,4 +192,14 @@ describe('CPA — read-tool error result renders error summary (CPA-3)', () => {
         const match = out.match(/❌ (.+)/);
         expect(match?.[1]?.length).toBeLessThanOrEqual(40);
     });
+
+    it('skill_search_content summarize counts hits from the real {hits} shape', () => {
+        const entry = CPA_TOOL_DISPLAY.skill_search_content;
+        const out = entry.summarize(
+            { name: 'demo-skill', query: 'foo' },
+            { hits: [{ path: 'SKILL.md', lineStart: 1, lineEnd: 3, snippet: '…foo…' }, { path: 'SKILL.md', lineStart: 4, lineEnd: 6, snippet: 'foo' }] },
+            identity,
+        );
+        expect(out).toMatch(/2 hits/);
+    });
 });

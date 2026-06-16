@@ -128,7 +128,7 @@ export const CPA_TOOL_DISPLAY = {
         type: 'read',
         summarize: (a, r, i18n) => {
             if (r && typeof r === 'object' && r.error) return `❌ ${String(r.error).slice(0, 40)}`;
-            if (r && Array.isArray(r.matches)) return fmt(i18n, '${0} hits', r.matches.length);
+            if (r && Array.isArray(r.hits)) return fmt(i18n, '${0} hits', r.hits.length);
             const name = a?.name ? String(a.name) : '';
             const query = a?.query ? String(a.query).slice(0, 30) : '';
             return [name, query].filter(Boolean).join(' ');

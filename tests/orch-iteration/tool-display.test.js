@@ -49,4 +49,17 @@ describe('Orch tool-display map', () => {
         const editEntries = Object.values(ORCH_TOOL_DISPLAY).filter(e => e.type === 'edit');
         expect(editEntries.length).toBeGreaterThan(0);
     });
+
+    it('lorebook_query summarize counts hits from the real {total_hits, entries} shape', () => {
+        const entry = ORCH_TOOL_DISPLAY.lorebook_query;
+        const i18n = (s, ...args) => args.reduce((acc, v, i) => acc.replace(`\${${i}}`, String(v)), String(s));
+        const result = { book_name: 'b', total_hits: 3, entries: [{ uid: 1 }, { uid: 2 }, { uid: 3 }] };
+        expect(entry.summarize({ book_name: 'b', text: 'q' }, result, i18n)).toBe('3 hits');
+    });
+
+    it('lorebook_query summarize falls back to entries.length when total_hits is absent', () => {
+        const entry = ORCH_TOOL_DISPLAY.lorebook_query;
+        const i18n = (s, ...args) => args.reduce((acc, v, i) => acc.replace(`\${${i}}`, String(v)), String(s));
+        expect(entry.summarize({}, { entries: [{}, {}] }, i18n)).toBe('2 hits');
+    });
 });

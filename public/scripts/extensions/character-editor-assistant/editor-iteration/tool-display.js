@@ -95,8 +95,10 @@ export const CEA_EDITOR_TOOL_DISPLAY = {
         type: 'read',
         summarize: (a, r, i18n) => {
             if (r && typeof r === 'object') {
-                const count = Array.isArray(r.matches) ? r.matches.length : Number(r.count || 0);
-                return fmt(i18n, '${0} hits', count);
+                const total = Number.isFinite(r.total_hits)
+                    ? Number(r.total_hits)
+                    : (Array.isArray(r.entries) ? r.entries.length : 0);
+                return fmt(i18n, '${0} hits', total);
             }
             const book = a?.book_name ? String(a.book_name) : '';
             const text = a?.text ? String(a.text) : (a?.query ? String(a.query) : '');
