@@ -2740,14 +2740,50 @@ async function openAdminPanel() {
         return response.json();
     }
 
-    async function triggerStorageBackendMigration(targetMode) {
+    async function triggerStorageBackendMigration(targetMode, dbCreds = {}) {
+        const body = { targetMode };
+        if (targetMode === 'mysql' && dbCreds.mysql) body.mysql = dbCreds.mysql;
+        if (targetMode === 'postgres' && dbCreds.postgres) body.postgres = dbCreds.postgres;
         const response = await fetch('/api/users/storage/migrate', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ targetMode }),
+            body: JSON.stringify(body),
         });
         const data = await response.json().catch(() => ({}));
         return { ok: response.ok, status: response.status, data };
+    }
+
+    function collectStorageBackendDbCreds(template, targetMode) {
+        if (targetMode === 'mysql') {
+            const url = String(template.find('.storageBackendMysqlUrl').val() || '').trim();
+            const poolSizeRaw = String(template.find('.storageBackendMysqlPoolSize').val() || '').trim();
+            const mysql = {};
+            if (url) mysql.url = url;
+            if (poolSizeRaw) {
+                const n = Number(poolSizeRaw);
+                if (Number.isFinite(n) && n > 0) mysql.poolSize = n;
+            }
+            return Object.keys(mysql).length > 0 ? { mysql } : {};
+        }
+        if (targetMode === 'postgres') {
+            const url = String(template.find('.storageBackendPostgresUrl').val() || '').trim();
+            const poolSizeRaw = String(template.find('.storageBackendPostgresPoolSize').val() || '').trim();
+            const postgres = {};
+            if (url) postgres.url = url;
+            if (poolSizeRaw) {
+                const n = Number(poolSizeRaw);
+                if (Number.isFinite(n) && n > 0) postgres.poolSize = n;
+            }
+            return Object.keys(postgres).length > 0 ? { postgres } : {};
+        }
+        return {};
+    }
+
+    function updateStorageBackendDbConfigVisibility(template, targetMode) {
+        const mysqlPanel = template.find('.storageBackendDbConfigMysql');
+        const postgresPanel = template.find('.storageBackendDbConfigPostgres');
+        mysqlPanel.toggle(targetMode === 'mysql');
+        postgresPanel.toggle(targetMode === 'postgres');
     }
 
     function renderStorageMigrationResult(el, result) {
@@ -2799,6 +2835,7 @@ async function openAdminPanel() {
         lastEl.text(t`Loading...`);
         targetRadios.prop('disabled', true).prop('checked', false);
         migrateButton.addClass('disabled').prop('disabled', true);
+        updateStorageBackendDbConfigVisibility(section, '');
 
         try {
             const status = await fetchStorageBackendStatus();
@@ -2912,6 +2949,10 @@ async function openAdminPanel() {
     template.find('.refreshServerPluginsButton').on('click', renderServerPlugins);
     template.find('.storageBackendRefreshButton').on('click', renderStorageBackend);
 
+    template.find('.storageBackendTargetMode').on('change', function () {
+        updateStorageBackendDbConfigVisibility(template, String($(this).val() || ''));
+    });
+
     template.find('.storageBackendMigrateButton').on('click', async function () {
         const button = $(this);
         if (button.hasClass('disabled')) {
@@ -2923,6 +2964,8 @@ async function openAdminPanel() {
             toastr.warning(t`Select a target backend mode.`);
             return;
         }
+
+        const dbCreds = collectStorageBackendDbCreds(template, targetMode);
 
         const confirmed = await callGenericPopup(
             t`Migrate ALL user data to ${targetMode}? A backup will be saved permanently under the data-root _storage-migrations directory. This may take several minutes for large installs and the server will reject writes until it finishes.`,
@@ -2943,7 +2986,7 @@ async function openAdminPanel() {
         resultEl.text(t`Migration in progress. This may take several minutes.`);
 
         try {
-            const response = await triggerStorageBackendMigration(targetMode);
+            const response = await triggerStorageBackendMigration(targetMode, dbCreds);
             if (response.ok && response.data?.ok) {
                 toastr.success(t`Migration complete.`);
                 renderStorageMigrationResult(resultEl, response.data);

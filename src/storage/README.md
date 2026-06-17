@@ -285,7 +285,8 @@ Reads `./config.yaml` from the CWD (so the script assumes you ran it from the re
 
 - New "Storage Backend" tab in the admin panel.
 - Shows current mode, the read-only flag, and the last-migration timestamp returned by `/api/users/storage/status`.
-- Radio + button to trigger migration; live status and the per-user result map render into a `<pre>` block.
+- Radio set covers all four engines (Filesystem / SQLite / MySQL / PostgreSQL). Selecting MySQL or PostgreSQL reveals an inline credential panel (URL + pool size). Leaving the URL blank falls back to `storage.mysql.url` / `storage.postgres.url` already set in `config.yaml`.
+- Migration button is disabled for the radio matching the current mode (no self-migration). Live status and the per-user result map render into a `<pre>` block.
 - i18n: zh-cn + zh-tw + English (source).
 
 ### Backup convention

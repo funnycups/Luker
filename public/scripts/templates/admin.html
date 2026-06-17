@@ -250,11 +250,40 @@
 
         <h4 class="margin0" data-i18n="Switch Backend">Switch Backend</h4>
         <div class="flex-container flexFlowColumn flexGap10">
-            <div class="flex-container alignItemsCenter flexGap10">
+            <div class="flex-container alignItemsCenter flexGap10 flexWrap">
                 <span data-i18n="Target:">Target:</span>
                 <label><input type="radio" name="storageBackendTargetMode" class="storageBackendTargetMode" value="fs"> <span data-i18n="Filesystem">Filesystem</span></label>
                 <label><input type="radio" name="storageBackendTargetMode" class="storageBackendTargetMode" value="sqlite"> <span data-i18n="SQLite">SQLite</span></label>
+                <label><input type="radio" name="storageBackendTargetMode" class="storageBackendTargetMode" value="mysql"> <span data-i18n="MySQL">MySQL</span></label>
+                <label><input type="radio" name="storageBackendTargetMode" class="storageBackendTargetMode" value="postgres"> <span data-i18n="PostgreSQL">PostgreSQL</span></label>
             </div>
+
+            <div class="storageBackendDbConfig storageBackendDbConfigMysql flex-container flexFlowColumn flexGap5" style="display: none;">
+                <strong data-i18n="MySQL connection">MySQL connection</strong>
+                <div class="flex-container alignItemsCenter flexGap5">
+                    <span data-i18n="URL:">URL:</span>
+                    <input type="text" class="storageBackendMysqlUrl text_pole flex1" placeholder="mysql://user:pass@host:3306/luker" data-i18n="[placeholder]mysql://user:pass@host:3306/luker" />
+                </div>
+                <div class="flex-container alignItemsCenter flexGap5">
+                    <span data-i18n="Pool size:">Pool size:</span>
+                    <input type="number" min="1" class="storageBackendMysqlPoolSize text_pole" style="width: 6em;" placeholder="10" />
+                </div>
+                <small data-i18n="storageBackendDbConfigHint">Leave the URL blank to use the value already set in config.yaml (storage.mysql.url / storage.postgres.url).</small>
+            </div>
+
+            <div class="storageBackendDbConfig storageBackendDbConfigPostgres flex-container flexFlowColumn flexGap5" style="display: none;">
+                <strong data-i18n="PostgreSQL connection">PostgreSQL connection</strong>
+                <div class="flex-container alignItemsCenter flexGap5">
+                    <span data-i18n="URL:">URL:</span>
+                    <input type="text" class="storageBackendPostgresUrl text_pole flex1" placeholder="postgresql://user:pass@host:5432/luker" data-i18n="[placeholder]postgresql://user:pass@host:5432/luker" />
+                </div>
+                <div class="flex-container alignItemsCenter flexGap5">
+                    <span data-i18n="Pool size:">Pool size:</span>
+                    <input type="number" min="1" class="storageBackendPostgresPoolSize text_pole" style="width: 6em;" placeholder="10" />
+                </div>
+                <small data-i18n="storageBackendDbConfigHint">Leave the URL blank to use the value already set in config.yaml (storage.mysql.url / storage.postgres.url).</small>
+            </div>
+
             <div class="flex-container alignItemsCenter flexGap10">
                 <button type="button" class="storageBackendMigrateButton menu_button menu_button_icon">
                     <i class="fa-fw fa-solid fa-database"></i>
@@ -262,6 +291,7 @@
                 </button>
             </div>
             <small data-i18n="storageBackendMigrationWarning">This will copy ALL user data to the target backend. A backup is preserved at &lt;dataRoot&gt;/_storage-migrations/ and is NEVER auto-deleted. Edit config.yaml (storage.mode) and restart the server so new logins use the new mode.</small>
+            <small data-i18n="storageBackendSharedDbWarning">MySQL and PostgreSQL share a single schema across users (rows are keyed by handle). When switching to or from a shared backend, the other backend's data is left on disk untouched but becomes invisible until you switch back.</small>
         </div>
 
         <h4 class="margin0" data-i18n="Result">Result</h4>
