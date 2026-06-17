@@ -64,6 +64,7 @@ import { NamedDocRepo } from '../storage/repositories/named-doc-repo.js';
 import { GroupRepo } from '../storage/repositories/group-repo.js';
 import { StatsRepo } from '../storage/repositories/stats-repo.js';
 import { MigrationRunner } from '../storage/migration/runner.js';
+import { persistStorageBackendToConfig, resolveStorageDbConfig } from '../storage/config-persistence.js';
 
 export const router = express.Router();
 
@@ -1034,29 +1035,21 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
     // connection credentials; if absent, fall back to config.yaml so an
     // operator who has already filled storage.{mysql,postgres} in the
     // config file can trigger migration without re-typing the URL.
+    // resolveStorageDbConfig tracks which fields came from the body so
+    // persistStorageBackendToConfig only rewrites the ones the operator
+    // actually typed.
     function resolveDbConfig(mode) {
-        const inline = request.body?.[mode];
-        if (inline && typeof inline === 'object' && typeof inline.url === 'string' && inline.url) {
-            return {
-                url: inline.url,
-                poolSize: Number.isFinite(inline.poolSize) ? inline.poolSize : undefined,
-            };
-        }
-        const fromConfig = getConfigValue(`storage.${mode}`, null);
-        if (fromConfig && typeof fromConfig.url === 'string' && fromConfig.url) {
-            return {
-                url: fromConfig.url,
-                poolSize: Number.isFinite(fromConfig.poolSize) ? fromConfig.poolSize : undefined,
-            };
-        }
-        return null;
+        return resolveStorageDbConfig({
+            inline: request.body?.[mode],
+            fromConfig: getConfigValue(`storage.${mode}`, null),
+        });
     }
 
-    let mysqlConfig = null;
-    let postgresConfig = null;
+    let mysqlResolved = null;
+    let postgresResolved = null;
     if (targetMode === 'mysql') {
-        mysqlConfig = resolveDbConfig('mysql');
-        if (!mysqlConfig) {
+        mysqlResolved = resolveDbConfig('mysql');
+        if (!mysqlResolved) {
             return response.status(400).send({
                 error: 'mysql_config_missing',
                 message: 'mode=mysql requires storage.mysql.url (in request body or config.yaml)',
@@ -1064,14 +1057,16 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
         }
     }
     if (targetMode === 'postgres') {
-        postgresConfig = resolveDbConfig('postgres');
-        if (!postgresConfig) {
+        postgresResolved = resolveDbConfig('postgres');
+        if (!postgresResolved) {
             return response.status(400).send({
                 error: 'postgres_config_missing',
                 message: 'mode=postgres requires storage.postgres.url (in request body or config.yaml)',
             });
         }
     }
+    const mysqlConfig = mysqlResolved?.engine ?? null;
+    const postgresConfig = postgresResolved?.engine ?? null;
 
     if (_migrationInProgress) {
         return response.status(409).send({ error: 'migration_in_progress' });
@@ -1163,11 +1158,31 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
         }
         _lastMigrationAt = new Date().toISOString();
 
+        // Persist the choice to config.yaml so the next server start picks up
+        // the same backend. Failures here are logged + returned as a warning
+        // alongside `ok: true` — the migration itself has already succeeded
+        // and the live engine has swapped, so we don't want to make the
+        // operator think their data is in limbo.
+        const persistResult = await persistStorageBackendToConfig({
+            configPath: getConfigFilePath(),
+            safetyCheck: validateConfigSafety,
+            targetMode,
+            mysqlInline: mysqlResolved?.inlineFields ?? null,
+            postgresInline: postgresResolved?.inlineFields ?? null,
+        });
+        if (persistResult.ok) {
+            reloadConfigCache();
+        } else {
+            console.error('Storage config persist failed:', persistResult.error);
+        }
+
         return response.send({
             ok: true,
             perUser,
             durationMs: Date.now() - startedAt,
             currentMode: targetMode,
+            configPersisted: persistResult.ok,
+            configPersistError: persistResult.ok ? undefined : persistResult.error,
         });
     } catch (err) {
         console.error('Storage migration error:', err);

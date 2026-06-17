@@ -11,6 +11,7 @@ import { canViewSecrets } from './secrets.js';
 import { renderTemplateAsync } from './templates.js';
 import { copyText, debounce, ensureImageFormatSupported, getBase64Async, humanFileSize } from './utils.js';
 import { formatAnnouncementBody } from './announcements.js';
+import { buildStorageBackendCreds } from './admin-storage-backend.js';
 
 /**
  * @type {import('../../src/users.js').UserViewModel} Logged in user
@@ -2754,29 +2755,12 @@ async function openAdminPanel() {
     }
 
     function collectStorageBackendDbCreds(template, targetMode) {
-        if (targetMode === 'mysql') {
-            const url = String(template.find('.storageBackendMysqlUrl').val() || '').trim();
-            const poolSizeRaw = String(template.find('.storageBackendMysqlPoolSize').val() || '').trim();
-            const mysql = {};
-            if (url) mysql.url = url;
-            if (poolSizeRaw) {
-                const n = Number(poolSizeRaw);
-                if (Number.isFinite(n) && n > 0) mysql.poolSize = n;
-            }
-            return Object.keys(mysql).length > 0 ? { mysql } : {};
-        }
-        if (targetMode === 'postgres') {
-            const url = String(template.find('.storageBackendPostgresUrl').val() || '').trim();
-            const poolSizeRaw = String(template.find('.storageBackendPostgresPoolSize').val() || '').trim();
-            const postgres = {};
-            if (url) postgres.url = url;
-            if (poolSizeRaw) {
-                const n = Number(poolSizeRaw);
-                if (Number.isFinite(n) && n > 0) postgres.poolSize = n;
-            }
-            return Object.keys(postgres).length > 0 ? { postgres } : {};
-        }
-        return {};
+        return buildStorageBackendCreds(targetMode, {
+            mysqlUrl: template.find('.storageBackendMysqlUrl').val(),
+            mysqlPoolSize: template.find('.storageBackendMysqlPoolSize').val(),
+            postgresUrl: template.find('.storageBackendPostgresUrl').val(),
+            postgresPoolSize: template.find('.storageBackendPostgresPoolSize').val(),
+        });
     }
 
     function updateStorageBackendDbConfigVisibility(template, targetMode) {
@@ -2793,6 +2777,9 @@ async function openAdminPanel() {
         }
         if (result.message) {
             lines.push(result.message);
+        }
+        if (result.configPersisted === false && result.configPersistError) {
+            lines.push(t`Could not save to config.yaml: ${result.configPersistError}`);
         }
         if (result.perUser) {
             lines.push('');

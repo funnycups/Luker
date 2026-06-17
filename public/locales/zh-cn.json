@@ -5824,7 +5824,7 @@
     ,"storageBackendDbConfigHint": "若连接字符串留空，将直接使用 config.yaml 中已设置的 storage.mysql.url／storage.postgres.url。"
     ,"storageBackendSharedDbWarning": "MySQL 与 PostgreSQL 后端会在所有用户间共享同一份数据库 schema（以 handle 字段区分）。切换到或离开共享后端时，另一个后端的数据会原样保留在磁盘上但暂时不可见，直到再次切换回去。"
     ,"Migrate Now": "立即迁移"
-    ,"storageBackendMigrationWarning": "此操作会将所有用户数据复制到目标后端。备份会永久保存在 <dataRoot>/_storage-migrations/ 目录下，绝不会自动删除。请编辑 config.yaml（storage.mode）并重启服务器，以便新登录使用新模式。"
+    ,"storageBackendMigrationWarning": "此操作会将所有用户数据复制到目标后端并将运行中的服务器切换过去。备份会永久保存在 <dataRoot>/_storage-migrations/ 目录下，绝不会自动删除。"
     ,"Result": "结果"
     ,"Loading...": "加载中……"
     ,"yes": "是"
@@ -5839,5 +5839,6 @@
     ,"Migration complete.": "迁移完成。"
     ,"Migration failed for one or more users. Source backend retained.": "一个或多个用户迁移失败。源后端已保留。"
     ,"Migration failed.": "迁移失败。"
+    ,"Could not save to config.yaml: ${configPersistError}": "写入 config.yaml 失败：${configPersistError}"
     ,"Duration:": "耗时："
 }

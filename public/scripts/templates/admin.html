@@ -290,7 +290,7 @@
                     <span class="storageBackendMigrateButtonLabel" data-i18n="Migrate Now">Migrate Now</span>
                 </button>
             </div>
-            <small data-i18n="storageBackendMigrationWarning">This will copy ALL user data to the target backend. A backup is preserved at &lt;dataRoot&gt;/_storage-migrations/ and is NEVER auto-deleted. Edit config.yaml (storage.mode) and restart the server so new logins use the new mode.</small>
+            <small data-i18n="storageBackendMigrationWarning">This will copy ALL user data to the target backend and switch the live server to it. A backup is preserved at &lt;dataRoot&gt;/_storage-migrations/ and is NEVER auto-deleted.</small>
             <small data-i18n="storageBackendSharedDbWarning">MySQL and PostgreSQL share a single schema across users (rows are keyed by handle). When switching to or from a shared backend, the other backend's data is left on disk untouched but becomes invisible until you switch back.</small>
         </div>
 

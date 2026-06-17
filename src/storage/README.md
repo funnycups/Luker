@@ -244,9 +244,9 @@ The runner writes to the destination through `withReadOnlyBypass` so the source 
 | Method + Path | Body | Returns |
 |---|---|---|
 | `POST /api/users/storage/status` | — | `{ currentMode, readOnly, lastMigration, migrationInProgress }` |
-| `POST /api/users/storage/migrate` | `{ targetMode: 'fs' \| 'sqlite' \| 'mysql' \| 'postgres', mysql?: { url, poolSize? }, postgres?: { url, poolSize? } }` | per-user result map; on success the global engine is re-initialised to `targetMode` |
+| `POST /api/users/storage/migrate` | `{ targetMode: 'fs' \| 'sqlite' \| 'mysql' \| 'postgres', mysql?: { url, poolSize? }, postgres?: { url, poolSize? } }` | per-user result map, plus `configPersisted` (bool) and `configPersistError?` (string). The global engine is swapped to `targetMode` and `storage.mode` / inline creds are written back to `config.yaml`. |
 
-`/migrate` is synchronous and blocks the request until the runner finishes. If any user fails, the source engine is retained and per-user errors are returned in the response body. For `targetMode: 'mysql'` / `'postgres'` the body may carry inline credentials; if absent, the endpoint falls back to `storage.mysql` / `storage.postgres` from `config.yaml`.
+`/migrate` is synchronous and blocks the request until the runner finishes. If any user fails, the source engine is retained and per-user errors are returned in the response body. For `targetMode: 'mysql'` / `'postgres'` the body may carry inline credentials; otherwise the endpoint reads `storage.mysql` / `storage.postgres` from `config.yaml`. Inline creds win for both engine construction and the config writeback; credentials sourced from config.yaml are not rewritten because they're already there.
 
 ### Express middleware
 
@@ -283,10 +283,11 @@ Reads `./config.yaml` from the CWD (so the script assumes you ran it from the re
 
 `public/scripts/templates/admin.html` + `public/scripts/user.js`:
 
-- New "Storage Backend" tab in the admin panel.
+- "Storage Backend" tab in the admin panel.
 - Shows current mode, the read-only flag, and the last-migration timestamp returned by `/api/users/storage/status`.
 - Radio set covers all four engines (Filesystem / SQLite / MySQL / PostgreSQL). Selecting MySQL or PostgreSQL reveals an inline credential panel (URL + pool size). Leaving the URL blank falls back to `storage.mysql.url` / `storage.postgres.url` already set in `config.yaml`.
 - Migration button is disabled for the radio matching the current mode (no self-migration). Live status and the per-user result map render into a `<pre>` block.
+- After a successful migration the new `storage.mode` (plus any URL / poolSize the operator typed in) is written back to `config.yaml` via the comment-preserving `yaml.parseDocument` API. The same safety gate that `/config/save` uses (`validateConfigSafety`) runs first; if it refuses, the migration response carries `configPersisted: false` and the operator edits the file by hand.
 - i18n: zh-cn + zh-tw + English (source).
 
 ### Backup convention
