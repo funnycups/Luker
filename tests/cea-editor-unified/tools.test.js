@@ -261,7 +261,7 @@ describe('CEA editor tool-display map', () => {
     });
 
     it('summarize for lorebook_query renders hit count when result has matches', () => {
-        const out = map.lorebook_query.summarize({ book_name: 'BookA', query: 'foo' }, { matches: [1, 2, 3] });
+        const out = map.lorebook_query.summarize({ book_name: 'BookA', query: 'foo' }, { total_hits: 3, entries: [{}, {}, {}] });
         expect(String(out)).toContain('3');
     });
 

@@ -177,10 +177,9 @@ describe('MG schema — createNewSession baseline shape', () => {
         expect(a.createdAt).toBe(a.updatedAt);
     });
 
-    test('messages and pendingEdits start empty', () => {
+    test('messages start empty and title/summary are blank', () => {
         const sess = _testOnly_createNewSession();
         expect(sess.messages).toEqual([]);
-        expect(sess.pendingEdits).toEqual([]);
         expect(sess.title).toBe('');
         expect(sess.summary).toBe('');
     });

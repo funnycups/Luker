@@ -7,6 +7,7 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 
 const requestToolCallsWithRetryMock = jest.fn();
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
+    proposalBus: {},
     applyEdits: (edits, live) => ({ newLive: live, journal: [] }),
     inverseEdit: () => null,
     bindIterWorkspaceResizer: () => () => {},

@@ -16,6 +16,7 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 });
 
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
+    proposalBus: {},
     applyEdits: (edits, live) => ({ newLive: live, clean: edits, conflicts: [], alreadyDone: [] }),
     inverseEdit: (edit) => edit,
     registerOp: () => {},
@@ -65,7 +66,7 @@ describe('unified CEA editor loadSession refreshes state.live', () => {
         expect(typeof _internalLoadSessionIntoState).toBe('function');
     });
 
-    test('replaces state.session + state.pendingEdits with the loaded bucket', async () => {
+    test('replaces state.session and clears state.pendingEdits (bus owns pending data via hydrateBus)', async () => {
         const sessionB = {
             id: 'B',
             avatar: 'alice.png',
@@ -76,6 +77,7 @@ describe('unified CEA editor loadSession refreshes state.live', () => {
         };
         const sessionStore = { load: jest.fn().mockResolvedValue(sessionB) };
         const buildLiveSnapshot = jest.fn().mockResolvedValue({ character: { name: 'live' }, lorebooks: {} });
+        const hydrateBus = jest.fn();
         const state = {
             session: { id: 'A', avatar: 'alice.png', messages: [], pendingEdits: [], surfaceState: {} },
             pendingEdits: [],
@@ -87,6 +89,7 @@ describe('unified CEA editor loadSession refreshes state.live', () => {
         const ok = await _internalLoadSessionIntoState(state, 'B', {
             sessionStore,
             buildLiveSnapshot,
+            hydrateBus,
             context: { _kind: 'ctx' },
             avatar: 'alice.png',
         });
@@ -94,8 +97,8 @@ describe('unified CEA editor loadSession refreshes state.live', () => {
         expect(ok).toBe(true);
         expect(sessionStore.load).toHaveBeenCalledWith('B');
         expect(state.session).toBe(sessionB);
-        expect(state.pendingEdits).toHaveLength(1);
-        expect(state.pendingEdits[0].path).toBe('card.name');
+        expect(state.pendingEdits).toEqual([]);
+        expect(hydrateBus).toHaveBeenCalledWith(sessionB);
     });
 
     test('refreshes state.live by calling buildUnifiedCharacterEditorLiveSnapshot, not by re-using session.live', async () => {

@@ -25,6 +25,7 @@ const requestToolCallsWithRetryMock = jest.fn();
 const ensureUiStylesheetInjectedMock = jest.fn();
 const ensureMarkdownDepsMock = jest.fn().mockResolvedValue(true);
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
+    proposalBus: {},
     applyEdits: (edits, live) => ({ newLive: live, clean: edits, conflicts: [], alreadyDone: [] }),
     inverseEdit: (edit) => edit,
     registerOp: () => {},

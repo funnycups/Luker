@@ -25,6 +25,7 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 // exercise the runner, edits, or shared UI — it only needs these to load
 // cleanly so the studio module can import.
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
+    proposalBus: {},
     applyEdits: (edits, live) => ({ newLive: live, clean: edits, conflicts: [], alreadyDone: [] }),
     inverseEdit: () => null,
     registerOp: () => {},

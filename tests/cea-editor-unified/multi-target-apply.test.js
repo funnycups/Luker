@@ -11,6 +11,7 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 // per-target slices to the commit helpers. The other umbrella members are
 // stubbed because the apply path doesn't touch them.
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
+    proposalBus: {},
     applyEdits: (edits, live) => {
         // Trivial in-place semantics for the test: each edit is a `set` on a
         // dot-path. Studio passes per-target slices (character-only or

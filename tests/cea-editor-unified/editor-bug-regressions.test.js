@@ -25,6 +25,7 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 
 const requestToolCallsWithRetryMock = jest.fn();
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
+    proposalBus: {},
     applyEdits: (edits, live) => {
         // Trivial in-place set semantics — matches what multi-target-apply
         // does. Studio passes per-target slices so we don't need cross-book
