@@ -77,16 +77,16 @@
  */
 
 // iteration-library convention (mirrors lorebook-reads / lorebook-writes
-// and the rest of iter-lib): never capture SillyTavern.getContext() at
+// and the rest of iter-lib): never capture Luker.getContext() at
 // module load — the context may not be ready when the module first
 // evaluates, and resolving lazily lets tests stub the surface per-call.
 // The two helpers below resolve fresh each time; downstream callers
 // invoke them directly (cheap — getContext() returns a stable singleton).
 function getSkillsApi() {
-    return SillyTavern.getContext().skills;
+    return Luker.getContext().skills;
 }
 function getYaml() {
-    return SillyTavern.getContext().lib.yaml;
+    return Luker.getContext().lib.yaml;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
