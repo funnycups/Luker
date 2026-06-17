@@ -30,3 +30,4 @@ export * as tools from './tools/index.js';
 export * as proposalBus from './proposal-bus/index.js';
 
 export { bindIterWorkspaceResizer } from './workspace-resizer.js';
+export { createRenderScheduler } from './render-scheduler.js';

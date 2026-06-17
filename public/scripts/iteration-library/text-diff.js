@@ -25,6 +25,7 @@ const LINE_DIFF_LONG_CHAR_THRESHOLD = 900;
 const LINE_DIFF_LONG_LINE_THRESHOLD = 18;
 const LINE_DIFF_LCS_MAX_CELLS = 240000;
 const NARROW_VIEWPORT_BREAKPOINT = 720;
+const NARROW_VIEWPORT_MEDIA_QUERY = `(max-width: ${NARROW_VIEWPORT_BREAKPOINT - 1}px)`;
 
 /**
  * Below ~720 CSS px the wider iter-popup bubble accumulates several short
@@ -33,9 +34,75 @@ const NARROW_VIEWPORT_BREAKPOINT = 720;
  * narrow viewports — the user can tap any specific diff to expand. The
  * companion narrow-viewport rules in `text-diff.css` keep an expanded
  * card paint-bounded so opening one doesn't fall back into the same bug.
+ *
+ * Cached at module init via `matchMedia` so the renderer hot path never
+ * reads `window.innerWidth`. The legacy per-call read forced a synchronous
+ * layout pass on every diff card; under iter-studio's bus-driven render
+ * loop a single chat send burned ~25s of main thread on
+ * `get innerWidth` alone. A matchMedia change listener updates the cache
+ * when the user resizes across the breakpoint or rotates a device, so
+ * collapse-on-narrow stays correct without polling layout.
  */
+let narrowViewportCached = false;
+let narrowViewportMql = null;
+
+function readNarrowViewportFromMediaQuery() {
+    if (typeof globalThis === 'undefined') return false;
+    const win = globalThis.window;
+    if (!win || typeof win.matchMedia !== 'function') {
+        // No matchMedia (older test stubs, node environments) — fall back
+        // to a single innerWidth read so behaviour is correct, but only
+        // once per cache miss instead of once per renderer call.
+        const width = Number(win?.innerWidth);
+        return Number.isFinite(width) && width < NARROW_VIEWPORT_BREAKPOINT;
+    }
+    try {
+        const mql = win.matchMedia(NARROW_VIEWPORT_MEDIA_QUERY);
+        return Boolean(mql?.matches);
+    } catch {
+        return false;
+    }
+}
+
+function refreshNarrowViewportCache() {
+    narrowViewportCached = readNarrowViewportFromMediaQuery();
+}
+
+function initNarrowViewportCache() {
+    if (typeof globalThis === 'undefined') return;
+    const win = globalThis.window;
+    if (!win || typeof win.matchMedia !== 'function') {
+        refreshNarrowViewportCache();
+        return;
+    }
+    try {
+        narrowViewportMql = win.matchMedia(NARROW_VIEWPORT_MEDIA_QUERY);
+        narrowViewportCached = Boolean(narrowViewportMql?.matches);
+        if (typeof narrowViewportMql.addEventListener === 'function') {
+            narrowViewportMql.addEventListener('change', (event) => {
+                narrowViewportCached = Boolean(event?.matches);
+            });
+        }
+    } catch {
+        refreshNarrowViewportCache();
+    }
+}
+
+initNarrowViewportCache();
+
 function isNarrowViewport() {
-    return typeof window !== 'undefined' && window.innerWidth < NARROW_VIEWPORT_BREAKPOINT;
+    return narrowViewportCached;
+}
+
+/**
+ * Re-read the narrow-viewport state from the underlying matchMedia.
+ * Exported for test wiring only — production callers should never need
+ * this because the matchMedia change listener keeps the cache in sync.
+ * The renderer is the hot path; the helper exists so cache invariants
+ * can be verified without invoking the renderer.
+ */
+export function _testOnly_refreshNarrowViewport() {
+    refreshNarrowViewportCache();
 }
 
 export const STYLESHEET_ID = 'luker_lib_diff_stylesheet';

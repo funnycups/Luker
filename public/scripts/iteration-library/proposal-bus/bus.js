@@ -180,9 +180,14 @@ export function createBus(opts = {}) {
     }
 
     function drainOutcomes() {
-        const out = outcomeQueue.splice(0, outcomeQueue.length);
-        onChange();
-        return out;
+        // No onChange here: a drain is a pure read of the queue, the
+        // visible entry state is unchanged, and the popup's onChange
+        // handler is the iter-studio render pump. Emitting on every drain
+        // produced a hot render loop whenever the auto-continue scheduler
+        // flushed outcomes between LLM rounds. Entries already emit
+        // onChange when they ENTER the queue (approve/reject/rollback);
+        // a separate emit on drain is redundant.
+        return outcomeQueue.splice(0, outcomeQueue.length);
     }
 
     function reject(id) {

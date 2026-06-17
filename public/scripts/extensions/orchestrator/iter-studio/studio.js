@@ -84,6 +84,7 @@ const POPUP_TYPE = __ctx.POPUP_TYPE;
 import {
     applyEdits,
     bindIterWorkspaceResizer,
+    createRenderScheduler,
     inverseEdit,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
@@ -1080,16 +1081,27 @@ export async function openOrchestratorIterationStudio(deps) {
         },
     });
 
-    let busRenderScheduled = false;
-    function scheduleBusRender() {
-        if (busRenderScheduled) return;
-        busRenderScheduled = true;
-        queueMicrotask(async () => {
-            busRenderScheduled = false;
+    // Coalesce a burst of bus mutations into ONE render per animation
+    // frame. Each propose / approve / reject / rollback fires onChange;
+    // without coalescing, a single LLM auto-continue round fans out N
+    // mutations -> N full popup re-renders (see trace
+    // Trace-20260617T154806: 1,079 renders in 106s of one chat send).
+    // The scheduler also defers a mid-render schedule() to the next
+    // frame so mutations that arrive while persistSession/render are
+    // awaiting still surface, instead of being silently dropped.
+    const busRenderScheduler = createRenderScheduler({
+        handler: async () => {
             try { await persistSession(); } catch { /* surface elsewhere */ }
             try { await render(); } catch { /* surface elsewhere */ }
             await drainBusOutcomes();
-        });
+        },
+        onError: (err) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}:${mode}] scheduleBusRender handler error`, err);
+        },
+    });
+    function scheduleBusRender() {
+        busRenderScheduler.schedule();
     }
 
     bus.registerKind('profile-edit', createProfileEditHandler({
@@ -3139,6 +3151,10 @@ export async function openOrchestratorIterationStudio(deps) {
         try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
         try { unsubscribeChatChanged?.(); } catch { /* ignore */ }
         try { state.abortController?.abort(); } catch { /* ignore */ }
+        // Stop accepting new bus-driven renders before final persist —
+        // a propose() that lands during teardown would otherwise request
+        // a frame that fires after popup DOM has detached.
+        try { busRenderScheduler.dispose(); } catch { /* ignore */ }
         state.isBusy = false;
         state.aborting = false;
         state.abortController = null;

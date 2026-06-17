@@ -59,6 +59,7 @@ const POPUP_TYPE = __ctx.POPUP_TYPE;
 import {
     applyEdits,
     bindIterWorkspaceResizer,
+    createRenderScheduler,
     inverseEdit,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
@@ -1640,16 +1641,25 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         },
     });
 
-    let busRenderScheduled = false;
-    function scheduleBusRender() {
-        if (busRenderScheduled) return;
-        busRenderScheduled = true;
-        queueMicrotask(async () => {
-            busRenderScheduled = false;
+    // Coalesce a burst of bus mutations into ONE render per animation
+    // frame. Each propose / approve / reject / rollback fires onChange;
+    // without coalescing, a single LLM auto-continue round produces N
+    // mutations -> N full popup re-renders. The scheduler defers mid-
+    // render schedule() calls to the next frame so mutations arriving
+    // while persistSession/render are awaiting still surface.
+    const busRenderScheduler = createRenderScheduler({
+        handler: async () => {
             try { await persistSession(); } catch { /* surface elsewhere */ }
             try { await render(); } catch { /* surface elsewhere */ }
             await drainBusOutcomes();
-        });
+        },
+        onError: (err) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[${MODULE}] scheduleBusRender handler error`, err);
+        },
+    });
+    function scheduleBusRender() {
+        busRenderScheduler.schedule();
     }
 
     const { sha256OfJson } = ITER_PROPOSAL_BUS;
@@ -2950,6 +2960,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         try { state.abortController?.abort(); } catch { /* ignore */ }
         try { unbindResizer(); } catch { /* ignore */ }
         try { zoomOverlayUnbind(); } catch { /* ignore */ }
+        // Stop accepting new bus-driven renders before final persist —
+        // a propose() that lands during teardown would otherwise queue
+        // a frame that fires after popup DOM has detached.
+        try { busRenderScheduler.dispose(); } catch { /* ignore */ }
         try { await persistSession(); } catch { /* ignore */ }
     }
 }
