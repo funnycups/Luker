@@ -3,21 +3,24 @@ import { buildDirectorDefaultSystemPrompt } from '../../../public/scripts/extens
 
 /**
  * The default director-mode system prompt is STRONGLY COUPLED to the
- * default sub-agent set in `createDefaultDirectorProfile` —
- * voice_critic, continuity_critic, context_scout. It is the operations
- * manual for THAT specific config, not a generic director-mode
- * tutorial. Generic principles live in the Studio iteration prompt
- * (see main.js / buildAiIterationSystemPrompt director branch).
+ * default sub-agent set. The default call (no args) builds the FULL
+ * preset variant: 11 analysts — `chat_scout` is absent because
+ * `memory_scout` now owns the chat-drill role via floorRange in this
+ * variant. (The Minimal preset, exercised by
+ * `director-default-prompt-presets.test.js`, ships a different 9-agent
+ * set.) It is the operations manual for the Full preset specifically,
+ * not a generic director-mode tutorial. Generic principles live in the
+ * Studio iteration prompt (see main.js / buildAiIterationSystemPrompt
+ * director branch).
  *
- * These tests pin the coupling: if you change the default sub-agent
+ * These tests pin the coupling: if you change the Full preset sub-agent
  * set, you must update the default prompt too — and vice versa.
  */
 describe('director default system prompt — concrete for the default profile', () => {
-    test('names the twelve default analysts by id', () => {
+    test('names the eleven Full-preset analysts by id', () => {
         const text = buildDirectorDefaultSystemPrompt();
         // Pre-draft scouts:
         expect(text).toContain('intent_scout');
-        expect(text).toContain('chat_scout');
         expect(text).toContain('memory_scout');
         expect(text).toContain('lorebook_scout');
         // Pre-draft notes scout:
@@ -34,7 +37,9 @@ describe('director default system prompt — concrete for the default profile', 
         // Post-draft housekeepers:
         expect(text).toContain('notes_curator');
         expect(text).toContain('memory_curator');
-        // Old singular context_scout should be gone (now split into three).
+        // chat_scout is folded into memory_scout in this variant (chat drill via floorRange).
+        expect(text).not.toContain('### chat_scout');
+        // Old singular context_scout should be gone (now split into the above).
         expect(text).not.toContain('context_scout');
     });
 

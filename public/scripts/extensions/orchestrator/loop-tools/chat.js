@@ -62,8 +62,8 @@ export async function execChatReadRange(args, context) {
     const chat = Array.isArray(context?.chat) ? context.chat : [];
     if (chat.length === 0) return [];
 
-    const start = resolveIndex(args?.start, chat.length);
-    const end = resolveIndex(args?.end, chat.length);
+    let start = resolveIndex(args?.start, chat.length);
+    let end = resolveIndex(args?.end, chat.length);
     if (start < 0 || end < 0) return [];
     if (end < start) {
         throw new ToolError(
@@ -80,6 +80,37 @@ export async function execChatReadRange(args, context) {
             `Reduce the range so end - start + 1 <= ${MAX_RANGE}. Use chat_search to locate specific floors first.`,
         );
     }
+
+    // Auto-align to whole user→assistant pairs. Walking backward at the
+    // start moves to a user message (or chat head). Walking forward at the
+    // end moves past any user/system messages until an assistant message
+    // (or chat tail). LLM consumers passing chat-floor coords sourced from
+    // memory-graph's `floorRange` translation always get well-formed pairs
+    // — and so do consumers that walk mid-pair manually.
+    let alignedStart = start;
+    while (alignedStart > 0 && !chat[alignedStart]?.is_user) {
+        alignedStart -= 1;
+    }
+    let alignedEnd = end;
+    while (alignedEnd < chat.length - 1) {
+        const m = chat[alignedEnd];
+        if (m?.is_user || m?.is_system) {
+            alignedEnd += 1;
+        } else {
+            break;  // assistant — stop here
+        }
+    }
+
+    const alignedSpan = alignedEnd - alignedStart + 1;
+    if (alignedSpan > MAX_RANGE) {
+        throw new ToolError(
+            `chat_read_range: range expanded to whole user→assistant pairs (${alignedStart}..${alignedEnd}, ${alignedSpan} floors) exceeds max ${MAX_RANGE}.`,
+            'CHAT_RANGE_TOO_LARGE',
+            `Reduce the requested range. The slice is auto-aligned outward to pair boundaries; aim for fewer than ${MAX_RANGE} floors after alignment.`,
+        );
+    }
+    start = alignedStart;
+    end = alignedEnd;
 
     const out = [];
     for (let i = start; i <= end; i += 1) {

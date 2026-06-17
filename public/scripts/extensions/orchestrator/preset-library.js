@@ -63,6 +63,33 @@ export function setMigrationPersistHook(fn) {
     migrationPersistHook = typeof fn === 'function' ? fn : () => {};
 }
 
+/**
+ * Seed a scope container with factory preset entries for a mode.
+ *
+ * `createFactoryPresetForMode(mode)` returns either:
+ * - a single payload object (legacy single-entry modes: loop / agenda / spec)
+ *   — wrapped into a single entry with id=DEFAULT_PRESET_ID.
+ * - an array of `{id, name, ...payload}` entries (director) — each written to
+ *   its own library slot.
+ *
+ * Both shapes route through here. The first entry's id becomes the active
+ * preset id, so factory authors order entries by "what should be active by
+ * default on a fresh install".
+ */
+function seedFactoryEntries(c, mode) {
+    const factory = createFactoryPresetForMode(mode);
+    const rawEntries = Array.isArray(factory)
+        ? factory
+        : [{ id: DEFAULT_PRESET_ID, ...factory }];
+    for (const entry of rawEntries) {
+        const id = entry.id || DEFAULT_PRESET_ID;
+        const payload = { ...entry };
+        delete payload.id;
+        c.libraries[mode][id] = sanitizePresetEntry(mode, payload);
+    }
+    c.activeIds[mode] = rawEntries[0]?.id || DEFAULT_PRESET_ID;
+}
+
 function sanitizePresetEntry(mode, entry) {
     const raw = entry && typeof entry === 'object' ? entry : {};
     const name = String(raw.name || DEFAULT_PRESET_NAME).trim() || DEFAULT_PRESET_NAME;
@@ -285,8 +312,7 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
         if (scope === 'character') {
             return null;
         }
-        c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
-        c.activeIds[mode] = DEFAULT_PRESET_ID;
+        seedFactoryEntries(c, mode);
     }
     if (!c.activeIds[mode] || !c.libraries[mode][c.activeIds[mode]]) {
         c.activeIds[mode] = Object.keys(c.libraries[mode])[0] || '';
@@ -319,8 +345,8 @@ export function deletePreset(settings, mode, scope, presetId, { context, avatar 
         } else {
             // Global scope must always have at least one preset to render
             // an editable workspace → re-seed Default and make it active.
-            c.libraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, createFactoryPresetForMode(mode));
-            c.activeIds[mode] = DEFAULT_PRESET_ID;
+            // For director, this seeds BOTH Full and Minimal (see B4).
+            seedFactoryEntries(c, mode);
         }
     } else if (wasActive) {
         c.activeIds[mode] = Object.keys(c.libraries[mode])[0];
@@ -395,11 +421,26 @@ export function migrateGlobalLegacyToLibraries(settings) {
             continue;
         }
         const seed = readLegacyGlobalForMode(settings, mode);
-        const payload = seed
-            ? { name: DEFAULT_PRESET_NAME, ...seed }
-            : createFactoryPresetForMode(mode);
-        settings.presetLibraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, payload);
-        settings.activePresetIds[mode] = DEFAULT_PRESET_ID;
+        if (seed) {
+            // Legacy data exists → migrate it into the single 'default' slot.
+            // For director mode, do NOT auto-append the second factory entry
+            // (Minimal). Legacy users keep their familiar single-entry view
+            // and can opt into the second factory via Reset Global (B5) or by
+            // manually duplicating.
+            settings.presetLibraries[mode][DEFAULT_PRESET_ID] = sanitizePresetEntry(mode, {
+                name: DEFAULT_PRESET_NAME,
+                ...seed,
+            });
+            settings.activePresetIds[mode] = DEFAULT_PRESET_ID;
+        } else {
+            // No legacy data → seed factory entries. For director this seeds
+            // both Full and Minimal; for other modes a single entry.
+            const tempContainer = {
+                libraries: settings.presetLibraries,
+                activeIds: settings.activePresetIds,
+            };
+            seedFactoryEntries(tempContainer, mode);
+        }
     }
     delete settings.loopProfile;
     delete settings.directorProfile;

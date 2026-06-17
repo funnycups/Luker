@@ -66,6 +66,39 @@ export function getDirectorLimitBounds() {
     return DIRECTOR_LIMIT_BOUNDS;
 }
 
+// Canonical memory verb list passed to the legacy translator in
+// `sanitizeAgentToolFlags`. Spelled out here (rather than imported from
+// `persistence.js`'s private `MEMORY_TOOL_NAMES`) so director-defaults
+// stays self-contained, matching the loose-coupling note on that const.
+// `buildDefaultDirectorTools` and `buildMinimalDirectorTools` both read
+// from this list; flipping a verb on/off across both presets at once is
+// a single-line edit.
+const DIRECTOR_LEGACY_MEMORY_VERBS = Object.freeze([
+    'schema',
+    'list_candidates',
+    'edge_summary',
+    'node_brief',
+    'expand_seeds',
+    'keyword_search',
+    'vector_search',
+    'find_by_name',
+    'compaction_candidates',
+    'node_create',
+    'node_edit',
+    'node_delete',
+    'link_upsert',
+    'link_delete',
+    'compact_nodes',
+]);
+
+const DIRECTOR_LEGACY_SEARCH_VERBS = Object.freeze(['search', 'visit']);
+
+function buildLegacyVerbBag(verbs, value) {
+    const out = {};
+    for (const verb of verbs) out[verb] = value;
+    return out;
+}
+
 function buildDefaultDirectorTools() {
     // defaultAllOn: true → every verb (chat.read_range, chat.search, …)
     // starts enabled. forceFinalize: false → finalize is NOT forced on; we
@@ -80,24 +113,28 @@ function buildDefaultDirectorTools() {
     // default ships with the same enabled tool set users had before
     // the namespace drop.
     const input = {
-        memory: {
-            schema: true,
-            list_candidates: true,
-            edge_summary: true,
-            node_brief: true,
-            expand_seeds: true,
-            keyword_search: true,
-            vector_search: true,
-            find_by_name: true,
-            compaction_candidates: true,
-            node_create: true,
-            node_edit: true,
-            node_delete: true,
-            link_upsert: true,
-            link_delete: true,
-            compact_nodes: true,
-        },
-        search: { search: true, visit: true },
+        memory: buildLegacyVerbBag(DIRECTOR_LEGACY_MEMORY_VERBS, true),
+        search: buildLegacyVerbBag(DIRECTOR_LEGACY_SEARCH_VERBS, true),
+    };
+    const flags = sanitizeAgentToolFlags(input, { defaultAllOn: true, forceFinalize: false });
+    flags.finalize = false;
+    return flags;
+}
+
+function buildMinimalDirectorTools() {
+    // Same default-all-on shape as the Full preset (notes / chat / lorebook /
+    // collab default-on), but every memory_* and search_* Layer-2 verb is
+    // explicitly disabled. Without these explicit `false` entries Layer-2's
+    // default-on policy (`customFlags[name] !== false` in
+    // `getEnabledToolSchemas`) would silently surface every memory / search
+    // tool to the director regardless of preset choice — defeating the whole
+    // point of the Minimal split. The legacy translator in
+    // `sanitizeAgentToolFlags` turns `tools.memory.<verb> = false` into
+    // `tools.custom.memory_<verb> = false`, which IS recognized by the
+    // runtime as "explicitly off".
+    const input = {
+        memory: buildLegacyVerbBag(DIRECTOR_LEGACY_MEMORY_VERBS, false),
+        search: buildLegacyVerbBag(DIRECTOR_LEGACY_SEARCH_VERBS, false),
     };
     const flags = sanitizeAgentToolFlags(input, { defaultAllOn: true, forceFinalize: false });
     flags.finalize = false;
@@ -390,21 +427,114 @@ function buildDefaultDirectorSubAgents() {
     ];
 }
 
-export function createDefaultDirectorProfile() {
-    // Route the hand-written defaults through the sanitizer so the result
-    // is always canonical (e.g. each sub-agent carries the explicit
-    // `maxRounds: null` "inherit default" sentinel rather than `undefined`).
-    //
-    // Skills pre-fill (Plan 1 Unit 7): out-of-the-box director profiles
-    // ship with the curated bundled skill set already enabled. The mode-level
-    // `skills.visible` carries cross-sub-agent baseline rules (anti-cliche,
-    // voice, no-meta, output discipline, zh style); the main agent extends
-    // with `+` to inherit those + its workflow / dispatch skills; each
-    // sub-agent extends with `+` to inherit baseline + its per-role method
-    // skill. The resolver silently filters skill names that don't exist
-    // in the user's data dir (see skill-resolution.js §5.6), so missing
-    // bundled scaffolds degrade gracefully — the profile shape stays valid
-    // even if a scaffold ships without a body yet.
+/**
+ * Per-sub-agent skill wiring. Each sub-agent inherits the mode-level
+ * baseline (`+`) plus a per-role method skill. memory_curator is the only
+ * special case — it carries TWO skills (`event-summary-rules-zh` for the
+ * V10 event.summary writing rules, plus `memory-curator-method-zh` for
+ * the multi-round workflow / dedup roll-call / field rules / tool table).
+ * Other sub-agents follow the canonical `<id-with-dashes>-method-zh`
+ * pattern. Skill names that don't have a scaffold yet are silently
+ * filtered by the resolver (see skill-resolution.js §5.6), so the wiring
+ * stays valid even if the bundle ships without a body yet.
+ */
+function wirePerAgentSkills(agents) {
+    return agents.map(agent => ({
+        ...agent,
+        skills: {
+            visible: agent.id === 'memory_curator'
+                ? ['+', 'event-summary-rules-zh', 'memory-curator-method-zh']
+                : ['+', `${agent.id.replace(/_/g, '-')}-method-zh`],
+        },
+    }));
+}
+
+/**
+ * Full preset sub-agents. Starts from the hand-written default list, then:
+ *   - drops `chat_scout` (no longer needed — `memory_scout` now drills
+ *     from MG floorRange-anchored nodes straight to the originating chat)
+ *   - augments `memory_scout` with `chat.read_range` + `chat.search` per-
+ *     agent tools plus a one-sentence drill-workflow extension to its
+ *     systemPrompt. The description is also rewritten so the "Does NOT
+ *     read chat" lane-scope language no longer leaks — that scope no
+ *     longer applies in this preset.
+ */
+function buildFullDirectorSubAgents() {
+    return buildDefaultDirectorSubAgents()
+        .filter(a => a.id !== 'chat_scout')
+        .map(a => {
+            if (a.id !== 'memory_scout') return a;
+            const augmentedDescription = a.description.replace(
+                /Does NOT read chat or lorebook \(those are other scouts' jobs\)\./,
+                'Can drill from a returned memory node with a `floorRange` to the originating chat slice via `chat_read_range` / `chat_search` (no separate chat-only scout exists in this preset).',
+            );
+            const augmentedPrompt = [
+                a.systemPrompt,
+                '',
+                'When a memory node you return carries a `floorRange`, you may drill further by calling `chat_read_range` on that range (or `chat_search` within it) to inspect the originating dialogue; nodes that only return `seqTo` are legacy and cannot be drilled to chat — use them as a "last touched at" watermark only.',
+            ].join('\n');
+            return {
+                ...a,
+                description: augmentedDescription,
+                systemPrompt: augmentedPrompt,
+                tools: {
+                    ...a.tools,
+                    chat: { read_range: true, search: true },
+                },
+            };
+        });
+}
+
+/**
+ * Minimal preset sub-agents. Starts from the hand-written default list, then:
+ *   - drops the three sub-agents that hard-require the memory-graph or
+ *     search plugins to do their job (`memory_scout`, `memory_curator`,
+ *     `canon_scout`)
+ *   - strips the `memory.*` per-agent tool override from `epistemic_scout`
+ *     and `continuity_critic` so those critics gracefully degrade to
+ *     chat + lorebook only (which is exactly what their method skills'
+ *     "if memory tools are not enabled" graceful-degrade clauses already
+ *     describe).
+ */
+function buildMinimalDirectorSubAgents() {
+    const removedIds = new Set(['memory_scout', 'memory_curator', 'canon_scout']);
+    return buildDefaultDirectorSubAgents()
+        .filter(a => !removedIds.has(a.id))
+        .map(a => {
+            if (a.id !== 'epistemic_scout' && a.id !== 'continuity_critic') return a;
+            // `delete` on a fresh shallow copy — matches the `delete next.x`
+            // idiom used elsewhere in this file (see line ~495,
+            // `delete passthrough.director`).
+            const nextTools = { ...(a.tools || {}) };
+            delete nextTools.memory;
+            return { ...a, tools: nextTools };
+        });
+}
+
+/**
+ * Full preset factory. Identical to the original
+ * `createDefaultDirectorProfile` body, except the sub-agents come from
+ * `buildFullDirectorSubAgents()` (which drops `chat_scout` and augments
+ * `memory_scout` with chat drill tools). The mode-level tools, mainAgent,
+ * limits, and `discardOnAbort` are unchanged from the original default.
+ *
+ * Use this for installs where both the memory-graph and search extensions
+ * are present and enabled (the original default-case assumption).
+ *
+ * Route through the sanitizer so the result is always canonical (e.g.
+ * each sub-agent carries the explicit `maxRounds: null` "inherit default"
+ * sentinel rather than `undefined`).
+ *
+ * Skills pre-fill (Plan 1 Unit 7): out-of-the-box director profiles ship
+ * with the curated bundled skill set already enabled. The mode-level
+ * `skills.visible` carries cross-sub-agent baseline rules (anti-cliche,
+ * voice, no-meta, output discipline, zh style); the main agent extends
+ * with `+` to inherit those + its workflow / dispatch skills; each
+ * sub-agent extends with `+` to inherit baseline + its per-role method
+ * skill. The resolver silently filters skill names that don't exist in
+ * the user's data dir, so missing bundled scaffolds degrade gracefully.
+ */
+export function createFullDirectorProfile() {
     return sanitizeDirectorProfile({
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
         skills: {
@@ -420,34 +550,79 @@ export function createDefaultDirectorProfile() {
         mainAgent: {
             promptPresetName: '',
             apiPresetName: '',
-            systemPrompt: buildDirectorDefaultSystemPrompt(),
+            systemPrompt: buildDirectorDefaultSystemPrompt({ presetVariant: 'full' }),
             // Main agent inherits mode baseline + workflow / dispatch /
             // draft-writing skills. `draft-writer-style-zh` carries the
             // living-being prose + no-meta-narration + three-pass self-check
             // rules; main-agent prompt no longer inlines them.
             skills: { visible: ['+', 'director-turn-workflow-zh', 'director-dispatch-protocol-zh', 'draft-writer-style-zh'] },
         },
-        subAgents: buildDefaultDirectorSubAgents().map(agent => ({
-            ...agent,
-            // Each sub-agent inherits mode baseline + a per-role method skill.
-            // memory_curator is bound to TWO skills: `event-summary-rules-zh`
-            // (the V10 event.summary writing rules) and `memory-curator-method-zh`
-            // (the multi-round workflow / dedup roll-call / field rules / tool
-            // table). The other 11 sub-agents follow the canonical `<id>-method-zh`
-            // pattern. Skill names that don't have a scaffold yet are silently
-            // filtered by the resolver.
-            skills: {
-                visible: agent.id === 'memory_curator'
-                    ? ['+', 'event-summary-rules-zh', 'memory-curator-method-zh']
-                    : ['+', `${agent.id.replace(/_/g, '-')}-method-zh`],
-            },
-        })),
+        subAgents: wirePerAgentSkills(buildFullDirectorSubAgents()),
         maxRounds: DIRECTOR_LIMIT_BOUNDS.maxRounds.default,
         maxConcurrentSubagents: DIRECTOR_LIMIT_BOUNDS.maxConcurrentSubagents.default,
         maxTotalSubagentRuns: DIRECTOR_LIMIT_BOUNDS.maxTotalSubagentRuns.default,
         tools: buildDefaultDirectorTools(),
         discardOnAbort: false,
     });
+}
+
+/**
+ * Minimal preset factory. Same shape as Full, but stripped of every
+ * sub-agent / per-agent tool / mode-level tool that depends on the
+ * memory-graph or search extensions:
+ *   - `memory_scout`, `memory_curator`, `canon_scout` dropped from the
+ *     sub-agent list
+ *   - `epistemic_scout` and `continuity_critic` lose their `memory.*`
+ *     per-agent tool overrides (they degrade gracefully via their
+ *     method skill's "if memory tools are not enabled" clauses)
+ *   - mode-level `tools.custom.memory_*` and `tools.custom.search_*`
+ *     verbs are explicitly disabled so Layer-2's default-on policy
+ *     does not silently re-surface them at runtime
+ *
+ * Mode-level skills, mainAgent config, limits, and `discardOnAbort` are
+ * unchanged from Full — only the memory / search wiring differs.
+ *
+ * Use this for installs where the memory-graph or search extensions
+ * are not present / disabled. Switching to Full later (after enabling
+ * the plugins) materializes the full sub-agent set.
+ */
+export function createMinimalDirectorProfile() {
+    return sanitizeDirectorProfile({
+        mode: ORCH_EXECUTION_MODE_DIRECTOR,
+        skills: {
+            visible: [
+                'director-anti-cliche-zh',
+                'director-character-voice-zh',
+                'director-no-meta-zh',
+                'director-output-discipline-zh',
+                'director-zh-style-baseline',
+            ],
+            deny: [],
+        },
+        mainAgent: {
+            promptPresetName: '',
+            apiPresetName: '',
+            systemPrompt: buildDirectorDefaultSystemPrompt({ presetVariant: 'minimal' }),
+            skills: { visible: ['+', 'director-turn-workflow-zh', 'director-dispatch-protocol-zh', 'draft-writer-style-zh'] },
+        },
+        subAgents: wirePerAgentSkills(buildMinimalDirectorSubAgents()),
+        maxRounds: DIRECTOR_LIMIT_BOUNDS.maxRounds.default,
+        maxConcurrentSubagents: DIRECTOR_LIMIT_BOUNDS.maxConcurrentSubagents.default,
+        maxTotalSubagentRuns: DIRECTOR_LIMIT_BOUNDS.maxTotalSubagentRuns.default,
+        tools: buildMinimalDirectorTools(),
+        discardOnAbort: false,
+    });
+}
+
+/**
+ * Back-compat alias for `createFullDirectorProfile`. Kept exported because
+ * external code (settings migration, legacy tests, other modules that have
+ * not yet been ported to pick a preset explicitly) still call this name.
+ * New code should call `createFullDirectorProfile()` or
+ * `createMinimalDirectorProfile()` directly.
+ */
+export function createDefaultDirectorProfile() {
+    return createFullDirectorProfile();
 }
 
 function clampInt(value, { min, max, default: def }) {

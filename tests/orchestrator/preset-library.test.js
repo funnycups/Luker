@@ -129,7 +129,7 @@ describe('preset-library — active preset resolution', () => {
         expect(p?.name).toBe('A');
     });
 
-    test.each(MODES)('getActivePreset on empty library re-seeds Default and returns it (%s)', (mode) => {
+    test.each(MODES.filter(m => m !== 'director'))('getActivePreset on empty library re-seeds Default and returns it (%s)', (mode) => {
         const settings = freshSettings();
         // library starts empty
         const p = lib.getActivePreset(settings, mode, { scope: 'global' });
@@ -137,6 +137,19 @@ describe('preset-library — active preset resolution', () => {
         // The seeded entry should also be in the library now under id 'default'
         expect(settings.presetLibraries[mode].default).toBeTruthy();
         expect(settings.activePresetIds[mode]).toBe('default');
+    });
+
+    test('getActivePreset on empty director library re-seeds both factory entries (Full + Minimal)', () => {
+        // Director's factory returns an array (B3/B4): Full first, Minimal
+        // second. Seeding writes both into separate slots and activates the
+        // first (Full). The mode-agnostic test above can't handle this
+        // because the name and active id differ from 'Default' / 'default'.
+        const settings = freshSettings();
+        const p = lib.getActivePreset(settings, 'director', { scope: 'global' });
+        expect(p?.name).toBe('Default (记忆图 + 搜索)');
+        expect(settings.presetLibraries.director['default-full']).toBeTruthy();
+        expect(settings.presetLibraries.director['default']).toBeTruthy();
+        expect(settings.activePresetIds.director).toBe('default-full');
     });
 });
 
@@ -155,14 +168,20 @@ describe('preset-library — delete / rename / duplicate', () => {
     });
 
     test('deleting the last preset re-seeds Default and makes it active', () => {
+        // Uses 'loop' mode (a single-entry factory) rather than 'director'.
+        // Director's factory now returns two entries (Full + Minimal) on
+        // re-seed; the "delete both → both come back" case is covered
+        // explicitly in preset-library-seed.test.js. This test guards the
+        // simpler invariant: deleting the only entry of a single-entry mode
+        // re-seeds Default and reactivates it.
         const settings = freshSettings();
-        const id = lib.createPreset(settings, 'director', 'global', { name: 'Only' });
-        lib.setActivePresetId(settings, 'director', 'global', id);
-        lib.deletePreset(settings, 'director', 'global', id);
-        const list = lib.listPresets(settings, 'director', { scope: 'global' });
+        const id = lib.createPreset(settings, 'loop', 'global', { name: 'Only' });
+        lib.setActivePresetId(settings, 'loop', 'global', id);
+        lib.deletePreset(settings, 'loop', 'global', id);
+        const list = lib.listPresets(settings, 'loop', { scope: 'global' });
         expect(list).toHaveLength(1);
         expect(list[0].id).toBe('default');
-        expect(settings.activePresetIds.director).toBe('default');
+        expect(settings.activePresetIds.loop).toBe('default');
     });
 
     test('deleting the last character-scope preset leaves the library empty', () => {

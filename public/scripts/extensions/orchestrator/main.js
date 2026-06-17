@@ -7559,9 +7559,6 @@ function bindUi() {
         }
 
         if (action === 'reset-global') {
-            if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
-                return;
-            }
             // Reset writes the factory payload into the CURRENTLY ACTIVE
             // preset slot via `writeActivePreset`, so the same path the
             // editor reads from (`getActivePreset` → `presetLibraries.<mode>
@@ -7573,8 +7570,61 @@ function bindUi() {
             // showing the pre-reset content until the user reopened the
             // popup (and even then only because of the migration deleting
             // legacy fields).
+            //
+            // Director mode ships TWO factory variants (Full vs Minimal,
+            // see B3 / fa0c5d5db): `createFactoryPresetForMode(director)`
+            // returns an array, not a single object. Ask the user which
+            // variant to restore via a three-button popup. Other modes
+            // keep the existing single-confirm path since their factory
+            // is still a single object.
             const currentMode = getExecutionMode(settings);
-            const factoryPayload = createFactoryPresetForMode(currentMode);
+            let factoryPayload;
+            if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                const FULL_RESULT = context.POPUP_RESULT?.AFFIRMATIVE ?? 1;
+                const MINIMAL_RESULT = context.POPUP_RESULT?.CUSTOM1 ?? 1001;
+                const CANCEL_RESULT = context.POPUP_RESULT?.NEGATIVE ?? 0;
+                const choice = await context.callGenericPopup(
+                    i18n('Reset global director profile to which factory default? This overwrites the currently active director preset.'),
+                    context.POPUP_TYPE.TEXT,
+                    i18n('Reset Director Profile'),
+                    {
+                        okButton: i18n('Default (记忆图 + 搜索)'),
+                        cancelButton: i18n('Cancel'),
+                        customButtons: [
+                            { text: i18n('Default (无记忆图，无搜索)'), result: MINIMAL_RESULT, appendAtEnd: true },
+                        ],
+                    },
+                );
+                if (choice === CANCEL_RESULT || choice === undefined || choice === null) {
+                    return;
+                }
+                let targetId = null;
+                if (choice === FULL_RESULT) targetId = 'default-full';
+                else if (choice === MINIMAL_RESULT) targetId = 'default';
+                else {
+                    // Unexpected popup result value — treat as cancel.
+                    return;
+                }
+                const entries = createFactoryPresetForMode(currentMode);
+                const entry = Array.isArray(entries) ? entries.find(e => e.id === targetId) : null;
+                if (!entry) {
+                    console.warn(`[orchestrator] reset-global director: no factory entry for id=${targetId}`);
+                    return;
+                }
+                // Drop the factory's `id` field; the active slot's id is
+                // already owned by `writeActivePreset` via the preset
+                // library, and `sanitizeDirectorProfile` should not see
+                // a stray top-level `id`. Mirrors the B4 destructure-and-
+                // delete pattern in `seedFactoryEntries`.
+                const payload = { ...entry };
+                delete payload.id;
+                factoryPayload = payload;
+            } else {
+                if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
+                    return;
+                }
+                factoryPayload = createFactoryPresetForMode(currentMode);
+            }
             writeActivePreset(settings, currentMode, 'global', factoryPayload);
             await saveSettings();
             if (currentMode === ORCH_EXECUTION_MODE_LOOP) {

@@ -60,9 +60,11 @@ describe('execChatReadRange (Task 8)', () => {
     });
 
     test('supports mixed positive + negative indices', async () => {
+        // start=1 (assistant) auto-aligns backward to user at 0; end=-1 → 3
+        // (assistant) stays. Pair-boundary expansion is covered in detail
+        // by chat-read-range-pair-expansion.test.js.
         const result = await execChatReadRange({ start: 1, end: -1 }, ctx);
-        expect(result).toHaveLength(3);
-        expect(result.map(r => r.floor)).toEqual([1, 2, 3]);
+        expect(result.map(r => r.floor)).toEqual([0, 1, 2, 3]);
     });
 
     test('throws ToolError when end < start', async () => {

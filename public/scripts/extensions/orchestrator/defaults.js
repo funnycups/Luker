@@ -59,7 +59,8 @@ export {
 } from './director-defaults.js';
 import {
     ORCH_EXECUTION_MODE_DIRECTOR as _ORCH_EXECUTION_MODE_DIRECTOR,
-    createDefaultDirectorProfile as _createDefaultDirectorProfile,
+    createFullDirectorProfile as _createFullDirectorProfile,
+    createMinimalDirectorProfile as _createMinimalDirectorProfile,
 } from './director-defaults.js';
 export const ORCH_EXECUTION_MODES = Object.freeze([
     ORCH_EXECUTION_MODE_SPEC,
@@ -548,13 +549,19 @@ export const defaultSettings = {
  * Build a factory "Default" preset entry for the given mode. Used by
  * preset-library.js when seeding the first entry of an empty library and
  * by the global one-shot migration when no legacy data exists.
+ *
+ * Director mode returns an array of entries (Full + Minimal); all other
+ * modes return a single object. Callers must branch on `Array.isArray`.
  */
 export function createFactoryPresetForMode(mode) {
     if (mode === ORCH_EXECUTION_MODE_LOOP) {
         return { name: 'Default', ...defaultLoopProfile };
     }
     if (mode === _ORCH_EXECUTION_MODE_DIRECTOR) {
-        return { name: 'Default', ..._createDefaultDirectorProfile() };
+        return [
+            { id: 'default-full', name: 'Default (记忆图 + 搜索)',    ..._createFullDirectorProfile() },
+            { id: 'default',      name: 'Default (无记忆图，无搜索)', ..._createMinimalDirectorProfile() },
+        ];
     }
     if (mode === ORCH_EXECUTION_MODE_AGENDA) {
         return {

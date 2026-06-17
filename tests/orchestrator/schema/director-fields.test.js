@@ -7,6 +7,7 @@ import { describe, expect, test } from '@jest/globals';
 import {
     ORCH_EXECUTION_MODE_DIRECTOR,
     createDefaultDirectorProfile,
+    createMinimalDirectorProfile,
     sanitizeDirectorProfile,
 } from '../../../public/scripts/extensions/orchestrator/director-defaults.js';
 import { sanitizeAgentToolFlags } from '../../../public/scripts/extensions/orchestrator/persistence.js';
@@ -228,16 +229,23 @@ describe('director schema fields', () => {
         expect(p.discardOnAbort).toBe(false);
     });
 
-    test('createDefaultDirectorProfile ships with the twelve default RP analyst sub-agents (1 cross-source intent scout + 3 single-source scouts + 1 external scout + 1 epistemic scout + 1 notes pickup scout + 1 brainstormer + 2 critics + 1 notes curator + 1 memory curator)', () => {
+    test('createDefaultDirectorProfile ships with the eleven default RP analyst sub-agents (the Full preset, alias of createFullDirectorProfile)', () => {
         const p = createDefaultDirectorProfile();
         const ids = p.subAgents.map(a => a.id).sort();
         // The default main-agent prompt (director-default-prompt.js) is
         // strongly coupled to this exact set — it names them by id and
         // gives task-brief shapes for each. Adding / removing / renaming
         // here requires updating that prompt to match.
+        //
+        // Post-B2: `chat_scout` was retired from the Full preset because
+        // `memory_scout` now drills from MG floorRange-anchored nodes
+        // straight to the originating chat slice, making a separate
+        // chat-only scout redundant. The Minimal preset still ships
+        // `chat_scout` (no memory_scout to do the drill there). See
+        // tests/orchestrator/director-factory-presets.test.js for the
+        // preset split coverage.
         expect(ids).toEqual([
             'canon_scout',
-            'chat_scout',
             'continuity_critic',
             'epistemic_scout',
             'intent_scout',
@@ -277,11 +285,11 @@ describe('director schema fields', () => {
     test('default sub-agents survive sanitize round-trip (no field gets dropped)', () => {
         const p = createDefaultDirectorProfile();
         const sanitized = sanitizeDirectorProfile(p);
-        expect(sanitized.subAgents).toHaveLength(12);
+        // Post-B2: Full preset ships 11 sub-agents (chat_scout retired).
+        expect(sanitized.subAgents).toHaveLength(11);
         const ids = sanitized.subAgents.map(a => a.id).sort();
         expect(ids).toEqual([
             'canon_scout',
-            'chat_scout',
             'continuity_critic',
             'epistemic_scout',
             'intent_scout',
@@ -304,25 +312,32 @@ describe('director schema fields', () => {
         // in the per-sub-agent method skill body, not in the inline systemPrompt.
         // Verify each single-source scout is bound to its method skill, which is
         // where the "stay in your lane" rule is enforced.
+        //
+        // Post-B2: `chat_scout` retired from the Full preset; its method-skill
+        // binding is covered by the Minimal preset suite in
+        // tests/orchestrator/director-factory-presets.test.js.
         const p = createDefaultDirectorProfile();
         const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
         const expectBound = (id, skill) => {
             const visible = byId[id]?.skills?.visible || [];
             expect(visible).toContain(skill);
         };
-        expectBound('chat_scout', 'chat-scout-method-zh');
         expectBound('memory_scout', 'memory-scout-method-zh');
         expectBound('lorebook_scout', 'lorebook-scout-method-zh');
         expectBound('canon_scout', 'canon-scout-method-zh');
     });
 
-    test('chat_scout description signals the signal-vs-noise filter', () => {
+    test('Minimal preset chat_scout description signals the signal-vs-noise filter', () => {
         // Per-feedback (no-prompt-regex-tests): inline systemPrompt body no
         // longer enumerates de-weight rules — they live in chat-scout-method-zh.
         // Description is the dispatcher-facing one-liner; pin it here so the
         // main agent can still discover this scout's purpose without skill_read.
-        const p = createDefaultDirectorProfile();
+        //
+        // Post-B2: chat_scout lives only in the Minimal preset (the Full
+        // preset's memory_scout handles chat drilling via floorRange).
+        const p = createMinimalDirectorProfile();
         const byId = Object.fromEntries(p.subAgents.map(a => [a.id, a]));
+        expect(byId.chat_scout).toBeDefined();
         expect(byId.chat_scout.description).toMatch(/signal[- ]vs[- ]noise|de-?weight|low.signal/i);
     });
 
