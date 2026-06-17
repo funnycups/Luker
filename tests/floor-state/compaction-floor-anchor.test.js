@@ -1,23 +1,32 @@
 /**
- * Regression for "compression commit anchored at historical floor breaks
- * truncate-by-floor recovery" (memory-graph crash on delete-after-compression).
+ * Regression for "compression commit anchored at a historical floor breaks
+ * truncate-by-floor recovery" (memory-graph crash on delete-after-compression),
+ * and pins the post-fix invariant that lets the user's swipe / delete on the
+ * chat tail leave the historical graph intact.
  *
  * Contract under test:
  *   Floor-state's truncate-by-floor handler (MESSAGE_DELETED) is sound ONLY
- *   when commit.floor is monotonically non-decreasing in append order. Once
- *   any commit lands at a floor lower than an earlier commit on the same log,
- *   "truncate at floor >= N" stops being equivalent to "drop a log suffix" —
- *   it leaves earlier-in-log commits whose `prev` state depends on commits
- *   that were just dropped, and replay then crashes inside fast-json-patch
- *   with "Array index out of bounds" or similar.
+ *   when commit.floor is monotonically non-decreasing in log-append order.
+ *   Once any commit lands at a floor lower than an earlier commit on the
+ *   same log, "truncate at floor >= N" stops being equivalent to "drop a
+ *   log suffix" — it leaves earlier-in-log commits whose `prev` state
+ *   depends on commits that were just dropped, and replay crashes inside
+ *   fast-json-patch with "Array index out of bounds" or similar.
  *
- *   memory-graph's event compression used to anchor compression commits to
- *   `seqToFloor(parent.seqTo)`, which resolves to the (historical) floor of
- *   the most-recent compressed child — strictly less than the trigger floor.
- *   That violated the invariant above and produced the live crash.
+ *   memory-graph satisfies that invariant by:
+ *     (a) anchoring each extraction-batch commit at `seqToFloor(batch.endSeq)`,
+ *         which is monotonic because endSeq is monotonic; and
+ *     (b) running compression inline after each batch, so every rollup commit
+ *         is appended right after the batch that produced its candidate
+ *         events. The rollup's `parent.seqTo` is bounded above by that
+ *         batch's endSeq → `seqToFloor(parent.seqTo)` is bounded above by
+ *         the batch's anchor floor → log-append-order monotonicity holds.
  *
- * Both tests below operate directly on FloorState (no memory-graph adapter)
- * so the contract is documented at the layer that enforces it.
+ *   The bug demo below pins what goes wrong when compression instead defers
+ *   to the end of all batches (the historical shape that f5778aa4 papered
+ *   over by pinning everything to the trigger floor): the deferred rollup
+ *   commit lands in the log AFTER later batches but anchors at the historical
+ *   floor of its parent.seqTo, breaking the chain.
  */
 
 import { describe, test, expect } from '@jest/globals';
@@ -99,121 +108,134 @@ async function updateToPayload(fs, nextPayloadProducer, options) {
     }, options);
 }
 
-describe('compaction commit floor anchor — root-cause regression', () => {
+describe('compaction commit floor anchor — invariants', () => {
     /**
-     * Repro of the production crash:
-     *   - chat has 5 messages (floors 0..4)
-     *   - extraction adds an edge at floors 0, 2, 4 (3 commits, edges.length grows 0→1→2→3)
-     *   - compression triggered AT floor 4 produces a rollup whose
-     *     parent.seqTo maps back to the OLD floor 2 (the most recent
-     *     compressed child)
-     *   - production currently anchors that compression commit at floor 2,
-     *     not at floor 4
-     *   - user then deletes the chat back to length=3 (i.e. floors 0..2),
-     *     which truncates commits whose floor >= 3
+     * Post-fix shape: extraction batches at floors 0/2/4, with a compression
+     * round appended INLINE after the batch at floor 2 (anchored at floor 2,
+     * matching seqToFloor of the rollup's parent.seqTo which equals the
+     * batch's own endSeq at that point). One more batch follows at floor 4.
      *
-     * Outcome under the bug: floor-2 compression commit survives, but the
-     * floor-4 extraction commit it implicitly depended on (edges[2] add)
-     * was just truncated → its `add /edges/3` patch throws
-     * "Array index out of bounds: 3" inside fast-json-patch.
-     *
-     * Outcome with the fix: compression commit is anchored at floor 4 (the
-     * trigger floor), so truncating chat to length=3 drops the compression
-     * commit alongside the floor-4 extraction commit. The remaining log
-     * (floor-0 + floor-2 extraction) replays cleanly.
+     * Log-append-order floors: [0, 2, 2, 4] — monotonic. Truncating to chat
+     * length=3 drops floors >= 3 → keeps [0, 2, 2], log suffix removed,
+     * patch chain self-consistent, rollup preserved.
      */
-    test('compression commit anchored at trigger floor survives delete-after-compression', async () => {
+    test('inline per-batch compression keeps anchors monotonic and survives delete past the tail', async () => {
         const chatRef = { value: [msg(), msg(), msg(), msg(), msg()] }; // floors 0..4
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'mg' }, deps);
 
-        // Three extraction commits at floors 0, 2, 4 — each appends one edge.
+        // Batch 1 at floor 0.
         await updateToPayload(fs, (cur) => ({
             edges: [...(cur.edges || []), { from: 'a', to: 'b' }],
         }), { floor: 0 });
 
+        // Batch 2 at floor 2.
         await updateToPayload(fs, (cur) => ({
             edges: [...(cur.edges || []), { from: 'b', to: 'c' }],
         }), { floor: 2 });
 
+        // Compression triggered inline after batch 2 — anchored at floor 2,
+        // matching seqToFloor of the rollup parent.seqTo (bounded above by
+        // batch-2's endSeq).
+        await updateToPayload(fs, (cur) => ({
+            edges: [...(cur.edges || []), { from: 'rollup-1', to: 'a-b' }],
+        }), { floor: 2 });
+
+        // Batch 3 at floor 4.
         await updateToPayload(fs, (cur) => ({
             edges: [...(cur.edges || []), { from: 'c', to: 'd' }],
         }), { floor: 4 });
 
-        // Sanity: state has all three edges, log has 3 commits at 0/2/4.
-        const beforeCompress = await fs.get();
-        expect(beforeCompress.edges).toHaveLength(3);
-        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 4]);
+        // Log-append-order anchor sequence: [0, 2, 2, 4] — strictly non-decreasing.
+        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 2, 4]);
+        const beforeDelete = await fs.get();
+        expect(beforeDelete.edges).toHaveLength(4);
 
-        // Compression triggered AT floor 4. Adds rollup edge → edges grows to 4.
-        // CONTRACT: this commit MUST be anchored at the trigger floor (4),
-        // NOT at the rollup parent's historical seqTo (which would map to
-        // floor 2 via seqToFloor). Anchoring at the historical floor is what
-        // breaks the chain on subsequent truncation.
-        const TRIGGER_FLOOR = 4;
-        await updateToPayload(fs, (cur) => ({
-            edges: [...(cur.edges || []), { from: 'rollup', to: 'parent' }],
-        }), { floor: TRIGGER_FLOOR });
-
-        const afterCompress = await fs.get();
-        expect(afterCompress.edges).toHaveLength(4);
-
-        // Now the user deletes back to chat length 3 (keeping floors 0..2).
+        // User deletes back to length=3 → truncate floor >= 3.
         chatRef.value = chatRef.value.slice(0, 3);
         await fs.__handleMessageDeleted(3);
         await fs.ready();
 
-        // Survivors must replay cleanly. Bug manifests here as
-        // "Array index out of bounds" thrown out of fs.get().
         const recovered = await fs.get();
-
-        // The two surviving extraction commits each added one edge.
-        // Compression commit was at floor 4 (≥3) so it was dropped with the
-        // floor-4 extraction commit — atomicity preserved.
         expect(recovered).not.toBeNull();
-        expect(recovered.edges).toHaveLength(2);
+        // Surviving commits: batch-0 + batch-2 + rollup-after-batch-2.
+        expect(recovered.edges).toEqual([
+            { from: 'a', to: 'b' },
+            { from: 'b', to: 'c' },
+            { from: 'rollup-1', to: 'a-b' },
+        ]);
+        // Survivors keep their original anchors.
+        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 2]);
+    });
+
+    /**
+     * Tail-swipe shape: user swipes the tail message after a fresh rebuild
+     * (or normal incremental extraction). The tail's only commits are the
+     * last batch + any compression rounds that ran inline after it — all
+     * anchored at the tail floor. Swipe shifts that floor's active swipeId
+     * so those commits get filtered out of replay; earlier batches stay.
+     *
+     * Critical: the user's original complaint was that swipe wiped the
+     * entire graph because every rebuild commit was pinned to the tail
+     * trigger floor. With per-seq anchoring, swipe of floor=4 only drops
+     * floor-4 commits, leaving the floor-0/2 batches intact.
+     */
+    test('tail swipe drops only tail-anchored commits, leaves historical batches', async () => {
+        const chatRef = { value: [msg(), msg(), msg(), msg(), msg()] }; // floors 0..4
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'mg' }, deps);
+
+        await updateToPayload(fs, (cur) => ({
+            edges: [...(cur.edges || []), { from: 'a', to: 'b' }],
+        }), { floor: 0 });
+        await updateToPayload(fs, (cur) => ({
+            edges: [...(cur.edges || []), { from: 'b', to: 'c' }],
+        }), { floor: 2 });
+        await updateToPayload(fs, (cur) => ({
+            edges: [...(cur.edges || []), { from: 'c', to: 'd' }],
+        }), { floor: 4 });
+        // Inline compression after batch-3, also at floor 4.
+        await updateToPayload(fs, (cur) => ({
+            edges: [...(cur.edges || []), { from: 'rollup-tail', to: 'c-d' }],
+        }), { floor: 4 });
+
+        const beforeSwipe = await fs.get();
+        expect(beforeSwipe.edges).toHaveLength(4);
+
+        // User swipes floor 4 — chat[4].swipe_id flips from 0 to 1, so
+        // shouldKeepCommit filters out both floor-4 commits on the next get().
+        chatRef.value[4] = { swipe_id: 1, mes: 'x-swipe-1' };
+        await fs.__handleMessageSwiped();
+        await fs.ready();
+
+        const recovered = await fs.get();
+        expect(recovered).not.toBeNull();
+        // Floor-0 and floor-2 commits survive untouched.
         expect(recovered.edges).toEqual([
             { from: 'a', to: 'b' },
             { from: 'b', to: 'c' },
         ]);
-
-        // Defensive: log must have exactly the two extraction commits left.
-        const survivingFloors = store._raw.get('mg__floor_log').commits.map((c) => c.floor);
-        expect(survivingFloors).toEqual([0, 2]);
+        // Floor-4 log entries remain on disk (they would replay again if the
+        // user swipes back to swipe_id=0), but they're filtered out of the
+        // current replay.
+        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 4, 4]);
     });
 
     /**
-     * The complementary case: user deletes back to a point AFTER the
-     * compression trigger floor. The compression commit must still be in
-     * place and the materialized state must still reflect the rollup.
+     * Bug demo: this is what happens when compression is deferred to the END
+     * of all batches but anchored at seqToFloor(parent.seqTo) — the rollup
+     * commit lands in the log AFTER batches at later floors, but anchors
+     * back at an earlier floor. Log-append-order anchors become [0, 2, 4, 2]
+     * — non-monotonic. Truncate to length=3 (floor >= 3) keeps [0, 2, 2],
+     * but the surviving floor-2 compression commit's `add /edges/3` assumes
+     * edges.length === 3 (the post-batch-3 state), while the surviving
+     * prefix only built edges to length 2 → patch out of bounds → recovery
+     * truncates floor >= 2 → user loses half the graph.
      *
-     * This guards against an over-zealous fix that drops compression
-     * commits unconditionally on truncate.
+     * Pins the failure mode the production fix avoids by running compression
+     * INLINE (test above) rather than deferring it to the pass tail.
      */
-    /**
-     * Demonstrates the BUG STATE that motivated the contract: when a
-     * compression commit is anchored at a historical floor (the rollup
-     * parent's seqTo, as production used to compute it via
-     * `seqToFloor(parent.seqTo)`) instead of the trigger floor, then any
-     * subsequent truncation that lands between the historical floor and the
-     * trigger floor leaves the compression commit orphaned — its `prev`
-     * state assumes log entries that were just dropped, and replay throws
-     * out of fast-json-patch.
-     *
-     * This is the floor-state-level proof of why memory-graph's compaction
-     * commit anchoring had to change. It's an existence test, not a
-     * regression — the system contract is "callers must anchor at trigger
-     * floor"; this test shows what happens when a caller violates that.
-     *
-     * Note on observed behavior: floor-state's broken-log recovery (added
-     * in dede4cb39) catches the replay throw, identifies the broken floor
-     * (here: floor 2), and TRUNCATES EVERYTHING at floor >= 2 — i.e. it
-     * drops the perfectly-good floor-2 extraction commit too, taking half
-     * the graph with it. That's the "整个图废掉" the user reported. The
-     * test below pins that data-loss outcome so a future change to
-     * recovery semantics is forced to consciously re-evaluate it.
-     */
-    test('compression commit anchored at HISTORICAL floor causes catastrophic data loss after truncation (bug demo)', async () => {
+    test('deferred compression at historical anchor causes catastrophic data loss', async () => {
         const chatRef = { value: [msg(), msg(), msg(), msg(), msg()] };
         const { deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'mg' }, deps);
@@ -228,16 +250,14 @@ describe('compaction commit floor anchor — root-cause regression', () => {
             edges: [...(cur.edges || []), { from: 'c', to: 'd' }],
         }), { floor: 4 });
 
-        // BUG: compression triggered at floor 4 but anchored back at
-        // floor 2 — the historical floor of the rollup parent's seqTo.
+        // BUG: compression deferred to pass tail, anchored at the historical
+        // floor of rollup.parent.seqTo (which compresses batches 1+2, so
+        // parent.seqTo maps back to floor 2).
         const HISTORICAL_FLOOR = 2;
         await updateToPayload(fs, (cur) => ({
             edges: [...(cur.edges || []), { from: 'rollup', to: 'parent' }],
         }), { floor: HISTORICAL_FLOOR });
 
-        // User deletes back to length=3 → floor >= 3 truncated.
-        // floor-2 compression commit survives; floor-4 extraction commit
-        // (which the compression commit's prev state assumed) does not.
         chatRef.value = chatRef.value.slice(0, 3);
         await fs.__handleMessageDeleted(3);
         await fs.ready();
@@ -245,50 +265,10 @@ describe('compaction commit floor anchor — root-cause regression', () => {
         // Replay: floor-0 ext → floor-2 ext → floor-2 compression.
         // Compression's `add /edges/3` assumes edges.length === 3, but the
         // surviving prefix only built edges up to length 2 → out of bounds.
-        // Recovery (recoverByTruncatingBrokenFloor) catches the throw,
-        // identifies brokenFloor=2, truncates floor >= 2 → drops the
-        // floor-2 extraction commit too. Result: only the floor-0 edge
-        // survives. This is "整个图被废掉".
+        // Recovery catches the throw, identifies brokenFloor=2, truncates
+        // floor >= 2 → drops the floor-2 extraction commit too. Result:
+        // only the floor-0 edge survives. This is the "整个图被废掉" outcome.
         const recovered = await fs.get();
         expect(recovered.edges).toEqual([{ from: 'a', to: 'b' }]);
-        // floor-2 extraction was collateral damage — both b→c (extraction)
-        // and the rollup edge are gone.
-    });
-
-    test('compression commit at trigger floor is preserved when delete stops short of it', async () => {
-        const chatRef = { value: [msg(), msg(), msg(), msg(), msg(), msg()] }; // floors 0..5
-        const { deps } = makeDeps(chatRef);
-        const fs = createFloorStateWithDeps({ namespace: 'mg', }, deps);
-
-        await updateToPayload(fs, (cur) => ({
-            edges: [...(cur.edges || []), { from: 'a', to: 'b' }],
-        }), { floor: 0 });
-
-        await updateToPayload(fs, (cur) => ({
-            edges: [...(cur.edges || []), { from: 'b', to: 'c' }],
-        }), { floor: 2 });
-
-        // Compression triggered at floor 4 — anchored AT floor 4.
-        await updateToPayload(fs, (cur) => ({
-            edges: [...(cur.edges || []), { from: 'rollup', to: 'parent' }],
-        }), { floor: 4 });
-
-        // Then one more extraction at floor 5 (next turn).
-        await updateToPayload(fs, (cur) => ({
-            edges: [...(cur.edges || []), { from: 'd', to: 'e' }],
-        }), { floor: 5 });
-
-        // Delete back to length=5 — keeps floors 0..4 (including compression).
-        chatRef.value = chatRef.value.slice(0, 5);
-        await fs.__handleMessageDeleted(5);
-        await fs.ready();
-
-        const recovered = await fs.get();
-        expect(recovered).not.toBeNull();
-        expect(recovered.edges).toEqual([
-            { from: 'a', to: 'b' },
-            { from: 'b', to: 'c' },
-            { from: 'rollup', to: 'parent' },
-        ]);
     });
 });

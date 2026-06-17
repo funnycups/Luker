@@ -114,6 +114,7 @@ import {
     clearCachedMeta,
     activeSwipeIdAtFloor,
     resolveInFlightAnchor,
+    seqToFloor,
 } from './persistence.js';
 import {
     LEVEL,
@@ -1844,7 +1845,7 @@ async function importMemoryGraphStore(context, parsed) {
         chatKey,
         nextStore,
         persistSeq,
-        { syncPersistentProjection: true, floor: resolveCommitTriggerFloor(context) },
+        { syncPersistentProjection: true, floor: seqToFloor(context, persistSeq) },
     );
     clearRollbackHistory(chatKey);
     latestRecallSnapshot = null;
@@ -1898,38 +1899,8 @@ function formatPersistFailureWithSeq({ op, stage, seq, floor, chatLen, reason })
 }
 
 /**
- * Resolve the chat floor at which a memory-graph commit was *triggered*.
- *
- * Every floor-state commit MUST be anchored at this floor — the chat tail
- * at the moment the long-running operation (extraction pass, compression
- * loop, manual rebuild, etc.) was launched. NOT at any floor a historical
- * seq it covers happens to map back to, AND NOT at `chat.length - 1`
- * sampled when the commit lands on disk (which drifts if the user posts
- * new messages while the operation is still running and would mis-attribute
- * the commit to a floor that didn't cause it).
- *
- * The contract this enforces is "causal anchoring": a commit's floor is
- * the floor the user's action that produced it lived on. When the user
- * deletes that floor, the commit should disappear; when they don't, it
- * should remain. Floor-state's truncate-by-floor handler then does the
- * right thing on its own.
- *
- * Returns null when there is no chat. Callers that get null must either
- * skip the operation or surface an error — there is no safe fallback.
- *
- * Why this is a helper not inlined: trigger-floor resolution is dead-
- * simple today, but every caller that anchors a commit needs to remember
- * to use it. Centralizing the read makes the convention auditable.
- */
-function resolveCommitTriggerFloor(context) {
-    const chat = Array.isArray(context?.chat) ? context.chat : null;
-    if (!chat || chat.length === 0) return null;
-    return chat.length - 1;
-}
-
-/**
  * Replace the floor-state log for the current chat with a single commit that
- * encodes `store` as a fresh baseline at the supplied trigger floor. Used by
+ * encodes `store` as a fresh baseline at the supplied floor. Used by
  * Reset / Rebuild / Import paths that need to install a new history rather
  * than append to it.
  *
@@ -1938,13 +1909,14 @@ function resolveCommitTriggerFloor(context) {
  * not touched: it's no longer a persisted source of truth — `fs.get()`
  * replays the log on demand.
  *
- * `floor` is required: it pins the baseline commit at the chat tail the
- * caller's long-running operation was launched against (see
- * `resolveCommitTriggerFloor`). Passing an invalid floor returns
- * `{ skipped: true }` so the caller can decide whether to retry or surface.
+ * `floor` is required: callers compute it via `seqToFloor(context, seq)` so
+ * the commit anchors at the chat slot the covered seq actually maps to.
+ * Passing an invalid floor (null / out of range) returns `{ skipped: true }`
+ * so the caller can decide whether to retry or surface.
  *
- * `seq` is purely a watermark stamp (coveredAssistantSeq / appliedSeqTo /
- * loggedSeqTo) — it no longer participates in floor resolution.
+ * `seq` is the watermark stamp (coveredAssistantSeq / appliedSeqTo /
+ * loggedSeqTo). It doubles as the seq that derived the floor, but the floor
+ * is supplied explicitly so callers don't all re-derive it.
  */
 async function replaceGraphLogForTarget(context, store, seq, floor) {
     const fs = await getFloorStateInstance(context);
@@ -2029,12 +2001,12 @@ async function persistMetaForChatKey(context, chatKey, store, target = undefined
 
 /**
  * Replace-style persist: wipes the log and writes one commit covering the
- * given store at the supplied trigger floor. Updates __meta and the runtime
- * caches.
+ * given store at the supplied floor. Updates __meta and the runtime caches.
  *
  * Used by import, raw-graph editor apply, and the rebuild flow's
- * onBatchApplied/onCompressionApplied checkpoints. `floor` MUST be the
- * trigger floor of the caller's operation (see `resolveCommitTriggerFloor`).
+ * onBatchApplied/onCompressionApplied checkpoints. `floor` MUST be derived
+ * from `seqToFloor(context, seq)` (or the equivalent for the covered watermark)
+ * so the commit anchors at the chat slot the covered seq actually maps to.
  */
 async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, { syncPersistentProjection = false, floor = null } = {}) {
     const target = memoryStoreTargets.get(chatKey);
@@ -2120,13 +2092,13 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
 
     if (hasGraphChange) {
         const chatLen = Array.isArray(context?.chat) ? context.chat.length : 0;
-        // `floor` is the trigger floor of the long-running operation that
-        // produced this commit (extraction pass, compression loop, session
-        // mutation). It MUST be supplied by the caller — see
-        // `resolveCommitTriggerFloor` for the contract. There is no
-        // fallback: anchoring elsewhere (historical seq → floor, or "chat
-        // tail at write time" sampled here) silently mis-attributes the
-        // commit and breaks subsequent truncation.
+        // `floor` is the chat slot the seq this commit covers maps to —
+        // computed by callers via `seqToFloor(context, seq)` (or
+        // resolveInFlightAnchor for in-flight director writes that may land
+        // on an empty placeholder seqToFloor can't see). It MUST be supplied
+        // by the caller: anchoring at "chat tail at write time" sampled here
+        // would mis-attribute commits when the user posts new messages
+        // mid-extraction.
         if (!Number.isInteger(floor) || floor < 0) {
             throw new Error(formatPersistFailureWithSeq({
                 op: 'commit-diff',
@@ -2134,7 +2106,7 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
                 seq: normalizedSeq,
                 floor: floor === null ? 'missing' : String(floor),
                 chatLen,
-                reason: 'caller did not supply a valid trigger floor; commits must be anchored at the chat tail the operation was launched against',
+                reason: 'caller did not supply a valid floor; commits must be anchored at the chat slot the covered seq maps to',
             }));
         }
         let committed;
@@ -2235,12 +2207,13 @@ export async function ensureMemoryStoreLoaded(context, { force = false } = {}) {
         setCachedMeta(chatKey, loaded.meta || metaFieldsFromStore(loaded.store));
         memoryStoreCache.set(chatKey, loaded.store);
         if (loaded.migrated) {
+            const migrationSeq = getStoreCoveredSeqTo(loaded.store);
             await commitMemoryStoreReplaceByChatKey(
                 context,
                 chatKey,
                 loaded.store,
-                getStoreCoveredSeqTo(loaded.store),
-                { floor: resolveCommitTriggerFloor(context) },
+                migrationSeq,
+                { floor: seqToFloor(context, migrationSeq) },
             );
         }
         return memoryStoreCache.get(chatKey) || loaded.store;
@@ -2314,7 +2287,7 @@ export async function commitSessionMutation(context, chatKey, beforeStore, after
         // Legacy replace-flush for callers without an in-flight chat tail
         // (e.g. test fixtures, future non-orchestrator session consumers).
         const seq = getStoreCoveredSeqTo(store);
-        await replacePersistedGraphWithStore(context, key, store, seq, { floor: resolveCommitTriggerFloor(context) });
+        await replacePersistedGraphWithStore(context, key, store, seq, { floor: seqToFloor(context, seq) });
     }
 
     try {
@@ -6083,14 +6056,6 @@ async function runExtractionForStore(context, store, {
     const frames = window.frames;
     const latestSeq = window.latestSeq;
     const coveredSeqTo = window.coveredSeqTo;
-    // Trigger floor: the chat tail at the moment this pass was launched.
-    // Every commit produced by this pass (extraction batches AND compression
-    // rounds that run as part of it) MUST anchor here, so that user deletion
-    // of this floor removes ALL of those commits atomically — they were all
-    // caused by the AI reply that lives at this floor. Sampled ONCE here at
-    // pass entry; not re-sampled inside the loop where it would drift if the
-    // user posts new messages while extraction is mid-pass.
-    const triggerFloor = resolveCommitTriggerFloor(context);
     if (coveredSeqTo !== Math.max(0, Math.floor(Number(store.appliedSeqTo || 0)))) {
         store.appliedSeqTo = coveredSeqTo;
     }
@@ -6216,14 +6181,25 @@ async function runExtractionForStore(context, store, {
                 beginSeq: Number(startFrame?.seq || 0),
                 endSeq: Number(endFrame?.seq || 0),
                 latestSeq,
-                triggerFloor,
             });
         }
-    }
-    if (extractedAny) {
+        // Per-batch compression: run the compression loop immediately after
+        // each successful extraction batch, mirroring how live incremental
+        // play paces extract→compress turn by turn. Keeps every commit's
+        // anchor floor monotonic in log-append order — each compression
+        // round's commit lands right after the batch that produced its
+        // candidate events, so its anchor (seqToFloor of the rollup's
+        // covered range) is naturally bounded above by the batch's anchor.
+        // Postponing compression to the tail (the old shape) made the
+        // rollup commit land in the log AFTER batches that wrote later
+        // floors, while its anchor pointed back to a historical floor —
+        // a non-monotone anchor sequence that broke floor-state's
+        // truncate-by-floor invariant and could nuke the whole graph on
+        // delete (see tests/floor-state/compaction-floor-anchor.test.js).
+        const batchEndSeq = Number(endFrame?.seq || 0);
         await runCompressionLoop(context, store, settings, {
             compressionStats,
-            maxSeq: latestSeq,
+            maxSeq: batchEndSeq,
             abortSignal: abortSignal || null,
             onRoundApplied: typeof onCompressionApplied === 'function'
                 ? async ({ type, depth, roundSeqTo, beforeStore }) => {
@@ -6233,11 +6209,13 @@ async function runExtractionForStore(context, store, {
                         roundSeqTo,
                         latestSeq,
                         beforeStore,
-                        triggerFloor,
+                        batchEndSeq,
                     });
                 }
                 : null,
         });
+    }
+    if (extractedAny) {
         const compressionRollbackEntry = buildRollbackEntry(historyChatKey, {
             kind: 'compression',
             seqTo: latestSeq,
@@ -7927,17 +7905,18 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
 
     const rebuilt = createEmptyStore();
     let hasCommittedBatch = false;
-    // Rebuild's own trigger floor — the chat tail at the moment the user
-    // pressed "rebuild from chat". All commits this rebuild produces (every
-    // batch + every compression round + the final baseline) anchor here.
-    const rebuildTriggerFloor = resolveCommitTriggerFloor(context);
+    // Each batch commit and each compression round commit anchors at the floor
+    // of the seq it covers (seqToFloor(endSeq | roundSeqTo)). Compression runs
+    // inline after every successful batch, so anchors stay monotonic in log
+    // append order and tail-truncation on delete drops a clean log suffix —
+    // see runExtractionForStore for the invariant.
     const extracted = await runExtractionForStore(context, rebuilt, {
         force: true,
         startSeq: 1,
         showCompressionToast: false,
         abortSignal,
         onBatchStart,
-        onBatchApplied: async ({ endSeq, triggerFloor }) => {
+        onBatchApplied: async ({ endSeq }) => {
             if (!hasCommittedBatch) {
                 const currentBatchEntries = getRollbackHistory(chatKey)
                     .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
@@ -7947,15 +7926,16 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
                 }
                 hasCommittedBatch = true;
             }
-            await commitMemoryStoreReplaceByChatKey(context, chatKey, rebuilt, endSeq, { syncPersistentProjection: true, floor: triggerFloor });
+            await commitMemoryStoreReplaceByChatKey(context, chatKey, rebuilt, endSeq, { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) });
         },
-        onCompressionApplied: async ({ roundSeqTo, triggerFloor }) => {
+        onCompressionApplied: async ({ roundSeqTo, batchEndSeq }) => {
+            const anchorSeq = Number(roundSeqTo || batchEndSeq || getStoreCoveredSeqTo(rebuilt) || 0);
             await commitMemoryStoreReplaceByChatKey(
                 context,
                 chatKey,
                 rebuilt,
-                Number(roundSeqTo || getStoreCoveredSeqTo(rebuilt) || 0),
-                { syncPersistentProjection: true, floor: triggerFloor },
+                anchorSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, anchorSeq) },
             );
         },
         rebuildCreateOnly: true,
@@ -7966,12 +7946,13 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
     }
     updateStoreSourceState(rebuilt, context);
     memoryStoreTargets.set(chatKey, target);
+    const finalSeq = Number(rebuilt?.lastExtractionDebug?.latestSeq || getStoreCoveredSeqTo(rebuilt) || 0);
     const persistedStore = await commitMemoryStoreReplaceByChatKey(
         context,
         chatKey,
         rebuilt,
-        Number(rebuilt?.lastExtractionDebug?.latestSeq || getStoreCoveredSeqTo(rebuilt) || 0),
-        { syncPersistentProjection: true, floor: rebuildTriggerFloor },
+        finalSeq,
+        { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
     );
     return persistedStore;
 }
@@ -8590,46 +8571,45 @@ async function runScheduledExtractionPass(chatKey) {
                 }
             },
         });
-        // Pin the trigger floor for this pass BEFORE entering
-        // runExtractionForStore. Same value the inner pass will read at its
-        // own entry (we're contiguous), but reading it here keeps the final
-        // flush below from re-sampling chat.length after the pass yielded
-        // potentially-long LLM time during which the user might have posted
-        // new messages — re-sampling would mis-attribute the final flush.
-        const passTriggerFloor = resolveCommitTriggerFloor(runtimeContext);
+        // Each batch + each compression round commit anchors at the floor of
+        // the seq it covers (seqToFloor of endSeq | roundSeqTo). Compression
+        // runs inline after every batch, so anchors stay monotonic in log
+        // append order — see runExtractionForStore for the invariant.
         await runExtractionForStore(runtimeContext, workingStore, {
             abortSignal: extractionAbortController.signal,
             onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
                 updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
             },
-            onBatchApplied: async ({ endSeq, triggerFloor }) => {
+            onBatchApplied: async ({ endSeq }) => {
                 committedStore = await commitMemoryStoreDiffByChatKey(
                     runtimeContext,
                     chatKey,
                     committedStore,
                     workingStore,
                     endSeq,
-                    { syncPersistentProjection: true, floor: triggerFloor },
+                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
                 );
             },
-            onCompressionApplied: async ({ beforeStore, roundSeqTo, triggerFloor }) => {
+            onCompressionApplied: async ({ beforeStore, roundSeqTo, batchEndSeq }) => {
+                const anchorSeq = Number(roundSeqTo || batchEndSeq || 0);
                 committedStore = await commitMemoryStoreDiffByChatKey(
                     runtimeContext,
                     chatKey,
                     beforeStore,
                     workingStore,
-                    roundSeqTo,
-                    { syncPersistentProjection: true, floor: triggerFloor },
+                    anchorSeq,
+                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, anchorSeq) },
                 );
             },
         });
+        const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
         const finalStore = await commitMemoryStoreDiffByChatKey(
             runtimeContext,
             chatKey,
             committedStore,
             workingStore,
-            Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0),
-            { syncPersistentProjection: true, floor: passTriggerFloor },
+            finalSeq,
+            { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, finalSeq) },
         );
         // Sync vector index after extraction (only if using hybrid recall)
         const effectiveStore = finalStore || workingStore;
@@ -10309,13 +10289,11 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
         const effectiveSeq = Number.isFinite(Number(seq))
             ? Math.max(0, Math.floor(Number(seq)))
             : getStoreCoveredSeqTo(latest);
-        // Editor-save trigger floor: chat tail at the moment the user
-        // pressed save in the graph editor.
-        const editorSaveTriggerFloor = resolveCommitTriggerFloor(context);
+        const editorSaveFloor = seqToFloor(context, effectiveSeq);
         if (replaceGraph) {
-            await replacePersistedGraphWithStore(context, chatKey, latest, effectiveSeq, { floor: editorSaveTriggerFloor });
+            await replacePersistedGraphWithStore(context, chatKey, latest, effectiveSeq, { floor: editorSaveFloor });
         } else if (beforeStore) {
-            await appendPersistedDiffEntry(context, chatKey, beforeStore, latest, effectiveSeq, { floor: editorSaveTriggerFloor });
+            await appendPersistedDiffEntry(context, chatKey, beforeStore, latest, effectiveSeq, { floor: editorSaveFloor });
         }
         await persistMemoryStoreByChatKey(context, chatKey, latest, { syncPersistentProjection: true });
         refreshUiStats();
@@ -11258,12 +11236,13 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             const parsed = JSON.parse(raw);
             const migrated = normalizeStoreForRuntime(parsed);
             updateStoreSourceState(migrated, context);
+            const migratedSeq = getStoreCoveredSeqTo(migrated);
             replacePersistedGraphWithStore(
                 context,
                 chatKey,
                 migrated,
-                getStoreCoveredSeqTo(migrated),
-                { floor: resolveCommitTriggerFloor(context) },
+                migratedSeq,
+                { floor: seqToFloor(context, migratedSeq) },
             );
             clearRollbackHistory(chatKey);
             await persistMemoryStoreByChatKey(context, chatKey, migrated, { syncPersistentProjection: true });
@@ -14155,11 +14134,14 @@ async function openManualCompressionPopup(context, settings) {
         },
     });
     try {
-        // Manual compression's trigger floor: the chat tail at the moment
-        // the user pressed "Apply Manual Compression". Every commit this
-        // loop produces anchors here, NOT at the historical floor of any
-        // child node being rolled up.
-        const manualCompressionTriggerFloor = resolveCommitTriggerFloor(context);
+        // Manual compression collapses into a single tail commit after all
+        // rounds finish. Per-round commits would form a non-monotonic anchor
+        // sequence (each round's roundSeqTo can jump backwards across types),
+        // and floor-state's incremental patch model can't replay such a log
+        // after truncation. The covered seq advances by the highest roundSeqTo
+        // observed, which yields the same anchor as the legacy "one commit at
+        // tail" shape.
+        let highestRoundSeqTo = getStoreCoveredSeqTo(store);
         const changed = await runCompressionLoop(context, store, settings, {
             typeIds: values.selectedTypeIds,
             force: values.mode === 'force' || values.mode === 'flat',
@@ -14168,21 +14150,25 @@ async function openManualCompressionPopup(context, settings) {
             maxSeq,
             compressionStats,
             abortSignal: compressionAbortController.signal,
-            onRoundApplied: async ({ beforeStore, roundSeqTo }) => {
-                await commitMemoryStoreDiffByChatKey(
-                    context,
-                    getChatKey(context),
-                    beforeStore,
-                    store,
-                    roundSeqTo,
-                    { syncPersistentProjection: true, floor: manualCompressionTriggerFloor },
-                );
+            onRoundApplied: ({ roundSeqTo }) => {
+                const candidate = Number(roundSeqTo || 0);
+                if (Number.isFinite(candidate) && candidate > highestRoundSeqTo) {
+                    highestRoundSeqTo = candidate;
+                }
             },
         });
         if (!changed) {
             notifySuccess(i18n('Manual compression made no changes.'));
             return;
         }
+        await commitMemoryStoreDiffByChatKey(
+            context,
+            getChatKey(context),
+            beforeStore,
+            store,
+            highestRoundSeqTo,
+            { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
+        );
         const afterNodes = Object.values(store.nodes || {});
         const afterNodeCount = afterNodes.length;
         const afterArchivedCount = afterNodes.filter(node => Boolean(node?.archived)).length;
@@ -14652,42 +14638,42 @@ function bindUi() {
             });
             const workingStore = normalizeStoreForRuntime(store);
             let committedStore = normalizeStoreForRuntime(store);
-            // Manual fill's trigger floor (chat tail when user clicked "fill").
-            const fillTriggerFloor = resolveCommitTriggerFloor(context);
             await runExtractionForStore(context, workingStore, {
                 force: true,
                 abortSignal: fillAbortController.signal,
                 onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
                     updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
                 },
-                onBatchApplied: async ({ endSeq, triggerFloor }) => {
+                onBatchApplied: async ({ endSeq }) => {
                     committedStore = await commitMemoryStoreDiffByChatKey(
                         context,
                         chatKey,
                         committedStore,
                         workingStore,
                         endSeq,
-                        { syncPersistentProjection: true, floor: triggerFloor },
+                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
                     );
                 },
-                onCompressionApplied: async ({ beforeStore, roundSeqTo, triggerFloor }) => {
+                onCompressionApplied: async ({ beforeStore, roundSeqTo, batchEndSeq }) => {
+                    const anchorSeq = Number(roundSeqTo || batchEndSeq || 0);
                     committedStore = await commitMemoryStoreDiffByChatKey(
                         context,
                         chatKey,
                         beforeStore,
                         workingStore,
-                        roundSeqTo,
-                        { syncPersistentProjection: true, floor: triggerFloor },
+                        anchorSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, anchorSeq) },
                     );
                 },
             });
+            const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
             const finalStore = await commitMemoryStoreDiffByChatKey(
                 context,
                 chatKey,
                 committedStore,
                 workingStore,
-                Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0),
-                { syncPersistentProjection: true, floor: fillTriggerFloor },
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
             );
             const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
             updateUiStatus(i18nFormat(
@@ -14856,9 +14842,6 @@ function bindUi() {
             },
         });
         try {
-            // Rebuild-recent's trigger floor (chat tail when user clicked
-            // "rebuild recent N turns").
-            const rebuildRecentTriggerFloor = resolveCommitTriggerFloor(context);
             const extracted = await runExtractionForStore(context, workingStore, {
                 force: true,
                 startSeq,
@@ -14866,7 +14849,7 @@ function bindUi() {
                 onBatchStart: ({ beginSeq, endSeq, latestSeq: latest }) => {
                     updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latest));
                 },
-                onBatchApplied: async ({ endSeq, triggerFloor }) => {
+                onBatchApplied: async ({ endSeq }) => {
                     if (!hasCommittedBatch) {
                         const currentBatchEntries = getRollbackHistory(chatKey)
                             .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
@@ -14881,16 +14864,17 @@ function bindUi() {
                         chatKey,
                         workingStore,
                         endSeq,
-                        { syncPersistentProjection: true, floor: triggerFloor },
+                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
                     );
                 },
-                onCompressionApplied: async ({ roundSeqTo, triggerFloor }) => {
+                onCompressionApplied: async ({ roundSeqTo, batchEndSeq }) => {
+                    const anchorSeq = Number(roundSeqTo || batchEndSeq || latestSeq || getStoreCoveredSeqTo(workingStore) || 0);
                     await commitMemoryStoreReplaceByChatKey(
                         context,
                         chatKey,
                         workingStore,
-                        Number(roundSeqTo || latestSeq || getStoreCoveredSeqTo(workingStore) || 0),
-                        { syncPersistentProjection: true, floor: triggerFloor },
+                        anchorSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, anchorSeq) },
                     );
                 },
             });
@@ -14898,12 +14882,13 @@ function bindUi() {
             if (!extracted && Number(debug.latestSeq || 0) >= startSeq && String(debug.reason || '') !== 'no_graph_changes') {
                 throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
             }
+            const finalSeq = Number(latestSeq || debug.latestSeq || 0);
             const persistedStore = await commitMemoryStoreReplaceByChatKey(
                 context,
                 chatKey,
                 workingStore,
-                Number(latestSeq || debug.latestSeq || 0),
-                { syncPersistentProjection: true, floor: rebuildRecentTriggerFloor },
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
             );
             const committedDebug = persistedStore?.lastExtractionDebug || debug;
             refreshUiStats();
