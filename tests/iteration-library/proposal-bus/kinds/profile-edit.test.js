@@ -90,4 +90,62 @@ describe('profile-edit KindHandler', () => {
         });
         expect(h.inverseAvailable).toBe(true);
     });
+
+    // Regression: every iter-studio popup ships an `async readLive` (it
+    // wraps `loadLive()` which may await disk I/O before returning the
+    // re-read state). The handler's readCurrent forgot to `await` it,
+    // so `snapshot` was a Promise. canonicalJson sees a Promise as
+    // `{}` (no own enumerable keys), so every fingerprint after the
+    // first one collapsed to sha256("{}") and NEVER matched the
+    // proposal's fingerprint of the real profile — every fresh approve
+    // bounced to status='conflict' with "外部已变更" before the user
+    // had a chance to do anything. Lock this down by giving readLive
+    // an async signature that returns a real object; the handler must
+    // await it and fingerprint the resolved value, not the Promise.
+    test('readCurrent awaits an async readLive (the production shape)', async () => {
+        const liveAtReadTime = { spec: { stages: [{ id: 'a' }] } };
+        const readLive = jest.fn(async () => liveAtReadTime);
+        const h = createProfileEditHandler({
+            commitLive: jest.fn(async () => {}),
+            readLive,
+        });
+        const { snapshot, fingerprint } = await h.readCurrent({ op: 'set', path: '', newValue: {} });
+        // Snapshot must be the resolved value, not the Promise itself.
+        expect(snapshot).toBe(liveAtReadTime);
+        // Fingerprint must match what fingerprint() produces for the
+        // SAME object — i.e. the bus's drift check would see "no
+        // change" when the disk really did not change.
+        expect(fingerprint).toBe(await h.fingerprint(liveAtReadTime));
+        // And it must NOT match the empty-object fingerprint (which is
+        // what we'd get if a Promise had been hashed through
+        // canonicalJson).
+        expect(fingerprint).not.toBe(await h.fingerprint({}));
+    });
+
+    test('approve on an unchanged async-readLive commits cleanly (no false conflict)', async () => {
+        // Full end-to-end through the bus, using the production-shaped
+        // async readLive. Pre-fix this returned status='conflict' on the
+        // first approve because readCurrent's missing `await` meant the
+        // bus compared `fingerprint(snapshot)` against `fingerprint(Promise)`.
+        const { createProposalBus } = await import('../../../../public/scripts/iteration-library/proposal-bus/index.js');
+        const profile = { a: 1, b: [{ x: 'q' }] };
+        const commitLive = jest.fn(async () => {});
+        const handler = createProfileEditHandler({
+            commitLive,
+            readLive: async () => profile,
+        });
+        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        bus.registerKind('profile-edit', handler);
+        const { id } = await bus.propose({
+            kind: 'profile-edit',
+            op: { op: 'set', path: '', newValue: { a: 2, b: [{ x: 'q' }] } },
+            snapshot: profile,
+        });
+        const out = await bus.approve(id);
+        expect(out).toEqual({ ok: true, status: 'committed' });
+        expect(commitLive).toHaveBeenCalledWith({ a: 2, b: [{ x: 'q' }] });
+        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        expect(entry.status).toBe('committed');
+        expect(entry.conflictInfo).toBe(null);
+    });
 });

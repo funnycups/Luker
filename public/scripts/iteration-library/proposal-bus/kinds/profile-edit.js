@@ -48,7 +48,15 @@ export function createProfileEditHandler(opts = {}) {
     }
 
     async function readCurrent(_op, ctx) {
-        const snapshot = readLive(ctx);
+        // readLive is async-shaped in every production popup (it wraps
+        // the popup's loadLive(), which re-reads disk before returning
+        // state.live). Forgetting to await turned `snapshot` into a
+        // Promise; canonicalJson sees a Promise as `{}`, so every
+        // approve fingerprinted sha256("{}") and never matched the
+        // proposal's real-content fingerprint — fresh proposals
+        // surfaced "external edit detected" on the first approve. The
+        // await is a no-op when callers happen to pass a sync readLive.
+        const snapshot = await readLive(ctx);
         return { snapshot, fingerprint: await fingerprint(snapshot) };
     }
 
