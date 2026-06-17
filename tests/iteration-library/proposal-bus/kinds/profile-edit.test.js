@@ -1,11 +1,19 @@
 import { describe, test, expect, jest } from '@jest/globals';
 import { createProfileEditHandler } from '../../../../public/scripts/iteration-library/proposal-bus/kinds/profile-edit.js';
 
+// Every production caller of createProfileEditHandler — orchestrator
+// iter-studio, CPA, CEA, MG schema — passes async commitLive + async
+// readLive (their readLive wraps loadLive(), which may await disk
+// I/O before resolving state.live). These stubs MUST mirror that
+// shape; sync-shaped stubs hid the "readCurrent forgot to await
+// readLive" bug for the whole life of ProposalBus by sidestepping
+// the only code path that exercised it.
+
 describe('profile-edit KindHandler', () => {
     test('fingerprint is async and deterministic for equivalent objects', async () => {
         const h = createProfileEditHandler({
             commitLive: jest.fn(async () => {}),
-            readLive: () => ({ a: 1, b: 2 }),
+            readLive: jest.fn(async () => ({ a: 1, b: 2 })),
         });
         const f1 = await h.fingerprint({ x: 1, y: { z: 'q' } });
         const f2 = await h.fingerprint({ y: { z: 'q' }, x: 1 });
@@ -14,7 +22,7 @@ describe('profile-edit KindHandler', () => {
     });
 
     test('readCurrent reads via injected readLive and fingerprints it', async () => {
-        const readLive = jest.fn(() => ({ live: 'now' }));
+        const readLive = jest.fn(async () => ({ live: 'now' }));
         const h = createProfileEditHandler({
             commitLive: jest.fn(async () => {}),
             readLive,
@@ -29,7 +37,7 @@ describe('profile-edit KindHandler', () => {
         const commitLive = jest.fn(async () => {});
         const h = createProfileEditHandler({
             commitLive,
-            readLive: () => null,
+            readLive: jest.fn(async () => null),
         });
         await h.commit({ op: 'set', path: '', newValue: { fresh: true } });
         expect(commitLive).toHaveBeenCalledTimes(1);
@@ -39,8 +47,8 @@ describe('profile-edit KindHandler', () => {
 
     test('inverse returns a set op restoring the snapshot', () => {
         const h = createProfileEditHandler({
-            commitLive: jest.fn(),
-            readLive: () => null,
+            commitLive: jest.fn(async () => {}),
+            readLive: jest.fn(async () => null),
         });
         const inv = h.inverse({ op: 'set', path: '', newValue: { after: true } }, { before: true });
         expect(inv).toEqual({ op: 'set', path: '', newValue: { before: true } });
@@ -48,16 +56,16 @@ describe('profile-edit KindHandler', () => {
 
     test('inverse returns null when snapshot is undefined', () => {
         const h = createProfileEditHandler({
-            commitLive: jest.fn(),
-            readLive: () => null,
+            commitLive: jest.fn(async () => {}),
+            readLive: jest.fn(async () => null),
         });
         expect(h.inverse({ op: 'set' }, undefined)).toBeNull();
     });
 
     test('label / icon / target accessors return configured strings', () => {
         const h = createProfileEditHandler({
-            commitLive: jest.fn(),
-            readLive: () => null,
+            commitLive: jest.fn(async () => {}),
+            readLive: jest.fn(async () => null),
             label: () => 'Profile change',
             icon: () => '✏',
             target: (entry) => `agent:${entry?.meta?.agentId ?? '?'}`,
@@ -70,8 +78,8 @@ describe('profile-edit KindHandler', () => {
     test('renderDiffCard delegates to injected renderer with snapshot+newValue', () => {
         const renderDiff = jest.fn(() => '<div>diff</div>');
         const h = createProfileEditHandler({
-            commitLive: jest.fn(),
-            readLive: () => null,
+            commitLive: jest.fn(async () => {}),
+            readLive: jest.fn(async () => null),
             renderDiff,
         });
         const entry = {
@@ -85,8 +93,8 @@ describe('profile-edit KindHandler', () => {
 
     test('inverseAvailable defaults to true', () => {
         const h = createProfileEditHandler({
-            commitLive: jest.fn(),
-            readLive: () => null,
+            commitLive: jest.fn(async () => {}),
+            readLive: jest.fn(async () => null),
         });
         expect(h.inverseAvailable).toBe(true);
     });
@@ -99,9 +107,8 @@ describe('profile-edit KindHandler', () => {
     // first one collapsed to sha256("{}") and NEVER matched the
     // proposal's fingerprint of the real profile — every fresh approve
     // bounced to status='conflict' with "外部已变更" before the user
-    // had a chance to do anything. Lock this down by giving readLive
-    // an async signature that returns a real object; the handler must
-    // await it and fingerprint the resolved value, not the Promise.
+    // had a chance to do anything. Lock this down: the handler must
+    // await readLive and fingerprint the resolved value, not the Promise.
     test('readCurrent awaits an async readLive (the production shape)', async () => {
         const liveAtReadTime = { spec: { stages: [{ id: 'a' }] } };
         const readLive = jest.fn(async () => liveAtReadTime);
