@@ -7,7 +7,9 @@ import { NotFoundError } from '../../../src/storage/errors.js';
 // loud and fast on a missing handler or a per-kind regression while iterating
 // on Task 3.
 
-describe('MysqlTransaction handlers (smoke)', () => {
+const describeMysql = process.env.LUKER_DISABLE_MYSQL_TESTS ? describe.skip : describe;
+
+describeMysql('MysqlTransaction handlers (smoke)', () => {
     let harness;
     beforeEach(async () => {
         harness = await makeTempMysqlEngineHarness();
