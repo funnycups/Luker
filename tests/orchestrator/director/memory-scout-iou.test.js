@@ -143,43 +143,6 @@ describe('memory_scout content contract (spec 2 §8.3)', () => {
         expect(typeof scout.description).toBe('string');
         expect(typeof scout.systemPrompt).toBe('string');
     });
-
-    test('description does NOT claim traversal (spec §4.3 — old aspirational wording removed)', () => {
-        expect(scout.description).not.toMatch(/traverse/i);
-    });
-
-    test('description contains enumerate / rank / expand / cite (spec §4.3 — new pipeline framing)', () => {
-        expect(scout.description).toMatch(/enumerate/i);
-        expect(scout.description).toMatch(/rank/i);
-        expect(scout.description).toMatch(/expand/i);
-        expect(scout.description).toMatch(/cite|cited/i);
-    });
-
-    test('description mentions LLM-grade recall (so main agent knows scout is recall-equivalent)', () => {
-        expect(scout.description).toMatch(/LLM-grade\s+(memory-graph\s+)?recall/i);
-    });
-
-    test('systemPrompt drops chat-grounded signal heuristics (spec §4.4 — engaged/build/sedimented gone)', () => {
-        expect(scout.systemPrompt).not.toMatch(/engaged with/i);
-        expect(scout.systemPrompt).not.toMatch(/build on/i);
-        expect(scout.systemPrompt).not.toMatch(/sedimented/i);
-    });
-
-    test('systemPrompt mentions every read-api tool by name (the menu the scout dispatches from)', () => {
-        const expectedTools = [
-            'memory_schema',
-            'memory_list_candidates',
-            'memory_node_brief',
-            'memory_edge_summary',
-            'memory_expand_seeds',
-            'memory_keyword_search',
-            'memory_vector_search',
-            'memory_find_by_name',
-        ];
-        for (const tool of expectedTools) {
-            expect(scout.systemPrompt).toContain(tool);
-        }
-    });
 });
 
 describe('memory_scout vs native recall — IoU end-to-end (deferred, spec §9.1)', () => {

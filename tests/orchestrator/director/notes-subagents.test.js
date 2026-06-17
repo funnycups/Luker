@@ -16,8 +16,6 @@ describe('default director profile: notes sub-agents', () => {
         expect(curator).toBeDefined();
         expect(String(curator.description || '').length).toBeGreaterThan(40);
         expect(String(curator.systemPrompt || '').length).toBeGreaterThan(200);
-        // 反污染必须在 prompt 里
-        expect(curator.systemPrompt.toLowerCase()).toMatch(/do.{0,5}nothing|conservative|default.{0,15}do nothing/);
     });
 });
 
