@@ -54,6 +54,8 @@ import {
 } from '../storage/index.js';
 import { FsEngine } from '../storage/engines/fs-engine.js';
 import { SqliteEngine } from '../storage/engines/sqlite-engine.js';
+import { MysqlEngine } from '../storage/engines/mysql-engine.js';
+import { PgEngine } from '../storage/engines/postgres-engine.js';
 import { ChatRepo } from '../storage/repositories/chat-repo.js';
 import { SettingsRepo } from '../storage/repositories/settings-repo.js';
 import { PresetRepo } from '../storage/repositories/preset-repo.js';
@@ -984,13 +986,16 @@ let _lastMigrationAt = null;
 
 /**
  * Return the current engine mode by inspecting the live engine instance.
- * Kept here rather than in storage/index.js so the storage module doesn't
- * grow a dependency on the engine subclasses for an admin-only concern.
+ * Each engine sets `this.kind = '<mode>'` in its constructor; we read that
+ * rather than chaining instanceof checks so the list of supported modes
+ * stays in one place (the engine classes themselves).
  */
 function detectCurrentMode() {
     const engine = getStorageEngine();
-    if (engine instanceof SqliteEngine) return 'sqlite';
-    if (engine instanceof FsEngine) return 'fs';
+    const kind = engine?.kind;
+    if (kind === 'fs' || kind === 'sqlite' || kind === 'mysql' || kind === 'postgres') {
+        return kind;
+    }
     return 'unknown';
 }
 
@@ -1017,12 +1022,57 @@ router.post('/storage/status', requireAdminMiddleware, async (_request, response
 
 router.post('/storage/migrate', requireAdminMiddleware, async (request, response) => {
     const targetMode = request.body?.targetMode;
-    if (targetMode !== 'sqlite' && targetMode !== 'fs') {
+    const SUPPORTED_MODES = ['fs', 'sqlite', 'mysql', 'postgres'];
+    if (!SUPPORTED_MODES.includes(targetMode)) {
         return response.status(400).send({
             error: 'invalid_target_mode',
-            message: 'targetMode must be "sqlite" or "fs"',
+            message: `targetMode must be one of: ${SUPPORTED_MODES.join(', ')}`,
         });
     }
+
+    // For shared-DB engines (mysql, postgres) the request body may carry
+    // connection credentials; if absent, fall back to config.yaml so an
+    // operator who has already filled storage.{mysql,postgres} in the
+    // config file can trigger migration without re-typing the URL.
+    function resolveDbConfig(mode) {
+        const inline = request.body?.[mode];
+        if (inline && typeof inline === 'object' && typeof inline.url === 'string' && inline.url) {
+            return {
+                url: inline.url,
+                poolSize: Number.isFinite(inline.poolSize) ? inline.poolSize : undefined,
+            };
+        }
+        const fromConfig = getConfigValue(`storage.${mode}`, null);
+        if (fromConfig && typeof fromConfig.url === 'string' && fromConfig.url) {
+            return {
+                url: fromConfig.url,
+                poolSize: Number.isFinite(fromConfig.poolSize) ? fromConfig.poolSize : undefined,
+            };
+        }
+        return null;
+    }
+
+    let mysqlConfig = null;
+    let postgresConfig = null;
+    if (targetMode === 'mysql') {
+        mysqlConfig = resolveDbConfig('mysql');
+        if (!mysqlConfig) {
+            return response.status(400).send({
+                error: 'mysql_config_missing',
+                message: 'mode=mysql requires storage.mysql.url (in request body or config.yaml)',
+            });
+        }
+    }
+    if (targetMode === 'postgres') {
+        postgresConfig = resolveDbConfig('postgres');
+        if (!postgresConfig) {
+            return response.status(400).send({
+                error: 'postgres_config_missing',
+                message: 'mode=postgres requires storage.postgres.url (in request body or config.yaml)',
+            });
+        }
+    }
+
     if (_migrationInProgress) {
         return response.status(409).send({ error: 'migration_in_progress' });
     }
@@ -1041,9 +1091,15 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             });
         }
 
-        destEngine = targetMode === 'sqlite'
-            ? new SqliteEngine({ directoriesByHandle: getUserDirectories })
-            : new FsEngine({ directoriesByHandle: getUserDirectories });
+        if (targetMode === 'sqlite') {
+            destEngine = new SqliteEngine({ directoriesByHandle: getUserDirectories });
+        } else if (targetMode === 'fs') {
+            destEngine = new FsEngine({ directoriesByHandle: getUserDirectories });
+        } else if (targetMode === 'mysql') {
+            destEngine = new MysqlEngine(mysqlConfig);
+        } else {
+            destEngine = new PgEngine(postgresConfig);
+        }
 
         const dataRoot = globalThis.DATA_ROOT;
         if (!dataRoot) {
@@ -1093,7 +1149,12 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
         // handlers transparently see the new backend. Close the old engine
         // last so any in-flight read on it completes against a live handle.
         const oldEngine = sourceEngine;
-        initStorage({ mode: targetMode, directoriesByHandle: getUserDirectories });
+        initStorage({
+            mode: targetMode,
+            directoriesByHandle: getUserDirectories,
+            mysql: mysqlConfig,
+            postgres: postgresConfig,
+        });
         // Ownership of `destEngine` has now transferred to the storage module;
         // null our local handle so the catch/finally don't double-close it.
         destEngine = null;

@@ -66,6 +66,13 @@ describe('scripts/storage-migrate.js', () => {
         expect(r.stderr).toContain('must be one of');
     });
 
+    test('--mysql-url and --postgres-url appear in help', async () => {
+        const r = await runScript(['--help']);
+        expect(r.code).toBe(0);
+        expect(r.stdout).toContain('--mysql-url');
+        expect(r.stdout).toContain('--postgres-url');
+    });
+
     test('unknown argument exits non-zero', async () => {
         const r = await runScript(['--unknown']);
         expect(r.code).not.toBe(0);

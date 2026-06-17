@@ -4,10 +4,11 @@
 //
 // storage-migrate — headless CLI front-end for MigrationRunner.
 //
-// Use this when you need to copy a user's per-handle state from one storage
-// engine (fs ↔ sqlite) without going through the admin web UI — e.g. on a
-// headless container, during automated provisioning, or to perform a dry-run
-// audit of source data before swapping backends.
+// Use this when you need to copy a user's per-handle state between any pair
+// of storage engines (fs / sqlite / mysql / postgres) without going through
+// the admin web UI — e.g. on a headless container, during automated
+// provisioning, or to perform a dry-run audit of source data before
+// swapping backends.
 //
 // The script does NOT mutate config.yaml. After a successful migration the
 // operator edits `storage.mode` and restarts the server so the live engine
@@ -25,7 +26,17 @@ import path from 'node:path';
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-    const args = { from: null, to: null, handle: null, dryRun: false, help: false };
+    const args = {
+        from: null,
+        to: null,
+        handle: null,
+        dryRun: false,
+        help: false,
+        mysqlUrl: null,
+        mysqlPoolSize: null,
+        postgresUrl: null,
+        postgresPoolSize: null,
+    };
     for (let i = 2; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '--help' || arg === '-h') args.help = true;
@@ -33,6 +44,10 @@ function parseArgs(argv) {
         else if (arg === '--to') args.to = argv[++i];
         else if (arg === '--handle') args.handle = argv[++i];
         else if (arg === '--dry-run') args.dryRun = true;
+        else if (arg === '--mysql-url') args.mysqlUrl = argv[++i];
+        else if (arg === '--mysql-pool-size') args.mysqlPoolSize = Number(argv[++i]);
+        else if (arg === '--postgres-url') args.postgresUrl = argv[++i];
+        else if (arg === '--postgres-pool-size') args.postgresPoolSize = Number(argv[++i]);
         else throw new Error(`Unknown argument: ${arg}`);
     }
     return args;
@@ -42,18 +57,30 @@ function printHelp() {
     console.log(`storage-migrate — migrate Luker user data between storage backends
 
 Usage:
-  node scripts/storage-migrate.js --from <fs|sqlite> --to <fs|sqlite> [options]
+  node scripts/storage-migrate.js --from <mode> --to <mode> [options]
+
+Modes:
+  fs                     Per-user JSON/JSONL files on disk
+  sqlite                 Per-user better-sqlite3 database
+  mysql                  Shared MySQL 8.0+ database keyed by handle
+  postgres               Shared PostgreSQL 14+ database keyed by handle
 
 Options:
-  --from <fs|sqlite>     Source engine (required)
-  --to <fs|sqlite>       Destination engine (required)
+  --from <mode>          Source engine (required)
+  --to <mode>            Destination engine (required)
   --handle <handle>      Migrate only a specific user handle (default: all users)
   --dry-run              Enumerate + verify source data without writing destination or taking a backup
+  --mysql-url <url>      MySQL connection string (required if --from=mysql or --to=mysql,
+                         unless storage.mysql.url is already set in config.yaml)
+  --mysql-pool-size <n>  MySQL pool size (default: storage.mysql.poolSize or 10)
+  --postgres-url <url>   PostgreSQL connection string (same rule as --mysql-url)
+  --postgres-pool-size <n> PostgreSQL pool size (default: storage.postgres.poolSize or 10)
   --help, -h             Show this message
 
 Examples:
   node scripts/storage-migrate.js --from fs --to sqlite
   node scripts/storage-migrate.js --from sqlite --to fs --handle alice --dry-run
+  node scripts/storage-migrate.js --from fs --to mysql --mysql-url mysql://luker:pw@db:3306/luker
 
 Behavior:
   Backup of each user's source state is written to <dataRoot>/_storage-migrations/<timestamp>-<handle>/
@@ -64,6 +91,8 @@ Behavior:
 `);
 }
 
+const VALID_MODES = ['fs', 'sqlite', 'mysql', 'postgres'];
+
 function validateArgs(args) {
     // Validation order matters: --help short-circuits everything else (already
     // handled by the caller); after that we surface the most operator-useful
@@ -71,14 +100,20 @@ function validateArgs(args) {
     if (!args.from || !args.to) {
         return { ok: false, message: 'Both --from and --to are required.' };
     }
-    if (!['fs', 'sqlite'].includes(args.from) || !['fs', 'sqlite'].includes(args.to)) {
+    if (!VALID_MODES.includes(args.from) || !VALID_MODES.includes(args.to)) {
         return {
             ok: false,
-            message: `--from and --to must be one of: fs, sqlite (got --from=${args.from} --to=${args.to})`,
+            message: `--from and --to must be one of: ${VALID_MODES.join(', ')} (got --from=${args.from} --to=${args.to})`,
         };
     }
     if (args.from === args.to) {
         return { ok: false, message: '--from and --to must differ.' };
+    }
+    if (args.mysqlPoolSize !== null && !Number.isFinite(args.mysqlPoolSize)) {
+        return { ok: false, message: '--mysql-pool-size must be a number.' };
+    }
+    if (args.postgresPoolSize !== null && !Number.isFinite(args.postgresPoolSize)) {
+        return { ok: false, message: '--postgres-pool-size must be a number.' };
     }
     return { ok: true };
 }
@@ -108,12 +143,14 @@ async function bootstrap() {
     const { initUserStorage, getAllUserHandles, getUserDirectories } = await import('../src/users.js');
     await initUserStorage(dataRoot);
 
-    return { dataRoot, getAllUserHandles, getUserDirectories };
+    return { dataRoot, getAllUserHandles, getUserDirectories, getConfigValue };
 }
 
-async function buildEnginesAndRepos({ fromMode, toMode, getUserDirectories }) {
+async function buildEnginesAndRepos({ fromMode, toMode, getUserDirectories, dbConfigs }) {
     const { FsEngine } = await import('../src/storage/engines/fs-engine.js');
     const { SqliteEngine } = await import('../src/storage/engines/sqlite-engine.js');
+    const { MysqlEngine } = await import('../src/storage/engines/mysql-engine.js');
+    const { PgEngine } = await import('../src/storage/engines/postgres-engine.js');
     const { ChatRepo } = await import('../src/storage/repositories/chat-repo.js');
     const { SettingsRepo } = await import('../src/storage/repositories/settings-repo.js');
     const { PresetRepo } = await import('../src/storage/repositories/preset-repo.js');
@@ -125,6 +162,8 @@ async function buildEnginesAndRepos({ fromMode, toMode, getUserDirectories }) {
     function buildEngine(mode) {
         if (mode === 'fs') return new FsEngine({ directoriesByHandle: getUserDirectories });
         if (mode === 'sqlite') return new SqliteEngine({ directoriesByHandle: getUserDirectories });
+        if (mode === 'mysql') return new MysqlEngine(dbConfigs.mysql);
+        if (mode === 'postgres') return new PgEngine(dbConfigs.postgres);
         throw new Error(`unknown engine mode: ${mode}`);
     }
 
@@ -178,7 +217,39 @@ async function main() {
     }
 
     // From here on we need a real config + data root + node-persist.
-    const { dataRoot, getAllUserHandles, getUserDirectories } = await bootstrap();
+    const { dataRoot, getAllUserHandles, getUserDirectories, getConfigValue } = await bootstrap();
+
+    // Resolve mysql/postgres credentials: CLI flag wins, fall back to config.yaml.
+    function resolveDbConfig(mode, urlFlag, poolSizeFlag) {
+        if (urlFlag) {
+            return { url: urlFlag, poolSize: poolSizeFlag ?? undefined };
+        }
+        const fromConfig = getConfigValue(`storage.${mode}`, null);
+        if (fromConfig && typeof fromConfig.url === 'string' && fromConfig.url) {
+            return {
+                url: fromConfig.url,
+                poolSize: poolSizeFlag ?? (Number.isFinite(fromConfig.poolSize) ? fromConfig.poolSize : undefined),
+            };
+        }
+        return null;
+    }
+
+    const dbConfigs = { mysql: null, postgres: null };
+    const dbModesInUse = new Set([args.from, args.to].filter(m => m === 'mysql' || m === 'postgres'));
+    if (dbModesInUse.has('mysql')) {
+        dbConfigs.mysql = resolveDbConfig('mysql', args.mysqlUrl, args.mysqlPoolSize);
+        if (!dbConfigs.mysql) {
+            console.error('mode=mysql requires --mysql-url or storage.mysql.url in config.yaml');
+            process.exit(2);
+        }
+    }
+    if (dbModesInUse.has('postgres')) {
+        dbConfigs.postgres = resolveDbConfig('postgres', args.postgresUrl, args.postgresPoolSize);
+        if (!dbConfigs.postgres) {
+            console.error('mode=postgres requires --postgres-url or storage.postgres.url in config.yaml');
+            process.exit(2);
+        }
+    }
 
     const allHandles = await getAllUserHandles();
     if (args.handle && !allHandles.includes(args.handle)) {
@@ -196,6 +267,7 @@ async function main() {
         fromMode: args.from,
         toMode: args.to,
         getUserDirectories,
+        dbConfigs,
     });
 
     const { MigrationRunner } = await import('../src/storage/migration/runner.js');

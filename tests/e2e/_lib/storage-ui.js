@@ -28,7 +28,7 @@ import { expect } from '@playwright/test';
  * is automatically admin).
  *
  * @param {import('@playwright/test').Page} page
- * @param {'fs' | 'sqlite'} targetMode
+ * @param {'fs' | 'sqlite' | 'mysql' | 'postgres'} targetMode
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs] Migration wall time. Includes a
  *   user fixture with no chat data, so 60s is generous.
@@ -116,7 +116,7 @@ export async function closeAdminPanel(page) {
  * works inside a regular logged-in single-user session.
  *
  * @param {import('@playwright/test').Page} page
- * @returns {Promise<{ currentMode: 'fs'|'sqlite', readOnly: boolean, lastMigration: string|null, migrationInProgress: boolean }>}
+ * @returns {Promise<{ currentMode: 'fs'|'sqlite'|'mysql'|'postgres', readOnly: boolean, lastMigration: string|null, migrationInProgress: boolean }>}
  */
 export async function fetchStorageStatus(page) {
     return page.evaluate(async () => {

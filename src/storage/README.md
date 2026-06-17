@@ -153,7 +153,7 @@ storage:
 - `mysql` — `MysqlEngine` connects to a shared MySQL 8.0+ database; all users live in one schema, keyed by `handle` column. Requires `storage.mysql.url`.
 - `postgres` — `PgEngine` connects to a shared PostgreSQL 14+ database; all users live in one schema, keyed by `handle` column. Requires `storage.postgres.url`.
 
-`initStorage({ mode, directoriesByHandle, mysql, postgres })` throws `Error: unknown storage mode "<x>"` for anything else, and throws `mode=mysql requires storage.mysql.url` / `mode=postgres requires storage.postgres.url` when the mode is selected without a URL. There is no UI or hot-swap for `mysql` / `postgres` yet; the admin panel currently only switches between `fs` and `sqlite` (mysql/postgres switching requires migration runner support, deferred to a follow-up).
+`initStorage({ mode, directoriesByHandle, mysql, postgres })` throws `Error: unknown storage mode "<x>"` for anything else, and throws `mode=mysql requires storage.mysql.url` / `mode=postgres requires storage.postgres.url` when the mode is selected without a URL. Migration between any pair of engines (fs / sqlite / mysql / postgres) is supported from both the admin panel and the `storage-migrate` CLI; see "Phase 3 — Migration tooling" below.
 
 ### SqliteEngine on disk
 
@@ -244,9 +244,9 @@ The runner writes to the destination through `withReadOnlyBypass` so the source 
 | Method + Path | Body | Returns |
 |---|---|---|
 | `POST /api/users/storage/status` | — | `{ currentMode, readOnly, lastMigration, migrationInProgress }` |
-| `POST /api/users/storage/migrate` | `{ targetMode: 'fs' \| 'sqlite' }` | per-user result map; on success the global engine is re-initialised to `targetMode` |
+| `POST /api/users/storage/migrate` | `{ targetMode: 'fs' \| 'sqlite' \| 'mysql' \| 'postgres', mysql?: { url, poolSize? }, postgres?: { url, poolSize? } }` | per-user result map; on success the global engine is re-initialised to `targetMode` |
 
-`/migrate` is synchronous and blocks the request until the runner finishes. If any user fails, the source engine is retained and per-user errors are returned in the response body.
+`/migrate` is synchronous and blocks the request until the runner finishes. If any user fails, the source engine is retained and per-user errors are returned in the response body. For `targetMode: 'mysql'` / `'postgres'` the body may carry inline credentials; if absent, the endpoint falls back to `storage.mysql` / `storage.postgres` from `config.yaml`.
 
 ### Express middleware
 
@@ -265,9 +265,11 @@ Registered in `src/server-main.js` after `setupPrivateEndpoints` and before the 
 `scripts/storage-migrate.js`:
 
 ```
-node scripts/storage-migrate.js --from fs --to sqlite [--handle <h>] [--dry-run]
+node scripts/storage-migrate.js --from <mode> --to <mode> [options]
 node scripts/storage-migrate.js --help
 ```
+
+Modes: `fs`, `sqlite`, `mysql`, `postgres`. For `mysql` / `postgres` either pass `--mysql-url` / `--postgres-url` on the command line or set `storage.mysql.url` / `storage.postgres.url` in `config.yaml` — the CLI flag wins when both are present. `--mysql-pool-size` / `--postgres-pool-size` override the pool size (defaults to the config value, or 10).
 
 | Exit code | Meaning |
 |---|---|
