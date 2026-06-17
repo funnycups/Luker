@@ -146,17 +146,6 @@ function pickFiniteInt(value) {
     return Number.isFinite(n) ? Math.floor(n) : undefined;
 }
 
-function normalizeSeqWindow(value) {
-    if (!value || typeof value !== 'object') return undefined;
-    const from = pickFiniteInt(value.from);
-    const to = pickFiniteInt(value.to);
-    if (from === undefined && to === undefined) return undefined;
-    const out = {};
-    if (from !== undefined) out.from = from;
-    if (to !== undefined) out.to = to;
-    return out;
-}
-
 function normalizeStringArrayArg(value) {
     if (!Array.isArray(value)) return undefined;
     const out = [];
@@ -167,39 +156,134 @@ function normalizeStringArrayArg(value) {
     return out.length > 0 ? out : undefined;
 }
 
-function trimCandidatePreview(node) {
+/**
+ * Strict-typed check for a usable `{start, end}` floor range stamped by
+ * A2's `createNode`. Mirrors the same predicate used in
+ * `createRollupWithChildren` (main.js) — kept local to orchestrator-tools
+ * because all four trimmers / brief paths need it and inlining repeats
+ * the type checks four times.
+ */
+function hasValidFloorRange(obj) {
+    return Boolean(
+        obj?.floorRange
+        && typeof obj.floorRange.start === 'number' && Number.isFinite(obj.floorRange.start)
+        && typeof obj.floorRange.end === 'number' && Number.isFinite(obj.floorRange.end),
+    );
+}
+
+/**
+ * Translate a memory-graph internal assistant-message-ordinal range
+ * (the coord A3 extraction wrote into `node.floorRange`) into chat[]
+ * indices the LLM can pass directly to the `chat_read_range` tool.
+ *
+ * Coord systems:
+ *   - Internal: assistant ordinal = position among `isExtractableAssistantMessage`
+ *     matches (non-user, non-empty `mes`; `is_system` is deliberately ignored
+ *     per primitives.js doc so /hide doesn't drift seq). 1-based.
+ *   - External: chat[] index = raw position in the SillyTavern chat array,
+ *     0-based, what `chat_read_range` consumes.
+ *
+ * Mapping rules:
+ *   - end: chat[] index of the assistant at ordinal `range.end`.
+ *   - start: chat[] index of the user message immediately preceding the
+ *     assistant at ordinal `range.start`. We walk back from that assistant's
+ *     chat[] position until `is_user` is found, so the LLM also gets the
+ *     prompt that triggered the bot turn. If no user precedes (e.g. an
+ *     opening greeting), we fall back to that assistant's own chat[]
+ *     index.
+ *   - Returns null when `range.end` exceeds the live assistant count
+ *     (the referenced message has been deleted since extraction).
+ *
+ * Predicate parity is load-bearing: extraction recorded the ordinal via
+ * `getFloorFromAssistantSeq` which uses the SAME `isExtractableAssistantMessage`
+ * predicate (primitives.js). Diverging here would map ordinals to the
+ * wrong chat[] indices and the LLM would read unrelated text.
+ */
+function assistantSeqRangeToChatRange(range, context) {
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    if (chat.length === 0) return null;
+    if (!range || typeof range !== 'object') return null;
+    const targetStart = Number(range.start);
+    const targetEnd = Number(range.end);
+    if (!Number.isFinite(targetStart) || !Number.isFinite(targetEnd)) return null;
+
+    // Inline the predicate to keep this module free of cross-extension
+    // imports. Mirrors `isExtractableAssistantMessage` in primitives.js:
+    // not user + non-empty trimmed `mes`. is_system is deliberately
+    // NOT filtered (see primitives.js doc).
+    let ordinal = 0;
+    let chatStartForStart = -1;
+    let chatIndexForEnd = -1;
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (!msg || msg.is_user) continue;
+        const raw = msg.mes;
+        if (typeof raw !== 'string' || raw.trim().length === 0) continue;
+        ordinal += 1;
+        if (ordinal === targetStart) {
+            let k = i - 1;
+            while (k >= 0 && !chat[k]?.is_user) k -= 1;
+            chatStartForStart = k >= 0 ? k : i;
+        }
+        if (ordinal === targetEnd) {
+            chatIndexForEnd = i;
+            break;
+        }
+    }
+    if (chatStartForStart < 0 || chatIndexForEnd < 0) return null;
+    return { start: chatStartForStart, end: chatIndexForEnd };
+}
+
+function trimCandidatePreview(node, context = null) {
     if (!node || typeof node !== 'object') return null;
-    return {
+    const out = {
         id: String(node.id || ''),
         type: String(node.type || ''),
         level: node.level === 'semantic' ? 'semantic' : 'episodic',
         title: String(node.title || ''),
-        seqTo: Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1,
         semanticDepth: Number.isFinite(Number(node.semanticDepth)) ? Number(node.semanticDepth) : 0,
     };
+    if (hasValidFloorRange(node)) {
+        // null when the referenced messages have been deleted; the LLM
+        // sees an explicit null so it can decide whether to drop the node.
+        out.floorRange = assistantSeqRangeToChatRange(node.floorRange, context);
+    } else {
+        out.seqTo = Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1;
+    }
+    return out;
 }
 
-function trimExpandPreview(node) {
+function trimExpandPreview(node, context = null) {
     if (!node || typeof node !== 'object') return null;
-    return {
+    const out = {
         id: String(node.id || ''),
         type: String(node.type || ''),
         level: node.level === 'semantic' ? 'semantic' : 'episodic',
         title: String(node.title || ''),
-        seqTo: Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1,
     };
+    if (hasValidFloorRange(node)) {
+        out.floorRange = assistantSeqRangeToChatRange(node.floorRange, context);
+    } else {
+        out.seqTo = Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1;
+    }
+    return out;
 }
 
-function trimRankedPreview(entry) {
+function trimRankedPreview(entry, context = null) {
     if (!entry || typeof entry !== 'object') return null;
-    return {
+    const out = {
         id: String(entry.id || ''),
         type: String(entry.type || ''),
         title: String(entry.title || ''),
-        seqTo: Number.isFinite(Number(entry.seqTo)) ? Number(entry.seqTo) : -1,
         score: Number.isFinite(Number(entry.score)) ? Number(entry.score) : 0,
         scoreMode: String(entry.scoreMode || ''),
     };
+    if (hasValidFloorRange(entry)) {
+        out.floorRange = assistantSeqRangeToChatRange(entry.floorRange, context);
+    } else {
+        out.seqTo = Number.isFinite(Number(entry.seqTo)) ? Number(entry.seqTo) : -1;
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,8 +293,6 @@ function trimRankedPreview(entry) {
 async function execMemoryListCandidates(args, context) {
     const session = requireSession('memory_list_candidates', context);
     const options = {};
-    const seqWindow = normalizeSeqWindow(args?.seq_window);
-    if (seqWindow) options.seqWindow = seqWindow;
     const types = normalizeStringArrayArg(args?.types);
     if (types) options.types = types;
     const excludeRecent = pickFiniteInt(args?.exclude_recent_messages);
@@ -219,7 +301,7 @@ async function execMemoryListCandidates(args, context) {
     }
     const candidates = session.listVisibleCandidates(options) || [];
     return {
-        candidates: Array.from(candidates).map(trimCandidatePreview).filter(Boolean),
+        candidates: Array.from(candidates).map(n => trimCandidatePreview(n, context)).filter(Boolean),
     };
 }
 
@@ -257,7 +339,27 @@ async function execMemoryNodeBrief(args, context) {
     if (edgeSummaryLimit !== undefined && edgeSummaryLimit >= 1) {
         options.edgeSummaryLimit = edgeSummaryLimit;
     }
-    return { brief: session.getNodeBrief(idRaw, options) };
+    const brief = session.getNodeBrief(idRaw, options);
+    if (brief && hasValidFloorRange(brief)) {
+        // brief is a frozen view from freezeNodeBriefView; spread into a
+        // mutable object before adjusting. Translate the internal seq
+        // range to chat[] coords (or null if the chat slice no longer
+        // exists). When floorRange is present we drop the legacy `toSeq`
+        // watermark so the agent has exactly one positional signal —
+        // matching the trimmer behaviour for list/search results.
+        const translated = assistantSeqRangeToChatRange(brief.floorRange, context);
+        // brief.toSeq is the legacy watermark we drop in favour of floorRange.
+        // Manual property pluck is cleaner than a destructure with an unused
+        // sink variable (which trips no-unused-vars in eslint).
+        const next = {};
+        for (const key of Object.keys(brief)) {
+            if (key === 'toSeq') continue;
+            next[key] = brief[key];
+        }
+        next.floorRange = translated;
+        return { brief: next };
+    }
+    return { brief };
 }
 
 async function execMemoryExpandSeeds(args, context) {
@@ -278,7 +380,7 @@ async function execMemoryExpandSeeds(args, context) {
     if (args?.include_children === false) options.includeChildren = false;
     if (args?.exclude_internal === true) options.excludeInternal = true;
     const nodes = session.expandFromSeeds(seedIds, options) || [];
-    return { nodes: Array.from(nodes).map(trimExpandPreview).filter(Boolean) };
+    return { nodes: Array.from(nodes).map(n => trimExpandPreview(n, context)).filter(Boolean) };
 }
 
 async function execMemorySchema(_args, context) {
@@ -293,7 +395,7 @@ async function execMemoryKeywordSearch(args, context) {
         types: Array.isArray(args?.types) ? args.types : undefined,
         k: args?.k,
     });
-    return { results: Array.from(results).map(trimRankedPreview).filter(Boolean) };
+    return { results: Array.from(results).map(e => trimRankedPreview(e, context)).filter(Boolean) };
 }
 
 async function execMemoryVectorSearch(args, context) {
@@ -304,7 +406,7 @@ async function execMemoryVectorSearch(args, context) {
             types: Array.isArray(args?.types) ? args.types : undefined,
             k: args?.k,
         });
-        return { results: Array.from(results).map(trimRankedPreview).filter(Boolean) };
+        return { results: Array.from(results).map(e => trimRankedPreview(e, context)).filter(Boolean) };
     } catch (err) {
         if (err?.code === 'NO_EMBEDDING_PROFILE') {
             throw new ToolError(
@@ -323,7 +425,7 @@ async function execMemoryFindByName(args, context) {
         query: String(args?.query || ''),
         types: Array.isArray(args?.types) ? args.types : undefined,
     });
-    return { matches: Array.from(result.matches).map(trimCandidatePreview).filter(Boolean) };
+    return { matches: Array.from(result.matches).map(m => trimCandidatePreview(m, context)).filter(Boolean) };
 }
 
 async function execMemoryCompactionCandidates(args, context) {
@@ -561,19 +663,10 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryListCandidates,
         simulate: null,
-        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, seqTo, semanticDepth }] } in recency-first order (seqTo desc, semanticDepth desc). Use this as the FIRST step of a recall pipeline.',
+        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, semanticDepth, <positionField> }] } in recency-first order, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use this as the FIRST step of a recall pipeline.',
         parameters: {
             type: 'object',
             properties: {
-                seq_window: {
-                    type: 'object',
-                    properties: {
-                        from: { type: 'integer', description: 'Inclusive lower bound on node seqTo.' },
-                        to: { type: 'integer', description: 'Inclusive upper bound on node seqTo.' },
-                    },
-                    additionalProperties: false,
-                    description: 'Optional seq range to narrow the pool.',
-                },
                 types: {
                     type: 'array',
                     items: { type: 'string' },
@@ -621,7 +714,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryNodeBrief,
         simulate: null,
-        description: 'Get the canonical recall-side brief for one node: { id, title, summary, keyValues, rowValues, toSeq, childCount, exposure, edgeSummary, alwaysInject }. This is the SAME per-row format the memory-graph recall LLM sees. Returns { brief: null } when the node does not exist or is archived.',
+        description: 'Get the canonical recall-side brief for one node: { id, title, summary, keyValues, rowValues, childCount, exposure, edgeSummary, alwaysInject, <positionField> }, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `toSeq: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). This is the SAME per-row format the memory-graph recall LLM sees. Returns { brief: null } when the node does not exist or is archived.',
         parameters: {
             type: 'object',
             properties: {
@@ -648,7 +741,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryExpandSeeds,
         simulate: null,
-        description: 'BFS-expand from seed ids along children + projected edges (default 1 hop). Returns { nodes: [{ id, type, level, title, seqTo }] } for the union of seeds + reachable nodes. Use SPARINGLY: when a brief is on-topic but compressed (high_only exposure, large childCount) and you need to surface specific children.',
+        description: 'BFS-expand from seed ids along children + projected edges (default 1 hop). Returns { nodes: [{ id, type, level, title, <positionField> }] } for the union of seeds + reachable nodes, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use SPARINGLY: when a brief is on-topic but compressed (high_only exposure, large childCount) and you need to surface specific children.',
         parameters: {
             type: 'object',
             properties: {
@@ -697,7 +790,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryKeywordSearch,
         simulate: null,
-        description: 'Token-intersection search across node title + projected columns. Always available (no profile required). Returns { results: [{ id, type, title, seqTo, score, scoreMode: "keyword" }] } sorted by score desc. Use to locate existing nodes by name / keyword for dedup or relevance.',
+        description: 'Token-intersection search across node title + projected columns. Always available (no profile required). Returns { results: [{ id, type, title, score, scoreMode: "keyword", <positionField> }] } sorted by score desc, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use to locate existing nodes by name / keyword for dedup or relevance.',
         parameters: {
             type: 'object',
             properties: {
@@ -714,7 +807,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryVectorSearch,
         simulate: null,
-        description: 'Semantic vector search. REQUIRES an embedding profile configured in memory-graph settings. Throws NO_EMBEDDING_PROFILE error when not configured — fall back to memory_keyword_search in that case. Returns { results: [{ id, type, title, seqTo, score, scoreMode: "vector" }] }.',
+        description: 'Semantic vector search. REQUIRES an embedding profile configured in memory-graph settings. Throws NO_EMBEDDING_PROFILE error when not configured — fall back to memory_keyword_search in that case. Returns { results: [{ id, type, title, score, scoreMode: "vector", <positionField> }] }, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only).',
         parameters: {
             type: 'object',
             properties: {
@@ -731,7 +824,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryFindByName,
         simulate: null,
-        description: 'Find existing nodes by name (case-insensitive substring match on title + primary key columns including aliases). Use BEFORE creating a character_sheet or location_state to verify the entity is not already in the graph. Returns { matches: [{ id, type, title, seqTo, ... }] } — empty array if no match.',
+        description: 'Find existing nodes by name (case-insensitive substring match on title + primary key columns including aliases). Use BEFORE creating a character_sheet or location_state to verify the entity is not already in the graph. Returns { matches: [{ id, type, title, <positionField>, ... }] } — empty array if no match — where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only).',
         parameters: {
             type: 'object',
             properties: {
@@ -953,3 +1046,20 @@ export function unregisterMemoryGraphOrchestrationTools() {
         orch.unregisterOrchestrationTool(name);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only exports
+//
+// Trimmers and the seq→chat translator are module-private helpers, but the
+// floor-range translation behavior is the core of A5 and deserves direct
+// unit coverage without spinning up a memory-graph session. Names are
+// prefixed `_*ForTest` per the project convention.
+// ---------------------------------------------------------------------------
+
+export {
+    trimCandidatePreview as _trimCandidatePreviewForTest,
+    trimRankedPreview as _trimRankedPreviewForTest,
+    trimExpandPreview as _trimExpandPreviewForTest,
+    assistantSeqRangeToChatRange as _assistantSeqRangeToChatRangeForTest,
+    SCHEMAS,
+};

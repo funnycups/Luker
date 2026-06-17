@@ -158,7 +158,19 @@ function freezeFieldsRecord(fields) {
 
 function freezeNodeView(node) {
     if (!node || typeof node !== 'object') return null;
-    return Object.freeze({
+    // floorRange is the chat-floor anchor stamped by A3 extraction on
+    // types whose schema sets `recordsFloorRange: true` (default: event).
+    // We carry it through verbatim — the LLM-facing trimmers in
+    // orchestrator-tools translate to chat[] coords before the LLM sees
+    // it. Frozen here so downstream consumers can't mutate the range.
+    const rawFloorRange = node.floorRange;
+    const floorRangeView = (rawFloorRange
+        && typeof rawFloorRange === 'object'
+        && typeof rawFloorRange.start === 'number' && Number.isFinite(rawFloorRange.start)
+        && typeof rawFloorRange.end === 'number' && Number.isFinite(rawFloorRange.end))
+        ? Object.freeze({ start: rawFloorRange.start, end: rawFloorRange.end })
+        : null;
+    const out = {
         id: String(node.id || ''),
         type: String(node.type || ''),
         level: node.level === 'semantic' ? 'semantic' : 'episodic',
@@ -174,7 +186,9 @@ function freezeNodeView(node) {
         archived: Boolean(node.archived),
         semanticRollup: Boolean(node.semanticRollup),
         semanticDepth: Number.isFinite(Number(node.semanticDepth)) ? Number(node.semanticDepth) : 0,
-    });
+    };
+    if (floorRangeView) out.floorRange = floorRangeView;
+    return Object.freeze(out);
 }
 
 function freezeEdgeView(edge, { includeWeight = false } = {}) {
@@ -273,7 +287,17 @@ function freezeNodeBriefView(brief) {
         ? brief.rowValues
         : (brief.row_values && typeof brief.row_values === 'object' ? brief.row_values : {});
     const edgeSummaryRaw = (brief.edgeSummary !== undefined ? brief.edgeSummary : brief.edge_summary);
-    return Object.freeze({
+    // Carry floorRange through verbatim — same shape rule as freezeNodeView.
+    // The brief is built via formatNodeBrief which (after this task) spreads
+    // node.floorRange into its output so getNodeBrief reaches us here.
+    const rawFloorRange = brief.floorRange;
+    const floorRangeView = (rawFloorRange
+        && typeof rawFloorRange === 'object'
+        && typeof rawFloorRange.start === 'number' && Number.isFinite(rawFloorRange.start)
+        && typeof rawFloorRange.end === 'number' && Number.isFinite(rawFloorRange.end))
+        ? Object.freeze({ start: rawFloorRange.start, end: rawFloorRange.end })
+        : null;
+    const out = {
         id: String(brief.id || ''),
         level: brief.level === 'semantic' ? 'semantic' : 'episodic',
         type: String(brief.type || ''),
@@ -287,7 +311,9 @@ function freezeNodeBriefView(brief) {
         exposure: brief.exposure === 'high_only' ? 'high_only' : 'full',
         edgeSummary: edgeSummaryRaw ? freezeEdgeSummaryView(edgeSummaryRaw) : null,
         alwaysInject: Boolean(brief.alwaysInject ?? brief.always_inject),
-    });
+    };
+    if (floorRangeView) out.floorRange = floorRangeView;
+    return Object.freeze(out);
 }
 
 // ---------------------------------------------------------------------------

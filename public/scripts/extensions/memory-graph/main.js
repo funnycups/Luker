@@ -741,6 +741,7 @@ const defaultNodeTypeSchema = [
         keywords: ['battle', 'reveal', 'deal', 'betrayal', 'event', 'outcome'],
         alwaysInject: true,
         latestOnly: false,
+        recordsFloorRange: true,
         primaryKeyColumns: [],
         compression: {
             mode: 'hierarchical',
@@ -1245,6 +1246,10 @@ function migrateLegacyProfileSettings() {
     }
 }
 
+export function getDefaultNodeTypeSchema() {
+    return structuredClone(defaultNodeTypeSchema);
+}
+
 export function normalizeNodeTypeSchema(schema) {
     const list = Array.isArray(schema) ? schema : defaultNodeTypeSchema;
     const normalizeCompressionMode = (mode) => {
@@ -1312,6 +1317,7 @@ export function normalizeNodeTypeSchema(schema) {
                 editable,
                 alwaysInject: Boolean(item.alwaysInject),
                 latestOnly,
+                recordsFloorRange: Boolean(item?.recordsFloorRange),
                 primaryKeyColumns,
                 compression: {
                     mode: normalizeCompressionMode(rawCompressionMode),
@@ -2969,6 +2975,20 @@ function createNode(store, node) {
     };
     setNodeSummary(store.nodes[id], node?.fields?.summary ?? '');
 
+    const rawFloorRange = node?.floorRange;
+    if (rawFloorRange && typeof rawFloorRange === 'object') {
+        const rs = rawFloorRange.start;
+        const re = rawFloorRange.end;
+        if (typeof rs === 'number' && typeof re === 'number'
+            && Number.isFinite(rs) && Number.isFinite(re)
+            && rs >= 0 && re >= rs) {
+            store.nodes[id].floorRange = {
+                start: Math.floor(rs),
+                end: Math.floor(re),
+            };
+        }
+    }
+
     if (store.nodes[id].parentId && store.nodes[store.nodes[id].parentId]) {
         const parent = store.nodes[store.nodes[id].parentId];
         if (!parent.childrenIds.includes(id)) {
@@ -2979,6 +2999,9 @@ function createNode(store, node) {
 
     return store.nodes[id];
 }
+
+export { createNode as _createNodeForTest };
+export { createRollupWithChildren as _createRollupWithChildrenForTest };
 
 function reparentNode(store, childId, parentId) {
     const child = store.nodes[childId];
@@ -4976,6 +4999,17 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
         incomingFields.summary
         ?? '',
     );
+    // floorRange is stamped only when the type opts in (schema flag) and the
+    // caller supplied a valid lower bound; otherwise the field is omitted so
+    // legacy callers and edits can't corrupt or shrink an existing range.
+    const optsMinSeq = (typeof options?.minSeq === 'number' && Number.isFinite(options.minSeq))
+        ? Math.max(0, Math.floor(options.minSeq))
+        : null;
+    const typeSchemaEntry = settings ? getSemanticTypeSpec(settings, type) : null;
+    const shouldRecordFloorRange = Boolean(typeSchemaEntry?.recordsFloorRange);
+    const computedFloorRange = (shouldRecordFloorRange && optsMinSeq !== null && optsMinSeq <= seqTo)
+        ? { start: optsMinSeq, end: seqTo }
+        : null;
     const latestOnlyConfig = settings ? getSemanticLatestOnlyConfig(settings, type) : { enabled: false, keyFields: [] };
     const latestOnlyKeyFields = Array.isArray(latestOnlyConfig.keyFields)
         ? latestOnlyConfig.keyFields.map(column => String(column || '').trim()).filter(Boolean)
@@ -5031,6 +5065,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
             semanticDepth: 0,
             semanticRollup: false,
             seqTo,
+            ...(computedFloorRange ? { floorRange: computedFloorRange } : {}),
         });
     }
 
@@ -5079,6 +5114,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
             semanticDepth: 0,
             semanticRollup: false,
             seqTo,
+            ...(computedFloorRange ? { floorRange: computedFloorRange } : {}),
         });
     } else {
         setNodeSummary(target, itemSummary || getNodeSummary(target));
@@ -5436,6 +5472,20 @@ export function createRollupWithChildren(store, { type, childIds, summary, field
     const rollupDepth = Math.max(...childDepths) + 1;
     const ordinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
     const finalFields = { summary: String(summary || ''), ...fields };
+    // Partial-coverage rollup: union the floorRange of children that have a
+    // well-formed one, and skip the rest. Legacy children pre-dating the
+    // floor-anchor schema flag don't veto the parent's anchor — they just
+    // don't contribute to it. Strict typeof === 'number' guards mirror
+    // createNode's own floorRange validation upstream.
+    const childrenWithFloorRange = children.filter(c => c?.floorRange
+        && typeof c.floorRange.start === 'number' && Number.isFinite(c.floorRange.start)
+        && typeof c.floorRange.end === 'number' && Number.isFinite(c.floorRange.end));
+    const rolledFloorRange = childrenWithFloorRange.length > 0
+        ? {
+            start: Math.min(...childrenWithFloorRange.map(c => c.floorRange.start)),
+            end: Math.max(...childrenWithFloorRange.map(c => c.floorRange.end)),
+        }
+        : null;
     const parent = createNode(store, {
         type: String(type),
         level: LEVEL.SEMANTIC,
@@ -5445,6 +5495,7 @@ export function createRollupWithChildren(store, { type, childIds, summary, field
         semanticRollup: true,
         semanticDepth: rollupDepth,
         seqTo: Math.max(...children.map(c => Number(c.seqTo ?? 0))),
+        ...(rolledFloorRange ? { floorRange: rolledFloorRange } : {}),
     });
     for (const child of children) {
         reparentNode(store, child.id, parent.id);
@@ -5765,6 +5816,9 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
     extractBatch.push(...buildExtractBatchFromFrames(frames, safeStart, safeEnd, contextTurns));
     const endFrameSeq = Number(endFrame?.seq || 0);
     const extractionMaxSeq = Number.isFinite(endFrameSeq) ? Math.max(0, Math.floor(endFrameSeq)) : null;
+    const startFrame = source[safeStart];
+    const startFrameSeq = Number(startFrame?.seq || 0);
+    const extractionMinSeq = Number.isFinite(startFrameSeq) ? Math.max(0, Math.floor(startFrameSeq)) : null;
     const operations = await extractNodesWithLLM(context, store, settings, schema, extractBatch, {
         maxSeq: extractionMaxSeq,
         abortSignal: options?.abortSignal || null,
@@ -5776,6 +5830,7 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
 
     applyExtractionOpsImpl(store, operations, {
         maxSeq: extractionMaxSeq,
+        minSeq: extractionMinSeq,
         context,
         settings,
     });
@@ -5809,12 +5864,16 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
  * @param {Array<object>} operations - op records produced by extraction
  * @param {object} [opts]
  * @param {number} [opts.maxSeq=0] - extraction seq ceiling for new/edited node seqTo
+ * @param {number} [opts.minSeq=null] - extraction-window lower bound; threaded
+ *     into `upsertSemanticNode` so node types whose schema opts in via
+ *     `recordsFloorRange:true` (default: `event`) record `floorRange={start,end}`
  * @param {object} [opts.context] - accepted for caller parity; currently unused inside
  * @param {object} [opts.settings] - effective settings (threaded into `upsertSemanticNode`)
  * @returns {{ applied: object[], rejected: object[] }}
  */
 export function applyExtractionOpsImpl(store, operations, {
     maxSeq = 0,
+    minSeq = null,
     context = null,
     settings = null,
 } = {}) {
@@ -5826,6 +5885,13 @@ export function applyExtractionOpsImpl(store, operations, {
     const extractionMaxSeq = Number.isFinite(Number(maxSeq))
         ? Math.max(0, Math.floor(Number(maxSeq)))
         : 0;
+    // Strict typeof === 'number' parallel to createNode's floorRange validation
+    // (see A2): `Number(null) === 0`, `Number('') === 0`, `Number(true) === 1`
+    // — none of which mean "the caller gave me a real lower bound". Treat
+    // anything that wasn't already typed `number` as absent.
+    const extractionMinSeq = (typeof minSeq === 'number' && Number.isFinite(minSeq))
+        ? Math.max(0, Math.floor(minSeq))
+        : null;
     const extractionRefIndex = new Map();
     const pendingLinkJobs = [];
 
@@ -5942,7 +6008,7 @@ export function applyExtractionOpsImpl(store, operations, {
                 title,
                 fields: item?.fields && typeof item.fields === 'object' ? item.fields : {},
                 seqTo: extractionMaxSeq,
-            }, settings, { maxSeq: extractionMaxSeq });
+            }, settings, { maxSeq: extractionMaxSeq, minSeq: extractionMinSeq });
             if (targetNode) {
                 const ref = normalizeText(item?.ref || '');
                 if (ref) {
@@ -6201,11 +6267,27 @@ async function runExtractionForStore(context, store, {
 
 export function formatNodeBrief(node, settings = null, context = null, extra = {}) {
     const spec = settings ? getSemanticTypeSpec(settings, node?.type, context) : null;
-    return {
+    const out = {
         ...buildLlmFriendlyNodeProjection(node, spec),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
         ...extra,
     };
+    // Carry node.floorRange through to the brief view so the read-api's
+    // freezeNodeBriefView can preserve it for the orchestrator-tools layer
+    // (which translates the seq range to chat[] coords for the LLM).
+    // Stamped by A3 extraction; only present for types whose schema sets
+    // `recordsFloorRange: true`. Spread comes after `extra` to win when a
+    // caller overrides explicitly.
+    const rawFloorRange = node?.floorRange;
+    if (rawFloorRange
+        && typeof rawFloorRange === 'object'
+        && typeof rawFloorRange.start === 'number' && Number.isFinite(rawFloorRange.start)
+        && typeof rawFloorRange.end === 'number' && Number.isFinite(rawFloorRange.end)) {
+        if (out.floorRange === undefined) {
+            out.floorRange = { start: rawFloorRange.start, end: rawFloorRange.end };
+        }
+    }
+    return out;
 }
 
 function formatNodeDetail(node, settings = null, context = null, extra = {}) {
