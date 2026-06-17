@@ -214,6 +214,52 @@ export const LOREBOOK_READ_GUIDANCE_LINES = Object.freeze([
     'You MAY propose lorebook entry edits when an entry hard-constrains output in a way that conflicts with the orchestration you are designing. Classify each conflict before repairing: process coercion (directives that pin HOW the agent thinks during the run — every-round CoT templates, mandatory thinking blocks, "always check X before answering") versus final-output shape (directives that pin the FORM of the final committed reply — wrapping tags, closing recaps, "speak in poetry"). Process coercion poisons the agent loop and must be stripped, its cognitive intent harvested as worldbuilding / persona / scene-anchor content the agent reads as narrative input — not as a new rule. Final-output shape is legitimate and should be kept, rewritten to make the finalize semantics explicit so intermediate orchestration nodes stay free. Use `lorebook_str_replace_in_entry` for surgical clause-level edits that preserve the rest of the entry; reserve `lorebook_update_entry` with `{ "disable": true }` for entries that are pure format coercion with no salvageable content. Never delete entries. Both write tools are approval-gated: each call captures a {before, after} proposal envelope and returns it to you, while the popup renders a diff card the user reviews and approves or rejects. Nothing reaches the on-disk world book until the user approves the card AND clicks Apply. Treat your tool result as "captured for review", not as "applied" — your next round can keep designing without waiting for the disk write to land.',
 ]);
 
+/**
+ * The single source-of-truth mental model the iteration AI (iter-studio)
+ * must hold when authoring any agent / node / planner systemPrompt. This
+ * block is appended to every mode\'s iteration system prompt so the four
+ * mode blocks (spec / director / agenda / loop) can stop re-stating the
+ * same "do not duplicate runtime data" rules from scratch and instead
+ * reduce to mode-specific consequences of the same shared model.
+ *
+ * The three viewpoints (A. profile author = you / B. runtime agent /
+ * C. final generation model) deliberately spell out the visibility
+ * boundary: viewpoint B sees a narrative blob of activated world-info
+ * bodies with NO uid / book-name / metadata tags, so a literal `uid: N`
+ * in any authored systemPrompt is always wrong — uid is a runtime
+ * handle resolved by `lorebook_list` at the moment the agent runs.
+ */
+export const RUNTIME_AGENT_CONTEXT_MENTAL_MODEL = Object.freeze([
+    '# Mental model — what the runtime agent actually sees',
+    '',
+    'You are authoring a profile. The agent you author runs LATER, inside an RP generation pipeline. Hold this picture before writing any systemPrompt text.',
+    '',
+    'At runtime the agent\'s context is assembled like this:',
+    '',
+    '- Director mode: `[system: <story_context>]` + the user\'s preset-assembled messages (character card, chat history, world-info entries the runtime activated for THIS turn, the user\'s final turn that triggered generation) + `[system: </story_context>` + your authored agent.systemPrompt`]`. Sub-agents additionally receive a per-dispatch task brief from the main agent.',
+    '- Loop mode: `[system: your authored system_prompt + auto-appended ## Open Notes]`, then a per-turn user task brief. The loop agent re-runs across rounds; its systemPrompt is constant, the user brief and accumulated tool results vary.',
+    '- Agenda mode: planner and each agenda agent get `[system: their authored systemPrompt]` + runtime-injected task state / upstream agent outputs.',
+    '- Spec mode: each node gets `[system: its authored preset.systemPrompt]` + the runtime-prepended previous orchestration result, approved review feedback, and the node\'s `userPromptTemplate`.',
+    '',
+    'Two facts about the activated world-info entries the agent sees in its context that you MUST internalize:',
+    '',
+    '1. **The agent sees plain entry BODIES, with no metadata.** No `uid=`, no `name=`, no `world=`, no "this came from the lorebook" framing. The runtime splices entry.content text into a narrative blob. The agent cannot distinguish "this paragraph was a lorebook entry" from "this paragraph was the character card" — and it does not need to. Telling it "follow uid 42" or "the lorebook entry tells you X" is meaningless instruction: there is no uid 42 visible to find, and "lorebook entry" is not a category the agent perceives in its input.',
+    '2. **uid is a runtime handle, not a profile-time identifier.** uid is per-book and user-editable; the user can renumber entries between sessions. You are authoring a profile that persists across turns / chats / users / installs — you cannot know what uid any entry has at the moment your profile runs. A literal `uid: N` written into any systemPrompt is always a bug. If you mean "make the agent read entry X", reference X by its stable display name (the `comment` field the user gave it) or by a stable `entry_key` from the user\'s keys array, and let the runtime agent resolve uid itself via `lorebook_list({book_name})` → `lorebook_get({uid})` at runtime.',
+    '',
+    '## Three viewpoints — never mix them in a systemPrompt',
+    '',
+    '- **A. You (iter-studio AI, profile author)** — can read AND propose edits to the user\'s worldbooks via your editor-side tools (`world_book_list` / `lorebook_list` / `lorebook_query` / `lorebook_get` / `lorebook_str_replace_in_entry` / `lorebook_update_entry`). You do this for YOUR audit and editing work. Nothing you observe via these tools is data the runtime agent automatically sees — never copy entry bodies, uids, or worldbook names from your tool results into a profile field.',
+    '- **B. The runtime agent (the one you\'re authoring for)** — read-only lorebook tools, plus its visible `<story_context>` / `system_prompt + user brief` blob. It works in terms of entry names / keys / narrative content, NOT uids / books / metadata. Anything you write in a systemPrompt is read by B.',
+    '- **C. The final generation model** — sees context + the orchestration capsule your profile produced. No tools. Not your direct authoring target.',
+    '',
+    'When you write a systemPrompt, you are writing for viewpoint B. Describe what B should do from B\'s perspective:',
+    '',
+    '- Name the entry it should fetch by user-visible **display name** (entry `comment`) or **stable key** (entry `entry_key`). Never by uid.',
+    '- Name the **tools** it has and what each is for; never explain the injection plumbing ("the runtime injects activated entries…").',
+    '- Name the **output shape** it must emit.',
+    '- Do NOT paste any runtime data into the systemPrompt body — character card, world-info entry bodies, the user\'s latest turn, chat history, upstream stage outputs, the main agent\'s task brief: all of those reach B through the runtime pipeline, not through your authored text.',
+]);
+
 export function getDefaultRequestSystemPrompt() {
     // Mode-agnostic base — applies to spec / director / agenda / loop alike.
     // Spec-specific guidance lives in `SPEC_DEFAULT_GUIDANCE_LINES` below and
