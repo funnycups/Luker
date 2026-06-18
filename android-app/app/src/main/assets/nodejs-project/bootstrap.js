@@ -65,6 +65,18 @@ if (!fs.existsSync(dataRoot)) {
   fs.mkdirSync(dataRoot, { recursive: true });
 }
 
+// The APK packager releases prebuilt frontend Webpack bundles into
+// runtime root under _prebuilt-bundles/. The server picks them up via this
+// env var and skips its in-process Webpack compile when all three files
+// (lib.core.bundle.js, lib.optional.bundle.js, codemirror.bundle.js) are
+// present, which is the biggest single win on cold start.
+if (!process.env.LUKER_PREBUILT_BUNDLES_DIR) {
+  const candidate = path.join(runtimeRoot, '_prebuilt-bundles');
+  if (fs.existsSync(candidate)) {
+    process.env.LUKER_PREBUILT_BUNDLES_DIR = candidate;
+  }
+}
+
 process.chdir(runtimeRoot);
 appendLog('BOOT', `argv=${JSON.stringify(process.argv)}`);
 appendLog('BOOT', `cwd=${process.cwd()}`);

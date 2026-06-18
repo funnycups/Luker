@@ -29,7 +29,19 @@ object LukerRuntimeManager {
     private const val GLOBAL_EXTENSIONS_RELATIVE_PATH = "extensions/third-party"
     private const val NODE_SCRIPT_PATH = "nodejs-project/bootstrap.js"
     private const val NODE_PROJECT_ASSET_PATH = "luker"
+    private const val PREBUILT_BUNDLES_ASSET_PATH = "_prebuilt-bundles"
+    private const val PREBUILT_BUNDLES_RUNTIME_DIR_NAME = "_prebuilt-bundles"
+    // Must match PREBUILT_BUNDLE_FILES in src/middleware/webpack-serve.js. If any
+    // file is missing, the server-side resolver rejects the whole dir and falls
+    // back to compiling Webpack in-process — a 30 s+ regression on Android.
+    private val REQUIRED_PREBUILT_BUNDLES = setOf(
+        "lib.core.bundle.js",
+        "lib.optional.bundle.js",
+        "codemirror.bundle.js",
+    )
     private const val BOOTSTRAP_LOG_FILE = "bootstrap.log"
+    private const val SERVER_READY_PROBE_TIMEOUT_MS = 400
+    private const val PING_FAILURE_LOG_INTERVAL_MS = 30_000L
     private val RUNTIME_PERSIST_RELATIVE_PATHS = listOf(
         "whitelist.txt",
     )
@@ -56,6 +68,8 @@ object LukerRuntimeManager {
     private var dataRootDir: File? = null
     @Volatile
     private var pingFailures: Int = 0
+    @Volatile
+    private var lastPingFailureLogMs: Long = 0L
 
     data class StartResult(val ok: Boolean, val error: String? = null)
     private data class RuntimePaths(
@@ -216,6 +230,7 @@ object LukerRuntimeManager {
             runtimeRoot.mkdirs()
             copyAssetDirectory(context.assets, NODE_PROJECT_ASSET_PATH, runtimeRoot)
             copyAssetFile(context.assets, NODE_SCRIPT_PATH, File(runtimeRoot, "bootstrap.js"))
+            copyPrebuiltBundlesIfPresent(context, runtimeRoot)
             restoreRuntimeArtifacts(persistRoot, runtimeRoot)
             markerFile.writeText(markerValue)
             Log.i(TAG, "Runtime assets prepared at ${runtimeRoot.absolutePath}")
@@ -464,19 +479,54 @@ object LukerRuntimeManager {
         }
     }
 
+    /**
+     * Releases the prebuilt frontend Webpack bundles that the APK packager
+     * generated under `assets/_prebuilt-bundles/` into the runtime root. The
+     * server resolves them via the `LUKER_PREBUILT_BUNDLES_DIR` env var so the
+     * in-process Webpack compile is skipped entirely on Android.
+     */
+    private fun copyPrebuiltBundlesIfPresent(context: Context, runtimeRoot: File) {
+        val entries = runCatching { context.assets.list(PREBUILT_BUNDLES_ASSET_PATH) }.getOrNull()
+        if (entries.isNullOrEmpty()) {
+            Log.i(TAG, "No prebuilt frontend bundles bundled; server will fall back to in-process Webpack compile.")
+            return
+        }
+        val missing = REQUIRED_PREBUILT_BUNDLES - entries.toSet()
+        if (missing.isNotEmpty()) {
+            Log.e(
+                TAG,
+                "Prebuilt bundle ship is incomplete (missing: ${missing.joinToString()}). " +
+                    "Server will fall back to in-process Webpack compile.",
+            )
+            return
+        }
+        val target = File(runtimeRoot, PREBUILT_BUNDLES_RUNTIME_DIR_NAME)
+        target.mkdirs()
+        for (entry in entries) {
+            val assetPath = "$PREBUILT_BUNDLES_ASSET_PATH/$entry"
+            try {
+                copyAssetFile(context.assets, assetPath, File(target, entry))
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to release prebuilt bundle $entry", t)
+            }
+        }
+        Log.i(TAG, "Released ${entries.size} prebuilt frontend bundle(s) to ${target.absolutePath}")
+    }
+
     fun isServerReady(): Boolean {
         return try {
             val url = URL("$SERVER_URL/api/ping")
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 800
-                readTimeout = 800
+                connectTimeout = SERVER_READY_PROBE_TIMEOUT_MS
+                readTimeout = SERVER_READY_PROBE_TIMEOUT_MS
                 doOutput = true
             }
             connection.outputStream.use { os -> os.write(ByteArray(0)) }
             val code = connection.responseCode
             connection.disconnect()
             pingFailures = 0
+            lastPingFailureLogMs = 0L
             code in 200..499
         } catch (e: Exception) {
             pingFailures += 1
@@ -484,9 +534,11 @@ object LukerRuntimeManager {
                 Log.w(TAG, "Node process is not running while server is unreachable. Resetting start state.")
                 started.set(false)
             }
-            if (pingFailures % 30 == 0) {
+            val now = System.currentTimeMillis()
+            if (now - lastPingFailureLogMs >= PING_FAILURE_LOG_INTERVAL_MS) {
                 val detail = e.message ?: e.javaClass.simpleName
                 Log.w(TAG, "Server not ready after $pingFailures probes: $detail, nodeRunning=${isNodeProcessRunning()}")
+                lastPingFailureLogMs = now
             }
             false
         }

@@ -625,18 +625,31 @@ async function preSetupTasks() {
     console.log();
 
     const directories = await getUserDirectoriesList();
+
+    // Schema migrations must complete before downstream readers run, because
+    // diskCache.verify / initializeAllUserMetadata / settingsInit / statsInit
+    // all consume whatever shape these migrations leave behind.
     await migrateGroupChatsMetadataFormat(directories);
+
+    // Content seeding can add new characters/worlds; finish before the
+    // metadata/cache stages scan those directories.
     await checkForNewContent(directories);
-    await diskCache.verify(directories);
+
     migrateFlatSecrets(directories);
     cleanUploads();
     migrateAccessLog();
 
-    await settingsInit();
-    await statsInit();
-
-    // Initialize image metadata
-    await initializeAllUserMetadata(directories);
+    // IO-bound, mutually-independent: each touches disjoint state
+    // (diskCache → character PNGs, settingsInit → settings backups,
+    // statsInit → stats DB, initializeAllUserMetadata → avatar metadata).
+    // Running serially on Android wastes hundreds of ms per user; the JS
+    // event loop happily interleaves these fs reads.
+    await Promise.all([
+        diskCache.verify(directories),
+        settingsInit(),
+        statsInit(),
+        initializeAllUserMetadata(directories),
+    ]);
 
     const cleanupPlugins = await loadPlugins(app, SERVER_PLUGINS_DIRECTORY);
     const consoleTitle = process.title;

@@ -7,6 +7,8 @@ import android.app.Application
 import android.os.Build
 import android.os.Process
 import android.util.Log
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -18,6 +20,7 @@ class LukerApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         installUncaughtExceptionHandler()
+        warmUpWebViewProvider()
     }
 
     private fun installUncaughtExceptionHandler() {
@@ -34,6 +37,29 @@ class LukerApplication : Application() {
                 Process.killProcess(Process.myPid())
                 kotlin.system.exitProcess(10)
             }
+        }
+    }
+
+    /**
+     * Kicks off the WebView provider load (~1-2s on first launch, mostly spent
+     * linking the Chromium renderer process) before MainActivity needs it.
+     *
+     * `startSafeBrowsing` is the AndroidX-recommended path: it asynchronously
+     * loads and initializes the provider without instantiating a WebView, so
+     * it (a) runs off the main thread, (b) is safe with an Application
+     * Context (raw `WebView(applicationContext)` is unsupported and crashes
+     * on several OEMs), and (c) needs no destroy timer. By the time the Node
+     * server is ready and MainActivity creates its real WebView, the provider
+     * is already warm.
+     */
+    private fun warmUpWebViewProvider() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.START_SAFE_BROWSING)) {
+            return
+        }
+        try {
+            WebViewCompat.startSafeBrowsing(this) { /* result ignored */ }
+        } catch (t: Throwable) {
+            Log.w(TAG, "WebView warmup failed", t)
         }
     }
 

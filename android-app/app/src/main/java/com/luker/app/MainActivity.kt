@@ -2061,7 +2061,7 @@ class MainActivity : AppCompatActivity() {
                         loadingText.setText(R.string.loading_webview)
                     }
                 }
-                waitUntilServerReady(240, 1000, bootstrapToken)
+                waitUntilServerReady(SERVER_READY_TOTAL_BUDGET_MS, SERVER_READY_POLL_DELAY_MS, bootstrapToken)
             } catch (t: Throwable) {
                 if (!isBootstrapCurrent(bootstrapToken)) {
                     return@Thread
@@ -2077,8 +2077,8 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun waitUntilServerReady(maxAttempts: Int, delayMs: Long, bootstrapToken: Int) {
-        var remaining = maxAttempts
+    private fun waitUntilServerReady(totalBudgetMs: Long, delayMs: Long, bootstrapToken: Int) {
+        val deadline = System.currentTimeMillis() + totalBudgetMs
         while (isBootstrapCurrent(bootstrapToken)) {
             if (LukerRuntimeManager.isServerReady()) {
                 runOnUiThread {
@@ -2096,14 +2096,13 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
-            if (remaining <= 0) {
+            if (System.currentTimeMillis() >= deadline) {
                 val diagnostics = LukerRuntimeManager.collectDiagnostics(applicationContext)
                 Log.e(tag, "Server readiness timed out.\n$diagnostics")
                 reportRuntimeFailure(getString(R.string.loading_failed_timeout), diagnostics)
                 return
             }
 
-            remaining -= 1
             Thread.sleep(delayMs)
         }
     }
@@ -2383,6 +2382,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_OPEN_ENDPOINT_SETTINGS = "com.luker.app.action.OPEN_ENDPOINT_SETTINGS"
         const val ACTION_RELOAD_WEBVIEW = "com.luker.app.action.RELOAD_WEBVIEW"
+        private const val SERVER_READY_TOTAL_BUDGET_MS: Long = 240_000L
+        private const val SERVER_READY_POLL_DELAY_MS: Long = 100L
     }
 
     private data class StreamRequest(

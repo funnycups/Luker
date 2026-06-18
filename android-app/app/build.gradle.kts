@@ -6,6 +6,7 @@ plugins {
 val projectRootDir = rootProject.projectDir.parentFile
 val generatedNodeProjectDir = layout.buildDirectory.dir("generated/nodejs-project")
 val generatedNodeProjectLukerDir = generatedNodeProjectDir.map { it.dir("luker") }
+val prebuiltBundlesRelativePath = "_prebuilt-bundles"
 val jniLibsDir = file("src/main/jniLibs")
 val availableNodeAbis = jniLibsDir
     .listFiles()
@@ -30,6 +31,45 @@ fun parseAppVersionCode(versionName: String): Int {
 
 val appVersionName = parseAppVersionName(packageJsonFile)
 val appVersionCode = parseAppVersionCode(appVersionName)
+
+// Pre-compile the three frontend Webpack bundles at build time so the
+// APK ships them as static assets. Skips the (very slow) in-process
+// Webpack compile that would otherwise run on the phone on first launch.
+val prebuildFrontendBundles by tasks.registering(Exec::class) {
+    workingDir = projectRootDir
+    commandLine("node", "docker/build-lib.js")
+    val outputDir = File(projectRootDir, "dist/_webpack")
+    inputs.file(File(projectRootDir, "webpack.config.js"))
+    inputs.file(File(projectRootDir, "docker/build-lib.js"))
+    inputs.file(File(projectRootDir, "src/middleware/webpack-serve.js"))
+    inputs.file(File(projectRootDir, "public/lib-bundle-core.js"))
+    inputs.file(File(projectRootDir, "public/lib-bundle-optional.js"))
+    inputs.file(File(projectRootDir, "public/lib-bundle-codemirror.js"))
+    inputs.file(File(projectRootDir, "package.json"))
+    inputs.file(File(projectRootDir, "package-lock.json"))
+    outputs.dir(outputDir)
+    outputs.cacheIf { true }
+}
+
+val collectPrebuiltBundles by tasks.registering(Sync::class) {
+    dependsOn(prebuildFrontendBundles)
+    val sourceRoot = File(projectRootDir, "dist/_webpack")
+    from(sourceRoot) {
+        // Webpack writes outputs to dist/_webpack/<cacheVersion>/output/*.js.
+        // Flatten so the runtime can resolve them by filename without knowing
+        // the cache version, which is git-rev-dependent and not available
+        // inside nodejs-mobile. build-lib.js passes pruneCache:true so only
+        // the current cacheVersion folder exists; the FAIL strategy guards
+        // against a stray sibling sneaking in via aborted/parallel builds.
+        include("*/output/*.js")
+        eachFile {
+            path = name
+        }
+        includeEmptyDirs = false
+    }
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+    into(generatedNodeProjectDir.map { it.dir(prebuiltBundlesRelativePath) })
+}
 
 val prepareNodeProject by tasks.registering(Sync::class) {
     from(projectRootDir) {
@@ -164,6 +204,7 @@ tasks.configureEach {
         taskName.endsWith("LintVitalReportModel")
     if (requiresPreparedNodeProject) {
         dependsOn(prepareNodeProject)
+        dependsOn(collectPrebuiltBundles)
     }
 }
 

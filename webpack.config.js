@@ -2,10 +2,16 @@ import process from 'node:process';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import isDocker from 'is-docker';
-import webpack from 'webpack';
 import { serverDirectory } from './src/server-directory.js';
 import { getVersion, color } from './src/util.js';
+
+// Read webpack's version straight from its package.json instead of `import webpack`
+// so this module — statically imported via the request path — never drags the
+// ~7 MB webpack runtime into Node startup. The actual compiler is loaded on
+// demand inside webpack-serve.js's runWebpackCompiler.
+const webpackVersion = createRequire(import.meta.url)('webpack/package.json').version;
 
 /**
  * Generate a cache version string based on the application version, Git revision, and Webpack version.
@@ -13,7 +19,7 @@ import { getVersion, color } from './src/util.js';
  */
 function getWebpackCacheVersion() {
     return crypto.createHash('shake256', { outputLength: 8 })
-        .update(JSON.stringify([appVersion.pkgVersion, appVersion.gitRevision, webpack.version]))
+        .update(JSON.stringify([appVersion.pkgVersion, appVersion.gitRevision, webpackVersion]))
         .digest('hex');
 }
 
