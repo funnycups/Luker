@@ -2,51 +2,25 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Memory Graph Schema — plugin-owned session store.
+ * Memory Graph Schema — plugin-owned session store, scope-aware.
  *
- * Thin wrapper around createExtensionSettingsSessionStorage scoped
- * to the global MG bucket at
- *
- *     extension_settings.luker_rpg_memory[SESSIONS_BUCKET_KEY]
- *
- * (The module key on extensionSettings is `memory_graph` in the live UI, but
- * we depend on the caller to hand us the right root via getMgSettingsRoot —
- * the wrapper stays agnostic to where the root actually lives.)
- *
- * Preserves the existing bucket path so existing sessions survive the popup
- * migration with no schema change. `clearObsolete` is a no-op (MG has no
- * obsolete keys to wipe under the new popup; the `schemaIterationHistory`
- * cleanup that the shell-driven adapter used to do is no
- * longer the popup's job).
- *
- * Pure ESM. No DOM, no jQuery, no globals.
+ * Restores the per-character vs global session dimension MG had at the
+ * schema layer all along (the `getSchemaScopeInfo` view) but that V2
+ * collapsed into a single global bucket. Now session storage routes the
+ * same way the schema itself does:
+ *   - character scope → sidecar under MG_SIDECAR_NAMESPACE on the avatar
+ *   - global scope    → extension_settings.memory_graph.schema_iter_global_sessions
  */
 
-import { createExtensionSettingsSessionStorage } from '../../../iteration-library/storage.js';
-import { SESSIONS_BUCKET_KEY } from './tools.js';
+export const MG_SIDECAR_NAMESPACE = 'memory_graph_schema_iter_history';
+export const MG_GLOBAL_BUCKET_KEY = 'schema_iter_global_sessions';
 
-/**
- * Generate a stable per-message id. The studio renders messages keyed by
- * id (so React-style diff updates work), and persisted messages keep
- * their id across reloads. The shape — `mg_msg_<timestamp36>_<rand>` —
- * mirrors the session id format and is recognized as MG-origin by
- * downstream consumers (mirrors the CPA `cpa_msg_*` convention).
- */
+const SIDECAR_SCHEMA_VERSION = 1;
+
 export function makeMessageId() {
     return `mg_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Normalize a message read from disk into the shape rendered today.
- * Legacy sessions persisted only `{role, content}`; the upgraded schema
- * adds `id`, `at`, optional `toolCalls`, `edits`, `appliedAt`,
- * `appliedTarget`, `rolledBackAt`, and an `auto` flag for synthetic
- * auto-continue user messages.
- *
- * Tolerance: missing `id` regenerates one, missing `at` falls back to
- * the session's updatedAt, missing arrays stay undefined (renderer
- * uses Array.isArray as the visibility gate).
- */
 export function normalizeMessageShape(m, fallbackAt = Date.now()) {
     if (!m || typeof m !== 'object') return m;
     const out = {
@@ -64,49 +38,122 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
     return out;
 }
 
-/**
- * @param {object} args
- * @param {() => object} args.getMgSettingsRoot
- *        Returns the mutable Memory Graph extension settings root. The
- *        wrapper lazy-creates `[SESSIONS_BUCKET_KEY]` on this root on first
- *        access; the caller does not need to pre-seed it.
- * @param {() => void} args.persistSettings
- *        Called after every mutating op (save / delete) so the host can
- *        flush extension_settings (e.g. via saveSettingsDebounced).
- * @returns {{
- *   list: () => Promise<Array<{ id: string, title: string, updatedAt: number }>>,
- *   load: (id: string) => Promise<object|null>,
- *   save: (session: object) => Promise<void>,
- *   delete: (id: string) => Promise<void>,
- *   clearObsolete: () => Promise<void>,
- * }}
- */
-export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings }) {
+function extractAvatarFromScope(scope) {
+    if (typeof scope !== 'string') return null;
+    if (!scope.startsWith('character_')) return null;
+    const avatar = scope.slice('character_'.length).trim();
+    return avatar || null;
+}
+
+async function readSidecar(ctx, avatar) {
+    try {
+        const raw = await ctx.getCharacterState(avatar, MG_SIDECAR_NAMESPACE);
+        if (raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object') {
+            return raw;
+        }
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[memory-graph schema-iteration] sidecar read failed for ${avatar}, treating as empty:`, err?.message || err);
+    }
+    return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+}
+
+async function writeSidecar(ctx, avatar, sessions) {
+    await ctx.setCharacterState(avatar, MG_SIDECAR_NAMESPACE, {
+        version: SIDECAR_SCHEMA_VERSION,
+        sessions,
+    });
+}
+
+function getGlobalBucket(settingsRoot) {
+    if (!settingsRoot[MG_GLOBAL_BUCKET_KEY] || typeof settingsRoot[MG_GLOBAL_BUCKET_KEY] !== 'object') {
+        settingsRoot[MG_GLOBAL_BUCKET_KEY] = {};
+    }
+    return settingsRoot[MG_GLOBAL_BUCKET_KEY];
+}
+
+export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings, computeScope, ctx }) {
     if (typeof getMgSettingsRoot !== 'function') {
         throw new TypeError('createMgSchemaSessionStore: getMgSettingsRoot must be a function');
     }
     if (typeof persistSettings !== 'function') {
         throw new TypeError('createMgSchemaSessionStore: persistSettings must be a function');
     }
+    if (typeof computeScope !== 'function') {
+        throw new TypeError('createMgSchemaSessionStore: computeScope must be a function');
+    }
+    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.setCharacterState !== 'function') {
+        throw new TypeError('createMgSchemaSessionStore: ctx with getCharacterState + setCharacterState is required');
+    }
 
-    const scope = 'global';
+    function metaOf(s) {
+        return { id: String(s.id), title: String(s.title || s.id), updatedAt: Number(s.updatedAt || 0) };
+    }
 
-    const inner = createExtensionSettingsSessionStorage({
-        getBucket: () => {
-            const root = getMgSettingsRoot() || {};
-            if (!root[SESSIONS_BUCKET_KEY] || typeof root[SESSIONS_BUCKET_KEY] !== 'object') {
-                root[SESSIONS_BUCKET_KEY] = {};
-            }
-            return root[SESSIONS_BUCKET_KEY];
-        },
-        persistSettings,
-    });
+    async function list() {
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            return Object.values(payload.sessions)
+                .filter(s => s && typeof s === 'object' && s.id)
+                .map(metaOf)
+                .sort((a, b) => b.updatedAt - a.updatedAt);
+        }
+        const bucket = getGlobalBucket(getMgSettingsRoot() || {});
+        return Object.values(bucket)
+            .filter(s => s && typeof s === 'object' && s.id)
+            .map(metaOf)
+            .sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+
+    async function load(id) {
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            const stored = payload.sessions[String(id)];
+            return stored ? structuredClone(stored) : null;
+        }
+        const bucket = getGlobalBucket(getMgSettingsRoot() || {});
+        const stored = bucket[String(id)];
+        return stored ? structuredClone(stored) : null;
+    }
+
+    async function save(session) {
+        if (!session?.id) return;
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            payload.sessions[String(session.id)] = structuredClone(session);
+            await writeSidecar(ctx, avatar, payload.sessions);
+            return;
+        }
+        const bucket = getGlobalBucket(getMgSettingsRoot() || {});
+        bucket[String(session.id)] = structuredClone(session);
+        persistSettings();
+    }
+
+    async function deleteFn(id) {
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            delete payload.sessions[String(id)];
+            await writeSidecar(ctx, avatar, payload.sessions);
+            return;
+        }
+        const bucket = getGlobalBucket(getMgSettingsRoot() || {});
+        delete bucket[String(id)];
+        persistSettings();
+    }
 
     return {
-        list: () => inner.listSessions(scope),
-        load: (id) => inner.loadSession(scope, id),
-        save: (session) => inner.saveSession(scope, session),
-        delete: (id) => inner.deleteSession(scope, id),
-        clearObsolete: async () => { /* no-op for MG; nothing legacy to wipe */ },
+        list,
+        load,
+        save,
+        delete: deleteFn,
+        clearObsolete: async () => { /* no-op for MG */ },
     };
 }

@@ -1,30 +1,99 @@
 // tests/memory-graph/schema-iteration-session-store.test.js
 //
-// Round-trips the new message schema fields (id / at / toolCalls / edits /
+// Backend coverage for the scope-aware MG schema-iteration session store:
+//   - global scope → extension_settings.memory_graph.schema_iter_global_sessions
+//   - character scope → sidecar under MG_SIDECAR_NAMESPACE on the avatar
+//
+// Also round-trips the new message schema fields (id / at / toolCalls / edits /
 // appliedAt / appliedTarget / rolledBackAt / auto + top-level pendingEdits)
-// through the MG schema-iteration session store. Also covers
-// makeMessageId and normalizeMessageShape directly so legacy message
-// migration is verified without spinning up the popup's browser deps.
+// through the store, and covers makeMessageId / normalizeMessageShape directly
+// so legacy message migration is verified without spinning up the popup's
+// browser deps.
 
-import { describe, test, expect, beforeEach } from '@jest/globals';
+import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 
 import {
     createMgSchemaSessionStore,
     makeMessageId,
     normalizeMessageShape,
+    MG_SIDECAR_NAMESPACE,
+    MG_GLOBAL_BUCKET_KEY,
 } from '../../public/scripts/extensions/memory-graph/schema-iteration/session-store.js';
-import { SESSIONS_BUCKET_KEY } from '../../public/scripts/extensions/memory-graph/schema-iteration/tools.js';
+
+function makeStubs({ scope = 'global', avatar = null, initialSidecar = null } = {}) {
+    const sidecars = {};
+    if (initialSidecar && avatar) sidecars[`${avatar}:${MG_SIDECAR_NAMESPACE}`] = initialSidecar;
+    const settingsRoot = {};
+    return {
+        getMgSettingsRoot: () => settingsRoot,
+        persistSettings: jest.fn(),
+        computeScope: () => scope === 'character' && avatar ? `character_${avatar}` : 'global',
+        ctx: {
+            getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
+            setCharacterState: jest.fn(async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; }),
+        },
+        sidecars,
+        settingsRoot,
+    };
+}
+
+describe('createMgSchemaSessionStore — global scope uses settings, character scope uses sidecar', () => {
+    test('global scope save writes into extension_settings.memory_graph.schema_iter_global_sessions', async () => {
+        const stubs = makeStubs({ scope: 'global' });
+        const store = createMgSchemaSessionStore(stubs);
+        await store.save({ id: 's1', title: 'Global', updatedAt: 1 });
+        expect(stubs.settingsRoot[MG_GLOBAL_BUCKET_KEY].s1.id).toBe('s1');
+        expect(stubs.persistSettings).toHaveBeenCalled();
+        expect(stubs.ctx.setCharacterState).not.toHaveBeenCalled();
+    });
+
+    test('character scope save writes to the sidecar', async () => {
+        const stubs = makeStubs({ scope: 'character', avatar: 'alice.png' });
+        const store = createMgSchemaSessionStore(stubs);
+        await store.save({ id: 's2', title: 'Per-char', updatedAt: 2 });
+        expect(stubs.sidecars[`alice.png:${MG_SIDECAR_NAMESPACE}`].sessions.s2.id).toBe('s2');
+        expect(stubs.settingsRoot[MG_GLOBAL_BUCKET_KEY]).toBeUndefined();
+    });
+
+    test('list under character scope reads only sidecar contents', async () => {
+        const initial = { version: 1, sessions: { 'sa': { id: 'sa', title: 'A', updatedAt: 1 } } };
+        const stubs = makeStubs({ scope: 'character', avatar: 'alice.png', initialSidecar: initial });
+        const store = createMgSchemaSessionStore(stubs);
+        const metas = await store.list();
+        expect(metas).toEqual([{ id: 'sa', title: 'A', updatedAt: 1 }]);
+    });
+
+    test('list under global scope ignores the sidecar', async () => {
+        const stubs = makeStubs({ scope: 'global' });
+        stubs.settingsRoot[MG_GLOBAL_BUCKET_KEY] = { 'g1': { id: 'g1', title: 'Global', updatedAt: 5 } };
+        const store = createMgSchemaSessionStore(stubs);
+        const metas = await store.list();
+        expect(metas).toEqual([{ id: 'g1', title: 'Global', updatedAt: 5 }]);
+        expect(stubs.ctx.getCharacterState).not.toHaveBeenCalled();
+    });
+
+    test('delete under character scope strips the id from the sidecar map', async () => {
+        const initial = { version: 1, sessions: { 's1': { id: 's1', updatedAt: 1 } } };
+        const stubs = makeStubs({ scope: 'character', avatar: 'alice.png', initialSidecar: initial });
+        const store = createMgSchemaSessionStore(stubs);
+        await store.delete('s1');
+        expect(stubs.sidecars[`alice.png:${MG_SIDECAR_NAMESPACE}`].sessions.s1).toBeUndefined();
+    });
+
+    test('clearObsolete is still a no-op', async () => {
+        const stubs = makeStubs({ scope: 'global' });
+        const store = createMgSchemaSessionStore(stubs);
+        await expect(store.clearObsolete()).resolves.toBeUndefined();
+    });
+});
 
 describe('MG schema — session store basic round-trip', () => {
-    let settingsRoot;
+    let stubs;
     let store;
 
     beforeEach(() => {
-        settingsRoot = {};
-        store = createMgSchemaSessionStore({
-            getMgSettingsRoot: () => settingsRoot,
-            persistSettings: () => { /* no-op for tests */ },
-        });
+        stubs = makeStubs({ scope: 'global' });
+        store = createMgSchemaSessionStore(stubs);
     });
 
     test('save then list returns metadata sorted by updatedAt desc', async () => {
@@ -54,22 +123,19 @@ describe('MG schema — session store basic round-trip', () => {
 
     test('clearObsolete is a no-op (does not throw, no state change)', async () => {
         await store.save({ id: 'a', title: 'one', messages: [], updatedAt: 1 });
-        const before = JSON.stringify(settingsRoot[SESSIONS_BUCKET_KEY]);
+        const before = JSON.stringify(stubs.settingsRoot[MG_GLOBAL_BUCKET_KEY]);
         await store.clearObsolete();
-        expect(JSON.stringify(settingsRoot[SESSIONS_BUCKET_KEY])).toBe(before);
+        expect(JSON.stringify(stubs.settingsRoot[MG_GLOBAL_BUCKET_KEY])).toBe(before);
     });
 });
 
 describe('MG schema session — new message schema persistence', () => {
-    let settingsRoot;
+    let stubs;
     let store;
 
     beforeEach(() => {
-        settingsRoot = {};
-        store = createMgSchemaSessionStore({
-            getMgSettingsRoot: () => settingsRoot,
-            persistSettings: () => { /* no-op */ },
-        });
+        stubs = makeStubs({ scope: 'global' });
+        store = createMgSchemaSessionStore(stubs);
     });
 
     test('save+load round-trips id/at/toolCalls/edits/appliedAt/appliedTarget/rolledBackAt/auto + pendingEdits', async () => {
