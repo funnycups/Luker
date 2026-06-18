@@ -722,6 +722,20 @@ export async function openSchemaIterationStudio(deps) {
             // saveSettings() separately, so this overlap is intentional.
             try { saveSettings(); } catch { /* host save errors surface elsewhere */ }
         },
+        computeScope: () => {
+            // Mirror getSchemaScopeInfo's character-vs-global view so
+            // session storage routes the same way the schema itself does.
+            try {
+                if (typeof getSchemaScopeInfo === 'function') {
+                    const info = getSchemaScopeInfo(context, settings);
+                    if (info?.scope === 'character' && info?.avatar) {
+                        return `character_${info.avatar}`;
+                    }
+                }
+            } catch { /* fall through to global */ }
+            return 'global';
+        },
+        ctx: context,
     });
     await sessionStore.clearObsolete();
 
