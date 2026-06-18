@@ -924,14 +924,15 @@ export async function openCpaIterationStudio(deps) {
     // live snapshot and fall back to the focused find→replace card,
     // because `state.live` has moved on past their edits.
     // ──────────────────────────────────────────────────────────────────
-    function renderPendingEditCard(edit, message) {
-        const isLatestUnapplied = !!message
-            && String(message?.id || '') === state.__latestUnappliedAssistantId;
-        return ITER_UI.diff.renderDiffCard([edit], {
-            i18n: tf,
-            live: isLatestUnapplied ? state.live : undefined,
-        });
-    }
+    // ──────────────────────────────────────────────────────────────────
+    // Pending-edit card rendering is now owned end-to-end by the bus's
+    // profile-edit kind (registered above). The bus walks per-message
+    // entries via renderCardsForMessage, runs each through the shared
+    // diff renderer, and emits the Approve / Reject / Conflict / Rollback
+    // chrome itself. The legacy `renderPendingEditCard` was a thin
+    // wrapper over ITER_UI.diff.renderDiffCard with the same i18n + live
+    // hook and was double-rendering every staged edit. Removed.
+    // ──────────────────────────────────────────────────────────────────
 
 
     // ──────────────────────────────────────────────────────────────────
@@ -1091,7 +1092,11 @@ export async function openCpaIterationStudio(deps) {
 
         const innerHtml = ITER_UI.message.renderMessageCard(message, {
             toolDisplay: CPA_TOOL_DISPLAY,
-            renderEditCard: renderPendingEditCard,
+            // Bus's profile-edit card owns the diff body — no legacy
+            // edit-card render here. Old sessions that still carry
+            // message.edits render nothing here; their bus entries (if
+            // any) still surface via renderApplyControls below.
+            renderEditCard: () => '',
             renderApplyControls: (m) => {
                 // Bus owns per-card chrome + turn-actions. Legacy Apply
                 // button + per-bucket renderers retired.
@@ -1945,9 +1950,10 @@ export async function openCpaIterationStudio(deps) {
         if (persistedToolResults.length > 0 || editToolResults.length > 0) {
             assistantMsg.toolResults = [...persistedToolResults, ...editToolResults];
         }
-        if (edits.length > 0) {
-            assistantMsg.edits = edits.slice();
-        }
+        // No `assistantMsg.edits` write — the bus's profile-edit card
+        // below renders the diff body once. Persisting per-tool edits
+        // here used to drive a legacy editsHtml render that visually
+        // duplicated the bus card.
         state.session.messages.push(assistantMsg);
 
         // Stage this turn's profile sandbox-diff as ONE ProposalBus

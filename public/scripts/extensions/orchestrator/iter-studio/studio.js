@@ -1583,17 +1583,18 @@ export async function openOrchestratorIterationStudio(deps) {
     // "inherit mode default + foo", not "only foo" — which is otherwise
     // invisible in the raw `visible: ... → ['+', foo]` structural diff.
     // ──────────────────────────────────────────────────────────────────
-    function renderPendingEditCard(edit, message) {
-        const isLatestUnapplied = !!message
-            && String(message?.id || '') === state.__latestUnappliedAssistantId;
-        const skillContext = edit?.skillVisibilityChange
-            ? renderSkillVisibilityContext(edit.skillVisibilityChange)
-            : '';
-        const diffHtml = ITER_UI.diff.renderDiffCard([edit], {
-            i18n: tf,
-            live: isLatestUnapplied ? state.live : undefined,
-        });
-        return `${skillContext}${diffHtml}`;
+    function renderPendingEditCard(edit) {
+        // Bus's profile-edit card owns the actual LCS diff body — we no
+        // longer render the diff here. The legacy `renderEditCard` path
+        // still fires per-edit so skill policy-binding tool calls (which
+        // attach a `skillVisibilityChange` blob describing the
+        // "before / after effective visible skill set" for an agent or
+        // mode) can surface that context strip above the bus's combined
+        // diff card. Without this strip the user sees a sandbox-diff for
+        // a structurally opaque enum (`'+'` = inherit, `'*'` = wildcard)
+        // without learning what the change actually means.
+        if (!edit?.skillVisibilityChange) return '';
+        return renderSkillVisibilityContext(edit.skillVisibilityChange);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1754,6 +1755,12 @@ export async function openOrchestratorIterationStudio(deps) {
 
         const innerHtml = ITER_UI.message.renderMessageCard(displayMessage, {
             toolDisplay: ORCH_TOOL_DISPLAY,
+            // Renders ONLY the skill-policy visibility context strip when
+            // the edit carries one — the bus's profile-edit card below
+            // renders the actual LCS diff body. Without this strip the
+            // user wouldn't see what a skill_bind_to_agent / unbind /
+            // set_mode_defaults call actually changes (the raw structural
+            // diff over `'+'` / `'*'` enums is unreadable on its own).
             renderEditCard: renderPendingEditCard,
             renderApplyControls: (m) => {
                 // Bus renders per-card chrome (Approve / Reject / Conflict /
@@ -2683,6 +2690,15 @@ export async function openOrchestratorIterationStudio(deps) {
         // up to that point).
         const combinedEdits = [...skillToolEdits, ...edits];
         if (combinedEdits.length > 0) {
+            // The bus `profile-edit` kind below renders the actual diff
+            // body — but skill policy-binding tool calls also attach a
+            // `skillVisibilityChange` blob to their pendingEdit that
+            // describes the before / after effective visible skill set in
+            // human terms (resolving the opaque `'+'` / `'*'` sentinels).
+            // We persist the raw edits on the message so `renderEditCard`
+            // can surface that context strip above the bus card; the
+            // legacy renderer no longer emits a diff body of its own to
+            // avoid double-rendering.
             assistantMsg.edits = combinedEdits.slice();
         }
         state.session.messages.push(assistantMsg);

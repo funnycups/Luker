@@ -1305,28 +1305,11 @@ export async function openSchemaIterationStudio(deps) {
         return ITER_UI.diff.renderDiffCard(syntheticEdits, { i18n: tf, fieldLabels });
     }
 
-    function renderPendingEditCard(edit, message) {
-        // Coarse sandbox-diff path: one {op:'set', path:'', oldValue:<arr>,
-        // newValue:<arr>}. Fan out into per-changed-id sub-cards so the
-        // model's intent shows up as a small number of focused diffs
-        // instead of one massive stringified array (bug #20).
-        if (edit?.op === 'set' && edit?.path === ''
-            && Array.isArray(edit.oldValue) && Array.isArray(edit.newValue)) {
-            return renderSchemaArrayPendingCards(edit.oldValue, edit.newValue);
-        }
-        // Future fine-grained-op compatibility: anything else flows
-        // straight through the shared renderer, which already handles
-        // empty-path object sets (per-leaf split) and path-keyed sets.
-        // Pass state.live only for the latest unapplied turn so str-ops
-        // resolve against pre-edit values; older turns fall back to the
-        // focused find→replace card (state.live has moved on past them).
-        const isLatestUnapplied = !!message
-            && String(message?.id || '') === state.__latestUnappliedAssistantId;
-        return ITER_UI.diff.renderDiffCard([edit], {
-            i18n: tf,
-            live: isLatestUnapplied ? state.live : undefined,
-        });
-    }
+    // Pending-edit card rendering now lives in the bus's profile-edit
+    // kind (registered above), which wraps `renderSchemaArrayPendingCards`
+    // via its `renderDiff` hook. The legacy `renderPendingEditCard`
+    // wrapper has been retired to avoid double-rendering every staged
+    // edit (renderEditCard path + bus.renderCardsForMessage both fire).
 
     // ──────────────────────────────────────────────────────────────────
     // Chat-message rendering. MG delegates to
@@ -1372,7 +1355,9 @@ export async function openSchemaIterationStudio(deps) {
 
         const innerHtml = ITER_UI.message.renderMessageCard(message, {
             toolDisplay: MG_SCHEMA_TOOL_DISPLAY,
-            renderEditCard: renderPendingEditCard,
+            // Bus's profile-edit card owns the diff body — no legacy
+            // edit-card render here.
+            renderEditCard: () => '',
             renderApplyControls: (m) => {
                 // Bus owns per-card chrome + turn-actions. Render the
                 // per-card stack first (Approve / Reject / Conflict ribbon
@@ -1940,9 +1925,11 @@ export async function openSchemaIterationStudio(deps) {
         if (persistedToolResults.length > 0 || editToolResults.length > 0) {
             assistantMsg.toolResults = [...persistedToolResults, ...editToolResults];
         }
-        if (edits.length > 0) {
-            assistantMsg.edits = edits.slice();
-        }
+        // No `assistantMsg.edits` write — the bus's profile-edit card
+        // below renders the same per-record diff via
+        // renderSchemaArrayPendingCards. Persisting edits on the message
+        // would double up the cards (renderEditCard + the bus path both
+        // fire). Bus is the single source of truth.
         state.session.messages.push(assistantMsg);
 
         // Stage this turn as a single ProposalBus proposal. The MG sandbox-
