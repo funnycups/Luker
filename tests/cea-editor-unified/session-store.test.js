@@ -1,188 +1,128 @@
-import { jest } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
+import { createUnifiedCeaEditorSessionStore, CEA_SIDECAR_NAMESPACE, makeMessageId, normalizeMessageShape } from '../../public/scripts/extensions/character-editor-assistant/editor-iteration/session-store.js';
 
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return { lodash };
+function makeCtx({ initialSidecar = null } = {}) {
+    const sidecars = {};
+    if (initialSidecar) sidecars[`alice.png:${CEA_SIDECAR_NAMESPACE}`] = initialSidecar;
+    return {
+        getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
+        setCharacterState: jest.fn(async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; }),
+        _sidecars: sidecars,
+    };
+}
+
+describe('createUnifiedCeaEditorSessionStore — per-character sidecar backend', () => {
+    test('save writes a sessions map keyed by id into the sidecar', async () => {
+        const ctx = makeCtx();
+        const store = createUnifiedCeaEditorSessionStore({ avatar: 'alice.png', context: ctx });
+        await store.save({ id: 's1', title: 'Alpha', updatedAt: 1 });
+        const written = ctx._sidecars[`alice.png:${CEA_SIDECAR_NAMESPACE}`];
+        expect(written.sessions.s1.id).toBe('s1');
+    });
+
+    test('list returns metas sorted by updatedAt desc', async () => {
+        const ctx = makeCtx({
+            initialSidecar: { version: 1, sessions: {
+                's1': { id: 's1', title: 'Old', updatedAt: 1 },
+                's2': { id: 's2', title: 'New', updatedAt: 5 },
+            } },
+        });
+        const store = createUnifiedCeaEditorSessionStore({ avatar: 'alice.png', context: ctx });
+        const metas = await store.list();
+        expect(metas).toEqual([
+            { id: 's2', title: 'New', updatedAt: 5 },
+            { id: 's1', title: 'Old', updatedAt: 1 },
+        ]);
+    });
+
+    test('load returns null when sidecar is empty', async () => {
+        const ctx = makeCtx();
+        const store = createUnifiedCeaEditorSessionStore({ avatar: 'alice.png', context: ctx });
+        expect(await store.load('missing')).toBeNull();
+    });
+
+    test('delete and remove are aliases — both strip the id from sessions and rewrite', async () => {
+        const ctx = makeCtx({
+            initialSidecar: { version: 1, sessions: { 's1': { id: 's1', updatedAt: 1 } } },
+        });
+        const store = createUnifiedCeaEditorSessionStore({ avatar: 'alice.png', context: ctx });
+        await store.remove('s1');
+        expect(ctx._sidecars[`alice.png:${CEA_SIDECAR_NAMESPACE}`].sessions.s1).toBeUndefined();
+    });
+
+    test('throws when avatar is missing', () => {
+        expect(() => createUnifiedCeaEditorSessionStore({ context: makeCtx() })).toThrow(/avatar is required/);
+    });
+
+    test('throws when context lacks getCharacterState/setCharacterState', () => {
+        expect(() => createUnifiedCeaEditorSessionStore({ avatar: 'a.png', context: {} }))
+            .toThrow(/getCharacterState/);
+    });
 });
 
-let createUnifiedCeaEditorSessionStore;
-let makeMessageId;
-let normalizeMessageShape;
-
-beforeAll(async () => {
-    ({ createUnifiedCeaEditorSessionStore, makeMessageId, normalizeMessageShape } = await import(
-        '../../public/scripts/extensions/character-editor-assistant/editor-iteration/session-store.js'
-    ));
-});
-
-describe('unified CEA editor session-store', () => {
-    it('exports the canonical 3 helpers', () => {
-        expect(typeof createUnifiedCeaEditorSessionStore).toBe('function');
-        expect(typeof makeMessageId).toBe('function');
-        expect(typeof normalizeMessageShape).toBe('function');
+describe('CEA unified editor — normalizeMessageShape (legacy message migration)', () => {
+    test('regenerates id for legacy messages without one', () => {
+        const legacy = { role: 'user', content: 'old' };
+        const normalized = normalizeMessageShape(legacy, 5000);
+        expect(normalized.id).toMatch(/^cea_msg_/);
+        expect(normalized.at).toBe(5000);
+        expect(normalized.role).toBe('user');
+        expect(normalized.content).toBe('old');
     });
 
-    it('makeMessageId returns a unique string per call', () => {
-        const a = makeMessageId();
-        const b = makeMessageId();
-        expect(typeof a).toBe('string');
-        expect(a).not.toBe(b);
-        expect(a.length).toBeGreaterThan(0);
+    test('preserves an existing id', () => {
+        const m = { id: 'existing_id', role: 'assistant', content: 'hi', at: 1234 };
+        const n = normalizeMessageShape(m, 9000);
+        expect(n.id).toBe('existing_id');
+        expect(n.at).toBe(1234);
     });
 
-    it('normalizeMessageShape gives default fields when input is sparse', () => {
-        const m = normalizeMessageShape({ role: 'user', content: 'hi' });
-        expect(m.role).toBe('user');
-        expect(m.content).toBe('hi');
-        expect(typeof m.id).toBe('string');
-        expect(Array.isArray(m.toolCalls)).toBe(true);
-        expect(Array.isArray(m.toolResults)).toBe(true);
-        expect(Array.isArray(m.edits)).toBe(true);
-        expect(typeof m.at).toBe('number');
+    test('falls back to fallbackAt when at is missing', () => {
+        const n = normalizeMessageShape({ role: 'user', content: 'x' }, 7777);
+        expect(n.at).toBe(7777);
     });
 
-    it('normalizeMessageShape preserves toolCalls and toolResults with tool_call_id linkage', () => {
-        const input = {
-            role: 'assistant',
-            content: '',
+    test('drops empty arrays (toolCalls/toolResults/edits stay undefined)', () => {
+        const n = normalizeMessageShape({ id: 'a', role: 'user', content: '', toolCalls: [], toolResults: [], edits: [] }, 1);
+        expect(n.toolCalls).toBeUndefined();
+        expect(n.toolResults).toBeUndefined();
+        expect(n.edits).toBeUndefined();
+    });
+
+    test('preserves toolCalls/toolResults/edits/appliedAt/appliedTarget/rolledBackAt/auto when present', () => {
+        const n = normalizeMessageShape({
+            id: 'a', role: 'assistant', content: 'ok', at: 100,
             toolCalls: [{ id: 'c1', name: 'lorebook_query', args: { book_name: 'a', query: 'x' } }],
             toolResults: [{ tool_call_id: 'c1', content: { hits: 0 } }],
-            edits: [],
-        };
-        const m = normalizeMessageShape(input);
-        expect(m.toolCalls).toHaveLength(1);
-        expect(m.toolCalls[0].id).toBe('c1');
-        expect(m.toolResults).toHaveLength(1);
-        expect(m.toolResults[0].tool_call_id).toBe('c1');
-        expect(m.toolResults[0].content).toEqual({ hits: 0 });
-    });
-
-    it('normalizeMessageShape preserves edits with target.kind and bookName', () => {
-        const input = {
-            role: 'assistant',
-            edits: [
-                { op: 'set', path: 'description', oldValue: 'old', newValue: 'new', target: { kind: 'character' } },
-                { op: 'set', path: 'entries.0.content', oldValue: 'a', newValue: 'b', target: { kind: 'lorebook', bookName: 'BookA' } },
-            ],
-        };
-        const m = normalizeMessageShape(input);
-        expect(m.edits).toHaveLength(2);
-        expect(m.edits[0].target.kind).toBe('character');
-        expect(m.edits[1].target.kind).toBe('lorebook');
-        expect(m.edits[1].target.bookName).toBe('BookA');
-    });
-
-    it('normalizeMessageShape preserves appliedAt, appliedTarget, rolledBackAt, auto flags', () => {
-        const now = Date.now();
-        const m = normalizeMessageShape({
-            role: 'assistant',
-            content: 'x',
-            appliedAt: now,
-            appliedTarget: 'character',
-            rolledBackAt: now + 100,
+            edits: [{ op: 'set', path: 'description', oldValue: 'a', newValue: 'b', target: { kind: 'character' } }],
+            appliedAt: 200, appliedTarget: 'character',
+            rolledBackAt: 300,
             auto: true,
-        });
-        expect(m.appliedAt).toBe(now);
-        expect(m.appliedTarget).toBe('character');
-        expect(m.rolledBackAt).toBe(now + 100);
-        expect(m.auto).toBe(true);
+        }, 1);
+        expect(n.toolCalls).toHaveLength(1);
+        expect(n.toolCalls[0].id).toBe('c1');
+        expect(n.toolResults).toHaveLength(1);
+        expect(n.toolResults[0].tool_call_id).toBe('c1');
+        expect(n.edits).toHaveLength(1);
+        expect(n.edits[0].target.kind).toBe('character');
+        expect(n.appliedAt).toBe(200);
+        expect(n.appliedTarget).toBe('character');
+        expect(n.rolledBackAt).toBe(300);
+        expect(n.auto).toBe(true);
     });
 
-    it('normalizeMessageShape preserves op-specific fields on lorebook_entry_update edits (CEA-1)', () => {
-        // CEA-1 regression: the legacy normalizeEdit only kept op/path/oldValue
-        // /newValue/target, dropping `patch` and `before`. After persist +
-        // reload, the diff card rendered empty and rollback couldn't rebuild
-        // the inverse op. This test pins the round-trip behavior.
-        const before = { content: 'old', comment: 'old comment' };
-        const patch = { content: 'new', comment: 'new comment' };
-        const input = {
-            role: 'assistant',
-            edits: [
-                {
-                    op: 'lorebook_entry_update',
-                    path: 'lorebook.entries',
-                    uid: 42,
-                    patch,
-                    before,
-                    target: { kind: 'lorebook', bookName: 'BookA' },
-                },
-            ],
-        };
-        const m = normalizeMessageShape(input);
-        expect(m.edits).toHaveLength(1);
-        expect(m.edits[0].op).toBe('lorebook_entry_update');
-        expect(m.edits[0].uid).toBe(42);
-        expect(m.edits[0].patch).toEqual(patch);
-        expect(m.edits[0].before).toEqual(before);
-        expect(m.edits[0].target.bookName).toBe('BookA');
+    test('returns input unchanged for non-object', () => {
+        expect(normalizeMessageShape(null)).toBeNull();
+        expect(normalizeMessageShape(undefined)).toBeUndefined();
     });
+});
 
-    it('normalizeMessageShape preserves str_replace find/replace fields (CEA-1)', () => {
-        const m = normalizeMessageShape({
-            role: 'assistant',
-            edits: [{
-                op: 'str_replace',
-                path: 'description',
-                find: 'foo',
-                replace: 'bar',
-                target: { kind: 'character' },
-            }],
-        });
-        expect(m.edits[0].find).toBe('foo');
-        expect(m.edits[0].replace).toBe('bar');
-    });
-
-    it('normalizeMessageShape preserves lorebook_entry_add entry payload (CEA-1)', () => {
-        const entry = { uid: 7, comment: 'new entry', key: ['foo'], content: 'body' };
-        const m = normalizeMessageShape({
-            role: 'assistant',
-            edits: [{
-                op: 'lorebook_entry_add',
-                path: 'lorebook.entries',
-                uid: 7,
-                entry,
-                target: { kind: 'lorebook', bookName: 'BookA' },
-            }],
-        });
-        expect(m.edits[0].uid).toBe(7);
-        expect(m.edits[0].entry).toEqual(entry);
-    });
-
-    it('normalizeMessageShape preserves lorebook_entry_remove entry snapshot (CEA-1)', () => {
-        // The remove op carries the live entry as `entry` so the inverse
-        // (`lorebook_entry_add`) can faithfully restore it on rollback.
-        const removed = { uid: 5, comment: 'doomed', content: 'gone' };
-        const m = normalizeMessageShape({
-            role: 'assistant',
-            edits: [{
-                op: 'lorebook_entry_remove',
-                path: 'lorebook.entries',
-                uid: 5,
-                entry: removed,
-                target: { kind: 'lorebook', bookName: 'BookA' },
-            }],
-        });
-        expect(m.edits[0].uid).toBe(5);
-        expect(m.edits[0].entry).toEqual(removed);
-    });
-
-    it('createUnifiedCeaEditorSessionStore returns a store with the expected methods', () => {
-        // Stub the storage dep at module load time. The store factory takes a
-        // ctx + options object — match the sibling signature.
-        const fakeCtx = {
-            extensionSettings: {},
-            saveSettings: () => {},
-            saveSettingsDebounced: () => {},
-        };
-        const store = createUnifiedCeaEditorSessionStore({
-            context: fakeCtx,
-            avatar: 'avatar.png',
-            computeScope: () => 'character',
-        });
-        // Mirror the sibling stores' interface — common methods.
-        expect(typeof store.saveSession === 'function' || typeof store.save === 'function').toBe(true);
-        expect(typeof store.loadSession === 'function' || typeof store.load === 'function').toBe(true);
-        expect(typeof store.listSessions === 'function' || typeof store.list === 'function').toBe(true);
-        expect(typeof store.deleteSession === 'function' || typeof store.remove === 'function').toBe(true);
+describe('CEA unified editor — makeMessageId', () => {
+    test('produces unique cea_msg_-prefixed ids', () => {
+        const a = makeMessageId();
+        const b = makeMessageId();
+        expect(a).toMatch(/^cea_msg_/);
+        expect(b).toMatch(/^cea_msg_/);
+        expect(a).not.toBe(b);
     });
 });

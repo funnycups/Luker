@@ -376,11 +376,12 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
         // does — and verify that a session marked `_transient` with no
         // messages/pendingEdits never reaches the bucket.
         //
-        // We use the real store factory + an in-memory settings root to
+        // We use the real store factory + an in-memory sidecar map to
         // observe what would actually land on disk.
+        const sidecars = {};
         const fakeCtx = {
-            extensionSettings: { character_editor_assistant: {} },
-            saveSettingsDebounced: () => {},
+            getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
+            setCharacterState: async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; },
         };
         const store = createUnifiedCeaEditorSessionStore({
             context: fakeCtx,
@@ -414,9 +415,10 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
     });
 
     test('once messages exist the gate falls through and the session persists', async () => {
+        const sidecars = {};
         const fakeCtx = {
-            extensionSettings: { character_editor_assistant: {} },
-            saveSettingsDebounced: () => {},
+            getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
+            setCharacterState: async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; },
         };
         const store = createUnifiedCeaEditorSessionStore({
             context: fakeCtx,
@@ -453,9 +455,10 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
         // start with two saved sessions, delete both, then "create new
         // session" (transient marker on) and run the persist gate; the
         // store must end up empty.
+        const sidecars = {};
         const fakeCtx = {
-            extensionSettings: { character_editor_assistant: {} },
-            saveSettingsDebounced: () => {},
+            getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
+            setCharacterState: async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; },
         };
         const store = createUnifiedCeaEditorSessionStore({
             context: fakeCtx,
