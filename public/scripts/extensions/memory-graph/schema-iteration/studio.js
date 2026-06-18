@@ -80,6 +80,7 @@ import {
 import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
 import { buildSystemPrompt, DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
+import { migrateMgSchemaSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
 
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
@@ -737,6 +738,16 @@ export async function openSchemaIterationStudio(deps) {
         },
         ctx: context,
     });
+    try {
+        await migrateMgSchemaSessionsV2ToSidecar({
+            settingsRoot: settings,
+            ctx: context,
+            persistSettings: () => { try { saveSettings(); } catch { /* ignore */ } },
+        });
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[memory-graph schema-iteration] V2-to-sidecar migration threw, continuing', err);
+    }
     await sessionStore.clearObsolete();
 
     // Prime markdown deps so the first paint has formatted messages
