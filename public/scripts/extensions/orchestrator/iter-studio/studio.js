@@ -113,6 +113,7 @@ import {
     makeMessageId,
     normalizeMessageShape,
 } from './session-store.js';
+import { migrateOrchSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
 // auto-continue gate is now `bus.hasOutstanding()` — the standalone
 // gate module + its unit test were retired during the ProposalBus migration.
@@ -1047,6 +1048,24 @@ export async function openOrchestratorIterationStudio(deps) {
         ctx: __ctx,
     });
     await sessionStore.clearObsolete();
+
+    try {
+        await migrateOrchSessionsV2ToSidecar({
+            settingsRoot: settings,
+            ctx: __ctx,
+            persistSettings: () => {
+                try {
+                    if (typeof globalThis !== 'undefined' && typeof globalThis.saveSettingsDebounced === 'function') {
+                        globalThis.saveSettingsDebounced();
+                    }
+                } catch { /* ignore */ }
+            },
+        });
+    } catch (err) {
+        // Migration is best-effort — never block popup mount on a migration failure.
+        // eslint-disable-next-line no-console
+        console.warn('[orchestrator iter-studio] V2-to-sidecar migration threw, continuing with current bucket layout', err);
+    }
 
     // Prime markdown deps so the first paint has formatted messages
     // rather than escaped fallback (`ensureMarkdownDeps` caches).
