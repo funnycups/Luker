@@ -89,6 +89,7 @@ import {
     makeMessageId,
     normalizeMessageShape,
 } from './session-store.js';
+import { migrateCeaSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
 import { migrateLegacyCeaEditorSession } from './session-migration.js';
 
 const MODULE = 'cea-editor-unified';
@@ -1550,6 +1551,25 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         context,
         avatar,
     });
+    try {
+        const settingsRoot = (context?.extensionSettings && typeof context.extensionSettings === 'object'
+            && context.extensionSettings.character_editor_assistant
+            && typeof context.extensionSettings.character_editor_assistant === 'object')
+            ? context.extensionSettings.character_editor_assistant
+            : null;
+        if (settingsRoot) {
+            await migrateCeaSessionsV2ToSidecar({
+                settingsRoot,
+                ctx: context,
+                persistSettings: typeof context.saveSettingsDebounced === 'function'
+                    ? context.saveSettingsDebounced
+                    : (typeof context.saveSettings === 'function' ? context.saveSettings : () => {}),
+            });
+        }
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[character-editor-assistant] V2-to-sidecar migration threw, continuing', err);
+    }
 
     // One-shot legacy migration: if the unified namespace is empty for this
     // avatar, attempt to import sessions from the pre-unification CEA editor
