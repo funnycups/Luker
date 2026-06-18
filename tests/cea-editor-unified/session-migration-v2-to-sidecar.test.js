@@ -67,4 +67,26 @@ describe('migrateCeaSessionsV2ToSidecar', () => {
         expect(result.migrated).toBe(0);
         warnSpy.mockRestore();
     });
+
+    test('drops empty char_ bucket without skipping (empty-but-orphan from a deleted character)', async () => {
+        const settingsRoot = {
+            unified_cea_editor_sessions: {
+                'char_ghost.png': {}, // empty sessionMap, ghost avatar not in character list
+            },
+        };
+        const ctx = {
+            getCharacterState: jest.fn(),
+            setCharacterState: jest.fn(),
+            characters: [{ avatar: 'alice.png' }],
+        };
+        const persistSettings = jest.fn();
+
+        const result = await migrateCeaSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings });
+
+        expect(result.migrated).toBe(0);
+        expect(result.skipped).toBe(0);
+        expect(settingsRoot.unified_cea_editor_sessions).toBeUndefined();
+        expect(settingsRoot[CEA_MIGRATION_FLAG_KEY]).toBe(true);
+        expect(ctx.setCharacterState).not.toHaveBeenCalled();
+    });
 });

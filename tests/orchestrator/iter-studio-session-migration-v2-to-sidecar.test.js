@@ -129,4 +129,27 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         expect(sidecars[`alice.png:${ORCH_SIDECAR_NAMESPACE}`].sessions.old1.id).toBe('old1');
         expect(sidecars[`alice.png:${ORCH_SIDECAR_NAMESPACE}`].version).toBe(1);
     });
+
+    test('drops empty character_ bucket without skipping (empty-but-orphan from a deleted character)', async () => {
+        const settingsRoot = {
+            iterStudioV2: {
+                director: {
+                    'character_ghost.png': {}, // empty sessionMap
+                },
+            },
+        };
+        const ctx = {
+            getCharacterState: jest.fn(),
+            setCharacterState: jest.fn(),
+            characters: [{ avatar: 'alice.png' }],
+        };
+        const persistSettings = jest.fn();
+
+        const result = await migrateOrchSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings });
+
+        expect(result.migrated).toBe(0);
+        expect(result.skipped).toBe(0);
+        expect(settingsRoot.iterStudioV2).toBeUndefined();
+        expect(settingsRoot[MIGRATION_FLAG_KEY]).toBe(true);
+    });
 });

@@ -54,6 +54,14 @@ export async function migrateCeaSessionsV2ToSidecar({ settingsRoot, ctx, persist
 
     for (const [scope, sessionMap] of Object.entries(v2)) {
         if (!sessionMap || typeof sessionMap !== 'object') continue;
+        // Empty bucket has nothing to migrate or lose; drop it cleanly
+        // without classifying it as a failure (otherwise an orphan from
+        // a deleted character keeps the migration flag from ever setting,
+        // forcing the migrator to re-run on every popup mount).
+        if (Object.keys(sessionMap).length === 0) {
+            delete v2[scope];
+            continue;
+        }
         if (!scope.startsWith('char_')) {
             console.warn(`[CEA editor migration] unexpected non-char scope in V2 bucket: ${scope}`);
             skipped += Object.keys(sessionMap).length;

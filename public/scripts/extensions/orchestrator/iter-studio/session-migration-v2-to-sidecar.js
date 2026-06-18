@@ -80,6 +80,13 @@ export async function migrateOrchSessionsV2ToSidecar({ settingsRoot, ctx, persis
                 }
                 continue;
             }
+            // Empty bucket has nothing to migrate or lose; drop it cleanly
+            // without classifying it as a failure (otherwise an orphan from
+            // a deleted character keeps the migration flag from ever setting).
+            if (Object.keys(sessionMap).length === 0) {
+                delete scopeMap[scope];
+                continue;
+            }
             if (!scope.startsWith('character_')) {
                 skipped += Object.keys(sessionMap).length;
                 continue;
