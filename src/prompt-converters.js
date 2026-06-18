@@ -293,8 +293,7 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
                         content.text = `${message.name}: ${content.text}`;
                     }
 
-                    // If the text is empty, replace it with a zero-width space
-                    return { type: 'text', text: content.text || '\u200b' };
+                    return { type: 'text', text: content.text };
                 }
 
                 return content;
@@ -367,7 +366,32 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
         });
     }
 
-    return { messages: mergedMessages, systemPrompt: systemPrompt };
+    // Anthropic rejects text blocks that are empty or whitespace-only. Drop
+    // such blocks, then drop any message left with zero content blocks, then
+    // re-merge adjacent same-role survivors that became neighbours.
+    const compactedMessages = [];
+    for (const message of mergedMessages) {
+        const keptContent = message.content.filter((content) => {
+            if (content.type !== 'text') return true;
+            return typeof content.text === 'string' && content.text.trim() !== '';
+        });
+        if (keptContent.length === 0) continue;
+        const last = compactedMessages[compactedMessages.length - 1];
+        if (last && last.role === message.role) {
+            last.content.push(...keptContent);
+        } else {
+            compactedMessages.push({ ...message, content: keptContent });
+        }
+    }
+
+    if (compactedMessages.length === 0) {
+        compactedMessages.push({
+            role: 'user',
+            content: [{ type: 'text', text: PROMPT_PLACEHOLDER }],
+        });
+    }
+
+    return { messages: compactedMessages, systemPrompt: systemPrompt };
 }
 
 /**

@@ -950,12 +950,57 @@ describe('convertClaudeMessages', () => {
         expect(toolResult.content).toBe('Found results');
     });
 
-    test('replaces empty text content with zero-width space', () => {
+    test('drops messages whose only content is empty or whitespace-only text', () => {
         const messages = [
             { role: 'user', content: [{ type: 'text', text: '' }] },
         ];
         const result = mod.convertClaudeMessages(messages, '', false, false, names);
-        expect(result.messages[0].content[0].text).toBe('\u200b');
+        // Empty text leaves the message with zero content blocks, so the message
+        // is dropped and the placeholder takes its place to keep Anthropic happy.
+        expect(result.messages).toHaveLength(1);
+        expect(result.messages[0].role).toBe('user');
+        expect(result.messages[0].content[0].text).not.toBe('');
+        expect(result.messages[0].content[0].text.trim()).not.toBe('');
+    });
+
+    test('drops whitespace-only string user message and re-merges neighbours', () => {
+        const messages = [
+            { role: 'user', content: 'Hello' },
+            { role: 'assistant', content: '   \n\t  ' },
+            { role: 'user', content: 'Still there?' },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        // The whitespace assistant turn is dropped; the two user turns become
+        // neighbours and get merged into a single user message.
+        expect(result.messages).toHaveLength(1);
+        expect(result.messages[0].role).toBe('user');
+        const texts = result.messages[0].content.map(c => c.text);
+        expect(texts).toEqual(['Hello', 'Still there?']);
+    });
+
+    test('strips whitespace-only blocks but keeps the message when other blocks survive', () => {
+        const messages = [
+            { role: 'user', content: [
+                { type: 'text', text: '   ' },
+                { type: 'text', text: 'real content' },
+                { type: 'text', text: '\n\n' },
+            ] },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        expect(result.messages).toHaveLength(1);
+        expect(result.messages[0].content).toEqual([{ type: 'text', text: 'real content' }]);
+    });
+
+    test('falls back to placeholder when every message is whitespace-only', () => {
+        const messages = [
+            { role: 'user', content: '   ' },
+            { role: 'assistant', content: '\n' },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        expect(result.messages).toHaveLength(1);
+        expect(result.messages[0].role).toBe('user');
+        expect(result.messages[0].content[0].type).toBe('text');
+        expect(result.messages[0].content[0].text.trim()).not.toBe('');
     });
 
     test('prepends example_assistant name with charName in system prompt', () => {
