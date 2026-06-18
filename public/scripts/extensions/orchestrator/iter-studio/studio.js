@@ -1044,6 +1044,7 @@ export async function openOrchestratorIterationStudio(deps) {
             } catch { /* ignore */ }
         },
         computeScope: () => computeSessionScope(),
+        ctx: __ctx,
     });
     await sessionStore.clearObsolete();
 
