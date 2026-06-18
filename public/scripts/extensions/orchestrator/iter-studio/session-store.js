@@ -2,54 +2,33 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Orchestrator — plugin-owned session store.
+ * Orchestrator — plugin-owned session store, sidecar-backed.
  *
- * Stage 5 sibling to studio.js. Thin wrapper around Stage 1's
- * createExtensionSettingsSessionStorage scoped to
+ * Per-character iter-studio sessions live in a character sidecar file
+ * (`<char>.state.orchestrator_iter_studio_history.json` on disk) via the
+ * SillyTavern `getCharacterState` / `setCharacterState` API. Global-scope
+ * sessions stay in `extension_settings.orchestrator.iter_studio_global_sessions[mode]`
+ * — matching pre-V2 orch behaviour where only character-bound history ever
+ * touched the character card and global history rode along with settings.
  *
- *     extension_settings.luker_orchestrator[SESSIONS_BUCKET_KEY][mode][scope]
- *
- * Both the iteration mode (spec / loop / agenda / director) and the dynamic
- * scope (global vs character_<avatar>) are baked into the wrapper's closure so
- * the popup gets the simple `list / load / save / delete` surface the other
- * plugin-owned popups expose — without having to remember to thread the mode
- * + scope through every call site.
- *
- * `clearObsolete` strips the legacy `global_iteration_history` key the
- * pre-v2 schema used; the v2 bucket lives under SESSIONS_BUCKET_KEY and is
- * unaffected.
+ * `mode` is preserved as a per-session field; the sidecar stores ALL modes
+ * for a given character in one file (the user only ever opens one mode at
+ * a time, so cross-mode contention is impossible). `list()` filters by the
+ * factory's `mode` so each popup sees only its own bucket.
  *
  * Pure ESM. No DOM, no jQuery, no globals.
  */
 
-import { createExtensionSettingsSessionStorage } from '../../../iteration-library/storage.js';
+export const ORCH_SIDECAR_NAMESPACE = 'orchestrator_iter_studio_history';
+export const ORCH_GLOBAL_BUCKET_KEY = 'iter_studio_global_sessions';
 
-const SESSIONS_BUCKET_KEY = 'iterStudioV2';
 const LEGACY_GLOBAL_HISTORY_KEY = 'global_iteration_history';
+const SIDECAR_SCHEMA_VERSION = 1;
 
-/**
- * Generate a stable per-message id. The studio renders messages keyed by
- * id (so React-style diff updates work), and persisted messages keep
- * their id across reloads. The shape — `orch_msg_<timestamp36>_<rand>` —
- * mirrors the session id format and is recognized as orch-origin by
- * downstream consumers (mirrors the CPA `cpa_msg_*` / MG `mg_msg_*`
- * conventions).
- */
 export function makeMessageId() {
     return `orch_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Normalize a message read from disk into the shape rendered today.
- * Legacy sessions persisted only `{role, content}`; the upgraded schema
- * adds `id`, `at`, optional `toolCalls`, `toolResults`, `edits`,
- * `appliedAt`, `appliedTarget`, `rolledBackAt`, and an `auto` flag for
- * synthetic auto-continue user messages.
- *
- * Tolerance: missing `id` regenerates one, missing `at` falls back to
- * the session's updatedAt, missing arrays stay undefined (renderer
- * uses Array.isArray as the visibility gate).
- */
 export function normalizeMessageShape(m, fallbackAt = Date.now()) {
     if (!m || typeof m !== 'object') return m;
     const out = {
@@ -68,42 +47,52 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
     return out;
 }
 
-/**
- * @param {object} args
- * @param {string} args.mode
- *        One of 'spec' | 'loop' | 'agenda' | 'director'. Each mode keeps its
- *        own session bucket so switching execution modes in the host UI does
- *        not pollute the other modes' history lists.
- * @param {() => object} args.getOrchestratorSettingsRoot
- *        Returns the mutable orchestrator extension settings root. The
- *        wrapper lazy-creates `[SESSIONS_BUCKET_KEY][mode][scope]` on first
- *        access; the caller does not need to pre-seed it.
- * @param {() => void} args.persistSettings
- *        Called after every mutating op (save / delete) so the host can
- *        flush extension_settings (e.g. via saveSettingsDebounced).
- * @param {() => string} args.computeScope
- *        Returns the current scope key (typically 'global' or
- *        `character_<avatar>`). Evaluated lazily on each bucket access so
- *        switching characters mid-session routes new writes to the right
- *        bucket without restarting the popup.
- * @returns {{
- *   list: () => Promise<Array<{ id: string, title: string, updatedAt: number }>>,
- *   load: (id: string) => Promise<object|null>,
- *   save: (session: object) => Promise<void>,
- *   delete: (id: string) => Promise<void>,
- *   clearObsolete: () => Promise<void>,
- * }}
- */
+function extractAvatarFromScope(scope) {
+    if (typeof scope !== 'string') return null;
+    if (!scope.startsWith('character_')) return null;
+    const avatar = scope.slice('character_'.length).trim();
+    return avatar || null;
+}
+
+async function readSidecar(ctx, avatar) {
+    try {
+        const raw = await ctx.getCharacterState(avatar, ORCH_SIDECAR_NAMESPACE);
+        if (raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object') {
+            return raw;
+        }
+        return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+    } catch {
+        return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+    }
+}
+
+async function writeSidecar(ctx, avatar, payload) {
+    await ctx.setCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, {
+        version: SIDECAR_SCHEMA_VERSION,
+        sessions: payload.sessions || {},
+    });
+}
+
+function getGlobalBucket(settingsRoot, mode) {
+    if (!settingsRoot[ORCH_GLOBAL_BUCKET_KEY] || typeof settingsRoot[ORCH_GLOBAL_BUCKET_KEY] !== 'object') {
+        settingsRoot[ORCH_GLOBAL_BUCKET_KEY] = {};
+    }
+    const root = settingsRoot[ORCH_GLOBAL_BUCKET_KEY];
+    if (!root[mode] || typeof root[mode] !== 'object') {
+        root[mode] = {};
+    }
+    return root[mode];
+}
+
 export function createOrchestratorIterationSessionStore({
     mode,
     getOrchestratorSettingsRoot,
     persistSettings,
     persistSettingsImmediate,
     computeScope,
+    ctx,
 }) {
-    if (!mode) {
-        throw new TypeError('createOrchestratorIterationSessionStore: mode is required');
-    }
+    if (!mode) throw new TypeError('createOrchestratorIterationSessionStore: mode is required');
     if (typeof getOrchestratorSettingsRoot !== 'function') {
         throw new TypeError('createOrchestratorIterationSessionStore: getOrchestratorSettingsRoot must be a function');
     }
@@ -113,45 +102,106 @@ export function createOrchestratorIterationSessionStore({
     if (typeof computeScope !== 'function') {
         throw new TypeError('createOrchestratorIterationSessionStore: computeScope must be a function');
     }
+    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.setCharacterState !== 'function') {
+        throw new TypeError('createOrchestratorIterationSessionStore: ctx with getCharacterState + setCharacterState is required');
+    }
 
-    // Single fixed scope inside the underlying storage wrapper; the real
-    // dynamic mode + scope are resolved per-call inside getBucket.
-    const innerScope = '__bound__';
+    function metaOf(s) {
+        return { id: String(s.id), title: String(s.title || s.id), updatedAt: Number(s.updatedAt || 0) };
+    }
 
-    const inner = createExtensionSettingsSessionStorage({
-        getBucket: () => {
-            const root = getOrchestratorSettingsRoot() || {};
-            if (!root[SESSIONS_BUCKET_KEY] || typeof root[SESSIONS_BUCKET_KEY] !== 'object') {
-                root[SESSIONS_BUCKET_KEY] = {};
-            }
-            if (!root[SESSIONS_BUCKET_KEY][mode] || typeof root[SESSIONS_BUCKET_KEY][mode] !== 'object') {
-                root[SESSIONS_BUCKET_KEY][mode] = {};
-            }
-            const scope = computeScope() || 'global';
-            if (!root[SESSIONS_BUCKET_KEY][mode][scope] || typeof root[SESSIONS_BUCKET_KEY][mode][scope] !== 'object') {
-                root[SESSIONS_BUCKET_KEY][mode][scope] = {};
-            }
-            return root[SESSIONS_BUCKET_KEY][mode][scope];
-        },
-        persistSettings,
-        persistSettingsImmediate,
-    });
+    async function list() {
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            return Object.values(payload.sessions)
+                .filter(s => s && typeof s === 'object' && s.id && (s.mode === mode || !s.mode))
+                .map(metaOf)
+                .sort((a, b) => b.updatedAt - a.updatedAt);
+        }
+        const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
+        return Object.values(bucket)
+            .filter(s => s && typeof s === 'object' && s.id)
+            .map(metaOf)
+            .sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+
+    async function load(id) {
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            const stored = payload.sessions[String(id)];
+            return stored && (stored.mode === mode || !stored.mode) ? structuredClone(stored) : null;
+        }
+        const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
+        const stored = bucket[String(id)];
+        return stored ? structuredClone(stored) : null;
+    }
+
+    async function save(session) {
+        if (!session?.id) return;
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            payload.sessions[String(session.id)] = structuredClone(session);
+            await writeSidecar(ctx, avatar, payload);
+            return;
+        }
+        const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
+        bucket[String(session.id)] = structuredClone(session);
+        persistSettings();
+    }
+
+    async function saveFlush(session) {
+        if (!session?.id) return;
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            payload.sessions[String(session.id)] = structuredClone(session);
+            await writeSidecar(ctx, avatar, payload);
+            return;
+        }
+        const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
+        bucket[String(session.id)] = structuredClone(session);
+        if (typeof persistSettingsImmediate === 'function') {
+            await persistSettingsImmediate();
+        } else {
+            persistSettings();
+        }
+    }
+
+    async function deleteFn(id) {
+        const scope = computeScope() || 'global';
+        const avatar = extractAvatarFromScope(scope);
+        if (avatar) {
+            const payload = await readSidecar(ctx, avatar);
+            delete payload.sessions[String(id)];
+            await writeSidecar(ctx, avatar, payload);
+            return;
+        }
+        const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
+        delete bucket[String(id)];
+        persistSettings();
+    }
+
+    async function clearObsolete() {
+        const root = getOrchestratorSettingsRoot();
+        if (root && Object.hasOwn(root, LEGACY_GLOBAL_HISTORY_KEY)) {
+            delete root[LEGACY_GLOBAL_HISTORY_KEY];
+            persistSettings();
+        }
+    }
 
     return {
-        list: () => inner.listSessions(innerScope),
-        load: (id) => inner.loadSession(innerScope, id),
-        save: (session) => inner.saveSession(innerScope, session),
-        // Non-debounced save: bypasses the host's settings debounce so a
-        // close-then-refresh inside the debounce window doesn't lose the
-        // last in-popup mutation. Called from the popup teardown finally.
-        saveFlush: (session) => inner.saveSessionFlush(innerScope, session),
-        delete: (id) => inner.deleteSession(innerScope, id),
-        clearObsolete: async () => {
-            const root = getOrchestratorSettingsRoot();
-            if (root && Object.hasOwn(root, LEGACY_GLOBAL_HISTORY_KEY)) {
-                delete root[LEGACY_GLOBAL_HISTORY_KEY];
-                persistSettings();
-            }
-        },
+        list,
+        load,
+        save,
+        saveFlush,
+        delete: deleteFn,
+        clearObsolete,
     };
 }

@@ -1,227 +1,136 @@
-// tests/orchestrator/iter-studio-session-store.test.js
-//
-// Round-trips the new message schema fields (id / at / toolCalls / edits /
-// appliedAt / appliedTarget / rolledBackAt / auto + top-level pendingEdits +
-// surfaceState.isFinalized / finalizeSummary) through the orchestrator's
-// iter-studio session store. Also covers makeMessageId and
-// normalizeMessageShape directly so legacy message migration is verified
-// without spinning up the popup's browser deps.
+import { describe, test, expect, jest } from '@jest/globals';
+import { createOrchestratorIterationSessionStore, ORCH_SIDECAR_NAMESPACE, ORCH_GLOBAL_BUCKET_KEY } from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
 
-import { describe, test, expect, beforeEach } from '@jest/globals';
+function makeStubs({ avatar = 'alice.png', getCharacterState, setCharacterState } = {}) {
+    const sidecarReads = [];
+    const sidecarWrites = [];
+    const settingsRoot = {};
+    const stubs = {
+        mode: 'director',
+        getOrchestratorSettingsRoot: () => settingsRoot,
+        persistSettings: jest.fn(),
+        persistSettingsImmediate: jest.fn(async () => {}),
+        computeScope: () => avatar ? `character_${avatar}` : 'global',
+        ctx: {
+            getCharacterState: getCharacterState || (async (a, ns) => { sidecarReads.push({ a, ns }); return null; }),
+            setCharacterState: setCharacterState || (async (a, ns, data) => { sidecarWrites.push({ a, ns, data }); }),
+        },
+        sidecarReads,
+        sidecarWrites,
+        settingsRoot,
+    };
+    return stubs;
+}
 
-import {
-    createOrchestratorIterationSessionStore,
-    makeMessageId,
-    normalizeMessageShape,
-} from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
-
-describe('Orchestrator iter-studio — session store basic round-trip', () => {
-    let settingsRoot;
-    let store;
-
-    beforeEach(() => {
-        settingsRoot = {};
-        store = createOrchestratorIterationSessionStore({
-            mode: 'spec',
-            getOrchestratorSettingsRoot: () => settingsRoot,
-            persistSettings: () => { /* no-op for tests */ },
-            computeScope: () => 'global',
+describe('createOrchestratorIterationSessionStore — per-character sessions go to the sidecar', () => {
+    test('save() under character scope writes through ctx.setCharacterState, not into the settings root', async () => {
+        const stubs = makeStubs();
+        const store = createOrchestratorIterationSessionStore({
+            mode: stubs.mode,
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
         });
+        await store.save({ id: 's1', title: 'Alpha', updatedAt: 1, mode: 'director' });
+        expect(stubs.sidecarWrites).toHaveLength(1);
+        expect(stubs.sidecarWrites[0].a).toBe('alice.png');
+        expect(stubs.sidecarWrites[0].ns).toBe(ORCH_SIDECAR_NAMESPACE);
+        expect(stubs.sidecarWrites[0].data.sessions.s1.id).toBe('s1');
+        expect(stubs.settingsRoot[ORCH_GLOBAL_BUCKET_KEY]).toBeUndefined();
+        expect(stubs.persistSettings).not.toHaveBeenCalled();
     });
 
-    test('save then list returns metadata sorted by updatedAt desc', async () => {
-        await store.save({ id: 'a', title: 'one', messages: [], updatedAt: 100 });
-        await store.save({ id: 'b', title: 'two', messages: [], updatedAt: 200 });
-        const list = await store.list();
-        expect(list.map(s => s.id)).toEqual(['b', 'a']);
-    });
-
-    test('load returns null for unknown id', async () => {
-        expect(await store.load('missing')).toBeNull();
-    });
-
-    test('load returns a clone (mutating result does not affect storage)', async () => {
-        await store.save({ id: 'a', title: 'one', messages: [{ role: 'user', content: 'hi' }], updatedAt: 1 });
-        const loaded = await store.load('a');
-        loaded.title = 'mutated';
-        const reloaded = await store.load('a');
-        expect(reloaded.title).toBe('one');
-    });
-
-    test('delete removes the entry', async () => {
-        await store.save({ id: 'a', title: 'one', messages: [], updatedAt: 1 });
-        await store.delete('a');
-        expect((await store.list())).toEqual([]);
-    });
-
-    test('clearObsolete strips legacy global_iteration_history but leaves v2 bucket intact', async () => {
-        settingsRoot.global_iteration_history = { stale: true };
-        await store.save({ id: 'a', title: 'one', messages: [], updatedAt: 1 });
-        await store.clearObsolete();
-        expect(settingsRoot.global_iteration_history).toBeUndefined();
-        // v2 bucket should still hold our session
-        const list = await store.list();
-        expect(list).toHaveLength(1);
-    });
-
-    test('per-mode + per-scope bucketing keeps spec/loop and global/character separate', async () => {
-        const specGlobalStore = store;
-        const specCharStore = createOrchestratorIterationSessionStore({
-            mode: 'spec',
-            getOrchestratorSettingsRoot: () => settingsRoot,
-            persistSettings: () => {},
-            computeScope: () => 'character_abc',
-        });
-        const loopGlobalStore = createOrchestratorIterationSessionStore({
-            mode: 'loop',
-            getOrchestratorSettingsRoot: () => settingsRoot,
-            persistSettings: () => {},
-            computeScope: () => 'global',
-        });
-        await specGlobalStore.save({ id: 'sg', title: 'spec-global', messages: [], updatedAt: 1 });
-        await specCharStore.save({ id: 'sc', title: 'spec-char', messages: [], updatedAt: 2 });
-        await loopGlobalStore.save({ id: 'lg', title: 'loop-global', messages: [], updatedAt: 3 });
-        expect((await specGlobalStore.list()).map(s => s.id)).toEqual(['sg']);
-        expect((await specCharStore.list()).map(s => s.id)).toEqual(['sc']);
-        expect((await loopGlobalStore.list()).map(s => s.id)).toEqual(['lg']);
-    });
-});
-
-describe('Orchestrator iter-studio session — new message schema persistence', () => {
-    let settingsRoot;
-    let store;
-
-    beforeEach(() => {
-        settingsRoot = {};
-        store = createOrchestratorIterationSessionStore({
-            mode: 'spec',
-            getOrchestratorSettingsRoot: () => settingsRoot,
-            persistSettings: () => { /* no-op */ },
-            computeScope: () => 'global',
-        });
-    });
-
-    test('save+load round-trips id/at/toolCalls/edits/appliedAt/appliedTarget/rolledBackAt/auto + pendingEdits + surfaceState', async () => {
-        const session = {
-            id: 'rt-1',
-            title: 'Round trip',
-            createdAt: 1,
-            updatedAt: 1,
-            summary: '',
-            mode: 'spec',
-            surfaceState: {
-                historyOpen: false,
-                autoApply: true,
+    test('list() under character scope reads from the sidecar and only surfaces sessions matching this mode', async () => {
+        const sidecar = {
+            version: 1,
+            sessions: {
+                's1': { id: 's1', title: 'Director run', updatedAt: 1, mode: 'director' },
+                's2': { id: 's2', title: 'Agenda run', updatedAt: 2, mode: 'agenda' },
             },
-            messages: [
-                { id: 'm1', role: 'user', content: 'Bump reviewer max_rounds to 4', at: 100 },
-                {
-                    id: 'm2', role: 'assistant', content: 'Done.', at: 200,
-                    toolCalls: [{ name: 'orch_set_stage_field', args: { stageId: 'stage_1', field: 'max_rounds', value: 4 } }],
-                    edits: [{ op: 'set', path: '', oldValue: { spec: {}, presets: {} }, newValue: { spec: { stages: [] }, presets: {} } }],
-                    appliedAt: 300,
-                    appliedTarget: 'global',
-                    rolledBackAt: null,
-                },
-                { id: 'm3', role: 'user', content: 'Continue', at: 400, auto: true },
-            ],
-            pendingEdits: [{ op: 'set', path: '', oldValue: {}, newValue: { spec: { stages: [{ id: 'review', mode: 'serial' }] } } }],
         };
-        await store.save(session);
-        const loaded = await store.load('rt-1');
-        expect(loaded).not.toBeNull();
-        expect(loaded.messages).toHaveLength(3);
-        expect(loaded.messages[0]).toEqual(session.messages[0]);
-        expect(loaded.messages[1].toolCalls).toEqual(session.messages[1].toolCalls);
-        expect(loaded.messages[1].edits).toEqual(session.messages[1].edits);
-        expect(loaded.messages[1].appliedAt).toBe(300);
-        expect(loaded.messages[1].appliedTarget).toBe('global');
-        expect(loaded.messages[1].rolledBackAt).toBeNull();
-        // Synthetic auto-continue user message preserves auto flag.
-        expect(loaded.messages[2].auto).toBe(true);
-        // pendingEdits at the session top level survives.
-        expect(loaded.pendingEdits).toEqual(session.pendingEdits);
-        // surfaceState round-trips. The shape no longer carries
-        // isFinalized / finalizeSummary — the iter loop self-terminates
-        // when the model stops calling continue, so a banner-driven
-        // finalize flag is dead persisted state.
-        expect(loaded.surfaceState.autoApply).toBe(true);
+        const stubs = makeStubs({
+            getCharacterState: async () => sidecar,
+        });
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        const metas = await store.list();
+        expect(metas).toEqual([{ id: 's1', title: 'Director run', updatedAt: 1 }]);
     });
 
-    test('save+load preserves rolledBackAt timestamp (not null)', async () => {
-        const session = {
-            id: 'rb-1', title: '', createdAt: 1, updatedAt: 1, summary: '', mode: 'spec', surfaceState: {},
-            messages: [{
-                id: 'm1', role: 'assistant', content: 'done', at: 100,
-                toolCalls: [{ name: 'orch_set_stage_field', args: {} }],
-                edits: [{ op: 'set', path: '', oldValue: {}, newValue: { spec: { stages: [] } } }],
-                appliedAt: 200, appliedTarget: 'character', rolledBackAt: 500,
-            }],
+    test('list() under global scope reads from extension_settings.orchestrator.iter_studio_global_sessions[mode]', async () => {
+        const stubs = makeStubs({ avatar: null });
+        stubs.settingsRoot[ORCH_GLOBAL_BUCKET_KEY] = {
+            director: {
+                's3': { id: 's3', title: 'Global director', updatedAt: 3, mode: 'director' },
+            },
         };
-        await store.save(session);
-        const loaded = await store.load('rb-1');
-        expect(loaded.messages[0].rolledBackAt).toBe(500);
-        expect(loaded.messages[0].appliedTarget).toBe('character');
-    });
-});
-
-describe('Orchestrator iter-studio — normalizeMessageShape (legacy message migration)', () => {
-    test('regenerates id for legacy messages without one', () => {
-        const legacy = { role: 'user', content: 'old' };
-        const normalized = normalizeMessageShape(legacy, 5000);
-        expect(normalized.id).toMatch(/^orch_msg_/);
-        expect(normalized.at).toBe(5000);
-        expect(normalized.role).toBe('user');
-        expect(normalized.content).toBe('old');
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: () => 'global',
+            ctx: stubs.ctx,
+        });
+        const metas = await store.list();
+        expect(metas).toEqual([{ id: 's3', title: 'Global director', updatedAt: 3 }]);
+        expect(stubs.sidecarReads).toHaveLength(0);
     });
 
-    test('preserves an existing id', () => {
-        const m = { id: 'existing_id', role: 'assistant', content: 'hi', at: 1234 };
-        const n = normalizeMessageShape(m, 9000);
-        expect(n.id).toBe('existing_id');
-        expect(n.at).toBe(1234);
+    test('delete() removes the session from the sidecar map and rewrites it', async () => {
+        const sidecar = { version: 1, sessions: { 's1': { id: 's1', mode: 'director', updatedAt: 1 }, 's2': { id: 's2', mode: 'director', updatedAt: 2 } } };
+        const stubs = makeStubs({
+            getCharacterState: async () => structuredClone(sidecar),
+        });
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        await store.delete('s1');
+        expect(stubs.sidecarWrites).toHaveLength(1);
+        expect(stubs.sidecarWrites[0].data.sessions.s1).toBeUndefined();
+        expect(stubs.sidecarWrites[0].data.sessions.s2).toBeDefined();
     });
 
-    test('falls back to fallbackAt when at is missing', () => {
-        const n = normalizeMessageShape({ role: 'user', content: 'x' }, 7777);
-        expect(n.at).toBe(7777);
+    test('saveFlush() awaits the same write path as save() (no separate immediate helper)', async () => {
+        const stubs = makeStubs();
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        await store.saveFlush({ id: 's4', title: 'Flush', updatedAt: 4, mode: 'director' });
+        expect(stubs.sidecarWrites).toHaveLength(1);
     });
 
-    test('drops empty arrays (toolCalls/edits stay undefined)', () => {
-        const n = normalizeMessageShape({ id: 'a', role: 'user', content: '', toolCalls: [], edits: [] }, 1);
-        expect(n.toolCalls).toBeUndefined();
-        expect(n.edits).toBeUndefined();
-    });
-
-    test('preserves toolCalls/edits/appliedAt/appliedTarget/auto when present', () => {
-        const n = normalizeMessageShape({
-            id: 'a', role: 'assistant', content: 'ok', at: 100,
-            toolCalls: [{ name: 'orch_set_stage_field' }],
-            edits: [{ op: 'set', path: '', oldValue: {}, newValue: {} }],
-            appliedAt: 200, appliedTarget: 'character',
-            rolledBackAt: 300,
-            auto: true,
-        }, 1);
-        expect(n.toolCalls).toEqual([{ name: 'orch_set_stage_field' }]);
-        expect(n.edits).toEqual([{ op: 'set', path: '', oldValue: {}, newValue: {} }]);
-        expect(n.appliedAt).toBe(200);
-        expect(n.appliedTarget).toBe('character');
-        expect(n.rolledBackAt).toBe(300);
-        expect(n.auto).toBe(true);
-    });
-
-    test('returns input unchanged for non-object', () => {
-        expect(normalizeMessageShape(null)).toBeNull();
-        expect(normalizeMessageShape(undefined)).toBeUndefined();
-    });
-});
-
-describe('Orchestrator iter-studio — makeMessageId', () => {
-    test('produces unique orch_msg_-prefixed ids', () => {
-        const a = makeMessageId();
-        const b = makeMessageId();
-        expect(a).toMatch(/^orch_msg_/);
-        expect(b).toMatch(/^orch_msg_/);
-        expect(a).not.toBe(b);
+    test('clearObsolete() strips legacy v1 global key like before', async () => {
+        const stubs = makeStubs();
+        stubs.settingsRoot.global_iteration_history = { sessions: ['stale'] };
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        await store.clearObsolete();
+        expect(stubs.settingsRoot.global_iteration_history).toBeUndefined();
+        expect(stubs.persistSettings).toHaveBeenCalledTimes(1);
     });
 });
