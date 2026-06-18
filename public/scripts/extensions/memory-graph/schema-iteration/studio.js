@@ -906,7 +906,7 @@ export async function openSchemaIterationStudio(deps) {
             for (const o of rejected) lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}`);
         }
         if (conflicts.length) {
-            lines.push(`Conflict — disk changed externally; user must retry or reject (${conflicts.length}):`);
+            lines.push(`Skipped — target had been changed since you captured the diff, so the write was NOT applied (${conflicts.length}). If still needed, re-read the current state and re-issue:`);
             for (const o of conflicts) {
                 const err = o.error ? ` — ${o.error}` : '';
                 lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}${err}`);

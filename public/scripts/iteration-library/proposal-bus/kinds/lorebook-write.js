@@ -48,7 +48,7 @@ function inverseFromSnapshot(op, snapshot) {
     };
 }
 
-function defaultRenderDiff(_before, _op, helpers) {
+function defaultRenderDiff(_entry, helpers) {
     const t = helpers && typeof helpers.i18n === 'function' ? helpers.i18n : (s) => String(s ?? '');
     return `<div class="iter_proposal_diff_placeholder">${t('Lorebook write — no diff renderer registered')}</div>`;
 }
@@ -95,7 +95,7 @@ export function createLorebookWriteHandler(opts = {}) {
     }
 
     function renderDiffCard(entry, helpers) {
-        return renderDiff(entry?.snapshot, entry?.op, helpers || {});
+        return renderDiff(entry, helpers || {});
     }
 
     function label(entry) {

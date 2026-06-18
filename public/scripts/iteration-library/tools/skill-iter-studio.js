@@ -237,8 +237,13 @@ async function readFileSafe(scope, name, path) {
         // as "not present" so callers can decide whether that's a soft
         // "before is empty" (frontmatter patch on a missing file is an
         // error; edit_content on a missing file is an error; create with
-        // a name that already exists shouldn't end up here).
-        if (String(err?.message || err).match(/404|not found/i)) return null;
+        // a name that already exists shouldn't end up here). Match
+        // ENOENT and status:404 too — the skills repo wraps Node's
+        // ENOENT in its message and the API attaches a structured
+        // status, so the bare /404|not found/ regex misses the common
+        // server-side shape and any caller would throw a spurious error.
+        if (err && typeof err === 'object' && Number(err.status) === 404) return null;
+        if (String(err?.message || err).match(/404|not found|ENOENT/i)) return null;
         throw err;
     }
 }
@@ -846,10 +851,15 @@ const HANDLERS = {
             skillName: name,
             scope,
             path: 'SKILL.md',
-            // For create, the diff card shows SKILL.md going from empty
-            // string to its full body so the user sees the new file's
-            // shape verbatim — same renderer the content-edit tools use.
-            before: '',
+            // For create, the diff card shows SKILL.md going from "no file"
+            // to its full body so the user sees the new file's shape
+            // verbatim — same renderer the content-edit tools use. `before`
+            // is null (not the empty string) so the bus-handler's snapshot
+            // wrap stays consistent with readCurrent, which reads SKILL.md
+            // off disk at approve time: file-absent → null snapshot, fresh
+            // approve matches; concurrent-create → snapshot { content: ... }
+            // mismatches and surfaces as a true conflict.
+            before: null,
             after: skillMd,
             extras: files.length > 1 ? { extraFiles: files.slice(1).map(f => f.path) } : null,
             op,

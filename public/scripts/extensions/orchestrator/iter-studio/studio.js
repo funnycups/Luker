@@ -97,6 +97,18 @@ import { createProfileEditHandler } from '../../../iteration-library/proposal-bu
 import { createLorebookWriteHandler } from '../../../iteration-library/proposal-bus/kinds/lorebook-write.js';
 import { createSkillAuthorHandler } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
 import {
+    renderSkillBody,
+    skillLabel as skillBodyLabel,
+    skillIcon as skillBodyIcon,
+    skillTarget as skillBodyTarget,
+} from '../../../iteration-library/proposal-bus/diff-bodies/skill.js';
+import {
+    renderLorebookBody,
+    lorebookLabel as lorebookBodyLabel,
+    lorebookIcon as lorebookBodyIcon,
+    lorebookTarget as lorebookBodyTarget,
+} from '../../../iteration-library/proposal-bus/diff-bodies/lorebook-write.js';
+import {
     createOrchestratorIterationSessionStore,
     makeMessageId,
     normalizeMessageShape,
@@ -1128,10 +1140,10 @@ export async function openOrchestratorIterationStudio(deps) {
             return getCea().applyCharacterEditorLorebookProposal(context, opPayload);
         },
         loadWorldInfo: async (bookName) => context.loadWorldInfo(bookName),
-        renderDiff: (before, op) => {
-            const after = op?.args || null;
-            return renderLorebookDiffCardFromBeforeAfter(before, after, op?.kind);
-        },
+        renderDiff: (entry, helpers) => renderLorebookBody(entry, helpers),
+        label: (entry) => lorebookBodyLabel(entry, { i18n: tf }),
+        icon: (entry) => lorebookBodyIcon(entry),
+        target: (entry) => lorebookBodyTarget(entry),
     }));
     bus.registerKind('skill-author', createSkillAuthorHandler({
         commitOp: commitApprovedSkillProposal,
@@ -1143,41 +1155,25 @@ export async function openOrchestratorIterationStudio(deps) {
                 if (raw && typeof raw.content === 'string') return raw.content;
                 return null;
             } catch (err) {
-                if (/404|not found/i.test(String(err?.message || err || ''))) return null;
+                // Match status:404 + ENOENT alongside the literal
+                // "404"/"not found" strings — the skills API wraps
+                // Node ENOENT verbatim, so the bare regex would miss
+                // the most common server-side shape.
+                if (err && typeof err === 'object' && Number(err.status) === 404) return null;
+                if (/404|not found|ENOENT/i.test(String(err?.message || err || ''))) return null;
                 throw err;
             }
         },
-        renderDiff: (before, op) => {
-            return renderSkillDiffCardForOp(before, op);
-        },
+        renderDiff: (entry, helpers) => renderSkillBody(entry, helpers),
+        label: (entry) => skillBodyLabel(entry, { i18n: tf }),
+        icon: (entry) => skillBodyIcon(entry),
+        target: (entry) => skillBodyTarget(entry, { i18n: tf }),
     }));
     bus.setMessageResolver((messageId) => {
         const msgs = state.session?.messages || [];
         const m = msgs.find((x) => String(x?.id || '') === String(messageId));
         return m || { id: messageId, toolCalls: [] };
     });
-
-    // Placeholder diff renderers — wired to the popup's existing lorebook /
-    // skill diff cards. Both helpers already exist below; declared here
-    // as forward references so bus mount doesn't have to wait for the
-    // function declarations later in this scope (JS function-hoisting
-    // covers `function` decls; these are inline helpers).
-    function renderLorebookDiffCardFromBeforeAfter(before, _after, kind) {
-        // We deliberately don't try to recompute the after-image here —
-        // the source of truth is the args carried on entry.op, which the
-        // CEA proposal helper re-derives at approve time. For the per-
-        // card body, render a slim "kind + book/uid" line until the full
-        // diff card is wired into the bus stylesheet pass.
-        const bookName = before?.book_name ?? '';
-        const uid = before?.uid != null ? String(before.uid) : '';
-        return `<div class="iter_lorebook_proposal_inline">${escapeHtmlLocal(tf('${0} on ${1}#${2}', String(kind || 'update'), String(bookName), uid))}</div>`;
-    }
-    function renderSkillDiffCardForOp(before, op) {
-        const name = op?.args?.name ?? '';
-        const path = op?.args?.path ?? '';
-        const label = `${op?.name || 'skill'} ${name}${path ? `/${path}` : ''}`;
-        return `<div class="iter_skill_proposal_inline">${escapeHtmlLocal(label)}</div>`;
-    }
 
     // Bus drain pump — re-fires the iteration loop after the user resolves
     // any batch of proposals. Replaces the legacy continueAfterReviewDecision.
@@ -1205,7 +1201,7 @@ export async function openOrchestratorIterationStudio(deps) {
         const fmt = (o) => `  - ${o.kind}${o.target ? ` (${o.target})` : ''}${o.error ? ` — ${o.error}` : ''}`;
         if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
         if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
-        if (conflicts.length) { lines.push(`Conflict — disk changed externally; retry or reject (${conflicts.length}):`); for (const o of conflicts) lines.push(fmt(o)); }
+        if (conflicts.length) { lines.push(`Skipped — target had been changed since you captured the diff, so the write was NOT applied (${conflicts.length}). If still needed, re-read the current state and re-issue:`); for (const o of conflicts) lines.push(fmt(o)); }
         if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         drainScheduled = true;

@@ -4,7 +4,10 @@
 /**
  * Renders a single proposal card. Chrome only — body is delegated to
  * handler.renderDiffCard. Controls toggle by entry.status:
- *   pending / conflict -> Approve + Reject
+ *   pending            -> Approve + Reject
+ *   conflict           -> no buttons; conflictBlock explains what happened
+ *                         and the bus has already notified the AI via the
+ *                         outcome queue, so the user does not need to act
  *   rejected           -> Undo reject
  *   committed          -> Rollback (only when handler.inverseAvailable)
  *   rolledBack         -> no buttons
@@ -34,7 +37,7 @@ function statusChip(entry, i18n) {
         case 'pending':    return `<span class="iter_proposal_card_status iter_proposal_card_status_pending">${escapeHtml(i18n('Pending approval'))}</span>`;
         case 'committed':  return `<span class="iter_proposal_card_status iter_proposal_card_status_committed">${escapeHtml(i18n('✓ Applied at ${0}', t))}</span>`;
         case 'rejected':   return `<span class="iter_proposal_card_status iter_proposal_card_status_rejected">${escapeHtml(i18n('✗ Rejected at ${0}', t))}</span>`;
-        case 'conflict':   return `<span class="iter_proposal_card_status iter_proposal_card_status_conflict">${escapeHtml(i18n('⚠ External change'))}</span>`;
+        case 'conflict':   return `<span class="iter_proposal_card_status iter_proposal_card_status_conflict">${escapeHtml(i18n('⚠ Write skipped (resource changed)'))}</span>`;
         case 'rolledBack': return `<span class="iter_proposal_card_status iter_proposal_card_status_rolledBack">${escapeHtml(i18n('↺ Rolled back at ${0}', t))}</span>`;
         default:           return '';
     }
@@ -44,7 +47,7 @@ function controls(entry, handler, i18n) {
     const idAttr = escapeHtml(entry.id);
     const status = entry.status;
     const btns = [];
-    if (status === 'pending' || status === 'conflict') {
+    if (status === 'pending') {
         btns.push(`<button class="menu_button iter_proposal_btn iter_proposal_btn_approve" data-proposal-action="approve" data-proposal-id="${idAttr}">${escapeHtml(i18n('Approve'))}</button>`);
         btns.push(`<button class="menu_button iter_proposal_btn iter_proposal_btn_reject" data-proposal-action="reject" data-proposal-id="${idAttr}">${escapeHtml(i18n('Reject'))}</button>`);
     } else if (status === 'rejected') {
@@ -52,17 +55,23 @@ function controls(entry, handler, i18n) {
     } else if (status === 'committed' && handler.inverseAvailable !== false) {
         btns.push(`<button class="menu_button iter_proposal_btn" data-proposal-action="rollback" data-proposal-id="${idAttr}">${escapeHtml(i18n('Rollback'))}</button>`);
     }
+    // status === 'conflict' / 'rolledBack' — no buttons. Conflicts have
+    // already been reported to the AI via the outcome queue; manual
+    // re-approval against a drifted target would commit a stale diff,
+    // and manual rejection adds nothing the conflict outcome doesn't
+    // already convey.
+    if (btns.length === 0) return '';
     return `<div class="iter_proposal_card_controls">${btns.join('')}</div>`;
 }
 
 function conflictBlock(entry, i18n) {
-    if (entry.status !== 'conflict' || !entry.conflictInfo) return '';
-    const info = entry.conflictInfo;
-    const errLine = info.error
+    if (entry.status !== 'conflict') return '';
+    const info = entry.conflictInfo || null;
+    const errLine = info && info.error
         ? `<div class="iter_proposal_conflict_error">${escapeHtml(i18n('Error: ${0}', String(info.error)))}</div>`
         : '';
     return `<div class="iter_proposal_card_conflict">
-        <div class="iter_proposal_conflict_summary">${escapeHtml(i18n('The resource changed externally since this proposal was captured. Approve to retry against the current state, or reject.'))}</div>
+        <div class="iter_proposal_conflict_summary">${escapeHtml(i18n('The AI called this write tool, but the target had been changed in the meantime — the write was NOT applied. The AI has been notified and can decide whether to retry.'))}</div>
         ${errLine}
     </div>`;
 }

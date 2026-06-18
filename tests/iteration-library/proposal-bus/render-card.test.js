@@ -79,7 +79,7 @@ describe('renderProposalCard', () => {
         expect(html).not.toContain('data-proposal-action="reset"');
     });
 
-    test('conflict card carries conflict explanation HTML and Approve/Reject buttons', () => {
+    test('conflict card carries conflict explanation HTML but NO Approve/Reject buttons (write was dropped, AI already notified)', () => {
         const e = entry({
             status: 'conflict',
             conflictInfo: {
@@ -91,7 +91,20 @@ describe('renderProposalCard', () => {
         });
         const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
         expect(html).toContain('iter_proposal_card_conflict');
-        expect(html).toContain('data-proposal-action="approve"');
-        expect(html).toContain('data-proposal-action="reject"');
+        // The bus enqueues a conflict outcome the moment it sees drift,
+        // which drainOutcomes reports back to the AI. Re-approving from
+        // here would commit a stale diff; rejecting adds nothing the
+        // outcome doesn't already carry. So the card chrome is read-only.
+        expect(html).not.toContain('data-proposal-action="approve"');
+        expect(html).not.toContain('data-proposal-action="reject"');
+    });
+
+    test('conflict card omits the controls row entirely when there is nothing to render', () => {
+        const e = entry({
+            status: 'conflict',
+            conflictInfo: { expectedFingerprint: 'a', actualFingerprint: 'b', at: Date.now() },
+        });
+        const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
+        expect(html).not.toContain('iter_proposal_card_controls');
     });
 });

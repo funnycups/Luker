@@ -91,7 +91,7 @@ describe('lorebook-write KindHandler', () => {
         expect(h.target(entry)).toContain('5');
     });
 
-    test('renderDiffCard delegates to injected renderer with snapshot+op', () => {
+    test('renderDiffCard delegates to injected renderer with the full entry', () => {
         const renderDiff = jest.fn(() => '<pre>lore diff</pre>');
         const h = createLorebookWriteHandler({
             applyProposal: jest.fn(),
@@ -101,10 +101,15 @@ describe('lorebook-write KindHandler', () => {
         const entry = {
             snapshot: { uid: 5, content: 'b' },
             op: { kind: 'update', args: { uid: 5, content: 'a' } },
+            meta: { bookName: 'lore', uid: 5, before: { content: 'b' }, after: { content: 'a' } },
         };
         const out = h.renderDiffCard(entry, { escapeHtml: (s) => s });
         expect(out).toBe('<pre>lore diff</pre>');
-        expect(renderDiff).toHaveBeenCalledWith(entry.snapshot, entry.op, expect.any(Object));
+        // Renderers need entry.meta (before/after written by the popup
+        // at propose time) to draw a real LCS diff; passing only
+        // snapshot+op forces every popup to maintain a separate lookup
+        // table or fall back to a placeholder.
+        expect(renderDiff).toHaveBeenCalledWith(entry, expect.any(Object));
     });
 
     test('inverseAvailable defaults to true', () => {

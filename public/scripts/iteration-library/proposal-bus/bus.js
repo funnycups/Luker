@@ -84,8 +84,16 @@ export function createBus(opts = {}) {
     }
 
     function hasOutstanding() {
+        // Conflicts are NOT outstanding: a conflict means the bus already
+        // tried to commit, found drift, and emitted an outcome for the AI
+        // to react to. Blocking the auto-continue loop on conflict would
+        // strand the user in front of a card whose only honest resolution
+        // is "the disk changed under us, retry from scratch" — the AI
+        // sees the conflict in the next round's outcome message and
+        // decides whether to re-propose. Pending entries (still awaiting
+        // first approve / reject) are the only true gate.
         for (const e of entries) {
-            if (e.status === 'pending' || e.status === 'conflict') return true;
+            if (e.status === 'pending') return true;
         }
         return false;
     }
@@ -399,7 +407,12 @@ export function createBus(opts = {}) {
         let committed = 0;
         for (const e of entries) {
             if (!callIds.has(String(e.sourceCallId || ''))) continue;
-            if (e.status === 'pending' || e.status === 'conflict') pending++;
+            // Conflicts are not user-actionable here: they don't accept
+            // approve / reject from the bulk path either, and counting
+            // them would surface "Approve all pending (3)" buttons that
+            // commit nothing on click. Pending is the only count this row
+            // can act on.
+            if (e.status === 'pending') pending++;
             else if (e.status === 'committed') {
                 const handler = kinds.get(e.kind);
                 if (handler && handler.inverseAvailable !== false) committed++;

@@ -74,6 +74,12 @@ import { createProfileEditHandler } from '../../../iteration-library/proposal-bu
 import { createSkillAuthorHandler } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
 import { createPresetCloneHandler } from '../../../iteration-library/proposal-bus/kinds/preset-clone.js';
 import {
+    renderSkillBody,
+    skillLabel as skillBodyLabel,
+    skillIcon as skillBodyIcon,
+    skillTarget as skillBodyTarget,
+} from '../../../iteration-library/proposal-bus/diff-bodies/skill.js';
+import {
     buildToolCatalog,
     normalizeToolCallToEdit,
     runCpaReadTool,
@@ -603,10 +609,19 @@ export async function openCpaIterationStudio(deps) {
                 if (raw && typeof raw.content === 'string') return raw.content;
                 return null;
             } catch (err) {
-                if (/404|not found/i.test(String(err?.message || err || ''))) return null;
+                // Match status:404 + ENOENT alongside the literal
+                // "404"/"not found" strings — the skills API wraps
+                // Node ENOENT verbatim, so the bare regex would miss
+                // the most common server-side shape.
+                if (err && typeof err === 'object' && Number(err.status) === 404) return null;
+                if (/404|not found|ENOENT/i.test(String(err?.message || err || ''))) return null;
                 throw err;
             }
         },
+        renderDiff: (entry, helpers) => renderSkillBody(entry, helpers),
+        label: (entry) => skillBodyLabel(entry, { i18n: tf }),
+        icon: (entry) => skillBodyIcon(entry),
+        target: (entry) => skillBodyTarget(entry, { i18n: tf }),
     }));
     bus.registerKind('preset-clone', createPresetCloneHandler({
         cloneAndSwitchTarget: async (newName) => {
@@ -664,7 +679,7 @@ export async function openCpaIterationStudio(deps) {
         const lines = [`[User reviewed ${total} proposal(s):`];
         if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
         if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
-        if (conflicts.length) { lines.push(`Conflict — retry or reject (${conflicts.length}):`); for (const o of conflicts) lines.push(fmt(o)); }
+        if (conflicts.length) { lines.push(`Skipped — target had been changed since you captured the diff, so the write was NOT applied (${conflicts.length}). If still needed, re-read the current state and re-issue:`); for (const o of conflicts) lines.push(fmt(o)); }
         if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
         lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
         drainScheduled = true;

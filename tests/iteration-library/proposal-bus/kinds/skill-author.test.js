@@ -49,19 +49,43 @@ describe('skill-author KindHandler', () => {
         expect(snapshot).toEqual({ content: 'live' });
     });
 
-    test('readCurrent for ops without file-level before returns null snapshot', async () => {
+    test('readCurrent for structural ops without a single-file before returns null snapshot', async () => {
         const readFile = jest.fn();
         const h = createSkillAuthorHandler({
             commitOp: jest.fn(),
             readFile,
         });
-        for (const name of ['skill_create', 'skill_rename', 'skill_change_scope', 'skill_delete']) {
+        for (const name of ['skill_rename', 'skill_change_scope', 'skill_delete']) {
             const op = { name, args: {} };
             const { snapshot, fingerprint } = await h.readCurrent(op);
             expect(snapshot).toBeNull();
             expect(fingerprint).toBe(await h.fingerprint(null));
         }
         expect(readFile).not.toHaveBeenCalled();
+    });
+
+    test('readCurrent for skill_create reads SKILL.md so concurrent-create surfaces as drift', async () => {
+        // Fresh create against an absent file: readFile returns the 404-shaped
+        // null and readCurrent reports a null snapshot — matches the
+        // propose-time `before: null` in skill-iter-studio so the bus does
+        // NOT trip a false conflict on first approval.
+        const absent = jest.fn(async () => { throw new Error('404 not found'); });
+        const hAbsent = createSkillAuthorHandler({ commitOp: jest.fn(), readFile: absent });
+        const op = { name: 'skill_create', args: { scope: 'user', name: 'skl' } };
+        const { snapshot, fingerprint } = await hAbsent.readCurrent(op);
+        expect(absent).toHaveBeenCalledWith({ scope: 'user', name: 'skl', path: 'SKILL.md' });
+        expect(snapshot).toBeNull();
+        expect(fingerprint).toBe(await hAbsent.fingerprint(null));
+
+        // Concurrent create (another session created the same skill in the
+        // meantime): readFile returns a string body → snapshot { content }
+        // mismatches the propose-time null fingerprint → real conflict.
+        const present = jest.fn(async () => 'live md');
+        const hPresent = createSkillAuthorHandler({ commitOp: jest.fn(), readFile: present });
+        const out = await hPresent.readCurrent(op);
+        expect(out.snapshot).toEqual({ content: 'live md' });
+        expect(out.fingerprint).toBe(await hPresent.fingerprint({ content: 'live md' }));
+        expect(out.fingerprint).not.toBe(await hPresent.fingerprint(null));
     });
 
     test('readCurrent returns null snapshot when readFile throws not-found', async () => {
@@ -138,17 +162,24 @@ describe('skill-author KindHandler', () => {
         expect(tgt).toContain('bar.md');
     });
 
-    test('renderDiffCard delegates to injected renderer', () => {
+    test('renderDiffCard delegates to injected renderer with the full entry', () => {
         const renderDiff = jest.fn(() => '<x/>');
         const h = createSkillAuthorHandler({
             commitOp: jest.fn(),
             readFile: jest.fn(),
             renderDiff,
         });
-        const entry = { snapshot: { content: 'b' }, op: { name: 'skill_update_content', args: { content: 'a' } } };
+        const entry = {
+            snapshot: { content: 'b' },
+            op: { name: 'skill_update_content', args: { content: 'a' } },
+            meta: { skillName: 's', path: 'a.txt', before: 'b', after: 'a' },
+        };
         const out = h.renderDiffCard(entry, { escapeHtml: (s) => s });
         expect(out).toBe('<x/>');
-        expect(renderDiff).toHaveBeenCalledWith(entry.snapshot, entry.op, expect.any(Object));
+        // Renderers need entry.meta (before/after written by the popup
+        // at propose time) — without it they can't draw a real LCS for
+        // the structural / content / frontmatter branches.
+        expect(renderDiff).toHaveBeenCalledWith(entry, expect.any(Object));
     });
 
     test('inverseAvailable is false for ops without inverse capability', () => {

@@ -278,7 +278,7 @@ describe('runSkillIterStudioTool — authoring (proposal-mode)', () => {
         expect(out.pendingSkillEdit.skillName).toBe('new-skill');
         expect(out.pendingSkillEdit.scope).toEqual({ kind: 'global' });
         expect(out.pendingSkillEdit.path).toBe('SKILL.md');
-        expect(out.pendingSkillEdit.before).toBe('');
+        expect(out.pendingSkillEdit.before).toBe(null);  // create has no prior file; null keeps the bus-handler snapshot consistent with the on-disk readCurrent (which 404s → null) so fresh creates don't trip a false conflict.
         expect(out.pendingSkillEdit.after).toMatch(/^---\nname: new-skill\ndescription: does X\n---\n/);
         expect(out.pendingSkillEdit.after).toMatch(/# X/);
         expect(out.pendingSkillEdit.op.name).toBe('skill_create');

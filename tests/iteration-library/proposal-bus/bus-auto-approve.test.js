@@ -39,7 +39,7 @@ describe('ProposalBus — auto-approve', () => {
         expect(handler.commit).toHaveBeenCalledTimes(1);
     });
 
-    test('auto-approve commit failure leaves entry in conflict (not hidden)', async () => {
+    test('auto-approve commit failure leaves entry in conflict (visible, but not blocking the loop)', async () => {
         const handler = makeHandler({
             commit: jest.fn(async () => { throw new Error('boom'); }),
         });
@@ -50,6 +50,9 @@ describe('ProposalBus — auto-approve', () => {
         await new Promise((r) => setImmediate(r));
         const entry = bus._testOnly_entries().find((e) => e.id === id);
         expect(entry.status).toBe('conflict');
-        expect(bus.hasOutstanding()).toBe(true);
+        // hasOutstanding excludes conflicts so the AI loop continues —
+        // the conflict outcome is in the queue for drainOutcomes to
+        // report so the AI can decide whether to retry.
+        expect(bus.hasOutstanding()).toBe(false);
     });
 });

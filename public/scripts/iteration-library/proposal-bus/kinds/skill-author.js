@@ -9,9 +9,14 @@
  *
  * Op shape: { name: <skill_tool_name>, args: { scope, name, ... } }
  *
- * Snapshot is a `{ content: string }` object for file-mutating ops, or
- * `null` for ops whose "before" is not a single-file value (create, rename,
- * change_scope, delete). Fingerprint = sha256(canonicalJson(snapshot)).
+ * Snapshot is a `{ content: string }` object for file-mutating ops or
+ * `skill_create`'s post-create target, `null` for ops with no single-file
+ * before (rename, change_scope, delete) or when the create target does
+ * not exist yet on disk. Fingerprint = sha256(canonicalJson(snapshot)).
+ * `skill_create` reads the target path too so a concurrent session that
+ * happened to create the same skill first surfaces as a fingerprint
+ * mismatch (snapshot null vs `{ content: ... }`) instead of silently
+ * clobbering.
  *
  * Inverse:
  *   - update_content / edit_content / update_frontmatter when snapshot is
@@ -22,24 +27,34 @@
 
 import { sha256OfJson } from '../drift-hash.js';
 
-const FILE_OPS = new Set(['skill_update_content', 'skill_edit_content', 'skill_update_frontmatter']);
+const FILE_OPS = new Set(['skill_update_content', 'skill_edit_content', 'skill_update_frontmatter', 'skill_create']);
+const INVERSE_OPS = new Set(['skill_update_content', 'skill_edit_content', 'skill_update_frontmatter']);
 
 const DEFAULT_LABEL = 'Skill change';
 const DEFAULT_ICON = '🧩';
 
 function targetPath(op) {
     if (!op || typeof op !== 'object') return null;
-    if (op.name === 'skill_update_frontmatter') return 'SKILL.md';
+    if (op.name === 'skill_update_frontmatter' || op.name === 'skill_create') return 'SKILL.md';
     const args = op.args && typeof op.args === 'object' ? op.args : {};
     if (typeof args.path === 'string' && args.path) return args.path;
     return null;
 }
 
 function isNotFoundError(err) {
-    return /404|not found/i.test(String(err?.message || err || ''));
+    // The skills API throws a structured Error with .status when the
+    // server returns a non-OK code (see public/scripts/skills/api.js
+    // jsonFetch), but the message itself may not carry "404" or "not
+    // found" — the repository often wraps Node's ENOENT verbatim
+    // ("cannot read SKILL.md: ENOENT: no such file or directory, ..."),
+    // and the outer fetch surfaces "Not Found" only when the server
+    // didn't attach a body. Cover all three signals so an absent file
+    // is recognised regardless of which layer reported it.
+    if (err && typeof err === 'object' && Number(err.status) === 404) return true;
+    return /404|not found|ENOENT/i.test(String(err?.message || err || ''));
 }
 
-function defaultRenderDiff(_before, _op, helpers) {
+function defaultRenderDiff(_entry, helpers) {
     const t = helpers && typeof helpers.i18n === 'function' ? helpers.i18n : (s) => String(s ?? '');
     return `<div class="iter_proposal_diff_placeholder">${t('Skill change — no diff renderer registered')}</div>`;
 }
@@ -89,7 +104,7 @@ export function createSkillAuthorHandler(opts = {}) {
     }
 
     function inverse(op, snapshot) {
-        if (!op || !FILE_OPS.has(op.name)) return null;
+        if (!op || !INVERSE_OPS.has(op.name)) return null;
         if (!snapshot || typeof snapshot !== 'object' || typeof snapshot.content !== 'string') {
             return null;
         }
@@ -108,7 +123,7 @@ export function createSkillAuthorHandler(opts = {}) {
     }
 
     function renderDiffCard(entry, helpers) {
-        return renderDiff(entry?.snapshot, entry?.op, helpers || {});
+        return renderDiff(entry, helpers || {});
     }
 
     function label(entry) {
