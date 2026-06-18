@@ -1,5 +1,5 @@
 import { describe, test, expect, jest } from '@jest/globals';
-import { createOrchestratorIterationSessionStore, ORCH_SIDECAR_NAMESPACE, ORCH_GLOBAL_BUCKET_KEY } from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
+import { createOrchestratorIterationSessionStore, makeMessageId, normalizeMessageShape, ORCH_SIDECAR_NAMESPACE, ORCH_GLOBAL_BUCKET_KEY } from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
 
 function makeStubs({ avatar = 'alice.png', getCharacterState, setCharacterState } = {}) {
     const sidecarReads = [];
@@ -132,5 +132,66 @@ describe('createOrchestratorIterationSessionStore — per-character sessions go 
         await store.clearObsolete();
         expect(stubs.settingsRoot.global_iteration_history).toBeUndefined();
         expect(stubs.persistSettings).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Orchestrator iter-studio — normalizeMessageShape (legacy message migration)', () => {
+    test('regenerates id for legacy messages without one', () => {
+        const legacy = { role: 'user', content: 'old' };
+        const normalized = normalizeMessageShape(legacy, 5000);
+        expect(normalized.id).toMatch(/^orch_msg_/);
+        expect(normalized.at).toBe(5000);
+        expect(normalized.role).toBe('user');
+        expect(normalized.content).toBe('old');
+    });
+
+    test('preserves an existing id', () => {
+        const m = { id: 'existing_id', role: 'assistant', content: 'hi', at: 1234 };
+        const n = normalizeMessageShape(m, 9000);
+        expect(n.id).toBe('existing_id');
+        expect(n.at).toBe(1234);
+    });
+
+    test('falls back to fallbackAt when at is missing', () => {
+        const n = normalizeMessageShape({ role: 'user', content: 'x' }, 7777);
+        expect(n.at).toBe(7777);
+    });
+
+    test('drops empty arrays (toolCalls/edits stay undefined)', () => {
+        const n = normalizeMessageShape({ id: 'a', role: 'user', content: '', toolCalls: [], edits: [] }, 1);
+        expect(n.toolCalls).toBeUndefined();
+        expect(n.edits).toBeUndefined();
+    });
+
+    test('preserves toolCalls/edits/appliedAt/appliedTarget/auto when present', () => {
+        const n = normalizeMessageShape({
+            id: 'a', role: 'assistant', content: 'ok', at: 100,
+            toolCalls: [{ name: 'orch_set_stage_field' }],
+            edits: [{ op: 'set', path: '', oldValue: {}, newValue: {} }],
+            appliedAt: 200, appliedTarget: 'character',
+            rolledBackAt: 300,
+            auto: true,
+        }, 1);
+        expect(n.toolCalls).toEqual([{ name: 'orch_set_stage_field' }]);
+        expect(n.edits).toEqual([{ op: 'set', path: '', oldValue: {}, newValue: {} }]);
+        expect(n.appliedAt).toBe(200);
+        expect(n.appliedTarget).toBe('character');
+        expect(n.rolledBackAt).toBe(300);
+        expect(n.auto).toBe(true);
+    });
+
+    test('returns input unchanged for non-object', () => {
+        expect(normalizeMessageShape(null)).toBeNull();
+        expect(normalizeMessageShape(undefined)).toBeUndefined();
+    });
+});
+
+describe('Orchestrator iter-studio — makeMessageId', () => {
+    test('produces unique orch_msg_-prefixed ids', () => {
+        const a = makeMessageId();
+        const b = makeMessageId();
+        expect(a).toMatch(/^orch_msg_/);
+        expect(b).toMatch(/^orch_msg_/);
+        expect(a).not.toBe(b);
     });
 });

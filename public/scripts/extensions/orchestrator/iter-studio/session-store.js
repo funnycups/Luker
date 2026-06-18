@@ -61,7 +61,9 @@ async function readSidecar(ctx, avatar) {
             return raw;
         }
         return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
-    } catch {
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[orchestrator iter-studio] sidecar read failed for ${avatar}, treating as empty:`, err?.message || err);
         return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
     }
 }
