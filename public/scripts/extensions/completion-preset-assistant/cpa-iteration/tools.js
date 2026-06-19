@@ -357,6 +357,9 @@ function upsertPromptEntryInBody(body, edit) {
     if (!Object.hasOwn(next, 'content')) {
         throw new Error(`New prompt entry ${identifier} requires content.`);
     }
+    if (typeof next.name !== 'string' || !next.name) {
+        throw new Error(`New prompt entry ${identifier} requires name.`);
+    }
     body.prompts.push(next);
 
     const autoAdd = !Object.hasOwn(edit, 'auto_add_to_order') || Boolean(edit.auto_add_to_order);
@@ -690,7 +693,7 @@ export function buildToolCatalog({ hasReference = false } = {}) {
                         content: { type: 'string', description: 'Prompt text. Required when creating a new entry.' },
                         role: { type: 'string', description: 'Optional role: system / user / assistant.' },
                         enabled: { type: 'boolean', description: 'When CREATING: sets the initial prompt_order item.enabled (default true). When UPDATING an existing entry: routed to every prompt_order group\'s item for this identifier — this is the only way to actually toggle whether the entry takes effect at generation. prompts[].enabled is unused by the runtime.' },
-                        name: { type: 'string' },
+                        name: { type: 'string', description: 'Display name shown in the prompt manager. Required when creating a new entry.' },
                         marker: { type: 'boolean' },
                         injection_position: { type: 'number' },
                         injection_depth: { type: 'number' },
