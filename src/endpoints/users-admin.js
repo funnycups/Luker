@@ -51,6 +51,7 @@ import {
     getStorageEngine,
     initStorage,
     isReadOnly,
+    setReadOnly,
 } from '../storage/index.js';
 import { FsEngine } from '../storage/engines/fs-engine.js';
 import { SqliteEngine } from '../storage/engines/sqlite-engine.js';
@@ -65,6 +66,17 @@ import { GroupRepo } from '../storage/repositories/group-repo.js';
 import { StatsRepo } from '../storage/repositories/stats-repo.js';
 import { MigrationRunner } from '../storage/migration/runner.js';
 import { persistStorageBackendToConfig, resolveStorageDbConfig } from '../storage/config-persistence.js';
+import {
+    computeFingerprint,
+    createState,
+    shouldResume,
+    pendingHandles,
+    markStart,
+    markDone,
+    markFailed,
+    isAllDone,
+    serializeStatus,
+} from '../storage/migration/state.js';
 
 export const router = express.Router();
 
@@ -974,15 +986,17 @@ router.post('/announcements/delete', requireAdminMiddleware, async (request, res
 // they pick up `requireAdminMiddleware` automatically (same pattern as the
 // existing /storage/* user-account endpoints above).
 //
-// Concurrency model: a single module-level guard (`_migrationInProgress`)
-// blocks overlapping migrations. The migration itself is synchronous from the
-// HTTP caller's perspective — we don't return until the full per-user copy +
-// verify pass is done. That matches the Phase 3 simplification (no SSE /
-// progress stream). The MigrationRunner flips the global read-only flag for
-// the duration; the storage error middleware turns the resulting
-// StorageReadOnlyError from concurrent writers into a 503.
+// Concurrency model: a module-level `_migrationState` object holds resume
+// state for the in-flight migration (or null if none is running) and blocks
+// overlapping migrations whose target fingerprint differs. The migration
+// itself is synchronous from the HTTP caller's perspective — we don't return
+// until the per-user copy + verify pass is done. That matches the Phase 3
+// simplification (no SSE / progress stream). The endpoint flips the global
+// read-only flag via setReadOnly() for the duration; the storage error
+// middleware turns the resulting StorageReadOnlyError from concurrent writers
+// into a 503.
 
-let _migrationInProgress = false;
+let _migrationState = null;
 let _lastMigrationAt = null;
 
 /**
@@ -1015,9 +1029,10 @@ function buildRepos(engine) {
 router.post('/storage/status', requireAdminMiddleware, async (_request, response) => {
     return response.send({
         currentMode: detectCurrentMode(),
-        migrationInProgress: _migrationInProgress,
+        migrationInProgress: _migrationState != null,
         readOnly: isReadOnly(),
         lastMigration: _lastMigrationAt,
+        state: serializeStatus(_migrationState, Date.now()),
     });
 });
 
@@ -1068,24 +1083,55 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
     const mysqlConfig = mysqlResolved?.engine ?? null;
     const postgresConfig = postgresResolved?.engine ?? null;
 
-    if (_migrationInProgress) {
-        return response.status(409).send({ error: 'migration_in_progress' });
+    const sourceMode = detectCurrentMode();
+    if (sourceMode === targetMode && _migrationState == null) {
+        return response.status(400).send({
+            error: 'already_in_target_mode',
+            currentMode: sourceMode,
+        });
     }
 
-    _migrationInProgress = true;
-    const startedAt = Date.now();
-    let destEngine = null;
+    const fingerprint = computeFingerprint({ targetMode, mysqlConfig, postgresConfig });
+    const decision = shouldResume(_migrationState, fingerprint);
+    if (decision.kind === 'conflict') {
+        return response.status(409).send({
+            error: 'migration_in_progress_different_target',
+            message: 'a different migration target is already in progress; POST /storage/migrate/reset to clear',
+            currentTargetMode: _migrationState.targetMode,
+        });
+    }
 
+    const dataRoot = globalThis.DATA_ROOT;
+    if (!dataRoot) {
+        return response.status(500).send({
+            error: 'data_root_missing',
+            message: 'globalThis.DATA_ROOT is not set; server bootstrap incomplete',
+        });
+    }
+    const backupRoot = path.join(dataRoot, '_storage-migrations');
+
+    let destEngine;
     try {
-        const sourceEngine = getStorageEngine();
-        const sourceMode = detectCurrentMode();
-        if (sourceMode === targetMode) {
-            return response.status(400).send({
-                error: 'already_in_target_mode',
-                currentMode: sourceMode,
+        const handles = await getAllUserHandles();
+        if (decision.kind === 'fresh') {
+            _migrationState = createState({
+                targetMode, fingerprint, handles, now: new Date().toISOString(),
             });
+        } else {
+            // Resume: detect users registered since the original attempt to avoid
+            // silently dropping them on the dest swap. Operator must reset and retry.
+            const knownHandles = new Set(Object.keys(_migrationState.perUser));
+            const newHandles = handles.filter(h => !knownHandles.has(h));
+            if (newHandles.length > 0) {
+                return response.status(409).send({
+                    error: 'migration_handles_changed',
+                    message: 'new users registered since the original migration attempt; POST /storage/migrate/reset and retry',
+                    newHandles,
+                });
+            }
         }
 
+        const sourceEngine = getStorageEngine();
         if (targetMode === 'sqlite') {
             destEngine = new SqliteEngine({ directoriesByHandle: getUserDirectories });
         } else if (targetMode === 'fs') {
@@ -1096,18 +1142,6 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             destEngine = new PgEngine(postgresConfig);
         }
 
-        const dataRoot = globalThis.DATA_ROOT;
-        if (!dataRoot) {
-            return response.status(500).send({
-                error: 'data_root_missing',
-                message: 'globalThis.DATA_ROOT is not set; server bootstrap incomplete',
-            });
-        }
-        // Permanent on-disk backup tree, one timestamped directory per user
-        // per migration. See storage/migration/backup.js.
-        const backupRoot = path.join(dataRoot, '_storage-migrations');
-
-        const handles = await getAllUserHandles();
         const runner = new MigrationRunner({
             sourceRepos: buildRepos(sourceEngine),
             destRepos: buildRepos(destEngine),
@@ -1118,31 +1152,44 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             },
         });
 
-        const perUser = await runner.migrateAllUsers(handles);
+        const startedAt = Date.now();
+        const toRun = pendingHandles(_migrationState);
 
-        // Any user that failed (caught error OR verification didn't pass)
-        // aborts the swap. The source engine remains the live one and the
-        // destination engine is torn down. Backups remain on disk for manual
-        // recovery if needed.
-        const allOk = Object.values(perUser).every(r => !r.error && r.verified);
-        if (!allOk) {
+        setReadOnly(true);
+        try {
+            for (const handle of toRun) {
+                markStart(_migrationState, handle, new Date().toISOString());
+                try {
+                    const onProgress = () => {
+                        // Refresh lastProgressAt on every runner-emitted stage so
+                        // /storage/status's staleSeconds reflects forward motion.
+                        _migrationState.lastProgressAt = new Date().toISOString();
+                    };
+                    await runner.migrateUser(handle, { onProgress });
+                    markDone(_migrationState, handle, new Date().toISOString());
+                } catch (err) {
+                    markFailed(_migrationState, handle, err?.message || String(err), new Date().toISOString());
+                    console.error(`Storage migration error for ${handle}:`, err);
+                }
+            }
+        } finally {
+            setReadOnly(false);
+        }
+
+        if (!isAllDone(_migrationState)) {
             if (destEngine?.close) {
                 try { await destEngine.close(); } catch { /* best-effort */ }
             }
-            destEngine = null;
             return response.status(500).send({
                 ok: false,
-                perUser,
+                perUser: _migrationState.perUser,
                 durationMs: Date.now() - startedAt,
                 currentMode: sourceMode,
-                message: 'one or more users failed to migrate; source engine retained',
+                message: 'one or more users failed to migrate; source engine retained, run POST /storage/migrate again to resume',
             });
         }
 
-        // All users verified — swap the live engine. initStorage() rebuilds
-        // every Repo singleton against the new engine, so subsequent route
-        // handlers transparently see the new backend. Close the old engine
-        // last so any in-flight read on it completes against a live handle.
+        // All users done — swap engine + persist config.
         const oldEngine = sourceEngine;
         initStorage({
             mode: targetMode,
@@ -1150,19 +1197,13 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             mysql: mysqlConfig,
             postgres: postgresConfig,
         });
-        // Ownership of `destEngine` has now transferred to the storage module;
-        // null our local handle so the catch/finally don't double-close it.
-        destEngine = null;
         if (oldEngine?.close) {
             try { await oldEngine.close(); } catch { /* best-effort */ }
         }
         _lastMigrationAt = new Date().toISOString();
+        const finalPerUser = _migrationState.perUser;
+        _migrationState = null;
 
-        // Persist the choice to config.yaml so the next server start picks up
-        // the same backend. Failures here are logged + returned as a warning
-        // alongside `ok: true` — the migration itself has already succeeded
-        // and the live engine has swapped, so we don't want to make the
-        // operator think their data is in limbo.
         const persistResult = await persistStorageBackendToConfig({
             configPath: getConfigFilePath(),
             safetyCheck: validateConfigSafety,
@@ -1178,14 +1219,14 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
 
         return response.send({
             ok: true,
-            perUser,
+            perUser: finalPerUser,
             durationMs: Date.now() - startedAt,
             currentMode: targetMode,
             configPersisted: persistResult.ok,
             configPersistError: persistResult.ok ? undefined : persistResult.error,
         });
     } catch (err) {
-        console.error('Storage migration error:', err);
+        console.error('Storage migration failed:', err);
         if (destEngine?.close) {
             try { await destEngine.close(); } catch { /* best-effort */ }
         }
@@ -1193,7 +1234,17 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             error: 'migration_error',
             message: err?.message || String(err),
         });
-    } finally {
-        _migrationInProgress = false;
     }
+});
+
+router.post('/storage/migrate/reset', requireAdminMiddleware, async (request, response) => {
+    if (request.body?.confirm !== true) {
+        return response.status(400).send({
+            error: 'reset_requires_confirm',
+            message: 'pass { confirm: true } to reset in-memory migration state',
+        });
+    }
+    _migrationState = null;
+    setReadOnly(false);
+    return response.send({ ok: true });
 });
