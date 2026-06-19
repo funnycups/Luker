@@ -6167,7 +6167,7 @@ function bindUi() {
     root.find('#luker_orch_iter_mode_prompt_director').val(String(settings.iterModePromptDirector || ''));
     root.find('#luker_orch_iter_mode_prompt_agenda').val(String(settings.iterModePromptAgenda || ''));
     root.find('#luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
-    root.find('#luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 3));
+    root.find('#luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 20));
     root.find('#luker_orch_review_reruns').val(String(settings.reviewRerunMaxRounds ?? 2));
     root.find('#luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
     root.find('#luker_orch_rpm_limit').val(settings.rpmLimit || 0);
@@ -7088,7 +7088,7 @@ function bindUi() {
     });
 
     root.on('change.lukerOrch', '#luker_orch_node_iterations', function () {
-        settings.nodeIterationMaxRounds = Math.max(1, Math.min(20, Math.floor(Number(jQuery(this).val()) || 3)));
+        settings.nodeIterationMaxRounds = Math.max(1, Math.min(20, Math.floor(Number(jQuery(this).val()) || 20)));
         saveSettingsDebounced();
     });
 

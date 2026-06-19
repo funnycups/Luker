@@ -569,7 +569,7 @@ export const defaultSettings = {
     llmNodeApiPresetName: '',
     llmNodePresetName: '',
     includeWorldInfoWithPreset: true,
-    nodeIterationMaxRounds: 3,
+    nodeIterationMaxRounds: 20,
     reviewRerunMaxRounds: 2,
     toolCallRetryMax: 2,
     maxRecentMessages: 14,
