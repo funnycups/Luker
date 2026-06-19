@@ -22,6 +22,16 @@ let audioGain = null;
 let audioMediaElement = null;
 let audioMediaListenersAttached = false;
 
+// Heartbeat worker (keeps the main thread "alive" past hidden-tab throttling)
+let heartbeatWorker = null;
+let heartbeatWorkerBlobUrl = null;
+
+// Web Lock (Chromium uses lock holding as a "the page is doing work" hint)
+let webLockAbortController = null;
+
+// Page lifecycle listeners (re-arm audio after the OS suspends us)
+let pageLifecycleListenersAttached = false;
+
 function hasAndroidKeepAliveBridge() {
     return typeof window !== 'undefined'
         && typeof window.LukerAndroid === 'object'
@@ -125,6 +135,17 @@ function onAudioMediaEnded() {
     }
 }
 
+function onAudioMediaPaused() {
+    // Browsers pause backgrounded <audio> on their own; this is what kills keep-alive
+    // unless we re-arm it. The 500ms delay avoids fighting a real user pause from the
+    // MediaSession card (which we want to override too, but the delay smooths things).
+    if (activeMode !== 'audio') return;
+    setTimeout(() => {
+        if (activeMode !== 'audio') return;
+        audioMediaElement?.play().catch(() => { /* noop */ });
+    }, 500);
+}
+
 function ensureAudioElement() {
     if (audioMediaElement) return audioMediaElement;
     const el = new Audio(SILENT_VIDEO_URL);
@@ -139,12 +160,14 @@ function ensureAudioElement() {
 function attachAudioMediaListeners() {
     if (audioMediaListenersAttached || !audioMediaElement) return;
     audioMediaElement.addEventListener('ended', onAudioMediaEnded);
+    audioMediaElement.addEventListener('pause', onAudioMediaPaused);
     audioMediaListenersAttached = true;
 }
 
 function detachAudioMediaListeners() {
     if (!audioMediaListenersAttached || !audioMediaElement) return;
     audioMediaElement.removeEventListener('ended', onAudioMediaEnded);
+    audioMediaElement.removeEventListener('pause', onAudioMediaPaused);
     audioMediaListenersAttached = false;
 }
 
@@ -197,6 +220,92 @@ async function exitAudio() {
     if (audioCtx && audioCtx.state === 'running') {
         try { await audioCtx.suspend(); } catch (_) { /* noop */ }
     }
+}
+
+// ---------- Heartbeat worker ----------
+
+function startHeartbeatWorker() {
+    if (heartbeatWorker || typeof Worker !== 'function') return;
+    const code = "let t=null;self.onmessage=e=>{if(e.data==='start')t=setInterval(()=>{self.postMessage('ping');try{fetch(self.location.origin||'/',{method:'HEAD',mode:'no-cors'}).catch(()=>{})}catch(_){}},15000);else if(e.data==='stop'){clearInterval(t);t=null;}};";
+    try {
+        const blob = new Blob([code], { type: 'application/javascript' });
+        heartbeatWorkerBlobUrl = URL.createObjectURL(blob);
+        heartbeatWorker = new Worker(heartbeatWorkerBlobUrl);
+        heartbeatWorker.onmessage = resumeIfNeeded;
+        heartbeatWorker.onerror = () => {
+            stopHeartbeatWorker();
+            if (activeMode !== 'off') setTimeout(startHeartbeatWorker, 1000);
+        };
+        heartbeatWorker.postMessage('start');
+    } catch (_) { /* noop */ }
+}
+
+function stopHeartbeatWorker() {
+    try { heartbeatWorker?.postMessage('stop'); } catch (_) { /* noop */ }
+    try { heartbeatWorker?.terminate(); } catch (_) { /* noop */ }
+    heartbeatWorker = null;
+    if (heartbeatWorkerBlobUrl) {
+        try { URL.revokeObjectURL(heartbeatWorkerBlobUrl); } catch (_) { /* noop */ }
+        heartbeatWorkerBlobUrl = null;
+    }
+}
+
+// ---------- Web Lock ----------
+
+function acquireWebLock() {
+    if (typeof navigator === 'undefined' || !('locks' in navigator)) return;
+    releaseWebLock();
+    try {
+        webLockAbortController = new AbortController();
+        navigator.locks
+            .request('luker-keep-alive', { signal: webLockAbortController.signal }, () => new Promise(() => { /* never resolve */ }))
+            .catch((error) => {
+                if (error?.name !== 'AbortError') {
+                    console.warn('[Luker] Web Lock request failed', error);
+                }
+            });
+    } catch (_) { /* noop */ }
+}
+
+function releaseWebLock() {
+    try { webLockAbortController?.abort(); } catch (_) { /* noop */ }
+    webLockAbortController = null;
+}
+
+// ---------- Page lifecycle (re-arm after OS unsuspends) ----------
+
+function resumeIfNeeded() {
+    if (activeMode === 'audio') {
+        if (audioCtx?.state === 'suspended') {
+            audioCtx.resume().catch(() => { /* noop */ });
+        }
+        if (audioMediaElement?.paused) {
+            audioMediaElement.play().catch(() => { /* noop */ });
+        }
+    }
+    if (activeMode === 'pip' && pipVideo?.paused) {
+        pipVideo.play().catch(() => { /* noop */ });
+    }
+}
+
+function onVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+        resumeIfNeeded();
+    }
+}
+
+function attachPageLifecycleListeners() {
+    if (pageLifecycleListenersAttached) return;
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    document.addEventListener('resume', resumeIfNeeded);
+    pageLifecycleListenersAttached = true;
+}
+
+function detachPageLifecycleListeners() {
+    if (!pageLifecycleListenersAttached) return;
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    document.removeEventListener('resume', resumeIfNeeded);
+    pageLifecycleListenersAttached = false;
 }
 
 // ---------- Notification ----------
@@ -272,6 +381,15 @@ export async function setKeepAliveMode(desired) {
         }
     }
 
+    // Web-mode supplements: tear down when leaving any web mode entirely.
+    const wasWebMode = activeMode === 'pip' || activeMode === 'audio';
+    const willBeWebMode = target === 'pip' || target === 'audio';
+    if (wasWebMode && !willBeWebMode) {
+        stopHeartbeatWorker();
+        releaseWebLock();
+        detachPageLifecycleListeners();
+    }
+
     if (target === 'off') {
         activeMode = 'off';
         return 'off';
@@ -301,6 +419,11 @@ export async function setKeepAliveMode(desired) {
         try {
             await enterPip();
             activeMode = 'pip';
+            if (!wasWebMode) {
+                startHeartbeatWorker();
+                acquireWebLock();
+                attachPageLifecycleListeners();
+            }
             return 'pip';
         } catch (error) {
             console.warn('[Luker] Failed to enter PiP for keep-alive', error);
@@ -318,6 +441,11 @@ export async function setKeepAliveMode(desired) {
         try {
             await enterAudio();
             activeMode = 'audio';
+            if (!wasWebMode) {
+                startHeartbeatWorker();
+                acquireWebLock();
+                attachPageLifecycleListeners();
+            }
             return 'audio';
         } catch (error) {
             console.warn('[Luker] Failed to start audio keep-alive', error);
