@@ -54,11 +54,12 @@ async function readSidecar(ctx, avatar) {
     return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
 }
 
-async function writeSidecar(ctx, avatar, sessions) {
-    await ctx.setCharacterState(avatar, CEA_SIDECAR_NAMESPACE, {
-        version: SIDECAR_SCHEMA_VERSION,
-        sessions,
-    });
+function buildNextSidecar(current, mutate) {
+    const base = (current && typeof current === 'object' && current.sessions && typeof current.sessions === 'object')
+        ? { version: SIDECAR_SCHEMA_VERSION, sessions: { ...current.sessions } }
+        : { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+    mutate(base.sessions);
+    return base;
 }
 
 export function createUnifiedCeaEditorSessionStore(opts = {}) {
@@ -67,8 +68,8 @@ export function createUnifiedCeaEditorSessionStore(opts = {}) {
         throw new TypeError('createUnifiedCeaEditorSessionStore: avatar is required');
     }
     const ctx = opts.context;
-    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.setCharacterState !== 'function') {
-        throw new TypeError('createUnifiedCeaEditorSessionStore: opts.context with getCharacterState + setCharacterState is required');
+    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.updateCharacterState !== 'function') {
+        throw new TypeError('createUnifiedCeaEditorSessionStore: opts.context with getCharacterState + updateCharacterState is required');
     }
 
     function metaOf(s) {
@@ -91,15 +92,19 @@ export function createUnifiedCeaEditorSessionStore(opts = {}) {
 
     async function save(session) {
         if (!session?.id) return;
-        const payload = await readSidecar(ctx, avatar);
-        payload.sessions[String(session.id)] = structuredClone(session);
-        await writeSidecar(ctx, avatar, payload.sessions);
+        await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
+            buildNextSidecar(current, (sessions) => {
+                sessions[String(session.id)] = structuredClone(session);
+            }),
+        );
     }
 
     async function deleteFn(id) {
-        const payload = await readSidecar(ctx, avatar);
-        delete payload.sessions[String(id)];
-        await writeSidecar(ctx, avatar, payload.sessions);
+        await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
+            buildNextSidecar(current, (sessions) => {
+                delete sessions[String(id)];
+            }),
+        );
     }
 
     return {

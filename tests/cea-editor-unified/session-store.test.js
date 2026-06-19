@@ -6,7 +6,16 @@ function makeCtx({ initialSidecar = null } = {}) {
     if (initialSidecar) sidecars[`alice.png:${CEA_SIDECAR_NAMESPACE}`] = initialSidecar;
     return {
         getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
-        setCharacterState: jest.fn(async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; }),
+        updateCharacterState: jest.fn(async (a, ns, updater) => {
+            const current = sidecars[`${a}:${ns}`] || null;
+            const next = await updater(
+                current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+                { attempt: 0, avatar: a, namespace: ns },
+            );
+            if (next == null) return { ok: true, state: current, updated: false };
+            sidecars[`${a}:${ns}`] = next;
+            return { ok: true, state: next, updated: true };
+        }),
         _sidecars: sidecars,
     };
 }
@@ -54,7 +63,7 @@ describe('createUnifiedCeaEditorSessionStore — per-character sidecar backend',
         expect(() => createUnifiedCeaEditorSessionStore({ context: makeCtx() })).toThrow(/avatar is required/);
     });
 
-    test('throws when context lacks getCharacterState/setCharacterState', () => {
+    test('throws when context lacks getCharacterState/updateCharacterState', () => {
         expect(() => createUnifiedCeaEditorSessionStore({ avatar: 'a.png', context: {} }))
             .toThrow(/getCharacterState/);
     });

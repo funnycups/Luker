@@ -381,7 +381,16 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
         const sidecars = {};
         const fakeCtx = {
             getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
-            setCharacterState: async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; },
+            updateCharacterState: async (a, ns, updater) => {
+                const current = sidecars[`${a}:${ns}`] || null;
+                const next = await updater(
+                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+                    { attempt: 0, avatar: a, namespace: ns },
+                );
+                if (next == null) return { ok: true, state: current, updated: false };
+                sidecars[`${a}:${ns}`] = next;
+                return { ok: true, state: next, updated: true };
+            },
         };
         const store = createUnifiedCeaEditorSessionStore({
             context: fakeCtx,
@@ -418,7 +427,16 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
         const sidecars = {};
         const fakeCtx = {
             getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
-            setCharacterState: async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; },
+            updateCharacterState: async (a, ns, updater) => {
+                const current = sidecars[`${a}:${ns}`] || null;
+                const next = await updater(
+                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+                    { attempt: 0, avatar: a, namespace: ns },
+                );
+                if (next == null) return { ok: true, state: current, updated: false };
+                sidecars[`${a}:${ns}`] = next;
+                return { ok: true, state: next, updated: true };
+            },
         };
         const store = createUnifiedCeaEditorSessionStore({
             context: fakeCtx,
@@ -458,7 +476,16 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
         const sidecars = {};
         const fakeCtx = {
             getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
-            setCharacterState: async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; },
+            updateCharacterState: async (a, ns, updater) => {
+                const current = sidecars[`${a}:${ns}`] || null;
+                const next = await updater(
+                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+                    { attempt: 0, avatar: a, namespace: ns },
+                );
+                if (next == null) return { ok: true, state: current, updated: false };
+                sidecars[`${a}:${ns}`] = next;
+                return { ok: true, state: next, updated: true };
+            },
         };
         const store = createUnifiedCeaEditorSessionStore({
             context: fakeCtx,
