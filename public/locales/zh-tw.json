@@ -2800,7 +2800,7 @@
     "Background keep-alive could not be enabled. Try again from a tap on the page.": "無法開啟後台保活，請在頁面上點一下後再試。",
     "Background keep-alive": "後台保活",
     "Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.": "子母畫面：螢幕上多一個懸浮小窗，不會打斷正在播放的音樂。",
-    "Audio: nothing floats on screen, but a \"playing\" card appears on the lock screen and music apps will be interrupted.": "音訊：螢幕上沒有懸浮窗，但鎖屏會出現一個「正在播放」卡片，並且會打斷正在播放的音樂。",
+    "Audio: nothing floats on screen, but other playing music or video apps will be interrupted.": "音訊：螢幕上沒有懸浮窗，但會打斷其他正在播放的音樂和影片。",
     "Picture-in-Picture": "子母畫面",
     "Audio": "音訊",
     "Plugin Scripts": "插件正規腳本",

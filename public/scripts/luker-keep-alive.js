@@ -15,12 +15,14 @@ let stateChangeCallback = null;
 let pipVideo = null;
 let pipListenersAttached = false;
 
-// Audio state
+// Audio state — a silent 1Hz OscillatorNode fed through near-zero gain into
+// AudioContext.destination. As long as the destination produces frames, Chromium keeps
+// audio focus on the tab and skips hidden-tab throttling. Tested on Android 10 Chrome
+// 147: backgrounded tab survives screen-off indefinitely with just this. No <audio>
+// element, no MediaSession, no worker, no Web Lock needed.
 let audioCtx = null;
 let audioOscillator = null;
 let audioGain = null;
-let audioMediaElement = null;
-let audioMediaListenersAttached = false;
 
 // Heartbeat worker (keeps the main thread "alive" past hidden-tab throttling)
 let heartbeatWorker = null;
@@ -49,7 +51,7 @@ function hasPipSupport() {
 function hasAudioSupport() {
     if (typeof window === 'undefined') return false;
     const Ctx = window.AudioContext || window.webkitAudioContext;
-    return typeof Ctx === 'function' && typeof Audio === 'function';
+    return typeof Ctx === 'function';
 }
 
 function resolvePlatform() {
@@ -117,108 +119,35 @@ async function exitPip() {
 
 // ---------- Audio ----------
 
-function ensureAudioGraph() {
-    if (audioCtx) return;
+async function enterAudio() {
+    if (audioCtx) {
+        if (audioCtx.state === 'suspended') {
+            try { await audioCtx.resume(); } catch (_) { /* noop */ }
+        }
+        return;
+    }
     const Ctx = window.AudioContext || window.webkitAudioContext;
     audioCtx = new Ctx();
-    audioOscillator = audioCtx.createOscillator();
     audioGain = audioCtx.createGain();
     audioGain.gain.value = 0.0001;
+    audioOscillator = audioCtx.createOscillator();
     audioOscillator.frequency.value = 1;
     audioOscillator.connect(audioGain).connect(audioCtx.destination);
     audioOscillator.start();
-}
-
-function onAudioMediaEnded() {
-    if (activeMode === 'audio') {
-        audioMediaElement?.play().catch(() => { /* noop */ });
-    }
-}
-
-function onAudioMediaPaused() {
-    // Browsers pause backgrounded <audio> on their own; this is what kills keep-alive
-    // unless we re-arm it. The 500ms delay avoids fighting a real user pause from the
-    // MediaSession card (which we want to override too, but the delay smooths things).
-    if (activeMode !== 'audio') return;
-    setTimeout(() => {
-        if (activeMode !== 'audio') return;
-        audioMediaElement?.play().catch(() => { /* noop */ });
-    }, 500);
-}
-
-function ensureAudioElement() {
-    if (audioMediaElement) return audioMediaElement;
-    const el = new Audio(SILENT_VIDEO_URL);
-    el.loop = true;
-    el.volume = 0.0001;
-    el.preload = 'auto';
-    el.setAttribute('aria-hidden', 'true');
-    audioMediaElement = el;
-    return el;
-}
-
-function attachAudioMediaListeners() {
-    if (audioMediaListenersAttached || !audioMediaElement) return;
-    audioMediaElement.addEventListener('ended', onAudioMediaEnded);
-    audioMediaElement.addEventListener('pause', onAudioMediaPaused);
-    audioMediaListenersAttached = true;
-}
-
-function detachAudioMediaListeners() {
-    if (!audioMediaListenersAttached || !audioMediaElement) return;
-    audioMediaElement.removeEventListener('ended', onAudioMediaEnded);
-    audioMediaElement.removeEventListener('pause', onAudioMediaPaused);
-    audioMediaListenersAttached = false;
-}
-
-function installMediaSessionHandlers() {
-    if (!('mediaSession' in navigator)) return;
-    try {
-        if (typeof MediaMetadata === 'function') {
-            navigator.mediaSession.metadata = new MediaMetadata({
-                title: 'Luker',
-                artist: 'Background keep-alive',
-            });
-        }
-        // Refuse the user's pause request to keep the keep-alive running.
-        // When the user wants to stop, they toggle the setting off in Luker.
-        navigator.mediaSession.setActionHandler('play', () => {
-            audioMediaElement?.play().catch(() => { /* noop */ });
-        });
-        navigator.mediaSession.setActionHandler('pause', () => {
-            audioMediaElement?.play().catch(() => { /* noop */ });
-        });
-    } catch (_) { /* noop */ }
-}
-
-function clearMediaSessionHandlers() {
-    if (!('mediaSession' in navigator)) return;
-    try {
-        navigator.mediaSession.metadata = null;
-        navigator.mediaSession.setActionHandler('play', null);
-        navigator.mediaSession.setActionHandler('pause', null);
-    } catch (_) { /* noop */ }
-}
-
-async function enterAudio() {
-    ensureAudioGraph();
     if (audioCtx.state === 'suspended') {
         try { await audioCtx.resume(); } catch (_) { /* noop */ }
     }
-    const el = ensureAudioElement();
-    attachAudioMediaListeners();
-    await el.play();
-    installMediaSessionHandlers();
 }
 
 async function exitAudio() {
-    clearMediaSessionHandlers();
-    detachAudioMediaListeners();
-    if (audioMediaElement) {
-        try { audioMediaElement.pause(); } catch (_) { /* noop */ }
-    }
-    if (audioCtx && audioCtx.state === 'running') {
-        try { await audioCtx.suspend(); } catch (_) { /* noop */ }
+    try { audioOscillator?.stop(); } catch (_) { /* noop */ }
+    try { audioOscillator?.disconnect(); } catch (_) { /* noop */ }
+    audioOscillator = null;
+    try { audioGain?.disconnect(); } catch (_) { /* noop */ }
+    audioGain = null;
+    if (audioCtx) {
+        try { await audioCtx.close(); } catch (_) { /* noop */ }
+        audioCtx = null;
     }
 }
 
@@ -278,9 +207,6 @@ function resumeIfNeeded() {
     if (activeMode === 'audio') {
         if (audioCtx?.state === 'suspended') {
             audioCtx.resume().catch(() => { /* noop */ });
-        }
-        if (audioMediaElement?.paused) {
-            audioMediaElement.play().catch(() => { /* noop */ });
         }
     }
     if (activeMode === 'pip' && pipVideo?.paused) {
@@ -381,12 +307,17 @@ export async function setKeepAliveMode(desired) {
         }
     }
 
-    // Web-mode supplements: tear down when leaving any web mode entirely.
+    // PiP-only supplements: worker heartbeat and Web Lock are PiP scaffolding.
+    // Visibility self-heal is shared by both web modes — kept as a cheap "if the OS
+    // really suspends us, recover on return" fallback even though current testing on
+    // Android shows AudioContext doesn't actually get suspended.
+    if (activeMode === 'pip' && target !== 'pip') {
+        stopHeartbeatWorker();
+        releaseWebLock();
+    }
     const wasWebMode = activeMode === 'pip' || activeMode === 'audio';
     const willBeWebMode = target === 'pip' || target === 'audio';
     if (wasWebMode && !willBeWebMode) {
-        stopHeartbeatWorker();
-        releaseWebLock();
         detachPageLifecycleListeners();
     }
 
@@ -419,11 +350,9 @@ export async function setKeepAliveMode(desired) {
         try {
             await enterPip();
             activeMode = 'pip';
-            if (!wasWebMode) {
-                startHeartbeatWorker();
-                acquireWebLock();
-                attachPageLifecycleListeners();
-            }
+            startHeartbeatWorker();
+            acquireWebLock();
+            attachPageLifecycleListeners();
             return 'pip';
         } catch (error) {
             console.warn('[Luker] Failed to enter PiP for keep-alive', error);
@@ -441,11 +370,7 @@ export async function setKeepAliveMode(desired) {
         try {
             await enterAudio();
             activeMode = 'audio';
-            if (!wasWebMode) {
-                startHeartbeatWorker();
-                acquireWebLock();
-                attachPageLifecycleListeners();
-            }
+            attachPageLifecycleListeners();
             return 'audio';
         } catch (error) {
             console.warn('[Luker] Failed to start audio keep-alive', error);

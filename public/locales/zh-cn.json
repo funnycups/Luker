@@ -3713,7 +3713,7 @@
     "Background keep-alive could not be enabled. Try again from a tap on the page.": "无法开启后台保活，请在页面上点一下后重试。",
     "Background keep-alive": "后台保活",
     "Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.": "画中画：屏幕上多一个悬浮小窗，不会打断正在播放的音乐。",
-    "Audio: nothing floats on screen, but a \"playing\" card appears on the lock screen and music apps will be interrupted.": "音频：屏幕上没有悬浮窗，但锁屏会出现一个「正在播放」卡片，并且会打断正在播放的音乐。",
+    "Audio: nothing floats on screen, but other playing music or video apps will be interrupted.": "音频：屏幕上没有悬浮窗，但会打断其他正在播放的音乐和视频。",
     "Picture-in-Picture": "画中画",
     "Audio": "音频",
     "Current chat tools": "当前聊天工具",

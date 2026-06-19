@@ -572,8 +572,8 @@ async function chooseWebKeepAliveMode() {
         $('<p></p>').attr('data-i18n', 'Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.').text(
             t`Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.`,
         ),
-        $('<p></p>').attr('data-i18n', 'Audio: nothing floats on screen, but a "playing" card appears on the lock screen and music apps will be interrupted.').text(
-            t`Audio: nothing floats on screen, but a "playing" card appears on the lock screen and music apps will be interrupted.`,
+        $('<p></p>').attr('data-i18n', 'Audio: nothing floats on screen, but other playing music or video apps will be interrupted.').text(
+            t`Audio: nothing floats on screen, but other playing music or video apps will be interrupted.`,
         ),
     );
     const result = await callGenericPopup(message, POPUP_TYPE.TEXT, '', {
