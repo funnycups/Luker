@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { GenerateTaskError, resolveProfile, resolveWorldInfo, assembleMessages, renderForApi, generateTask, applyMacroSubstitution } from '../../public/scripts/generate-task.js';
+import { GenerateTaskError, resolveProfile, resolveWorldInfo, assembleMessages, renderForApi, generateTask, applyMacroSubstitution, resolveOpenAiStreamFlag } from '../../public/scripts/generate-task.js';
 
 describe('GenerateTaskError', () => {
     test('stores code, message, cause, details', () => {
@@ -313,6 +313,37 @@ describe('module exports', () => {
         expect(typeof mod.dispatchToSender).toBe('function');
         expect(typeof mod.normalizeResponse).toBe('function');
         expect(typeof mod.applyMacroSubstitution).toBe('function');
+        expect(typeof mod.resolveOpenAiStreamFlag).toBe('function');
+    });
+});
+
+describe('resolveOpenAiStreamFlag', () => {
+    const runtime = {
+        oai_settings: { stream_openai: false },
+        openai_settings: [
+            { stream_openai: true },
+            { stream_openai: false },
+        ],
+        openai_setting_names: { Streamy: 0, Plain: 1 },
+    };
+
+    test('returns named preset flag when llmPresetName matches', () => {
+        expect(resolveOpenAiStreamFlag(runtime, 'Streamy')).toBe(true);
+        expect(resolveOpenAiStreamFlag(runtime, 'Plain')).toBe(false);
+    });
+
+    test('falls back to oai_settings.stream_openai when llmPresetName empty', () => {
+        expect(resolveOpenAiStreamFlag(runtime, '')).toBe(false);
+        expect(resolveOpenAiStreamFlag({ ...runtime, oai_settings: { stream_openai: true } }, '')).toBe(true);
+    });
+
+    test('falls back to current selection when named preset is unknown', () => {
+        expect(resolveOpenAiStreamFlag(runtime, 'NoSuchPreset')).toBe(false);
+    });
+
+    test('returns false when runtime is null / missing', () => {
+        expect(resolveOpenAiStreamFlag(null, 'Streamy')).toBe(false);
+        expect(resolveOpenAiStreamFlag(undefined, '')).toBe(false);
     });
 });
 

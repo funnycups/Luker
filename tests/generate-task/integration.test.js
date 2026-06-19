@@ -189,6 +189,62 @@ describe('generateTask end-to-end', () => {
         expect(capturedMessages).toEqual([{ role: 'user', content: 'Hi {{user}}' }]);
         expect(substituteCalls).toBe(0);
     });
+
+    test('openai preset with stream_openai=true routes through streaming dispatcher and returns same shape', async () => {
+        // openai.js's streaming sender returns a generator factory yielding
+        // cumulative { text, toolCalls, state } frames; dispatchToSenderStreaming
+        // accumulates them into a chat-completion shape for normalizeResponse.
+        const fakeOpenAI = async (type, payload, signal, opts) => {
+            expect(opts.allowStreamingForQuiet).toBe(true); // streaming branch reached
+            return async function* () {
+                yield { text: 'hel', toolCalls: [], state: { reasoning: '' } };
+                yield { text: 'hello', toolCalls: [], state: { reasoning: '', finishReason: 'stop' } };
+            };
+        };
+        const result = await generateTask({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+            llmPresetName: 'Streamy',
+        }, {
+            _injected: baseInjected({
+                senders: {
+                    sendOpenAIRequest: fakeOpenAI,
+                    getOpenAiRuntime: () => ({
+                        oai_settings: { stream_openai: false },
+                        openai_settings: [{ stream_openai: true }],
+                        openai_setting_names: { Streamy: 0 },
+                    }),
+                },
+            }),
+        });
+        expect(result.assistantText).toBe('hello');
+        expect(result.finishReason).toBe('stop');
+        expect(result.toolCalls).toEqual([]);
+    });
+
+    test('openai preset with stream_openai=false stays on one-shot dispatcher', async () => {
+        let allowFlag = null;
+        const fakeOpenAI = async (type, payload, signal, opts) => {
+            allowFlag = opts.allowStreamingForQuiet;
+            return { choices: [{ message: { content: 'plain' }, finish_reason: 'stop' }] };
+        };
+        const result = await generateTask({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+            llmPresetName: 'Plain',
+        }, {
+            _injected: baseInjected({
+                senders: {
+                    sendOpenAIRequest: fakeOpenAI,
+                    getOpenAiRuntime: () => ({
+                        oai_settings: { stream_openai: true },
+                        openai_settings: [{ stream_openai: false }],
+                        openai_setting_names: { Plain: 0 },
+                    }),
+                },
+            }),
+        });
+        expect(result.assistantText).toBe('plain');
+        expect(allowFlag).toBeFalsy(); // one-shot dispatcher does not set this
+    });
 });
 
 import { generateTaskStream } from '../../public/scripts/generate-task.js';

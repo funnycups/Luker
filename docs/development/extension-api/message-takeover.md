@@ -78,7 +78,7 @@ type DispatchEventData = {
 
 If no subscriber claims, the normal LLM dispatch proceeds. If multiple subscribers try to claim, the first claim wins; subsequent assignments are logged with a warning. `quiet` and `impersonate` generation types do NOT emit this event.
 
-`isStreamingEnabled` is the user's *session-level* preference, sourced from `isStreamingEnabled()` (the same flag that gates the main LLM path between `sendStreamingRequest` and `sendOpenAIRequest`). Plugins that drive their own LLM calls — e.g. via `generateTask` vs `generateTaskStream` — should honor it for consistency with the rest of the UI. Plugins that ship their own streaming-transport setting may further override this (the orchestrator's "Use streaming transport" profile checkbox is one example).
+`isStreamingEnabled` is the user's *session-level* preference, sourced from `isStreamingEnabled()` (the same flag that gates the main LLM path between `sendStreamingRequest` and `sendOpenAIRequest`). Plugins driving their own LLM calls should honor it when they need to decide whether to render tokens live — pick `generateTaskStream` when streaming is on, `generateTask` when it's off. Transport selection (SSE vs one-shot POST) is handled separately by `generateTask` based on the named preset's `stream_openai` flag and is independent of this signal.
 
 ## Three terminal states
 

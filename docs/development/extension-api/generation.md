@@ -236,9 +236,20 @@ return {
 };
 ```
 
+### Transport
+
+`generateTask` picks the wire-level transport (SSE vs one-shot POST) from the resolved preset's `stream_openai` flag:
+
+- `stream_openai: true` on the named `llmPresetName` (or the currently selected chat-completion preset when `llmPresetName` is empty) → SSE transport. Useful on slow upstreams where the HTTP connection would otherwise time out. Frames are accumulated server-side into the same terminal shape; the caller still sees `Promise<terminal>`.
+- `stream_openai: false` → one-shot POST. The whole response arrives in a single body.
+
+The return shape is identical either way. Callers do **not** flip a transport flag — the user's preset choice is the source of truth. Non-OpenAI request APIs (kobold / koboldhorde / novel / textgenerationwebui) always use one-shot POST.
+
+When you want to **render tokens as they arrive**, that is a separate concern from transport — use `generateTaskStream` (next section).
+
 ### Streaming
 
-For interactive flows that want to render tokens as the model produces them, `context.generateTaskStream` returns a split-stream pair: an `AsyncIterable` of delta chunks plus a `Promise` of the same normalized terminal result `generateTask` returns.
+`generateTask` returns a terminal result regardless of transport. For interactive flows that need to render tokens as the model produces them, use `context.generateTaskStream` — it returns a split-stream pair: an `AsyncIterable` of delta chunks plus a `Promise` of the same normalized terminal result `generateTask` returns. The OpenAI-family streaming sender is always used; the preset's `stream_openai` flag is not consulted because consuming chunks is the caller's expressed intent.
 
 ```js
 const { stream, result } = context.generateTaskStream({

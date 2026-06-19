@@ -132,7 +132,7 @@ import { addLocaleData, getCurrentLocale, t, translate } from './i18n.js';
 import { hideLoader, showLoader } from './loader.js';
 import { loader } from './action-loader.js';
 import { MacrosParser } from './macros.js';
-import { getChatCompletionModel, oai_settings, sendOpenAIRequest, proxies, ZAI_ENDPOINT, stripOpenAIConnectionFieldsFromPreset } from './openai.js';
+import { getChatCompletionModel, oai_settings, openai_settings, openai_setting_names, sendOpenAIRequest, proxies, ZAI_ENDPOINT, stripOpenAIConnectionFieldsFromPreset } from './openai.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { power_user, registerDebugFunction, performFuzzySearch } from './power-user.js';
 import { getPresetManager } from './preset-manager.js';
@@ -2237,6 +2237,16 @@ function buildGenerateTaskSenders() {
             novelai_settings,
             novelai_setting_names,
             amount_gen,
+        }),
+        // Snapshot the OpenAI preset registry so generate-task can decide
+        // streaming transport from the preset the caller named (or the
+        // currently selected chat-completion preset if `llmPresetName` is
+        // empty). Generation params are read off the named preset here;
+        // unnamed callers fall through to `oai_settings.stream_openai`.
+        getOpenAiRuntime: () => ({
+            oai_settings,
+            openai_settings,
+            openai_setting_names,
         }),
     };
 }

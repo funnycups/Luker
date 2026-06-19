@@ -51,6 +51,43 @@ function getDefaultSubstituteParams() {
 }
 
 /**
+ * Read `stream_openai` from the preset named by `llmPresetName` (canonical
+ * lookup against `openai_setting_names`); fall back to the currently selected
+ * chat-completion preset's `oai_settings.stream_openai` when the name is empty
+ * or unknown.
+ *
+ * The OpenAI senders treat `type='quiet'` requests as non-streaming unless the
+ * caller flips `allowStreamingForQuiet:true`. `generateTask` always sends
+ * 'quiet', so without this lookup every plugin request collapsed to
+ * one-shot transport regardless of preset. Reading the flag here lets the
+ * caller's selected preset drive transport (SSE vs one-shot POST) without
+ * surfacing it as a separate API parameter.
+ *
+ * Returns `false` when the runtime is unavailable so generate-task degrades
+ * gracefully in tests / non-browser contexts.
+ *
+ * @param {object|null} openAiRuntime  { oai_settings, openai_settings, openai_setting_names }
+ * @param {string} llmPresetName
+ * @returns {boolean}
+ */
+export function resolveOpenAiStreamFlag(openAiRuntime, llmPresetName = '') {
+    if (!openAiRuntime || typeof openAiRuntime !== 'object') {
+        return false;
+    }
+    const presetName = String(llmPresetName || '').trim();
+    if (presetName) {
+        const settingNames = openAiRuntime.openai_setting_names || {};
+        const settingsList = openAiRuntime.openai_settings || [];
+        const presetIndex = settingNames[presetName];
+        const presetSource = Number.isInteger(presetIndex) ? settingsList[presetIndex] : null;
+        if (presetSource && typeof presetSource === 'object' && Object.hasOwn(presetSource, 'stream_openai')) {
+            return Boolean(presetSource.stream_openai);
+        }
+    }
+    return Boolean(openAiRuntime.oai_settings?.stream_openai);
+}
+
+/**
  * Run substituteParams over each task message's string content. Side-effect
  * macros ({{setvar/addvar/incvar/decvar/deletevar}}) are stripped via
  * `skipSideEffects:true` so plugin requests cannot mutate chat_metadata
@@ -956,21 +993,50 @@ export async function generateTask({
     const payload = renderForApi(profile.requestApi, messages, { rawPromptBuilder });
 
     // ── 7. Dispatch ──
+    // OpenAI-family: when the resolved preset has `stream_openai: true`, run
+    // the streaming sender and accumulate frames into the same chat-completion
+    // shape `normalizeResponse` expects. This keeps the wire-level transport
+    // tied to the user-selected preset while leaving `generateTask`'s contract
+    // — `Promise<terminal>` — unchanged. `generateTaskStream` remains the
+    // entry point for callers that want chunk-by-chunk delivery.
     const mode = hasJsonSchema ? RESPONSE_MODES.JSON : (hasTools ? RESPONSE_MODES.TOOL : RESPONSE_MODES.TEXT);
+    const useStreamingTransport = profile.requestApi === 'openai'
+        && resolveOpenAiStreamFlag(senders?.getOpenAiRuntime?.(), effectiveLlmPresetName);
     let raw;
     try {
-        raw = await dispatchToSender({
-            requestApi: profile.requestApi,
-            payload,
-            tools,
-            toolChoice,
-            jsonSchema,
-            llmPresetName: effectiveLlmPresetName,
-            apiSettingsOverride: profile.apiSettingsOverride,
-            functionCallMode,
-            functionCallOptions,
-            abortSignal,
-        }, { senders });
+        if (useStreamingTransport) {
+            const { stream: innerStream, rawTerminal } = dispatchToSenderStreaming({
+                requestApi: profile.requestApi,
+                payload,
+                tools,
+                toolChoice,
+                jsonSchema,
+                llmPresetName: effectiveLlmPresetName,
+                apiSettingsOverride: profile.apiSettingsOverride,
+                functionCallMode,
+                functionCallOptions,
+                abortSignal,
+            }, { senders });
+            // Drain inner stream so the producer is not blocked waiting for a
+            // consumer (chunks are dropped per channel spec when no consumer
+            // attaches, but we attach defensively to avoid back-pressure
+            // surprises if that contract ever changes).
+            (async () => { try { for await (const _ of innerStream) { /* drop */ } } catch { /* surfaced via rawTerminal */ } })();
+            raw = await rawTerminal;
+        } else {
+            raw = await dispatchToSender({
+                requestApi: profile.requestApi,
+                payload,
+                tools,
+                toolChoice,
+                jsonSchema,
+                llmPresetName: effectiveLlmPresetName,
+                apiSettingsOverride: profile.apiSettingsOverride,
+                functionCallMode,
+                functionCallOptions,
+                abortSignal,
+            }, { senders });
+        }
     } catch (e) {
         throw _wrapSenderError(e, abortSignal);
     }

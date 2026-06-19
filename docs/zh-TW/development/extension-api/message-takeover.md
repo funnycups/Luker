@@ -77,7 +77,7 @@ type DispatchEventData = {
 
 如果沒有訂閱方宣告接管，正常的 LLM 分派會照常進行。如果多個訂閱方都嘗試宣告，先到先得；後續的賦值會被記錄為警告。`quiet` 和 `impersonate` 這兩種生成類型**不會**觸發該事件。
 
-`isStreamingEnabled` 為使用者**工作階段層級**的偏好，來源是 `isStreamingEnabled()`（也就是決定主 LLM 路徑走 `sendStreamingRequest` 還是 `sendOpenAIRequest` 的同一個 flag）。如果你的外掛自行驅動 LLM 呼叫（例如在 `generateTask` 與 `generateTaskStream` 之間擇一），應尊重此值以與 UI 其他行為保持一致。帶有自身串流開關的外掛可以進一步覆寫（編排器的「使用串流傳輸」profile 開關即為一例）。
+`isStreamingEnabled` 為使用者**工作階段層級**的偏好，來源是 `isStreamingEnabled()`（也就是決定主 LLM 路徑走 `sendStreamingRequest` 還是 `sendOpenAIRequest` 的同一個 flag）。外掛自行驅動 LLM 呼叫時，如果需要決定「是否即時渲染 token」，應尊重此值——開了就走 `generateTaskStream`，關了就走 `generateTask`。底層傳輸（SSE / 一次性 POST）由 `generateTask` 依命名預設的 `stream_openai` 單獨決定，與此信號獨立。
 
 ## 三種終態
 

@@ -77,7 +77,7 @@ type DispatchEventData = {
 
 如果没有订阅方声明接管，正常的 LLM 分发会照常进行。如果多个订阅方都尝试声明，先到先得；后续的赋值会被记录为警告。`quiet` 和 `impersonate` 这两种生成类型**不会**触发该事件。
 
-`isStreamingEnabled` 是用户**会话级**的偏好，来自 `isStreamingEnabled()`（即决定主 LLM 路径走 `sendStreamingRequest` 还是 `sendOpenAIRequest` 的那同一个 flag）。如果你的插件自行驱动 LLM 调用（比如在 `generateTask` 与 `generateTaskStream` 之间二选一），应该尊重此值以与 UI 其它行为保持一致。带有自己流式开关的插件可以进一步覆写（编排器的「使用流式传输」profile 开关就是一例）。
+`isStreamingEnabled` 是用户**会话级**的偏好，来自 `isStreamingEnabled()`（即决定主 LLM 路径走 `sendStreamingRequest` 还是 `sendOpenAIRequest` 的那同一个 flag）。插件自行驱动 LLM 调用时，如果需要决定"是否实时渲染 token"，应尊重这个值——开了就走 `generateTaskStream`，关了就走 `generateTask`。底层传输（SSE / 一次性 POST）由 `generateTask` 根据命名预设的 `stream_openai` 单独决定，跟这个信号独立。
 
 ## 三种终态
 

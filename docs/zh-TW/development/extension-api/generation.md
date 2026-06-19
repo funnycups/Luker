@@ -236,9 +236,20 @@ return {
 };
 ```
 
+### 傳輸方式
+
+`generateTask` 依解析後預設的 `stream_openai` 欄位決定底層走 SSE 或一次性 POST：
+
+- 命名的 `llmPresetName`（留空時回退到目前選中的 chat completion 預設）`stream_openai: true` → SSE 傳輸。慢速上游用得到，避免 HTTP 連線逾時；伺服端逐幀累積後拼成完整終態，呼叫方仍然只看到 `Promise<terminal>`。
+- `stream_openai: false` → 一次性 POST。整個回應在一個 body 裡回傳。
+
+兩種走法回傳形態完全一致。**呼叫方不需要設傳輸開關**，使用者在預設裡的選擇就是真相來源。非 OpenAI 族（kobold / koboldhorde / novel / textgenerationwebui）始終走一次性 POST。
+
+如果你需要**即時渲染 token**，那是另一回事——和傳輸無關，要走下一節的 `generateTaskStream`。
+
 ### 串流回應
 
-對於希望在模型生成過程中即時渲染 token 的互動式場景，`context.generateTaskStream` 會回傳一對 split-stream：一個用於消費 delta 增量的 `AsyncIterable`，以及一個 `Promise` 取得與 `generateTask` 相同形態的終態結果。
+`generateTask` 不管走哪種傳輸都會回傳終態結果。如果互動式場景需要在模型生成過程中即時渲染 token，請使用 `context.generateTaskStream`——它會回傳一對 split-stream：一個用於消費 delta 增量的 `AsyncIterable`，以及一個 `Promise` 取得與 `generateTask` 相同形態的終態結果。它始終走 OpenAI 族的串流 sender，不再讀預設的 `stream_openai` 欄位，因為「消費 chunk」本身就是呼叫方明確表達的訴求。
 
 ```js
 const { stream, result } = context.generateTaskStream({
