@@ -79,6 +79,7 @@ import {
     skillIcon as skillBodyIcon,
     skillTarget as skillBodyTarget,
 } from '../../../iteration-library/proposal-bus/diff-bodies/skill.js';
+import { renderPresetCloneBody } from '../../../iteration-library/proposal-bus/diff-bodies/preset-clone.js';
 import {
     buildToolCatalog,
     normalizeToolCallToEdit,
@@ -654,6 +655,7 @@ export async function openCpaIterationStudio(deps) {
         // canonical-JSON hash digests sourceBody for us, so we hand it the
         // live object instead of pre-hashing.
         readSourceSnapshot: readPresetCloneSnapshot,
+        renderDiff: renderPresetCloneBody,
         afterClone: async (op, _result) => {
             const newRefRaw = getTargetRef();
             const newRef = newRefRaw ? { collection: newRefRaw.collection, name: newRefRaw.name } : null;

@@ -38,6 +38,21 @@
 
 .iter_proposal_card_body { margin: 6px 0; }
 
+.iter_proposal_preset_clone_body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.92em;
+}
+.iter_proposal_preset_clone_summary { opacity: 0.95; }
+.iter_proposal_preset_clone_warning {
+    padding: 4px 8px;
+    background: color-mix(in oklab, #d4a017 18%, transparent);
+    border-left: 3px solid color-mix(in oklab, #d4a017 70%, transparent);
+    border-radius: 3px;
+    font-size: 0.88em;
+}
+
 .iter_proposal_card_conflict {
     margin: 6px 0;
     padding: 6px 8px;
