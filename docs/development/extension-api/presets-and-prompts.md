@@ -66,15 +66,76 @@ This function does **not** return API endpoint, model, or secret information. To
 
 ### presets.state
 
+Plugin runtime/session data bound to a preset. State sidecars live next to the preset on disk and are NOT exported with the preset itself — they are strictly for plugin-side runtime state (e.g., the orchestrator's per-preset agent override, the preset assistant's last-used template). Do not stuff plugin data into the preset body; use `presets.state.*` instead.
+
+All methods accept `options.target` (a `PresetRef`) and `options.collection` for cross-preset reads/writes; both default to the currently selected preset.
+
+#### presets.state.get
+
+```ts
+presets.state.get(
+  namespace: string,
+  options?: { target?: PresetRef, collection?: string }
+): Promise<any | null>
+```
+
+Reads the preset state for a given namespace. Returns `null` if no data exists for that namespace.
+
+#### presets.state.getBatch
+
+```ts
+presets.state.getBatch(
+  namespaces: string[],
+  options?: { target?: PresetRef, collection?: string }
+): Promise<Map<string, any | null>>
+```
+
+Reads preset state for multiple namespaces in batch. Returns a `Map` keyed by namespace; missing namespaces map to `null`.
+
+#### presets.state.update
+
 ```ts
 presets.state.update(
   namespace: string,
   updater: (current: any) => any,
-  options?: { target: PresetRef }
-): Promise<void>
+  options?: { target?: PresetRef, collection?: string, maxOperations?: number, maxRetries?: number }
+): Promise<{ ok: boolean, state: object | null, updated: boolean }>
 ```
 
-Manages plugin runtime/session data bound to a preset. This data is not exported with the preset and is only used for plugin runtime state.
+**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change". 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1).
+
+```js
+await context.presets.state.update('my-plugin', (current = {}) => ({
+  ...current,
+  lastUsedTemplate: 'compact',
+  updatedAt: Date.now(),
+}));
+```
+
+#### presets.state.delete
+
+```ts
+presets.state.delete(
+  namespace: string,
+  options?: { target?: PresetRef, collection?: string }
+): Promise<boolean>
+```
+
+Deletes the preset state for a given namespace. Idempotent — succeeds when the sidecar does not exist.
+
+#### presets.state.deleteAll
+
+```ts
+presets.state.deleteAll(target?: PresetRef | string | null): Promise<boolean>
+```
+
+Wipes every namespace under the given preset. Use sparingly — typically only when the preset itself is being deleted or reset.
+
+#### Best Practices
+
+- Use `presets.state.update()` for read-modify-write instead of manually chaining `get()` + a full overwrite — the helper ships only the diff and handles the 409 retry for you.
+- Keep payloads as JSON-serializable plain objects; arrays and primitives at the top level are not supported.
+- One namespace per logical state slice; don't pack unrelated data under a single namespace.
 
 ### Usage Rules
 

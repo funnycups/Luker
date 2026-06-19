@@ -66,15 +66,76 @@ presets.resolve(
 
 ### presets.state
 
+綁定到預設的外掛執行時/會話資料。State sidecar 與預設檔案並排存放，**不會隨預設一起匯出**，僅供外掛側執行時使用（例如編排器的「按預設記憶 agent 覆寫」、預設助手的「上次使用的範本」）。不要把外掛資料塞進預設 body，用 `presets.state.*`。
+
+所有方法都接受 `options.target`（`PresetRef`）和 `options.collection` 做跨預設讀寫；兩者預設指向當前選中的預設。
+
+#### presets.state.get
+
+```ts
+presets.state.get(
+  namespace: string,
+  options?: { target?: PresetRef, collection?: string }
+): Promise<any | null>
+```
+
+讀取指定命名空間下的預設狀態。如果該命名空間沒有資料，回傳 `null`。
+
+#### presets.state.getBatch
+
+```ts
+presets.state.getBatch(
+  namespaces: string[],
+  options?: { target?: PresetRef, collection?: string }
+): Promise<Map<string, any | null>>
+```
+
+單次請求批次讀取多個命名空間。回傳以命名空間為鍵的 `Map`；不存在的命名空間對應 `null`。
+
+#### presets.state.update
+
 ```ts
 presets.state.update(
   namespace: string,
   updater: (current: any) => any,
-  options?: { target: PresetRef }
-): Promise<void>
+  options?: { target?: PresetRef, collection?: string, maxOperations?: number, maxRetries?: number }
+): Promise<{ ok: boolean, state: object | null, updated: boolean }>
 ```
 
-管理綁定到預設的外掛執行時/會話資料。這些資料不會隨預設匯出，僅用於外掛的執行時狀態。
+**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統底層自動計算最小增量 patch，只有變化的那部分上網。回傳 `null` / `undefined` 視為「無變更」。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。
+
+```js
+await context.presets.state.update('my-plugin', (current = {}) => ({
+  ...current,
+  lastUsedTemplate: 'compact',
+  updatedAt: Date.now(),
+}));
+```
+
+#### presets.state.delete
+
+```ts
+presets.state.delete(
+  namespace: string,
+  options?: { target?: PresetRef, collection?: string }
+): Promise<boolean>
+```
+
+刪除指定命名空間的預設狀態。冪等 —— sidecar 不存在時也會成功回傳。
+
+#### presets.state.deleteAll
+
+```ts
+presets.state.deleteAll(target?: PresetRef | string | null): Promise<boolean>
+```
+
+清空指定預設下的所有命名空間。慎用 —— 通常只在預設本身被刪除或重設時呼叫。
+
+#### 最佳實踐
+
+- 優先用 `presets.state.update()`，不要手動串 `get()` + 整份覆寫 —— helper 只發 diff，並替你處理 409 重試。
+- 負載保持為可 JSON 序列化的普通物件；頂層陣列或基本型別不支援。
+- 一個命名空間裝一片邏輯狀態，不要把無關資料塞同一個命名空間。
 
 ### 使用規則
 
