@@ -25,7 +25,12 @@ export class PgEngine {
         // URL's `options=-csearch_path=...` parameter, so every connection
         // pulled from this pool already targets the right namespace — no
         // per-connection `SET search_path` needed.
-        this._pool = new pg.Pool({ connectionString: url, max: poolSize });
+        this._pool = new pg.Pool({
+            connectionString: url,
+            max: poolSize,
+            keepAlive: true,
+            keepAliveInitialDelayMillis: 10_000,
+        });
         // Lazy schema bootstrap: first ping / withTransaction triggers
         // initSchema once and caches the promise so concurrent first calls
         // share the work. Mirrors MysqlEngine / SqliteEngine bootstrap.

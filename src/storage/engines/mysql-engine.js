@@ -19,6 +19,8 @@ export class MysqlEngine {
             // Allow multiple PK fields without auto-string casts; the
             // composite-key handlers in Task 3 rely on raw 0/1 for is_group.
             namedPlaceholders: false,
+            enableKeepAlive: true,
+            keepAliveInitialDelay: 10_000,
         });
         // Lazy schema bootstrap: first ping / withTransaction triggers
         // initSchema once and caches the promise so concurrent first calls
