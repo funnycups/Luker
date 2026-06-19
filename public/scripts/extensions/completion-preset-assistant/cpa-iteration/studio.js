@@ -1974,16 +1974,20 @@ export async function openCpaIterationStudio(deps) {
         state.session.messages.push(assistantMsg);
 
         // Stage this turn's profile sandbox-diff as ONE ProposalBus
-        // proposal. The CPA preset sandbox-diff coalesces 1-or-N empty-
-        // path-set edits per turn (each call chained off the previous);
-        // the user-visible card represents the cumulative replace.
+        // proposal. Unlike orch/MG (whose normalize emits `path:''` whole-
+        // body sets, so the last edit's newValue is already the cumulative
+        // new live), CPA's tools emit scoped-path sets (`prompts`,
+        // `prompt_order`, individual field paths). The cumulative new live
+        // is the chained sandbox the per-call loop maintains in
+        // `chainedLive` — we hand that to the bus as the whole-body replace
+        // newValue. Using `edits[N-1].newValue` here would replace the
+        // entire preset body with just the last op's local fragment.
         if (edits.length > 0) {
-            const lastEdit = edits[edits.length - 1];
             const firstCallId = (editToolCalls.find((c) => c?.id)?.id) || assistantMsg.id;
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
             await bus.propose({
                 kind: 'profile-edit',
-                op: { op: 'set', path: '', newValue: lastEdit.newValue },
+                op: { op: 'set', path: '', newValue: chainedLive },
                 snapshot: state.live,
                 sourceCallId: firstCallId,
             });
