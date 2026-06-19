@@ -1144,7 +1144,7 @@ export async function openOrchestratorIterationStudio(deps) {
             else await commitLiveToGlobal();
         },
         readLive: async () => {
-            loadLive();
+            await loadLive();
             return state.live;
         },
         renderDiff: (before, after) => {
