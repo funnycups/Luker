@@ -230,6 +230,7 @@ export const power_user = {
     immersive_mode_last_state: false,
     immersive_mode_keep_top_bar: false,
     luker_mobile_keep_alive_android_enabled: false,
+    luker_mobile_keep_alive_web_audio_enabled: false,
     hotswap_enabled: true,
     timer_enabled: true,
     timestamps_enabled: true,
@@ -492,9 +493,21 @@ function syncMobileKeepAliveUi() {
         onKeepAliveStateChanged(() => {
             // Reflect whatever the module says is currently in effect — the user closing the
             // PiP window from the OS UI or autoplay being denied both land here.
-            if (getKeepAlivePlatform() === 'android') {
-                power_user.luker_mobile_keep_alive_android_enabled = getActiveKeepAliveMode() === 'android';
+            const active = getActiveKeepAliveMode();
+            const platform = getKeepAlivePlatform();
+            if (platform === 'android') {
+                power_user.luker_mobile_keep_alive_android_enabled = active === 'android';
                 saveSettingsDebounced();
+            } else if (platform === 'web') {
+                // Only track audio: PiP cannot be auto-restored without a same-gesture click,
+                // so persisting it would create the "checkbox on but actually off" mismatch.
+                if (active === 'audio') {
+                    power_user.luker_mobile_keep_alive_web_audio_enabled = true;
+                    saveSettingsDebounced();
+                } else if (active === 'off' && power_user.luker_mobile_keep_alive_web_audio_enabled) {
+                    power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+                    saveSettingsDebounced();
+                }
             }
             syncMobileKeepAliveCheckbox();
         });
@@ -505,12 +518,13 @@ function syncMobileKeepAliveUi() {
     $row.toggle(supported);
     syncMobileKeepAliveCheckbox();
 
-    // Android bridge accepts toggling without a user gesture, so honor the persisted choice
-    // on startup. Web modes (PiP/audio) need user activation and are never auto-restored:
-    // the checkbox stays off until the user clicks it this session.
+    if (!supported) return;
+
+    const platform = getKeepAlivePlatform();
+
+    // Android bridge accepts toggling without a user gesture: restore immediately.
     if (
-        supported
-        && getKeepAlivePlatform() === 'android'
+        platform === 'android'
         && power_user.luker_mobile_keep_alive_android_enabled
         && getActiveKeepAliveMode() !== 'android'
     ) {
@@ -519,6 +533,30 @@ function syncMobileKeepAliveUi() {
             .catch((error) => {
                 console.warn('[Luker] Failed to restore Android background keep-alive', error);
             });
+        return;
+    }
+
+    // Audio mode needs *some* user gesture but not the toggle click specifically — wait for
+    // any tap/click anywhere on the page and start it from there. PiP is never auto-restored.
+    if (
+        platform === 'web'
+        && power_user.luker_mobile_keep_alive_web_audio_enabled
+        && getActiveKeepAliveMode() !== 'audio'
+        && !syncMobileKeepAliveUi._audioRestoreArmed
+    ) {
+        syncMobileKeepAliveUi._audioRestoreArmed = true;
+        const tryRestore = () => {
+            // The user may have toggled it off between page load and this click.
+            if (!power_user.luker_mobile_keep_alive_web_audio_enabled) return;
+            setKeepAliveMode('audio')
+                .then(syncMobileKeepAliveCheckbox)
+                .catch((error) => {
+                    console.warn('[Luker] Failed to restore audio keep-alive', error);
+                });
+        };
+        const opts = { once: true, capture: true };
+        document.addEventListener('click', tryRestore, opts);
+        document.addEventListener('touchstart', tryRestore, opts);
     }
 }
 
@@ -551,8 +589,12 @@ async function chooseWebKeepAliveMode() {
 async function applyMobileKeepAliveFromUser(checked) {
     if (!checked) {
         try { await setKeepAliveMode('off'); } catch (_) { /* noop */ }
-        if (getKeepAlivePlatform() === 'android') {
+        const platform = getKeepAlivePlatform();
+        if (platform === 'android') {
             power_user.luker_mobile_keep_alive_android_enabled = false;
+            saveSettingsDebounced();
+        } else if (platform === 'web') {
+            power_user.luker_mobile_keep_alive_web_audio_enabled = false;
             saveSettingsDebounced();
         }
         syncMobileKeepAliveCheckbox();
@@ -581,7 +623,12 @@ async function applyMobileKeepAliveFromUser(checked) {
     }
     try {
         await setKeepAliveMode(desired);
+        // Only audio can be auto-restored next session via a deferred click; PiP cannot.
+        power_user.luker_mobile_keep_alive_web_audio_enabled = desired === 'audio';
+        saveSettingsDebounced();
     } catch (_error) {
+        power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+        saveSettingsDebounced();
         toastr.warning(t`Background keep-alive could not be enabled. Try again from a tap on the page.`);
     }
     syncMobileKeepAliveCheckbox();
