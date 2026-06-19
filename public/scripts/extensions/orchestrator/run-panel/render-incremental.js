@@ -36,38 +36,32 @@ export class PanelRenderer {
         this._pendingAppends = new Map();
         this._rafScheduled = false;
         this._scrollPinned = true;
-        // Tracks user-driven expand/collapse on round/section <details>.
-        // Auto-collapse on terminal status skips any entry the user has
-        // touched so a manually-pinned section stays pinned.
-        this._manualToggles = new Map();
-        // Guards against `_setDetailsOpen` recording its own programmatic
-        // flip as a "user toggle" — we set this before mutating .open and
-        // clear it after, so the toggle listener can ignore the bounce.
-        this._suppressToggleRecord = false;
+        // Tracks round/section keys the user has clicked the <summary> on.
+        // Auto-collapse on terminal status skips any entry in here so a
+        // manually-pinned section stays pinned. We key off summary clicks
+        // (which also covers keyboard Enter/Space synthetic clicks) rather
+        // than the `toggle` event — toggle fires asynchronously on a
+        // macrotask and also fires for programmatic `.open = ...` flips,
+        // so any same-tick suppression flag is cleared by the time the
+        // listener runs and the initial creation-time `open = true` would
+        // mark every round/section as "user-pinned" before any real
+        // interaction.
+        this._manualToggles = new Set();
         this._elapsedTimer = null;
 
         this._bindScrollPin();
     }
 
     /**
-     * Flip `<details>.open` programmatically without polluting
-     * `_manualToggles`. Use this for round/section auto-fold on
-     * terminal status; direct `details.open = ...` is only safe at
-     * construction (before the toggle listener is attached).
+     * Flip `<details>.open` programmatically. Programmatic flips never
+     * trigger the `<summary>` click handler, so `_manualToggles` stays
+     * clean and the auto-fold paths can keep using it as a user-pin
+     * signal.
      */
     _setDetailsOpen(detailsEl, open) {
         if (!detailsEl) return;
         if (detailsEl.open === Boolean(open)) return;
-        this._suppressToggleRecord = true;
-        try {
-            detailsEl.open = Boolean(open);
-        } finally {
-            // Clear after the synchronous assignment — the toggle event
-            // fires asynchronously, so flip the flag back in a microtask
-            // so the very next handler sees the suppression and later
-            // user-driven toggles see it cleared.
-            queueMicrotask(() => { this._suppressToggleRecord = false; });
-        }
+        detailsEl.open = Boolean(open);
     }
 
     _bindScrollPin() {
@@ -188,12 +182,14 @@ export class PanelRenderer {
         details.appendChild(ol);
 
         // Track manual toggles so subsequent status updates don't override
-        // user-driven expand/collapse decisions. Programmatic flips via
-        // `_setDetailsOpen` (terminal-status auto-fold) set
-        // `_suppressToggleRecord` so they don't masquerade as user input.
-        details.addEventListener('toggle', () => {
-            if (this._suppressToggleRecord) return;
-            this._manualToggles.set(`round:${roundId}`, details.open);
+        // user-driven expand/collapse decisions. We listen on `<summary>`
+        // click (which covers keyboard Enter/Space too — the browser
+        // synthesizes a click) instead of the details `toggle` event:
+        // toggle is a macrotask that also fires for programmatic
+        // `.open = ...` flips, so it can't distinguish the initial
+        // creation-time set from a real interaction.
+        summary.addEventListener('click', () => {
+            this._manualToggles.add(`round:${roundId}`);
         });
 
         li.appendChild(details);
@@ -245,9 +241,8 @@ export class PanelRenderer {
         pre.textContent = section.body;
         details.appendChild(pre);
 
-        details.addEventListener('toggle', () => {
-            if (this._suppressToggleRecord) return;
-            this._manualToggles.set(`section:${roundId}:${sectionId}`, details.open);
+        summary.addEventListener('click', () => {
+            this._manualToggles.add(`section:${roundId}:${sectionId}`);
         });
 
         sli.appendChild(details);

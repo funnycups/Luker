@@ -167,6 +167,18 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         expect(finalState.status, 'run committed (no abort, no error)').toBe('committed');
         expect(typeof finalState.finalText === 'string' && finalState.finalText.length > 0, 'committed run wrote a non-empty finalText').toBe(true);
 
+        // ── 8a. Auto-fold sanity: every completed round/section <details>
+        //   must end up collapsed unless the user manually expanded it.
+        //   Regression guard for the toggle-event race where programmatic
+        //   `.open = true` during initial render fired toggle handlers
+        //   that flagged every fresh round/section as "user-pinned",
+        //   silently disabling auto-fold on terminal status.
+        //   We didn't click anything in this test, so 0 open is expected.
+        const openRoundCount = await panel.locator('.round > details[open]').count();
+        expect(openRoundCount, 'no completed round <details> should remain open after a committed run').toBe(0);
+        const openSectionCount = await panel.locator('.section > details[open]').count();
+        expect(openSectionCount, 'no completed section <details> should remain open after a committed run').toBe(0);
+
         // ── 9. Chat bubble byte-equality with finalText ───────────────
         // The last assistant bubble's visible text must equal the
         // committed finalText. Both are .trim()ed to absorb trailing
