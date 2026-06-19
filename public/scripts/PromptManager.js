@@ -2060,6 +2060,7 @@ class PromptManager {
                 return;
             }
             prompt.identifier = prompt.identifier ?? this.getUuidv4();
+            if (typeof prompt.name !== 'string') prompt.name = prompt.identifier;
             prompt.plugin_extra = Boolean(prompt.plugin_extra);
         });
 
