@@ -35,6 +35,15 @@ import {
 } from '../script.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
+    getActiveKeepAliveMode,
+    getAvailableWebModes,
+    getKeepAlivePlatform,
+    initKeepAlive,
+    isKeepAliveSupported,
+    onKeepAliveStateChanged,
+    setKeepAliveMode,
+} from './luker-keep-alive.js';
+import {
     groups,
     resetSelectedGroup,
 } from './group-chats.js';
@@ -220,6 +229,7 @@ export const power_user = {
     allow_name2_display: false,
     immersive_mode_last_state: false,
     immersive_mode_keep_top_bar: false,
+    luker_mobile_keep_alive_android_enabled: false,
     hotswap_enabled: true,
     timer_enabled: true,
     timestamps_enabled: true,
@@ -469,6 +479,112 @@ function syncAndroidSystemBarsColor() {
     } catch (error) {
         console.warn('Failed to sync Android system bars color via bridge', error);
     }
+}
+
+function syncMobileKeepAliveCheckbox() {
+    const active = getActiveKeepAliveMode();
+    $('#luker_mobile_keep_alive').prop('checked', active !== 'off');
+}
+
+function syncMobileKeepAliveUi() {
+    if (!syncMobileKeepAliveUi._initialized) {
+        initKeepAlive();
+        onKeepAliveStateChanged(() => {
+            // Reflect whatever the module says is currently in effect — the user closing the
+            // PiP window from the OS UI or autoplay being denied both land here.
+            if (getKeepAlivePlatform() === 'android') {
+                power_user.luker_mobile_keep_alive_android_enabled = getActiveKeepAliveMode() === 'android';
+                saveSettingsDebounced();
+            }
+            syncMobileKeepAliveCheckbox();
+        });
+        syncMobileKeepAliveUi._initialized = true;
+    }
+    const supported = isKeepAliveSupported() && isMobile();
+    const $row = $('#luker_mobile_keep_alive').closest('label.checkbox_label');
+    $row.toggle(supported);
+    syncMobileKeepAliveCheckbox();
+
+    // Android bridge accepts toggling without a user gesture, so honor the persisted choice
+    // on startup. Web modes (PiP/audio) need user activation and are never auto-restored:
+    // the checkbox stays off until the user clicks it this session.
+    if (
+        supported
+        && getKeepAlivePlatform() === 'android'
+        && power_user.luker_mobile_keep_alive_android_enabled
+        && getActiveKeepAliveMode() !== 'android'
+    ) {
+        setKeepAliveMode('android')
+            .then(syncMobileKeepAliveCheckbox)
+            .catch((error) => {
+                console.warn('[Luker] Failed to restore Android background keep-alive', error);
+            });
+    }
+}
+
+async function chooseWebKeepAliveMode() {
+    const available = getAvailableWebModes();
+    if (!available.pip && !available.audio) return null;
+    if (available.pip && !available.audio) return 'pip';
+    if (!available.pip && available.audio) return 'audio';
+
+    // Both available — let the user pick. Use customButtons so the choice itself is the answer.
+    const message = $('<div></div>').append(
+        $('<h4></h4>').attr('data-i18n', 'Background keep-alive').text(t`Background keep-alive`),
+        $('<p></p>').attr('data-i18n', 'Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.').text(
+            t`Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.`,
+        ),
+        $('<p></p>').attr('data-i18n', 'Audio: nothing floats on screen, but a "playing" card appears on the lock screen and music apps will be interrupted.').text(
+            t`Audio: nothing floats on screen, but a "playing" card appears on the lock screen and music apps will be interrupted.`,
+        ),
+    );
+    const result = await callGenericPopup(message, POPUP_TYPE.TEXT, '', {
+        okButton: false,
+        cancelButton: t`Cancel`,
+        customButtons: [t`Picture-in-Picture`, t`Audio`],
+    });
+    if (result === 2) return 'pip';
+    if (result === 3) return 'audio';
+    return null;
+}
+
+async function applyMobileKeepAliveFromUser(checked) {
+    if (!checked) {
+        try { await setKeepAliveMode('off'); } catch (_) { /* noop */ }
+        if (getKeepAlivePlatform() === 'android') {
+            power_user.luker_mobile_keep_alive_android_enabled = false;
+            saveSettingsDebounced();
+        }
+        syncMobileKeepAliveCheckbox();
+        return;
+    }
+
+    if (getKeepAlivePlatform() === 'android') {
+        try {
+            await setKeepAliveMode('android');
+            power_user.luker_mobile_keep_alive_android_enabled = true;
+            saveSettingsDebounced();
+        } catch (error) {
+            console.warn('[Luker] Failed to enable Android keep-alive', error);
+            power_user.luker_mobile_keep_alive_android_enabled = false;
+            saveSettingsDebounced();
+        }
+        syncMobileKeepAliveCheckbox();
+        return;
+    }
+
+    // Web platform: ask which mode, then enter inside the same user gesture chain.
+    const desired = await chooseWebKeepAliveMode();
+    if (!desired) {
+        syncMobileKeepAliveCheckbox();
+        return;
+    }
+    try {
+        await setKeepAliveMode(desired);
+    } catch (_error) {
+        toastr.warning(t`Background keep-alive could not be enabled. Try again from a tap on the page.`);
+    }
+    syncMobileKeepAliveCheckbox();
 }
 
 function shouldSuppressBackgroundNotification() {
@@ -2062,6 +2178,7 @@ export async function loadPowerUserSettings(settings, data) {
     //$("#removeXML").prop("checked", power_user.removeXML);
     $('#hotswapEnabled').prop('checked', power_user.hotswap_enabled);
     $('#immersiveKeepTopBar').prop('checked', power_user.immersive_mode_keep_top_bar);
+    syncMobileKeepAliveUi();
     $('#messageTimerEnabled').prop('checked', power_user.timer_enabled);
     $('#messageTimestampsEnabled').prop('checked', power_user.timestamps_enabled);
     $('#messageModelIconEnabled').prop('checked', power_user.timestamp_model_icon);
@@ -4205,6 +4322,11 @@ jQuery(() => {
             document.body.classList.toggle('luker-immersive-keep-top-bar', value);
         }
         saveSettingsDebounced();
+    });
+
+    $('#luker_mobile_keep_alive').on('change', function () {
+        const desired = !!$(this).prop('checked');
+        applyMobileKeepAliveFromUser(desired);
     });
 
     $('#prefer_character_prompt').on('input', function () {

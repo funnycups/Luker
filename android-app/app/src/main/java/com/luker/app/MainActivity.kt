@@ -124,6 +124,17 @@ class MainActivity : AppCompatActivity() {
     private var contentRootBasePaddingRight: Int = 0
     private var contentRootBasePaddingBottom: Int = 0
     private var lastAppliedImeOverlapBottom: Int = -1
+    @Volatile
+    private var backgroundKeepAliveEnabled: Boolean = false
+    private val forceWebViewVisibleRunnable = Runnable {
+        if (!backgroundKeepAliveEnabled || isFinishing || isDestroyed) return@Runnable
+        if (!this::webView.isInitialized) return@Runnable
+        try {
+            webView.dispatchWindowVisibilityChanged(View.VISIBLE)
+        } catch (t: Throwable) {
+            Log.w(tag, "Failed to force WebView VISIBLE for background keep-alive", t)
+        }
+    }
     private val bootstrapSequence = AtomicInteger(0)
     private val recentHttpAuthAttempts = mutableMapOf<Pair<String, String>, LukerHttpAuthStore.Credentials>()
     private val backPressedCallback = object : OnBackPressedCallback(true) {
@@ -889,10 +900,33 @@ class MainActivity : AppCompatActivity() {
                 applySystemBarsColor(parsedStatus, parsedNavigation)
             }
         }
+
+        @JavascriptInterface
+        fun setBackgroundKeepAliveEnabled(enabled: Boolean) {
+            runOnUiThread {
+                applyBackgroundKeepAlive(enabled)
+            }
+        }
     }
 
     private var lastAppliedStatusBarColor: Int? = null
     private var lastAppliedNavigationBarColor: Int? = null
+
+    private fun applyBackgroundKeepAlive(enabled: Boolean) {
+        if (backgroundKeepAliveEnabled == enabled) return
+        backgroundKeepAliveEnabled = enabled
+        if (!this::webView.isInitialized) return
+        if (!enabled) {
+            webView.removeCallbacks(forceWebViewVisibleRunnable)
+        }
+    }
+
+    private fun scheduleForceWebViewVisible() {
+        if (!backgroundKeepAliveEnabled) return
+        if (!this::webView.isInitialized) return
+        webView.removeCallbacks(forceWebViewVisibleRunnable)
+        webView.postDelayed(forceWebViewVisibleRunnable, 1000L)
+    }
 
     private fun applySystemBarsColor(statusBarColor: Int?, navigationBarColor: Int?) {
         val opaqueStatus = statusBarColor?.let { it or 0xFF000000.toInt() }
@@ -1099,6 +1133,19 @@ class MainActivity : AppCompatActivity() {
         if (hasFocus && this::contentRoot.isInitialized) {
             ViewCompat.requestApplyInsets(contentRoot)
         }
+        if (!hasFocus) {
+            scheduleForceWebViewVisible()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        scheduleForceWebViewVisible()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        scheduleForceWebViewVisible()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -2359,6 +2406,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (this::webView.isInitialized) {
+            webView.removeCallbacks(forceWebViewVisibleRunnable)
+        }
+        backgroundKeepAliveEnabled = false
         endpointDialog?.dismiss()
         endpointDialog = null
         httpAuthDialog?.cancel()
