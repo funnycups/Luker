@@ -385,13 +385,24 @@ Reads the character state for the specified avatar and namespace. Returns `null`
 | `avatar` | Character avatar filename (e.g. `'tavernkeeper.png'`) |
 | `namespace` | Storage namespace, typically the plugin name (e.g., `'my-extension'`) |
 
+### getCharacterStateBatch
+
+```ts
+getCharacterStateBatch(
+  avatar: string,
+  namespaces: string[],
+): Promise<Record<string, any | null>>
+```
+
+Reads multiple character state namespaces in a single request. Returns an object keyed by namespace; missing namespaces map to `null`.
+
 ### setCharacterState
 
 ```ts
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-Writes character state under the specified namespace. Pass `null` as `data` to delete the state for that namespace.
+Writes character state under the specified namespace as a whole-document overwrite. Pass `null` as `data` to delete the state for that namespace. For non-trivial payloads prefer `updateCharacterState` — `setCharacterState` ships the entire document on every call.
 
 | Parameter | Description |
 |------|------|
@@ -399,25 +410,41 @@ Writes character state under the specified namespace. Pass `null` as `data` to d
 | `namespace` | Storage namespace |
 | `data` | Data to store (any serializable object); pass `null` to delete |
 
-### Usage Example
+### updateCharacterState
+
+```ts
+updateCharacterState(
+  avatar: string,
+  namespace: string,
+  updater: (currentState: object, meta: { attempt: number, avatar: string, namespace: string })
+    => object | null | undefined | Promise<object | null | undefined>,
+  options?: { maxOperations?: number, maxRetries?: number, asyncDiff?: boolean },
+): Promise<{ ok: boolean, state: object | null, updated: boolean, created?: boolean }>
+```
+
+**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change". 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1).
 
 ```js
-const context = Luker.getContext();
-const character = context.characters[context.characterId];
-
-// Read character state
-const state = await context.getCharacterState(character.avatar, 'my-extension');
-console.log(state); // { someConfig: true } or null
-
-// Write character state
-await context.setCharacterState(character.avatar, 'my-extension', {
-  someConfig: true,
+await context.updateCharacterState(character.avatar, 'my-plugin', (current = {}) => ({
+  ...current,
+  counter: (current.counter || 0) + 1,
   lastUpdated: Date.now(),
-});
-
-// Delete character state
-await context.setCharacterState(character.avatar, 'my-extension', null);
+}));
 ```
+
+### deleteCharacterState
+
+```ts
+deleteCharacterState(avatar: string, namespace: string): Promise<void>
+```
+
+Removes the character state sidecar for the given namespace. Idempotent — succeeds when the sidecar does not exist. Equivalent to `setCharacterState(avatar, namespace, null)` for callers that prefer an explicit delete verb.
+
+### Best Practices
+
+- Use `updateCharacterState()` for read-modify-write instead of manually chaining `getCharacterState()` + `setCharacterState()` — the helper ships only the diff and handles the 409 retry for you.
+- Use `setCharacterState()` only for first-time seeding or when you genuinely want to replace the whole sidecar.
+- Keep payloads as JSON-serializable plain objects; arrays and primitives at the top level are not supported.
 
 ### Character State vs Chat State
 
@@ -425,7 +452,7 @@ await context.setCharacterState(character.avatar, 'my-extension', null);
 |------|------|------|
 | Scope | Bound to Character Card, shared across all chats | Bound to a single chat |
 | Typical Use | Character-level plugin config, CardApp application state | Temporary in-chat data, conversation context |
-| API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
+| API | `getCharacterState` / `getCharacterStateBatch` / `setCharacterState` / `updateCharacterState` / `deleteCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
 | Storage Location | Character state file (next to the card) | Chat metadata |
 
 ## Chat Lifecycle

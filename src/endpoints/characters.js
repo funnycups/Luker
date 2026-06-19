@@ -27,6 +27,8 @@ import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 import { extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from './card-app.js';
 import { deleteRecentChatIndexEntriesUnderDirectory, invalidateRecentChatIndex } from './chats.js';
+import { applyJsonPatch } from '../storage/repositories/json-patch.js';
+import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -2006,25 +2008,40 @@ router.post('/state/get', validateAvatarUrlMiddleware, function (request, respon
         }
 
         const characterPath = path.join(request.user.directories.characters, avatarUrl);
-        const stateFilePath = getCharacterStateSidecarPath(characterPath, namespace);
-        if (!stateFilePath || !fs.existsSync(stateFilePath)) {
-            return response.send({ ok: true, data: null });
-        }
-
-        const raw = tryReadFileSync(stateFilePath);
-        if (!raw) {
-            return response.send({ ok: true, data: null });
-        }
-
-        const parsed = tryParse(raw);
-        if (!_.isObjectLike(parsed) || Array.isArray(parsed)) {
-            console.warn(`Invalid character state sidecar JSON: ${stateFilePath}`);
-            return response.send({ ok: true, data: null });
-        }
-
-        return response.send({ ok: true, data: parsed });
+        return response.send({ ok: true, data: readCharacterStateSidecar(characterPath, namespace) });
     } catch (error) {
         console.error('Error reading character state sidecar:', error);
+        return response.status(500).send({ error: true });
+    }
+});
+
+router.post('/state/get-batch', validateAvatarUrlMiddleware, function (request, response) {
+    try {
+        const avatarUrl = sanitize(String(request.body?.avatar_url || '').trim());
+        if (!avatarUrl) {
+            return response.status(400).send({ error: 'Expected body.avatar_url string.' });
+        }
+        const rawNamespaces = Array.isArray(request.body?.namespaces) ? request.body.namespaces : [];
+        const seen = new Set();
+        const normalized = [];
+        for (const ns of rawNamespaces) {
+            const n = normalizeCharacterStateNamespace(ns);
+            if (!n || seen.has(n)) continue;
+            seen.add(n);
+            normalized.push(n);
+        }
+        if (normalized.length === 0) {
+            return response.status(400).send({ error: 'Expected body.namespaces to be a non-empty array of strings.' });
+        }
+
+        const characterPath = path.join(request.user.directories.characters, avatarUrl);
+        const data = {};
+        for (const ns of normalized) {
+            data[ns] = readCharacterStateSidecar(characterPath, ns);
+        }
+        return response.send({ ok: true, data });
+    } catch (error) {
+        console.error('Error reading character state sidecars:', error);
         return response.status(500).send({ error: true });
     }
 });
@@ -2058,6 +2075,64 @@ router.post('/state/set', validateAvatarUrlMiddleware, function (request, respon
         return response.send({ ok: true });
     } catch (error) {
         console.error('Error writing character state sidecar:', error);
+        return response.status(500).send({ error: true });
+    }
+});
+
+router.post('/state/patch', validateAvatarUrlMiddleware, function (request, response) {
+    try {
+        const avatarUrl = sanitize(String(request.body?.avatar_url || '').trim());
+        const namespace = normalizeCharacterStateNamespace(request.body?.namespace);
+        if (!avatarUrl) {
+            return response.status(400).send({ error: 'Expected body.avatar_url string.' });
+        }
+        if (!namespace) {
+            return response.status(400).send({ error: 'Expected body.namespace string.' });
+        }
+
+        const operations = Array.isArray(request.body?.operations)
+            ? request.body.operations
+            : (_.isObjectLike(request.body?.operation) ? [request.body.operation] : []);
+        if (operations.length === 0) {
+            return response.status(400).send({ error: 'No character state patch operations found. Expected body.operations or body.operation.' });
+        }
+
+        const characterPath = path.join(request.user.directories.characters, avatarUrl);
+        if (!fs.existsSync(characterPath)) {
+            return response.status(404).send({ error: 'Character not found.' });
+        }
+        const stateFilePath = getCharacterStateSidecarPath(characterPath, namespace);
+        if (!stateFilePath) {
+            return response.status(400).send({ error: 'Invalid namespace for state sidecar path.' });
+        }
+
+        const existing = readCharacterStateSidecar(characterPath, namespace);
+        const seed = existing ?? {};
+
+        let next;
+        try {
+            next = applyJsonPatch(seed, operations);
+        } catch (error) {
+            const mapped = mapCharacterStatePatchError(error, response);
+            if (mapped) {
+                return mapped;
+            }
+            throw error;
+        }
+
+        if (!_.isObjectLike(next) || Array.isArray(next)) {
+            return response.status(400).send({ error: 'Character state patch result must be an object.' });
+        }
+
+        fs.mkdirSync(path.dirname(stateFilePath), { recursive: true });
+        writeFileAtomicSync(stateFilePath, JSON.stringify(next), 'utf8');
+        return response.send({
+            ok: true,
+            applied: operations.length,
+            created: existing == null,
+        });
+    } catch (error) {
+        console.error('Error patching character state sidecar:', error);
         return response.status(500).send({ error: true });
     }
 });
@@ -2171,6 +2246,33 @@ function getCharacterStateSidecarPath(characterFilePath, namespace) {
     }
     const parsed = path.parse(characterFilePath);
     return path.join(parsed.dir, `${parsed.name}${CHARACTER_STATE_FILE_PREFIX}${safeNamespace}${CHARACTER_STATE_FILE_SUFFIX}`);
+}
+
+function readCharacterStateSidecar(characterFilePath, namespace) {
+    const stateFilePath = getCharacterStateSidecarPath(characterFilePath, namespace);
+    if (!stateFilePath || !fs.existsSync(stateFilePath)) {
+        return null;
+    }
+    const raw = tryReadFileSync(stateFilePath);
+    if (!raw) {
+        return null;
+    }
+    const parsed = tryParse(raw);
+    if (!_.isObjectLike(parsed) || Array.isArray(parsed)) {
+        console.warn(`Invalid character state sidecar JSON: ${stateFilePath}`);
+        return null;
+    }
+    return parsed;
+}
+
+function mapCharacterStatePatchError(error, response) {
+    if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
+        return response.status(409).send({ error: 'Character state patch conflict.' });
+    }
+    if (error instanceof UnsupportedPatchOpError) {
+        return response.status(400).send({ error: 'Invalid character state patch payload.' });
+    }
+    return null;
 }
 
 function getAllCharacterStateSidecarPaths(characterFilePath) {

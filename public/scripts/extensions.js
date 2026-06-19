@@ -1,6 +1,6 @@
 import { Popper } from '../lib.js';
 
-import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, EXTENSIONS_CLIENT_VERSION } from '../script.js';
+import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, EXTENSIONS_CLIENT_VERSION, buildObjectPatchOperationsAsync, buildObjectPatchOperations, cloneJsonValue } from '../script.js';
 import { showLoader } from './loader.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup } from './popup.js';
 import { renderTemplate, renderTemplateAsync } from './templates.js';
@@ -2248,6 +2248,144 @@ export async function setCharacterState(avatar, namespace, data) {
         const detail = await response.text().catch(() => '');
         throw new Error(`Character state write failed (${response.status}): ${detail || response.statusText}`);
     }
+}
+
+/**
+ * Apply RFC 6902 JSON Patch operations to a character state sidecar.
+ * The server reads the current sidecar, applies the operations, and writes
+ * the result back atomically. Returns `{ applied, created }` — `created`
+ * is true when the sidecar did not previously exist (seeded from `{}`).
+ *
+ * Throws on transport failure. The server returns 409 on patch test/missing-
+ * parent failures (treat as "another writer changed the sidecar; retry") and
+ * 400 on malformed operations.
+ *
+ * @param {string} avatar - Character avatar filename
+ * @param {string} namespace - Storage namespace
+ * @param {Array<object>} operations - RFC 6902 patch operations
+ * @returns {Promise<{ ok: true, applied: number, created: boolean }>}
+ */
+export async function patchCharacterState(avatar, namespace, operations) {
+    const response = await fetch('/api/characters/state/patch', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatar, namespace, operations }),
+        cache: 'no-cache',
+    });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`Character state patch failed (${response.status}): ${detail || response.statusText}`);
+    }
+    return response.json();
+}
+
+/**
+ * Read multiple character state namespaces in one round trip. Returns an
+ * object keyed by namespace; missing namespaces map to `null`.
+ *
+ * @param {string} avatar - Character avatar filename
+ * @param {string[]} namespaces - Storage namespaces to read
+ * @returns {Promise<Record<string, any>>}
+ */
+export async function getCharacterStateBatch(avatar, namespaces) {
+    const response = await fetch('/api/characters/state/get-batch', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatar, namespaces }),
+        cache: 'no-cache',
+    });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`Character state batch read failed (${response.status}): ${detail || response.statusText}`);
+    }
+    const payload = await response.json().catch(() => null);
+    return payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object'
+        ? payload.data
+        : {};
+}
+
+function isPlainObjectLike(value) {
+    return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Read-modify-write helper for character state. The `updater` receives a
+ * deep clone of the current sidecar (`{}` when none exists) and must return
+ * the next state. The diff is computed with `buildObjectPatchOperationsAsync`
+ * and shipped through `patchCharacterState` — only the changed slice crosses
+ * the wire, not the whole document.
+ *
+ * Use this in preference to `setCharacterState` for any non-trivial payload.
+ * Returning `null` / `undefined` from the updater is treated as "no change"
+ * and resolves with `updated: false`.
+ *
+ * On a 409 (concurrent edit) the helper re-reads the sidecar and re-runs the
+ * updater once. The retry budget is controlled by `options.maxRetries`
+ * (default 1, i.e. one re-attempt after the initial try). Non-409 transport
+ * failures bubble up — wrap the call in try/catch if you want to swallow
+ * them; the helper does NOT silently fall back to a full set.
+ *
+ * @param {string} avatar - Character avatar filename
+ * @param {string} namespace - Storage namespace
+ * @param {(currentState: object, meta: { attempt: number, avatar: string, namespace: string }) => (object|null|undefined|Promise<object|null|undefined>)} updater
+ * @param {object} [options]
+ * @param {number} [options.maxOperations] - Cap on patch op count before falling back to a single replace op. Default 2000.
+ * @param {number} [options.maxRetries] - Re-attempts on 409. Default 1.
+ * @param {boolean} [options.asyncDiff] - When `false`, use the sync diff path (skips the worker).
+ * @returns {Promise<{ ok: boolean, state: object|null, updated: boolean, created?: boolean }>}
+ */
+export async function updateCharacterState(avatar, namespace, updater, options = {}) {
+    const safeAvatar = String(avatar || '').trim();
+    const safeNamespace = String(namespace || '').trim();
+    if (!safeAvatar || !safeNamespace || typeof updater !== 'function') {
+        return { ok: false, state: null, updated: false };
+    }
+
+    const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
+        ? Number(options.maxOperations)
+        : 2000;
+    const maxRetries = Number.isInteger(options?.maxRetries) && options.maxRetries >= 0
+        ? Number(options.maxRetries)
+        : 1;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const currentRaw = await getCharacterState(safeAvatar, safeNamespace);
+        const currentState = isPlainObjectLike(cloneJsonValue(currentRaw)) ? cloneJsonValue(currentRaw) : {};
+        const nextRaw = await updater(cloneJsonValue(currentState), {
+            attempt,
+            avatar: safeAvatar,
+            namespace: safeNamespace,
+        });
+
+        if (nextRaw === undefined || nextRaw === null) {
+            return { ok: true, state: currentState, updated: false };
+        }
+        if (!isPlainObjectLike(nextRaw)) {
+            throw new Error('updateCharacterState: updater must return a plain object (or null/undefined to skip).');
+        }
+        const nextState = cloneJsonValue(nextRaw);
+
+        const operations = options?.asyncDiff === false
+            ? buildObjectPatchOperations(currentState, nextState, { maxOperations })
+            : await buildObjectPatchOperationsAsync(currentState, nextState, { maxOperations });
+        if (operations.length === 0) {
+            return { ok: true, state: nextState, updated: false };
+        }
+
+        try {
+            const result = await patchCharacterState(safeAvatar, safeNamespace, operations);
+            return { ok: true, state: nextState, updated: true, created: Boolean(result?.created) };
+        } catch (error) {
+            const message = String(error?.message || error || '');
+            const isConflict = message.includes('(409)');
+            if (!isConflict || attempt >= maxRetries) {
+                throw error;
+            }
+            // Conflict: another writer raced us. Loop re-reads and re-applies the updater.
+        }
+    }
+
+    return { ok: false, state: null, updated: false };
 }
 
 /**

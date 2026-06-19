@@ -383,13 +383,24 @@ getCharacterState(avatar: string, namespace: string): Promise<any | null>
 | `avatar` | 角色頭像檔案名（例如 `'tavernkeeper.png'`） |
 | `namespace` | 儲存命名空間，通常使用外掛名稱（例如 `'my-extension'`） |
 
+### getCharacterStateBatch
+
+```ts
+getCharacterStateBatch(
+  avatar: string,
+  namespaces: string[],
+): Promise<Record<string, any | null>>
+```
+
+單次請求批次讀取多個角色狀態命名空間。回傳以命名空間為鍵的物件；不存在的命名空間對應值為 `null`。
+
 ### setCharacterState
 
 ```ts
 setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 ```
 
-在指定命名空間下寫入角色狀態。傳 `null` 作為 `data` 可以刪除該命名空間的狀態。
+以整份覆寫的方式在指定命名空間下寫入角色狀態。傳 `null` 作為 `data` 可以刪除該命名空間的狀態。非平凡負載請優先用 `updateCharacterState` —— `setCharacterState` 每次都會把整份文件上網。
 
 | 參數 | 說明 |
 |------|------|
@@ -397,25 +408,41 @@ setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
 | `namespace` | 儲存命名空間 |
 | `data` | 要儲存的資料（任意可序列化物件），傳 `null` 刪除 |
 
-### 使用範例
+### updateCharacterState
+
+```ts
+updateCharacterState(
+  avatar: string,
+  namespace: string,
+  updater: (currentState: object, meta: { attempt: number, avatar: string, namespace: string })
+    => object | null | undefined | Promise<object | null | undefined>,
+  options?: { maxOperations?: number, maxRetries?: number, asyncDiff?: boolean },
+): Promise<{ ok: boolean, state: object | null, updated: boolean, created?: boolean }>
+```
+
+**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統底層自動計算最小增量 patch，只有變化的那部分上網。回傳 `null` / `undefined` 視為「無變更」。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。
 
 ```js
-const context = Luker.getContext();
-const character = context.characters[context.characterId];
-
-// 讀取角色狀態
-const state = await context.getCharacterState(character.avatar, 'my-extension');
-console.log(state); // { someConfig: true } 或 null
-
-// 寫入角色狀態
-await context.setCharacterState(character.avatar, 'my-extension', {
-  someConfig: true,
+await context.updateCharacterState(character.avatar, 'my-plugin', (current = {}) => ({
+  ...current,
+  counter: (current.counter || 0) + 1,
   lastUpdated: Date.now(),
-});
-
-// 刪除角色狀態
-await context.setCharacterState(character.avatar, 'my-extension', null);
+}));
 ```
+
+### deleteCharacterState
+
+```ts
+deleteCharacterState(avatar: string, namespace: string): Promise<void>
+```
+
+刪除指定命名空間的角色狀態 sidecar。冪等 —— sidecar 不存在時也會成功回傳。語意等價於 `setCharacterState(avatar, namespace, null)`，提供給希望使用顯式刪除動詞的呼叫端。
+
+### 最佳實踐
+
+- 優先用 `updateCharacterState()`，不要手動串 `getCharacterState()` + `setCharacterState()` —— helper 只發 diff，並替你處理 409 重試。
+- `setCharacterState()` 只用於首次初始化或確實想整份替換 sidecar 的場景。
+- 負載保持為可 JSON 序列化的普通物件；頂層陣列或基本型別不支援。
 
 ### 角色狀態 vs 聊天狀態
 
@@ -423,7 +450,7 @@ await context.setCharacterState(character.avatar, 'my-extension', null);
 |------|------|------|
 | 作用範圍 | 綁定到角色卡，所有聊天共享 | 綁定到單個聊天 |
 | 典型用途 | 角色級別的外掛設定、CardApp 應用狀態 | 聊天內的臨時資料、對話上下文 |
-| API | `getCharacterState` / `setCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
+| API | `getCharacterState` / `getCharacterStateBatch` / `setCharacterState` / `updateCharacterState` / `deleteCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
 | 儲存位置 | 角色卡 JSON 檔案 | 聊天中繼資料 |
 
 ## 聊天生命週期
