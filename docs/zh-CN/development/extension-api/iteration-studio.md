@@ -128,11 +128,10 @@ getRunnerSettings(settings): RunnerSettings | null
 type RunnerSettings = {
     toolCallRetryMax?: number;       // 默认 0——工具调用畸形/缺失时的重试次数
     rpmLimit?: number;               // 默认 0——iteration-studio 共享的 RPM 上限（0 表示不限）
-    useStreamingTransport?: boolean; // 默认 false——使用 generateTaskStream() 而非 generateTask()
 };
 ```
 
-返回 `null` / `undefined` / `{}` 即采用全部默认值。外壳不会直接读取你的 settings 字段——只走这一个 hook。这样每个适配器可以自由暴露自己的设置 UI（CPA 把三项全部暴露在面板上；CardApp Studio 只暴露 `useStreamingTransport`），外壳不需要知道你的存储路径。
+返回 `null` / `undefined` / `{}` 即采用全部默认值。外壳不会直接读取你的 settings 字段——只走这一个 hook。这样每个适配器可以自由暴露自己的设置 UI（CPA 两项都暴露；CardApp Studio 都不暴露），外壳不需要知道你的存储路径。底层传输（SSE / 一次性 POST）由 `generateTask` 依解析后预设的 `stream_openai` 决定，适配器不需要再暴露相应开关。
 
 ## 会话存储
 

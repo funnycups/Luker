@@ -461,7 +461,6 @@ export function ensureSettings() {
         extension_settings[MODULE_NAME].llmNodePresetName = String(extension_settings[MODULE_NAME].llmNodePromptPresetName || '').trim();
     }
     extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
-    extension_settings[MODULE_NAME].useStreamingTransport = Boolean(extension_settings[MODULE_NAME].useStreamingTransport);
     if (extension_settings[MODULE_NAME].aiSuggestApiPresetName !== undefined) {
         extension_settings[MODULE_NAME].requestApiPresetName ||= String(extension_settings[MODULE_NAME].aiSuggestApiPresetName || '');
         delete extension_settings[MODULE_NAME].aiSuggestApiPresetName;
@@ -4108,7 +4107,8 @@ function getChatMessagesForSimulation(context, recentMessagesN) {
  * `exportDirectorPayload` reshapes for the simulation-review popup.
  *
  * Deps mirror the GENERATE_TAKEOVER_DISPATCH wiring below — the same
- * generateTask router (honouring useStreamingTransport), the same
+ * generateTask router (probing per-call preset.stream_openai for live
+ * chunk delivery), the same
  * notes / memory-graph adapter overlays, the same executeLoopTool entry
  * point — so a simulation run exercises the production code path. The
  * trace returned is the one the caller hands to the review popup.
@@ -4205,12 +4205,15 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     };
 
     // Mirror the GENERATE_TAKEOVER_DISPATCH `generateTaskRouter` so
-    // simulation honours the same streaming-transport toggle real runs
-    // use. Director-runtime invokes this twice (main agent + sub-agent
-    // dispatcher) so we share one router rather than two near-identical
-    // closures.
+    // simulation reads chunk-by-chunk progress the same way real runs do
+    // — driven by the per-call preset's `stream_openai` flag. Director-
+    // runtime invokes this twice (main agent + sub-agent dispatcher) so
+    // we share one router rather than two near-identical closures.
     const generateTaskRouter = async ({ onChunk, ...opts } = {}) => {
-        if (settings?.useStreamingTransport && typeof context?.generateTaskStream === 'function') {
+        const streamChunks = typeof context?.isStreamingPresetEnabled === 'function'
+            && typeof context?.generateTaskStream === 'function'
+            && context.isStreamingPresetEnabled(opts?.llmPresetName || '');
+        if (streamChunks) {
             const { stream, result } = context.generateTaskStream(opts);
             if (typeof onChunk === 'function') {
                 (async () => {
@@ -4270,8 +4273,15 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
             deps: {
                 generateTask: generateTaskRouter,
                 generateTaskStreamForMainAgent: generateTaskRouter,
-                generateTaskStream: settings?.useStreamingTransport && typeof context?.generateTaskStream === 'function'
+                // Sub-agent dispatcher receives the raw streaming provider
+                // and a `(presetName) => boolean` probe; it decides per
+                // dispatch whether to consume chunks based on the spec'd
+                // preset's `stream_openai` flag.
+                generateTaskStream: typeof context?.generateTaskStream === 'function'
                     ? (opts) => context.generateTaskStream(opts)
+                    : null,
+                isStreamingPresetEnabled: typeof context?.isStreamingPresetEnabled === 'function'
+                    ? (presetName) => Boolean(context.isStreamingPresetEnabled(presetName))
                     : null,
                 executeLoopTool: (name, callArgs, callDeps) => executeLoopTool(name, callArgs, callDeps),
                 // `getContentPayload` is what the runtime calls to fetch
@@ -6158,7 +6168,6 @@ function bindUi() {
     root.find('#luker_orch_llm_api_preset').val(String(settings.llmNodeApiPresetName || ''));
     root.find('#luker_orch_llm_preset').val(String(settings.llmNodePresetName || ''));
     root.find('#luker_orch_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
-    root.find('#luker_orch_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#luker_orch_request_api_preset').val(String(settings.requestApiPresetName || ''));
     root.find('#luker_orch_request_llm_preset').val(String(settings.requestLlmPresetName || ''));
     root.find('#luker_orch_request_system_prompt').val(String(settings.requestSystemPrompt || ''));
@@ -7011,11 +7020,6 @@ function bindUi() {
 
     root.on('input.lukerOrch', '#luker_orch_include_world_info', function () {
         settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
-        saveSettingsDebounced();
-    });
-
-    root.on('input.lukerOrch', '#luker_orch_use_streaming_transport', function () {
-        settings.useStreamingTransport = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 
@@ -8097,20 +8101,19 @@ jQuery(() => {
 
                 const settings = extension_settings[MODULE_NAME];
 
-                // Both main agent and sub-agents honor the orchestrator's
-                // "Use streaming transport" toggle (settings.useStreamingTransport),
-                // the same way the other 5 built-in plugins do: ON routes
-                // through generateTaskStream(opts) so the HTTP connection
-                // stays alive on long generations *and* exposes chunk-level
-                // deltas via opts.onChunk; OFF uses plain generateTask.
-                // Both API shapes return identical assistantText + toolCalls,
-                // which is what director consumes. The streaming branch
-                // forwards each chunk to opts.onChunk if the caller passes
-                // one — used by director-runtime to push the main agent's
-                // text into the reasoning fold as it arrives, instead of
-                // waiting for the round to finish.
+                // Main agent and sub-agents both decide chunk-level
+                // streaming from the per-call preset's `stream_openai`
+                // flag (probed via context.isStreamingPresetEnabled).
+                // When true, the dispatcher consumes the generateTaskStream
+                // channel and forwards deltas via opts.onChunk so director-
+                // runtime can push the live text into the reasoning fold
+                // as it arrives; when false, plain generateTask returns
+                // the terminal payload in one shot. The two paths return
+                // identical assistantText + toolCalls.
                 const generateTaskRouter = async ({ onChunk, ...opts } = {}) => {
-                    if (settings?.useStreamingTransport) {
+                    const streamChunks = typeof context?.isStreamingPresetEnabled === 'function'
+                        && context.isStreamingPresetEnabled(opts?.llmPresetName || '');
+                    if (streamChunks) {
                         const { stream, result } = context.generateTaskStream(opts);
                         if (typeof onChunk === 'function') {
                             (async () => {
@@ -8169,14 +8172,17 @@ jQuery(() => {
                     getContentPayload: () => directorContentCache.get(),
                     generateTask: generateTaskRouter,
                     generateTaskStreamForMainAgent: generateTaskRouter,
-                    // Sub-agent dispatcher uses this when streaming
-                    // transport is on, to pipe each sub-agent's chunks
-                    // into its own reasoning-fold section as they arrive.
-                    // When off, the dispatcher falls back to generateTask
-                    // and the section gets the terminal text in one shot
-                    // (still visible, just not progressive).
-                    generateTaskStream: settings?.useStreamingTransport
+                    // Sub-agent dispatcher receives the raw streaming
+                    // provider plus a `(presetName) => boolean` probe and
+                    // picks per dispatch whether to pipe chunks into the
+                    // reasoning-fold section (preset `stream_openai: true`)
+                    // or hand the section the terminal text in one shot
+                    // (preset `stream_openai: false`).
+                    generateTaskStream: typeof context?.generateTaskStream === 'function'
                         ? (opts) => context.generateTaskStream(opts)
+                        : null,
+                    isStreamingPresetEnabled: typeof context?.isStreamingPresetEnabled === 'function'
+                        ? (presetName) => Boolean(context.isStreamingPresetEnabled(presetName))
                         : null,
                     executeLoopTool: (name, args, deps) => executeLoopTool(name, args, deps),
                     runId: directorRunId,

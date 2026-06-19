@@ -161,7 +161,7 @@ import { macros } from './macros/macro-system.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 import { createFloorState } from './floor-state.js';
-import { generateTask, generateTaskStream, GenerateTaskError } from './generate-task.js';
+import { generateTask, generateTaskStream, GenerateTaskError, resolveOpenAiStreamFlag } from './generate-task.js';
 import { createMessageEditorHandle, TakeoverError } from './message-takeover.js';
 import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
@@ -2288,6 +2288,19 @@ export function getContext() {
         generateTask,
         generateTaskStream,
         GenerateTaskError,
+        // Read `stream_openai` from the named chat-completion preset
+        // (fallback: the currently selected preset). Plugins use this to
+        // decide whether to consume chunk deltas — i.e. pick between
+        // `generateTaskStream` (chunks) and `generateTask` (terminal only)
+        // for the same caller-supplied `llmPresetName`. Transport
+        // selection inside `generateTask` is already driven off the same
+        // signal; this exposure exists so callers that *do* want to render
+        // tokens live (orchestrator's run-panel, etc.) can mirror the
+        // user's preset choice instead of inventing a parallel toggle.
+        isStreamingPresetEnabled: (llmPresetName = '') => resolveOpenAiStreamFlag(
+            buildGenerateTaskSenders().getOpenAiRuntime?.() ?? null,
+            llmPresetName,
+        ),
         createMessageEditorHandle,
         TakeoverError,
         /** @deprecated Use addMessages() instead */

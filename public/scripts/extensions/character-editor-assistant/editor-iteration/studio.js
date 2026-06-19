@@ -763,7 +763,6 @@ async function runIterationTurn(state, opts = {}) {
     const taskMessages = buildSeedTaskMessages(state, systemPrompt);
 
     const runnerSettings = {
-        useStreamingTransport: Boolean(settings?.useStreamingTransport),
         toolCallRetryMax: settings?.toolCallRetryMax,
         rpmLimit: settings?.rpmLimit,
     };

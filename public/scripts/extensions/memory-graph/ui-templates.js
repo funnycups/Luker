@@ -253,10 +253,6 @@ export function buildMemoryGraphSettingsHtml(deps) {
                 <input id="luker_rpg_memory_include_world_info" type="checkbox" />
                 ${escapeHtml(i18n('Include world info'))}
             </label>
-            <label class="checkbox_label">
-                <input id="luker_rpg_memory_use_streaming_transport" type="checkbox" />
-                ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
-            </label>
 
             <div class="flex-container">
                 <label style="flex:1">${escapeHtml(i18n('Update every N assistant turns'))} <input id="luker_rpg_memory_update_every" class="text_pole" type="number" min="1" step="1" /></label>

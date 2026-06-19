@@ -435,13 +435,15 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         limits,
         settings: deps?.settings,
         generateTask: deps?.generateTask,
-        // When the main.js wiring passed a streaming provider, sub-agent
-        // output streams chunk-by-chunk into the per-dispatch round in
-        // the RunStateStore (so the Stage-4 run panel renders parallel
-        // sub-agents live without character-level interleaving). Without
-        // it, the dispatcher falls back to non-streaming and the section
-        // gets the terminal text in one shot.
+        // Streaming provider is always forwarded; the dispatcher decides
+        // per dispatch whether to consume chunks by probing
+        // `isStreamingPresetEnabled(presetName)` against the sub-agent's
+        // resolved `llmPresetName`. When the preset enables streaming
+        // chunks pipe into the RunStateStore section live; otherwise the
+        // dispatcher awaits the terminal result and writes the section
+        // once.
         generateTaskStream: deps?.generateTaskStream,
+        isStreamingPresetEnabled: deps?.isStreamingPresetEnabled,
         handle,
         // The active director run id — each sub-agent dispatch opens its
         // own top-level round (`sub-<agentName>-<n>`) in the store so

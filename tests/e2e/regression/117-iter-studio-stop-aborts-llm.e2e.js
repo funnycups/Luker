@@ -60,10 +60,12 @@ async function openOrchIterStudio(page) {
         if (!s) throw new Error('orchestrator settings missing');
         s.enabled = true;
         s.executionMode = 'director';
-        // Streaming transport on — production-default for many users
-        // and the path where AbortSignal propagation through a
-        // streaming reader could silently break.
-        s.useStreamingTransport = true;
+        // Force the active chat-completion preset to enable SSE transport
+        // so generateTask routes through the streaming dispatcher — the
+        // path where AbortSignal propagation through a streaming reader
+        // could silently break.
+        const chatCompletionSettings = ctx.chatCompletionSettings;
+        if (chatCompletionSettings) chatCompletionSettings.stream_openai = true;
         if (typeof ctx.saveSettings === 'function') ctx.saveSettings();
         else if (typeof ctx.saveSettingsDebounced === 'function') ctx.saveSettingsDebounced();
     });

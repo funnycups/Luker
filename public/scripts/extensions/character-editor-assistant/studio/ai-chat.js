@@ -2582,9 +2582,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  abortSignal: abortSignal || undefined,
  substituteMacros: false,
  };
- const result = ceaSettings?.useStreamingTransport
- ? await ctx.generateTaskStream(generateTaskOpts).result
- : await ctx.generateTask(generateTaskOpts);
+ const result = await ctx.generateTask(generateTaskOpts);
 
  if (abortSignal?.aborted) {
  throw new Error('Request aborted');

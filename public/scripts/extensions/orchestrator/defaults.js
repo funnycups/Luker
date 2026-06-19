@@ -588,7 +588,6 @@ export const defaultSettings = {
     requestLlmPresetName: '',
     requestSystemPrompt: getDefaultRequestSystemPrompt(),
     rpmLimit: 0,
-    useStreamingTransport: false,
 };
 
 /**

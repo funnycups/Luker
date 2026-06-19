@@ -1728,7 +1728,6 @@ export async function openSchemaIterationStudio(deps) {
         const llmPresetName = String(settings?.requestLlmPresetName || '').trim();
 
         const runnerSettings = {
-            useStreamingTransport: Boolean(settings?.useStreamingTransport),
             toolCallRetryMax: settings?.toolCallRetryMax,
             rpmLimit: settings?.rpmLimit,
         };

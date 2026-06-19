@@ -322,10 +322,6 @@ export async function installMinimalDirectorProfile(page, {
         settings.enabled = true;
         settings.executionMode = 'director';
         settings.singleAgentModeEnabled = false;
-        // Force streaming OFF so the mock can answer with plain JSON
-        // (deterministic; one body, no SSE assembly). Tests that want
-        // streaming should flip this back on themselves after calling.
-        settings.useStreamingTransport = false;
         // Cap retries so a misconfigured router fails fast instead of
         // burning a long timeout pumping the no-tool-call retry loop.
         settings.toolCallRetryMax = 1;

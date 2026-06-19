@@ -388,10 +388,14 @@ const SUB_AGENT_MAX_ROUNDS = 16;
  *     result). Always required (used when no stream provider is given,
  *     or as a last resort).
  *   - generateTaskStream: optional streaming provider (takes opts,
- *     returns { stream, result }). When provided, sub-agent text deltas
- *     pipe chunk-by-chunk into the RunStateStore round/section for live
- *     panel rendering. When absent, the dispatcher falls back to
- *     generateTask and the section gets each round's text in one shot.
+ *     returns { stream, result }). Forwarded unconditionally — the
+ *     dispatcher consumes its chunks only when the per-call preset
+ *     opts in (see `isStreamingPresetEnabled`).
+ *   - isStreamingPresetEnabled: optional `(presetName) => boolean`
+ *     probe. Returns true when the named preset's `stream_openai` flag
+ *     enables live chunk delivery for this dispatch. When absent or
+ *     false the dispatcher awaits the terminal `generateTask` result
+ *     and writes the section once.
  *   - handle: MessageEditorHandle for the in-flight assistant message.
  *     Used only for `getText()` (snapshot of the live draft injected
  *     into the sub-agent's prompt) and as a settle-state probe to bail
@@ -424,6 +428,7 @@ export function createSubagentDispatcher({
     settings,
     generateTask,
     generateTaskStream,
+    isStreamingPresetEnabled = null,
     handle,
     runId = null,
     getContentPayload,
@@ -555,7 +560,10 @@ export function createSubagentDispatcher({
             let roundReasoning = '';
             let roundResult;
             try {
-                if (typeof generateTaskStream === 'function') {
+                const streamChunks = typeof generateTaskStream === 'function'
+                    && typeof isStreamingPresetEnabled === 'function'
+                    && isStreamingPresetEnabled(callOpts?.llmPresetName || '');
+                if (streamChunks) {
                     const { stream, result } = generateTaskStream(callOpts);
                     for await (const chunk of stream) {
                         // Bail the moment the takeover handle has settled

@@ -347,7 +347,6 @@ const DEFAULT_SETTINGS = Object.freeze({
     lorebookDepth: 9999,
     lorebookRole: extension_prompt_roles.SYSTEM,
     lorebookEntryOrder: 9800,
-    useStreamingTransport: false,
 });
 const LOREBOOK_POSITION_SCHEMA_VERSION = 2;
 const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
@@ -1435,9 +1434,7 @@ async function requestToolCallsWithRetry(context, settings, {
                 },
                 abortSignal: isAbortSignalLike(abortSignal) ? abortSignal : undefined,
             };
-            const result = settings?.useStreamingTransport
-                ? await context.generateTaskStream(generateTaskOpts).result
-                : await context.generateTask(generateTaskOpts);
+            const result = await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Search agent aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({

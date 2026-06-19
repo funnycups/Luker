@@ -38,7 +38,6 @@ const defaultSettings = {
     requestApiPresetName: '',
     includeWorldInfo: false,
     toolCallRetryMax: 2,
-    useStreamingTransport: false,
     iterBaseSystemPrompt: DEFAULT_CPA_BASE_SYSTEM_PROMPT,
     iterModePromptOrchestratorOptimize: DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE,
     iterModePromptJailbreakOnly: DEFAULT_CPA_MODE_JAILBREAK_ONLY,
@@ -74,7 +73,6 @@ function ensureSettings() {
     settings.requestLlmPresetName = String(settings.requestLlmPresetName || '').trim();
     settings.requestApiPresetName = String(settings.requestApiPresetName || '').trim();
     settings.includeWorldInfo = settings.includeWorldInfo === true;
-    settings.useStreamingTransport = settings.useStreamingTransport === true;
     settings.toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(settings.toolCallRetryMax, defaultSettings.toolCallRetryMax)));
     delete settings.iterSystemPrompt;
     settings.iterBaseSystemPrompt = String(settings.iterBaseSystemPrompt || '').trim() || DEFAULT_CPA_BASE_SYSTEM_PROMPT;
@@ -103,7 +101,6 @@ function registerLocaleData() {
         'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示词预设（参数+提示词）',
         'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 预设（连接配置）',
         'Include world info (simulate current chat)': '包含世界书信息（按当前聊天重新模拟）',
-        'Use streaming transport (avoid timeout on slow APIs)': '使用流式传输（避免慢速 API 超时）',
         'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
         'Iteration System Prompts (advanced)': '迭代系统提示词（高级）',
         'Base prompt (sent in every mode)': '基础提示词（每种模式都会发送）',
@@ -207,7 +204,6 @@ function registerLocaleData() {
         'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示詞預設（參數+提示詞）',
         'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 預設（連線設定）',
         'Include world info (simulate current chat)': '包含世界書資訊（按目前聊天重新模擬）',
-        'Use streaming transport (avoid timeout on slow APIs)': '使用串流傳輸（避免慢速 API 逾時）',
         'Tool-call retries on invalid/missing tool call (N)': '工具調用重試次數（無效/缺失時）',
         'Iteration System Prompts (advanced)': '迭代系統提示詞（進階）',
         'Base prompt (sent in every mode)': '基礎提示詞（每種模式都會傳送）',
@@ -547,7 +543,6 @@ function refreshUiState(context = getContext()) {
     root.find('#cpa_request_llm_preset').html(renderSelectOptions(getOpenAIPresetNames(context), settings.requestLlmPresetName, true, '(current)'));
     root.find('#cpa_request_api_preset').html(renderSelectOptions(getConnectionProfileNames(), settings.requestApiPresetName, true, '(current)'));
     root.find('#cpa_include_world_info').prop('checked', settings.includeWorldInfo === true);
-    root.find('#cpa_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#cpa_tool_retries').val(String(settings.toolCallRetryMax));
     root.find('#cpa_iter_base_system_prompt').val(String(settings.iterBaseSystemPrompt || ''));
     root.find('#cpa_iter_mode_orchestrator_optimize').val(String(settings.iterModePromptOrchestratorOptimize || ''));
@@ -580,10 +575,6 @@ function bindUi() {
     });
     root.on('change.cpa', '#cpa_include_world_info', function () {
         getSettings().includeWorldInfo = jQuery(this).prop('checked') === true;
-        saveSettingsDebounced();
-    });
-    root.on('change.cpa', '#cpa_use_streaming_transport', function () {
-        getSettings().useStreamingTransport = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
     root.on('change.cpa', '#cpa_tool_retries', function () {
@@ -662,10 +653,6 @@ function ensureUi(context = getContext()) {
             <label for="cpa_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
             <select id="cpa_request_api_preset" class="text_pole"></select>
             <label class="checkbox_label"><input id="cpa_include_world_info" type="checkbox"/> ${escapeHtml(i18n('Include world info (simulate current chat)'))}</label>
-            <label class="checkbox_label">
-                <input id="cpa_use_streaming_transport" type="checkbox" />
-                ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
-            </label>
             <label for="cpa_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
             <input id="cpa_tool_retries" class="text_pole" type="number" min="0" max="${TOOL_CALL_RETRY_MAX}" step="1"/>
             <details class="cpa_prompt_overrides">

@@ -1128,7 +1128,6 @@ const defaultSettings = {
     hybridMaxResults: 15,
     enableRerank: false,
     rpmLimit: 0,
-    useStreamingTransport: false,
 };
 
 
@@ -3615,9 +3614,7 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
                 functionCallOptions,
                 abortSignal: requestController.signal,
             };
-            const result = settings?.useStreamingTransport
-                ? await context.generateTaskStream(generateTaskOpts).result
-                : await context.generateTask(generateTaskOpts);
+            const result = await context.generateTask(generateTaskOpts);
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({
@@ -3701,9 +3698,7 @@ async function requestToolCallsWithRetry(context, settings, {
                 },
                 abortSignal: requestController.signal,
             };
-            const result = settings?.useStreamingTransport
-                ? await context.generateTaskStream(generateTaskOpts).result
-                : await context.generateTask(generateTaskOpts);
+            const result = await context.generateTask(generateTaskOpts);
             throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({
@@ -14332,7 +14327,6 @@ function bindUi() {
     root.find('#luker_rpg_memory_request_api_preset').val(String(settings.requestApiPresetName || ''));
     root.find('#luker_rpg_memory_request_llm_preset').val(String(settings.requestLlmPresetName || ''));
     root.find('#luker_rpg_memory_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
-    root.find('#luker_rpg_memory_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
     root.find('#luker_rpg_memory_update_every').val(String(settings.updateEvery));
     const schemaScopeInfo = getSchemaScopeInfo(context, settings);
     updateSchemaSummary(root, schemaScopeInfo.schema);
@@ -14502,11 +14496,6 @@ function bindUi() {
 
     root.find('#luker_rpg_memory_include_world_info').off('input').on('input', function () {
         settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
-        saveSettingsDebounced();
-    });
-
-    root.find('#luker_rpg_memory_use_streaming_transport').off('input').on('input', function () {
-        settings.useStreamingTransport = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 

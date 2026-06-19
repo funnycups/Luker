@@ -60,7 +60,7 @@ const TOOLS = [{
     },
 }];
 
-const SETTINGS = { toolCallRetryMax: 0, rpmLimit: 0, useStreamingTransport: false };
+const SETTINGS = { toolCallRetryMax: 0, rpmLimit: 0 };
 
 describe('requestToolCallsWithRetry — per-round callbacks', () => {
     test('no callbacks → preserves existing return shape (back-compat)', async () => {

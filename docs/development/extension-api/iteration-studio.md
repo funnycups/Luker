@@ -128,11 +128,10 @@ getRunnerSettings(settings): RunnerSettings | null
 type RunnerSettings = {
     toolCallRetryMax?: number;       // default 0 — retries for malformed / missing tool calls
     rpmLimit?: number;               // default 0 — per-iteration-studio shared RPM cap (0 = unbounded)
-    useStreamingTransport?: boolean; // default false — use generateTaskStream() instead of generateTask()
 };
 ```
 
-Returning `null` / `undefined` / `{}` keeps all three defaults. The shell does not read raw fields from your settings blob — this hook is the only path. That lets each adapter expose its own settings UI (CPA surfaces all three; CardApp Studio surfaces only `useStreamingTransport`) without the shell having to know your storage path.
+Returning `null` / `undefined` / `{}` keeps both defaults. The shell does not read raw fields from your settings blob — this hook is the only path. That lets each adapter expose its own settings UI (CPA surfaces both; CardApp Studio currently exposes neither) without the shell having to know your storage path. Transport selection (SSE vs one-shot POST) is handled by `generateTask` based on the resolved preset's `stream_openai`; adapters do not need to expose a toggle for it.
 
 ## Session storage
 

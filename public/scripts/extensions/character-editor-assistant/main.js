@@ -80,7 +80,6 @@ const defaultSettings = {
     requestApiPresetName: '',
     toolCallRetryMax: 2,
     maxJournalEntries: 120,
-    useStreamingTransport: false,
     editorIterationSystemPrompt: DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT,
     cardAppStudioSystemPrompt: DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT,
 };
@@ -597,7 +596,6 @@ function ensureSettings() {
     delete settings.plainTextFunctionCallMode;
     settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(settings.toolCallRetryMax || defaultSettings.toolCallRetryMax) || 0)));
     settings.maxJournalEntries = Math.max(20, Math.min(500, Number(settings.maxJournalEntries || defaultSettings.maxJournalEntries)));
-    settings.useStreamingTransport = Boolean(settings.useStreamingTransport);
     settings.editorIterationSystemPrompt = String(settings.editorIterationSystemPrompt || '').trim() || DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT;
     settings.cardAppStudioSystemPrompt = String(settings.cardAppStudioSystemPrompt || '').trim() || DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT;
 }

@@ -127,9 +127,7 @@ export async function requestToolCallWithRetry(context, settings, {
                 },
                 abortSignal: attemptSignal,
             };
-            const result = settings?.useStreamingTransport
-                ? await context.generateTaskStream(generateTaskOpts).result
-                : await context.generateTask(generateTaskOpts);
+            const result = await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const validationError = validateParsedToolCalls(calls, tools);
@@ -233,9 +231,7 @@ export async function requestToolCallsWithRetry(context, settings, {
                 substituteMacros: false,
                 abortSignal: attemptSignal,
             };
-            const result = settings?.useStreamingTransport
-                ? await context.generateTaskStream(generateTaskOpts).result
-                : await context.generateTask(generateTaskOpts);
+            const result = await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({

@@ -234,6 +234,7 @@ describe('director abort discipline — sub-agent tool loop', () => {
             settings: { toolCallRetryMax: 0 },
             generateTask: jest.fn(),
             generateTaskStream: fakeSubStream,
+            isStreamingPresetEnabled: () => true,
             handle,
             getContentPayload: () => ({ messages: [] }),
             abortSignal: ac.signal,

@@ -119,11 +119,11 @@ describe('director integration — scripted main agent', () => {
     });
 
     test('main agent falls back to assistantText in the text section when no chunks arrive (non-streaming transport)', async () => {
-        // The non-streaming path (`useStreamingTransport=false` →
+        // The non-streaming path (preset `stream_openai=false` →
         // `context.generateTask`) returns the final assistantText with
         // no chunk events. The runtime must still write that text into
         // the run-panel text section so the panel isn't left with empty
-        // sections when the user disables streaming.
+        // sections when the user's preset has streaming off.
         const { chat, handle } = makeHandle();
         const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {
@@ -337,6 +337,7 @@ describe('director integration — scripted main agent', () => {
                 generateTaskStreamForMainAgent: fakeMainStream,
                 generateTask: jest.fn(),
                 generateTaskStream: fakeSubStream,
+                isStreamingPresetEnabled: () => true,
                 chat,
                 runId,
             },
@@ -433,6 +434,7 @@ describe('director integration — scripted main agent', () => {
                 generateTaskStreamForMainAgent: fakeMainStream,
                 generateTask: jest.fn(),
                 generateTaskStream: fakeSubStream,
+                isStreamingPresetEnabled: () => true,
                 chat,
                 runId,
             },

@@ -136,10 +136,6 @@ export function createSearchToolsSettingsUi(deps) {
         <input id="search_tools_agent_max_rounds" class="text_pole" type="number" min="1" max="8" step="1" />
         <label for="search_tools_tool_call_retry_max">${escapeHtml(i18n('Tool call retry count'))}</label>
         <input id="search_tools_tool_call_retry_max" class="text_pole" type="number" min="0" max="5" step="1" />
-        <label class="checkbox_label">
-            <input id="search_tools_use_streaming_transport" type="checkbox" />
-            ${escapeHtml(i18n('Use streaming transport (avoid timeout on slow APIs)'))}
-        </label>
         <label for="search_tools_lorebook_position">${escapeHtml(i18n('Injection position'))}</label>
         <select id="search_tools_lorebook_position" class="text_pole">
             <option value="${world_info_position.before}">${escapeHtml(i18n('Before Character Definitions'))}</option>
@@ -564,7 +560,6 @@ export function createSearchToolsSettingsUi(deps) {
         root.find('#search_tools_include_world_info_with_preset').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
         root.find('#search_tools_agent_max_rounds').val(String(settings.agentMaxRounds));
         root.find('#search_tools_tool_call_retry_max').val(String(settings.toolCallRetryMax));
-        root.find('#search_tools_use_streaming_transport').prop('checked', Boolean(settings.useStreamingTransport));
         root.find('#search_tools_lorebook_position').val(String(settings.lorebookPosition));
         root.find('#search_tools_lorebook_depth').val(String(settings.lorebookDepth));
         root.find('#search_tools_lorebook_role').val(String(settings.lorebookRole));
@@ -638,10 +633,6 @@ export function createSearchToolsSettingsUi(deps) {
         root.on('change.searchTools', '#search_tools_tool_call_retry_max', function () {
             settings.toolCallRetryMax = clampInteger(jQuery(this).val(), 0, 5, DEFAULT_SETTINGS.toolCallRetryMax);
             jQuery(this).val(String(settings.toolCallRetryMax));
-            saveSettingsDebounced();
-        });
-        root.on('input.searchTools', '#search_tools_use_streaming_transport', function () {
-            settings.useStreamingTransport = Boolean(jQuery(this).prop('checked'));
             saveSettingsDebounced();
         });
         root.on('change.searchTools', '#search_tools_lorebook_position', function () {

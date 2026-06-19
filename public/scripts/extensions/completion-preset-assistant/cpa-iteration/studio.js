@@ -1581,7 +1581,6 @@ export async function openCpaIterationStudio(deps) {
         const llmPresetName = String(presetOptions.llmPresetName || '').trim();
 
         const runnerSettings = {
-            useStreamingTransport: Boolean(settings.useStreamingTransport),
             toolCallRetryMax: settings.toolCallRetryMax,
             rpmLimit: settings.rpmLimit,
         };
