@@ -1,10 +1,16 @@
 import { describe, test, expect, jest } from '@jest/globals';
 import { createOrchestratorIterationSessionStore, makeMessageId, normalizeMessageShape, ORCH_SIDECAR_NAMESPACE, ORCH_GLOBAL_BUCKET_KEY } from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
 
-function makeStubs({ avatar = 'alice.png', getCharacterState, setCharacterState } = {}) {
+function makeStubs({ avatar = 'alice.png', getCharacterState, updateCharacterState } = {}) {
     const sidecarReads = [];
     const sidecarWrites = [];
     const settingsRoot = {};
+    let storedSidecar = null;
+    const defaultGet = async (a, ns) => {
+        sidecarReads.push({ a, ns });
+        return storedSidecar;
+    };
+    const get = getCharacterState || defaultGet;
     const stubs = {
         mode: 'director',
         getOrchestratorSettingsRoot: () => settingsRoot,
@@ -12,8 +18,18 @@ function makeStubs({ avatar = 'alice.png', getCharacterState, setCharacterState 
         persistSettingsImmediate: jest.fn(async () => {}),
         computeScope: () => avatar ? `character_${avatar}` : 'global',
         ctx: {
-            getCharacterState: getCharacterState || (async (a, ns) => { sidecarReads.push({ a, ns }); return null; }),
-            setCharacterState: setCharacterState || (async (a, ns, data) => { sidecarWrites.push({ a, ns, data }); }),
+            getCharacterState: get,
+            updateCharacterState: updateCharacterState || (async (a, ns, updater) => {
+                const current = await get(a, ns);
+                const next = await updater(
+                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+                    { attempt: 0, avatar: a, namespace: ns },
+                );
+                if (next == null) return { ok: true, state: current, updated: false };
+                storedSidecar = next;
+                sidecarWrites.push({ a, ns, data: next });
+                return { ok: true, state: next, updated: true };
+            }),
         },
         sidecarReads,
         sidecarWrites,
@@ -23,7 +39,7 @@ function makeStubs({ avatar = 'alice.png', getCharacterState, setCharacterState 
 }
 
 describe('createOrchestratorIterationSessionStore — per-character sessions go to the sidecar', () => {
-    test('save() under character scope writes through ctx.setCharacterState, not into the settings root', async () => {
+    test('save() under character scope writes through ctx.updateCharacterState, not into the settings root', async () => {
         const stubs = makeStubs();
         const store = createOrchestratorIterationSessionStore({
             mode: stubs.mode,

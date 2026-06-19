@@ -68,11 +68,12 @@ async function readSidecar(ctx, avatar) {
     }
 }
 
-async function writeSidecar(ctx, avatar, payload) {
-    await ctx.setCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, {
-        version: SIDECAR_SCHEMA_VERSION,
-        sessions: payload.sessions || {},
-    });
+function buildNextSidecar(current, mutate) {
+    const base = (current && typeof current === 'object' && current.sessions && typeof current.sessions === 'object')
+        ? { version: SIDECAR_SCHEMA_VERSION, sessions: { ...current.sessions } }
+        : { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+    mutate(base.sessions);
+    return base;
 }
 
 function getGlobalBucket(settingsRoot, mode) {
@@ -104,8 +105,8 @@ export function createOrchestratorIterationSessionStore({
     if (typeof computeScope !== 'function') {
         throw new TypeError('createOrchestratorIterationSessionStore: computeScope must be a function');
     }
-    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.setCharacterState !== 'function') {
-        throw new TypeError('createOrchestratorIterationSessionStore: ctx with getCharacterState + setCharacterState is required');
+    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.updateCharacterState !== 'function') {
+        throw new TypeError('createOrchestratorIterationSessionStore: ctx with getCharacterState + updateCharacterState is required');
     }
 
     function metaOf(s) {
@@ -147,9 +148,11 @@ export function createOrchestratorIterationSessionStore({
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
         if (avatar) {
-            const payload = await readSidecar(ctx, avatar);
-            payload.sessions[String(session.id)] = structuredClone(session);
-            await writeSidecar(ctx, avatar, payload);
+            await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) =>
+                buildNextSidecar(current, (sessions) => {
+                    sessions[String(session.id)] = structuredClone(session);
+                }),
+            );
             return;
         }
         const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
@@ -162,9 +165,11 @@ export function createOrchestratorIterationSessionStore({
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
         if (avatar) {
-            const payload = await readSidecar(ctx, avatar);
-            payload.sessions[String(session.id)] = structuredClone(session);
-            await writeSidecar(ctx, avatar, payload);
+            await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) =>
+                buildNextSidecar(current, (sessions) => {
+                    sessions[String(session.id)] = structuredClone(session);
+                }),
+            );
             return;
         }
         const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
@@ -180,9 +185,11 @@ export function createOrchestratorIterationSessionStore({
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
         if (avatar) {
-            const payload = await readSidecar(ctx, avatar);
-            delete payload.sessions[String(id)];
-            await writeSidecar(ctx, avatar, payload);
+            await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) =>
+                buildNextSidecar(current, (sessions) => {
+                    delete sessions[String(id)];
+                }),
+            );
             return;
         }
         const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
