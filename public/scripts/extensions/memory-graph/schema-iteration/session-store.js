@@ -58,11 +58,12 @@ async function readSidecar(ctx, avatar) {
     return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
 }
 
-async function writeSidecar(ctx, avatar, sessions) {
-    await ctx.setCharacterState(avatar, MG_SIDECAR_NAMESPACE, {
-        version: SIDECAR_SCHEMA_VERSION,
-        sessions,
-    });
+function buildNextSidecar(current, mutate) {
+    const base = (current && typeof current === 'object' && current.sessions && typeof current.sessions === 'object')
+        ? { version: SIDECAR_SCHEMA_VERSION, sessions: { ...current.sessions } }
+        : { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+    mutate(base.sessions);
+    return base;
 }
 
 function getGlobalBucket(settingsRoot) {
@@ -82,8 +83,8 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
     if (typeof computeScope !== 'function') {
         throw new TypeError('createMgSchemaSessionStore: computeScope must be a function');
     }
-    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.setCharacterState !== 'function') {
-        throw new TypeError('createMgSchemaSessionStore: ctx with getCharacterState + setCharacterState is required');
+    if (!ctx || typeof ctx.getCharacterState !== 'function' || typeof ctx.updateCharacterState !== 'function') {
+        throw new TypeError('createMgSchemaSessionStore: ctx with getCharacterState + updateCharacterState is required');
     }
 
     function metaOf(s) {
@@ -125,9 +126,11 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
         if (avatar) {
-            const payload = await readSidecar(ctx, avatar);
-            payload.sessions[String(session.id)] = structuredClone(session);
-            await writeSidecar(ctx, avatar, payload.sessions);
+            await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
+                buildNextSidecar(current, (sessions) => {
+                    sessions[String(session.id)] = structuredClone(session);
+                }),
+            );
             return;
         }
         const bucket = getGlobalBucket(getMgSettingsRoot() || {});
@@ -139,9 +142,11 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
         if (avatar) {
-            const payload = await readSidecar(ctx, avatar);
-            delete payload.sessions[String(id)];
-            await writeSidecar(ctx, avatar, payload.sessions);
+            await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
+                buildNextSidecar(current, (sessions) => {
+                    delete sessions[String(id)];
+                }),
+            );
             return;
         }
         const bucket = getGlobalBucket(getMgSettingsRoot() || {});

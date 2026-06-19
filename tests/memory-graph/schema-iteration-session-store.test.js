@@ -30,7 +30,16 @@ function makeStubs({ scope = 'global', avatar = null, initialSidecar = null } = 
         computeScope: () => scope === 'character' && avatar ? `character_${avatar}` : 'global',
         ctx: {
             getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
-            setCharacterState: jest.fn(async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; }),
+            updateCharacterState: jest.fn(async (a, ns, updater) => {
+                const current = sidecars[`${a}:${ns}`] || null;
+                const next = await updater(
+                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+                    { attempt: 0, avatar: a, namespace: ns },
+                );
+                if (next == null) return { ok: true, state: current, updated: false };
+                sidecars[`${a}:${ns}`] = next;
+                return { ok: true, state: next, updated: true };
+            }),
         },
         sidecars,
         settingsRoot,
@@ -44,7 +53,7 @@ describe('createMgSchemaSessionStore — global scope uses settings, character s
         await store.save({ id: 's1', title: 'Global', updatedAt: 1 });
         expect(stubs.settingsRoot[MG_GLOBAL_BUCKET_KEY].s1.id).toBe('s1');
         expect(stubs.persistSettings).toHaveBeenCalled();
-        expect(stubs.ctx.setCharacterState).not.toHaveBeenCalled();
+        expect(stubs.ctx.updateCharacterState).not.toHaveBeenCalled();
     });
 
     test('character scope save writes to the sidecar', async () => {
