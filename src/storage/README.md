@@ -1,10 +1,10 @@
 # `src/storage/` — Repository and Engine layers
 
-Repository methods are the only API that endpoints should use to read or write structured data. Direct `fs.*` calls inside endpoint handlers are deprecated and will move into Repositories over the course of the storage refactor.
+Repository methods are the only API that endpoints should use to read or write structured data. Direct `fs.*` calls inside endpoint handlers are deprecated and migrate into Repositories incrementally.
 
 ## Layers
 
-- **`engines/`** — how data is read and written. Phases 1 + 1b ship `FsEngine`; Phase 2 ships `SqliteEngine` (per-user `luker-storage.sqlite`, WAL, FK on, real transactions). Phase 4 ships `MysqlEngine` and `PgEngine` — shared-DB backends keyed by `handle` column. All engine-swappable behind the same Engine / Transaction interface. The active engine is picked at boot from `storage.mode` in `config.yaml` (`fs` default; `sqlite` / `mysql` / `postgres` opt-in).
+- **`engines/`** — how data is read and written. Four engines ship: `FsEngine` (one file per resource under `<dataRoot>/<handle>/`), `SqliteEngine` (per-user `luker-storage.sqlite`, WAL, FK on, real transactions), `MysqlEngine` and `PgEngine` (shared-DB backends keyed by `handle` column). All are swappable behind the same Engine / Transaction interface. The active engine is picked at boot from `storage.mode` in `config.yaml` (`fs` default; `sqlite` / `mysql` / `postgres` opt-in).
 - **`repositories/`** — what a chat / preset / lorebook *is*. Owns integrity (OCC), gen_id dedup, JSON-Patch idempotency, and any other "what does this resource mean" logic.
 - **`errors.js`** — typed errors that endpoints translate into HTTP status codes:
   - `ConflictError` → 409
@@ -40,11 +40,11 @@ router.post('/something', async function (req, res) {
 3. If the Engine doesn't already expose the primitives the new Repo method needs, add them to `FsTransaction` and route through a `registerXxxHandler(tx)` function at the bottom of `fs-engine-transaction.js`.
 4. Wire the endpoint to call the new Repo method.
 
-## Phases 1 + 1b coverage
+## Repo coverage
 
 ### Repos shipped
 
-| Repo | Resource kind | Backing file shape |
+| Repo | Resource kind | Backing file shape (FS mode) |
 |---|---|---|
 | `ChatRepo` | `chat` | `<chats>/<charDir>/<name>.jsonl` (group chats: `<groupChats>/<chatId>.jsonl`) |
 | `SettingsRepo` | `settings` | `<root>/settings.json` |
@@ -54,7 +54,7 @@ router.post('/something', async function (req, res) {
 | `GroupRepo` | `group` | `<groups>/<id>.json`; `delete` cascades member chat JSONLs |
 | `StatsRepo` | `stats` | `<root>/stats.json` (compact JSON, internal IO only) |
 
-### Endpoints migrated
+### Endpoints routed through Repos
 
 | Endpoint family | Handlers routed through Repo |
 |---|---|
@@ -66,14 +66,12 @@ router.post('/something', async function (req, res) {
 | `/api/groups` | `/all`, `/create`, `/edit`, `/delete` (also `getGroupsSnapshot` consumed by `/api/bootstrap`) |
 | `/api/stats` | internal IO only (`init`, `saveStatsToFile`); endpoints unchanged because they read/write the in-memory `STATS` Map |
 
-### Still on direct `fs.*` access (deferred)
+### Still on direct `fs.*` access
 
-- **Chats**: `/recent` (in-memory cached index — would regress perf vs SqliteEngine's indexed scan), `/meta`, `/meta/patch`, `/get-delta`, `/export`, `/import`, `/search`, `/group/*` (all `/api/chats/group/*` group-chat handlers)
-- **Settings snapshot endpoints**: `/get-snapshots`, `/load-snapshot`, `/make-snapshot`, `/restore-snapshot` — moved to engine-level snapshot API in Phase 2 (`TODO(storage-phase-2)` markers in code)
-- **Presets**: `/restore` (reads from `getDefaultPresets`/`getDefaultPresetFile` content-manager, not user data)
-- **Secrets, user accounts, admin settings, announcements**: `src/endpoints/secrets.js`, `src/endpoints/users-private.js`, `src/endpoints/users-admin.js`, `src/admin-settings.js`, `src/announcements.js`. These are deferred to Phase 2 because:
-  - Secrets has ~20 external callers (`readSecret(directories, ...)` across `src/additional-headers.js`, `src/endpoints/{azure,novelai,translate,...}.js`, `src/users.js`). Migrating those to handle-based API is a separate per-caller pass.
-  - User accounts / admin settings / announcements live in `node-persist` (`<DATA_ROOT>/_storage/`), not user files. Phase 2 will add a `NodePersistEngine` (same Engine contract) so the migration target is consistent.
+- **Chats**: `/recent` (in-memory cached index — keeps parity with SqliteEngine's indexed scan), `/meta`, `/meta/patch`, `/get-delta`, `/export`, `/import`, `/search`, `/group/*` (all `/api/chats/group/*` group-chat handlers).
+- **Settings snapshot endpoints**: `/get-snapshots`, `/load-snapshot`, `/make-snapshot`, `/restore-snapshot` — covered by the engine-level snapshot API once they migrate.
+- **Presets**: `/restore` (reads from `getDefaultPresets`/`getDefaultPresetFile` content-manager, not user data).
+- **Secrets, user accounts, admin settings, announcements**: `src/endpoints/secrets.js`, `src/endpoints/users-private.js`, `src/endpoints/users-admin.js`, `src/admin-settings.js`, `src/announcements.js`. Secrets has ~20 external callers (`readSecret(directories, ...)` across `src/additional-headers.js`, `src/endpoints/{azure,novelai,translate,...}.js`, `src/users.js`); migrating to the handle-based API is a separate per-caller pass. User accounts / admin settings / announcements live in `node-persist` (`<dataRoot>/_storage/`), not user files, and would need a `NodePersistEngine` to share the Engine contract.
 - **`getGroupsSnapshot`**: now async and uses GroupRepo; sync callers (`migrateGroupChatsMetadataFormat` boot-time path inside `groups.js`) still use direct `fs.*` because that's a one-shot data migration unrelated to runtime IO.
 
 ## ChatRepo method coverage
@@ -92,7 +90,7 @@ router.post('/something', async function (req, res) {
 | `deleteState(handle, charDir, name, namespace)` | Delete one sidecar. No-op on missing. | — |
 | `getStateBatch(handle, charDir, name, namespaces[])` | Read multiple sidecars in one call. Missing namespaces map to null. | — |
 
-## Other Repo method coverage (Phase 1b)
+## Other Repo method coverage
 
 | Repo | Methods |
 |---|---|
@@ -113,7 +111,7 @@ router.post('/something', async function (req, res) {
 
 ## What FS mode does NOT provide
 
-- **Cross-resource transactions.** `withTransaction(fn)` on FsEngine runs `fn` sequentially; if a write inside the closure throws after earlier writes succeeded, the earlier writes are NOT rolled back. SqliteEngine (Phase 2+) will provide true transactions.
+- **Cross-resource transactions.** `withTransaction(fn)` on FsEngine runs `fn` sequentially; if a write inside the closure throws after earlier writes succeeded, the earlier writes are NOT rolled back. SqliteEngine provides true transactions.
 - **Concurrent-write linearization.** Chats use the integrity slug (409 → client retries) for safety, not file locks. Other resources have no OCC at all — concurrent writers to the same file race. FS mode introduces no `_journal/`, `_locks/`, or other files that would break vanilla SillyTavern compatibility.
 
 ## Testing
@@ -124,14 +122,11 @@ router.post('/something', async function (req, res) {
   ```
   (or `npm run test:unit --prefix tests` for the full suite.)
 - Tests use a real `makeTempFsEngine()` harness from `tests/storage/harness/fs-harness.js` — no mocks. Each test creates a fresh tmp dir and cleans up after itself.
-- A `chatRepoContract` is reserved at `tests/storage/contracts/chat-repo.contract.js` for Phase 2 (it will run the same suite against `SqliteEngine` etc.). Phases 1 + 1b only run it against `FsEngine`.
-- Endpoint migrations are covered by the existing endpoint-level integration suites (chats / settings / floor-state / memory-graph) — no new endpoint-level harness was needed.
+- `describe.each(CONTRACT_HARNESSES)` (from `tests/storage/harness/contract-harness.js`) runs each Repo's `.contract.js` suite against `FsEngine` and `SqliteEngine` from the same source file. Adding a test inside a `.contract.js` file automatically covers both engines.
+- `tests/storage/round-trip.test.js` proves cross-engine data preservation: write a doc via engine A, read it back, write that snapshot via engine B, read it back, assert deep equality (modulo engine-internal metadata like `integrity` / `updatedAt`). Covers Chat / Settings / Preset / WorldInfo / Group / Stats in both directions (FS ↔ SQLite). `NamedDocRepo` is skipped from round-trip because it has no `get` method.
+- Endpoint migrations are covered by the existing endpoint-level integration suites (chats / settings / floor-state / memory-graph).
 
-## Phase 2 scope
-
-Phase 2 lands the second engine (`SqliteEngine`) behind the same Repo API as Phase 1's `FsEngine`. No endpoints change; no on-disk layout changes for FS users. The active engine is picked once at boot.
-
-### `storage.mode` config switch
+## Selecting an engine
 
 The active engine is read from `config.yaml`:
 
@@ -148,34 +143,34 @@ storage:
     poolSize: 10
 ```
 
-- `fs` (default) — `FsEngine` behaves exactly as Phase 1 + 1b.
+- `fs` (default) — `FsEngine`. One file per resource under `<dataRoot>/<handle>/`.
 - `sqlite` — `SqliteEngine` opens / creates `<dataRoot>/<handle>/luker-storage.sqlite` per user.
 - `mysql` — `MysqlEngine` connects to a shared MySQL 8.0+ database; all users live in one schema, keyed by `handle` column. Requires `storage.mysql.url`.
 - `postgres` — `PgEngine` connects to a shared PostgreSQL 14+ database; all users live in one schema, keyed by `handle` column. Requires `storage.postgres.url`.
 
-`initStorage({ mode, directoriesByHandle, mysql, postgres })` throws `Error: unknown storage mode "<x>"` for anything else, and throws `mode=mysql requires storage.mysql.url` / `mode=postgres requires storage.postgres.url` when the mode is selected without a URL. Migration between any pair of engines (fs / sqlite / mysql / postgres) is supported from both the admin panel and the `storage-migrate` CLI; see "Phase 3 — Migration tooling" below.
+`initStorage({ mode, directoriesByHandle, mysql, postgres })` throws `Error: unknown storage mode "<x>"` for anything else, and throws `mode=mysql requires storage.mysql.url` / `mode=postgres requires storage.postgres.url` when the mode is selected without a URL. Migration between any pair of engines is supported from both the admin panel and the `storage-migrate` CLI; see "Migration tooling" below.
 
-### SqliteEngine on disk
+## SqliteEngine on disk
 
 - One database file per user: `<dataRoot>/<handle>/luker-storage.sqlite` — same per-user containment as FS mode.
 - PRAGMAs at open: `journal_mode = WAL`, `synchronous = NORMAL`, `foreign_keys = ON`.
 - Real transactions: `withTransaction(handle, fn)` issues `BEGIN IMMEDIATE` → runs `fn(tx)` → `COMMIT` (or `ROLLBACK` on throw). Unlike `FsEngine.withTransaction`, partial writes ARE rolled back.
 
-### Schema
+## Schema (SqliteEngine, MysqlEngine, PgEngine)
 
 One table per resource kind (`chats`, `chat_states`, `settings`, `presets`, `preset_states`, `worlds`, `named_docs`, `groups`, `stats`). Each row carries a `doc TEXT` column holding the JSON payload — that is the source of truth, and the Repo API reads / writes that field whole. Lookups by name are indexed but never authoritative.
 
 `chats` has a `STORED GENERATED COLUMN` (`integrity`) extracted from the doc's `chat_metadata.integrity` so OCC checks can run inside SQL without parsing JSON in JavaScript. This requires SQLite ≥ 3.31. better-sqlite3's bundled SQLite is well past that, so the requirement only bites if you point better-sqlite3 at a system SQLite via custom build.
 
-### What's the same between engines
+## What's the same across engines
 
 - The Repo API (every `getXxxRepo()` accessor returns the same Repo class regardless of engine).
-- Engine observable contract: each Repo method's pre/post conditions match across engines, enforced by the parameterized contract tests under `tests/storage/repositories/*.contract.js` (driven by `describe.each(CONTRACT_HARNESSES)` from `tests/storage/harness/contract-harness.js`).
+- Engine observable contract: each Repo method's pre/post conditions match across engines, enforced by the parameterized contract tests under `tests/storage/repositories/*.contract.js`.
 - Typed errors (`ConflictError`, `NotFoundError`, `PatchTestFailedError`, …) are thrown identically.
 - OCC: chat saves still rotate `integrity` and reject on mismatch.
 - Sidecar semantics: chats / presets still expose `getState`, `setState`, `deleteState`, `getStateBatch`, etc. with the same return shapes.
 
-### What's intentionally different
+## What's intentionally different across engines
 
 - **`chat_states` FK CASCADE** — SQLite enforces it via `FOREIGN KEY (...) REFERENCES chats(...) ON DELETE CASCADE`; the FS handler implements the same end behavior by walking sibling sidecars at delete time. End result: deleting a chat removes all its state sidecars on both engines.
 - **`preset_states` permissive orphan sidecars** — there is NO FK on `preset_states` in the SQLite schema. This matches FS behavior, where orphan preset sidecars are tolerated (presets are renamed / deleted via separate code paths that don't always run sidecar cleanup atomically). Adding the FK would diverge from FS.
@@ -188,29 +183,15 @@ One table per resource kind (`chats`, `chat_states`, `settings`, `presets`, `pre
   - SQLite stores `Date.now()` at save time (reflects when the Repo called `save`).
   - Both are millisecond-resolution numbers, but they answer slightly different questions. Don't compare timestamps across engines.
 
-### Contract tests + round-trip tests
-
-- `describe.each(CONTRACT_HARNESSES)` runs each Repo's contract suite against both `FsEngine` and `SqliteEngine` from the same source file. Adding a new test inside a `.contract.js` file automatically covers both engines.
-- `tests/storage/round-trip.test.js` proves cross-engine data preservation: write a doc via engine A, read it back, write that snapshot via engine B, read it back, assert deep equality (modulo engine-internal metadata like `integrity` / `updatedAt`). Covers Chat / Settings / Preset / WorldInfo / Group / Stats in both directions (FS → SQLite and SQLite → FS).
-- `NamedDocRepo` is skipped from round-trip because it has no `get` method — there's no public API to read the post-write doc back without coupling the test to handler internals. The contract tests cover its save/delete surface.
-
-### Migration
-
-Phase 3 will ship the migration tool (bulk copy + verify between engines) and the admin UI for switching modes. Until then:
-
-- Switching `storage.mode` on a populated install **does not delete data** — the other engine's data files (the JSONL/JSON tree, or the `luker-storage.sqlite` file) are left untouched.
-- However, the running engine only sees its own backing store, so the other engine's data becomes **invisible** until you switch back.
-- For first installs or empty users, switching is safe.
-
-### Dependencies and install gotchas
+## Dependencies and install gotchas
 
 - Native dep: `better-sqlite3`. Pulled in automatically by `npm install`.
 - SQLite version requirement: ≥ 3.31 (for `STORED GENERATED COLUMN` support in the `chats` table). better-sqlite3 bundles a recent SQLite, so this is satisfied out of the box.
-- macOS install gotcha (observed during Phase 2 bringup): Homebrew Python 3.14.6 ships a broken `pyexpat`, which makes node-gyp's setup phase crash before better-sqlite3 can build. Workaround: rerun the install with `npm rebuild better-sqlite3 --python=/usr/bin/python3` (system Python) or set `PYTHON=/usr/bin/python3` for the install command.
+- macOS install gotcha: Homebrew Python 3.14.6 ships a broken `pyexpat`, which makes node-gyp's setup crash before better-sqlite3 can build. Workaround: rerun the install with `npm rebuild better-sqlite3 --python=/usr/bin/python3` (system Python) or set `PYTHON=/usr/bin/python3` for the install command.
 
-## Phase 3 — Migration tooling
+## Migration tooling
 
-Phase 3 makes the engine switch operational. Operators can copy a populated install between `fs` and `sqlite` either from the admin panel or from a CLI, with a one-shot read-only freeze on the source engine while the copy runs.
+Operators can copy a populated install between any pair of engines either from the admin panel or from a CLI, with a one-shot read-only freeze on the source engine while the copy runs.
 
 ### Read-only mode
 
@@ -231,9 +212,9 @@ All seven Repos participate: every write method (`save`, `patch`, `delete`, `ren
 
 | File | Exports |
 |---|---|
-| `runner.js` | `MigrationRunner` — per-user async runner. Takes pre-built source and destination Repo sets and walks each user through three phases: snapshot, copy, verify. |
+| `runner.js` | `MigrationRunner` — per-user async runner. Takes pre-built source and destination Repo sets and walks each user through three steps: snapshot, copy, verify. |
 | `backup.js` | `snapshotUser({ handle, userRoot, backupRoot })` — recursive directory copy. Backups are timestamped (`<iso8601>-<handle>/`) and never auto-deleted. |
-| `equality.js` | `stripChatEngineMeta(record)`, `recordsEqual(kind, a, b)`. Shared between the round-trip tests and the runner's verification step. Strips both the top-level `integrity` field and the embedded `header.chat_metadata.integrity` for chat records — a load-bearing detail surfaced by Phase 2's round-trip suite. |
+| `equality.js` | `stripChatEngineMeta(record)`, `recordsEqual(kind, a, b)`. Shared between the round-trip tests and the runner's verification step. Strips both the top-level `integrity` field and the embedded `header.chat_metadata.integrity` for chat records — a load-bearing detail surfaced by the round-trip suite. |
 
 The runner writes to the destination through `withReadOnlyBypass` so the source remains frozen end-to-end.
 
@@ -296,7 +277,7 @@ Reads `./config.yaml` from the CWD (so the script assumes you ran it from the re
 - Format: verbatim recursive copy of the source user directory. For FS users this captures the JSONL/JSON tree; for SQLite users it captures the `.sqlite` file along with its `-wal` and `-shm` sidecars.
 - **Never auto-deleted.** Operators clean up manually with `rm -rf`. The cost of disk usage is intentional — the backup is the only safety net if a migration produces wrong data on the destination and the operator doesn't notice until after re-saving.
 
-### Migration semantics (carry-over from Phase 2 + Phase 3 discoveries)
+### Migration semantics
 
 - **Timestamps reset on migration.** FS uses `mtimeMs`; SQLite stores `Date.now()` at save. The destination's `updatedAt` will reflect "when migrated", not "when originally saved". `/api/chats/recent` ordering is scrambled until users save chats again.
 - **Chat integrity slug rotates per engine.** The runner's verification strips integrity (both top-level and embedded in the header) before equality check. End users will see new integrity values after migration; OCC retries on the next save are normal.
@@ -305,7 +286,7 @@ Reads `./config.yaml` from the CWD (so the script assumes you ran it from the re
 
 ### Multi-process safety
 
-The `READ_ONLY` flag lives in module-local state inside one Node process. If Luker is deployed as multiple Node processes behind a load balancer, the flag does **not** propagate between processes. Single-process Luker is the only supported deployment for migration; multi-process deployments must coordinate externally (admin downtime window) before triggering migration on one node.
+The read-only flag lives in module-local state inside one Node process. If Luker is deployed as multiple Node processes behind a load balancer, the flag does **not** propagate between processes. Single-process Luker is the only supported deployment for migration; multi-process deployments must coordinate externally (admin downtime window) before triggering migration on one node.
 
 ### Recovery
 
@@ -322,3 +303,7 @@ The backup at `<dataRoot>/_storage-migrations/<timestamp>-<handle>/` is the safe
 rm -rf <dataRoot>/<handle>/
 mv <dataRoot>/_storage-migrations/<timestamp>-<handle>/<handle>/ <dataRoot>/<handle>/
 ```
+
+### Switching modes without migration
+
+Switching `storage.mode` on a populated install **does not delete data** — the other engine's data files (the JSONL/JSON tree, or the `luker-storage.sqlite` file) are left untouched. However, the running engine only sees its own backing store, so the other engine's data becomes **invisible** until you switch back. For first installs or empty users, switching is safe.
