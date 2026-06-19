@@ -22,20 +22,15 @@ function isKnownAvatar(ctx, avatar) {
     return list.some(c => String(c?.avatar || '') === avatar);
 }
 
-async function readSidecar(ctx, avatar) {
-    try {
-        const raw = await ctx.getCharacterState(avatar, CEA_SIDECAR_NAMESPACE);
-        if (raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object') {
-            return raw;
+async function mergeSessionsIntoSidecar(ctx, avatar, newSessions) {
+    await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) => {
+        const base = (current && typeof current === 'object' && current.sessions && typeof current.sessions === 'object')
+            ? { ...current.sessions }
+            : {};
+        for (const [sid, session] of Object.entries(newSessions)) {
+            base[sid] = session;
         }
-    } catch { /* ignore */ }
-    return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
-}
-
-async function writeSidecar(ctx, avatar, sessions) {
-    await ctx.setCharacterState(avatar, CEA_SIDECAR_NAMESPACE, {
-        version: SIDECAR_SCHEMA_VERSION,
-        sessions,
+        return { version: SIDECAR_SCHEMA_VERSION, sessions: base };
     });
 }
 
@@ -81,11 +76,7 @@ export async function migrateCeaSessionsV2ToSidecar({ settingsRoot, ctx, persist
             continue;
         }
         try {
-            const payload = await readSidecar(ctx, avatar);
-            for (const [sid, session] of Object.entries(sessionMap)) {
-                payload.sessions[sid] = session;
-            }
-            await writeSidecar(ctx, avatar, payload.sessions);
+            await mergeSessionsIntoSidecar(ctx, avatar, sessionMap);
             migrated += Object.keys(sessionMap).length;
         } catch (err) {
             console.warn(`[CEA editor migration] sidecar write failed for ${avatar}:`, err?.message || err);

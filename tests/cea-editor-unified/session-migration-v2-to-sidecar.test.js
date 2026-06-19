@@ -2,6 +2,19 @@ import { describe, test, expect, jest } from '@jest/globals';
 import { migrateCeaSessionsV2ToSidecar, CEA_MIGRATION_FLAG_KEY } from '../../public/scripts/extensions/character-editor-assistant/editor-iteration/session-migration-v2-to-sidecar.js';
 import { CEA_SIDECAR_NAMESPACE } from '../../public/scripts/extensions/character-editor-assistant/editor-iteration/session-store.js';
 
+function makeUpdateStub(sidecars) {
+    return jest.fn(async (a, ns, updater) => {
+        const current = sidecars[`${a}:${ns}`] || null;
+        const next = await updater(
+            current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+            { attempt: 0, avatar: a, namespace: ns },
+        );
+        if (next == null) return { ok: true, state: current, updated: false };
+        sidecars[`${a}:${ns}`] = next;
+        return { ok: true, state: next, updated: true };
+    });
+}
+
 describe('migrateCeaSessionsV2ToSidecar', () => {
     test('moves char_<avatar> buckets from unified_cea_editor_sessions into sidecars', async () => {
         const settingsRoot = {
@@ -13,7 +26,7 @@ describe('migrateCeaSessionsV2ToSidecar', () => {
         const sidecars = {};
         const ctx = {
             getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
-            setCharacterState: jest.fn(async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; }),
+            updateCharacterState: makeUpdateStub(sidecars),
             characters: [{ avatar: 'alice.png' }, { avatar: 'bob.png' }],
         };
         const persistSettings = jest.fn();
@@ -31,10 +44,10 @@ describe('migrateCeaSessionsV2ToSidecar', () => {
 
     test('is idempotent — second run is a no-op', async () => {
         const settingsRoot = { [CEA_MIGRATION_FLAG_KEY]: true };
-        const ctx = { getCharacterState: jest.fn(), setCharacterState: jest.fn(), characters: [] };
+        const ctx = { getCharacterState: jest.fn(), updateCharacterState: jest.fn(), characters: [] };
         const result = await migrateCeaSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings: jest.fn() });
         expect(result.migrated).toBe(0);
-        expect(ctx.setCharacterState).not.toHaveBeenCalled();
+        expect(ctx.updateCharacterState).not.toHaveBeenCalled();
     });
 
     test('skips when avatar not in character list, leaves the V2 entry in place', async () => {
@@ -45,7 +58,7 @@ describe('migrateCeaSessionsV2ToSidecar', () => {
         };
         const ctx = {
             getCharacterState: jest.fn(),
-            setCharacterState: jest.fn(),
+            updateCharacterState: jest.fn(),
             characters: [{ avatar: 'alice.png' }],
         };
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -60,7 +73,7 @@ describe('migrateCeaSessionsV2ToSidecar', () => {
                 'global': { 's1': { id: 's1', updatedAt: 1 } },
             },
         };
-        const ctx = { getCharacterState: jest.fn(), setCharacterState: jest.fn(), characters: [] };
+        const ctx = { getCharacterState: jest.fn(), updateCharacterState: jest.fn(), characters: [] };
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
         const result = await migrateCeaSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings: jest.fn() });
         expect(result.skipped).toBe(1);
@@ -76,7 +89,7 @@ describe('migrateCeaSessionsV2ToSidecar', () => {
         };
         const ctx = {
             getCharacterState: jest.fn(),
-            setCharacterState: jest.fn(),
+            updateCharacterState: jest.fn(),
             characters: [{ avatar: 'alice.png' }],
         };
         const persistSettings = jest.fn();
@@ -87,6 +100,6 @@ describe('migrateCeaSessionsV2ToSidecar', () => {
         expect(result.skipped).toBe(0);
         expect(settingsRoot.unified_cea_editor_sessions).toBeUndefined();
         expect(settingsRoot[CEA_MIGRATION_FLAG_KEY]).toBe(true);
-        expect(ctx.setCharacterState).not.toHaveBeenCalled();
+        expect(ctx.updateCharacterState).not.toHaveBeenCalled();
     });
 });

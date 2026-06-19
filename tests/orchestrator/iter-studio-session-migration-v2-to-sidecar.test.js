@@ -2,6 +2,20 @@ import { describe, test, expect, jest } from '@jest/globals';
 import { migrateOrchSessionsV2ToSidecar, MIGRATION_FLAG_KEY } from '../../public/scripts/extensions/orchestrator/iter-studio/session-migration-v2-to-sidecar.js';
 import { ORCH_SIDECAR_NAMESPACE, ORCH_GLOBAL_BUCKET_KEY } from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
 
+function makeUpdateStub(sidecars, { onWrite = null } = {}) {
+    return jest.fn(async (a, ns, updater) => {
+        const current = sidecars[`${a}:${ns}`] || null;
+        const next = await updater(
+            current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
+            { attempt: 0, avatar: a, namespace: ns },
+        );
+        if (next == null) return { ok: true, state: current, updated: false };
+        if (typeof onWrite === 'function') onWrite();
+        sidecars[`${a}:${ns}`] = next;
+        return { ok: true, state: next, updated: true };
+    });
+}
+
 describe('migrateOrchSessionsV2ToSidecar', () => {
     test('moves character-scoped sessions out of iterStudioV2 and into per-character sidecars', async () => {
         const settingsRoot = {
@@ -22,7 +36,7 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         const sidecars = {};
         const ctx = {
             getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
-            setCharacterState: jest.fn(async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; }),
+            updateCharacterState: makeUpdateStub(sidecars),
             characters: [{ avatar: 'alice.png' }, { avatar: 'bob.png' }],
         };
         const persistSettings = jest.fn();
@@ -44,13 +58,13 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         const settingsRoot = { [MIGRATION_FLAG_KEY]: true };
         const ctx = {
             getCharacterState: jest.fn(),
-            setCharacterState: jest.fn(),
+            updateCharacterState: jest.fn(),
             characters: [],
         };
         const result = await migrateOrchSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings: jest.fn() });
         expect(result.skipped).toBe(0);
         expect(result.migrated).toBe(0);
-        expect(ctx.setCharacterState).not.toHaveBeenCalled();
+        expect(ctx.updateCharacterState).not.toHaveBeenCalled();
     });
 
     test('skips and warns when a target avatar is not in the character list (no destructive write)', async () => {
@@ -65,7 +79,7 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         };
         const ctx = {
             getCharacterState: jest.fn(),
-            setCharacterState: jest.fn(),
+            updateCharacterState: jest.fn(),
             characters: [{ avatar: 'alice.png' }],
         };
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -74,7 +88,7 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
 
         expect(result.skipped).toBe(1);
         expect(result.migrated).toBe(0);
-        expect(ctx.setCharacterState).not.toHaveBeenCalled();
+        expect(ctx.updateCharacterState).not.toHaveBeenCalled();
         expect(settingsRoot.iterStudioV2.director['character_ghost.png'].s1).toBeDefined();
         warnSpy.mockRestore();
     });
@@ -91,7 +105,7 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         };
         const ctx = {
             getCharacterState: jest.fn(async () => null),
-            setCharacterState: jest.fn(async () => { throw new Error('disk full'); }),
+            updateCharacterState: jest.fn(async () => { throw new Error('disk full'); }),
             characters: [{ avatar: 'alice.png' }],
         };
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -120,7 +134,7 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         };
         const ctx = {
             getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
-            setCharacterState: jest.fn(async (a, ns, data) => { sidecars[`${a}:${ns}`] = data; }),
+            updateCharacterState: makeUpdateStub(sidecars),
             characters: [{ avatar: 'alice.png' }],
         };
         await migrateOrchSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings: jest.fn() });
@@ -140,7 +154,7 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         };
         const ctx = {
             getCharacterState: jest.fn(),
-            setCharacterState: jest.fn(),
+            updateCharacterState: jest.fn(),
             characters: [{ avatar: 'alice.png' }],
         };
         const persistSettings = jest.fn();
