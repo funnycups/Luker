@@ -1467,7 +1467,10 @@ class PromptManager {
         this.error = null;
         const requestId = ++this.renderRequestId;
 
-        waitUntilCondition(() => !is_send_press && !is_group_generating, 1024 * 1024, 100).then(async () => {
+        waitUntilCondition(() => !is_send_press && !is_group_generating, 1024 * 1024, 100).catch(() => {
+            console.log('Timeout while waiting for send press to be false');
+            throw new Error('prompt-manager-render-skip');
+        }).then(async () => {
             if (requestId !== this.renderRequestId) {
                 return;
             }
@@ -1492,8 +1495,10 @@ class PromptManager {
             if (true === afterTryGenerate) {
                 this.scheduleDeferredTryGenerate(requestId);
             }
-        }).catch(() => {
-            console.log('Timeout while waiting for send press to be false');
+        }).catch((err) => {
+            if (err?.message === 'prompt-manager-render-skip') return;
+            console.error('PromptManager render failed:', err);
+            try { toastr.error(t`Prompt manager render failed: ${String(err?.message || err)}`); } catch { /* toastr unavailable */ }
         });
     }
 
