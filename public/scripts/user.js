@@ -2770,6 +2770,92 @@ async function openAdminPanel() {
         postgresPanel.toggle(targetMode === 'postgres');
     }
 
+    function formatStorageMigrationCounts(counts) {
+        if (!counts) return '';
+        return [
+            `chats=${counts.chats ?? 0}`,
+            `presets=${counts.presets ?? 0}`,
+            `worlds=${counts.worlds ?? 0}`,
+            `named=${counts.named_docs ?? 0}`,
+            `groups=${counts.groups ?? 0}`,
+            `settings=${counts.settings ?? 0}`,
+        ].join(' ');
+    }
+
+    function renderStorageMigrationProgress(el, status) {
+        const state = status?.state;
+        if (!state || !state.perUser) {
+            el.text(t`Migration in progress. This may take several minutes.`);
+            return;
+        }
+        const handles = Object.keys(state.perUser);
+        const total = handles.length;
+        const doneCount = handles.filter(h => state.perUser[h]?.status === 'done').length;
+        const failedCount = handles.filter(h => state.perUser[h]?.status === 'failed').length;
+
+        const lines = [];
+        const headerParts = [
+            `${t`Target:`} ${state.targetMode}`,
+            `${t`Started:`} ${state.startedAt}`,
+        ];
+        if (typeof state.staleSeconds === 'number') {
+            headerParts.push(`${t`last progress`} ${state.staleSeconds}s`);
+        }
+        lines.push(headerParts.join('  ·  '));
+        lines.push(`${t`Progress:`} ${doneCount}/${total} ${t`done`}${failedCount > 0 ? `, ${failedCount} ${t`failed`}` : ''}`);
+        lines.push('');
+
+        handles.forEach((handle, idx) => {
+            const entry = state.perUser[handle] ?? { status: 'pending' };
+            const indent = `[${idx + 1}/${total}] ${handle}`;
+            if (entry.status === 'done') {
+                const counts = formatStorageMigrationCounts(entry.counts);
+                lines.push(`${indent}  ${t`done`}   ${counts}`);
+            } else if (entry.status === 'failed') {
+                lines.push(`${indent}  ${t`failed`}   ${entry.error || ''}`);
+                if (entry.counts) {
+                    lines.push(`    ${t`so far:`} ${formatStorageMigrationCounts(entry.counts)}`);
+                }
+            } else if (entry.status === 'in_flight') {
+                const stage = entry.stage ? ` ${entry.stage}` : ` ${t`starting`}`;
+                lines.push(`${indent}  ${t`in flight`}${stage}`);
+                if (entry.counts) {
+                    lines.push(`    ${t`so far:`} ${formatStorageMigrationCounts(entry.counts)}`);
+                }
+            } else {
+                lines.push(`${indent}  ${t`pending`}`);
+            }
+        });
+        el.text(lines.join('\n'));
+    }
+
+    function startStorageMigrationProgressPolling(template, { onIdle = null, intervalMs = 1000 } = {}) {
+        const resultEl = template.find('.storageBackendResult');
+        let stopped = false;
+        let timer = null;
+        const poll = async () => {
+            if (stopped) return;
+            try {
+                const status = await fetchStorageBackendStatus();
+                if (stopped) return;
+                renderStorageMigrationProgress(resultEl, status);
+                if (!status.migrationInProgress && typeof onIdle === 'function') {
+                    onIdle(status);
+                    return;
+                }
+            } catch (err) {
+                console.warn('Storage migration progress poll failed:', err);
+            } finally {
+                if (!stopped) timer = setTimeout(poll, intervalMs);
+            }
+        };
+        timer = setTimeout(poll, intervalMs);
+        return () => {
+            stopped = true;
+            if (timer != null) clearTimeout(timer);
+        };
+    }
+
     function renderStorageMigrationResult(el, result) {
         const lines = [];
         if (typeof result.durationMs === 'number') {
@@ -2839,7 +2925,16 @@ async function openAdminPanel() {
 
             if (status.migrationInProgress) {
                 migrateButton.addClass('disabled').prop('disabled', true);
-                section.find('.storageBackendResult').text(t`A migration is currently in progress on the server. Please wait.`);
+                renderStorageMigrationProgress(section.find('.storageBackendResult'), status);
+                // Poll until the in-flight migration (started in another tab,
+                // or from the CLI on the same host) completes; the onIdle hook
+                // re-renders the dashboard once the server flips back to idle.
+                const stopPolling = startStorageMigrationProgressPolling(template, {
+                    onIdle: async () => {
+                        stopPolling();
+                        await renderStorageBackend();
+                    },
+                });
             }
         } catch (err) {
             console.error('Failed to load storage backend status:', err);
@@ -2972,8 +3067,10 @@ async function openAdminPanel() {
         label.text(t`Migration in progress, do not refresh...`);
         resultEl.text(t`Migration in progress. This may take several minutes.`);
 
+        const stopPolling = startStorageMigrationProgressPolling(template);
         try {
             const response = await triggerStorageBackendMigration(targetMode, dbCreds);
+            stopPolling();
             if (response.ok && response.data?.ok) {
                 toastr.success(t`Migration complete.`);
                 renderStorageMigrationResult(resultEl, response.data);
@@ -2982,10 +3079,12 @@ async function openAdminPanel() {
                 renderStorageMigrationResult(resultEl, response.data || { message: t`Migration failed.` });
             }
         } catch (err) {
+            stopPolling();
             console.error('Storage migration request failed:', err);
             toastr.error(err.message || t`Migration failed.`);
             resultEl.text(String(err.message || err));
         } finally {
+            stopPolling();
             label.text(originalLabel);
             // Refresh status — this also re-disables the radio matching the new current mode.
             await renderStorageBackend();

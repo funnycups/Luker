@@ -1,7 +1,7 @@
 import { describe, test, expect } from '@jest/globals';
 import {
     computeFingerprint, createState, shouldResume,
-    pendingHandles, markDone, markFailed,
+    pendingHandles, markStart, markStage, markDone, markFailed,
     isAllDone, serializeStatus,
 } from '../../../src/storage/migration/state.js';
 
@@ -111,5 +111,55 @@ describe('serializeStatus', () => {
         expect(view.targetMode).toBe('postgres');
         expect(view.staleSeconds).toBe(300);
         expect(view.perUser).toEqual({ a: { status: 'pending' } });
+    });
+});
+
+describe('markStart + markStage + markDone progress lifecycle', () => {
+    test('markStart flips pending -> in_flight and refreshes lastProgressAt', () => {
+        const state = createState({
+            targetMode: 'sqlite', fingerprint: 'f', handles: ['a'], now: '2026-06-19T00:00:00.000Z',
+        });
+        markStart(state, 'a', '2026-06-19T00:00:01.000Z');
+        expect(state.perUser.a.status).toBe('in_flight');
+        expect(state.perUser.a.startedAt).toBe('2026-06-19T00:00:01.000Z');
+        expect(state.lastProgressAt).toBe('2026-06-19T00:00:01.000Z');
+    });
+
+    test('markStage attaches stage + counts and updates lastProgressAt', () => {
+        const state = createState({
+            targetMode: 'sqlite', fingerprint: 'f', handles: ['a'], now: '2026-06-19T00:00:00.000Z',
+        });
+        markStart(state, 'a', '2026-06-19T00:00:01.000Z');
+        markStage(state, 'a', {
+            stage: 'chats-copied',
+            counts: { chats: 12, presets: 4, worlds: 1, settings: 1, preset_states: 0, named_docs: 0, groups: 0, chat_states: 0, stats: 0 },
+        }, '2026-06-19T00:00:05.000Z');
+        expect(state.perUser.a.stage).toBe('chats-copied');
+        expect(state.perUser.a.counts.chats).toBe(12);
+        expect(state.lastProgressAt).toBe('2026-06-19T00:00:05.000Z');
+    });
+
+    test('markStage is a no-op once the user is done', () => {
+        const state = createState({
+            targetMode: 'sqlite', fingerprint: 'f', handles: ['a'], now: '2026-06-19T00:00:00.000Z',
+        });
+        markStart(state, 'a', '2026-06-19T00:00:01.000Z');
+        markDone(state, 'a', '2026-06-19T00:00:10.000Z', { chats: 100 });
+        markStage(state, 'a', { stage: 'verifying', counts: { chats: 50 } }, '2026-06-19T00:00:11.000Z');
+        expect(state.perUser.a.status).toBe('done');
+        expect(state.perUser.a.counts.chats).toBe(100);
+    });
+
+    test('markFailed preserves last in-flight counts for the UI', () => {
+        const state = createState({
+            targetMode: 'sqlite', fingerprint: 'f', handles: ['a'], now: '2026-06-19T00:00:00.000Z',
+        });
+        markStart(state, 'a', '2026-06-19T00:00:01.000Z');
+        markStage(state, 'a', { stage: 'chats-copied', counts: { chats: 7 } }, '2026-06-19T00:00:05.000Z');
+        markFailed(state, 'a', 'boom', '2026-06-19T00:00:06.000Z');
+        expect(state.perUser.a.status).toBe('failed');
+        expect(state.perUser.a.error).toBe('boom');
+        expect(state.perUser.a.stage).toBe('chats-copied');
+        expect(state.perUser.a.counts.chats).toBe(7);
     });
 });

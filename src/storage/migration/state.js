@@ -44,24 +44,57 @@ export function pendingHandles(state) {
         .map(([handle]) => handle);
 }
 
-function touchProgress(state, now) {
-    state.lastProgressAt = typeof now === 'string' ? now : new Date(now).toISOString();
-}
-
 export function markStart(state, handle, now) {
-    if (!state.perUser[handle]) state.perUser[handle] = { status: 'pending' };
-    touchProgress(state, now);
+    const isoNow = typeof now === 'string' ? now : new Date(now).toISOString();
+    if (!state.perUser[handle] || state.perUser[handle].status !== 'done') {
+        state.perUser[handle] = { status: 'in_flight', startedAt: isoNow };
+    }
+    state.lastProgressAt = isoNow;
 }
 
-export function markDone(state, handle, now) {
+/**
+ * Record an in-flight stage transition for `handle`. Carries the runner-emitted
+ * stage name (`settings-copied`, `chats-copied`, …) plus the running counts
+ * snapshot so `/storage/status` callers can render "so far: chats=12 presets=4"
+ * without waiting for the user to finish.
+ *
+ * Ignored if the user is already `done` (a late onProgress firing after the
+ * runner returned won't clobber the terminal state).
+ */
+export function markStage(state, handle, { stage, counts } = {}, now) {
+    const entry = state.perUser[handle];
+    if (!entry || entry.status === 'done' || entry.status === 'failed') return;
     const isoNow = typeof now === 'string' ? now : new Date(now).toISOString();
-    state.perUser[handle] = { status: 'done', completedAt: isoNow };
+    state.perUser[handle] = {
+        ...entry,
+        status: 'in_flight',
+        stage: stage ?? entry.stage ?? null,
+        counts: counts ?? entry.counts ?? null,
+    };
+    state.lastProgressAt = isoNow;
+}
+
+export function markDone(state, handle, now, counts = null) {
+    const isoNow = typeof now === 'string' ? now : new Date(now).toISOString();
+    const prev = state.perUser[handle] ?? {};
+    state.perUser[handle] = {
+        status: 'done',
+        completedAt: isoNow,
+        stage: 'done',
+        counts: counts ?? prev.counts ?? null,
+    };
     state.lastProgressAt = isoNow;
 }
 
 export function markFailed(state, handle, errMsg, now) {
     const isoNow = typeof now === 'string' ? now : new Date(now).toISOString();
-    state.perUser[handle] = { status: 'failed', error: String(errMsg ?? 'unknown error') };
+    const prev = state.perUser[handle] ?? {};
+    state.perUser[handle] = {
+        status: 'failed',
+        error: String(errMsg ?? 'unknown error'),
+        stage: prev.stage ?? null,
+        counts: prev.counts ?? null,
+    };
     state.lastProgressAt = isoNow;
 }
 

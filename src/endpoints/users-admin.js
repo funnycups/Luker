@@ -72,6 +72,7 @@ import {
     shouldResume,
     pendingHandles,
     markStart,
+    markStage,
     markDone,
     markFailed,
     isAllDone,
@@ -1160,13 +1161,27 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             for (const handle of toRun) {
                 markStart(_migrationState, handle, new Date().toISOString());
                 try {
-                    const onProgress = () => {
-                        // Refresh lastProgressAt on every runner-emitted stage so
-                        // /storage/status's staleSeconds reflects forward motion.
-                        _migrationState.lastProgressAt = new Date().toISOString();
+                    const onProgress = (event) => {
+                        // Each runner-emitted stage carries (stage, counts) so
+                        // /storage/status surfaces per-user progress while the
+                        // migration is mid-flight.
+                        markStage(_migrationState, handle, {
+                            stage: event?.stage ?? null,
+                            counts: event?.counts ?? null,
+                        }, new Date().toISOString());
                     };
-                    await runner.migrateUser(handle, { onProgress });
-                    markDone(_migrationState, handle, new Date().toISOString());
+                    const stats = await runner.migrateUser(handle, { onProgress });
+                    markDone(_migrationState, handle, new Date().toISOString(), {
+                        settings: stats.settings,
+                        presets: stats.presets,
+                        preset_states: stats.preset_states,
+                        worlds: stats.worlds,
+                        chats: stats.chats,
+                        chat_states: stats.chat_states,
+                        named_docs: stats.named_docs,
+                        groups: stats.groups,
+                        stats: stats.stats,
+                    });
                 } catch (err) {
                     markFailed(_migrationState, handle, err?.message || String(err), new Date().toISOString());
                     console.error(`Storage migration error for ${handle}:`, err);

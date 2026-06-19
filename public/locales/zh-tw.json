@@ -5692,4 +5692,11 @@
     ,"Migration failed.": "遷移失敗。"
     ,"Could not save to config.yaml: ${configPersistError}": "寫入 config.yaml 失敗：${configPersistError}"
     ,"Duration:": "耗時："
+    ,"Started:": "開始時間："
+    ,"last progress": "最近進度"
+    ,"Progress:": "進度："
+    ,"pending": "等待中"
+    ,"in flight": "進行中"
+    ,"starting": "啟動中"
+    ,"so far:": "目前進度："
 }

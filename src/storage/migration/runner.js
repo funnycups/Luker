@@ -4,6 +4,23 @@ import { BUCKET_TO_DIR } from '../repositories/named-doc-repo.js';
 import { snapshotUser } from './backup.js';
 import { recordsEqual } from './equality.js';
 
+// Subset of the per-user stats accumulator that callers care about for
+// in-flight progress. `errors` / `backupPath` / `verified` are only meaningful
+// at the end of migrateUser, so they're excluded.
+function snapshotCounts(stats) {
+    return {
+        settings: stats.settings,
+        presets: stats.presets,
+        preset_states: stats.preset_states,
+        worlds: stats.worlds,
+        chats: stats.chats,
+        chat_states: stats.chat_states,
+        named_docs: stats.named_docs,
+        groups: stats.groups,
+        stats: stats.stats,
+    };
+}
+
 /**
  * @typedef {object} RepoSet
  * @property {object} chat
@@ -91,7 +108,7 @@ export class MigrationRunner {
                     userRoot: this._snapshotPaths.getUserRoot(handle),
                     backupRoot: this._snapshotPaths.backupRoot,
                 });
-                onProgress({ stage: 'snapshotted', handle, backupPath: stats.backupPath });
+                onProgress({ stage: 'snapshotted', handle, backupPath: stats.backupPath, counts: snapshotCounts(stats) });
             } catch (err) {
                 stats.errors.push({ stage: 'snapshot', message: err.message });
                 throw new Error(`migration failed at snapshot for ${handle}: ${err.message}`);
@@ -123,18 +140,18 @@ export class MigrationRunner {
 
         // 3. Verify (skipped on dry-run since nothing was written).
         if (!this._dryRun) {
-            onProgress({ stage: 'verifying', handle });
+            onProgress({ stage: 'verifying', handle, counts: snapshotCounts(stats) });
             try {
                 await this._verify(handle, sourceData);
                 stats.verified = true;
-                onProgress({ stage: 'verified', handle });
+                onProgress({ stage: 'verified', handle, counts: snapshotCounts(stats) });
             } catch (err) {
                 stats.errors.push({ stage: 'verify', message: err.message });
                 throw new Error(`migration verification failed for ${handle}: ${err.message}`);
             }
         }
 
-        onProgress({ stage: 'done', handle, stats });
+        onProgress({ stage: 'done', handle, stats, counts: snapshotCounts(stats) });
         return stats;
     }
 
@@ -178,7 +195,7 @@ export class MigrationRunner {
             if (!this._dryRun) await this._dst.settings.save(handle, settings);
             stats.settings = 1;
         }
-        onProgress({ stage: 'settings-copied', handle });
+        onProgress({ stage: 'settings-copied', handle, counts: snapshotCounts(stats) });
 
         // Presets — iterate unique dirKeys; each dirKey may map from multiple
         // apiIds (kobold + koboldhorde share koboldAI_Settings). Use a Map from
@@ -206,7 +223,7 @@ export class MigrationRunner {
                 }
             }
         }
-        onProgress({ stage: 'presets-copied', handle });
+        onProgress({ stage: 'presets-copied', handle, counts: snapshotCounts(stats) });
 
         // Worlds
         const worldList = await this._src.worldInfo.list(handle);
@@ -218,7 +235,7 @@ export class MigrationRunner {
             if (!this._dryRun) await this._dst.worldInfo.save(handle, name, doc);
             stats.worlds++;
         }
-        onProgress({ stage: 'worlds-copied', handle });
+        onProgress({ stage: 'worlds-copied', handle, counts: snapshotCounts(stats) });
 
         // Chats — split into "per-character" and "group" tracks because the FS
         // engine's chat list only walks `chats/<charDir>/*.jsonl` and never the
@@ -301,7 +318,7 @@ export class MigrationRunner {
                 }
             }
         }
-        onProgress({ stage: 'chats-copied', handle });
+        onProgress({ stage: 'chats-copied', handle, counts: snapshotCounts(stats) });
 
         // Named-docs — iterate all known buckets.
         for (const bucket of Object.keys(BUCKET_TO_DIR)) {
@@ -315,7 +332,7 @@ export class MigrationRunner {
                 stats.named_docs++;
             }
         }
-        onProgress({ stage: 'named-docs-copied', handle });
+        onProgress({ stage: 'named-docs-copied', handle, counts: snapshotCounts(stats) });
 
         // Groups
         const groupList = await this._src.group.list(handle);
@@ -327,7 +344,7 @@ export class MigrationRunner {
             if (!this._dryRun) await this._dst.group.save(handle, id, doc);
             stats.groups++;
         }
-        onProgress({ stage: 'groups-copied', handle });
+        onProgress({ stage: 'groups-copied', handle, counts: snapshotCounts(stats) });
 
         // Stats
         const statsDoc = await this._src.stats.get(handle);
@@ -336,7 +353,7 @@ export class MigrationRunner {
             if (!this._dryRun) await this._dst.stats.save(handle, statsDoc);
             stats.stats = 1;
         }
-        onProgress({ stage: 'stats-copied', handle });
+        onProgress({ stage: 'stats-copied', handle, counts: snapshotCounts(stats) });
     }
 
     async _verify(handle, sourceData) {
