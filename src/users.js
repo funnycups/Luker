@@ -1276,6 +1276,19 @@ export function requireAdminMiddleware(request, response, next) {
 }
 
 /**
+ * Returns true when the request belongs to an admin, or when user accounts are disabled
+ * (single-user mode is implicitly admin).
+ * @param {import('express').Request} request Request
+ * @returns {boolean}
+ */
+export function isRequestAdmin(request) {
+    if (!ENABLE_ACCOUNTS) {
+        return true;
+    }
+    return Boolean(request?.user?.profile?.admin);
+}
+
+/**
  * Normalizes a backup category selection object.
  * @param {Record<string, boolean|string|number>|null|undefined} selectionInput Selection payload from the client
  * @returns {Record<string, boolean>} Normalized selection

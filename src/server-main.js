@@ -93,6 +93,7 @@ import {
     verifySecuritySettings,
     loginPageMiddleware,
     migratePublicOverrides,
+    isRequestAdmin,
 } from './users.js';
 import { initStorage } from './storage/index.js';
 
@@ -520,10 +521,12 @@ function redactDebugExportValue(value) {
 
 app.post('/api/debug/export', (request, response) => {
     const handle = String(request?.user?.profile?.handle || '');
+    const isAdmin = isRequestAdmin(request);
     const client = (request.body && typeof request.body === 'object') ? request.body : {};
 
     const bundle = {
         exportedAt: new Date().toISOString(),
+        scope: isAdmin ? 'admin' : 'user',
         client: {
             userAgent: typeof client.userAgent === 'string' ? client.userAgent : '',
             viewport: client.viewport && typeof client.viewport === 'object' ? client.viewport : null,
@@ -537,17 +540,20 @@ app.post('/api/debug/export', (request, response) => {
         frontendLogs: Array.isArray(client.frontendLogs) ? client.frontendLogs : [],
         performanceMarks: Array.isArray(client.performanceMarks) ? client.performanceMarks : [],
         performanceMeasures: Array.isArray(client.performanceMeasures) ? client.performanceMeasures : [],
-        backendLogs: backendLogBuffer,
         requestInspector: handle ? getInspectorBufferForHandle(handle) : [],
-        runtime: {
+    };
+
+    if (isAdmin) {
+        bundle.backendLogs = backendLogBuffer;
+        bundle.runtime = {
             node: process.version,
             platform: process.platform,
             arch: process.arch,
             uptime: process.uptime(),
             memory: process.memoryUsage(),
             cwd: serverDirectory,
-        },
-    };
+        };
+    }
 
     const redacted = redactDebugExportValue(bundle);
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
