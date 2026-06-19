@@ -30,6 +30,8 @@ const getContext = Luker.getContext;
 const extension_settings = __ctx.extensionSettings;
 const lukerGetCharacterState = __ctx.getCharacterState;
 const lukerSetCharacterState = __ctx.setCharacterState;
+const lukerUpdateCharacterState = __ctx.updateCharacterState;
+const lukerDeleteCharacterState = __ctx.deleteCharacterState;
 const executeSlashCommandsWithOptions = __ctx.executeSlashCommandsWithOptions;
 const removeReasoningFromString = __ctx.removeReasoningFromString;
 const loadWorldInfo = __ctx.loadWorldInfo;
@@ -499,7 +501,9 @@ export function buildContext(container, charId, config) {
 
         /**
          * Write character-bound sidecar state for the active character.
-         * Pass `null` as `data` to delete the namespace.
+         * Pass `null` as `data` to delete the namespace. Whole-object write —
+         * prefer `updateCharacterState` for non-trivial payloads so only the
+         * changed slice crosses the wire.
          * @param {string} namespace
          * @param {any} data
          * @returns {Promise<void>}
@@ -509,6 +513,37 @@ export function buildContext(container, charId, config) {
             const avatar = String(character?.avatar || '').trim();
             if (!avatar) throw new Error('[CardApp] No active character');
             return await lukerSetCharacterState(avatar, namespace, data);
+        },
+
+        /**
+         * Reducer-style write of character-bound sidecar state. The `updater`
+         * receives the current state (`{}` when none exists) and returns the
+         * next state; the diff is computed and shipped, so only changed
+         * fields cross the wire. Recommended for any non-trivial payload.
+         *
+         * @param {string} namespace
+         * @param {(current: object) => object | null | undefined | Promise<object | null | undefined>} updater
+         * @param {object} [options] - { maxOperations?, maxRetries?, asyncDiff? }
+         * @returns {Promise<{ok: boolean, state: object|null, updated: boolean, created?: boolean}>}
+         */
+        async updateCharacterState(namespace, updater, options = {}) {
+            const character = characters[__ctx.characterId];
+            const avatar = String(character?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            return await lukerUpdateCharacterState(avatar, namespace, updater, options);
+        },
+
+        /**
+         * Remove the character-state sidecar for this namespace. Idempotent —
+         * succeeds when the sidecar does not exist.
+         * @param {string} namespace
+         * @returns {Promise<void>}
+         */
+        async deleteCharacterState(namespace) {
+            const character = characters[__ctx.characterId];
+            const avatar = String(character?.avatar || '').trim();
+            if (!avatar) throw new Error('[CardApp] No active character');
+            return await lukerDeleteCharacterState(avatar, namespace);
         },
 
         // ==================== Chat Management ====================

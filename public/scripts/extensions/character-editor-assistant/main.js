@@ -29,7 +29,7 @@ const lodash = __ctx.lib.lodash;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const getCharacterState = __ctx.getCharacterState;
-const setCharacterState = __ctx.setCharacterState;
+const updateCharacterState = __ctx.updateCharacterState;
 const addLocaleData = __ctx.addLocaleData;
 const translate = __ctx.translate;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
@@ -776,7 +776,10 @@ async function getOperationStateSidecar(context, avatar) {
 }
 
 async function setOperationStateSidecar(context, avatar, state) {
-    await setCharacterState(avatar, MODULE_NAME, clone(state));
+    // Caller (persistOperationState) has already computed the full next state,
+    // so the reducer returns it verbatim. updateCharacterState still diffs
+    // against the server snapshot and ships only the changed slice on the wire.
+    await updateCharacterState(avatar, MODULE_NAME, () => clone(state));
 }
 
 async function loadOperationState(context, { force = false, avatar = '' } = {}) {
@@ -997,11 +1000,10 @@ export async function readLegacyCharIterPopupSessions(context, avatar) {
 }
 
 async function persistCharacterEditorSessionStore(context, avatar, store) {
-    await setCharacterState(
-        avatar,
-        CHARACTER_EDITOR_SESSION_NAMESPACE,
-        normalizeCharacterEditorSessionStore(store),
-    );
+    const next = normalizeCharacterEditorSessionStore(store);
+    // See setOperationStateSidecar — caller already produced the full bundle;
+    // updateCharacterState's diff cuts the wire payload to just what changed.
+    await updateCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE, () => next);
 }
 
 function upsertCharacterEditorSession(store, session) {

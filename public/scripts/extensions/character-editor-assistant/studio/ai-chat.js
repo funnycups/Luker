@@ -1688,7 +1688,8 @@ Once the layer set is decided, move on to the actual card content (description, 
 - ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound state.
 - ctx.deleteChatState(namespace, options?) async — Drop a chat-bound state namespace.
 - ctx.getCharacterState(namespace) async — Read character-bound state (avatar auto-resolved). Survives across every chat with this character — for plugin/CardApp config, not per-run state.
-- ctx.setCharacterState(namespace, data) async — Write character-bound state (avatar auto-resolved). Pass null to delete.
+- ctx.updateCharacterState(namespace, updater, options?) async — Reducer-style write of character-bound state. Returns { ok, state, updated }.
+- ctx.setCharacterState(namespace, data) async — Whole-object write of character-bound state. Pass null to delete. Prefer updateCharacterState for non-trivial payloads.
 
 ### Chat Management
 - ctx.getChatList() — List all chats for this character

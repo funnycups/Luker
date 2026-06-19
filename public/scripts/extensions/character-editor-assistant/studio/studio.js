@@ -15,7 +15,8 @@ const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const getExtensionApi = __ctx.getExtensionApi;
 const getCharacterState = __ctx.getCharacterState;
-const setCharacterState = __ctx.setCharacterState;
+const updateCharacterState = __ctx.updateCharacterState;
+const deleteCharacterState = __ctx.deleteCharacterState;
 import { sendAIMessage, TOOL_NAMES } from './ai-chat.js';
 
 // Markdown converter for AI messages
@@ -122,7 +123,7 @@ async function loadAllSessions() {
                     },
                 ],
             };
-            await setCharacterState(avatar, SESSION_NAMESPACE, migrated);
+            await updateCharacterState(avatar, SESSION_NAMESPACE, () => migrated);
             return migrated.sessions;
         }
         
@@ -153,7 +154,7 @@ async function saveAllSessions(sessions) {
                 messages: s.messages.slice(-MAX_PERSISTED_MESSAGES),
             })),
         };
-        await setCharacterState(avatar, SESSION_NAMESPACE, data);
+        await updateCharacterState(avatar, SESSION_NAMESPACE, () => data);
     } catch (err) {
         console.warn(`[${MODULE_NAME}] Failed to save sessions to sidecar:`, err);
     }
@@ -230,7 +231,7 @@ async function clearSession() {
     const avatar = getCurrentAvatar();
     if (!avatar) return;
     try {
-        await setCharacterState(avatar, SESSION_NAMESPACE, null);
+        await deleteCharacterState(avatar, SESSION_NAMESPACE);
     } catch (err) {
         console.warn(`[${MODULE_NAME}] Failed to clear session from sidecar:`, err);
     }
@@ -372,7 +373,9 @@ function createCtxCompletionSource(cm) {
         { label: 'ctx.patchChatState', type: 'method', info: 'async — Apply JSON-patch ops to chat-bound sidecar', detail: '(namespace: string, operations: object[], options?: object) => Promise<boolean>' },
         { label: 'ctx.deleteChatState', type: 'method', info: 'async — Drop a chat-bound sidecar namespace', detail: '(namespace: string, options?: object) => Promise<boolean>' },
         { label: 'ctx.getCharacterState', type: 'method', info: 'async — Read character-bound sidecar (avatar auto-resolved)', detail: '(namespace: string) => Promise<any>' },
-        { label: 'ctx.setCharacterState', type: 'method', info: 'async — Write character-bound sidecar (avatar auto-resolved). Pass null to delete.', detail: '(namespace: string, data: any) => Promise<void>' },
+        { label: 'ctx.updateCharacterState', type: 'method', info: 'async — Reducer-style write of character-bound sidecar', detail: '(namespace: string, updater: (current: object) => object|null, options?: object) => Promise<{ok: boolean, state: object|null, updated: boolean}>' },
+        { label: 'ctx.setCharacterState', type: 'method', info: 'async — Whole-object write of character-bound sidecar (avatar auto-resolved). Pass null to delete. Prefer updateCharacterState for non-trivial payloads.', detail: '(namespace: string, data: any) => Promise<void>' },
+        { label: 'ctx.deleteCharacterState', type: 'method', info: 'async — Drop a character-bound sidecar namespace', detail: '(namespace: string) => Promise<void>' },
     ];
 
     return function ctxCompletion(context) {
