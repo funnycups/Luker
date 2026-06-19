@@ -194,15 +194,16 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
         expect(after.tools.finalize).toBe(true);
     });
 
-    test('numeric clamps from sanitizer apply to patched fields', () => {
-        // max_rounds is clamped into [1, 50]; wall_clock_budget_ms is
-        // floored at 10000ms by sanitizeLoopProfile. The patch helper
-        // does no clamping of its own — it relies on sanitizer.
+    test('numeric floors from sanitizer apply to patched fields', () => {
+        // max_rounds is floored at 1 and wall_clock_budget_ms is floored
+        // at 10000ms by sanitizeLoopProfile. The patch helper does no
+        // clamping of its own — it relies on sanitizer. There is no
+        // upper bound: large values pass through unchanged.
         const out = applyLoopProfilePatchArgs(baseProfile(), {
             max_rounds: 9999,
             wall_clock_budget_ms: 100,
         });
-        expect(out.max_rounds).toBe(50);
+        expect(out.max_rounds).toBe(9999);
         expect(out.wall_clock_budget_ms).toBe(10000);
     });
 

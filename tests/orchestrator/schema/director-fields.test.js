@@ -493,7 +493,7 @@ describe('director schema fields', () => {
         expect(sanitized.subAgents[0].description).toBe('second');
     });
 
-    test('sanitizeDirectorProfile clamps numeric limits to sane ranges', () => {
+    test('sanitizeDirectorProfile floors numeric limits but accepts arbitrary positive values', () => {
         const profile = {
             mode: 'director',
             director: {
@@ -501,13 +501,13 @@ describe('director schema fields', () => {
                 subAgents: [],
                 maxRounds: -5,                  // → 1
                 maxConcurrentSubagents: 0,      // → 1
-                maxTotalSubagentRuns: 9999,     // → clamped to 100
+                maxTotalSubagentRuns: 9999,     // preserved
             },
         };
         const sanitized = sanitizeDirectorProfile(profile);
         expect(sanitized.maxRounds).toBeGreaterThanOrEqual(1);
         expect(sanitized.maxConcurrentSubagents).toBeGreaterThanOrEqual(1);
-        expect(sanitized.maxTotalSubagentRuns).toBeLessThanOrEqual(100);
+        expect(sanitized.maxTotalSubagentRuns).toBe(9999);
     });
 
     test('mainAgent.tools null/undefined → inherit (null after sanitize)', () => {

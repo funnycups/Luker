@@ -356,8 +356,8 @@ export async function executeDraftSearchTool(handle, args) {
  * memory_curator) doing schema + a few find_by_name + brief + 1-2 drill
  * calls fits in ~10-12 rounds. 16 gives those a comfortable headroom
  * without letting a runaway burn the whole turn. Users / AI iteration
- * can override per sub-agent via `subAgents[].maxRounds` (clamped to
- * [1, 50] by the sanitizer); `null` keeps this default.
+ * can override per sub-agent via `subAgents[].maxRounds` (any integer
+ * >= 1 after the sanitizer); `null` keeps this default.
  */
 const SUB_AGENT_MAX_ROUNDS = 16;
 
@@ -548,7 +548,7 @@ export function createSubagentDispatcher({
         // Transport-error retry honors `settings.toolCallRetryMax` —
         // same convention as `requestToolCallsWithRetry` (loop / agenda /
         // spec). User-initiated aborts re-throw without retry.
-        const transportRetries = Math.max(0, Math.min(10, Math.floor(Number(settings?.toolCallRetryMax) || 0)));
+        const transportRetries = Math.max(0, Math.floor(Number(settings?.toolCallRetryMax) || 0));
         let transportAttempt = 0;
         while (true) {
             let roundText = '';
@@ -720,7 +720,7 @@ export function createSubagentDispatcher({
         const reasoningSectionId = panelEnsureSection(roundId, 'reasoning', 'reasoning', i18n('Reasoning'), { isInline, task });
         const textSectionId = panelEnsureSection(roundId, 'text', 'text', i18n('Text'), { isInline });
         // Effective per-dispatch round cap: per-agent override if pinned,
-        // otherwise the module-level default. Already clamped to [1, 50]
+        // otherwise the module-level default. Already floored at 1
         // by the sanitizer for configured agents and by the inline-dispatch
         // tool schema for inline ones; the > 0 guard keeps a defensive
         // floor in case a caller passes 0 / negative.

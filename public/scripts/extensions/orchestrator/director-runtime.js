@@ -386,7 +386,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // Same range/parsing as tool-calling.js so user-facing semantics of
     // "Tool-call retries (on invalid/missing)" are uniform across
     // orchestrator modes. 0 = no retry (one shot, then throw).
-    const maxNoToolRetries = Math.max(0, Math.min(10, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0)));
+    const maxNoToolRetries = Math.max(0, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0));
     // Empty systemPrompt sends an empty instruction — defaults are
     // materialized into the profile at creation/reset time (see
     // `createDefaultDirectorProfile` in director-defaults.js and the
@@ -605,7 +605,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             // that wrapper (it needs onChunk for live UI), so we replicate
             // the retry semantics inline. User-initiated aborts re-throw
             // without retry.
-            const transportRetries = Math.max(0, Math.min(10, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0)));
+            const transportRetries = Math.max(0, Math.floor(Number(deps?.settings?.toolCallRetryMax) || 0));
             let transportAttempt = 0;
             while (true) {
                 try {

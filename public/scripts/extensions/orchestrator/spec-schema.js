@@ -206,10 +206,10 @@ export function getStageRuntimeMode(stage) {
 
 export function getNodeIterationMaxRounds(settings = null) {
     const source = settings && typeof settings === 'object' ? settings : extension_settings[MODULE_NAME];
-    return Math.max(1, Math.min(20, Math.floor(Number(source?.nodeIterationMaxRounds) || 0)));
+    return Math.max(1, Math.floor(Number(source?.nodeIterationMaxRounds) || 0));
 }
 
 export function getReviewRerunMaxRounds(settings = null) {
     const source = settings && typeof settings === 'object' ? settings : extension_settings[MODULE_NAME];
-    return Math.max(0, Math.min(20, Math.floor(Number(source?.reviewRerunMaxRounds) || 0)));
+    return Math.max(0, Math.floor(Number(source?.reviewRerunMaxRounds) || 0));
 }

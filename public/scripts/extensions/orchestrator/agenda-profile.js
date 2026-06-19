@@ -48,15 +48,15 @@ import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 const MODULE_NAME = 'orchestrator';
 
 export function getAgendaPlannerMaxRounds(source = extension_settings[MODULE_NAME]) {
-    return Math.max(1, Math.min(20, Math.floor(Number(source?.agendaPlannerMaxRounds) || 6)));
+    return Math.max(1, Math.floor(Number(source?.agendaPlannerMaxRounds) || 6));
 }
 
 export function getAgendaMaxConcurrentAgents(source = extension_settings[MODULE_NAME]) {
-    return Math.max(1, Math.min(12, Math.floor(Number(source?.agendaMaxConcurrentAgents) || 3)));
+    return Math.max(1, Math.floor(Number(source?.agendaMaxConcurrentAgents) || 3));
 }
 
 export function getAgendaMaxTotalRuns(source = extension_settings[MODULE_NAME]) {
-    return Math.max(1, Math.min(200, Math.floor(Number(source?.agendaMaxTotalRuns) || 24)));
+    return Math.max(1, Math.floor(Number(source?.agendaMaxTotalRuns) || 24));
 }
 
 export function buildAgendaAvailableAgentsText(profile = {}) {
@@ -107,9 +107,9 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
             ? finalAgentId
             : (agents.finalizer ? 'finalizer' : (Object.keys(agents)[0] || 'finalizer')),
         limits: {
-            plannerMaxRounds: Math.max(1, Math.min(20, Math.floor(Number(limitsSource?.plannerMaxRounds) || 6))),
-            maxConcurrentAgents: Math.max(1, Math.min(12, Math.floor(Number(limitsSource?.maxConcurrentAgents) || 3))),
-            maxTotalRuns: Math.max(1, Math.min(200, Math.floor(Number(limitsSource?.maxTotalRuns) || 24))),
+            plannerMaxRounds: Math.max(1, Math.floor(Number(limitsSource?.plannerMaxRounds) || 6)),
+            maxConcurrentAgents: Math.max(1, Math.floor(Number(limitsSource?.maxConcurrentAgents) || 3)),
+            maxTotalRuns: Math.max(1, Math.floor(Number(limitsSource?.maxTotalRuns) || 24)),
         },
         // null = no profile-level default (every agent inherits the
         // mode's all-off built-in unless they set their own `tools`).

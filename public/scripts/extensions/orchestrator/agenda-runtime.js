@@ -1005,7 +1005,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
     // the registry holds).
     const customToolRegistry = buildPerRunCustomToolRegistry(profile, trace, recordRuntimeEvent);
     syncAgendaTrace(trace, state);
-    const plannerMaxRounds = Math.min(getAgendaPlannerMaxRounds(settings), Math.max(1, Math.floor(Number(profile?.limits?.plannerMaxRounds) || getAgendaPlannerMaxRounds(settings))));
+    const plannerMaxRounds = Math.max(1, Math.floor(Number(profile?.limits?.plannerMaxRounds) || getAgendaPlannerMaxRounds(settings)));
     let finalizeReason = '';
 
     try {

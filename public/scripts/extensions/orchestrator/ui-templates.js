@@ -582,11 +582,11 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
             <label for="luker_orch_agenda_final_agent">${escapeHtml(i18n('Final Agent'))}</label>
             <select id="luker_orch_agenda_final_agent" data-scope="${safeScope}" class="text_pole">${renderAgendaAgentSelectOptions(deps, editor, editor?.finalAgentId)}</select>
             <label for="luker_orch_agenda_planner_rounds">${escapeHtml(i18n('Planner max rounds'))}</label>
-            <input id="luker_orch_agenda_planner_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" max="20" step="1" value="${escapeHtml(String(editor?.limits?.plannerMaxRounds || 6))}" />
+            <input id="luker_orch_agenda_planner_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.plannerMaxRounds || 6))}" />
             <label for="luker_orch_agenda_max_concurrent">${escapeHtml(i18n('Max concurrent agents'))}</label>
-            <input id="luker_orch_agenda_max_concurrent" data-scope="${safeScope}" class="text_pole" type="number" min="1" max="12" step="1" value="${escapeHtml(String(editor?.limits?.maxConcurrentAgents || 3))}" />
+            <input id="luker_orch_agenda_max_concurrent" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxConcurrentAgents || 3))}" />
             <label for="luker_orch_agenda_max_total_runs">${escapeHtml(i18n('Max total agent runs'))}</label>
-            <input id="luker_orch_agenda_max_total_runs" data-scope="${safeScope}" class="text_pole" type="number" min="1" max="200" step="1" value="${escapeHtml(String(editor?.limits?.maxTotalRuns || 24))}" />
+            <input id="luker_orch_agenda_max_total_runs" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxTotalRuns || 24))}" />
             <details class="luker_orch_skills_section">
                 <summary>${escapeHtml(i18n('Planner skills'))}</summary>
                 ${renderSkillChipsPlaceholder(deps, safeScope, {
@@ -728,9 +728,9 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
             <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
             <label for="luker_orch_loop_max_rounds">${escapeHtml(i18n('Loop max rounds'))}</label>
-            <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" max="50" step="1" value="${escapeHtml(String(editor?.max_rounds || 20))}" />
+            <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.max_rounds || 20))}" />
             <label for="luker_orch_loop_wall_clock">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
-            <input id="luker_orch_loop_wall_clock" data-scope="${safeScope}" class="text_pole" type="number" min="10" max="3600" step="1" value="${escapeHtml(String(wallClockSeconds))}" />
+            <input id="luker_orch_loop_wall_clock" data-scope="${safeScope}" class="text_pole" type="number" min="10" step="1" value="${escapeHtml(String(wallClockSeconds))}" />
         </div>
         <div class="luker-studio-workspace-col">
             <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop tools'))}</div>
@@ -794,8 +794,8 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
     const subagentTools = (safe.tools && typeof safe.tools === 'object') ? safe.tools : null;
     // Per-sub-agent runaway cap. `null` (default) means "inherit the
     // runtime default (16)"; the input shows the placeholder and renders
-    // empty so the user can leave it alone. An explicit integer in
-    // [1, 50] pins the cap for that one sub-agent.
+    // empty so the user can leave it alone. An explicit integer >= 1
+    // pins the cap for that one sub-agent.
     const maxRoundsRaw = safe.maxRounds;
     const maxRoundsValue = Number.isFinite(Number(maxRoundsRaw)) && Number(maxRoundsRaw) > 0
         ? String(Math.floor(Number(maxRoundsRaw)))
@@ -832,8 +832,8 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
     </label>
     <label>
         <span data-i18n="Max tool-call rounds (this sub-agent)">${escapeHtml(i18n('Max tool-call rounds (this sub-agent)'))}</span>
-        <input class="text_pole" type="number" min="1" max="50" step="1" placeholder="${escapeHtml(i18n('Inherit default (16)'))}" data-orch-subagent-field="maxRounds" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" value="${escapeHtml(maxRoundsValue)}" />
-        <div class="director-preset-help">${escapeHtml(i18n('Per-sub-agent runaway cap. Leave empty to inherit the default (16). Valid range: 1–50.'))}</div>
+        <input class="text_pole" type="number" min="1" step="1" placeholder="${escapeHtml(i18n('Inherit default (16)'))}" data-orch-subagent-field="maxRounds" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" value="${escapeHtml(maxRoundsValue)}" />
+        <div class="director-preset-help">${escapeHtml(i18n('Per-sub-agent runaway cap. Leave empty to inherit the default (16).'))}</div>
     </label>
     <details class="luker_orch_tools_section">
         <summary>${escapeHtml(i18n('Tools'))}</summary>
@@ -951,15 +951,15 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
             <h4 data-i18n="Limits">${escapeHtml(i18n('Limits'))}</h4>
             <label>
                 <span data-i18n="Maximum tool-calling rounds">${escapeHtml(i18n('Maximum tool-calling rounds'))}</span>
-                <input class="text_pole" type="number" min="1" max="50" step="1" data-orch-director-field="maxRounds" data-scope="${safeScope}" value="${escapeHtml(String(maxRounds))}" />
+                <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxRounds" data-scope="${safeScope}" value="${escapeHtml(String(maxRounds))}" />
             </label>
             <label>
                 <span data-i18n="Maximum concurrent sub-agents">${escapeHtml(i18n('Maximum concurrent sub-agents'))}</span>
-                <input class="text_pole" type="number" min="1" max="16" step="1" data-orch-director-field="maxConcurrentSubagents" data-scope="${safeScope}" value="${escapeHtml(String(maxConcurrentSubagents))}" />
+                <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxConcurrentSubagents" data-scope="${safeScope}" value="${escapeHtml(String(maxConcurrentSubagents))}" />
             </label>
             <label>
                 <span data-i18n="Maximum total sub-agent runs per turn">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}</span>
-                <input class="text_pole" type="number" min="1" max="100" step="1" data-orch-director-field="maxTotalSubagentRuns" data-scope="${safeScope}" value="${escapeHtml(String(maxTotalSubagentRuns))}" />
+                <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxTotalSubagentRuns" data-scope="${safeScope}" value="${escapeHtml(String(maxTotalSubagentRuns))}" />
             </label>
 
             <label class="checkbox_label">
@@ -1276,15 +1276,15 @@ export function buildOrchestratorSettingsHtml(deps) {
                 </div>
             </details>
             <label for="luker_orch_max_recent_messages">${escapeHtml(i18n('Recent assistant turns for orchestration (N)'))}</label>
-            <input id="luker_orch_max_recent_messages" class="text_pole" type="number" min="1" max="80" step="1" />
+            <input id="luker_orch_max_recent_messages" class="text_pole" type="number" min="1" step="1" />
             <label for="luker_orch_node_iterations">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}</label>
-            <input id="luker_orch_node_iterations" class="text_pole" type="number" min="1" max="20" step="1" />
+            <input id="luker_orch_node_iterations" class="text_pole" type="number" min="1" step="1" />
             <label for="luker_orch_review_reruns">${escapeHtml(i18n('Review rerun max rounds (N)'))}</label>
-            <input id="luker_orch_review_reruns" class="text_pole" type="number" min="0" max="20" step="1" />
+            <input id="luker_orch_review_reruns" class="text_pole" type="number" min="0" step="1" />
             <label for="luker_orch_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
-            <input id="luker_orch_tool_retries" class="text_pole" type="number" min="0" max="10" step="1" />
+            <input id="luker_orch_tool_retries" class="text_pole" type="number" min="0" step="1" />
             <label for="luker_orch_rpm_limit">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}</label>
-            <input id="luker_orch_rpm_limit" class="text_pole" type="number" min="0" max="600" step="1" />
+            <input id="luker_orch_rpm_limit" class="text_pole" type="number" min="0" step="1" />
             <div id="luker_orch_capsule_settings">
                 <label for="luker_orch_capsule_position">${escapeHtml(i18n('Injection position'))}</label>
                 <select id="luker_orch_capsule_position" class="text_pole">
@@ -1297,7 +1297,7 @@ export function buildOrchestratorSettingsHtml(deps) {
                     <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
                 </select>
                 <label for="luker_orch_capsule_depth">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}</label>
-                <input id="luker_orch_capsule_depth" class="text_pole" type="number" min="0" max="10000" step="1" />
+                <input id="luker_orch_capsule_depth" class="text_pole" type="number" min="0" step="1" />
                 <label for="luker_orch_capsule_role">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}</label>
                 <select id="luker_orch_capsule_role" class="text_pole">
                     <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>

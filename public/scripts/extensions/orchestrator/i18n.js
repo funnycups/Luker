@@ -361,7 +361,7 @@ export function registerLocaleData() {
         // Per-sub-agent runaway cap (new field on sub-agent profile).
         'Max tool-call rounds (this sub-agent)': '工具调用最大轮数（此子代理）',
         'Inherit default (16)': '继承默认值（16）',
-        'Per-sub-agent runaway cap. Leave empty to inherit the default (16). Valid range: 1–50.': '每个子代理独立的失控保护上限。留空使用默认值（16）。有效范围 1–50。',
+        'Per-sub-agent runaway cap. Leave empty to inherit the default (16).': '每个子代理独立的失控保护上限。留空使用默认值（16）。',
         // Director runtime trace popup.
         'Model reasoning': '模型推理',
         'Assistant text': '助手输出',
@@ -993,7 +993,7 @@ export function registerLocaleData() {
         // Per-sub-agent runaway cap (new field on sub-agent profile).
         'Max tool-call rounds (this sub-agent)': '工具呼叫最大輪數（此子代理）',
         'Inherit default (16)': '繼承預設值（16）',
-        'Per-sub-agent runaway cap. Leave empty to inherit the default (16). Valid range: 1–50.': '每個子代理獨立的失控保護上限。留空使用預設值（16）。有效範圍 1–50。',
+        'Per-sub-agent runaway cap. Leave empty to inherit the default (16).': '每個子代理獨立的失控保護上限。留空使用預設值（16）。',
         // Director runtime trace popup.
         'Model reasoning': '模型推理',
         'Assistant text': '助手輸出',

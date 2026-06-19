@@ -107,7 +107,7 @@ export function injectCapsuleToPayload(payload, text, settings = extension_setti
     if (position === world_info_position.EMBottom) {
         return appendUniqueWorldInfoExample(payload, wi_anchor_position.after, packet);
     }
-    const depth = Math.max(0, Math.min(10000, Math.floor(Number(settings?.capsuleInjectDepth) || 0)));
+    const depth = Math.max(0, Math.floor(Number(settings?.capsuleInjectDepth) || 0));
     const role = normalizeCapsuleInjectRole(settings?.capsuleInjectRole);
     if (!Array.isArray(payload.worldInfoDepth)) {
         payload.worldInfoDepth = [];

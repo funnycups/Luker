@@ -53,13 +53,14 @@ function normalizeSkillsField(obj, { isAgent = false } = {}) {
 export const ORCH_EXECUTION_MODE_DIRECTOR = 'director';
 
 const DIRECTOR_LIMIT_BOUNDS = Object.freeze({
-    maxRounds: { min: 1, max: 50, default: 20 },
-    maxConcurrentSubagents: { min: 1, max: 16, default: 4 },
-    maxTotalSubagentRuns: { min: 1, max: 100, default: 16 },
-    // Per-sub-agent tool-call cap. Default (`null`) inherits the runtime
+    maxRounds: { min: 1, default: 20 },
+    maxConcurrentSubagents: { min: 1, default: 4 },
+    maxTotalSubagentRuns: { min: 1, default: 16 },
+    // Per-sub-agent tool-call floor. Default (`null`) inherits the runtime
     // hardcoded `SUB_AGENT_MAX_ROUNDS = 16`; explicit numeric values are
-    // clamped into [1, 50] like the main agent's cap.
-    subAgentMaxRounds: { min: 1, max: 50 },
+    // floored at 1 like the main agent's cap. No upper bound — users who
+    // want a 9999-round runaway window get it.
+    subAgentMaxRounds: { min: 1 },
 });
 
 export function getDirectorLimitBounds() {
@@ -625,10 +626,10 @@ export function createDefaultDirectorProfile() {
     return createFullDirectorProfile();
 }
 
-function clampInt(value, { min, max, default: def }) {
+function clampInt(value, { min, default: def }) {
     const n = Number(value);
     if (!Number.isFinite(n)) return def;
-    return Math.max(min, Math.min(max, Math.floor(n)));
+    return Math.max(min, Math.floor(n));
 }
 
 /**
@@ -699,7 +700,7 @@ export function sanitizeDirectorProfile(profile) {
     const subAgentMap = new Map();
     // Per-sub-agent maxRounds is optional. Sentinel `null` means "inherit
     // the runtime hardcoded default (SUB_AGENT_MAX_ROUNDS)". A finite
-    // integer in [1, 50] is preserved (after clamp + floor). Anything else
+    // integer >= 1 is preserved (after floor). Anything else
     // (undefined / NaN / string / 0) collapses to null so the runtime
     // dispatcher's `spec.maxRounds || SUB_AGENT_MAX_ROUNDS` fallback fires.
     const clampSubMaxRounds = (raw) => {
@@ -708,7 +709,6 @@ export function sanitizeDirectorProfile(profile) {
         if (!Number.isFinite(n)) return null;
         const floored = Math.floor(n);
         if (floored < 1) return bounds.subAgentMaxRounds.min;
-        if (floored > bounds.subAgentMaxRounds.max) return bounds.subAgentMaxRounds.max;
         return floored;
     };
     for (const a of subAgentsRaw) {

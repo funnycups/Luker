@@ -11,8 +11,8 @@
 // Sanitizer contract for the new field:
 //   - omitted / null / invalid → inherit the legacy default (null kept
 //     on the spec so the runtime falls back to SUB_AGENT_MAX_ROUNDS).
-//   - integer in [1, 50] → clamped + preserved.
-//   - out-of-range → clamped into [1, 50].
+//   - integer >= 1 → floored + preserved.
+//   - sub-1 → floored to 1.
 
 import { describe, expect, test, jest } from '@jest/globals';
 import {
@@ -43,7 +43,7 @@ describe('director sub-agent maxRounds (per-agent runaway cap)', () => {
         expect(after.subAgents[0].maxRounds).toBe(25);
     });
 
-    test('out-of-range maxRounds is clamped into [1, 50]', () => {
+    test('sub-1 maxRounds is floored to 1; large values preserved', () => {
         const after = sanitizeDirectorProfile({
             mode: 'director',
             mainAgent: { systemPrompt: 'm' },
@@ -55,7 +55,7 @@ describe('director sub-agent maxRounds (per-agent runaway cap)', () => {
         const low = after.subAgents.find(a => a.id === 'low');
         const high = after.subAgents.find(a => a.id === 'high');
         expect(low.maxRounds).toBe(1);
-        expect(high.maxRounds).toBe(50);
+        expect(high.maxRounds).toBe(999);
     });
 
     test('omitted maxRounds yields null (inherit runtime default)', () => {
@@ -80,7 +80,7 @@ describe('director sub-agent maxRounds (per-agent runaway cap)', () => {
         expect(after.subAgents.find(a => a.id === 's2').maxRounds).toBeNull();
     });
 
-    test('fractional values floor into the clamp range', () => {
+    test('fractional values floor to integers', () => {
         const after = sanitizeDirectorProfile({
             mode: 'director',
             mainAgent: { systemPrompt: 'm' },

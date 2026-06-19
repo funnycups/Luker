@@ -88,7 +88,7 @@ Click **Open Orchestration Editor** to open a two-column workspace — the left 
 Key fields:
 
 - **Loop system prompt** — the agent's role and task description. Tell it explicitly *when* to call `finalize`. Most loop runs that go off the rails do so because the agent never decides to stop.
-- **Loop max rounds** (default 20, max 50) — one round = one LLM request + processing the tool calls it returns.
+- **Loop max rounds** (default 20) — one round = one LLM request + processing the tool calls it returns.
 - **Loop wall-clock budget** (default 300 seconds) — the whole-loop wall-clock cap. The loop breaks when this expires regardless of round count.
 - **Tool toggles** — namespaces you uncheck are dropped from the agent's tool schema. `finalize` is forced on and cannot be disabled.
 - **Loop API preset / Loop preset** — empty = use the global orchestration presets. Same routing semantics as spec / agenda, so the loop can target a cheaper model independent of the rest.
@@ -132,7 +132,7 @@ For agents that need capabilities beyond these builtins, see [Custom tools](./cu
 
 1. **Abort signal** — user clicks Stop / upper-layer cancel → loop aborts immediately; trace records `cancelled` and **no** half-baked capsule is injected.
 2. **`wall_clock_budget_ms`** — break the moment the wall clock expires.
-3. **`max_rounds`** — hard round cap (default 20, max 50).
+3. **`max_rounds`** — round cap (default 20).
 4. **Agent stops calling tools** — three consecutive zero-tool-call rounds break the loop early (prevents "talking, not doing"). Any tool call resets the streak.
 
 When any safeguard fires, the loop falls back to the agent's last natural-language reply as the capsule so the main model still gets *something*.
@@ -185,7 +185,7 @@ The Loop popup currently has no **Export Profile** / **Import Profile** buttons.
 
 | Setting | Description |
 |---|---|
-| `max_rounds` | Maximum rounds the loop can run (default 20, max 50) |
+| `max_rounds` | Maximum rounds the loop can run (default 20) |
 | `wall_clock_budget_ms` | Whole-loop wall-clock cap (default 300000 ms / 5 min) |
 | `system_prompt` | Loop agent's system instruction |
 | `tools.<namespace>.<verb>` | Per-tool enable toggle (`finalize` forced true) |

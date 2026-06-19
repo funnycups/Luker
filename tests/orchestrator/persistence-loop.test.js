@@ -5,7 +5,7 @@
  *
  *   - default field values (mode / system_prompt / tool flags / max_rounds /
  *     wall_clock_budget_ms / capsule_inject)
- *   - max_rounds clamped to [1, 50]
+ *   - max_rounds floored at 1 (no upper bound)
  *   - wall_clock_budget_ms floored at 10000ms
  *   - tools.finalize forced to true even if input passes false
  *   - mode field forced to 'loop' regardless of input
@@ -129,21 +129,20 @@ describe('sanitizeLoopProfile mode coercion', () => {
     });
 });
 
-describe('sanitizeLoopProfile max_rounds clamping', () => {
+describe('sanitizeLoopProfile max_rounds', () => {
     test('clamps zero / negative input to the floor (1)', () => {
         expect(sanitizeLoopProfile({ max_rounds: 0 }).max_rounds).toBe(1);
         expect(sanitizeLoopProfile({ max_rounds: -50 }).max_rounds).toBe(1);
     });
 
-    test('clamps oversized input to the hard cap (50)', () => {
-        expect(sanitizeLoopProfile({ max_rounds: 999 }).max_rounds).toBe(50);
-        expect(sanitizeLoopProfile({ max_rounds: 51 }).max_rounds).toBe(50);
+    test('preserves arbitrarily large positive values (no upper bound)', () => {
+        expect(sanitizeLoopProfile({ max_rounds: 999 }).max_rounds).toBe(999);
+        expect(sanitizeLoopProfile({ max_rounds: 99999 }).max_rounds).toBe(99999);
     });
 
-    test('passes valid in-range values through unchanged', () => {
+    test('passes valid values through unchanged', () => {
         expect(sanitizeLoopProfile({ max_rounds: 25 }).max_rounds).toBe(25);
         expect(sanitizeLoopProfile({ max_rounds: 1 }).max_rounds).toBe(1);
-        expect(sanitizeLoopProfile({ max_rounds: 50 }).max_rounds).toBe(50);
     });
 
     test('floors fractional values', () => {

@@ -140,7 +140,7 @@ Constraints:
 
 - A review node only sees and re-runs nodes from the **immediately preceding** worker stage.
 - Reruns are scoped to specific node IDs, not the whole stage.
-- Rerun count is bounded by **Review Rerun Max Rounds** (default 2, max 20). When set to 0, the review node decides only "approve or fail" — no reruns.
+- Rerun count is bounded by **Review Rerun Max Rounds** (default 2). When set to 0, the review node decides only "approve or fail" — no reruns.
 - After rerun, the review node runs again, forming an "execute → review → rerun → re-review" loop until approved or the limit is hit.
 - Review nodes must emit review feedback.
 
@@ -176,7 +176,7 @@ Use **Export** at the top of the panel to download the run as JSON (handy for bu
 | Setting | Description |
 |---|---|
 | Node Iteration Max Rounds | Iteration cap for a single node |
-| Review Rerun Max Rounds | 0 disables review-driven reruns; max 20 |
+| Review Rerun Max Rounds | 0 disables review-driven reruns |
 | Anti-Data Guard | A built-in node in the default Spec workflow that blocks data-fication / report-style prose (terms like 观察 / 分析 / 评估 / 监测 / observation / analyze / metric / probability that turn RP into stat blocks). Hard-coded ~18-term lexicon. Remove the node from your workflow if you don't want it. |
 | Node API Preset | Per-node override; empty = global |
 | Node Chat Completion Preset | Per-node override; empty = global |

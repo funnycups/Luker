@@ -502,7 +502,7 @@ export function ensureSettings() {
     extension_settings[MODULE_NAME].capsuleInjectPositionSchemaVersion = CAPSULE_INJECT_POSITION_SCHEMA_VERSION;
     extension_settings[MODULE_NAME].capsuleInjectDepth = Math.max(
         0,
-        Math.min(10000, Math.floor(Number(extension_settings[MODULE_NAME].capsuleInjectDepth) || 0)),
+        Math.floor(Number(extension_settings[MODULE_NAME].capsuleInjectDepth) || 0),
     );
     {
         const role = Number(extension_settings[MODULE_NAME].capsuleInjectRole);
@@ -540,7 +540,7 @@ export function ensureSettings() {
     extension_settings[MODULE_NAME].iterModePromptSpec = String(extension_settings[MODULE_NAME].iterModePromptSpec || '').trim() || DEFAULT_SPEC_ITERATION_MODE_BLOCK;
     extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
         0,
-        Math.min(10, Math.floor(Number(extension_settings[MODULE_NAME].toolCallRetryMax) || 0)),
+        Math.floor(Number(extension_settings[MODULE_NAME].toolCallRetryMax) || 0),
     );
     extension_settings[MODULE_NAME].rpmLimit = Math.max(
         0,
@@ -548,11 +548,11 @@ export function ensureSettings() {
     );
     extension_settings[MODULE_NAME].nodeIterationMaxRounds = Math.max(
         1,
-        Math.min(20, Math.floor(Number(extension_settings[MODULE_NAME].nodeIterationMaxRounds) || 0)),
+        Math.floor(Number(extension_settings[MODULE_NAME].nodeIterationMaxRounds) || 0),
     );
     extension_settings[MODULE_NAME].reviewRerunMaxRounds = Math.max(
         0,
-        Math.min(20, Math.floor(Number(extension_settings[MODULE_NAME].reviewRerunMaxRounds) || 0)),
+        Math.floor(Number(extension_settings[MODULE_NAME].reviewRerunMaxRounds) || 0),
     );
     if (!extension_settings[MODULE_NAME].chatOverrides || typeof extension_settings[MODULE_NAME].chatOverrides !== 'object') {
         extension_settings[MODULE_NAME].chatOverrides = {};
@@ -3466,7 +3466,7 @@ function buildAiIterationToolSet(session = null) {
                 type: 'function',
                 function: {
                     name: 'luker_orch_set_director_subagent',
-                    description: 'Create or update one director sub-agent by id. id is required; other fields patch the existing sub-agent or initialize a new one. Leave apiPresetName and promptPresetName empty unless the user explicitly requests per-sub-agent routing. maxRounds caps that sub-agent\'s own tool-call loop ([1, 50]); omit / null to inherit the runtime default (16) — only set when the user asks for a tighter or looser cap.',
+                    description: 'Create or update one director sub-agent by id. id is required; other fields patch the existing sub-agent or initialize a new one. Leave apiPresetName and promptPresetName empty unless the user explicitly requests per-sub-agent routing. maxRounds caps that sub-agent\'s own tool-call loop (>= 1); omit / null to inherit the runtime default (16) — only set when the user asks for a tighter or looser cap.',
                     parameters: {
                         type: 'object',
                         properties: {
@@ -3475,7 +3475,7 @@ function buildAiIterationToolSet(session = null) {
                             systemPrompt: { type: 'string' },
                             apiPresetName: { type: 'string' },
                             promptPresetName: { type: 'string' },
-                            maxRounds: { type: ['integer', 'null'], minimum: 1, maximum: 50 },
+                            maxRounds: { type: ['integer', 'null'], minimum: 1 },
                         },
                         required: ['id'],
                         additionalProperties: false,
@@ -3534,9 +3534,9 @@ function buildAiIterationToolSet(session = null) {
                     parameters: {
                         type: 'object',
                         properties: {
-                            maxRounds: { type: 'integer', minimum: 1, maximum: 50 },
-                            maxConcurrentSubagents: { type: 'integer', minimum: 1, maximum: 16 },
-                            maxTotalSubagentRuns: { type: 'integer', minimum: 1, maximum: 100 },
+                            maxRounds: { type: 'integer', minimum: 1 },
+                            maxConcurrentSubagents: { type: 'integer', minimum: 1 },
+                            maxTotalSubagentRuns: { type: 'integer', minimum: 1 },
                             discardOnAbort: { type: 'boolean' },
                         },
                         additionalProperties: false,
@@ -3640,14 +3640,14 @@ function buildAiIterationToolSet(session = null) {
                 type: 'function',
                 function: {
                     name: 'luker_orch_set_loop_profile',
-                    description: 'Patch one or more fields of the loop profile. Pass only the fields you intend to change; omitted fields keep their current value. Numeric inputs are clamped (max_rounds in 1..50, wall_clock_budget_ms >= 10000) and tools.finalize is always coerced to true regardless of input.',
+                    description: 'Patch one or more fields of the loop profile. Pass only the fields you intend to change; omitted fields keep their current value. Numeric inputs are floored (max_rounds >= 1, wall_clock_budget_ms >= 10000) and tools.finalize is always coerced to true regardless of input.',
                     parameters: {
                         type: 'object',
                         properties: {
                             system_prompt: { type: 'string' },
                             apiPresetName: { type: 'string' },
                             promptPresetName: { type: 'string' },
-                            max_rounds: { type: 'integer', minimum: 1, maximum: 50 },
+                            max_rounds: { type: 'integer', minimum: 1 },
                             wall_clock_budget_ms: { type: 'integer', minimum: 10000 },
                             tools: {
                                 type: 'object',
@@ -4087,7 +4087,7 @@ function buildAiIterationToolSet(session = null) {
 
 function getChatMessagesForSimulation(context, recentMessagesN) {
     const all = Array.isArray(context?.chat) ? context.chat : [];
-    const n = Math.max(1, Math.min(60, Math.floor(Number(recentMessagesN) || 12)));
+    const n = Math.max(1, Math.floor(Number(recentMessagesN) || 12));
     return normalizeWorldInfoResolverMessages(all.slice(Math.max(0, all.length - n)));
 }
 
@@ -5154,8 +5154,8 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
                 // Explicit `null` from the AI clears the cap (inherit
                 // runtime default); omitting the key keeps whatever the
                 // existing spec had. The sanitizer is the source of
-                // truth for clamping into [1, 50] so the executor
-                // doesn't re-clamp here.
+                // truth for flooring at 1 so the executor
+                // doesn't re-floor here.
                 maxRounds: Object.prototype.hasOwnProperty.call(args, 'maxRounds')
                     ? args.maxRounds
                     : (existing?.maxRounds ?? null),
@@ -5264,9 +5264,9 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
                 maxTotalSubagentRuns: director.maxTotalSubagentRuns,
                 discardOnAbort: director.discardOnAbort,
             };
-            if (Number.isInteger(args.maxRounds)) director.maxRounds = Math.max(1, Math.min(50, Number(args.maxRounds)));
-            if (Number.isInteger(args.maxConcurrentSubagents)) director.maxConcurrentSubagents = Math.max(1, Math.min(16, Number(args.maxConcurrentSubagents)));
-            if (Number.isInteger(args.maxTotalSubagentRuns)) director.maxTotalSubagentRuns = Math.max(1, Math.min(100, Number(args.maxTotalSubagentRuns)));
+            if (Number.isInteger(args.maxRounds)) director.maxRounds = Math.max(1, Number(args.maxRounds));
+            if (Number.isInteger(args.maxConcurrentSubagents)) director.maxConcurrentSubagents = Math.max(1, Number(args.maxConcurrentSubagents));
+            if (Number.isInteger(args.maxTotalSubagentRuns)) director.maxTotalSubagentRuns = Math.max(1, Number(args.maxTotalSubagentRuns));
             if (typeof args.discardOnAbort === 'boolean') director.discardOnAbort = Boolean(args.discardOnAbort);
             const after = {
                 maxRounds: director.maxRounds,
@@ -6394,21 +6394,21 @@ function bindUi() {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
-        editor.limits.plannerMaxRounds = Math.max(1, Math.min(20, Math.floor(Number(jQuery(this).val()) || 1)));
+        editor.limits.plannerMaxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
     });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_concurrent, .luker_orch_editor_popup #luker_orch_agenda_max_concurrent`, function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
-        editor.limits.maxConcurrentAgents = Math.max(1, Math.min(12, Math.floor(Number(jQuery(this).val()) || 1)));
+        editor.limits.maxConcurrentAgents = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
     });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_total_runs, .luker_orch_editor_popup #luker_orch_agenda_max_total_runs`, function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
-        editor.limits.maxTotalRuns = Math.max(1, Math.min(200, Math.floor(Number(jQuery(this).val()) || 1)));
+        editor.limits.maxTotalRuns = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
     });
 
     // ─── Loop-mode editor handlers ─────────────────────────────────────
@@ -6442,14 +6442,14 @@ function bindUi() {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
         const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
-        editor.max_rounds = Math.max(1, Math.min(50, Math.floor(Number(jQuery(this).val()) || 20)));
+        editor.max_rounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 20));
         ensureLoopEditorIntegrity(editor);
     });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_wall_clock, .luker_orch_editor_popup #luker_orch_loop_wall_clock`, function () {
         // Stored as ms but edited in seconds; the floor (10s) matches
         // `LOOP_WALL_CLOCK_FLOOR_MS / 1000` in persistence.js.
-        const seconds = Math.max(10, Math.min(3600, Math.floor(Number(jQuery(this).val()) || 300)));
+        const seconds = Math.max(10, Math.floor(Number(jQuery(this).val()) || 300));
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
         const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
@@ -7083,22 +7083,22 @@ function bindUi() {
     });
 
     root.on('change.lukerOrch', '#luker_orch_max_recent_messages', function () {
-        settings.maxRecentMessages = Math.max(1, Math.min(80, Number(jQuery(this).val()) || 14));
+        settings.maxRecentMessages = Math.max(1, Math.floor(Number(jQuery(this).val()) || 14));
         saveSettingsDebounced();
     });
 
     root.on('change.lukerOrch', '#luker_orch_node_iterations', function () {
-        settings.nodeIterationMaxRounds = Math.max(1, Math.min(20, Math.floor(Number(jQuery(this).val()) || 20)));
+        settings.nodeIterationMaxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 20));
         saveSettingsDebounced();
     });
 
     root.on('change.lukerOrch', '#luker_orch_review_reruns', function () {
-        settings.reviewRerunMaxRounds = Math.max(0, Math.min(20, Math.floor(Number(jQuery(this).val()) || 0)));
+        settings.reviewRerunMaxRounds = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
         saveSettingsDebounced();
     });
 
     root.on('change.lukerOrch', '#luker_orch_tool_retries', function () {
-        settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(jQuery(this).val()) || 0)));
+        settings.toolCallRetryMax = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
         saveSettingsDebounced();
     });
 
@@ -7114,7 +7114,7 @@ function bindUi() {
     });
 
     root.on('change.lukerOrch', '#luker_orch_capsule_depth', function () {
-        settings.capsuleInjectDepth = Math.max(0, Math.min(10000, Math.floor(Number(jQuery(this).val()) || 0)));
+        settings.capsuleInjectDepth = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
         saveSettingsDebounced();
     });
 

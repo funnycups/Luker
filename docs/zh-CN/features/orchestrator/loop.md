@@ -88,7 +88,7 @@ loop.finalize -> out
 关键字段：
 
 - **Loop 系统提示词**:Agent 的角色与任务说明。要明确告诉它「何时该调 `finalize`」——多数翻车都来自 agent 不知道何时收尾。
-- **Loop 最大轮次**（默认 20，上限 50）：一轮 = 一次 LLM 请求 + 处理它返回的 tool call。
+- **Loop 最大轮次**（默认 20）：一轮 = 一次 LLM 请求 + 处理它返回的 tool call。
 - **Loop 墙钟预算**（默认 300 秒）：整个 loop 的墙钟上限，无论已跑多少轮，到点 break。
 - **工具开关**：勾掉的命名空间不会出现在 agent 的工具 schema 里。`finalize` 强制启用、不可关闭。
 - **Loop API 预设 / Loop 提示词预设**：留空 = 用全局编排预设。和 spec / agenda 的预设路由一致，能让 loop 单独走更便宜的模型。
@@ -132,7 +132,7 @@ loop.finalize -> out
 
 1. **abort signal**：用户点「停止」 / 上层取消 → 立即中止；trace 记 `cancelled`，**不**注入半成品 capsule。
 2. **wall_clock_budget_ms**：到点立即 break。
-3. **max_rounds**：硬轮次上限（默认 20，最多 50）。
+3. **max_rounds**：轮次上限（默认 20）。
 4. **Agent 不调工具**：连续 3 轮没调任何工具 → 提前 break（防止 agent「光说话不动手」耗光预算）。任意一轮调到工具，streak 归零。
 
 触发任一兜底时，loop 会把最后一次 agent 的自然文本作为 capsule 兜底，保证至少有产出送给主模型。
@@ -185,7 +185,7 @@ Loop popup 当前没有 **导出 Profile** / **导入 Profile** 按钮，跨电�
 
 | 设置 | 说明 |
 |---|---|
-| `max_rounds` | loop 最多跑多少轮（默认 20，上限 50） |
+| `max_rounds` | loop 最多跑多少轮（默认 20） |
 | `wall_clock_budget_ms` | 整个 loop 的墙钟预算（默认 300000 ms / 5 分钟） |
 | `system_prompt` | loop agent 的 system 指令 |
 | `tools.<namespace>.<verb>` | 每个工具的启用开关（`finalize` 强制 true） |

@@ -135,7 +135,7 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  *                            `sanitizeAgentToolFlags` so upgraded
  *                            profiles keep their enabled set.
  *   - tools.finalize        FORCED true; the loop has no other terminator
- *   - max_rounds            hard upper bound on tool-call rounds [1, 50]
+ *   - max_rounds            tool-call round budget; floored at 1
  *   - wall_clock_budget_ms  loop deadline; floored at 10000ms (10s)
  *   - capsule_inject        same shape as spec/agenda capsule injection
  */
@@ -237,18 +237,18 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
 });
 
 const LOOP_MAX_ROUNDS_FLOOR = 1;
-const LOOP_MAX_ROUNDS_HARD_CAP = 50;
 const LOOP_WALL_CLOCK_FLOOR_MS = 10000;
 
-function clampInteger(value, lo, hi, fallback) {
+function floorInteger(value, lo, fallback) {
     // Treat null / undefined / NaN / non-numeric strings as "missing" and
     // fall back. Explicit numeric inputs (including 0 and negatives) are
-    // clamped into [lo, hi] so callers cannot accidentally bypass the
-    // floor by passing 0.
+    // floored at `lo` so the algorithm still has a meaningful minimum
+    // (zero rounds = the loop never advances). No upper cap — users who
+    // want 9999 get 9999.
     if (value === null || value === undefined) return fallback;
     const n = Number(value);
     if (!Number.isFinite(n)) return fallback;
-    return Math.min(Math.max(Math.floor(n), lo), hi);
+    return Math.max(lo, Math.floor(n));
 }
 
 function readBooleanFlag(input, defaultValue) {
@@ -526,10 +526,9 @@ export function sanitizeLoopProfile(input) {
             ? LOOP_PROFILE_DEFAULTS.system_prompt
             : String(source.system_prompt),
         tools: sanitizeLoopToolFlags(source.tools),
-        max_rounds: clampInteger(
+        max_rounds: floorInteger(
             source.max_rounds,
             LOOP_MAX_ROUNDS_FLOOR,
-            LOOP_MAX_ROUNDS_HARD_CAP,
             LOOP_PROFILE_DEFAULTS.max_rounds,
         ),
         wall_clock_budget_ms: (() => {

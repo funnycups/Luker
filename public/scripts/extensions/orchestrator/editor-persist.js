@@ -80,9 +80,9 @@ export async function persistGlobalAgendaEditorFrom(settings, editor) {
         agents: sanitizePresetMap(editor.agents),
         finalAgentId: sanitizeIdentifierToken(editor.finalAgentId, 'finalizer'),
         limits: {
-            plannerMaxRounds: Math.max(1, Math.min(20, Math.floor(Number(editor?.limits?.plannerMaxRounds) || 6))),
-            maxConcurrentAgents: Math.max(1, Math.min(12, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3))),
-            maxTotalRuns: Math.max(1, Math.min(200, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24))),
+            plannerMaxRounds: Math.max(1, Math.floor(Number(editor?.limits?.plannerMaxRounds) || 6)),
+            maxConcurrentAgents: Math.max(1, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3)),
+            maxTotalRuns: Math.max(1, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24)),
         },
     });
     await saveSettings();
@@ -228,9 +228,9 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
         agents: sanitizePresetMap(editor.agents),
         finalAgentId: sanitizeIdentifierToken(editor.finalAgentId, 'finalizer'),
         limits: {
-            plannerMaxRounds: Math.max(1, Math.min(20, Math.floor(Number(editor?.limits?.plannerMaxRounds) || 6))),
-            maxConcurrentAgents: Math.max(1, Math.min(12, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3))),
-            maxTotalRuns: Math.max(1, Math.min(200, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24))),
+            plannerMaxRounds: Math.max(1, Math.floor(Number(editor?.limits?.plannerMaxRounds) || 6)),
+            maxConcurrentAgents: Math.max(1, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3)),
+            maxTotalRuns: Math.max(1, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24)),
         },
     });
     overrideEnabled[ORCH_EXECUTION_MODE_AGENDA] = enabledFlag;
