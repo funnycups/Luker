@@ -13,7 +13,7 @@ const getRequestHeaders = __ctx.getRequestHeaders;
 const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
 const getCharacterState = __ctx.getCharacterState;
-const setCharacterState = __ctx.setCharacterState;
+const updateCharacterState = __ctx.updateCharacterState;
 const addLocaleData = __ctx.addLocaleData;
 const translate = __ctx.translate;
 
@@ -168,36 +168,36 @@ async function recordCardAppDiagnosticForStudio(content) {
         content: String(content || '').slice(0, 16000),
     };
 
-    const data = await getCharacterState(avatar, STUDIO_SESSION_NAMESPACE);
-    let sessions = [];
+    await updateCharacterState(avatar, STUDIO_SESSION_NAMESPACE, (current) => {
+        let sessions = [];
+        if (current && Array.isArray(current.sessions)) {
+            sessions = current.sessions.map(s => ({ ...s, messages: Array.isArray(s.messages) ? s.messages.slice() : [] }));
+        } else if (current && Array.isArray(current.messages)) {
+            // Migrate legacy single-session format inline so we don't lose history.
+            sessions = [{
+                id: `migrated_${Date.now()}`,
+                messages: current.messages.slice(),
+                updatedAt: current.updatedAt || Date.now(),
+                summary: 'Migrated session',
+            }];
+        }
 
-    if (data && Array.isArray(data.sessions)) {
-        sessions = data.sessions;
-    } else if (data && Array.isArray(data.messages)) {
-        // Migrate legacy single-session format inline so we don't lose history.
-        sessions = [{
-            id: `migrated_${Date.now()}`,
-            messages: data.messages,
-            updatedAt: data.updatedAt || Date.now(),
-            summary: 'Migrated session',
-        }];
-    }
+        if (sessions.length === 0) {
+            sessions.push({
+                id: `cardapp_diag_${Date.now()}`,
+                messages: [diagnosticMessage],
+                updatedAt: Date.now(),
+                summary: 'CardApp diagnostic',
+            });
+        } else {
+            const latest = sessions[sessions.length - 1];
+            if (!Array.isArray(latest.messages)) latest.messages = [];
+            latest.messages.push(diagnosticMessage);
+            latest.updatedAt = Date.now();
+        }
 
-    if (sessions.length === 0) {
-        sessions.push({
-            id: `cardapp_diag_${Date.now()}`,
-            messages: [diagnosticMessage],
-            updatedAt: Date.now(),
-            summary: 'CardApp diagnostic',
-        });
-    } else {
-        const latest = sessions[sessions.length - 1];
-        if (!Array.isArray(latest.messages)) latest.messages = [];
-        latest.messages.push(diagnosticMessage);
-        latest.updatedAt = Date.now();
-    }
-
-    await setCharacterState(avatar, STUDIO_SESSION_NAMESPACE, { version: 1, sessions });
+        return { version: 1, sessions };
+    });
 }
 
 /**
