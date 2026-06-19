@@ -553,6 +553,21 @@ export async function openCpaIterationStudio(deps) {
     //   - 'preset-clone'    — cloneAndSwitchTarget + migrateCurrentSession
     //                         AcrossClone (afterClone hook)
     // ──────────────────────────────────────────────────────────────────
+    async function readPresetCloneSnapshot(op) {
+        const ctx = getContext();
+        const sourceRef = { collection: 'openai', name: String(op?.sourceName ?? '') };
+        const stored = ctx?.presets?.getStored?.(sourceRef);
+        const sourceBody = stored && typeof stored.body === 'object' ? stored.body : null;
+        const list = Array.isArray(ctx?.presets?.list?.('openai')) ? ctx.presets.list('openai') : [];
+        const requestedNewName = String(op?.newName ?? '');
+        const target_taken = requestedNewName.length > 0
+            && list.some((r) => String(r?.name || r || '') === requestedNewName);
+        return {
+            exists: sourceBody != null,
+            sourceBody,
+            target_taken,
+        };
+    }
     const bus = ITER_PROPOSAL_BUS.createProposalBus({
         mode: 'cpa',
         i18n: tf,
@@ -630,15 +645,15 @@ export async function openCpaIterationStudio(deps) {
             }
             return cloneAndSwitchTarget(newName);
         },
-        readSourceSnapshot: async (op) => {
-            const ref = getTargetRef();
-            const stored = getContext()?.presets?.getStored?.(ref);
-            return {
-                sourceName: ref?.name ?? null,
-                exists: Boolean(stored?.body),
-                requestedNewName: op?.newName ?? null,
-            };
-        },
+        // Snapshot fields follow the spec in
+        // iteration-library/proposal-bus/kinds/preset-clone.js — { exists,
+        // sourceBody, target_taken } captures the three things that can
+        // legitimately drift between propose and approve: source preset
+        // deleted, source body edited, or new name occupied by a sibling
+        // preset that didn't exist at propose time. The bus's
+        // canonical-JSON hash digests sourceBody for us, so we hand it the
+        // live object instead of pre-hashing.
+        readSourceSnapshot: readPresetCloneSnapshot,
         afterClone: async (op, _result) => {
             const newRefRaw = getTargetRef();
             const newRef = newRefRaw ? { collection: newRefRaw.collection, name: newRefRaw.name } : null;
@@ -1693,14 +1708,15 @@ export async function openCpaIterationStudio(deps) {
                     if (out.pendingCloneEdit) {
                         const oldRefRaw = getTargetRef();
                         const oldRef = oldRefRaw ? { collection: oldRefRaw.collection, name: oldRefRaw.name } : null;
+                        const op = {
+                            sourceName: out.pendingCloneEdit.sourceName,
+                            newName: out.pendingCloneEdit.newName,
+                            _oldRef: oldRef,
+                        };
                         const { id: pendingId } = await bus.propose({
                             kind: 'preset-clone',
-                            op: {
-                                sourceName: out.pendingCloneEdit.sourceName,
-                                newName: out.pendingCloneEdit.newName,
-                                _oldRef: oldRef,
-                            },
-                            snapshot: { sourceName: oldRef?.name ?? null, requestedNewName: out.pendingCloneEdit.newName },
+                            op,
+                            snapshot: await readPresetCloneSnapshot(op),
                             sourceCallId: callId,
                             meta: out.pendingCloneEdit,
                         });
