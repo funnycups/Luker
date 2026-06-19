@@ -1,8 +1,10 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
-import { CONTRACT_HARNESSES } from '../harness/contract-harness.js';
+import { CONTRACT_HARNESSES, makeTempFsEngineHarness } from '../harness/contract-harness.js';
 import { WorldInfoRepo } from '../../../src/storage/repositories/world-info-repo.js';
 import { PatchTestFailedError } from '../../../src/storage/errors.js';
+import { normalizeWorldInfoFile } from '../../../src/endpoints/worldinfo.js';
 
 describe.each(CONTRACT_HARNESSES)('WorldInfoRepo on $name — basic CRUD', ({ make }) => {
     let h, repo;
@@ -139,5 +141,43 @@ describe.each(CONTRACT_HARNESSES)('WorldInfoRepo on $name — list and resolveNa
         expect(await repo.resolveName(h.handle, 'Missing')).toBeNull();
         await repo.save(h.handle, 'Present', { entries: {} });
         expect(await repo.resolveName(h.handle, 'Present')).toBe('Present.json');
+    });
+});
+
+// Exercise the read-path normalization: legacy disk state where `entries` was
+// persisted as a sparse array (`[null, null, ..., {uid:66,...}]`) used to leak
+// into `getGlobalLore`/`getCharacterLore` and crash the WI scan with a null
+// destructure. The /get and /get-batch endpoints now repair the shape and
+// persist the fix, so the next read sees the canonical uid-keyed object.
+describe('WorldInfoRepo + normalizeWorldInfoFile — read-time repair (FS only)', () => {
+    let h, repo;
+    beforeEach(async () => {
+        h = await makeTempFsEngineHarness();
+        fs.mkdirSync(h.dirs.worlds, { recursive: true });
+        repo = new WorldInfoRepo({ engine: h.engine });
+    });
+    afterEach(() => h.cleanup());
+
+    test('reduces a poisoned array-form entries object and lets the repair be saved back', async () => {
+        const sparse = new Array(67);
+        sparse[66] = { uid: 66, content: 'survivor' };
+        // Bypass `repo.save` (it rejects array `entries`) to mimic legacy disk
+        // state. Writing through the raw FS keeps the test honest about what
+        // an upgrade from an older Luker/SillyTavern build could leave behind.
+        fs.writeFileSync(
+            path.join(h.dirs.worlds, 'Poisoned.json'),
+            JSON.stringify({ entries: sparse, name: 'Poisoned' }),
+        );
+
+        const raw = await repo.get(h.handle, 'Poisoned');
+        expect(Array.isArray(raw.entries)).toBe(true);
+
+        const { file: normalized, changed } = normalizeWorldInfoFile(raw);
+        expect(changed).toBe(true);
+        await repo.save(h.handle, 'Poisoned', normalized);
+
+        const reread = await repo.get(h.handle, 'Poisoned');
+        expect(Array.isArray(reread.entries)).toBe(false);
+        expect(reread.entries).toEqual({ '66': { uid: 66, content: 'survivor' } });
     });
 });

@@ -6,7 +6,63 @@ import sanitize from 'sanitize-filename';
 import _ from 'lodash';
 import { normalizeLookupText } from '../util.js';
 import { getWorldInfoRepo } from '../storage/index.js';
-import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
+import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, StorageReadOnlyError } from '../storage/errors.js';
+
+/**
+ * Coerces a corrupt `entries` array — `[null, null, ..., {uid:66,...}]`, a shape
+ * legacy SillyTavern saves left behind on some books — back into the documented
+ * uid-keyed object form. Null and non-object slots are dropped; surviving
+ * entries are re-keyed by their own `uid` (falling back to the array index when
+ * the entry has no usable uid). Returns the new file object plus a `changed`
+ * flag so the caller can decide whether to write the normalized shape back to
+ * disk and avoid hitting this hot path again next read.
+ *
+ * @param {unknown} file
+ * @returns {{ file: object, changed: boolean }}
+ */
+export function normalizeWorldInfoFile(file) {
+    if (!_.isObjectLike(file) || Array.isArray(file)) {
+        return { file, changed: false };
+    }
+    if (!Array.isArray(file.entries)) {
+        return { file, changed: false };
+    }
+    const fixedEntries = {};
+    file.entries.forEach((entry, index) => {
+        if (!_.isObjectLike(entry) || Array.isArray(entry)) return;
+        const rawUid = entry.uid;
+        const numericUid = Number(rawUid);
+        const uid = Number.isFinite(numericUid) ? numericUid : index;
+        fixedEntries[String(uid)] = { ...entry, uid };
+    });
+    return { file: { ...file, entries: fixedEntries }, changed: true };
+}
+
+/**
+ * Reads a world info file and repairs the array-form `entries` corruption in
+ * place if found. Repair writes are best-effort: read-only mode and write
+ * failures fall back to returning the in-memory normalized object so the read
+ * still succeeds.
+ *
+ * @param {ReturnType<typeof getWorldInfoRepo>} repo
+ * @param {string} handle
+ * @param {string} name
+ * @returns {Promise<object | null>}
+ */
+async function getNormalizedWorldInfoFile(repo, handle, name) {
+    const file = await repo.get(handle, name);
+    const { file: normalized, changed } = normalizeWorldInfoFile(file);
+    if (changed) {
+        try {
+            await repo.save(handle, name, normalized);
+        } catch (err) {
+            if (!(err instanceof StorageReadOnlyError)) {
+                console.warn(`World info ${name}: normalize-on-read save failed`, err);
+            }
+        }
+    }
+    return normalized;
+}
 
 /**
  * Reads a World Info file and returns its contents
@@ -133,7 +189,7 @@ router.post('/get', async (request, response) => {
         // File truly missing — legacy readWorldInfoFile(..., allowDummy=true) returned {entries:{}}.
         return response.send({ entries: {} });
     }
-    const file = await repo.get(handle, request.body.name);
+    const file = await getNormalizedWorldInfoFile(repo, handle, request.body.name);
     // file === null here means parse failure / corrupt JSON / non-object root.
     // Legacy 500'd via uncaught JSON.parse throw. Returning null is strictly safer:
     // the frontend already filters via isPlainObject and treats null as "skip" rather
@@ -159,7 +215,7 @@ router.post('/get-batch', async (request, response) => {
             // Missing — match allowDummy=true semantics.
             data[name] = { entries: {} };
         } else {
-            const file = await repo.get(handle, name);
+            const file = await getNormalizedWorldInfoFile(repo, handle, name);
             // null means corrupt; the frontend's isPlainObject filter handles it.
             data[name] = file;
         }
