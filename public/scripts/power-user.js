@@ -540,13 +540,31 @@ function uninstallAudioActivationHooks() {
 
 // Wraps setKeepAliveMode so the GENERATION_*-driven activation hooks track the
 // active mode exactly: installed iff audio mode was successfully entered.
+// For audio specifically, hooks go on BEFORE the awaited arm — otherwise a
+// GENERATION_STARTED that fires during prime (e.g. the click that armed audio
+// is also the click that triggered the message) gets emitted while the
+// counter still has no listener, and the resulting generation runs without
+// keep-alive.
 async function applyKeepAliveMode(mode) {
-    const result = await setKeepAliveMode(mode);
-    if (result === 'audio') {
+    if (mode === 'audio') {
         installAudioActivationHooks();
-    } else {
-        uninstallAudioActivationHooks();
+        try {
+            const result = await setKeepAliveMode(mode);
+            if (result !== 'audio') {
+                uninstallAudioActivationHooks();
+            } else if (audioActivationCount > 0) {
+                // A generation already started while we were arming — flip
+                // straight into active mode now that audioEl is ready.
+                audioActivationSync();
+            }
+            return result;
+        } catch (error) {
+            uninstallAudioActivationHooks();
+            throw error;
+        }
     }
+    const result = await setKeepAliveMode(mode);
+    uninstallAudioActivationHooks();
     return result;
 }
 
