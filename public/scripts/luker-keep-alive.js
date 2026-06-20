@@ -16,17 +16,17 @@ let stateChangeCallback = null;
 let pipVideo = null;
 let pipListenersAttached = false;
 
-// Audio mode: armed (resources built, not playing) vs active (playing).
-// A 1Hz OscillatorNode -> tiny gain -> AudioContext.destination keeps Chromium
-// from throttling the tab; a real <audio> element + MediaSession metadata
-// registers a media session so the OS treats us as foreground media. Both must
-// run together — osc alone fails to surface a MediaSession card, <audio> alone
-// gets decoder-throttled in background.
+// Audio mode runs in a single binary state: built when entered, fully torn
+// down when exited. A 1Hz OscillatorNode running through near-zero gain into
+// AudioContext.destination keeps Chromium from throttling the tab; a real
+// <audio> element with a MediaSession registers a media session so the OS
+// treats this tab as foreground media. Toggling either of them off mid-session
+// (e.g. "play only while generating") makes the OS reclaim the session a few
+// minutes after screen-off — testing confirmed this.
 let audioCtx = null;
 let audioOscillator = null;
 let audioGain = null;
 let audioEl = null;
-let audioActive = false;
 let audioListenersAttached = false;
 
 // Page lifecycle listeners (re-arm audio after the OS unsuspends us)
@@ -117,44 +117,12 @@ async function exitPip() {
 
 // ---------- Audio ----------
 
-async function startOscillator() {
-    if (audioCtx) return;
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new Ctx();
-    audioGain = audioCtx.createGain();
-    audioGain.gain.value = 0.0001;
-    audioOscillator = audioCtx.createOscillator();
-    audioOscillator.frequency.value = 1;
-    audioOscillator.connect(audioGain).connect(audioCtx.destination);
-    audioOscillator.start();
-    // Suspend immediately so the oscillator doesn't claim audio focus / surface a
-    // playing-media notification while we're just armed and idle. Resumed in
-    // setAudioActiveInternal(true) once a generation actually starts.
-    try { await audioCtx.suspend(); } catch (_) { /* noop */ }
-}
-
-async function stopOscillator() {
-    try { audioOscillator?.stop(); } catch (_) { /* noop */ }
-    try { audioOscillator?.disconnect(); } catch (_) { /* noop */ }
-    audioOscillator = null;
-    try { audioGain?.disconnect(); } catch (_) { /* noop */ }
-    audioGain = null;
-    if (audioCtx) {
-        try { await audioCtx.close(); } catch (_) { /* noop */ }
-        audioCtx = null;
-    }
-}
-
 function onAudioEnded() {
-    if (audioActive) audioEl?.play().catch(() => { /* noop */ });
+    audioEl?.play().catch(() => { /* noop */ });
 }
 
 function onAudioPause() {
-    if (audioActive) {
-        setTimeout(() => {
-            if (audioActive) audioEl?.play().catch(() => { /* noop */ });
-        }, 500);
-    }
+    setTimeout(() => audioEl?.play().catch(() => { /* noop */ }), 500);
 }
 
 function attachAudioListeners() {
@@ -171,39 +139,17 @@ function detachAudioListeners() {
     audioListenersAttached = false;
 }
 
-function ensureMediaSession() {
-    if (!('mediaSession' in navigator)) return;
-    try {
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: 'Luker',
-            artist: 'Background keep-alive',
-        });
-        navigator.mediaSession.setActionHandler('play',  () => audioEl?.play().catch(() => {}));
-        navigator.mediaSession.setActionHandler('pause', () => audioEl?.play().catch(() => {}));
-    } catch (error) {
-        console.warn('[Luker] MediaSession setup failed', error);
-    }
-}
-
-function clearMediaSession() {
-    if (!('mediaSession' in navigator)) return;
-    try {
-        navigator.mediaSession.metadata = null;
-        navigator.mediaSession.setActionHandler('play', null);
-        navigator.mediaSession.setActionHandler('pause', null);
-        navigator.mediaSession.playbackState = 'none';
-    } catch (_) { /* noop */ }
-}
-
-// Arm: build the oscillator + <audio> element while we still have a user
-// gesture, so later setAudioKeepAliveActive() calls (driven by GENERATION_*
-// events) can play() without a fresh gesture. Priming with a play→pause cycle
-// gives Chrome the "user has authorized this element" record. The oscillator
-// stays suspended and the audio element stays paused — nothing surfaces a
-// media notification until setAudioKeepAliveActive(true) flips us into active.
-async function armAudio() {
+async function enterAudio() {
     if (audioEl) return;
-    await startOscillator();
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new Ctx();
+    audioGain = audioCtx.createGain();
+    audioGain.gain.value = 0.0001;
+    audioOscillator = audioCtx.createOscillator();
+    audioOscillator.frequency.value = 1;
+    audioOscillator.connect(audioGain).connect(audioCtx.destination);
+    audioOscillator.start();
+
     audioEl = new Audio(SILENT_AUDIO_URL);
     audioEl.loop = true;
     audioEl.volume = 0.001;
@@ -211,59 +157,56 @@ async function armAudio() {
     attachAudioListeners();
     try {
         await audioEl.play();
-        audioEl.pause();
     } catch (error) {
-        await disarmAudio();
+        await exitAudio();
         throw error;
+    }
+
+    if ('mediaSession' in navigator) {
+        try {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: 'Luker',
+                artist: 'Background keep-alive',
+            });
+            navigator.mediaSession.setActionHandler('play',  () => audioEl?.play().catch(() => {}));
+            navigator.mediaSession.setActionHandler('pause', () => audioEl?.play().catch(() => {}));
+            navigator.mediaSession.playbackState = 'playing';
+        } catch (error) {
+            console.warn('[Luker] MediaSession setup failed', error);
+        }
     }
 }
 
-async function disarmAudio() {
-    audioActive = false;
-    clearMediaSession();
+async function exitAudio() {
     detachAudioListeners();
     if (audioEl) {
         try { audioEl.pause(); } catch (_) { /* noop */ }
         try { audioEl.src = ''; } catch (_) { /* noop */ }
         audioEl = null;
     }
-    await stopOscillator();
-}
-
-async function setAudioActiveInternal(shouldBeActive) {
-    if (activeMode !== 'audio' || !audioEl) return;
-    if (shouldBeActive === audioActive) return;
-    audioActive = shouldBeActive;
-    if (shouldBeActive) {
-        if (audioCtx?.state === 'suspended') {
-            try { await audioCtx.resume(); } catch (_) { /* noop */ }
-        }
-        try { await audioEl.play(); } catch (error) {
-            console.warn('[Luker] Failed to start audio keep-alive playback', error);
-            audioActive = false;
-            try { await audioCtx?.suspend(); } catch (_) { /* noop */ }
-            return;
-        }
-        ensureMediaSession();
-        if ('mediaSession' in navigator) {
-            try { navigator.mediaSession.playbackState = 'playing'; } catch (_) { /* noop */ }
-        }
-    } else {
-        try { audioEl.pause(); } catch (_) { /* noop */ }
-        // Clearing metadata makes the lock-screen card disappear entirely;
-        // just flipping playbackState to 'paused' would leave a stale "paused"
-        // card visible on Android.
-        clearMediaSession();
-        if (audioCtx?.state === 'running') {
-            try { await audioCtx.suspend(); } catch (_) { /* noop */ }
-        }
+    if ('mediaSession' in navigator) {
+        try {
+            navigator.mediaSession.metadata = null;
+            navigator.mediaSession.setActionHandler('play', null);
+            navigator.mediaSession.setActionHandler('pause', null);
+            navigator.mediaSession.playbackState = 'none';
+        } catch (_) { /* noop */ }
+    }
+    try { audioOscillator?.stop(); } catch (_) { /* noop */ }
+    try { audioOscillator?.disconnect(); } catch (_) { /* noop */ }
+    audioOscillator = null;
+    try { audioGain?.disconnect(); } catch (_) { /* noop */ }
+    audioGain = null;
+    if (audioCtx) {
+        try { await audioCtx.close(); } catch (_) { /* noop */ }
+        audioCtx = null;
     }
 }
 
 // ---------- Page lifecycle (re-arm after OS unsuspends) ----------
 
 function resumeIfNeeded() {
-    if (activeMode === 'audio' && audioActive) {
+    if (activeMode === 'audio') {
         if (audioCtx?.state === 'suspended') {
             audioCtx.resume().catch(() => { /* noop */ });
         }
@@ -359,7 +302,7 @@ export async function setKeepAliveMode(desired) {
         await exitPip();
     }
     if (activeMode === 'audio' && target !== 'audio') {
-        await disarmAudio();
+        await exitAudio();
     }
     if (activeMode === 'android' && target !== 'android') {
         try {
@@ -420,13 +363,13 @@ export async function setKeepAliveMode(desired) {
             return 'off';
         }
         try {
-            await armAudio();
+            await enterAudio();
             activeMode = 'audio';
             attachPageLifecycleListeners();
             return 'audio';
         } catch (error) {
-            console.warn('[Luker] Failed to arm audio keep-alive', error);
-            try { await disarmAudio(); } catch (_) { /* noop */ }
+            console.warn('[Luker] Failed to enter audio keep-alive', error);
+            try { await exitAudio(); } catch (_) { /* noop */ }
             activeMode = 'off';
             throw error;
         }
@@ -434,26 +377,6 @@ export async function setKeepAliveMode(desired) {
 
     activeMode = 'off';
     return 'off';
-}
-
-/**
- * Start or stop the silent audio playback for the audio mode. Only meaningful
- * when activeMode === 'audio' — a no-op otherwise. Designed to be called from
- * GENERATION_STARTED / GENERATION_ENDED handlers so the lock-screen card and
- * audio-focus claim only appear while a message is being generated.
- *
- * @param {boolean} shouldBeActive
- */
-export async function setAudioKeepAliveActive(shouldBeActive) {
-    await setAudioActiveInternal(!!shouldBeActive);
-}
-
-/**
- * Whether the audio keep-alive is currently playing (and thus showing a
- * lock-screen media card).
- */
-export function isAudioKeepAliveActive() {
-    return audioActive;
 }
 
 export function initKeepAlive() {

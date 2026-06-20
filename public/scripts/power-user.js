@@ -41,7 +41,6 @@ import {
     initKeepAlive,
     isKeepAliveSupported,
     onKeepAliveStateChanged,
-    setAudioKeepAliveActive,
     setKeepAliveMode,
 } from './luker-keep-alive.js';
 import {
@@ -484,118 +483,88 @@ function syncAndroidSystemBarsColor() {
 }
 
 function syncMobileKeepAliveCheckbox() {
-    const active = getActiveKeepAliveMode();
-    $('#luker_mobile_keep_alive').prop('checked', active !== 'off');
+    const platform = getKeepAlivePlatform();
+    // Web audio mode reflects the setting, not the live active mode — the
+    // session is only built up during generations, but the checkbox should
+    // stay checked across idle gaps.
+    const checked = platform === 'android'
+        ? !!power_user.luker_mobile_keep_alive_android_enabled
+        : platform === 'web'
+            ? !!power_user.luker_mobile_keep_alive_web_audio_enabled || getActiveKeepAliveMode() === 'pip'
+            : false;
+    $('#luker_mobile_keep_alive').prop('checked', checked);
 }
 
-// Reference-counted activation of the audio keep-alive: every GENERATION_STARTED
-// increments, every GENERATION_ENDED decrements (Math.max-clamped to 0). The
-// audio actually plays only while count > 0, so the lock-screen card appears
-// when a message starts generating and disappears once all plugin
-// MESSAGE_RECEIVED listeners settle (the eventSource.emit await chain ensures
-// ENDED fires only after that point).
-//
-// Deactivation is deferred by AUDIO_DEACTIVATE_GRACE_MS so chained generations
-// (orchestrator multi-node runs, agent tool loops) stay covered through the
-// gap between one ENDED and the next STARTED — without the grace, OS-side
-// throttling can kick in during that gap and stall the next request, and the
-// lock-screen card would flicker on/off between nodes.
+// Audio keep-alive is event-driven: while the audio setting is enabled,
+// GENERATION_STARTED enters audio mode (full build of oscillator + <audio> +
+// MediaSession) and GENERATION_ENDED schedules exiting it after a grace
+// window. The grace covers chained generations (orchestrator multi-node runs,
+// agent tool loops) so audio doesn't tear down between one node's ENDED and
+// the next node's STARTED. Reference-counted because a single user action can
+// trigger nested quiet generations.
 const AUDIO_DEACTIVATE_GRACE_MS = 10000;
 let audioActivationCount = 0;
-let audioActivationStarted = null;
-let audioActivationEnded = null;
 let audioDeactivateTimer = null;
 
+function isAudioKeepAliveSettingEnabled() {
+    return getKeepAlivePlatform() === 'web'
+        && !!power_user.luker_mobile_keep_alive_web_audio_enabled;
+}
+
 function audioActivationSync() {
+    if (!isAudioKeepAliveSettingEnabled()) return;
     if (audioActivationCount > 0) {
         if (audioDeactivateTimer) {
             clearTimeout(audioDeactivateTimer);
             audioDeactivateTimer = null;
         }
-        setAudioKeepAliveActive(true).catch((error) => {
-            console.warn('[Luker] Failed to activate audio keep-alive', error);
-        });
+        if (getActiveKeepAliveMode() !== 'audio') {
+            setKeepAliveMode('audio').catch((error) => {
+                console.warn('[Luker] Failed to enter audio keep-alive', error);
+            });
+        }
     } else if (!audioDeactivateTimer) {
         audioDeactivateTimer = setTimeout(() => {
             audioDeactivateTimer = null;
             if (audioActivationCount > 0) return;
-            setAudioKeepAliveActive(false).catch((error) => {
-                console.warn('[Luker] Failed to deactivate audio keep-alive', error);
-            });
+            if (getActiveKeepAliveMode() === 'audio') {
+                setKeepAliveMode('off').catch((error) => {
+                    console.warn('[Luker] Failed to exit audio keep-alive', error);
+                });
+            }
         }, AUDIO_DEACTIVATE_GRACE_MS);
     }
 }
 
-function installAudioActivationHooks() {
-    if (audioActivationStarted) return;
-    audioActivationCount = 0;
-    // dryRun generations (e.g. token-count predictions on chat open, lorebook
-    // scan previews) emit GENERATION_STARTED but never GENERATION_ENDED — see
-    // Generate() in script.js where dryRun returns before finishGenerating.
-    // Counting them would pin the counter above zero forever.
-    audioActivationStarted = (_type, _params, dryRun) => {
-        if (dryRun) return;
-        audioActivationCount += 1;
-        audioActivationSync();
-    };
-    audioActivationEnded = () => {
-        audioActivationCount = Math.max(0, audioActivationCount - 1);
-        audioActivationSync();
-    };
-    eventSource.on(event_types.GENERATION_STARTED, audioActivationStarted);
-    eventSource.on(event_types.GENERATION_ENDED, audioActivationEnded);
+// dryRun generations (token-count predictions on chat open, lorebook scan
+// previews) emit GENERATION_STARTED but never GENERATION_ENDED — see Generate()
+// in script.js where dryRun returns before finishGenerating. Counting them
+// would pin the counter above zero forever.
+function onAudioActivationStarted(_type, _params, dryRun) {
+    if (dryRun) return;
+    if (!isAudioKeepAliveSettingEnabled()) return;
+    audioActivationCount += 1;
+    audioActivationSync();
 }
 
-function uninstallAudioActivationHooks() {
-    if (audioActivationStarted) {
-        eventSource.removeListener(event_types.GENERATION_STARTED, audioActivationStarted);
-        audioActivationStarted = null;
-    }
-    if (audioActivationEnded) {
-        eventSource.removeListener(event_types.GENERATION_ENDED, audioActivationEnded);
-        audioActivationEnded = null;
-    }
-    audioActivationCount = 0;
+function onAudioActivationEnded() {
+    if (!isAudioKeepAliveSettingEnabled()) return;
+    audioActivationCount = Math.max(0, audioActivationCount - 1);
+    audioActivationSync();
+}
+
+function cancelAudioDeactivateTimer() {
     if (audioDeactivateTimer) {
         clearTimeout(audioDeactivateTimer);
         audioDeactivateTimer = null;
     }
-    setAudioKeepAliveActive(false).catch(() => { /* noop */ });
-}
-
-// Wraps setKeepAliveMode so the GENERATION_*-driven activation hooks track the
-// active mode exactly: installed iff audio mode was successfully entered.
-// For audio specifically, hooks go on BEFORE the awaited arm — otherwise a
-// GENERATION_STARTED that fires during prime (e.g. the click that armed audio
-// is also the click that triggered the message) gets emitted while the
-// counter still has no listener, and the resulting generation runs without
-// keep-alive.
-async function applyKeepAliveMode(mode) {
-    if (mode === 'audio') {
-        installAudioActivationHooks();
-        try {
-            const result = await setKeepAliveMode(mode);
-            if (result !== 'audio') {
-                uninstallAudioActivationHooks();
-            } else if (audioActivationCount > 0) {
-                // A generation already started while we were arming — flip
-                // straight into active mode now that audioEl is ready.
-                audioActivationSync();
-            }
-            return result;
-        } catch (error) {
-            uninstallAudioActivationHooks();
-            throw error;
-        }
-    }
-    const result = await setKeepAliveMode(mode);
-    uninstallAudioActivationHooks();
-    return result;
 }
 
 function syncMobileKeepAliveUi() {
     if (!syncMobileKeepAliveUi._initialized) {
         initKeepAlive();
+        eventSource.on(event_types.GENERATION_STARTED, onAudioActivationStarted);
+        eventSource.on(event_types.GENERATION_ENDED, onAudioActivationEnded);
         onKeepAliveStateChanged(() => {
             // Reflect whatever the module says is currently in effect — the user closing the
             // PiP window from the OS UI or autoplay being denied both land here.
@@ -604,19 +573,6 @@ function syncMobileKeepAliveUi() {
             if (platform === 'android') {
                 power_user.luker_mobile_keep_alive_android_enabled = active === 'android';
                 saveSettingsDebounced();
-            } else if (platform === 'web') {
-                // Only track audio: PiP cannot be auto-restored without a same-gesture click,
-                // so persisting it would create the "checkbox on but actually off" mismatch.
-                if (active === 'audio') {
-                    power_user.luker_mobile_keep_alive_web_audio_enabled = true;
-                    saveSettingsDebounced();
-                } else if (active === 'off' && power_user.luker_mobile_keep_alive_web_audio_enabled) {
-                    power_user.luker_mobile_keep_alive_web_audio_enabled = false;
-                    saveSettingsDebounced();
-                }
-            }
-            if (active !== 'audio') {
-                uninstallAudioActivationHooks();
             }
             syncMobileKeepAliveCheckbox();
         });
@@ -637,35 +593,11 @@ function syncMobileKeepAliveUi() {
         && power_user.luker_mobile_keep_alive_android_enabled
         && getActiveKeepAliveMode() !== 'android'
     ) {
-        applyKeepAliveMode('android')
+        setKeepAliveMode('android')
             .then(syncMobileKeepAliveCheckbox)
             .catch((error) => {
                 console.warn('[Luker] Failed to restore Android background keep-alive', error);
             });
-        return;
-    }
-
-    // Audio mode needs *some* user gesture but not the toggle click specifically — wait for
-    // any tap/click anywhere on the page and start it from there. PiP is never auto-restored.
-    if (
-        platform === 'web'
-        && power_user.luker_mobile_keep_alive_web_audio_enabled
-        && getActiveKeepAliveMode() !== 'audio'
-        && !syncMobileKeepAliveUi._audioRestoreArmed
-    ) {
-        syncMobileKeepAliveUi._audioRestoreArmed = true;
-        const tryRestore = () => {
-            // The user may have toggled it off between page load and this click.
-            if (!power_user.luker_mobile_keep_alive_web_audio_enabled) return;
-            applyKeepAliveMode('audio')
-                .then(syncMobileKeepAliveCheckbox)
-                .catch((error) => {
-                    console.warn('[Luker] Failed to restore audio keep-alive', error);
-                });
-        };
-        const opts = { once: true, capture: true };
-        document.addEventListener('click', tryRestore, opts);
-        document.addEventListener('touchstart', tryRestore, opts);
     }
 }
 
@@ -697,7 +629,12 @@ async function chooseWebKeepAliveMode() {
 
 async function applyMobileKeepAliveFromUser(checked) {
     if (!checked) {
-        try { await applyKeepAliveMode('off'); } catch (_) { /* noop */ }
+        // Audio session may already be playing for an in-flight generation;
+        // shut it down explicitly along with the reference counter so a future
+        // STARTED with the setting off doesn't reactivate a stale count.
+        audioActivationCount = 0;
+        cancelAudioDeactivateTimer();
+        try { await setKeepAliveMode('off'); } catch (_) { /* noop */ }
         const platform = getKeepAlivePlatform();
         if (platform === 'android') {
             power_user.luker_mobile_keep_alive_android_enabled = false;
@@ -712,7 +649,7 @@ async function applyMobileKeepAliveFromUser(checked) {
 
     if (getKeepAlivePlatform() === 'android') {
         try {
-            await applyKeepAliveMode('android');
+            await setKeepAliveMode('android');
             power_user.luker_mobile_keep_alive_android_enabled = true;
             saveSettingsDebounced();
         } catch (error) {
@@ -724,21 +661,30 @@ async function applyMobileKeepAliveFromUser(checked) {
         return;
     }
 
-    // Web platform: ask which mode, then enter inside the same user gesture chain.
+    // Web platform: ask which mode. Audio only takes effect on the next
+    // GENERATION_STARTED — the toggle click itself is the user gesture that
+    // would be required, but we don't want to claim audio focus until there's
+    // an actual generation to keep alive.
     const desired = await chooseWebKeepAliveMode();
     if (!desired) {
         syncMobileKeepAliveCheckbox();
         return;
     }
-    try {
-        await applyKeepAliveMode(desired);
-        // Only audio can be auto-restored next session via a deferred click; PiP cannot.
-        power_user.luker_mobile_keep_alive_web_audio_enabled = desired === 'audio';
+    if (desired === 'pip') {
+        try {
+            await setKeepAliveMode('pip');
+            power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            saveSettingsDebounced();
+        } catch (_error) {
+            power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            saveSettingsDebounced();
+            toastr.warning(t`Background keep-alive could not be enabled. Try again from a tap on the page.`);
+        }
+    } else {
+        // audio: just flag the setting on. The next GENERATION_STARTED enters
+        // audio mode automatically; nothing should happen right now.
+        power_user.luker_mobile_keep_alive_web_audio_enabled = true;
         saveSettingsDebounced();
-    } catch (_error) {
-        power_user.luker_mobile_keep_alive_web_audio_enabled = false;
-        saveSettingsDebounced();
-        toastr.warning(t`Background keep-alive could not be primed. Try unchecking and re-checking the option.`);
     }
     syncMobileKeepAliveCheckbox();
 }
