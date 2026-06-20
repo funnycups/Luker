@@ -53,7 +53,7 @@ function normalizeSkillsField(obj, { isAgent = false } = {}) {
 export const ORCH_EXECUTION_MODE_DIRECTOR = 'director';
 
 const DIRECTOR_LIMIT_BOUNDS = Object.freeze({
-    maxRounds: { min: 1, default: 20 },
+    maxRounds: { min: 1, default: 40 },
     maxConcurrentSubagents: { min: 1, default: 4 },
     maxTotalSubagentRuns: { min: 1, default: 16 },
     // Per-sub-agent tool-call floor. Default (`null`) inherits the runtime

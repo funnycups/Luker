@@ -132,7 +132,7 @@ loop.finalize -> out
 
 1. **abort signal**：使用者點「停止」 / 上層取消 → 立即中止；trace 記 `cancelled`，**不**注入半成品 capsule。
 2. **wall_clock_budget_ms**：到點立即 break。
-3. **max_rounds**：輪次上限（預設 20）。
+3. **max_rounds**：輪次上限（預設 40）。
 4. **Agent 不呼叫工具**：連續 3 輪沒呼叫任何工具 → 提前 break（防止 agent「光說話不動手」耗光預算）。任意一輪呼叫到工具，streak 歸零。
 
 觸發任一兜底時，loop 會把最後一次 agent 的自然文字作為 capsule 兜底，保證至少有產出送給主模型。
@@ -185,7 +185,7 @@ Loop popup 當前沒有 **匯出 Profile** / **匯入 Profile** 按鈕，跨電�
 
 | 設定 | 說明 |
 |---|---|
-| `max_rounds` | loop 最多跑多少輪（預設 20） |
+| `max_rounds` | loop 最多跑多少輪（預設 40） |
 | `wall_clock_budget_ms` | 整個 loop 的牆鐘預算（預設 300000 ms / 5 分鐘） |
 | `system_prompt` | loop agent 的 system 指令 |
 | `tools.<namespace>.<verb>` | 每個工具的啟用開關（`finalize` 強制 true） |

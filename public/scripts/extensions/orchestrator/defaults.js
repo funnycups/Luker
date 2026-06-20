@@ -516,7 +516,7 @@ export const defaultAgendaPlanner = {
 // Default loop profile system prompt — shipped as a starting point for
 // users who switch to loop mode. The runtime sanitizer in
 // `persistence.js::sanitizeLoopProfile` fills in the rest of the V3 shape
-// (tool flags default-on, max_rounds=20, wall_clock=300000ms, finalize
+// (tool flags default-on, max_rounds=40, wall_clock=300000ms, finalize
 // forced true). Keeping the default text terse and action-oriented matches
 // the project's prompt-writing convention.
 export const DEFAULT_LOOP_SYSTEM_PROMPT = [
@@ -556,7 +556,7 @@ export const defaultLoopProfile = {
         search: { search: true, visit: true },
         finalize: true,
     },
-    max_rounds: 20,
+    max_rounds: 40,
     wall_clock_budget_ms: 300000,
 };
 
@@ -569,7 +569,7 @@ export const defaultSettings = {
     llmNodeApiPresetName: '',
     llmNodePresetName: '',
     includeWorldInfoWithPreset: true,
-    nodeIterationMaxRounds: 20,
+    nodeIterationMaxRounds: 40,
     reviewRerunMaxRounds: 2,
     toolCallRetryMax: 2,
     maxRecentMessages: 14,

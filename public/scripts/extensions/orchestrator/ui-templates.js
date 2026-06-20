@@ -728,7 +728,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
             <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
             <label for="luker_orch_loop_max_rounds">${escapeHtml(i18n('Loop max rounds'))}</label>
-            <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.max_rounds || 20))}" />
+            <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.max_rounds || 40))}" />
             <label for="luker_orch_loop_wall_clock">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
             <input id="luker_orch_loop_wall_clock" data-scope="${safeScope}" class="text_pole" type="number" min="10" step="1" value="${escapeHtml(String(wallClockSeconds))}" />
         </div>
@@ -894,7 +894,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         : {};
     const mainAgent = director.mainAgent && typeof director.mainAgent === 'object' ? director.mainAgent : {};
     const subAgents = Array.isArray(director.subAgents) ? director.subAgents : [];
-    const maxRounds = Number.isFinite(Number(director.maxRounds)) ? Number(director.maxRounds) : 20;
+    const maxRounds = Number.isFinite(Number(director.maxRounds)) ? Number(director.maxRounds) : 40;
     const maxConcurrentSubagents = Number.isFinite(Number(director.maxConcurrentSubagents)) ? Number(director.maxConcurrentSubagents) : 4;
     const maxTotalSubagentRuns = Number.isFinite(Number(director.maxTotalSubagentRuns)) ? Number(director.maxTotalSubagentRuns) : 16;
     const discardOnAbort = Boolean(director.discardOnAbort);

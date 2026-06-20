@@ -247,7 +247,7 @@ Director 預設是「主代理 + 多子代理」的工作流，但有一種 powe
 1. 在主代理系統提示詞裡，刪掉所有「派遣子代理」相關的紀律，改寫成「你自己起草、自己回讀、自己改，認為可以了就 `finalize`」。
 2. 在 profile 裡把所有子代理刪掉（或者把它們的 ID 全部從主代理 prompt 裡摘乾淨）——這樣 `dispatch_subagent` 工具不會出現在主代理的工具列表裡，只剩 `dispatch_inline_subagent`（可以保留或不保留，看你想不想讓主代理在特殊場景臨時拉 ad-hoc 子代理）。
 3. 主代理的工具組裡至少保留：`write_message` / `apply_message_patches` / `get_draft` / `draft_search` / `finalize`，以及你想讓它用的幾個迴圈工具（典型組合是 `chat_*` + `memory_*` + `lorebook_*`）。
-4. 視情況把「工具呼叫最大輪數」往下調一些（預設 20 對單 agent 來說偏多）。
+4. 視情況把「工具呼叫最大輪數」往下調一些（預設 40 對單 agent 來說偏多）。
 
 :::
 

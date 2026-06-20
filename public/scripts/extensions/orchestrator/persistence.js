@@ -226,7 +226,7 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
         custom: { ...DEFAULT_LAYER2_CUSTOMS },
         finalize: true,
     }),
-    max_rounds: 20,
+    max_rounds: 40,
     wall_clock_budget_ms: 300000,
     capsule_inject: Object.freeze({
         position: 'atDepth',

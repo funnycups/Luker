@@ -70,7 +70,7 @@ describe('sanitizeLoopProfile defaults', () => {
         expect(out.tools.custom.search_search).toBe(true);
         expect(out.tools.custom.search_visit).toBe(true);
         expect(out.tools.finalize).toBe(true);
-        expect(out.max_rounds).toBe(20);
+        expect(out.max_rounds).toBe(40);
         expect(out.wall_clock_budget_ms).toBe(300000);
         expect(out.capsule_inject).toMatchObject({
             position: 'atDepth',
@@ -84,7 +84,7 @@ describe('sanitizeLoopProfile defaults', () => {
         const fromNull = sanitizeLoopProfile(null);
         const fromUndefined = sanitizeLoopProfile(undefined);
         expect(fromNull.mode).toBe(ORCH_EXECUTION_MODE_LOOP);
-        expect(fromNull.max_rounds).toBe(20);
+        expect(fromNull.max_rounds).toBe(40);
         expect(fromUndefined.mode).toBe(ORCH_EXECUTION_MODE_LOOP);
         expect(fromUndefined.tools.finalize).toBe(true);
     });
@@ -150,9 +150,9 @@ describe('sanitizeLoopProfile max_rounds', () => {
     });
 
     test('falls back to default on non-numeric / NaN input', () => {
-        expect(sanitizeLoopProfile({ max_rounds: 'lots' }).max_rounds).toBe(20);
-        expect(sanitizeLoopProfile({ max_rounds: NaN }).max_rounds).toBe(20);
-        expect(sanitizeLoopProfile({ max_rounds: null }).max_rounds).toBe(20);
+        expect(sanitizeLoopProfile({ max_rounds: 'lots' }).max_rounds).toBe(40);
+        expect(sanitizeLoopProfile({ max_rounds: NaN }).max_rounds).toBe(40);
+        expect(sanitizeLoopProfile({ max_rounds: null }).max_rounds).toBe(40);
     });
 });
 

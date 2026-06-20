@@ -247,7 +247,7 @@ Director's default workflow is "main agent + multiple sub-agents", but a power-u
 1. Rewrite the main-agent system prompt to drop all dispatch-related discipline. Replace it with "draft, re-read, revise; when you think it's ready, call `finalize`."
 2. Remove all sub-agents from the profile (or strip every id out of the main-agent prompt) — this way `dispatch_subagent` doesn't appear in the main agent's tool list. `dispatch_inline_subagent` can stay or go; keep it only if you want the main agent to spin up an ad-hoc consultant for unusual cases.
 3. Leave at minimum these tools enabled for the main agent: `write_message` / `apply_message_patches` / `get_draft` / `draft_search` / `finalize`, plus whichever loop tools you want it to use (a typical bundle is `chat_*` + `memory_*` + `lorebook_*`).
-4. Consider lowering the "maximum tool-calling rounds" cap — the default 20 is high for a single agent.
+4. Consider lowering the "maximum tool-calling rounds" cap — the default 40 is high for a single agent.
 
 :::
 

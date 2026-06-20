@@ -379,7 +379,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         ? safeProfile.director
         : safeProfile;
     const limits = {
-        maxRounds: Number(director.maxRounds) > 0 ? Number(director.maxRounds) : 20,
+        maxRounds: Number(director.maxRounds) > 0 ? Number(director.maxRounds) : 40,
         maxConcurrentSubagents: Number(director.maxConcurrentSubagents) > 0 ? Number(director.maxConcurrentSubagents) : 4,
         maxTotalSubagentRuns: Number(director.maxTotalSubagentRuns) > 0 ? Number(director.maxTotalSubagentRuns) : 16,
     };
