@@ -1968,10 +1968,24 @@ export async function openSchemaIterationStudio(deps) {
             // bus.setAutoApprove drives auto-commit; either way, propose
             // here so the user (or the auto-approve microtask) sees a card.
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+            // Snapshot chaining: when the user batches multiple AI turns
+            // without approving between them, each new proposal must record
+            // the state the live schema WILL be in by the time the user
+            // approves through this card (i.e. the previous pending
+            // proposal's newValue). state.live only advances on approve, so
+            // using it directly here means all batched proposals share the
+            // same fingerprint of the initial state.live — after the user
+            // approves proposal #1, state.live moves to #1's newValue, and
+            // proposal #2's stale snapshot mismatches the new readCurrent
+            // fingerprint and gets parked in `conflict`. Chaining off the
+            // last pending entry's newValue keeps the per-proposal
+            // fingerprints in sync with the approve-in-order replay.
+            const lastPending = bus.getLastPendingNewValue('profile-edit');
+            const proposalSnapshot = lastPending.found ? lastPending.newValue : state.live;
             await bus.propose({
                 kind: 'profile-edit',
                 op: { op: 'set', path: '', newValue: lastEdit.newValue },
-                snapshot: state.live,
+                snapshot: proposalSnapshot,
                 sourceCallId: firstCallId,
             });
         }

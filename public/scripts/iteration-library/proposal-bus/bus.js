@@ -98,6 +98,31 @@ export function createBus(opts = {}) {
         return false;
     }
 
+    /**
+     * Look up the most recent pending entry of `kind` and return its
+     * op.newValue. Used by replace-mode kinds (profile-edit) to chain
+     * proposal snapshots when the user batches multiple AI turns without
+     * approving between them: each new propose() should record the state
+     * the live system will be in AFTER prior pending entries commit, not
+     * the current state.live (which only advances on approve). Without
+     * chaining, approving entry N>=2 in order trips the fingerprint
+     * drift check and parks N in `conflict`.
+     *
+     * Returns { found: false } when no pending entry of this kind exists
+     * (fresh session or all prior approved/rejected) so callers can
+     * distinguish "use state.live" from "use undefined as snapshot".
+     */
+    function getLastPendingNewValue(kind) {
+        for (let i = entries.length - 1; i >= 0; i--) {
+            const e = entries[i];
+            if (e.kind !== kind) continue;
+            if (e.status !== 'pending') continue;
+            if (!e.op || !Object.prototype.hasOwnProperty.call(e.op, 'newValue')) continue;
+            return { found: true, newValue: e.op.newValue };
+        }
+        return { found: false, newValue: undefined };
+    }
+
     function findEntry(id) {
         return entries.find((e) => e.id === id) || null;
     }
@@ -438,6 +463,7 @@ export function createBus(opts = {}) {
             return out;
         },
         hasOutstanding,
+        getLastPendingNewValue,
         approve,
         reject,
         reset,
