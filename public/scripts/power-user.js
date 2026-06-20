@@ -41,6 +41,7 @@ import {
     initKeepAlive,
     isKeepAliveSupported,
     onKeepAliveStateChanged,
+    setAudioKeepAliveActive,
     setKeepAliveMode,
 } from './luker-keep-alive.js';
 import {
@@ -487,6 +488,68 @@ function syncMobileKeepAliveCheckbox() {
     $('#luker_mobile_keep_alive').prop('checked', active !== 'off');
 }
 
+// Reference-counted activation of the audio keep-alive: every GENERATION_STARTED
+// increments, every GENERATION_ENDED decrements (Math.max-clamped to 0). The
+// audio actually plays only while count > 0, so the lock-screen card appears
+// when a message starts generating and disappears once all plugin
+// MESSAGE_RECEIVED listeners settle (the eventSource.emit await chain ensures
+// ENDED fires only after that point).
+let audioActivationCount = 0;
+let audioActivationStarted = null;
+let audioActivationEnded = null;
+
+function audioActivationSync() {
+    if (audioActivationCount > 0) {
+        setAudioKeepAliveActive(true).catch((error) => {
+            console.warn('[Luker] Failed to activate audio keep-alive', error);
+        });
+    } else {
+        setAudioKeepAliveActive(false).catch((error) => {
+            console.warn('[Luker] Failed to deactivate audio keep-alive', error);
+        });
+    }
+}
+
+function installAudioActivationHooks() {
+    if (audioActivationStarted) return;
+    audioActivationCount = 0;
+    audioActivationStarted = () => {
+        audioActivationCount += 1;
+        audioActivationSync();
+    };
+    audioActivationEnded = () => {
+        audioActivationCount = Math.max(0, audioActivationCount - 1);
+        audioActivationSync();
+    };
+    eventSource.on(event_types.GENERATION_STARTED, audioActivationStarted);
+    eventSource.on(event_types.GENERATION_ENDED, audioActivationEnded);
+}
+
+function uninstallAudioActivationHooks() {
+    if (audioActivationStarted) {
+        eventSource.removeListener(event_types.GENERATION_STARTED, audioActivationStarted);
+        audioActivationStarted = null;
+    }
+    if (audioActivationEnded) {
+        eventSource.removeListener(event_types.GENERATION_ENDED, audioActivationEnded);
+        audioActivationEnded = null;
+    }
+    audioActivationCount = 0;
+    setAudioKeepAliveActive(false).catch(() => { /* noop */ });
+}
+
+// Wraps setKeepAliveMode so the GENERATION_*-driven activation hooks track the
+// active mode exactly: installed iff audio mode was successfully entered.
+async function applyKeepAliveMode(mode) {
+    const result = await setKeepAliveMode(mode);
+    if (result === 'audio') {
+        installAudioActivationHooks();
+    } else {
+        uninstallAudioActivationHooks();
+    }
+    return result;
+}
+
 function syncMobileKeepAliveUi() {
     if (!syncMobileKeepAliveUi._initialized) {
         initKeepAlive();
@@ -509,6 +572,9 @@ function syncMobileKeepAliveUi() {
                     saveSettingsDebounced();
                 }
             }
+            if (active !== 'audio') {
+                uninstallAudioActivationHooks();
+            }
             syncMobileKeepAliveCheckbox();
         });
         syncMobileKeepAliveUi._initialized = true;
@@ -528,7 +594,7 @@ function syncMobileKeepAliveUi() {
         && power_user.luker_mobile_keep_alive_android_enabled
         && getActiveKeepAliveMode() !== 'android'
     ) {
-        setKeepAliveMode('android')
+        applyKeepAliveMode('android')
             .then(syncMobileKeepAliveCheckbox)
             .catch((error) => {
                 console.warn('[Luker] Failed to restore Android background keep-alive', error);
@@ -548,7 +614,7 @@ function syncMobileKeepAliveUi() {
         const tryRestore = () => {
             // The user may have toggled it off between page load and this click.
             if (!power_user.luker_mobile_keep_alive_web_audio_enabled) return;
-            setKeepAliveMode('audio')
+            applyKeepAliveMode('audio')
                 .then(syncMobileKeepAliveCheckbox)
                 .catch((error) => {
                     console.warn('[Luker] Failed to restore audio keep-alive', error);
@@ -572,8 +638,8 @@ async function chooseWebKeepAliveMode() {
         $('<p></p>').attr('data-i18n', 'Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.').text(
             t`Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.`,
         ),
-        $('<p></p>').attr('data-i18n', 'Audio: nothing floats on screen, but other playing music or video apps will be interrupted.').text(
-            t`Audio: nothing floats on screen, but other playing music or video apps will be interrupted.`,
+        $('<p></p>').attr('data-i18n', 'Audio: automatically keeps AI requests alive only while a message is generating. A media card appears on the lock screen during that time, and other music or video apps will be paused.').text(
+            t`Audio: automatically keeps AI requests alive only while a message is generating. A media card appears on the lock screen during that time, and other music or video apps will be paused.`,
         ),
     );
     const result = await callGenericPopup(message, POPUP_TYPE.TEXT, '', {
@@ -588,7 +654,7 @@ async function chooseWebKeepAliveMode() {
 
 async function applyMobileKeepAliveFromUser(checked) {
     if (!checked) {
-        try { await setKeepAliveMode('off'); } catch (_) { /* noop */ }
+        try { await applyKeepAliveMode('off'); } catch (_) { /* noop */ }
         const platform = getKeepAlivePlatform();
         if (platform === 'android') {
             power_user.luker_mobile_keep_alive_android_enabled = false;
@@ -603,7 +669,7 @@ async function applyMobileKeepAliveFromUser(checked) {
 
     if (getKeepAlivePlatform() === 'android') {
         try {
-            await setKeepAliveMode('android');
+            await applyKeepAliveMode('android');
             power_user.luker_mobile_keep_alive_android_enabled = true;
             saveSettingsDebounced();
         } catch (error) {
@@ -622,14 +688,14 @@ async function applyMobileKeepAliveFromUser(checked) {
         return;
     }
     try {
-        await setKeepAliveMode(desired);
+        await applyKeepAliveMode(desired);
         // Only audio can be auto-restored next session via a deferred click; PiP cannot.
         power_user.luker_mobile_keep_alive_web_audio_enabled = desired === 'audio';
         saveSettingsDebounced();
     } catch (_error) {
         power_user.luker_mobile_keep_alive_web_audio_enabled = false;
         saveSettingsDebounced();
-        toastr.warning(t`Background keep-alive could not be enabled. Try again from a tap on the page.`);
+        toastr.warning(t`Background keep-alive could not be primed. Try unchecking and re-checking the option.`);
     }
     syncMobileKeepAliveCheckbox();
 }

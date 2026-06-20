@@ -2,6 +2,7 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 const SILENT_VIDEO_URL = '/sounds/silent.mp4';
+const SILENT_AUDIO_URL = '/sounds/silent-keepalive.m4a';
 
 /** @typedef {'off'|'android'|'pip'|'audio'} KeepAliveMode */
 /** @typedef {'android'|'web'|'unsupported'} KeepAlivePlatform */
@@ -15,23 +16,20 @@ let stateChangeCallback = null;
 let pipVideo = null;
 let pipListenersAttached = false;
 
-// Audio state — a silent 1Hz OscillatorNode fed through near-zero gain into
-// AudioContext.destination. As long as the destination produces frames, Chromium keeps
-// audio focus on the tab and skips hidden-tab throttling. Tested on Android 10 Chrome
-// 147: backgrounded tab survives screen-off indefinitely with just this. No <audio>
-// element, no MediaSession, no worker, no Web Lock needed.
+// Audio mode: armed (resources built, not playing) vs active (playing).
+// A 1Hz OscillatorNode -> tiny gain -> AudioContext.destination keeps Chromium
+// from throttling the tab; a real <audio> element + MediaSession metadata
+// registers a media session so the OS treats us as foreground media. Both must
+// run together — osc alone fails to surface a MediaSession card, <audio> alone
+// gets decoder-throttled in background.
 let audioCtx = null;
 let audioOscillator = null;
 let audioGain = null;
+let audioEl = null;
+let audioActive = false;
+let audioListenersAttached = false;
 
-// Heartbeat worker (keeps the main thread "alive" past hidden-tab throttling)
-let heartbeatWorker = null;
-let heartbeatWorkerBlobUrl = null;
-
-// Web Lock (Chromium uses lock holding as a "the page is doing work" hint)
-let webLockAbortController = null;
-
-// Page lifecycle listeners (re-arm audio after the OS suspends us)
+// Page lifecycle listeners (re-arm audio after the OS unsuspends us)
 let pageLifecycleListenersAttached = false;
 
 function hasAndroidKeepAliveBridge() {
@@ -119,13 +117,8 @@ async function exitPip() {
 
 // ---------- Audio ----------
 
-async function enterAudio() {
-    if (audioCtx) {
-        if (audioCtx.state === 'suspended') {
-            try { await audioCtx.resume(); } catch (_) { /* noop */ }
-        }
-        return;
-    }
+function startOscillator() {
+    if (audioCtx) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
     audioCtx = new Ctx();
     audioGain = audioCtx.createGain();
@@ -134,12 +127,9 @@ async function enterAudio() {
     audioOscillator.frequency.value = 1;
     audioOscillator.connect(audioGain).connect(audioCtx.destination);
     audioOscillator.start();
-    if (audioCtx.state === 'suspended') {
-        try { await audioCtx.resume(); } catch (_) { /* noop */ }
-    }
 }
 
-async function exitAudio() {
+async function stopOscillator() {
     try { audioOscillator?.stop(); } catch (_) { /* noop */ }
     try { audioOscillator?.disconnect(); } catch (_) { /* noop */ }
     audioOscillator = null;
@@ -151,62 +141,133 @@ async function exitAudio() {
     }
 }
 
-// ---------- Heartbeat worker ----------
-
-function startHeartbeatWorker() {
-    if (heartbeatWorker || typeof Worker !== 'function') return;
-    const code = "let t=null;self.onmessage=e=>{if(e.data==='start')t=setInterval(()=>{self.postMessage('ping');try{fetch(self.location.origin||'/',{method:'HEAD',mode:'no-cors'}).catch(()=>{})}catch(_){}},15000);else if(e.data==='stop'){clearInterval(t);t=null;}};";
-    try {
-        const blob = new Blob([code], { type: 'application/javascript' });
-        heartbeatWorkerBlobUrl = URL.createObjectURL(blob);
-        heartbeatWorker = new Worker(heartbeatWorkerBlobUrl);
-        heartbeatWorker.onmessage = resumeIfNeeded;
-        heartbeatWorker.onerror = () => {
-            stopHeartbeatWorker();
-            if (activeMode !== 'off') setTimeout(startHeartbeatWorker, 1000);
-        };
-        heartbeatWorker.postMessage('start');
-    } catch (_) { /* noop */ }
+function onAudioEnded() {
+    if (audioActive) audioEl?.play().catch(() => { /* noop */ });
 }
 
-function stopHeartbeatWorker() {
-    try { heartbeatWorker?.postMessage('stop'); } catch (_) { /* noop */ }
-    try { heartbeatWorker?.terminate(); } catch (_) { /* noop */ }
-    heartbeatWorker = null;
-    if (heartbeatWorkerBlobUrl) {
-        try { URL.revokeObjectURL(heartbeatWorkerBlobUrl); } catch (_) { /* noop */ }
-        heartbeatWorkerBlobUrl = null;
+function onAudioPause() {
+    if (audioActive) {
+        setTimeout(() => {
+            if (audioActive) audioEl?.play().catch(() => { /* noop */ });
+        }, 500);
     }
 }
 
-// ---------- Web Lock ----------
+function attachAudioListeners() {
+    if (audioListenersAttached || !audioEl) return;
+    audioEl.addEventListener('ended', onAudioEnded);
+    audioEl.addEventListener('pause', onAudioPause);
+    audioListenersAttached = true;
+}
 
-function acquireWebLock() {
-    if (typeof navigator === 'undefined' || !('locks' in navigator)) return;
-    releaseWebLock();
+function detachAudioListeners() {
+    if (!audioListenersAttached || !audioEl) return;
+    audioEl.removeEventListener('ended', onAudioEnded);
+    audioEl.removeEventListener('pause', onAudioPause);
+    audioListenersAttached = false;
+}
+
+function ensureMediaSession() {
+    if (!('mediaSession' in navigator)) return;
     try {
-        webLockAbortController = new AbortController();
-        navigator.locks
-            .request('luker-keep-alive', { signal: webLockAbortController.signal }, () => new Promise(() => { /* never resolve */ }))
-            .catch((error) => {
-                if (error?.name !== 'AbortError') {
-                    console.warn('[Luker] Web Lock request failed', error);
-                }
-            });
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'Luker',
+            artist: 'Background keep-alive',
+        });
+        navigator.mediaSession.setActionHandler('play',  () => audioEl?.play().catch(() => {}));
+        navigator.mediaSession.setActionHandler('pause', () => audioEl?.play().catch(() => {}));
+    } catch (error) {
+        console.warn('[Luker] MediaSession setup failed', error);
+    }
+}
+
+function clearMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    try {
+        navigator.mediaSession.metadata = null;
+        navigator.mediaSession.setActionHandler('play', null);
+        navigator.mediaSession.setActionHandler('pause', null);
+        navigator.mediaSession.playbackState = 'none';
     } catch (_) { /* noop */ }
 }
 
-function releaseWebLock() {
-    try { webLockAbortController?.abort(); } catch (_) { /* noop */ }
-    webLockAbortController = null;
+// Arm: build the oscillator + <audio> element while we still have a user
+// gesture, so later setAudioKeepAliveActive() calls (driven by GENERATION_*
+// events) can play() without a fresh gesture. Priming with a play→pause cycle
+// gives Chrome the "user has authorized this element" record.
+async function armAudio() {
+    if (audioEl) {
+        if (audioCtx?.state === 'suspended') {
+            try { await audioCtx.resume(); } catch (_) { /* noop */ }
+        }
+        return;
+    }
+    startOscillator();
+    audioEl = new Audio(SILENT_AUDIO_URL);
+    audioEl.loop = true;
+    audioEl.volume = 0.001;
+    audioEl.preload = 'auto';
+    attachAudioListeners();
+    // Prime: play briefly then pause to authorize future programmatic play().
+    try {
+        await audioEl.play();
+        audioEl.pause();
+    } catch (error) {
+        // Tear down so the caller sees armAudio fail cleanly.
+        await disarmAudio();
+        throw error;
+    }
+    if (audioCtx?.state === 'suspended') {
+        try { await audioCtx.resume(); } catch (_) { /* noop */ }
+    }
+}
+
+async function disarmAudio() {
+    audioActive = false;
+    clearMediaSession();
+    detachAudioListeners();
+    if (audioEl) {
+        try { audioEl.pause(); } catch (_) { /* noop */ }
+        try { audioEl.src = ''; } catch (_) { /* noop */ }
+        audioEl = null;
+    }
+    await stopOscillator();
+}
+
+async function setAudioActiveInternal(shouldBeActive) {
+    if (activeMode !== 'audio' || !audioEl) return;
+    if (shouldBeActive === audioActive) return;
+    audioActive = shouldBeActive;
+    if (shouldBeActive) {
+        try { await audioEl.play(); } catch (error) {
+            console.warn('[Luker] Failed to start audio keep-alive playback', error);
+            audioActive = false;
+            return;
+        }
+        if (audioCtx?.state === 'suspended') {
+            try { await audioCtx.resume(); } catch (_) { /* noop */ }
+        }
+        ensureMediaSession();
+        if ('mediaSession' in navigator) {
+            try { navigator.mediaSession.playbackState = 'playing'; } catch (_) { /* noop */ }
+        }
+    } else {
+        try { audioEl.pause(); } catch (_) { /* noop */ }
+        if ('mediaSession' in navigator) {
+            try { navigator.mediaSession.playbackState = 'paused'; } catch (_) { /* noop */ }
+        }
+    }
 }
 
 // ---------- Page lifecycle (re-arm after OS unsuspends) ----------
 
 function resumeIfNeeded() {
-    if (activeMode === 'audio') {
+    if (activeMode === 'audio' && audioActive) {
         if (audioCtx?.state === 'suspended') {
             audioCtx.resume().catch(() => { /* noop */ });
+        }
+        if (audioEl?.paused) {
+            audioEl.play().catch(() => { /* noop */ });
         }
     }
     if (activeMode === 'pip' && pipVideo?.paused) {
@@ -297,7 +358,7 @@ export async function setKeepAliveMode(desired) {
         await exitPip();
     }
     if (activeMode === 'audio' && target !== 'audio') {
-        await exitAudio();
+        await disarmAudio();
     }
     if (activeMode === 'android' && target !== 'android') {
         try {
@@ -307,14 +368,6 @@ export async function setKeepAliveMode(desired) {
         }
     }
 
-    // PiP-only supplements: worker heartbeat and Web Lock are PiP scaffolding.
-    // Visibility self-heal is shared by both web modes — kept as a cheap "if the OS
-    // really suspends us, recover on return" fallback even though current testing on
-    // Android shows AudioContext doesn't actually get suspended.
-    if (activeMode === 'pip' && target !== 'pip') {
-        stopHeartbeatWorker();
-        releaseWebLock();
-    }
     const wasWebMode = activeMode === 'pip' || activeMode === 'audio';
     const willBeWebMode = target === 'pip' || target === 'audio';
     if (wasWebMode && !willBeWebMode) {
@@ -350,8 +403,6 @@ export async function setKeepAliveMode(desired) {
         try {
             await enterPip();
             activeMode = 'pip';
-            startHeartbeatWorker();
-            acquireWebLock();
             attachPageLifecycleListeners();
             return 'pip';
         } catch (error) {
@@ -368,13 +419,13 @@ export async function setKeepAliveMode(desired) {
             return 'off';
         }
         try {
-            await enterAudio();
+            await armAudio();
             activeMode = 'audio';
             attachPageLifecycleListeners();
             return 'audio';
         } catch (error) {
-            console.warn('[Luker] Failed to start audio keep-alive', error);
-            try { await exitAudio(); } catch (_) { /* noop */ }
+            console.warn('[Luker] Failed to arm audio keep-alive', error);
+            try { await disarmAudio(); } catch (_) { /* noop */ }
             activeMode = 'off';
             throw error;
         }
@@ -382,6 +433,26 @@ export async function setKeepAliveMode(desired) {
 
     activeMode = 'off';
     return 'off';
+}
+
+/**
+ * Start or stop the silent audio playback for the audio mode. Only meaningful
+ * when activeMode === 'audio' — a no-op otherwise. Designed to be called from
+ * GENERATION_STARTED / GENERATION_ENDED handlers so the lock-screen card and
+ * audio-focus claim only appear while a message is being generated.
+ *
+ * @param {boolean} shouldBeActive
+ */
+export async function setAudioKeepAliveActive(shouldBeActive) {
+    await setAudioActiveInternal(!!shouldBeActive);
+}
+
+/**
+ * Whether the audio keep-alive is currently playing (and thus showing a
+ * lock-screen media card).
+ */
+export function isAudioKeepAliveActive() {
+    return audioActive;
 }
 
 export function initKeepAlive() {
