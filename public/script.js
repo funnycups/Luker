@@ -14541,7 +14541,7 @@ export async function ensureFullSettingsLoaded() {
 }
 
 export async function getSettings(options = {}) {
-    let shouldPersistFirstRunCompletion = false;
+    let onboardingTask = null;
     const useBootstrap = options?.bootstrap === true;
     const data = options?.payload ?? await fetchSettingsPayload(useBootstrap ? '/api/settings/bootstrap' : '/api/settings/get');
 
@@ -14664,12 +14664,27 @@ export async function getSettings(options = {}) {
         firstRun = !!settings.firstRun;
 
         if (firstRun) {
+            // Show onboarding non-blocking: it requires user input (typing
+            // their name) which would otherwise stall the entire boot
+            // sequence — including character/group hydration — behind a
+            // modal. We fire-and-forget the popup; once the user dismisses
+            // it we flip `firstRun` and persist the change. While this is
+            // pending the rest of the app remains usable.
             if (isLoaderVisible()) {
                 await hideLoader();
             }
-            await doOnboarding(user_avatar);
-            firstRun = false;
-            shouldPersistFirstRunCompletion = true;
+            onboardingTask = doOnboarding(user_avatar)
+                .then(async () => {
+                    firstRun = false;
+                    try {
+                        await saveSettings(0, { directSave: true });
+                    } catch (error) {
+                        console.error('Failed to persist firstRun completion', error);
+                    }
+                })
+                .catch((error) => {
+                    console.error('Onboarding failed', error);
+                });
         }
     }
     await validateDisabledSamplers();
@@ -14677,9 +14692,10 @@ export async function getSettings(options = {}) {
     settingsReady = true;
     await eventSource.emit(event_types.SETTINGS_LOADED);
 
-    if (shouldPersistFirstRunCompletion) {
-        await saveSettings(0, { directSave: true });
-    }
+    // onboardingTask (if any) intentionally not awaited — it owns its own
+    // persistence of `firstRun = false`. Keeping a reference prevents the
+    // unhandled-rejection warning if doOnboarding throws.
+    void onboardingTask;
 
     if (useBootstrap) {
         void warmPreloadFullSettings();
