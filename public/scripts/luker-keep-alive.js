@@ -117,7 +117,7 @@ async function exitPip() {
 
 // ---------- Audio ----------
 
-function startOscillator() {
+async function startOscillator() {
     if (audioCtx) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
     audioCtx = new Ctx();
@@ -127,6 +127,10 @@ function startOscillator() {
     audioOscillator.frequency.value = 1;
     audioOscillator.connect(audioGain).connect(audioCtx.destination);
     audioOscillator.start();
+    // Suspend immediately so the oscillator doesn't claim audio focus / surface a
+    // playing-media notification while we're just armed and idle. Resumed in
+    // setAudioActiveInternal(true) once a generation actually starts.
+    try { await audioCtx.suspend(); } catch (_) { /* noop */ }
 }
 
 async function stopOscillator() {
@@ -194,31 +198,23 @@ function clearMediaSession() {
 // Arm: build the oscillator + <audio> element while we still have a user
 // gesture, so later setAudioKeepAliveActive() calls (driven by GENERATION_*
 // events) can play() without a fresh gesture. Priming with a play→pause cycle
-// gives Chrome the "user has authorized this element" record.
+// gives Chrome the "user has authorized this element" record. The oscillator
+// stays suspended and the audio element stays paused — nothing surfaces a
+// media notification until setAudioKeepAliveActive(true) flips us into active.
 async function armAudio() {
-    if (audioEl) {
-        if (audioCtx?.state === 'suspended') {
-            try { await audioCtx.resume(); } catch (_) { /* noop */ }
-        }
-        return;
-    }
-    startOscillator();
+    if (audioEl) return;
+    await startOscillator();
     audioEl = new Audio(SILENT_AUDIO_URL);
     audioEl.loop = true;
     audioEl.volume = 0.001;
     audioEl.preload = 'auto';
     attachAudioListeners();
-    // Prime: play briefly then pause to authorize future programmatic play().
     try {
         await audioEl.play();
         audioEl.pause();
     } catch (error) {
-        // Tear down so the caller sees armAudio fail cleanly.
         await disarmAudio();
         throw error;
-    }
-    if (audioCtx?.state === 'suspended') {
-        try { await audioCtx.resume(); } catch (_) { /* noop */ }
     }
 }
 
@@ -239,13 +235,14 @@ async function setAudioActiveInternal(shouldBeActive) {
     if (shouldBeActive === audioActive) return;
     audioActive = shouldBeActive;
     if (shouldBeActive) {
+        if (audioCtx?.state === 'suspended') {
+            try { await audioCtx.resume(); } catch (_) { /* noop */ }
+        }
         try { await audioEl.play(); } catch (error) {
             console.warn('[Luker] Failed to start audio keep-alive playback', error);
             audioActive = false;
+            try { await audioCtx?.suspend(); } catch (_) { /* noop */ }
             return;
-        }
-        if (audioCtx?.state === 'suspended') {
-            try { await audioCtx.resume(); } catch (_) { /* noop */ }
         }
         ensureMediaSession();
         if ('mediaSession' in navigator) {
@@ -253,8 +250,12 @@ async function setAudioActiveInternal(shouldBeActive) {
         }
     } else {
         try { audioEl.pause(); } catch (_) { /* noop */ }
-        if ('mediaSession' in navigator) {
-            try { navigator.mediaSession.playbackState = 'paused'; } catch (_) { /* noop */ }
+        // Clearing metadata makes the lock-screen card disappear entirely;
+        // just flipping playbackState to 'paused' would leave a stale "paused"
+        // card visible on Android.
+        clearMediaSession();
+        if (audioCtx?.state === 'running') {
+            try { await audioCtx.suspend(); } catch (_) { /* noop */ }
         }
     }
 }
