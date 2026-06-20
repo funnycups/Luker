@@ -494,19 +494,35 @@ function syncMobileKeepAliveCheckbox() {
 // when a message starts generating and disappears once all plugin
 // MESSAGE_RECEIVED listeners settle (the eventSource.emit await chain ensures
 // ENDED fires only after that point).
+//
+// Deactivation is deferred by AUDIO_DEACTIVATE_GRACE_MS so chained generations
+// (orchestrator multi-node runs, agent tool loops) stay covered through the
+// gap between one ENDED and the next STARTED — without the grace, OS-side
+// throttling can kick in during that gap and stall the next request, and the
+// lock-screen card would flicker on/off between nodes.
+const AUDIO_DEACTIVATE_GRACE_MS = 10000;
 let audioActivationCount = 0;
 let audioActivationStarted = null;
 let audioActivationEnded = null;
+let audioDeactivateTimer = null;
 
 function audioActivationSync() {
     if (audioActivationCount > 0) {
+        if (audioDeactivateTimer) {
+            clearTimeout(audioDeactivateTimer);
+            audioDeactivateTimer = null;
+        }
         setAudioKeepAliveActive(true).catch((error) => {
             console.warn('[Luker] Failed to activate audio keep-alive', error);
         });
-    } else {
-        setAudioKeepAliveActive(false).catch((error) => {
-            console.warn('[Luker] Failed to deactivate audio keep-alive', error);
-        });
+    } else if (!audioDeactivateTimer) {
+        audioDeactivateTimer = setTimeout(() => {
+            audioDeactivateTimer = null;
+            if (audioActivationCount > 0) return;
+            setAudioKeepAliveActive(false).catch((error) => {
+                console.warn('[Luker] Failed to deactivate audio keep-alive', error);
+            });
+        }, AUDIO_DEACTIVATE_GRACE_MS);
     }
 }
 
@@ -535,6 +551,10 @@ function uninstallAudioActivationHooks() {
         audioActivationEnded = null;
     }
     audioActivationCount = 0;
+    if (audioDeactivateTimer) {
+        clearTimeout(audioDeactivateTimer);
+        audioDeactivateTimer = null;
+    }
     setAudioKeepAliveActive(false).catch(() => { /* noop */ });
 }
 
