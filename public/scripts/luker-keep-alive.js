@@ -20,18 +20,12 @@ let pipListenersAttached = false;
 // down when exited. A 1Hz OscillatorNode running through near-zero gain into
 // AudioContext.destination keeps Chromium from throttling the tab; a real
 // <audio> element with a MediaSession registers a media session so the OS
-// treats this tab as foreground media. A 15s Web Worker heartbeat and a held
-// Web Lock are additional "this page is doing work" signals — without them
-// long backgrounded sessions (tens of minutes) eventually get the audio
-// element paused by the OS even though the media session is registered.
+// treats this tab as foreground media.
 let audioCtx = null;
 let audioOscillator = null;
 let audioGain = null;
 let audioEl = null;
 let audioListenersAttached = false;
-let audioHeartbeatWorker = null;
-let audioHeartbeatWorkerBlobUrl = null;
-let audioWebLockAbortController = null;
 
 // Page lifecycle listeners (re-arm audio after the OS unsuspends us)
 let pageLifecycleListenersAttached = false;
@@ -143,63 +137,12 @@ function detachAudioListeners() {
     audioListenersAttached = false;
 }
 
-function onHeartbeatTick() {
-    if (audioEl?.paused) audioEl.play().catch(() => { /* noop */ });
-    if (audioCtx?.state === 'suspended') audioCtx.resume().catch(() => { /* noop */ });
-}
-
-function startAudioHeartbeatWorker() {
-    if (audioHeartbeatWorker || typeof Worker !== 'function') return;
-    const code = "let t=null;self.onmessage=e=>{if(e.data==='start')t=setInterval(()=>{self.postMessage('ping');try{fetch(self.location.origin||'/',{method:'HEAD',mode:'no-cors'}).catch(()=>{})}catch(_){}},15000);else if(e.data==='stop'){clearInterval(t);t=null;}};";
-    try {
-        const blob = new Blob([code], { type: 'application/javascript' });
-        audioHeartbeatWorkerBlobUrl = URL.createObjectURL(blob);
-        audioHeartbeatWorker = new Worker(audioHeartbeatWorkerBlobUrl);
-        audioHeartbeatWorker.onmessage = onHeartbeatTick;
-        audioHeartbeatWorker.onerror = () => {
-            stopAudioHeartbeatWorker();
-            if (activeMode === 'audio') setTimeout(startAudioHeartbeatWorker, 1000);
-        };
-        audioHeartbeatWorker.postMessage('start');
-    } catch (_) { /* noop */ }
-}
-
-function stopAudioHeartbeatWorker() {
-    try { audioHeartbeatWorker?.postMessage('stop'); } catch (_) { /* noop */ }
-    try { audioHeartbeatWorker?.terminate(); } catch (_) { /* noop */ }
-    audioHeartbeatWorker = null;
-    if (audioHeartbeatWorkerBlobUrl) {
-        try { URL.revokeObjectURL(audioHeartbeatWorkerBlobUrl); } catch (_) { /* noop */ }
-        audioHeartbeatWorkerBlobUrl = null;
-    }
-}
-
-function acquireAudioWebLock() {
-    if (typeof navigator === 'undefined' || !('locks' in navigator)) return;
-    releaseAudioWebLock();
-    try {
-        audioWebLockAbortController = new AbortController();
-        navigator.locks
-            .request('luker-keep-alive', { signal: audioWebLockAbortController.signal }, () => new Promise(() => { /* never resolve */ }))
-            .catch((error) => {
-                if (error?.name !== 'AbortError') {
-                    console.warn('[Luker] Web Lock request failed', error);
-                }
-            });
-    } catch (_) { /* noop */ }
-}
-
-function releaseAudioWebLock() {
-    try { audioWebLockAbortController?.abort(); } catch (_) { /* noop */ }
-    audioWebLockAbortController = null;
-}
-
 async function enterAudio() {
     if (audioEl) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
     audioCtx = new Ctx();
     audioGain = audioCtx.createGain();
-    audioGain.gain.value = 0.0001;
+    audioGain.gain.value = 0.001;
     audioOscillator = audioCtx.createOscillator();
     audioOscillator.frequency.value = 1;
     audioOscillator.connect(audioGain).connect(audioCtx.destination);
@@ -230,14 +173,9 @@ async function enterAudio() {
             console.warn('[Luker] MediaSession setup failed', error);
         }
     }
-
-    startAudioHeartbeatWorker();
-    acquireAudioWebLock();
 }
 
 async function exitAudio() {
-    releaseAudioWebLock();
-    stopAudioHeartbeatWorker();
     detachAudioListeners();
     if (audioEl) {
         try { audioEl.pause(); } catch (_) { /* noop */ }
