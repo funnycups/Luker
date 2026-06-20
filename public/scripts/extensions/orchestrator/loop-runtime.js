@@ -756,8 +756,8 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     // `<available_skills>` catalog block to its system prompt. Loop is a
     // single-agent mode, so the resolver sees only the mode-level
     // `profile.skills` (no per-agent overlay). Failure falls back to an
-    // empty list — the agent runs without a catalog and skill tools
-    // resolve via the global fallback in agent-tools.js.
+    // empty list — the agent runs without a catalog and any skill_* tool
+    // call rejects (the exec requires a populated __visibleSkillsForAgent).
     let visibleSkillsForLoop = [];
     try {
         const skillRes = await loadSkillResolution();

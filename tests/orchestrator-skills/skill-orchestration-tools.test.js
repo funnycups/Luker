@@ -9,9 +9,11 @@ import { describe, test, expect, beforeEach, jest } from '@jest/globals';
  * via `jest.unstable_mockModule` so each call writes into a local
  * `registered` table the tests can inspect.
  *
- * Tests exercise each registered tool's `exec` path: visibility from
- * `ctx.__visibleSkillsForAgent`, the fallback to a global list when
- * context is missing, and scope-precedence ordering in the fallback path.
+ * The execs require `ctx.__visibleSkillsForAgent` to be present — the
+ * orchestrator runtimes (director / loop / spec / agenda) populate it
+ * before dispatch. Calls without it are rejected so the main chat (which
+ * never goes through an orchestrator runtime) cannot reach the skill
+ * inventory even if a stray dispatch path ever wires through.
  */
 
 const registered = {};
@@ -29,11 +31,7 @@ jest.unstable_mockModule(
 );
 
 const skillsApi = {
-    list: jest.fn(async () => [
-        { name: 'foo-skill', description: 'foo', scope: { kind: 'global' }, metadata: { tags: [] } },
-        { name: 'shared', description: 'global ver', scope: { kind: 'global' } },
-        { name: 'shared', description: 'char ver', scope: { kind: 'character', characterFile: 'a.png' } },
-    ]),
+    list: jest.fn(async () => []),
     readFile: jest.fn(async () => ({ content: 'body', totalLines: 1, truncated: false })),
     listFiles: jest.fn(async () => ({ files: [{ path: 'SKILL.md', size: 4, isBinary: false }] })),
 };
@@ -60,20 +58,17 @@ describe('skill-orchestration-tools', () => {
         for (const t of Object.values(registered)) {
             expect(t.mode).toBe('read');
             expect(typeof t.exec).toBe('function');
-            // schema parameters object so the orchestrator's loop schema merge
-            // doesn't reject the entry with a `parameters must be object` error.
             expect(typeof t.parameters).toBe('object');
         }
     });
 
-    test('skill_list uses ctx.__visibleSkillsForAgent when present', async () => {
+    test('skill_list uses ctx.__visibleSkillsForAgent', async () => {
         const result = await registered.skill_list.exec(
             {},
             { __visibleSkillsForAgent: [{ name: 'only-this', description: 'x', metadata: {} }] },
         );
         expect(result).toHaveLength(1);
         expect(result[0].name).toBe('only-this');
-        // No global fallback fired.
         expect(skillsApi.list).not.toHaveBeenCalled();
     });
 
@@ -89,6 +84,12 @@ describe('skill-orchestration-tools', () => {
         expect(result[0].name).toBe('character-tools');
     });
 
+    test('skill_list rejects calls without __visibleSkillsForAgent', async () => {
+        await expect(registered.skill_list.exec({})).rejects.toThrow(/__visibleSkillsForAgent/);
+        await expect(registered.skill_list.exec({}, {})).rejects.toThrow(/__visibleSkillsForAgent/);
+        expect(skillsApi.list).not.toHaveBeenCalled();
+    });
+
     test('skill_read rejects unknown name when visible set is provided', async () => {
         await expect(registered.skill_read.exec(
             { name: 'unknown' },
@@ -96,19 +97,19 @@ describe('skill-orchestration-tools', () => {
         )).rejects.toThrow(/not visible/);
     });
 
-    test('skill_read falls back to global list with character > global precedence', async () => {
-        const result = await registered.skill_read.exec({ name: 'shared' });
+    test('skill_read reads scoped via visible entry', async () => {
+        const result = await registered.skill_read.exec(
+            { name: 'foo-skill' },
+            { __visibleSkillsForAgent: [{ name: 'foo-skill', scope: { kind: 'preset', name: 'rp' } }] },
+        );
         expect(result.content).toBe('body');
-        // Verify it picked the character-scope `shared` (not the global one)
-        // by inspecting the scope passed to skillsApi.readFile.
         const lastCall = skillsApi.readFile.mock.calls[skillsApi.readFile.mock.calls.length - 1];
-        expect(lastCall[0].scope.kind).toBe('character');
-        expect(lastCall[0].scope.characterFile).toBe('a.png');
+        expect(lastCall[0].scope).toEqual({ kind: 'preset', name: 'rp' });
     });
 
-    test('skill_read fallback rejects unknown name', async () => {
-        await expect(registered.skill_read.exec({ name: 'nope' }))
-            .rejects.toThrow(/not found/);
+    test('skill_read rejects calls without __visibleSkillsForAgent', async () => {
+        await expect(registered.skill_read.exec({ name: 'foo-skill' })).rejects.toThrow(/__visibleSkillsForAgent/);
+        expect(skillsApi.readFile).not.toHaveBeenCalled();
     });
 
     test('skill_search regex scans all files when no path supplied (grep -n shape, multi-file prefix)', async () => {
@@ -131,7 +132,6 @@ describe('skill-orchestration-tools', () => {
         expect(result.output).toContain('foo-skill/SKILL.md:1: 茶杯在窗边');
         expect(result.output).toContain('foo-skill/SKILL.md:2: 手里端着茶杯');
         expect(result.output).toContain('foo-skill/usage.md:2: 端着茶杯前进');
-        // listFiles must be called with the resolved target's scope.
         expect(skillsApi.listFiles).toHaveBeenCalledWith(expect.objectContaining({
             scope: { kind: 'global' }, name: 'foo-skill',
         }));
@@ -149,7 +149,6 @@ describe('skill-orchestration-tools', () => {
 
         expect(result.ok).toBe(true);
         expect(result.output).toContain('foo-skill/notes/extra.md:2: 行二命中');
-        // When path is supplied, listFiles is bypassed.
         expect(skillsApi.listFiles).not.toHaveBeenCalled();
         expect(skillsApi.readFile).toHaveBeenCalledWith(expect.objectContaining({
             scope: { kind: 'global' }, name: 'foo-skill', path: 'notes/extra.md',
@@ -184,19 +183,11 @@ describe('skill-orchestration-tools', () => {
         )).rejects.toThrow(/pattern/i);
     });
 
-    test('skill_search uses scope-precedence fallback when no visible set is provided', async () => {
-        skillsApi.listFiles.mockResolvedValueOnce({
-            files: [{ path: 'SKILL.md', size: 4, isBinary: false }],
-        });
-        skillsApi.readFile.mockResolvedValueOnce({ content: 'shared text', totalLines: 1, truncated: false });
-
-        const result = await registered.skill_search.exec({ name: 'shared', pattern: 'shared' });
-        expect(result.ok).toBe(true);
-        expect(result.output).toContain('shared/SKILL.md:1: shared text');
-        // Verify the character-scope `shared` (not global) was chosen.
-        const lastListFilesCall = skillsApi.listFiles.mock.calls[skillsApi.listFiles.mock.calls.length - 1];
-        expect(lastListFilesCall[0].scope.kind).toBe('character');
-        expect(lastListFilesCall[0].scope.characterFile).toBe('a.png');
+    test('skill_search rejects calls without __visibleSkillsForAgent', async () => {
+        await expect(registered.skill_search.exec({ name: 'foo-skill', pattern: 'x' }))
+            .rejects.toThrow(/__visibleSkillsForAgent/);
+        expect(skillsApi.listFiles).not.toHaveBeenCalled();
+        expect(skillsApi.readFile).not.toHaveBeenCalled();
     });
 
     test('unregisterSkillOrchestrationTools removes the three entries', () => {

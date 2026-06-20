@@ -841,7 +841,8 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                     // Thread the resolved visible-skills list onto the
                     // ctx so any skill_list / skill_read / skill_search
                     // calls dispatched through this loop see the agent's
-                    // scoped visibility instead of falling back to the
+                    // scoped visibility. The skill_* execs reject calls
+                    // whose ctx omits this field — they never see the
                     // global skill inventory.
                     toolCtx.__visibleSkillsForAgent = visibleSkillsForMain;
                     // Race the tool against the signal so a hanging

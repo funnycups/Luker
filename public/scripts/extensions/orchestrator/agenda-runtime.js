@@ -743,7 +743,8 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     // `preset`) layers via the `+` inheritance idiom. The catalog block
     // gets appended to the system prompt below; the visible list rides
     // on `toolContext.__visibleSkillsForAgent` in the multi-round path
-    // so skill_list / skill_read / skill_search see scoped visibility.
+    // so skill_list / skill_read / skill_search see scoped visibility
+    // (calls without it are rejected by the exec).
     let visibleSkillsForAgent = [];
     let systemTextWithSkills = systemText;
     try {

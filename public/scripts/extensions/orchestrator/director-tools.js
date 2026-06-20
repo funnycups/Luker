@@ -776,9 +776,9 @@ export function createSubagentDispatcher({
         // Resolve visible skills for this sub-agent. Mode-level default
         // lives on `directorProfile.skills`; per-sub-agent `skills` (when
         // present on `agentConfig`) layers via the `+` inheritance idiom.
-        // Failure falls back to an empty list — the dispatch proceeds, the
-        // tools resolve via the global fallback in agent-tools.js, and the
-        // catalog block is omitted.
+        // Failure falls back to an empty list — the agent runs without a
+        // catalog and any skill_* tool call rejects (the exec requires a
+        // populated __visibleSkillsForAgent).
         let visibleSkillsForSubAgent = [];
         let baseSystemPromptWithSkills = baseSystemPrompt;
         if (directorProfile) {
