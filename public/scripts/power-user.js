@@ -529,7 +529,12 @@ function audioActivationSync() {
 function installAudioActivationHooks() {
     if (audioActivationStarted) return;
     audioActivationCount = 0;
-    audioActivationStarted = () => {
+    // dryRun generations (e.g. token-count predictions on chat open, lorebook
+    // scan previews) emit GENERATION_STARTED but never GENERATION_ENDED — see
+    // Generate() in script.js where dryRun returns before finishGenerating.
+    // Counting them would pin the counter above zero forever.
+    audioActivationStarted = (_type, _params, dryRun) => {
+        if (dryRun) return;
         audioActivationCount += 1;
         audioActivationSync();
     };
