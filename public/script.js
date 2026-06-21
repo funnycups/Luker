@@ -21000,7 +21000,18 @@ jQuery(async function () {
         // commit happens off-main-thread before the page tears down.
         try { flushTokenCacheSave(); } catch { /* best-effort */ }
         try { flushItemizedPromptsSave(); } catch { /* best-effort */ }
-        if (isChatSaving || this_edit_mes_id >= 0) {
+        // If a debounced chat save is pending OR a save is in flight OR an
+        // edit is open, force the chat write to fire NOW so the user does
+        // not lose their last action by closing the tab inside the 1s
+        // debounce window. saveChatConditional() returns a Promise; we do
+        // not await it (beforeunload is sync), but its fetch is dispatched
+        // synchronously with `keepalive: true` so the browser commits it
+        // even as the page tears down.
+        const debouncePending = chatSaveTimeout !== null && chatSaveTimeout !== undefined;
+        if (debouncePending) {
+            try { saveChatConditional(); } catch { /* best-effort */ }
+        }
+        if (isChatSaving || this_edit_mes_id >= 0 || debouncePending) {
             e.preventDefault();
             e.returnValue = true;
         }
