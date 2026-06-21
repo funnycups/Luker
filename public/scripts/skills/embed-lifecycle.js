@@ -276,13 +276,23 @@ export function registerSkillEmbedLifecycle({ context, t = (s) => s } = {}) {
         });
     }
     if (et.CHARACTER_DELETED) {
-        ev.on(et.CHARACTER_DELETED, (event) => {
-            void onCharacterDeletedCascade(event, { context });
+        ev.on(et.CHARACTER_DELETED, async (event) => {
+            try {
+                await onCharacterDeletedCascade(event, { context });
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn('[skill-embed-lifecycle] CHARACTER_DELETED cascade failed:', err?.message || err);
+            }
         });
     }
     if (et.PRESET_DELETED) {
-        ev.on(et.PRESET_DELETED, (event) => {
-            void onPresetDeletedCascade(event, { context });
+        ev.on(et.PRESET_DELETED, async (event) => {
+            try {
+                await onPresetDeletedCascade(event, { context });
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn('[skill-embed-lifecycle] PRESET_DELETED cascade failed:', err?.message || err);
+            }
         });
     }
 }

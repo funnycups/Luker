@@ -289,6 +289,7 @@ import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
 import { ToolManager } from './scripts/tool-calling.js';
+import { registerSkillEmbedLifecycle } from './scripts/skills/embed-lifecycle.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
 import { initServerHistory } from './scripts/server-history.js';
@@ -2071,6 +2072,13 @@ async function firstLoadInit() {
         () => initAccessibility(),
         () => addDebugFunctions(),
         () => doDailyExtensionUpdatesCheck(),
+        () => {
+            // Hook skills lifecycle (CHARACTER_DELETED / PRESET_DELETED
+            // cascade + import dialogs) into the core boot sequence so it
+            // is deterministic — not contingent on the orchestrator
+            // extension loading first.
+            try { registerSkillEmbedLifecycle({ context: getContext() }); } catch (_) { /* best-effort */ }
+        },
     ]);
     console.debug('[init] startup tasks batch 3 done');
     performance.mark('[init] batch3 done');

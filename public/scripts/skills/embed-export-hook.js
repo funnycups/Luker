@@ -114,8 +114,9 @@ function isAffirmative(result) {
  */
 function resolvePresetName(context) {
     try {
-        const ext = context?.extensionSettings || context?.extension_settings;
-        const oai = ext?.openai || globalThis.oai_settings;
+        const oai = context?.chatCompletionSettings
+            || context?.extensionSettings?.openai
+            || context?.extension_settings?.openai;
         const name = oai?.preset_settings_openai;
         if (typeof name === 'string' && name.trim()) return name.trim();
     } catch (_) { /* swallow */ }
