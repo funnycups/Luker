@@ -273,6 +273,22 @@ export async function ensureCharacterLoaded(page) {
 }
 
 /**
+ * Read the avatar id of the currently-loaded character. Returns '' when no
+ * character is loaded (caller should treat that as fatal — assert on it).
+ *
+ * Kept separate from ensureCharacterLoaded because some specs only want to
+ * snapshot whatever the spec runner left selected, without trying to fall
+ * back to "any character with an avatar".
+ */
+export async function getActiveCharacterAvatar(page) {
+    return await page.evaluate(() => {
+        const ctx = window.Luker?.getContext?.();
+        const cur = ctx?.characters?.[ctx?.characterId];
+        return String(cur?.avatar || '');
+    });
+}
+
+/**
  * Ensure the orchestrator extension's director profile is initialized.
  * Waits for `extension_settings.orchestrator` to exist (the extension's
  * bootstrap creates it on init), then forces the lazy initialization

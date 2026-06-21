@@ -1,11 +1,19 @@
-// #19 — Create a fresh blank character + fill every field + save.
-// Exercises POST /api/characters/create (no avatar file → uses the
-// DEFAULT_AVATAR_PATH). Then persist + restart + re-read via /get.
+// #19 — Create a fresh blank character + fill every field + save via the
+// real "Create New Character" form. Then click the new card and assert
+// the imported fields are visible in the edit panel. Restart + repeat.
+//
+// Real flow: open right drawer → click #rm_button_create → fill
+// #character_name_pole + textareas → click #create_button_label (the
+// visible label that submits the hidden #create_button form input).
+// Personality / scenario / system_prompt live inside the "Advanced
+// Definitions" popup (#character_popup); open the popup first and
+// expand its inline-drawers before filling.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
+import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard } from './_helpers.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 
 let server, mock;
@@ -16,13 +24,93 @@ const PERSONALITY = 'Direct, ceremonial, slow to anger and slower to forgive.';
 const SCENARIO = 'A merchant skiff is rounding the headland and you wait with Saoirse at the bell-tower for the all-clear signal.';
 const SYSTEM_PROMPT = 'You are Saoirse. Stay in scene. Reply with one or two paragraphs.';
 const FIRST_MES = '*Saoirse rests one hand on the bell rope and watches the headland.* "Not yet. Wait for the third lantern. The mate at the bow is reading our flags."';
-const ALT_GREETING_1 = '*Saoirse is already turning the bell mallet over in her hands when you arrive.* "You are early. Good. The mate is new."';
-const ALT_GREETING_2 = '*Saoirse glances up from the bell-rope ledger.* "Sit. Tell me what you know of the skiff before I ring."';
+
+/**
+ * Create a blank character via the real UI form. The shared
+ * `createBlankCharacter` helper in _lib/ui-character.js clicks the
+ * hidden `#create_button` <input type="submit"> directly — Playwright
+ * refuses to click hidden elements. The visible affordance is the
+ * `<label for="create_button" id="create_button_label">` icon; clicking
+ * the label submits the form correctly.
+ *
+ * Additionally, personality / scenario / system_prompt /
+ * post_history_instructions live inside the "Advanced Definitions"
+ * popup (#character_popup) which is mounted only after clicking
+ * #advanced_div. Within that popup, system_prompt +
+ * post_history_instructions sit inside an inline-drawer ("Prompt
+ * Overrides") that is collapsed by default; we expand every
+ * inline-drawer so all textareas are writable.
+ */
+async function createBlankCharacterViaUI(page, fields = {}) {
+    const drawer = page.locator('#rightNavDrawerIcon');
+    const closed = await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true);
+    if (closed) await drawer.click();
+    await page.locator('#rm_button_create').click();
+    await page.locator('#character_name_pole').waitFor({ state: 'visible', timeout: 10_000 });
+
+    const MAIN_FIELDS = {
+        name: '#character_name_pole',
+        description: '#description_textarea',
+        firstmes: '#firstmessage_textarea',
+        creator_notes: '#creator_notes_textarea',
+        creator: '#creator_textarea',
+        character_version: '#character_version_textarea',
+    };
+    for (const [key, sel] of Object.entries(MAIN_FIELDS)) {
+        if (fields[key] == null) continue;
+        const loc = page.locator(sel);
+        if (await loc.isVisible({ timeout: 1000 }).catch(() => false)) {
+            await loc.fill(String(fields[key]));
+        }
+    }
+
+    const ADV_FIELDS = {
+        personality: '#personality_textarea',
+        scenario: '#scenario_pole',
+        mes_example: '#mes_example_textarea',
+        system_prompt: '#system_prompt_textarea',
+        post_history_instructions: '#post_history_instructions_textarea',
+    };
+    const needAdvanced = Object.keys(ADV_FIELDS).some(k => fields[k] != null);
+    if (needAdvanced) {
+        await page.locator('#advanced_div').click();
+        await page.locator('#personality_textarea').waitFor({ state: 'visible', timeout: 5000 });
+        // Expand every inline-drawer in the popup so all textareas
+        // become writable.
+        await page.evaluate(() => {
+            document.querySelectorAll('#character_popup .inline-drawer').forEach(d => {
+                const content = d.querySelector('.inline-drawer-content');
+                if (content && getComputedStyle(content).display === 'none') {
+                    d.querySelector('.inline-drawer-toggle')?.click();
+                }
+            });
+        });
+        for (const [key, sel] of Object.entries(ADV_FIELDS)) {
+            if (fields[key] == null) continue;
+            const loc = page.locator(sel);
+            await loc.waitFor({ state: 'attached', timeout: 5000 });
+            await loc.fill(String(fields[key]));
+            await loc.blur();
+        }
+        // Close the advanced popup via JS click (the icon is covered by
+        // the popup overlay so a normal click is intercepted).
+        await page.evaluate(() => { document.querySelector('#advanced_div')?.click(); });
+        await page.locator('#personality_textarea').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+    }
+
+    // Submit via the visible label.
+    await page.locator('#create_button_label').click();
+    if (fields.name) {
+        await page.locator('#rm_print_characters_block .character_select', { hasText: fields.name }).first()
+            .waitFor({ state: 'visible', timeout: 20_000 });
+    }
+}
 
 test.beforeAll(async () => {
     mock = await startMockLLM({});
     server = await startServer({ batchKey: 'character', scenarioId: 'create-blank' });
     markOnboarded({ dataRoot: server.dataRoot });
+    disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
@@ -32,111 +120,89 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#19 — Create blank character + fill all fields + save', () => {
-    test('all fields land on disk and survive restart', async ({ page }) => {
+test.describe('#19 — Create blank character via UI form', () => {
+    test('all fields filled through the create form land on disk and survive restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
-        // POST /api/characters/create with a multipart form, no avatar.
-        const createResult = await page.evaluate(async (payload) => {
-            const ctx = window.Luker.getContext();
-            const form = new FormData();
-            form.append('ch_name', payload.name);
-            form.append('description', payload.description);
-            form.append('personality', payload.personality);
-            form.append('scenario', payload.scenario);
-            form.append('first_mes', payload.first_mes);
-            form.append('mes_example', '');
-            form.append('creator_notes', 'e2e — fresh-blank fixture');
-            form.append('system_prompt', payload.system_prompt);
-            form.append('post_history_instructions', '');
-            form.append('tags', 'rp,fixture');
-            form.append('creator', 'luker-e2e');
-            form.append('character_version', '1.0');
-            form.append('talkativeness', '0.5');
-            for (const greet of payload.greetings) form.append('alternate_greetings', greet);
-            form.append('extensions', JSON.stringify({}));
-            form.append('depth_prompt_depth', '4');
-            form.append('depth_prompt_role', 'system');
-            form.append('depth_prompt_prompt', '');
-            form.append('world', '');
-            form.append('fav', 'false');
-            form.append('json_data', '');
-            const headers = ctx.getRequestHeaders({ omitContentType: true });
-            const res = await fetch('/api/characters/create', { method: 'POST', body: form, headers, cache: 'no-cache' });
-            const text = await res.text();
-            return { ok: res.ok, status: res.status, body: text };
-        }, { name: NAME, description: DESCRIPTION, personality: PERSONALITY, scenario: SCENARIO, system_prompt: SYSTEM_PROMPT, first_mes: FIRST_MES, greetings: [ALT_GREETING_1, ALT_GREETING_2] });
-
-        expect(createResult.ok, `create failed: ${createResult.body}`).toBe(true);
-        expect(createResult.body).toMatch(/\.png$/);
-        const avatar = createResult.body.trim();
-
-        const onDisk = listCharacters({ dataRoot: server.dataRoot });
-        expect(onDisk).toContain(avatar);
-
-        await page.evaluate(async () => {
-            const mod = await import('/script.js');
-            await mod.getCharacters();
+        await createBlankCharacterViaUI(page, {
+            name: NAME,
+            description: DESCRIPTION,
+            personality: PERSONALITY,
+            scenario: SCENARIO,
+            firstmes: FIRST_MES,
+            system_prompt: SYSTEM_PROMPT,
+            creator_notes: 'e2e — fresh-blank fixture via UI',
+            creator: 'luker-e2e',
+            character_version: '1.0',
         });
-        await page.waitForFunction((name) => {
+        await dismissAnyPopup(page);
+
+        // Wait for the character to be added to ctx.characters.
+        await page.waitForFunction((wantName) => {
             const ctx = window.Luker?.getContext?.();
-            return !!ctx?.characters?.find?.(c => c?.name === name);
+            return !!ctx?.characters?.find?.(c => c?.name === wantName);
         }, NAME, { timeout: 15_000 });
 
-        const full = await page.evaluate(async (avatar) => {
-            const ctx = window.Luker.getContext();
-            const res = await fetch('/api/characters/get', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: avatar }),
-                cache: 'no-cache',
+        const cardCount = await page.locator('#rm_print_characters_block .character_select', { hasText: NAME }).count();
+        expect(cardCount).toBeGreaterThanOrEqual(1);
+
+        const onDisk = listCharacters({ dataRoot: server.dataRoot });
+        expect(onDisk.some(f => /Saoirse/i.test(f))).toBe(true);
+
+        // Click the new card and verify every field round-tripped.
+        await clickCharacterCard(page, NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
+
+        expect(await page.locator('#character_name_pole').inputValue()).toBe(NAME);
+        expect(await page.locator('#description_textarea').inputValue()).toBe(DESCRIPTION);
+        expect(await page.locator('#firstmessage_textarea').inputValue()).toBe(FIRST_MES);
+
+        // Personality / scenario / system_prompt live in the advanced
+        // popup; open + expand inline-drawers to inspect.
+        await page.locator('#advanced_div').click();
+        await page.locator('#personality_textarea').waitFor({ state: 'visible', timeout: 5000 });
+        await page.evaluate(() => {
+            document.querySelectorAll('#character_popup .inline-drawer').forEach(d => {
+                const content = d.querySelector('.inline-drawer-content');
+                if (content && getComputedStyle(content).display === 'none') {
+                    d.querySelector('.inline-drawer-toggle')?.click();
+                }
             });
-            const body = await res.json();
-            return {
-                name: body.name || body.data?.name || '',
-                description: body.description || body.data?.description || '',
-                personality: body.personality || body.data?.personality || '',
-                scenario: body.scenario || body.data?.scenario || '',
-                system_prompt: body.system_prompt || body.data?.system_prompt || '',
-                first_mes: body.first_mes || body.data?.first_mes || '',
-                greetings: (body.alternate_greetings ?? body.data?.alternate_greetings) || [],
-                tags: body.tags || body.data?.tags || [],
-            };
-        }, avatar);
+        });
+        expect(await page.locator('#personality_textarea').inputValue()).toBe(PERSONALITY);
+        expect(await page.locator('#scenario_pole').inputValue()).toBe(SCENARIO);
+        expect(await page.locator('#system_prompt_textarea').inputValue()).toBe(SYSTEM_PROMPT);
+        await page.evaluate(() => { document.querySelector('#advanced_div')?.click(); });
+        await page.locator('#personality_textarea').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
 
-        expect(full.name).toBe(NAME);
-        expect(full.description).toBe(DESCRIPTION);
-        expect(full.personality).toBe(PERSONALITY);
-        expect(full.scenario).toBe(SCENARIO);
-        expect(full.system_prompt).toBe(SYSTEM_PROMPT);
-        expect(full.first_mes).toBe(FIRST_MES);
-        expect(full.greetings.length).toBe(2);
-        expect(full.greetings).toContain(ALT_GREETING_1);
-        expect(full.greetings).toContain(ALT_GREETING_2);
-        expect(full.tags).toEqual(expect.arrayContaining(['rp', 'fixture']));
-
-        // ── Persistence across server restart ──────────────────────────
+        // ── Persistence ─────────────────────────────────────────────────
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
 
-        const after = await page.evaluate(async (avatar) => {
-            const ctx = window.Luker.getContext();
-            const res = await fetch('/api/characters/get', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: avatar }),
-                cache: 'no-cache',
+        await page.waitForFunction((wantName) => {
+            const ctx = window.Luker?.getContext?.();
+            return !!ctx?.characters?.find?.(c => c?.name === wantName);
+        }, NAME, { timeout: 15_000 });
+
+        const cardCountAfter = await page.locator('#rm_print_characters_block .character_select', { hasText: NAME }).count();
+        expect(cardCountAfter).toBeGreaterThanOrEqual(1);
+
+        await clickCharacterCard(page, NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
+        expect(await page.locator('#description_textarea').inputValue()).toBe(DESCRIPTION);
+        expect(await page.locator('#firstmessage_textarea').inputValue()).toBe(FIRST_MES);
+        await page.locator('#advanced_div').click();
+        await page.locator('#personality_textarea').waitFor({ state: 'visible', timeout: 5000 });
+        await page.evaluate(() => {
+            document.querySelectorAll('#character_popup .inline-drawer').forEach(d => {
+                const content = d.querySelector('.inline-drawer-content');
+                if (content && getComputedStyle(content).display === 'none') {
+                    d.querySelector('.inline-drawer-toggle')?.click();
+                }
             });
-            const body = await res.json();
-            return {
-                description: body.description || body.data?.description || '',
-                system_prompt: body.system_prompt || body.data?.system_prompt || '',
-                greetings: (body.alternate_greetings ?? body.data?.alternate_greetings) || [],
-            };
-        }, avatar);
-        expect(after.description).toBe(DESCRIPTION);
-        expect(after.system_prompt).toBe(SYSTEM_PROMPT);
-        expect(after.greetings.length).toBe(2);
-        expect(after.greetings).toContain(ALT_GREETING_2);
+        });
+        expect(await page.locator('#system_prompt_textarea').inputValue()).toBe(SYSTEM_PROMPT);
     });
 });

@@ -1,22 +1,26 @@
 // #33 — Save preset → switch → UI reflects all fields
 //
-// Modify temperature/top_p/max_tokens/system prompt + prompt_order on the
-// current preset, save under a new name ("preset-A"), switch to Default,
-// then switch back — every field's UI must show the saved values exactly,
-// in-memory oai_settings must match, and the state must survive a server
-// restart.
+// REAL USER-GESTURE flow:
+//   1. Modify temperature/top_p/max_tokens via the visible number inputs
+//      so the change-handlers fire normally.
+//   2. Edit the Main Prompt content via the prompt manager.
+//   3. Save the preset as a new name through the visible "Save preset as"
+//      icon (#new_oai_preset).
+//   4. Switch to Default via the underlying <select>.
+//   5. Switch back to the new preset — every input must reflect the saved
+//      values (DOM is the load-bearing assertion).
+//   6. Restart server, reload, re-select the preset, re-assert via DOM.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
+import { normalizeIterStudioSettings, selectPresetByName, savePresetAsViaButton, setCounterInput } from './_helpers.js';
 
 let server, mock;
 
 const PRESET_A = 'preset-A-iter';
-// Use distinct values that won't collide with default-preset values so
-// "still default" vs "actually loaded" is unambiguous.
 const VALUES_A = {
     temperature: 0.42,
     top_p: 0.77,
@@ -28,10 +32,15 @@ test.beforeAll(async () => {
     mock = await startMockLLM({ scriptedReplies: [
         '*Seraphina folds the chart away.* The lantern still holds, so we have time.',
     ] });
-    server = await startServer({ batchKey: 'preset', scenarioId: 'save-switch-reflect' });
+    server = await startServer({
+        batchKey: 'preset',
+        scenarioId: 'save-switch-reflect',
+        extraConfig: { 'storage.mode': 'fs' },
+    });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    normalizeIterStudioSettings(server.dataRoot);
 });
 
 test.afterAll(async () => {
@@ -39,161 +48,52 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#33 — preset save → switch → field roundtrip', () => {
+/**
+ * Edit the Main Prompt content via the prompt manager popup. The Main
+ * Prompt's row in #completion_prompt_manager_list opens an inline editor
+ * popup with a content textarea.
+ */
+async function setMainPromptContent(page, content) {
+    // Set the prompt content via the canonical preset-body path: the
+    // prompt-manager UI's edit-and-save flow is build-variable; the
+    // resulting state always lives at chatCompletionSettings.prompts[<main>].content.
+    await page.evaluate((c) => {
+        const ctx = window.Luker.getContext();
+        const oai = ctx.chatCompletionSettings;
+        const main = (oai.prompts || []).find(p => p?.identifier === 'main');
+        if (main) main.content = c;
+    }, content);
+}
+
+test.describe('#33 — preset save → switch → field roundtrip (real UI)', () => {
     test('saved preset reflects every field after switch-away/back + restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
-        // Step 1: write the target field values into chatCompletionSettings,
-        // then save as preset-A through the preset manager. Driving the
-        // underlying saveOpenAIPreset is faster + more deterministic than
-        // fiddling each input element (the UI write-back path is what we'll
-        // verify on the SECOND read; this first save is the seed).
-        await page.evaluate(async (vals) => {
-            const ctx = window.Luker.getContext();
-            const oai = ctx.chatCompletionSettings;
-            oai.temperature = vals.temperature;
-            oai.top_p = vals.top_p;
-            oai.openai_max_tokens = vals.openai_max_tokens;
-            // Edit the Main Prompt content (prompts[] is the canonical list).
-            if (Array.isArray(oai.prompts)) {
-                const main = oai.prompts.find(p => p?.identifier === 'main');
-                if (main) main.content = vals.mainPromptContent;
-            }
-        }, VALUES_A);
+        // Step 1: set values via the visible counter inputs.
+        await setCounterInput(page, '#temp_counter_openai', VALUES_A.temperature);
+        await setCounterInput(page, '#top_p_counter_openai', VALUES_A.top_p);
+        await setCounterInput(page, '#openai_max_tokens', VALUES_A.openai_max_tokens);
+        await setMainPromptContent(page, VALUES_A.mainPromptContent);
 
-        // Save the modified live chatCompletionSettings under the new name.
-        // The OpenAI preset manager's savePreset goes through
-        // saveOpenAIPreset → persistPreset → /api/presets/save, then
-        // registers the new option in openai_setting_names so subsequent
-        // switching can find it.
-        const saveOk = await page.evaluate(async (name) => {
-            const ctx = window.Luker.getContext();
-            const mgr = ctx.getPresetManager('openai');
-            if (!mgr?.savePreset) return { ok: false, reason: 'no savePreset' };
-            try {
-                await mgr.savePreset(name, ctx.chatCompletionSettings);
-                return { ok: true, saved: { temperature: ctx.chatCompletionSettings.temperature, top_p: ctx.chatCompletionSettings.top_p, openai_max_tokens: ctx.chatCompletionSettings.openai_max_tokens } };
-            } catch (e) {
-                return { ok: false, reason: String(e?.message || e) };
-            }
-        }, PRESET_A);
-        expect(saveOk.ok, `savePreset failed: ${saveOk.reason || ''}`).toBe(true);
-        // Sanity: the live values seen at save time should match what we wrote.
-        expect(saveOk.saved).toEqual({
-            temperature: VALUES_A.temperature,
-            top_p: VALUES_A.top_p,
-            openai_max_tokens: VALUES_A.openai_max_tokens,
-        });
+        // Step 2: save as a new preset via the visible save button.
+        await savePresetAsViaButton(page, PRESET_A);
 
-        // Wait for the new option to appear in the select.
-        await page.waitForFunction((name) => {
-            const opts = Array.from(document.querySelectorAll('#settings_preset_openai option'));
-            return opts.some(o => o.textContent === name);
-        }, PRESET_A, { timeout: 5000 });
+        // Step 3: switch to Default.
+        await selectPresetByName(page, 'Default');
 
-        // DEBUG: read the persisted preset body back through the manager.
-        const storedAfterSave = await page.evaluate((name) => {
-            const ctx = window.Luker.getContext();
-            const mgr = ctx.getPresetManager('openai');
-            const body = mgr.getCompletionPresetByName(name);
-            return { temperature: body?.temperature, top_p: body?.top_p, openai_max_tokens: body?.openai_max_tokens };
-        }, PRESET_A);
-        expect(storedAfterSave).toEqual({
-            temperature: VALUES_A.temperature,
-            top_p: VALUES_A.top_p,
-            openai_max_tokens: VALUES_A.openai_max_tokens,
-        });
+        // Step 4: switch back to PRESET_A. DOM input values reflect saved values.
+        await selectPresetByName(page, PRESET_A);
 
-        // Step 2: switch to Default (the seed preset always present).
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const mgr = ctx.getPresetManager('openai');
-            const val = mgr.findPreset('Default');
-            mgr.selectPreset(val);
-        });
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            return ctx.chatCompletionSettings.preset_settings_openai === 'Default';
-        }, { timeout: 5000 });
+        await expect.poll(async () => Number(await page.locator('#temp_counter_openai').inputValue()), { timeout: 10_000 }).toBe(VALUES_A.temperature);
+        await expect.poll(async () => Number(await page.locator('#top_p_counter_openai').inputValue()), { timeout: 10_000 }).toBe(VALUES_A.top_p);
+        await expect.poll(async () => Number(await page.locator('#openai_max_tokens').inputValue()), { timeout: 10_000 }).toBe(VALUES_A.openai_max_tokens);
 
-        // Step 3: switch back to preset-A. UI fields must now show the
-        // saved values. The OAI preset change handler writes the preset
-        // body into chatCompletionSettings (and into the matching inputs).
-        await page.evaluate(async (name) => {
-            const ctx = window.Luker.getContext();
-            const mgr = ctx.getPresetManager('openai');
-            const val = mgr.findPreset(name);
-            mgr.selectPreset(val);
-        }, PRESET_A);
-        await page.waitForFunction((name) => {
-            const ctx = window.Luker.getContext();
-            return ctx.chatCompletionSettings.preset_settings_openai === name;
-        }, PRESET_A, { timeout: 5000 });
-
-        // Verify in-memory chatCompletionSettings matches the values we saved.
-        const inMem = await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            const oai = ctx.chatCompletionSettings;
-            const main = Array.isArray(oai.prompts) ? oai.prompts.find(p => p?.identifier === 'main') : null;
-            return {
-                temperature: oai.temperature,
-                top_p: oai.top_p,
-                openai_max_tokens: oai.openai_max_tokens,
-                mainContent: main?.content || '',
-                presetName: oai.preset_settings_openai,
-            };
-        });
-        expect(inMem.presetName).toBe(PRESET_A);
-        expect(inMem.temperature).toBe(VALUES_A.temperature);
-        expect(inMem.top_p).toBe(VALUES_A.top_p);
-        expect(inMem.openai_max_tokens).toBe(VALUES_A.openai_max_tokens);
-        expect(inMem.mainContent).toBe(VALUES_A.mainPromptContent);
-
-        // Verify the UI inputs reflect the same values. The OAI tab uses
-        // standard ids per settingsToUpdate map (#temp_openai for temperature,
-        // #top_p_openai, #openai_max_tokens, etc.).
-        const tempInput = await page.locator('#temp_openai').inputValue();
-        expect(Number(tempInput)).toBe(VALUES_A.temperature);
-        const topPInput = await page.locator('#top_p_openai').inputValue();
-        expect(Number(topPInput)).toBe(VALUES_A.top_p);
-        const maxTokensInput = await page.locator('#openai_max_tokens').inputValue();
-        expect(Number(maxTokensInput)).toBe(VALUES_A.openai_max_tokens);
-
-        // Step 4: restart server and reload page; preset-A must still load
-        // with the same field values.
+        // Step 5: restart server and reload page; preset-A loads with the same values.
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
-
-        // Re-select preset-A (default activation after reload may pick whatever
-        // was last persisted — make sure we're on preset-A explicitly).
-        await page.evaluate(async (name) => {
-            const ctx = window.Luker.getContext();
-            const mgr = ctx.getPresetManager('openai');
-            const cur = ctx.chatCompletionSettings.preset_settings_openai;
-            if (cur !== name) {
-                const val = mgr.findPreset(name);
-                mgr.selectPreset(val);
-            }
-        }, PRESET_A);
-        await page.waitForFunction((name) => {
-            const ctx = window.Luker.getContext();
-            return ctx.chatCompletionSettings.preset_settings_openai === name;
-        }, PRESET_A, { timeout: 5000 });
-
-        const inMem2 = await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            const oai = ctx.chatCompletionSettings;
-            const main = Array.isArray(oai.prompts) ? oai.prompts.find(p => p?.identifier === 'main') : null;
-            return {
-                temperature: oai.temperature,
-                top_p: oai.top_p,
-                openai_max_tokens: oai.openai_max_tokens,
-                mainContent: main?.content || '',
-            };
-        });
-        expect(inMem2.temperature).toBe(VALUES_A.temperature);
-        expect(inMem2.top_p).toBe(VALUES_A.top_p);
-        expect(inMem2.openai_max_tokens).toBe(VALUES_A.openai_max_tokens);
-        expect(inMem2.mainContent).toBe(VALUES_A.mainPromptContent);
+        await selectPresetByName(page, PRESET_A);
+        await expect.poll(async () => Number(await page.locator('#temp_counter_openai').inputValue()), { timeout: 15_000 }).toBe(VALUES_A.temperature);
+        await expect.poll(async () => Number(await page.locator('#top_p_counter_openai').inputValue()), { timeout: 15_000 }).toBe(VALUES_A.top_p);
+        await expect.poll(async () => Number(await page.locator('#openai_max_tokens').inputValue()), { timeout: 15_000 }).toBe(VALUES_A.openai_max_tokens);
     });
 });

@@ -1,22 +1,24 @@
-// #18 — Import a byaf (Backyard Archive Format) character. BYAF is a
-// zipped bundle with manifest.json + character + scenario JSON files +
-// images. We fabricate a minimal layout that's enough to drive
-// ByafParser.parse() to completion.
+// #18 — Import a byaf (Backyard Archive Format) character via the real
+// UI file picker. BYAF is a zipped bundle with manifest.json + character
+// + scenario JSON files + images.
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import AdmZip from 'adm-zip';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
-import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
+import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard } from './_helpers.js';
+import { awaitMainUI, reloadAndAwait, closeRightNavDrawer } from '../_lib/page.js';
+import { importCharacterFile } from '../_lib/ui-character.js';
+import { openWorldInfoDrawer, selectWorldBook, getRenderedWorldEntries } from '../_lib/ui-worldinfo.js';
 
-let server, mock;
+let server, mock, tmpDir, byafPath;
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
-
-const CHARACTER_NAME = 'Halden the Quill-Keeper';
+const NAME = 'Halden the Quill-Keeper';
 
 const MANIFEST = {
     formatVersion: 1,
@@ -26,8 +28,8 @@ const MANIFEST = {
 };
 
 const CHARACTER = {
-    name: CHARACTER_NAME,
-    displayName: CHARACTER_NAME,
+    name: NAME,
+    displayName: NAME,
     persona: 'A quiet archivist who keeps a wax-sealed ledger of every borrowed lantern in the harbor library.',
     isNSFW: false,
     images: [{ path: '../image/halden.png', label: '' }],
@@ -48,103 +50,100 @@ test.beforeAll(async () => {
     mock = await startMockLLM({});
     server = await startServer({ batchKey: 'character', scenarioId: 'import-byaf' });
     markOnboarded({ dataRoot: server.dataRoot });
+    disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+
+    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-byaf-'));
+    const iconPng = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
+    const zip = new AdmZip();
+    zip.addFile('manifest.json', Buffer.from(JSON.stringify(MANIFEST), 'utf8'));
+    zip.addFile('character/halden.json', Buffer.from(JSON.stringify(CHARACTER), 'utf8'));
+    zip.addFile('scenario/library-stairwell.json', Buffer.from(JSON.stringify(SCENARIO), 'utf8'));
+    zip.addFile('image/halden.png', iconPng);
+    byafPath = resolve(tmpDir, 'halden.byaf');
+    writeFileSync(byafPath, zip.toBuffer());
 });
 
 test.afterAll(async () => {
     await tearDownServer(server);
     await mock?.stop();
+    if (tmpDir && existsSync(tmpDir)) {
+        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
 });
 
-test.describe('#18 — Import byaf character card', () => {
-    test('byaf zip with manifest + character + scenario imports and persists', async ({ page }) => {
-        // Build the byaf zip: manifest.json + character/<name>.json +
-        // scenario/<name>.json + image/<name>.png.
-        const iconPng = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
-        const zip = new AdmZip();
-        zip.addFile('manifest.json', Buffer.from(JSON.stringify(MANIFEST), 'utf8'));
-        zip.addFile('character/halden.json', Buffer.from(JSON.stringify(CHARACTER), 'utf8'));
-        zip.addFile('scenario/library-stairwell.json', Buffer.from(JSON.stringify(SCENARIO), 'utf8'));
-        zip.addFile('image/halden.png', iconPng);
-        const byafBuf = zip.toBuffer();
-
+test.describe('#18 — Import byaf character card via UI file picker', () => {
+    test('byaf zip imports through the file picker, scenario + loreItems land in the card, embedded WI entries surface on the card', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
-        const importResult = await page.evaluate(async ({ b64, name }) => {
-            const ctx = window.Luker.getContext();
-            const binary = atob(b64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            const file = new File([bytes], `${name}.byaf`, { type: 'application/zip' });
-            const form = new FormData();
-            form.append('avatar', file);
-            form.append('file_type', 'byaf');
-            const headers = ctx.getRequestHeaders({ omitContentType: true });
-            const res = await fetch('/api/characters/import', { method: 'POST', body: form, headers, cache: 'no-cache' });
-            const text = await res.text();
-            let data; try { data = JSON.parse(text); } catch { data = { rawText: text }; }
-            return { ok: res.ok, status: res.status, data };
-        }, { b64: byafBuf.toString('base64'), name: 'Halden' });
+        await importCharacterFile(page, { filePath: byafPath, expectedName: NAME });
+        await dismissAnyPopup(page);
 
-        // byaf import has more moving parts than the others — if it doesn't
-        // complete in our minimal layout we'd rather record it as an expected
-        // bug than fail noisily, but with the minimal scaffold above it
-        // should land. Assert hard; fall back to a clear error if not.
-        expect(importResult.ok, `byaf import failed: ${JSON.stringify(importResult.data)}`).toBe(true);
-        expect(importResult.data?.error).toBeFalsy();
-        expect(importResult.data?.file_name).toBeTruthy();
+        const cardCount = await page.locator('#rm_print_characters_block .character_select', { hasText: NAME }).count();
+        expect(cardCount).toBeGreaterThanOrEqual(1);
 
         const onDisk = listCharacters({ dataRoot: server.dataRoot });
         expect(onDisk.length).toBeGreaterThan(0);
 
-        await page.evaluate(async () => {
-            const mod = await import('/script.js');
-            await mod.getCharacters();
-        });
-        await page.waitForFunction((name) => {
-            const ctx = window.Luker?.getContext?.();
-            return !!ctx?.characters?.find?.(c => c?.name === name);
-        }, CHARACTER_NAME, { timeout: 15_000 });
+        await clickCharacterCard(page, NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
 
-        const full = await page.evaluate(async (name) => {
+        expect(await page.locator('#character_name_pole').inputValue()).toBe(NAME);
+        expect(await page.locator('#description_textarea').inputValue()).toContain('archivist');
+        expect(await page.locator('#firstmessage_textarea').inputValue()).toContain('ledger');
+
+        // ── Embedded loreItems → character_book. Whether ST auto-imports
+        //    the embedded book into the WI library list depends on
+        //    power_user.world_import_dialog. The load-bearing assertion
+        //    is that the BYAF loreItems landed in data.character_book on
+        //    the saved card — read it via ctx so the test doesn't depend
+        //    on the import-popup outcome.
+        const embedded = await page.evaluate((name) => {
             const ctx = window.Luker.getContext();
-            const shallow = ctx.characters.find(c => c?.name === name);
-            const res = await fetch('/api/characters/get', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: shallow.avatar }),
-                cache: 'no-cache',
-            });
-            const body = await res.json();
+            const ch = (ctx.characters || []).find(c => c?.name === name);
+            const book = ch?.data?.character_book;
             return {
-                description: body.description || body.data?.description || '',
-                first_mes: body.first_mes || body.data?.first_mes || '',
-                book: body.data?.character_book,
+                hasBook: !!book,
+                entryCount: Array.isArray(book?.entries) ? book.entries.length : 0,
+                hasLedger: Array.isArray(book?.entries) && book.entries.some(e =>
+                    /ledger|lantern/i.test(JSON.stringify(e || {}))),
             };
-        }, CHARACTER_NAME);
-        expect(full.description).toContain('archivist');
-        expect(full.first_mes).toContain('ledger');
-        expect(full.book, 'character_book copied from loreItems').toBeTruthy();
-        expect(full.book.entries.length).toBeGreaterThan(0);
+        }, NAME);
+        expect(embedded.hasBook, 'embedded character_book present on card').toBe(true);
+        expect(embedded.entryCount, 'entry count > 0').toBeGreaterThan(0);
+        expect(embedded.hasLedger, 'lantern-ledger entry survived BYAF → character_book conversion').toBe(true);
+
+        // Best-effort: also try to open the WI editor and see if the
+        // auto-imported book is there. If not, that's just a UX setting.
+        await closeRightNavDrawer(page);
+        await dismissAnyPopup(page);
+        await openWorldInfoDrawer(page);
+        const bookOptionLabel = await page.evaluate(() => {
+            const sel = document.querySelector('#world_editor_select');
+            if (!sel) return null;
+            const opt = Array.from(sel.options).find(o => /halden|ledger|lantern/i.test(o.textContent || ''));
+            return opt?.textContent || null;
+        });
+        if (bookOptionLabel) {
+            await selectWorldBook(page, bookOptionLabel);
+            const rendered = await getRenderedWorldEntries(page);
+            const hasLedger = rendered.some(r => /ledger|lantern/i.test((r.content || '') + ' ' + (r.key || '')));
+            expect(hasLedger, `auto-imported lorebook contains ledger entry; got=${JSON.stringify(rendered)}`).toBe(true);
+        } else {
+            test.info().annotations.push({ type: 'note', description: 'BYAF loreItems stayed embedded on the card (no auto-import to WI library) — character_book entries verified via ctx instead' });
+        }
 
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
 
-        const persisted = await page.evaluate(async (name) => {
-            const ctx = window.Luker.getContext();
-            const shallow = ctx.characters.find(c => c?.name === name);
-            if (!shallow) return null;
-            const res = await fetch('/api/characters/get', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: shallow.avatar }),
-                cache: 'no-cache',
-            });
-            const body = await res.json();
-            return { description: body.description || body.data?.description || '' };
-        }, CHARACTER_NAME);
-        expect(persisted, 'Halden survived restart').toBeTruthy();
-        expect(persisted.description).toContain('archivist');
+        const cardCountAfter = await page.locator('#rm_print_characters_block .character_select', { hasText: NAME }).count();
+        expect(cardCountAfter).toBeGreaterThanOrEqual(1);
+
+        await clickCharacterCard(page, NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
+        expect(await page.locator('#description_textarea').inputValue()).toContain('archivist');
     });
 });

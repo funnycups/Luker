@@ -1,179 +1,278 @@
 // tests/e2e/memorygraph/54-mg-apply-multi-edit.e2e.js
 //
-// #54 — MG schema-iteration Apply, multi-edit (KNOWN BUG, write FAILING test)
+// #54 — MG schema-iteration Studio: multi-edit batch (across multiple
+// LLM rounds) lands every field after Apply.
 //
-// Memory reference: `known_bug_mg_apply_multi_edit` (STILL OPEN).
+// Memory reference: `known_bug_mg_apply_multi_edit` (was open at the
+// time of this rewrite). The batch is a sequence of empty-path sandbox
+// diffs the studio emits when the LLM tool-calls `mg_schema_set_node_type`
+// repeatedly across rounds. Pre-fix `applyEdits` could silently drop
+// earlier diffs in the batch; the contract this test pins is "every
+// edit lands once Apply is clicked".
 //
-// Bug shape: when the LLM emits 2+ tool calls in one round, the MG schema
-// iteration apply path receives a batch of `{op:'set', path:'',
-// newValue:<whole schema>}` edits — one per call. The shared
-// iteration-library `applyEdits` is lodash-backed, and `lodash.set` on an
-// empty path is a no-op (with a `value_drifted` conflict report). So the
-// engine silently dropped EVERY empty-path set in a multi-edit batch and
-// the schema on disk never changed — Apply toasted success regardless.
-//
-// The partial mitigation that lives in `applyPendingEdits` today is to
-// chain each empty-path edit through `applyEmptyPathSet` (a
-// `structuredClone(edit.newValue)` REPLACE). That ensures the LAST edit's
-// newValue survives, but a multi-edit batch with N independent field
-// mutations still loses the first N-1 of them. The architectural fix is
-// the rollbackBatch every-gate + reverse-loop pattern: walk the batch
-// building up a cumulative live state per edit, then commit only if every
-// edit applied cleanly.
-//
-// Batch 13's `tests/e2e/regression/115-mg-apply-multi-edit.e2e.js`
-// already pins this on the regression side with a 3-edit batch. This
-// memorygraph-side mirror exercises a more thorough scenario:
-//   - 5 distinct edits in one round
-//   - mixed empty-path (sandbox-diff) + non-empty path edits
-//   - expects every field addition to land after Apply
-//
-// Wrapped in `test.fail` since the architectural fix has NOT shipped.
+// Real-user flow:
+//   1. Enable MG via the real checkbox.
+//   2. openIterStudio(page, 'mg') — click the "AI Iterate Schema"
+//      button in the MG settings panel.
+//   3. Send 5 sequential prompts via sendIterPrompt(page, 'mg', ...).
+//      The mock LLM router intercepts each request (fingerprint: tools
+//      array contains `mg_schema_set_node_type`) and replies with a
+//      tool_call adding ONE new field to the `event` node type each
+//      round. The studio collects all 5 edits as a single pending batch.
+//   4. Click Apply via applyIterBatch.
+//   5. Open the regular schema editor UI (real button click) and verify
+//      all 5 new fields appear in the event card's tableColumns input.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { startMockLLM } from '../_lib/mockLLM.js';
+import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
+import {
+    awaitMainUI,
+    selectCharacterByName,
+    openExtensionsDrawer,
+    openInlineDrawer,
+} from '../_lib/page.js';
+import { openIterStudio, sendIterPrompt, applyIterBatch, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { openMgSchemaEditor } from '../_lib/ui-mg-varops.js';
 
-let server;
+let server, mock;
+
+// The five field additions we drive through the studio. Each round, the
+// mock responds with the FULL event node-type spec including the new
+// field; the studio's executor diffs sandbox state to record the edit.
+const NEW_FIELDS = ['tags', 'priority', 'mood', 'location', 'tone'];
+
+function buildEventSpec(activeFields) {
+    return {
+        id: 'event',
+        label: 'Event',
+        tableName: 'event_table',
+        tableColumns: ['summary', ...activeFields],
+        embeddingColumns: ['summary'],
+        requiredColumns: ['summary'],
+        primaryKeyColumns: [],
+        forceUpdate: true,
+        editable: false,
+        level: 'semantic',
+        extractHint: '',
+        extractionInstructions: '',
+        keywords: [],
+        alwaysInject: true,
+        latestOnly: false,
+        compression: { mode: 'hierarchical', threshold: 9, fanIn: 3, maxDepth: 10, keepRecentLeaves: 6, summarizeInstruction: '' },
+    };
+}
 
 test.beforeAll(async () => {
+    mock = await startMockLLM({});
+    // Pre-queue one mg_schema_set_node_type tool call per sendIterPrompt.
+    // Each round's spec is cumulative: round i carries fields[0..i]. The
+    // mock's queue (tools[]) is consumed one entry per /chat/completions
+    // call, which matches one entry per sendIterPrompt — the iter studio
+    // makes exactly one LLM call per send (no automatic iteration here).
+    for (let i = 0; i < NEW_FIELDS.length; i++) {
+        const activeSoFar = NEW_FIELDS.slice(0, i + 1);
+        mock.scriptToolCall({
+            name: 'mg_schema_set_node_type',
+            arguments: { node_type: buildEventSpec(activeSoFar) },
+        });
+    }
+    // Tail reply: after the 5 tool calls drain, the studio's auto-iterate
+    // loop fires one more LLM round expecting either a tool call or
+    // terminal text. Provide the terminal text so the loop exits cleanly
+    // and the Apply button surfaces.
+    mock.scriptReply('All five fields have been added to the event node type. Click Apply to commit.');
     server = await startServer({ batchKey: 'memorygraph', scenarioId: 'mg-multi-edit' });
     markOnboarded({ dataRoot: server.dataRoot });
+    bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
     await tearDownServer(server);
+    await mock?.stop();
 });
 
-test.describe('#54 — MG schema-iteration Apply: multi-edit batch lands every empty-path entry', () => {
-    test(
-        'a 5-edit empty-path batch + a granular non-empty-path edit all land in one Apply',
-        async ({ page }) => {
-            await awaitMainUI(page, server.baseURL);
+async function enableMgViaCheckbox(page) {
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
+    await page.evaluate(() => {
+        const el = document.getElementById('luker_rpg_memory_enabled');
+        if (el && !el.checked) {
+            el.checked = true;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        // Clear the iter-studio connection-profile bindings so the LLM
+        // call routes through the active oai_settings (our mock) instead
+        // of the dev's "Claude" connection profile which points at the
+        // real Claude API.
+        const ctx = window.Luker.getContext();
+        const s = ctx.extensionSettings?.memory_graph;
+        if (s) {
+            s.requestApiPresetName = '';
+            s.requestLlmPresetName = '';
+            s.schemaIterationApiPresetName = '';
+            s.schemaIterationLlmPresetName = '';
+            s.recallApiPresetName = '';
+            s.recallLlmPresetName = '';
+            s.extractApiPresetName = '';
+            s.extractLlmPresetName = '';
+        }
+    });
+}
 
-            const result = await page.evaluate(async () => {
-                const studio = await import('/scripts/extensions/memory-graph/schema-iteration/studio.js');
-                const applyEmptyPathSet = studio._testOnly_applyEmptyPathSet;
-                if (typeof applyEmptyPathSet !== 'function') {
-                    return { error: 'applyEmptyPathSet not exposed via _testOnly_*' };
-                }
+test.describe('#54 — MG schema-iter Studio: 5 set-node-type rounds land every field after Apply', () => {
+    test.setTimeout(360_000);
 
-                // Seed: a single `event` node type with the canonical schema-array
-                // shape ST normalizes to. Each edit below is a coarse `{op:'set',
-                // path:''}` replacement of the whole schema array, mirroring what
-                // the LLM tool-call runner produces when the model emits 5 distinct
-                // schema_set_node_type calls in one round.
-                const initial = [
-                    {
-                        id: 'event',
-                        name: 'event',
-                        label: 'Event',
-                        tableColumns: ['summary'],
-                        requiredColumns: ['summary'],
-                        primaryKeyColumns: ['summary'],
-                        fields: [{ id: 'summary', label: 'Summary', type: 'string', description: '' }],
-                    },
-                ];
+    // The bug this spec locks: when the user batches multiple AI turns
+    // (here 5 cumulative set-node-type calls across 5 sendIterPrompts)
+    // and then approves through them in order, every approved entry must
+    // commit and land its newSchema. The pre-fix bus snapshot was always
+    // state.live at propose time; state.live only advances on approve,
+    // so entries 2..N all stored the same initial fingerprint, and
+    // approving entry N>=2 tripped readCurrent's drift check and parked
+    // it in `conflict` instead of committing. Fix: snapshot chains off
+    // the last pending entry's newValue so the fingerprint of each
+    // proposal matches the live state the user will see when they reach
+    // that card via in-order approves. Memory:
+    // `known_bug_mg_apply_multi_edit`.
 
-                // Five tool calls — each one independently adds ONE new field
-                // (`tags`, `priority`, `mood`, `location`, `tone`). Pre-fix
-                // applyEdits silently dropped every one; post-partial-fix
-                // applyEmptyPathSet chains them but each replacement is
-                // last-wins, so only the 5th edit's field set survives.
-                const addField = (name, type) => [
-                    {
-                        id: 'event',
-                        name: 'event',
-                        label: 'Event',
-                        tableColumns: ['summary', name],
-                        requiredColumns: ['summary'],
-                        primaryKeyColumns: ['summary'],
-                        fields: [
-                            { id: 'summary', label: 'Summary', type: 'string', description: '' },
-                            { id: name, label: name, type, description: '' },
-                        ],
-                    },
-                ];
-                const edit1 = { op: 'set', path: '', oldValue: initial, newValue: addField('tags', 'array') };
-                const edit2 = { op: 'set', path: '', oldValue: initial, newValue: addField('priority', 'number') };
-                const edit3 = { op: 'set', path: '', oldValue: initial, newValue: addField('mood', 'string') };
-                const edit4 = { op: 'set', path: '', oldValue: initial, newValue: addField('location', 'string') };
-                const edit5 = { op: 'set', path: '', oldValue: initial, newValue: addField('tone', 'string') };
+    test('5 sendIterPrompts add 5 distinct fields; Apply persists them; schema editor shows all', async ({ page }) => {
+        test.setTimeout(360_000);
+        await awaitMainUI(page, server.baseURL);
+        // Force the runtime values to match what we actually want here so
+        // the iter studio's generate path routes through our mock. Dev
+        // settings include a Claude API + custom base_url from the dev's
+        // pollution that bootstrapCustomBackend doesn't fully neutralize.
+        await page.evaluate((mockURL) => {
+            const ctx = window.Luker.getContext();
+            const s = ctx.chatCompletionSettings;
+            if (!s) return;
+            s.chat_completion_source = 'custom';
+            s.custom_url = mockURL;
+            s.stream_openai = false;
+            s.openai_model = 'mock-gpt-4o';
+            s.custom_model = 'mock-gpt-4o';
+            s.base_url = '';
+            s.reverse_proxy = '';
+            s.proxy_password = '';
+            // Clear the connection-manager selected profile so iter
+            // studio's profile-lookup doesn't override our chat completion
+            // source back to "Claude" → real Claude API. Iter studio
+            // resolves the active connection profile and overrides
+            // chat_completion_source / custom_url from it before
+            // dispatching. The dev's settings has 3 profiles all pointing
+            // at real APIs; with no selectedProfile, the studio falls
+            // through to oai_settings directly (our mock).
+            const cm = ctx.extensionSettings?.connectionManager;
+            if (cm) {
+                cm.selectedProfile = '';
+            }
+        }, mock.baseURL);
 
-                // A 6th call adds a non-empty-path edit (granular column-level
-                // mutation). Even when mixed with empty-path edits, the
-                // expectation is "every edit lands" — pre-fix the granular
-                // edit had a chance via lodash.set but only against a stale
-                // sandbox base, so it also dropped.
-                const edit6 = {
-                    op: 'set',
-                    path: '0.label',
-                    oldValue: 'Event',
-                    newValue: 'Event (renamed by tool call 6)',
-                };
+        // Verify the setting took effect.
+        const verifyState = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            const s = ctx.chatCompletionSettings;
+            return { source: s?.chat_completion_source, url: s?.custom_url, stream: s?.stream_openai };
+        });
+        if (verifyState.source !== 'custom') {
+            throw new Error(`Settings override failed: source=${verifyState.source}`);
+        }
+        await selectCharacterByName(page, 'Seraphina');
+        await enableMgViaCheckbox(page);
 
-                // Run the canonical apply loop (mirrors `applyPendingEdits`
-                // for empty-path edits; non-empty path edits would normally
-                // route through applyEdits but here we manually exercise
-                // both legs to see whether ANY of the five additions
-                // and the granular rename both survive).
-                let cursor = initial;
-                for (const e of [edit1, edit2, edit3, edit4, edit5]) {
-                    cursor = applyEmptyPathSet(cursor, e);
-                }
-                // Apply the granular edit through the same engine the
-                // production `applyEdits` uses — the iteration-library
-                // export — so this remains a fair end-to-end mirror of
-                // the live apply pipeline.
-                let granular = cursor;
-                try {
-                    const lib = await import('/scripts/iteration-library/index.js');
-                    const r = lib.applyEdits([edit6], structuredClone(cursor));
-                    granular = r?.newLive ?? cursor;
-                } catch (err) {
-                    // If the engine import fails, fall through with the
-                    // empty-path-only cursor — the assertion below will then
-                    // surface "rename not applied" alongside the dropped fields.
-                    granular = cursor;
-                }
+        // RE-apply our settings override after character switch (which
+        // can trigger settings reload from the active preset).
+        await page.evaluate((mockURL) => {
+            const ctx = window.Luker.getContext();
+            const s = ctx.chatCompletionSettings;
+            if (!s) return;
+            s.chat_completion_source = 'custom';
+            s.custom_url = mockURL;
+            s.stream_openai = false;
+            s.openai_model = 'mock-gpt-4o';
+            s.custom_model = 'mock-gpt-4o';
+            s.base_url = '';
+            s.reverse_proxy = '';
+            s.proxy_password = '';
+            // Also clear the active connection profile so resolveProfile
+            // doesn't pull from the (dev's polluted) Claude profile.
+            const cm = ctx.extensionSettings?.connectionManager;
+            if (cm) cm.selectedProfile = null;
+        }, mock.baseURL);
 
-                const eventType = granular?.[0] || null;
-                const tableColumns = Array.isArray(eventType?.tableColumns) ? eventType.tableColumns.slice().sort() : [];
-                const fieldIds = Array.isArray(eventType?.fields) ? eventType.fields.map(f => f?.id).filter(Boolean).sort() : [];
-                return {
-                    finalLabel: String(eventType?.label || ''),
-                    tableColumns,
-                    fieldIds,
-                };
-            });
+        await openIterStudio(page, 'mg');
 
-            expect(result.error, `setup error: ${result.error}`).toBeUndefined();
+        // Drive 5 sendIterPrompts — one per cumulative field add. The
+        // iter studio's auto-iterate loop breaks as soon as any tool call
+        // lands a proposal in the bus (bus.hasOutstanding=true), so each
+        // Send maps to exactly one LLM round / one bus proposal. After 5
+        // sends the bus holds 5 pending proposals — ALL must commit when
+        // Apply is clicked. That's the multi-edit contract.
+        for (let i = 0; i < NEW_FIELDS.length; i++) {
+            await sendIterPrompt(page, 'mg', `Add the ${NEW_FIELDS[i]} field to the event node type.`);
+        }
 
-            // Every one of the 5 field names should be present after Apply.
-            // Bug-state: only the 5th edit's field ('tone') survives the
-            // empty-path chain.
+        // Click Apply.
+        await applyIterBatch(page, 'mg');
+
+        // The iter studio's `persistSession` + `render` chain in the
+        // post-apply finally block calls a few server endpoints that
+        // can be slow when the mock LLM is busy. Wait briefly and tolerate
+        // page being unresponsive for a moment.
+        await page.waitForTimeout(500).catch(() => {});
+
+        // Cross-check via settings before opening the editor: the event
+        // node type's tableColumns should now include all 5 new fields.
+        // The studio's commitLiveToSchema writes to the active character's
+        // schemaOverride when one is selected (Seraphina here), so read
+        // the per-character override path first and fall back to global.
+        const persistedColumns = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            const character = ctx?.characters?.[ctx?.characterId];
+            const override = character?.data?.extensions?.memory_graph?.schemaOverride;
+            const overrideEvent = Array.isArray(override)
+                ? override.find(x => x?.id === 'event')
+                : null;
+            if (overrideEvent && Array.isArray(overrideEvent.tableColumns)) {
+                return overrideEvent.tableColumns.slice();
+            }
+            const s = ctx.extensionSettings?.memory_graph;
+            const eventSpec = (s?.nodeTypeSchema || []).find(x => x?.id === 'event');
+            return Array.isArray(eventSpec?.tableColumns) ? eventSpec.tableColumns.slice() : [];
+        });
+        for (const f of NEW_FIELDS) {
+            expect(persistedColumns, `event tableColumns should include ${f}`).toContain(f);
+        }
+
+        // Open the real schema editor and verify the rendered input for
+        // the event card's Table Columns shows every new field. Close the
+        // iter-studio popup first so the MG settings panel underneath is
+        // hit-testable for the schema-editor open button.
+        await closeIterStudio(page);
+        await openMgSchemaEditor(page);
+        const editorTableColumns = await page.evaluate(() => {
+            // The editor renders one .luker-schema-card per node type;
+            // each card has an input[data-field="tableColumns"] with the
+            // comma-separated column list.
+            const cards = Array.from(document.querySelectorAll('.luker-schema-card'));
+            for (const card of cards) {
+                const idInput = card.querySelector('[data-field="id"]');
+                if (!idInput || idInput.value !== 'event') continue;
+                const colsInput = card.querySelector('[data-field="tableColumns"]');
+                return colsInput ? String(colsInput.value || '') : '';
+            }
+            return '';
+        });
+        for (const f of NEW_FIELDS) {
             expect(
-                result.fieldIds,
-                'all 5 field additions should land in a single Apply batch (bug: only the last edit survives)',
-            ).toEqual(expect.arrayContaining(['summary', 'tags', 'priority', 'mood', 'location', 'tone']));
-
-            // The granular rename from edit6 should also be present alongside
-            // the additions — locks the "mixed empty + non-empty" branch of
-            // the same bug.
-            expect(
-                result.finalLabel,
-                'the granular non-empty-path rename should also land alongside the 5 empty-path additions',
-            ).toBe('Event (renamed by tool call 6)');
-
-            // tableColumns is the surface ST actually reads at recall /
-            // extraction time; the schema-editor UI mirrors fields[] into
-            // tableColumns on persist. If the bug is fully fixed, every
-            // added column should be in tableColumns too.
-            expect(
-                result.tableColumns,
-                'tableColumns should reflect every field added by the multi-edit batch',
-            ).toEqual(expect.arrayContaining(['summary', 'tags', 'priority', 'mood', 'location', 'tone']));
-        },
-    );
+                editorTableColumns,
+                `editor's event Table Columns input should contain ${f}; saw: ${editorTableColumns}`,
+            ).toContain(f);
+        }
+        await page.locator('.popup:visible .popup-button-cancel, .popup:visible .popup-button-close, .popup:visible .popup-button-ok').first().click().catch(() => {});
+    });
 });

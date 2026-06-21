@@ -115,11 +115,33 @@ function cloneDataDirLocal(targetDir) {
     if (existsSync(targetDir)) {
         rmSync(targetDir, { recursive: true, force: true });
     }
-    try {
-        execSync(`cp -c -R "${SEED_DATA_ABS}" "${targetDir}"`, { stdio: 'ignore' });
-    } catch {
-        execSync(`cp -R "${SEED_DATA_ABS}" "${targetDir}"`, { stdio: 'ignore' });
+    const essentials = [
+        'default-user/settings.json',
+        'default-user/User Avatars',
+        'default-user/characters',
+        '_storage',
+    ];
+    for (let attempt = 0; attempt < 8; attempt++) {
+        try {
+            if (existsSync(targetDir)) rmSync(targetDir, { recursive: true, force: true });
+            // `cp -R` (no -c) is slower than APFS clone but is far more
+            // resilient to concurrent writers in `data/` (the clone
+            // form sometimes loses files on parallel sessions).
+            execSync(`cp -R "${SEED_DATA_ABS}" "${targetDir}"`, { stdio: 'ignore' });
+            const missing = essentials.filter(rel => !existsSync(resolve(targetDir, rel)));
+            if (missing.length === 0) return;
+            // eslint-disable-next-line no-console
+            console.warn(`[worldinfo cloneDataDirLocal] attempt ${attempt + 1} missing: ${missing.join(', ')} — retrying`);
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[worldinfo cloneDataDirLocal] attempt ${attempt + 1} threw: ${err.message} — retrying`);
+        }
+        // Backoff briefly in case `data/` is mid-write by a concurrent
+        // test run. Spin-wait — Date.now() is enough granularity.
+        const deadline = Date.now() + 500 * (attempt + 1);
+        while (Date.now() < deadline) { /* spin briefly */ }
     }
+    throw new Error(`cloneDataDirLocal failed after retries; target=${targetDir}`);
 }
 
 async function probeReadyLocal(port, timeoutMs = 60_000) {
@@ -149,6 +171,15 @@ export async function startWorldInfoServer({ specBaseName, scenarioId = 'default
     const dataRoot = resolve(SCRATCH_ROOT_ABS, `worldinfo-${specBaseName}-${scenarioId}-${port}`);
     cloneDataDirLocal(dataRoot);
 
+    // The seed `data/` doesn't include a populated `_storage/` for the
+    // sqlite backend (settings:default-user row is missing), so the
+    // local `config.yaml`'s `storage.mode: sqlite` would make every
+    // /bootstrap call fail with `settings missing for handle
+    // default-user`. Mirror the shared `_lib/server.js` approach: write
+    // a one-off per-spec config that pins the filesystem backend.
+    const configPath = resolve(SCRATCH_ROOT_ABS, `worldinfo-${specBaseName}-${scenarioId}-${port}-config.yaml`);
+    writeFileSync(configPath, 'storage:\n  mode: fs\n', 'utf8');
+
     let child = null;
     const env = { ...process.env, NODE_ENV: 'production' };
 
@@ -157,6 +188,7 @@ export async function startWorldInfoServer({ specBaseName, scenarioId = 'default
             'server.js',
             `--port=${port}`,
             `--dataRoot=${dataRoot}`,
+            `--configPath=${configPath}`,
             '--browserLaunchEnabled=false',
             '--listen=false',
             '--whitelist=127.0.0.1',
@@ -204,5 +236,7 @@ export async function tearDownWorldInfoServer(handle, { removeData = true } = {}
     await handle.stop();
     if (removeData && handle.dataRoot && handle.dataRoot.startsWith(SCRATCH_ROOT_ABS)) {
         try { rmSync(handle.dataRoot, { recursive: true, force: true }); } catch {}
+        // Best-effort: remove the per-spec config.yaml beside the dataRoot.
+        try { rmSync(`${handle.dataRoot}-config.yaml`, { force: true }); } catch {}
     }
 }

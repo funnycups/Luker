@@ -4,11 +4,11 @@
 //   a) stream_openai=true  → bubble grows over multiple ticks
 //   b) stream_openai=false → bubble appears in a single tick
 //
-// The shared mockLLM streams its chunks back-to-back with no inter-chunk
-// pause, which is too fast for a 100ms sampler to catch intermediate
-// states. For the streaming-on scenario we spin up an inline SSE server
-// with explicit per-chunk delays so we can observe the bubble growing.
-// Non-streaming uses the standard mock.
+// Real-user flow: fill #send_textarea, click #send_but, then sample the
+// rendered .last_mes .mes_text innerText over time. The shared mockLLM
+// streams its chunks back-to-back with no inter-chunk pause; for the
+// streaming-on scenario we spin up an inline SSE server with explicit
+// per-chunk delays so DOM growth is observable.
 
 import http from 'node:http';
 import { test, expect } from '@playwright/test';
@@ -69,26 +69,29 @@ async function startSlowStreamMock({ chunkDelayMs = 80 } = {}) {
     return { port, baseURL: `http://127.0.0.1:${port}/v1`, stop: () => new Promise(r => server.close(() => r())) };
 }
 
+/**
+ * Sample the rendered DOM length of `.last_mes .mes_text` at a fixed
+ * cadence until GENERATION_ENDED, returning the growth curve. This
+ * specifically reads what the user SEES (not ctx.chat[id].mes).
+ */
 async function captureGrowthCurve(page, { samplePeriodMs = 80, maxSamples = 120 } = {}) {
     return page.evaluate(async ({ samplePeriodMs, maxSamples }) => {
         const ctx = window.Luker.getContext();
-        const startLen = ctx.chat.length;
+        const startCount = document.querySelectorAll('#chat .mes').length;
         const samples = [];
-        let assistantIdx = -1;
         const startTs = performance.now();
         return await new Promise((resolve) => {
             let done = false;
             const intervalId = setInterval(() => {
                 if (done) return;
                 const elapsed = performance.now() - startTs;
-                if (assistantIdx < 0) {
-                    for (let i = startLen; i < ctx.chat.length; i++) {
-                        if (!ctx.chat[i]?.is_user) { assistantIdx = i; break; }
-                    }
-                }
-                if (assistantIdx >= 0) {
-                    const m = ctx.chat[assistantIdx];
-                    samples.push({ ts: elapsed, len: (m?.mes || '').length });
+                const totalNow = document.querySelectorAll('#chat .mes').length;
+                const lastMes = document.querySelector('#chat .last_mes');
+                const lastMesText = lastMes?.querySelector('.mes_text');
+                // Only sample if a new assistant message exists past the
+                // starting count and it's not the user's just-sent message.
+                if (totalNow > startCount && lastMes && !lastMes.matches('.mes[is_user="true"]') && lastMesText) {
+                    samples.push({ ts: elapsed, len: (lastMesText.innerText || '').length });
                 }
                 if (samples.length >= maxSamples) {
                     clearInterval(intervalId);
@@ -96,14 +99,13 @@ async function captureGrowthCurve(page, { samplePeriodMs = 80, maxSamples = 120 
                     resolve(samples);
                 }
             }, samplePeriodMs);
-            const eventName = ctx.eventTypes.MESSAGE_RECEIVED;
-            const off = ctx.eventSource.on(eventName, (id) => {
+            const eventName = ctx.eventTypes.GENERATION_ENDED;
+            const off = ctx.eventSource.on(eventName, () => {
                 try { ctx.eventSource.removeListener(eventName, off); } catch {}
                 setTimeout(() => {
                     if (done) return;
-                    if (assistantIdx < 0) assistantIdx = id;
-                    const m = ctx.chat[assistantIdx];
-                    samples.push({ ts: performance.now() - startTs, len: (m?.mes || '').length, final: true });
+                    const lastMesText = document.querySelector('#chat .last_mes .mes_text');
+                    samples.push({ ts: performance.now() - startTs, len: (lastMesText?.innerText || '').length, final: true });
                     clearInterval(intervalId);
                     done = true;
                     resolve(samples);
@@ -113,12 +115,16 @@ async function captureGrowthCurve(page, { samplePeriodMs = 80, maxSamples = 120 
     }, { samplePeriodMs, maxSamples });
 }
 
-async function sendAndSample(page, text) {
+/**
+ * Send via the REAL #send_textarea + #send_but and start sampling in
+ * parallel. Returns the growth curve.
+ */
+async function sendAndSampleViaUI(page, text) {
     const samplerP = captureGrowthCurve(page);
-    await page.evaluate(async (msg) => {
-        const ctx = window.Luker.getContext();
-        await ctx.executeSlashCommandsWithOptions(`/send ${msg.replace(/\n/g, ' ')} | /trigger`);
-    }, text);
+    const textarea = page.locator('#send_textarea');
+    await textarea.fill(text);
+    await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.locator('#send_but').click();
     return await samplerP;
 }
 
@@ -134,12 +140,9 @@ test.describe('#2 — streaming vs non-streaming bubble growth', () => {
         try {
             await awaitMainUI(page, server.baseURL);
             await selectCharacterByName(page, 'Seraphina');
-            await page.waitForFunction(() => {
-                const ctx = window.Luker.getContext();
-                return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-            }, { timeout: 10_000 }).catch(() => {});
+            await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
-            const samples = await sendAndSample(page, 'The wind is gathering. Tell me what to watch for.');
+            const samples = await sendAndSampleViaUI(page, 'The wind is gathering. Tell me what to watch for.');
             const finalLen = samples[samples.length - 1].len;
             expect(finalLen).toBeGreaterThan(50);
             const distinctIntermediate = new Set(samples.filter(s => s.len > 0 && s.len < finalLen).map(s => s.len));
@@ -167,12 +170,9 @@ test.describe('#2 — streaming vs non-streaming bubble growth', () => {
         try {
             await awaitMainUI(page, server.baseURL);
             await selectCharacterByName(page, 'Seraphina');
-            await page.waitForFunction(() => {
-                const ctx = window.Luker.getContext();
-                return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-            }, { timeout: 10_000 }).catch(() => {});
+            await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
-            const samples = await sendAndSample(page, 'No streaming this time — speak plain.');
+            const samples = await sendAndSampleViaUI(page, 'No streaming this time — speak plain.');
             const finalLen = samples[samples.length - 1].len;
             expect(finalLen).toBeGreaterThan(50);
             const nonzero = samples.filter(s => s.len > 0);

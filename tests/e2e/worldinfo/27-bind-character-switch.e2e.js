@@ -8,16 +8,29 @@
 //   - Char1 (Ash) bound to bookA — contains entry "OAKWOOD_LORE" on key "oakwood"
 //   - Char2 (Rhonin) bound to bookB — contains entry "STONEPATH_LORE" on key "stonepath"
 //
-// 1. Select Ash, send a turn with "the oakwood is restless tonight"
-//      → OAKWOOD_LORE present, STONEPATH_LORE absent
-// 2. Switch to Rhonin, send a turn with "the stonepath narrows past the mill"
-//      → STONEPATH_LORE present, OAKWOOD_LORE absent
-// 3. Restart, repeat both with new chat — bindings persist on disk.
+// Real-user flow:
+//   1. Click Ash's card in the right nav (real card click via
+//      selectCharacterByName). After selection the character editor
+//      panel mounts inside the right drawer; the editor's `#world_button`
+//      gains the `.world_set` class iff the bound primary book name is
+//      registered in world_names. We verify that — the same affordance
+//      a real user sees showing "Ash is linked to a lorebook".
+//   2. Send a turn with the bound key ("oakwood") via the real send
+//      button. Capture the mock LLM's chat-completion body — OAKWOOD_LORE
+//      must appear, STONEPATH_LORE must not.
+//   3. Click Rhonin's card (another real card click). Verify
+//      `#world_button` reflects the new binding, then send a turn with
+//      "stonepath" → STONEPATH_LORE present, OAKWOOD_LORE absent.
+//   4. Restart the server and repeat both via the same real card-click
+//      gestures — bindings persist on disk and the WI pipeline
+//      reattaches correctly post-restart.
 
 import { test, expect } from '@playwright/test';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import { awaitMainUI, sendMessageAndAwaitReply, selectCharacterByName } from '../_lib/page.js';
 import { writeCharacterWithBinding, startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
 
 test.describe.configure({ mode: 'serial' });
@@ -42,6 +55,34 @@ const BOOK_B_ENTRIES = [
     },
 ];
 
+/**
+ * Drop the seed's heavyweight orchestrator preset stack so the WI
+ * content has room in the chat-completion request body. Same rationale
+ * as 25-activation-strategies.e2e.js#scrubPresetPrompts.
+ */
+function scrubPresetPrompts(dataRoot, handle = 'default-user') {
+    const path = resolve(dataRoot, handle, 'settings.json');
+    if (!existsSync(path)) return;
+    const s = JSON.parse(readFileSync(path, 'utf8'));
+    s.oai_settings = s.oai_settings || {};
+    s.oai_settings.preset_settings_openai = 'Default';
+    s.oai_settings.prompts = [];
+    s.oai_settings.prompt_order = [];
+    s.oai_settings.main_prompt = '';
+    s.oai_settings.nsfw_prompt = '';
+    s.oai_settings.jailbreak_prompt = '';
+    s.oai_settings.impersonation_prompt = '';
+    s.oai_settings.new_chat_prompt = '';
+    s.oai_settings.new_group_chat_prompt = '';
+    s.oai_settings.new_example_chat_prompt = '';
+    s.oai_settings.continue_nudge_prompt = '';
+    s.extension_settings = s.extension_settings || {};
+    s.extension_settings.orchestrator = { ...(s.extension_settings.orchestrator || {}), enabled: false };
+    s.extensionSettings = s.extensionSettings || {};
+    s.extensionSettings.orchestrator = { ...(s.extensionSettings.orchestrator || {}), enabled: false };
+    writeFileSync(path, JSON.stringify(s, null, 4));
+}
+
 test.beforeAll(async () => {
     mock = await startMockLLM({
         scriptedReplies: Array.from({ length: 10 }, (_, i) =>
@@ -52,6 +93,7 @@ test.beforeAll(async () => {
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    scrubPresetPrompts(server.dataRoot);
 
     const bookA = writeWorldBook({ dataRoot: server.dataRoot, name: 'ash-private-book', entries: BOOK_A_ENTRIES });
     const bookB = writeWorldBook({ dataRoot: server.dataRoot, name: 'rhonin-private-book', entries: BOOK_B_ENTRIES });
@@ -90,53 +132,60 @@ async function sendAndCaptureBody(page, text) {
     return JSON.stringify(chatReq.body.messages);
 }
 
-async function settleFirstMes(page) {
-    // Wait for the just-selected character's greeting to populate ctx.chat so
-    // the next MESSAGE_RECEIVED is from our /trigger, not the chat-load event.
+/**
+ * Confirm the character editor's `#world_button` carries the `.world_set`
+ * class — the canonical user-visible signal that the bound primary
+ * world book is registered (setWorldInfoButtonClass toggles it after
+ * character load). Polls a few times because the class is set by an
+ * async sequence (character-load → resolve world_names → setClass).
+ *
+ * The button lives in `rm_ch_create_block`, which is `display:none`
+ * unless the right drawer is open. We do NOT require the drawer to be
+ * visible — only that the class is present in DOM, which is the
+ * load-bearing piece (drawer can be open or closed; the user sees the
+ * "world_set" glow when they open the drawer).
+ */
+async function expectWorldButtonBound(page, expectedBookName) {
     await page.waitForFunction(() => {
-        const ctx = window.Luker.getContext();
-        return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-    }, { timeout: 10_000 }).catch(() => { /* welcome panel path is ok */ });
+        const btn = document.querySelector('#world_button');
+        return btn && btn.classList.contains('world_set');
+    }, { timeout: 10_000 }).catch(() => { throw new Error(`#world_button did not gain .world_set after binding to ${expectedBookName}`); });
 }
 
-async function forceCharacterDrawerOpen(page) {
-    // The right-side character drawer's open/closed state can desync from
-    // visibility (the class flips but the panel stays hidden). Force-open
-    // it before any selectCharacterByName so the next click lands on a
-    // visible card list.
+async function openListAndSelect(page, name) {
+    // First make sure the right nav drawer is open.
     await page.evaluate(() => {
-        const drawer = document.querySelector('#rightNavDrawerIcon');
-        const block = document.querySelector('#rm_print_characters_block');
-        if (!drawer || !block) return;
-        const isHidden = window.getComputedStyle(block).display === 'none' || block.offsetParent === null;
-        if (drawer.classList.contains('closedIcon') || isHidden) {
-            drawer.click();
+        const i = document.querySelector('#rightNavDrawerIcon');
+        if (i && i.classList.contains('closedIcon')) {
+            (i.closest('.drawer-toggle') || i).click();
         }
     });
-    await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
-}
-
-async function selectByNameProgrammatic(page, name) {
-    // Drives selectCharacterById through the context API instead of clicking
-    // the drawer card, so character switching doesn't depend on the drawer
-    // being visible. Returns true if a character with the matching name was
-    // found and selected.
-    return page.evaluate(async (wantName) => {
-        const ctx = window.Luker.getContext();
-        const idx = ctx.characters.findIndex(c => c?.name === wantName || c?.data?.name === wantName);
-        if (idx < 0) return false;
-        await ctx.selectCharacterById(idx);
-        return true;
-    }, name);
+    await page.locator('#right-nav-panel').waitFor({ state: 'visible', timeout: 10_000 });
+    // If the character editor panel is currently shown (selecting a
+    // character routes selectRightMenuWithAnimation to
+    // `rm_ch_create_block`), click the "Select/Create Characters"
+    // button — this is the canonical real-user gesture to return to
+    // the character LIST view (rm_button_back is hidden in editor
+    // mode; the user instead uses the list icon at the top of the
+    // right nav).
+    const isEditorShown = await page.evaluate(() => {
+        const block = document.querySelector('#rm_ch_create_block');
+        return block && window.getComputedStyle(block).display !== 'none';
+    });
+    if (isEditorShown) {
+        await page.locator('#rm_button_characters').click({ force: true });
+        await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 10_000 });
+    }
+    // Now the shared helper can find the card and click it.
+    await selectCharacterByName(page, name);
 }
 
 test.describe('#27 — Bind WI to character → switch character', () => {
     test('each character pulls only its own bound book', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
-        await forceCharacterDrawerOpen(page);
 
         // --- Ash turn: only OAKWOOD_LORE ---
-        await selectCharacterByName(page, 'Ash Cartographer');
+        await openListAndSelect(page, 'Ash Cartographer');
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
@@ -144,15 +193,18 @@ test.describe('#27 — Bind WI to character → switch character', () => {
             if (typeof id !== 'number' && typeof id !== 'string') return false;
             return ctx.characters?.[id]?.data?.extensions?.world === 'ash-private-book';
         }, { timeout: 10_000 });
-        await settleFirstMes(page);
+        await expectWorldButtonBound(page, 'ash-private-book');
+        await page.waitForFunction(() => {
+            const ctx = window.Luker.getContext();
+            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
+        }, { timeout: 10_000 }).catch(() => {});
 
         const ashBody = await sendAndCaptureBody(page, 'The oakwood is restless tonight; the gulls are silent.');
         expect(ashBody).toContain('OAKWOOD_LORE');
         expect(ashBody).not.toContain('STONEPATH_LORE');
 
-        // --- Switch to Rhonin via programmatic API to skip drawer flicker ---
-        const switched = await selectByNameProgrammatic(page, 'Rhonin Warden');
-        expect(switched, 'expected Rhonin Warden to be present in characters list').toBe(true);
+        // --- Switch to Rhonin via another REAL card click ---
+        await openListAndSelect(page, 'Rhonin Warden');
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
@@ -160,7 +212,11 @@ test.describe('#27 — Bind WI to character → switch character', () => {
             if (typeof id !== 'number' && typeof id !== 'string') return false;
             return ctx.characters?.[id]?.data?.extensions?.world === 'rhonin-private-book';
         }, { timeout: 10_000 });
-        await settleFirstMes(page);
+        await expectWorldButtonBound(page, 'rhonin-private-book');
+        await page.waitForFunction(() => {
+            const ctx = window.Luker.getContext();
+            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
+        }, { timeout: 10_000 }).catch(() => {});
 
         const rhoninBody = await sendAndCaptureBody(page, 'The stonepath narrows past the mill at the third bend.');
         expect(rhoninBody).toContain('STONEPATH_LORE');
@@ -171,9 +227,9 @@ test.describe('#27 — Bind WI to character → switch character', () => {
         await server.restart();
         await awaitMainUI(page, server.baseURL);
 
-        // Use programmatic selection — drawer-state is unreliable across restart.
-        const ashOk = await selectByNameProgrammatic(page, 'Ash Cartographer');
-        expect(ashOk, 'expected Ash Cartographer to be in the post-restart characters list').toBe(true);
+        // Real card click again post-restart — same gesture as the
+        // first test, no programmatic shortcut.
+        await openListAndSelect(page, 'Ash Cartographer');
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
@@ -181,14 +237,17 @@ test.describe('#27 — Bind WI to character → switch character', () => {
             if (typeof id !== 'number' && typeof id !== 'string') return false;
             return ctx.characters?.[id]?.data?.extensions?.world === 'ash-private-book';
         }, { timeout: 10_000 });
-        await settleFirstMes(page);
+        await expectWorldButtonBound(page, 'ash-private-book');
+        await page.waitForFunction(() => {
+            const ctx = window.Luker.getContext();
+            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
+        }, { timeout: 10_000 }).catch(() => {});
 
         const ashBody = await sendAndCaptureBody(page, 'The oakwood cottage still stands on the eastern bluff.');
         expect(ashBody).toContain('OAKWOOD_LORE');
         expect(ashBody).not.toContain('STONEPATH_LORE');
 
-        const rhoninOk = await selectByNameProgrammatic(page, 'Rhonin Warden');
-        expect(rhoninOk).toBe(true);
+        await openListAndSelect(page, 'Rhonin Warden');
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
@@ -196,7 +255,11 @@ test.describe('#27 — Bind WI to character → switch character', () => {
             if (typeof id !== 'number' && typeof id !== 'string') return false;
             return ctx.characters?.[id]?.data?.extensions?.world === 'rhonin-private-book';
         }, { timeout: 10_000 });
-        await settleFirstMes(page);
+        await expectWorldButtonBound(page, 'rhonin-private-book');
+        await page.waitForFunction(() => {
+            const ctx = window.Luker.getContext();
+            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
+        }, { timeout: 10_000 }).catch(() => {});
 
         const rhoninBody = await sendAndCaptureBody(page, 'Two of the stonepath traps showed broken lines this dawn.');
         expect(rhoninBody).toContain('STONEPATH_LORE');

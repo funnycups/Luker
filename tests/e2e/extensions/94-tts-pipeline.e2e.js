@@ -1,23 +1,29 @@
-// Case #94 — TTS triggers playback pipeline on assistant reply
+// Case #94 — TTS pipeline fires on real .mes_narrate button click
 //
 // Spec:
-//   Enable TTS. Send a turn. Verify TTS pipeline activates on the
-//   assistant reply.
-//
-// Strategy:
-//   The system / cloud TTS providers each require a real backend (ElevenLabs,
-//   Azure, browser SpeechSynthesis, etc.) which we can't reliably exercise
-//   in headless Chromium. Instead we stub `ttsProvider.generateTts` and
-//   `ttsProvider.getVoice` with deterministic shims that return a pre-canned
-//   audio buffer, then wait for the `TTS_JOB_STARTED` + `TTS_AUDIO_READY`
-//   events to fire — proving the extension routed the assistant message
-//   through its processing queue and into the playback step.
+//   1. Register a Stub TTS provider that lets the pipeline complete
+//      without a real synthesizer.
+//   2. Enable TTS via the real #tts_enabled checkbox.
+//   3. Select Stub provider via #tts_provider dropdown.
+//   4. Wait for voice map to populate (the module's auto-resolver).
+//   5. Send a real message + reply.
+//   6. Click .mes_narrate on the assistant message — the same user
+//      gesture that fires onNarrateOneMessage.
+//   7. Assert TTS_JOB_STARTED fires OR generateTts is called. We
+//      explicitly do NOT accept CHARACTER_MESSAGE_RENDERED as success;
+//      that's the upstream trigger, not pipeline evidence.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    openExtensionsDrawer,
+    openInlineDrawer,
+} from '../_lib/page.js';
 
 let server, mock;
 
@@ -36,8 +42,10 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#94 — TTS reaches playback pipeline on new reply', () => {
-    test('assistant reply enqueues a TTS job and fires TTS_JOB_STARTED', async ({ page }) => {
+test.describe('#94 — TTS pipeline reaches playback via real .mes_narrate click', () => {
+    test.describe.configure({ timeout: 240_000 });
+    test('clicking .mes_narrate on assistant reply fires the TTS pipeline (real provider.generateTts call)', async ({ page }) => {
+        test.setTimeout(240_000);
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
@@ -46,33 +54,14 @@ test.describe('#94 — TTS reaches playback pipeline on new reply', () => {
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        // Enable TTS + install a stub provider. We import the TTS module
-        // to access the live `ttsProvider` binding and monkey-patch the
-        // outgoing audio call so the test doesn't depend on a real
-        // backend or browser SpeechSynthesis.
+        // Register the stub provider + wire up event observers BEFORE
+        // any TTS init runs. The stub records calls so we can assert
+        // post-click evidence that the pipeline reached generateTts.
         await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            ctx.extensionSettings.tts = ctx.extensionSettings.tts || {};
-            ctx.extensionSettings.tts.enabled = true;
-            ctx.extensionSettings.tts.auto_generation = true;
-            ctx.extensionSettings.tts.narrate_by_paragraphs = false;
-            ctx.extensionSettings.tts.skip_codeblocks = false;
-            ctx.extensionSettings.tts.skip_tags = false;
-            ctx.extensionSettings.tts.pass_asterisks = true;
-            ctx.extensionSettings.tts.narrate_quoted_only = false;
-            ctx.extensionSettings.tts.narrate_translated_only = false;
-            ctx.extensionSettings.tts.narrate_user = false;
-            ctx.extensionSettings.tts.multi_voice_enabled = false;
-            ctx.saveSettingsDebounced();
-
             const mod = await import('/scripts/extensions/tts/index.js');
-            // Stub: replace the underlying provider's getVoice + generateTts
-            // so the pipeline can advance through `tts(text, voiceId, char)`
-            // and emit TTS_JOB_STARTED + TTS_AUDIO_READY without external calls.
+            window.__ttsStub = { generateTtsCalls: 0, getVoiceCalls: 0 };
+            window.__ttsEvents = { jobStarted: 0, audioReady: 0 };
             const fakeAudio = new Blob([new Uint8Array([82, 73, 70, 70])], { type: 'audio/wav' });
-            // Build a small voice map pointing to a fake voice for the current chars.
-            const ttsRegister = await import('/scripts/extensions/tts/index.js');
-            // Register a synthetic provider for the duration of the test.
             class StubTts {
                 settings = {};
                 async loadSettings() {}
@@ -80,70 +69,96 @@ test.describe('#94 — TTS reaches playback pipeline on new reply', () => {
                 async checkReady() { return true; }
                 async onRefreshClick() {}
                 async fetchTtsVoiceObjects() { return [{ name: 'StubVoice', voice_id: 'stub-1' }]; }
-                async getVoice(name) { return { name: name || 'StubVoice', voice_id: 'stub-1' }; }
-                async generateTts(/* text, voiceId, voiceMapKey */) {
-                    // Return a Response-like object that addAudioJob can consume.
+                async getVoice(name) {
+                    window.__ttsStub.getVoiceCalls += 1;
+                    return { name: name || 'StubVoice', voice_id: 'stub-1' };
+                }
+                async generateTts() {
+                    window.__ttsStub.generateTtsCalls += 1;
                     return new Response(fakeAudio, { headers: { 'content-type': 'audio/wav' } });
                 }
             }
-            ttsRegister.registerTtsProvider?.('Stub', StubTts);
-            // Switch active provider to the stub and re-load.
-            ctx.extensionSettings.tts.currentProvider = 'Stub';
-            // The tts module reads `currentProvider` lazily; force a reload
-            // via loadTtsProvider which the module exposes.
-            if (typeof ttsRegister.loadTtsProvider === 'function') {
-                ttsRegister.loadTtsProvider('Stub');
+            if (typeof mod.registerTtsProvider === 'function') {
+                mod.registerTtsProvider('Stub', StubTts);
             }
-            // Seed voiceMap for both default + character names. The TTS
-            // module reads from its private voiceMap object — but if it
-            // can't resolve a voice for the message author it throws and
-            // never calls `tts()`. We have to seed the public voice map
-            // via initVoiceMap by injecting through the UI textarea.
-            // Easiest: open the multi-voice voice map preference and
-            // set every char to StubVoice.
-            // The internal voiceMap is keyed by character display name.
-            // We can't reach it directly, so we set the public surfaced
-            // accountStorage value the module persists.
-            // Fallback for headless: we will detect that the queue
-            // received the message (proves the wiring fired) even if
-            // generateTts is never called for lack of voice mapping.
-        });
-
-        // Subscribe to TTS_JOB_STARTED + queue introspection. Even when
-        // voice mapping isn't initialized, processAndQueueTtsMessage
-        // still pushes onto ttsJobQueue — which we can observe via a
-        // monkey-patched eventSource hook before the queue gets shifted.
-        const tapHandle = await page.evaluateHandle(() => {
             const ctx = window.Luker.getContext();
-            const recorded = { processed: 0, jobStarted: 0, audioReady: 0 };
-            // CHARACTER_MESSAGE_RENDERED is the actual trigger the TTS
-            // module subscribes to. We listen alongside to confirm it
-            // fires (proves the message reaches the same upstream event).
-            ctx.eventSource.on(ctx.eventTypes.CHARACTER_MESSAGE_RENDERED, () => { recorded.processed++; });
-            ctx.eventSource.on(ctx.eventTypes.TTS_JOB_STARTED, () => { recorded.jobStarted++; });
-            ctx.eventSource.on(ctx.eventTypes.TTS_AUDIO_READY, () => { recorded.audioReady++; });
-            return recorded;
+            ctx.eventSource.on(ctx.eventTypes.TTS_JOB_STARTED, () => { window.__ttsEvents.jobStarted++; });
+            ctx.eventSource.on(ctx.eventTypes.TTS_AUDIO_READY, () => { window.__ttsEvents.audioReady++; });
         });
 
-        await sendMessageAndAwaitReply(page, 'I walked the cliff path; tell me what you read in the reef tonight.');
+        // Open Extensions → TTS settings.
+        await openExtensionsDrawer(page);
+        await openInlineDrawer(page, 'tts_settings');
 
-        // Wait for at least the upstream rendered event.
-        await page.waitForFunction(() => true, null, { timeout: 500 }); // tiny tick
-        const snap = await tapHandle.jsonValue();
+        // Switch to Stub provider via the REAL dropdown. The change handler
+        // calls loadTtsProvider('Stub').
+        const providerSel = page.locator('#tts_provider');
+        await providerSel.waitFor({ state: 'attached', timeout: 10_000 });
+        await providerSel.scrollIntoViewIfNeeded().catch(() => {});
+        await providerSel.selectOption('Stub');
+        // Give the provider switch + voiceMap reset a beat.
+        await page.waitForTimeout(800);
 
-        // The TTS extension subscribes to CHARACTER_MESSAGE_RENDERED in
-        // its init via makeLast — for any new assistant message, the
-        // event must fire. This proves the assistant reply was the
-        // observable trigger surface the TTS extension watches.
-        expect(snap.processed, 'CHARACTER_MESSAGE_RENDERED should fire for the assistant reply').toBeGreaterThan(0);
+        // Enable TTS via REAL checkbox.
+        const enableCb = page.locator('#tts_enabled');
+        await enableCb.scrollIntoViewIfNeeded().catch(() => {});
+        await enableCb.check();
 
-        // Best-effort: if the stub provider was wired in (voice map +
-        // currentProvider resolution succeeded), TTS_JOB_STARTED will
-        // fire too. We don't hard-fail when it doesn't because the
-        // voice-map plumbing requires UI interaction that has no
-        // headless-stable API. Either condition is acceptable evidence
-        // the TTS wiring is in place.
-        const wiringEvidence = snap.processed + snap.jobStarted + snap.audioReady;
-        expect(wiringEvidence).toBeGreaterThan(0);
+        // Force-seed voiceMap so onNarrateOneMessage can resolve a voice
+        // for the current character. The legitimate UI gesture is to
+        // populate #tts_voicemap_block which the module reads; but
+        // headlessly we seed the provider-scoped settings.tts.Stub.voiceMap
+        // (initVoiceMapInternal:1505 reads
+        // extension_settings.tts[ttsProviderName].voiceMap, not the
+        // top-level tts.voiceMap). The important act under test is the
+        // CLICK, not the voice mapping setup.
+        await page.evaluate(async () => {
+            const ctx = window.Luker.getContext();
+            ctx.extensionSettings.tts = ctx.extensionSettings.tts || {};
+            ctx.extensionSettings.tts.Stub = ctx.extensionSettings.tts.Stub || {};
+            ctx.extensionSettings.tts.Stub.voiceMap = 'Seraphina:StubVoice';
+            ctx.saveSettingsDebounced();
+            const mod = await import('/scripts/extensions/tts/index.js');
+            if (typeof mod.initVoiceMap === 'function') {
+                await mod.initVoiceMap(true);
+            }
+        });
+
+        // Real send + reply.
+        await sendMessageAndAwaitReply(page, 'Tell me what you read in the reef tonight.');
+
+        // Click .mes_narrate on the assistant reply (last .mes). The
+        // button lives inside .extraMesButtons which is display:none by
+        // default (revealed by hovering / clicking .extraMesButtonsHint).
+        // Playwright's click({force:true}) can hang on display:none
+        // elements because there's no bbox to land the synthetic click
+        // on — dispatch the click via JS instead (the document-level
+        // delegated handler in tts/index.js:1577 will pick it up).
+        await page.evaluate(() => {
+            const btn = document.querySelector('#chat .mes:last-child .mes_narrate');
+            if (!btn) throw new Error('.mes_narrate not found on last bubble');
+            btn.click();
+        });
+
+        // Wait for the TTS pipeline to fire. moduleWorker runs on a
+        // setInterval(1000), so give the queue a beat to drain.
+        await page.waitForFunction(() => {
+            return (window.__ttsEvents?.jobStarted || 0) > 0
+                || (window.__ttsStub?.generateTtsCalls || 0) > 0;
+        }, { timeout: 30_000 }).catch(() => { /* surface via expect below */ });
+
+        const evidence = await page.evaluate(() => ({
+            jobStarted: window.__ttsEvents?.jobStarted || 0,
+            audioReady: window.__ttsEvents?.audioReady || 0,
+            generateTtsCalls: window.__ttsStub?.generateTtsCalls || 0,
+            getVoiceCalls: window.__ttsStub?.getVoiceCalls || 0,
+        }));
+
+        // Pipeline evidence: TTS_JOB_STARTED OR provider.generateTts called.
+        // We deliberately do NOT accept CHARACTER_MESSAGE_RENDERED here.
+        expect(
+            evidence.jobStarted > 0 || evidence.generateTtsCalls > 0,
+            `TTS pipeline did not reach the playback step. Evidence: ${JSON.stringify(evidence)}`,
+        ).toBe(true);
     });
 });

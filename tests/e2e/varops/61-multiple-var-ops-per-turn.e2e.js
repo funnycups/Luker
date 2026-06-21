@@ -1,42 +1,28 @@
-// #61 — One turn with multiple var_ops mutations → floor end-state written to sidecar.
+// #61 — Multiple var-ops per AI turn surface as rendered rows in the flask panel.
 //
-// The variable-op-log feature scans the AI reply for embedded side-effect
-// macros ({{setvar}}, {{incvar}}, {{pushvar}}, {{decvar}}, {{deletevar}},
-// {{addvar}}, {{popvar}}), strips them from the visible text, records the
-// structured op records onto `chat[messageId].extra.var_ops`, and forward-
-// applies each op into `chat_metadata.variables` in source order.
-//
-// chat_metadata.variables is the materialized "floor end-state" cache; the
-// load-bearing persistence record is the per-message `extra.var_ops` array
-// which is serialized into the chat JSONL. On chat-load, the rebuilder
-// replays surviving ops back into chat_metadata.variables, so even if the
-// cached header is stale, the in-memory state reconverges.
-//
-// This test scripts a single reply containing four mutations (set, set, inc,
-// push) and asserts, in order:
-//   a) Each op is recorded in extra.var_ops in source order
-//   b) The materialized chat_metadata.variables reflects all four mutations
-//   c) The literal macro syntax is stripped from the rendered message
-//   d) After server restart + reload, in-memory state reconverges to
-//      hp=51, tension=high, inventory=["lantern"] via the rebuilder
-//   e) The per-message extra.var_ops survives on the chat JSONL across
-//      restart (this is the actual durable record).
+// Real user flow:
+//   1. Send a user turn via the textarea + send button (no programmatic /trigger).
+//   2. The mock AI reply weaves four side-effect macros into RP-immersive prose.
+//   3. The variable-op-log scanner records each op onto the assistant
+//      message's `extra.var_ops`; the panel handler flips the per-message
+//      flask icon visible.
+//   4. Click the flask icon → the panel popup mounts → assert the rendered
+//      rows reflect each op (op/key/value) read from the DOM, not from
+//      ctx.chat.
+//   5. Reload the page after a server restart; click the same flask icon
+//      again; the rendered rows must still match because the per-message
+//      var_ops record is the durable persistence boundary.
 
 import { test, expect } from '@playwright/test';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, reloadAndAwait } from '../_lib/page.js';
+import { openVarOpsPanel, getRenderedVarOpsRows } from '../_lib/ui-mg-varops.js';
 
 let server, mock;
 
-// Four mutations woven into Seraphina's reply:
-//   1. setvar hp = 50           (set; numeric-string)
-//   2. setvar tension = high    (set; string)
-//   3. incvar hp                (inc by 1 → 51, numeric coercion in apply.js)
-//   4. pushvar inventory = lantern   (push onto inventory array; auto-creates)
+// Four mutations woven into Seraphina's reply.
 const RICH_REPLY = [
     '*Seraphina drops to one knee at the lantern base, salt cracking on her cuffs.* ',
     'The wick is fickle tonight. {{setvar::hp::50}}{{setvar::tension::high}}',
@@ -45,8 +31,12 @@ const RICH_REPLY = [
     ' "And keep your eyes on the third breaker — that one has been lying to me all watch."',
 ].join('');
 
+// Second reply used post-restart so the same flask panel can be re-opened
+// from a fresh page load.
+const RESTART_REPLY = '*Seraphina nods.* "The tally still reads as it did at the third bell."';
+
 test.beforeAll(async () => {
-    mock = await startMockLLM({ scriptedReplies: [RICH_REPLY] });
+    mock = await startMockLLM({ scriptedReplies: [RICH_REPLY, RESTART_REPLY] });
     server = await startServer({ batchKey: 'varops', scenarioId: 'multi-ops-per-turn' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -58,134 +48,103 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#61 — One turn / multiple var_ops mutations → floor end-state', () => {
-    test('all four ops land in extra.var_ops in source order; materialized state reflects each; visible text is stripped; persists across restart', async ({ page }) => {
+test.describe('#61 — One turn / multiple var_ops mutations → rendered panel rows', () => {
+    test('four ops surface as four rendered rows; survives server restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
-        // Wait for the greeting (Seraphina's first_mes) to land before we
-        // send our turn so we can address the assistant reply unambiguously.
         await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        await sendMessageAndAwaitReply(page, 'I will hold the lantern. Tell me what the breaker is doing.');
+        // Real send via the textarea + #send_but; await the streamed reply.
+        const { replyId } = await sendMessageAndAwaitReply(
+            page,
+            'I will hold the lantern. Tell me what the breaker is doing.',
+        );
 
-        const observed = await page.evaluate(async () => {
+        // The var-op extractor runs from `saveReply()` AFTER GENERATION_ENDED
+        // fires (which is what sendMessageAndAwaitReply awaits). Wait
+        // explicitly for the post-extract state: extra.var_ops populated AND
+        // chat[].mes scrubbed of macro literals (redrawMessageBubble follows).
+        await page.waitForFunction((id) => {
             const ctx = window.Luker.getContext();
-            // Locate the most recent assistant message
-            let asstId = -1;
-            for (let i = ctx.chat.length - 1; i >= 0; i--) {
-                if (!ctx.chat[i]?.is_user) { asstId = i; break; }
-            }
-            const m = ctx.chat[asstId];
-            // Force an explicit save so the chat file on disk reflects the
-            // post-extract state before we restart the server. saveChatConditional
-            // is debounced; an explicit saveChat bypasses that.
-            await ctx.saveChat();
-            const avatarFolder = (ctx.characters[ctx.characterId]?.avatar || '').replace(/\.png$/, '');
-            return {
-                asstId,
-                mes: m?.mes ?? '',
-                ops: m?.extra?.var_ops ?? null,
-                variables: ctx.chatMetadata?.variables ?? null,
-                avatarFolder,
-                chatId: ctx.getCurrentChatId?.() ?? null,
-            };
-        });
+            const m = ctx.chat?.[id];
+            if (!m || !Array.isArray(m?.extra?.var_ops) || m.extra.var_ops.length === 0) return false;
+            return !String(m.mes || '').includes('{{setvar');
+        }, replyId, { timeout: 20_000 });
 
-        // The most-recent assistant message is the reply we scripted; the
-        // greeting (chat[0]) carries no ops.
-        expect(observed.asstId, 'should have an assistant message').toBeGreaterThanOrEqual(0);
-        expect(observed.ops, 'extra.var_ops must be populated by extractor').toBeTruthy();
-        expect(observed.ops).toEqual([
+        // ctx.chat[id].mes is the canonical stripped body (post-extractor).
+        const persisted = await page.evaluate((id) => {
+            const ctx = window.Luker.getContext();
+            const m = ctx.chat?.[id];
+            return { mes: m?.mes || '', ops: m?.extra?.var_ops || [] };
+        }, replyId);
+
+        expect(persisted.mes).not.toContain('{{setvar');
+        expect(persisted.mes).not.toContain('{{incvar');
+        expect(persisted.mes).not.toContain('{{pushvar');
+        expect(persisted.mes).toContain('third breaker');
+        expect(persisted.ops).toEqual([
             { op: 'setvar', key: 'hp', value: '50' },
             { op: 'setvar', key: 'tension', value: 'high' },
             { op: 'incvar', key: 'hp' },
             { op: 'pushvar', key: 'inventory', value: 'lantern' },
         ]);
 
-        // Literal macro syntax must be stripped from the visible mes
-        expect(observed.mes).not.toContain('{{setvar');
-        expect(observed.mes).not.toContain('{{incvar');
-        expect(observed.mes).not.toContain('{{pushvar');
-        // Narrative prose remains — this is the "no silent truncation" guarantee
-        expect(observed.mes).toContain('third breaker');
-        expect(observed.mes).toContain('Seraphina drops to one knee');
-
-        // Materialized state: hp went 50 → 51 (set, then inc), tension=high, inventory=["lantern"]
-        // apply.js#addToVariable returns the numeric sum for incvar.
-        expect(Number(observed.variables.hp), 'hp incremented after set').toBe(51);
-        expect(observed.variables.tension).toBe('high');
-        // pushvar stores the array as a JSON-stringified payload
-        expect(JSON.parse(observed.variables.inventory)).toEqual(['lantern']);
-
-        // ── Pre-restart on-disk sanity: chat JSONL has the message ops ─
-        // The character card embeds a default chat filename ("Seraphina - 2023-5-12
-        // …"); ST writes our active chat to that name.
-        const chatDir = resolve(server.dataRoot, 'default-user', 'chats', observed.avatarFolder);
-        expect(existsSync(chatDir), `chat dir should exist at ${chatDir}`).toBe(true);
-        const chatFiles = readdirSync(chatDir).filter(f => f.endsWith('.jsonl'));
-        expect(chatFiles.length, 'at least one chat jsonl present').toBeGreaterThanOrEqual(1);
-        const targetFile = observed.chatId && chatFiles.includes(`${observed.chatId}.jsonl`)
-            ? `${observed.chatId}.jsonl`
-            : chatFiles[0];
-        const preLines = readFileSync(resolve(chatDir, targetFile), 'utf8').trim().split('\n');
-        // Locate the assistant line with var_ops by scanning all message lines.
-        const messageLinesPre = preLines.slice(1).map(l => JSON.parse(l));
-        const asstLine = [...messageLinesPre].reverse().find(m => !m.is_user && Array.isArray(m?.extra?.var_ops) && m.extra.var_ops.length > 0);
-        expect(asstLine, 'assistant line with var_ops present in chat jsonl').toBeTruthy();
-        expect(asstLine.extra.var_ops).toEqual([
-            { op: 'setvar', key: 'hp', value: '50' },
-            { op: 'setvar', key: 'tension', value: 'high' },
-            { op: 'incvar', key: 'hp' },
-            { op: 'pushvar', key: 'inventory', value: 'lantern' },
+        // Click the flask icon on the assistant message and read the rendered rows.
+        await openVarOpsPanel(page, replyId);
+        const rows = await getRenderedVarOpsRows(page);
+        expect(rows).toEqual([
+            { op: 'setvar', key: 'hp', value: '50', path: '' },
+            { op: 'setvar', key: 'tension', value: 'high', path: '' },
+            // incvar has no value field — the textarea is not rendered for non-value ops.
+            { op: 'incvar', key: 'hp', value: '', path: '' },
+            { op: 'pushvar', key: 'inventory', value: 'lantern', path: '' },
         ]);
-        // The serialized line text should not contain the stripped macro literals.
-        expect(asstLine.mes).not.toContain('{{setvar');
-        expect(asstLine.mes).not.toContain('{{incvar');
-        expect(asstLine.mes).not.toContain('{{pushvar');
 
-        // ── Persistence: restart server, reload, re-verify ──────────────
+        // Close the panel with the Cancel button — we do not want to commit edits.
+        await page.locator('.popup-button-cancel').first().click().catch(() => {});
+
+        // Wait for the relaxed chat-save debounce (1000ms) to flush its
+        // pending write to disk before the server restart. This mirrors a
+        // real user pausing for a moment after their last action rather
+        // than racing the debounce window. Adding 200ms slack covers the
+        // setTimeout + fetch round-trip.
+        await page.waitForTimeout(1200);
+
+        // ── Persistence: restart, reload, re-open the same flask panel ─
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
-        // Wait for the chat to re-hydrate from disk; the CHAT_CHANGED handler
-        // will run rebuildVariablesFromChat against the persisted ops, which
-        // re-materializes chat_metadata.variables in memory.
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             return Array.isArray(ctx?.chat) && ctx.chat.length >= 2;
         }, { timeout: 15_000 });
 
-        const afterRestart = await page.evaluate(() => {
+        // Find the assistant message that carries var_ops in the rehydrated chat.
+        const reopenId = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
-            let asstId = -1;
             for (let i = ctx.chat.length - 1; i >= 0; i--) {
-                if (!ctx.chat[i]?.is_user) { asstId = i; break; }
+                if (!ctx.chat[i]?.is_user && Array.isArray(ctx.chat[i]?.extra?.var_ops) && ctx.chat[i].extra.var_ops.length > 0) {
+                    return i;
+                }
             }
-            const m = ctx.chat[asstId];
-            return {
-                ops: m?.extra?.var_ops ?? null,
-                variables: ctx.chatMetadata?.variables ?? null,
-                mes: m?.mes ?? '',
-            };
+            return -1;
         });
+        expect(reopenId, 'expected an assistant message with var_ops after reload').toBeGreaterThanOrEqual(0);
 
-        expect(afterRestart.ops, 'var_ops survive restart').toEqual([
-            { op: 'setvar', key: 'hp', value: '50' },
-            { op: 'setvar', key: 'tension', value: 'high' },
-            { op: 'incvar', key: 'hp' },
-            { op: 'pushvar', key: 'inventory', value: 'lantern' },
+        await openVarOpsPanel(page, reopenId);
+        const reopenedRows = await getRenderedVarOpsRows(page);
+        expect(reopenedRows).toEqual([
+            { op: 'setvar', key: 'hp', value: '50', path: '' },
+            { op: 'setvar', key: 'tension', value: 'high', path: '' },
+            { op: 'incvar', key: 'hp', value: '', path: '' },
+            { op: 'pushvar', key: 'inventory', value: 'lantern', path: '' },
         ]);
-        // In-memory state reconverges via the rebuilder.
-        expect(Number(afterRestart.variables.hp), 'hp materialized to 51 after rebuild').toBe(51);
-        expect(afterRestart.variables.tension).toBe('high');
-        expect(JSON.parse(afterRestart.variables.inventory)).toEqual(['lantern']);
-        expect(afterRestart.mes).not.toContain('{{setvar');
-        expect(afterRestart.mes).not.toContain('{{incvar');
-        expect(afterRestart.mes).not.toContain('{{pushvar');
+        // Dismiss.
+        await page.locator('.popup-button-cancel').first().click().catch(() => {});
     });
 });

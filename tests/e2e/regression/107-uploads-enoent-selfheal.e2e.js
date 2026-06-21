@@ -1,4 +1,5 @@
-// #107 — `_uploads/` ENOENT self-heal (commit 69ebf6e5d)
+// #107 — character import survives _uploads/ being wiped mid-session
+// (commit 69ebf6e5d)
 //
 // Bug shape: server boots and creates `<dataRoot>/_uploads/`. If anything
 // deletes that directory while the server is still running, subsequent
@@ -11,103 +12,125 @@
 // `ensureDirectory(uploadsPath)` per request, so the dir is re-created
 // before the file lands.
 //
-// Regression lock:
-//   1. Boot server, open the page so CSRF / cookies are negotiated.
-//   2. Issue a character import POST through the live HTTP surface so
-//      multer touches `_uploads/` once and creates it (or so we can
-//      observe its first-touch state).
-//   3. `rm -rf` the dir while the server is still running.
-//   4. Issue a second character-import POST — this is the path that
-//      pre-fix ENOENT'd and 5xx'd. Assert the second request succeeds
-//      AND the dir is back on disk.
+// REAL USER FLOW: do a character import via the visible import button
+// (#character_import_button + setInputFiles on its hidden file input).
+// Wait for the new card to appear. Wipe _uploads/ on disk. Do the SAME
+// import a second time — assert another card appears. If multer's
+// per-request ensureDirectory regresses, the second import 5xx's and
+// no card lands; we also watch the toastr stream for any error popups.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { existsSync, rmSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
+import { existsSync, rmSync, statSync, copyFileSync, mkdtempSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const SEED_PNG = resolve(REPO_ROOT, 'default/content/default_Seraphina.png');
 
 let server;
+let tmpDir;
+let firstUploadPath;
+let secondUploadPath;
 
 test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'uploads-enoent' });
+    server = await startServer({ batchKey: 'regression', scenarioId: '107-uploads-enoent', extraConfig: { 'storage.mode': 'fs' } });
     markOnboarded({ dataRoot: server.dataRoot });
+
+    // Stage two copies of the seed PNG with distinct file names. Same
+    // image bytes either way — the regression cares about the upload
+    // path, not the contents.
+    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-107-'));
+    firstUploadPath = resolve(tmpDir, 'card-warmup.png');
+    secondUploadPath = resolve(tmpDir, 'card-post-wipe.png');
+    copyFileSync(SEED_PNG, firstUploadPath);
+    copyFileSync(SEED_PNG, secondUploadPath);
 });
 
 test.afterAll(async () => {
     await tearDownServer(server);
+    if (tmpDir) {
+        try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    }
 });
 
-test.describe('#107 — _uploads/ ENOENT self-heal', () => {
-    test('character import after rm -rf _uploads/ still succeeds and re-creates the dir', async ({ page }) => {
+test.describe('#107 — character import survives _uploads/ wipe', () => {
+    test('second character import after rm -rf _uploads/ still lands a new card', async ({ page }) => {
         const uploadsPath = resolve(server.dataRoot, '_uploads');
 
-        // 1. Open the page so the session has a valid CSRF token / cookie.
-        //    Server-issued multipart routes require the token to be passed
-        //    via `getRequestHeaders()`; we drive the upload from inside the
-        //    page to inherit those headers.
         await awaitMainUI(page, server.baseURL);
 
-        // 2. First import: nudges multer to touch _uploads/. This both
-        //    creates the dir (if not already) AND proves the baseline
-        //    happy path works — so the second-pass assertion isolates the
-        //    re-ensure behavior under test.
-        const pngBytesB64 = readFileSync(SEED_PNG).toString('base64');
+        // Listen for toastr error popups — pre-fix, a wiped _uploads/
+        // surfaces as a toastr error during the second import. Treat
+        // ANY toastr-error appearing during the post-wipe import as a
+        // failure signal alongside the missing card.
+        const toastrErrors = [];
+        await page.exposeBinding('__e2e107RecordToastError', (_, msg) => {
+            toastrErrors.push(String(msg));
+        }).catch(() => { /* may already be exposed */ });
+        await page.evaluate(() => {
+            try {
+                const orig = window.toastr?.error;
+                if (typeof orig === 'function' && !window.toastr.__e2e107Wrapped) {
+                    window.toastr.error = function (msg, ...rest) {
+                        try { window.__e2e107RecordToastError(String(msg || '')); } catch {}
+                        return orig.apply(this, [msg, ...rest]);
+                    };
+                    window.toastr.__e2e107Wrapped = true;
+                }
+            } catch { /* tolerate */ }
+        });
 
-        async function doImport(label) {
-            return await page.evaluate(async ({ b64, name }) => {
-                const ctx = window.Luker.getContext();
-                const headers = ctx.getRequestHeaders();
-                // Drop content-type so the browser sets the multipart boundary.
-                delete headers['Content-Type'];
-                delete headers['content-type'];
-                const form = new FormData();
-                const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-                form.append('avatar', new Blob([bin], { type: 'image/png' }), name);
-                form.append('file_type', 'png');
-                const res = await fetch('/api/characters/import', {
-                    method: 'POST',
-                    headers,
-                    body: form,
-                });
-                const text = await res.text();
-                let body;
-                try { body = JSON.parse(text); } catch { body = { raw: text }; }
-                return { status: res.status, body };
-            }, { b64: pngBytesB64, name: `regression-107-${label}.png` });
+        // 1. First import: drives the real visible button + file input.
+        //    The seed PNG embeds Seraphina's card data so the imported
+        //    name will be Seraphina (or Seraphina_<n> on dupes); we don't
+        //    care about the specific name — only that the card count grows.
+        //    Open the right-nav drawer first so the count is observable.
+        const drawer = page.locator('#rightNavDrawerIcon');
+        if (await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true)) {
+            await drawer.click();
+            await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 10_000 });
         }
-
-        const firstImport = await doImport('warmup');
-        expect(firstImport.status, `warmup import should succeed (got body=${JSON.stringify(firstImport.body)})`).toBe(200);
-        expect(firstImport.body?.error, `warmup import should not report error`).not.toBe(true);
+        const allCards = page.locator('#rm_print_characters_block .character_select');
+        const countBeforeFirst = await allCards.count();
+        await page.locator('#character_import_button').click().catch(() => {});
+        await page.locator('#character_import_file').setInputFiles(firstUploadPath);
+        await expect.poll(async () => await allCards.count(), {
+            message: 'first import should add a new character card',
+            timeout: 30_000,
+        }).toBeGreaterThan(countBeforeFirst);
         expect(existsSync(uploadsPath), '_uploads/ should exist after first multer touch').toBe(true);
 
-        // 3. Wipe _uploads/ while the server is still running. This is
-        //    the bug trigger — pre-fix, multer's `dest:` path is cached
-        //    at boot and subsequent uploads ENOENT.
+        // 2. Wipe _uploads/ while the server is still running. This is
+        //    the bug trigger — pre-fix, multer's dest path is cached at
+        //    boot and subsequent uploads ENOENT.
         rmSync(uploadsPath, { recursive: true, force: true });
-        expect(existsSync(uploadsPath), '_uploads should be gone after rm -rf').toBe(false);
+        expect(existsSync(uploadsPath), '_uploads/ should be gone after rm -rf').toBe(false);
 
-        // 4. Issue another import — this is the bug-triggering path. The
-        //    fix's per-request `ensureDirectory(uploadsPath)` should make
-        //    this succeed and recreate the dir.
-        const secondImport = await doImport('post-rm');
-        expect(secondImport.status,
-            `second import after rm -rf must succeed (commit 69ebf6e5d); ` +
-            `got status=${secondImport.status} body=${JSON.stringify(secondImport.body)}`,
-        ).toBe(200);
-        expect(secondImport.body?.error,
-            `second import must not report error after re-ensure`,
-        ).not.toBe(true);
+        // 3. Second import — the bug-triggering path. We don't care
+        //    about the exact name, just that the total card count grew
+        //    again (proving the import succeeded).
+        const countBeforeSecond = await allCards.count();
+        await page.locator('#character_import_button').click().catch(() => {});
+        await page.locator('#character_import_file').setInputFiles(secondUploadPath);
+        await expect.poll(async () => await allCards.count(), {
+            message: 'second import (post-rm -rf _uploads/) must add a new card; ' +
+                'if multer\'s per-request ensureDirectory regresses, the upload 5xx\'s and no card lands',
+            timeout: 30_000,
+        }).toBeGreaterThan(countBeforeSecond);
 
-        // 5. The uploads dir should be back on disk after the fix.
+        // 4. _uploads/ should be back on disk after the per-request
+        //    ensureDirectory recreated it.
         expect(existsSync(uploadsPath), '_uploads/ must be re-created by per-request ensureDirectory').toBe(true);
         const st = statSync(uploadsPath);
         expect(st.isDirectory()).toBe(true);
+
+        // 5. No toastr.error should have fired during the post-rm import.
+        //    Pre-fix the failure surfaces as an error toast.
+        expect(toastrErrors,
+            `no toastr.error should fire during the post-wipe import; got: ${JSON.stringify(toastrErrors)}`,
+        ).toEqual([]);
     });
 });
-

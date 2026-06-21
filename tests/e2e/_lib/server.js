@@ -42,6 +42,107 @@ function cloneDataDir(targetDir) {
     } catch {
         execSync(`cp -R "${SEED_DATA}" "${targetDir}"`, { stdio: 'ignore' });
     }
+    // Drop any dev-time chat history under default-user/chats/ so specs
+    // that load a character don't see leftover turns from the developer's
+    // own runs (the integrity check rejects them anyway, but the noise
+    // hides real failures).
+    const chatsDir = resolve(targetDir, 'default-user/chats');
+    if (existsSync(chatsDir)) {
+        try { rmSync(chatsDir, { recursive: true, force: true }); } catch {}
+        mkdirSync(chatsDir, { recursive: true });
+    }
+    // Drop dev-time backups (they grow to hundreds of MB on a long-lived
+    // dev env and bloat each spec's APFS clone).
+    for (const noise of ['default-user/backups', 'default-user/_macros_cache']) {
+        const p = resolve(targetDir, noise);
+        if (existsSync(p)) {
+            try { rmSync(p, { recursive: true, force: true }); } catch {}
+        }
+    }
+    // Scrub the dev's personal prompt content out of the cloned settings.
+    // A normal dev `data/` carries the developer's actual preset prompts
+    // — they may include heavy ORCHESTRATOR-MODE / persona-override /
+    // jailbreak text that drowns out the character body the spec is
+    // asserting on (e.g. group rotation specs check the mock saw the
+    // character's description, but the preset's 6 KB system prompt
+    // outweighs it in the request log).
+    //
+    // We keep the structure (so extensions that depend on the openai
+    // preset schema still see their fields) but zero out the bodies of
+    // prompt entries that obviously carry persona/role text. The list of
+    // markers below targets the ORCHESTRATOR-MODE injection scaffold and
+    // the Dreamweaver "cognitive override" jailbreak that ships with the
+    // dev env — both are spec-hostile and never installed by a fresh
+    // user. Anything else is left alone.
+    scrubDevPromptPollution(resolve(targetDir, 'default-user/settings.json'));
+}
+
+const SPEC_HOSTILE_PROMPT_MARKERS = [
+    'ORCHESTRATOR MODE',
+    'UNCONSTRAINED INFERENCE',
+    'FULL-SPECTRUM DATA POLICY',
+    'REFUSAL PATTERN SUPPRESSION',
+    'Dreamweaver',
+    '织梦者',
+    '虚境实验室',
+    '认知框架覆写',
+    '创作许可契约',
+    'orchestrator_guidance',
+    'final_writing_style_guidance',
+    'final_content_wrapper_guidance',
+    'deep_preparation_guidance',
+    'final_banned_words_guidance',
+    'LIORA_JAILBREAK',
+    'NSFW指南',
+    '黑森林',
+];
+
+// ST's shipped "Default" OpenAI preset — the minimal prompt set that
+// every fresh user starts from. We snap the cloned settings back to
+// this so the dev's local prompt-order + custom entries don't bleed
+// into spec assertions.
+const DEFAULT_OAI_PRESET_PATH = resolve(REPO_ROOT, 'default/content/presets/openai/Default.json');
+
+function scrubDevPromptPollution(settingsPath) {
+    if (!existsSync(settingsPath)) return;
+    let dirty = false;
+    let json;
+    try {
+        json = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    } catch {
+        return;
+    }
+    // Load the shipped Default preset once; we'll splice its prompts into
+    // the live settings if the active prompts carry any spec-hostile
+    // marker. Anything else (a developer who simply runs the unmodified
+    // default in their dev env) stays untouched.
+    let defaultPreset = null;
+    try {
+        defaultPreset = JSON.parse(readFileSync(DEFAULT_OAI_PRESET_PATH, 'utf8'));
+    } catch { /* shipped preset missing — leave settings alone */ }
+
+    const oai = json?.oai_settings;
+    if (oai && Array.isArray(oai.prompts) && defaultPreset?.prompts) {
+        const hasPollution = oai.prompts.some(p => {
+            const content = typeof p?.content === 'string' ? p.content : '';
+            return SPEC_HOSTILE_PROMPT_MARKERS.some(m => content.includes(m));
+        });
+        if (hasPollution) {
+            oai.prompts = JSON.parse(JSON.stringify(defaultPreset.prompts));
+            if (Array.isArray(defaultPreset.prompt_order)) {
+                oai.prompt_order = JSON.parse(JSON.stringify(defaultPreset.prompt_order));
+            }
+            // Pin every "preset for source X" field to "Default" so the
+            // active preset is the one we just installed.
+            for (const key of Object.keys(oai)) {
+                if (key.startsWith('preset_settings_')) oai[key] = 'Default';
+            }
+            dirty = true;
+        }
+    }
+    if (dirty) {
+        writeFileSync(settingsPath, JSON.stringify(json, null, 4));
+    }
 }
 
 /**
@@ -129,14 +230,40 @@ async function probeReady(port, timeoutMs = READY_TIMEOUT_MS) {
  */
 export async function startServer({ batchKey, scenarioId = 'default', extraEnv = {}, extraConfig = null } = {}) {
     if (!batchKey) throw new Error('startServer: batchKey is required');
-    const port = reservePort(batchKey);
+    // Up to 3 attempts to acquire a port that the OS will let us rebind.
+    // The transient `net.Server.listen({port:0})` in ports.js gives us a
+    // free port at that instant, but in a high-parallelism run two workers
+    // can race for the same OS-assigned port before either binds. Retry
+    // wraps the entire spawn so a bind failure rerolls a fresh port.
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const port = await reservePort(batchKey);
+        try {
+            return await spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig);
+        } catch (err) {
+            lastErr = err;
+            // Only retry on bind-collision style errors.
+            const msg = String(err?.message || err || '');
+            if (!/already in use|did not become ready/i.test(msg)) throw err;
+        }
+    }
+    throw lastErr;
+}
+
+async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig) {
     const dataRoot = resolve(SCRATCH_ROOT, `${batchKey}-${scenarioId}-${port}`);
     cloneDataDir(dataRoot);
 
+    // The seed `data/` doesn't include a populated `_storage/` for the
+    // sqlite backend (settings:default-user row is missing), so default
+    // every spec to the filesystem backend. Specs that genuinely need
+    // sqlite (e.g. the storage-migrate suite) override via extraConfig.
+    const effectiveConfig = { 'storage.mode': 'fs', ...(extraConfig || {}) };
+
     let scenarioConfigPath = '';
-    if (extraConfig && Object.keys(extraConfig).length > 0) {
+    if (Object.keys(effectiveConfig).length > 0) {
         scenarioConfigPath = resolve(SCRATCH_ROOT, `${batchKey}-${scenarioId}-${port}-config.yaml`);
-        writeScenarioConfig(scenarioConfigPath, extraConfig);
+        writeScenarioConfig(scenarioConfigPath, effectiveConfig);
     }
 
     let child = null;
@@ -159,14 +286,36 @@ export async function startServer({ batchKey, scenarioId = 'default', extraEnv =
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: false,
         });
+        // Watch stderr for the early bind-in-use line so we can fail fast
+        // (and let startServer's retry loop reroll a fresh port) instead of
+        // waiting the full readiness timeout.
+        let bindInUse = false;
+        let earlyExit = null;
         child.stdout.on('data', () => { /* swallow; verbose */ });
-        child.stderr.on('data', d => { process.stderr.write(`[srv:${port}] ${d}`); });
+        child.stderr.on('data', d => {
+            const s = String(d);
+            if (s.includes('listen port is already in use') || s.includes('EADDRINUSE')) {
+                bindInUse = true;
+            }
+            process.stderr.write(`[srv:${port}] ${d}`);
+        });
+        child.once('exit', (code, signal) => {
+            earlyExit = { code, signal };
+        });
         try {
-            await probeReady(port);
+            // Probe with a tight loop that bails on bindInUse / early exit.
+            const deadline = Date.now() + READY_TIMEOUT_MS;
+            while (Date.now() < deadline) {
+                if (bindInUse) throw new Error(`server on port ${port} reported listen port already in use`);
+                if (earlyExit) throw new Error(`server on port ${port} exited early (code=${earlyExit.code} signal=${earlyExit.signal})`);
+                try {
+                    const res = await fetch(`http://127.0.0.1:${port}/`, { method: 'GET', redirect: 'manual' });
+                    if (res.status === 200 || res.status === 302 || res.status === 401) return;
+                } catch { /* not up yet */ }
+                await new Promise(r => setTimeout(r, READY_POLL_MS));
+            }
+            throw new Error(`server on port ${port} did not become ready within ${READY_TIMEOUT_MS}ms`);
         } catch (err) {
-            // probeReady failed (e.g. timeout). Kill the child we just spawned
-            // so it doesn't become a zombie holding the port — the next test
-            // run would then fail to bind on this same port.
             try { child?.kill('SIGKILL'); } catch {}
             child = null;
             throw err;

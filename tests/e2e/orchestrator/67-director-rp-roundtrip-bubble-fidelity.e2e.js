@@ -86,14 +86,24 @@ test.describe('#67 — Director RP one full round → 1:1 bubble fidelity', () =
 
         // Send a single RP-immersive prompt and wait for the assistant
         // bubble to materialize.
-        const { text: bubble } = await sendMessageAndAwaitReply(
+        const { replyId } = await sendMessageAndAwaitReply(
             page,
             '*I cup my hand to the lantern, shielding the flame from the wind, and lean toward Ash.* "What do you read in the reef tonight?"',
             { timeoutMs: 60_000 },
         );
 
-        // Byte-equality (post-trim — the renderer trims trailing newlines).
-        expect(bubble.trim()).toBe(FINAL_REPLY.trim());
+        // Byte-equality of the committed message body. We compare against
+        // the raw `chat[id].mes` (the source the renderer reads from) and
+        // NOT the DOM `.mes_text` innerText, because the renderer turns
+        // markdown asterisks into <em> tags and innerText strips them —
+        // i.e. the 1:1 fidelity contract is about the persisted body, not
+        // the HTML rendering of it (see spec #68 which uses the same
+        // raw-mes assertion for the same reason).
+        const committedMes = await page.evaluate((id) => {
+            const ctx = window.Luker.getContext();
+            return String(ctx.chat?.[id]?.mes ?? '');
+        }, replyId);
+        expect(committedMes.trim()).toBe(FINAL_REPLY.trim());
 
         // Persistence assertion: restart and re-open the chat.
         const before = await getChatSnapshot(page);

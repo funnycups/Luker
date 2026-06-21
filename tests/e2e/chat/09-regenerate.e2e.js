@@ -1,20 +1,24 @@
-// #9 — /regenerate at swipe #2.
+// #9 — Regenerate from the options dropdown
 //
-// Luker's /regenerate is a "redo this message" — it REPLACES the last
-// assistant message entirely (the old swipes do not carry forward). We
-// verify:
-//   - After regenerate, the last assistant turn now exists and contains
-//     the Variant C content from the next mock reply.
-//   - chat.length is unchanged (we still have one assistant message at
-//     the end, not two).
-//   - The variants A/B that were in swipes before are gone (regenerate
-//     is not the same as swipe).
+// Real user clicks the "Regenerate" item in the #options dropdown. Per
+// the original audit: Luker's Regenerate is "redo this message" — it
+// REPLACES the in-flight assistant turn's body with a new variant.
+//
+// We send turn 1 (variant A), swipe right once to land on variant B,
+// then click Regenerate from the options dropdown. The last bubble's
+// rendered body becomes Variant C and chat length is unchanged.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, getChatSnapshot } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    regenerateViaUI,
+    getChatSnapshot,
+} from '../_lib/page.js';
 
 const REPLIES = [
     '*Seraphina answers calmly.* "Variant A: the watch is steady."',
@@ -37,65 +41,64 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function swipeRight(page) {
-    return page.evaluate(() => new Promise((resolve, reject) => {
-        const ctx = window.Luker.getContext();
-        const t = setTimeout(() => reject(new Error('swipe timeout')), 30_000);
-        const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, (id) => {
-            clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_RECEIVED, off); } catch {}
-            resolve(id);
-        });
-        ctx.executeSlashCommandsWithOptions('/swipe direction=right').catch(reject);
-    }));
+/**
+ * Click .swipe_right on the last message (dispatched via el.click() to
+ * bypass the `.fade` transition) and wait for the swipes-counter to
+ * advance to the target. See 03-multi-swipe for full rationale.
+ */
+async function swipeRightToVariant(page, targetCounter, marker, { timeoutMs = 30_000 } = {}) {
+    // Wait for any pending generation to settle.
+    await page.waitForFunction(() => {
+        const stop = document.querySelector('#mes_stop');
+        const stopHidden = !stop || getComputedStyle(stop).display === 'none';
+        const swiping = document.body.dataset.swiping === 'true';
+        return stopHidden && !swiping;
+    }, { timeout: timeoutMs });
+    await page.evaluate(() => {
+        const arrow = document.querySelector('#chat .last_mes .swipe_right');
+        if (!arrow) throw new Error('.swipe_right not in DOM');
+        arrow.click();
+    });
+    await page.waitForFunction(
+        ({ targetCounter, marker }) => {
+            const counter = document.querySelector('#chat .last_mes .swipes-counter');
+            const mes = document.querySelector('#chat .last_mes .mes_text');
+            if (!counter || !mes) return false;
+            const counterText = (counter.innerText || '').replace(/[​]/g, '');
+            return counterText === targetCounter && (mes.innerText || '').includes(marker);
+        },
+        { targetCounter, marker },
+        { timeout: timeoutMs },
+    );
 }
 
-test.describe('#9 — /regenerate at swipe #2', () => {
-    test('regenerate adds a new swipe variant without disturbing earlier ones', async ({ page }) => {
+test.describe('#9 — Regenerate from the options dropdown', () => {
+    test('Regenerate replaces last assistant message at current swipe in place', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-        }, { timeout: 10_000 }).catch(() => {});
+        await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
-        await sendMessageAndAwaitReply(page, 'Watch report?');
-        await swipeRight(page); // → swipe_id 1, variant B
-        // ensure we're on swipe_id 1
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            const last = ctx.chat[ctx.chat.length - 1];
-            return last && last.swipe_id === 1;
-        }, { timeout: 10_000 });
+        const first = await sendMessageAndAwaitReply(page, 'Watch report?');
+        expect(first.text).toContain('Variant A');
+        // Swipe right once → variant B lands.
+        await swipeRightToVariant(page, '2/2', 'Variant B');
 
-        const before = await getChatSnapshot(page);
-        const lastBefore = before.messages[before.messages.length - 1];
-        expect(lastBefore.swipes.length).toBe(2);
-        expect(lastBefore.swipes[0]).toContain('Variant A');
-        expect(lastBefore.swipes[1]).toContain('Variant B');
+        const beforeCount = await page.locator('#chat .mes').count();
 
-        // /regenerate.
-        const beforeLen = before.length;
-        await page.evaluate(() => new Promise((resolve, reject) => {
-            const ctx = window.Luker.getContext();
-            const t = setTimeout(() => reject(new Error('regen timeout')), 30_000);
-            const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, () => {
-                clearTimeout(t);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_RECEIVED, off); } catch {}
-                resolve(true);
-            });
-            ctx.executeSlashCommandsWithOptions('/regenerate').catch(reject);
-        }));
-        await page.waitForTimeout(400);
+        // Real user gesture: Regenerate from the options dropdown.
+        const { text } = await regenerateViaUI(page);
+        expect(text, `regenerated message should be Variant C; got=${text?.slice(0, 120)}`).toContain('Variant C');
 
+        // Chat length unchanged — regenerate replaces in place.
+        const afterCount = await page.locator('#chat .mes').count();
+        expect(afterCount, `chat length should be unchanged by Regenerate`).toBe(beforeCount);
+
+        // DOM-side: last bubble body is Variant C.
+        const lastBody = await page.locator('#chat .last_mes .mes_text').innerText();
+        expect(lastBody).toContain('Variant C');
+
+        // Secondary ctx.chat: exactly one assistant message carries Variant C.
         const after = await getChatSnapshot(page);
-        // Chat length unchanged — regenerate replaces in place, not append.
-        expect(after.length, `chat length should be unchanged by /regenerate`).toBe(beforeLen);
-        const lastAfter = after.messages[after.messages.length - 1];
-        // Variant C is now the active message.
-        expect(lastAfter.mes, `regenerated message should be Variant C; got=${lastAfter.mes?.slice(0, 120)}`).toContain('Variant C');
-        // No assistant turn elsewhere in the chat carries Variant C
-        // (sanity: regenerate did not duplicate it).
         const cCount = after.messages.filter(m => !m.is_user && /Variant C/.test(m.mes || '')).length;
         expect(cCount).toBe(1);
     });

@@ -1,16 +1,16 @@
-// #64 — Variables set via slash commands persist across restart.
+// #64 — Variables set via typed slash commands persist across restart.
 //
-// `/setvar` writes directly into `chat_metadata.variables` (see
-// public/scripts/variables.js setLocalVariable). The variable cache is
-// part of chat metadata, persisted on the chat JSONL header line — so a
-// restart that re-reads the same chat file must surface the same values.
+// `/setvar` is a slash-command that writes directly into
+// `chat_metadata.variables`. Typing it into the send textarea + pressing
+// the send button is a real user gesture (slash commands are valid user
+// input, intercepted by the chat composer before they reach the LLM).
 //
 // What this test does NOT exercise: var_ops extraction. /setvar is a
 // slash command, not an embedded AI macro — there are no extra.var_ops
 // records produced. That distinction matters because the rebuilder on
 // CHAT_CHANGED only rewrites keys it OWNS (keys that appear in surviving
-// ops). Slash-command-written keys are not owned and therefore not touched
-// by rebuild, which is exactly the behavior we want here.
+// ops). Slash-command-written keys are not owned and therefore not
+// touched by rebuild, which is exactly the behavior we want here.
 
 import { test, expect } from '@playwright/test';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -23,8 +23,6 @@ import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, reloadAnd
 let server, mock;
 
 test.beforeAll(async () => {
-    // Two scripted replies — one to anchor the chat (so it gets a persisted
-    // ID), one in reserve for the post-restart turn.
     mock = await startMockLLM({
         scriptedReplies: [
             '*Seraphina sets her elbow on the chart, watching you mark the slate.* "The wind tells me you have the tallies right."',
@@ -42,35 +40,46 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#64 — Variables persist across restart (slash command path)', () => {
-    test('/setvar writes survive server restart and re-load of chat', async ({ page }) => {
+/**
+ * Type a slash command into the send textarea and click #send_but. Slash
+ * commands execute synchronously in the composer's submit handler — no
+ * LLM round-trip — so we just await the textarea clearing as the ready
+ * signal.
+ */
+async function sendSlashCommand(page, command) {
+    const textarea = page.locator('#send_textarea');
+    await textarea.fill(command);
+    await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
+    await page.locator('#send_but').click();
+    await page.waitForFunction(() => {
+        const ta = document.querySelector('#send_textarea');
+        return ta && ta.value === '';
+    }, { timeout: 15_000 });
+}
+
+test.describe('#64 — Variables persist across restart (typed /setvar in textarea)', () => {
+    test('/setvar typed into the textarea + send-button survives server restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
-        // Anchor the chat: ensure greeting is in chat array first so the
-        // chat file is actually created on disk before we /setvar into it.
         await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        // Send one turn so the chat file definitely exists (greeting alone
-        // is in-memory until a save). This also gives us a stable jsonl
-        // we can read back from disk.
+        // Anchor the chat (so it gets persisted on disk) with one real turn.
         await sendMessageAndAwaitReply(page, 'Mark the slate — I have three tallies for you tonight.');
 
-        // ── Set three variables via the slash-command surface ─────────
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            await ctx.executeSlashCommandsWithOptions('/setvar key=watch_count 3');
-            await ctx.executeSlashCommandsWithOptions('/setvar key=keeper_name Briallen');
-            await ctx.executeSlashCommandsWithOptions('/setvar key=lantern_oil whale-oil');
-            // Trigger a save so the header rewrites with the new variables.
-            await ctx.saveChat();
-        });
+        // ── Set three variables by TYPING /setvar into the textarea ────
+        await sendSlashCommand(page, '/setvar key=watch_count 3');
+        await sendSlashCommand(page, '/setvar key=keeper_name Briallen');
+        await sendSlashCommand(page, '/setvar key=lantern_oil whale-oil');
 
-        // Verify cache reflects the writes — both via direct metadata and the public API.
-        // /setvar with no `as=number` keeps the value as the literal string.
+        // Let the relaxed chat-save debounce (1000ms) flush to disk
+        // before cycling the server. Mirrors a real user pausing briefly.
+        await page.waitForTimeout(1200);
+
+        // Verify cache reflects the writes.
         const beforeRestart = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
             return {
@@ -91,9 +100,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         expect(beforeRestart.viaApi.keeper_name).toBe('Briallen');
         expect(beforeRestart.viaApi.lantern_oil).toBe('whale-oil');
 
-        // ── Persistence: on-disk header carries the variables block ──
-        // Resolve the avatar folder dynamically (Seraphina's avatar is
-        // default_Seraphina.png so the folder is "default_Seraphina").
+        // ── Persistence: on-disk header carries the variables block ────
         const avatarFolder = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
             return (ctx.characters[ctx.characterId]?.avatar || '').replace(/\.png$/, '');
@@ -102,7 +109,6 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
         expect(existsSync(chatDir), `chat dir exists at ${chatDir}`).toBe(true);
         const files = readdirSync(chatDir).filter(f => f.endsWith('.jsonl'));
         expect(files.length, 'at least one jsonl chat persisted').toBeGreaterThan(0);
-        // Find the file matching our active chatId.
         const chatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId());
         const targetFile = chatId && files.includes(`${chatId}.jsonl`) ? `${chatId}.jsonl` : files[0];
         const headerOnDisk = JSON.parse(readFileSync(resolve(chatDir, targetFile), 'utf8').split('\n')[0]);
@@ -113,7 +119,7 @@ test.describe('#64 — Variables persist across restart (slash command path)', (
             lantern_oil: 'whale-oil',
         });
 
-        // ── Restart + re-load → vars still present in cache + UI ──────
+        // ── Restart + reload → vars still present in cache + via UI ────
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');

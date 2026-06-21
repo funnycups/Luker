@@ -1,15 +1,22 @@
 // #1 — Send first user turn → receive reply → restart server → both
 // messages still present in chat history (in-memory + on-disk).
 //
-// Locks regression of the most basic happy path: chat.jsonl actually
-// gets fsync'd before the user reload, and the server reopens the file
-// for the same character on subsequent boot.
+// Real-user flow: fill #send_textarea, click #send_but, assert against
+// .mes_text DOM nodes. ctx.chat snapshot is the secondary cross-restart
+// equality check; DOM is the primary assertion.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, reloadAndAwait, selectCharacterByName, sendMessageAndAwaitReply, getChatSnapshot } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    reloadAndAwait,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    getChatSnapshot,
+    getRenderedChatTexts,
+} from '../_lib/page.js';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -36,22 +43,28 @@ test.describe('#1 — first-turn persistence', () => {
         await selectCharacterByName(page, 'Seraphina');
 
         // Wait for greeting to land so the message we care about isn't
-        // mistaken for the first_mes echo.
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-        }, { timeout: 10_000 }).catch(() => {});
+        // mistaken for the first_mes echo. DOM-side: .mes count >= 1.
+        await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
         const userText = 'I walked the cliff path. The wind is cold but the lantern holds and the path is clear.';
-        await sendMessageAndAwaitReply(page, userText);
+        const { replyId, text: replyText } = await sendMessageAndAwaitReply(page, userText);
 
+        // DOM-side primary assertion: rendered .mes_text contains the
+        // scripted reply (the actual bytes the user sees).
+        expect(replyText).toMatch(/lantern|reef|moving/);
+        const renderedBefore = await getRenderedChatTexts(page);
+        expect(renderedBefore.some(t => t.includes('cliff path'))).toBe(true);
+        expect(renderedBefore.some(t => /lantern|reef|moving/.test(t))).toBe(true);
+        // Last rendered message must be the assistant reply at replyId.
+        expect(renderedBefore[replyId]).toBe(replyText);
+
+        // Secondary: ctx.chat snapshot for cross-restart structural equality.
         const before = await getChatSnapshot(page);
         expect(before.length).toBeGreaterThanOrEqual(2);
         const chatId = before.chatId;
         expect(chatId).toBeTruthy();
 
-        // Avatar filename (minus .png) is the chat-folder name. Look it up
-        // through the context API rather than guessing.
+        // Avatar filename (minus .png) is the chat-folder name.
         const avatarFolder = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
             const c = ctx.characters[ctx.characterId];
@@ -75,11 +88,14 @@ test.describe('#1 — first-turn persistence', () => {
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            return Array.isArray(ctx.chat) && ctx.chat.length >= 2;
-        }, { timeout: 15_000 });
+        await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 2, { timeout: 15_000 });
 
+        // After-restart DOM assertion.
+        const renderedAfter = await getRenderedChatTexts(page);
+        expect(renderedAfter.some(t => /cliff path/.test(t))).toBe(true);
+        expect(renderedAfter.some(t => /lantern|reef|moving/.test(t))).toBe(true);
+
+        // Secondary ctx.chat check.
         const after = await getChatSnapshot(page);
         expect(after.chatId).toBe(chatId);
         expect(after.length).toBeGreaterThanOrEqual(before.length);

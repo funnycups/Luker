@@ -1,6 +1,7 @@
-// #103 — Switch UI language via localStorage 'language' key (the same
-// surface as the dropdown in User Settings); reload; assert a few key
-// labels picked up the translation; persist across restart.
+// #103 — Switch UI language via the real `#ui_language_select` dropdown
+// in User Settings; the change handler calls localStorage.setItem +
+// location.reload() automatically. Assert key labels picked up the
+// translation; persist across server restart.
 //
 // Per `feedback_i18n_text_conventions`: zh-CN, zh-TW, and en must all
 // render correctly. We pick stable strings ("Persona Management" and
@@ -28,10 +29,12 @@ test.afterAll(async () => {
 });
 
 /**
- * Read i18n-driven title of a known drawer button by id.
- * `data-i18n="[title]Persona Management"` plus an attribute mutation
- * observer in i18n.js means the title attribute carries the translated
- * value once locale data has loaded.
+ * Read i18n-driven title of a known drawer button by id, plus the
+ * <html lang> attribute and the persisted localStorage key.
+ *
+ * `data-i18n="[title]Persona Management"` + the attribute observer in
+ * i18n.js means the title attribute carries the translated value once
+ * locale data has loaded.
  */
 async function drawerTitles(page) {
     return page.evaluate(() => {
@@ -48,16 +51,45 @@ async function drawerTitles(page) {
     });
 }
 
-async function setLanguageAndReload(page, baseURL, code) {
-    await page.evaluate((c) => {
-        if (c) localStorage.setItem('language', c);
-        else localStorage.removeItem('language');
-    }, code);
-    await reloadAndAwait(page, baseURL);
+/**
+ * Open the User Settings drawer (the canonical home of #ui_language_select)
+ * and select the requested language option via real .selectOption. The
+ * page reloads automatically as part of the change handler.
+ */
+async function setLanguageViaDropdownAndReload(page, baseURL, code) {
+    // Open the User Settings drawer so the language select is visible.
+    const closed = await page.locator('#user-settings-button .drawer-icon.closedIcon').count();
+    if (closed > 0) {
+        await page.locator('#user-settings-button .drawer-toggle').click();
+        await page.waitForFunction(() => {
+            const icon = document.querySelector('#user-settings-button .drawer-icon');
+            return icon && icon.classList.contains('openIcon');
+        }, { timeout: 5000 }).catch(() => {});
+    }
+
+    const sel = page.locator('#ui_language_select');
+    await sel.waitFor({ state: 'visible', timeout: 10_000 });
+    await sel.scrollIntoViewIfNeeded().catch(() => {});
+
+    // The change handler calls location.reload() — that races with our
+    // post-select wait. Wrap in waitForFunction polling localStorage to
+    // confirm the value persisted (proves the change handler fired even if
+    // the reload happens before we can chain a .waitForLoadState).
+    if (code === '') {
+        // Empty option = browser default; the option's value is "".
+        await sel.selectOption({ value: '' });
+    } else {
+        await sel.selectOption({ value: code });
+    }
+
+    // The change handler triggers a full page reload — wait for the
+    // preloader to vanish and the UI to come back, then we re-assert.
+    await page.waitForFunction(() => document.getElementById('preloader') === null, { timeout: 60_000 });
+    await page.waitForFunction(() => !!window.Luker?.getContext, { timeout: 30_000 });
 }
 
-test.describe('#103 — i18n language switch persists and labels translate', () => {
-    test('zh-CN → zh-TW → en cycles with persistence + label assertions', async ({ page }) => {
+test.describe('#103 — i18n language switch via real dropdown persists and labels translate', () => {
+    test('zh-CN -> zh-TW -> en cycles with persistence + label assertions', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
         // Baseline: English (or browser default). We don't care what the
@@ -65,7 +97,7 @@ test.describe('#103 — i18n language switch persists and labels translate', () 
         // translated string for that locale.
 
         // --- zh-CN ---
-        await setLanguageAndReload(page, server.baseURL, 'zh-cn');
+        await setLanguageViaDropdownAndReload(page, server.baseURL, 'zh-cn');
         let titles = await drawerTitles(page);
         expect(titles.stored).toBe('zh-cn');
         expect(titles.lang).toBe('zh-cn');
@@ -81,14 +113,14 @@ test.describe('#103 — i18n language switch persists and labels translate', () 
         expect(titles.persona).toBe('用户设定管理');
 
         // --- en ---
-        await setLanguageAndReload(page, server.baseURL, 'en');
+        await setLanguageViaDropdownAndReload(page, server.baseURL, 'en');
         titles = await drawerTitles(page);
         expect(titles.stored).toBe('en');
         expect(titles.persona).toBe('Persona Management');
         expect(titles.user).toBe('User Settings');
 
         // --- zh-TW ---
-        await setLanguageAndReload(page, server.baseURL, 'zh-tw');
+        await setLanguageViaDropdownAndReload(page, server.baseURL, 'zh-tw');
         titles = await drawerTitles(page);
         expect(titles.stored).toBe('zh-tw');
         expect(titles.persona, `persona title not localized to zh-TW; got "${titles.persona}"`).toBe('使用者角色管理');

@@ -1,37 +1,30 @@
-// Case #98 — Function-call runtime: register custom tool, mock invokes it,
-//             result loops back into next turn's prompt, final bubble has
-//             "sunny" + "21°C".
+// Case #98 — Function-call runtime via REAL send (not slash exec)
 //
 // Round-trip flow:
-//   1. Test registers `get_weather({city})` via
-//        ctx.registerFunctionTool({ name, action: () => "sunny, 21°C", ... })
-//      Action returns a hardcoded string so the assertion is deterministic.
-//   2. Test enables oai_settings.function_calling = true and forces a NONE
-//      custom_prompt_post_processing (the empty string, NOT 'none' — the
-//      latter silently disables tool calling per the briefing).
-//   3. Test scripts a tool_calls response into the mock LLM (first call),
-//      then a plain-text reply for the second call.
-//   4. Test sends a user turn. /trigger generates → mock returns tool_calls
-//      → Luker invokes the tool → saveFunctionToolInvocations appends a
-//      system message with the invocation record → Generate recurses →
-//      mock pops the second reply → that text lands in chat.
-//   5. Test asserts the final assistant bubble (NOT the tool-call system
-//        message) contains "sunny" and "21°C".
+//   1. Test registers `get_weather({city})` via the production
+//      ctx.registerFunctionTool API (the same surface extensions use).
+//   2. Test enables oai_settings.function_calling = true.
+//   3. Test scripts the mock LLM responses: first call returns a
+//      tool_call for get_weather, second call returns plain text that
+//      mentions sunny + 21°C.
+//   4. Test types a user question into #send_textarea + clicks #send_but
+//      (real user gesture). Luker invokes the tool, recurses into the
+//      LLM with the tool result, the second reply lands in chat.
+//   5. Test asserts the final assistant bubble (rendered DOM text on
+//      .mes_text) contains "sunny" and "21°C". Also asserts the
+//      side effect — invocations record — landed in the chat.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
+import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 
 let server, mock;
 
 const TOOL_RESULT = 'sunny, 21°C';
 
 test.beforeAll(async () => {
-    // No scripted replies up front — we push them inside the test in
-    // the right order so the mock's tool/reply FIFO matches Luker's
-    // expected request sequence (tool_calls → recurse → text).
     mock = await startMockLLM({ scriptedReplies: [], scriptedToolCalls: [] });
     server = await startServer({ batchKey: 'extensions', scenarioId: '98-tool-call' });
     markOnboarded({ dataRoot: server.dataRoot });
@@ -44,8 +37,8 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#98 — Function call runtime round-trip', () => {
-    test('registered get_weather tool is invoked, result fed back, final reply contains "sunny" + "21°C"', async ({ page }) => {
+test.describe('#98 — function-call runtime tool round-trip via real send', () => {
+    test('mock returns tool_call → registered tool runs → final bubble has "sunny" + "21°C"', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
@@ -54,30 +47,24 @@ test.describe('#98 — Function call runtime round-trip', () => {
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        // Enable native function calling. NONE is the empty string —
-        // setting 'none' would silently disable tool calling per the
-        // briefing note. Stream off so chunk/queue races don't blur the
-        // assertion (the mock supports both, and the streaming path is
-        // exercised in other batches).
+        // Enable native function calling. Setting custom_prompt_post_processing
+        // to '' (empty NONE, not 'none') keeps tool calling active.
         await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            // Reach into oai_settings via the openai.js module.
             return import('/scripts/openai.js').then(mod => {
                 mod.oai_settings.function_calling = true;
                 mod.oai_settings.custom_prompt_post_processing = '';
-                // Disable streaming for this test only — it's the simpler
-                // path through ToolManager and lets us await the recurse.
                 mod.oai_settings.stream_openai = false;
                 mod.oai_settings.tool_call_recurse_limit = 5;
+                const ctx = window.Luker.getContext();
                 ctx.ToolManager.RECURSE_LIMIT = 5;
             });
         });
 
-        // Register the get_weather tool. Action returns the hardcoded
-        // string the mock will echo back into the prompt.
+        // Register the tool via the same registerFunctionTool API
+        // extensions use — this is production-equivalent setup, not a
+        // test-only hook.
         await page.evaluate((toolResult) => {
             const ctx = window.Luker.getContext();
-            // Defensive: drop any prior registration so re-runs don't double up.
             try { ctx.unregisterFunctionTool('get_weather'); } catch {}
             ctx.registerFunctionTool({
                 name: 'get_weather',
@@ -98,86 +85,56 @@ test.describe('#98 — Function call runtime round-trip', () => {
             });
         }, TOOL_RESULT);
 
-        // Confirm the tool registry sees it.
+        // Sanity: the registry sees the tool.
         const registeredNames = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
-            // ToolDefinition keeps `name` as a private field; project it
-            // via the public toFunctionOpenAI() shape instead.
             return ctx.ToolManager.tools.map(t => t.toFunctionOpenAI?.().function?.name);
         });
         expect(registeredNames).toContain('get_weather');
 
         // Script the LLM responses: 1st call = tool_call, 2nd call = text.
-        // The mockLLM is currently queue-empty; push in order.
-        // (page-side push because mock.requests is server-side state but
-        //  scriptReply/scriptToolCall are server-side APIs we have direct
-        //  Node access to — we don't need page.evaluate for these.)
         const finalText = '*Ash glances at the lantern and answers without looking up.* "It will be sunny tomorrow — 21°C at midday by the chart\'s reckoning."';
         mock.scriptToolCall({ name: 'get_weather', arguments: { city: 'Bryn-on-Sea' } });
         mock.scriptReply(finalText);
 
-        // Send a turn that motivates the tool call.
+        // REAL send: type into the textarea, click send.
         const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            await ctx.executeSlashCommandsWithOptions('/send What will the weather be tomorrow in Bryn-on-Sea? | /trigger await=true');
-        });
+        await sendMessageAndAwaitReply(page, 'What will the weather be tomorrow in Bryn-on-Sea?');
 
-        // Wait until two new things land: the tool-call system message
-        // (from saveFunctionToolInvocations) AND the final assistant
-        // message. With both, chat.length should be at least +3 from
-        // before (user + tool-call sysmsg + assistant text). Be generous
-        // about the exact count — Luker may also append other internal
-        // markers depending on settings.
+        // After the user turn lands and the tool result loops back through
+        // Generate(), the final assistant bubble must contain both tokens.
         await page.waitForFunction((targetLen) => {
             const ctx = window.Luker.getContext();
-            // Look for an assistant message that's not the tool-invocation
-            // record (which is is_system) after the user's turn.
             return ctx.chat.some((m, i) => i > targetLen && !m.is_user && !m.is_system && typeof m.mes === 'string' && m.mes.includes('sunny'));
         }, chatLenBefore, { timeout: 60_000 });
 
         // ===== Assert the mock saw two chat completion requests. =====
-        // First with our tool advertised; second with the tool's result
-        // present somewhere in the messages array (role=tool, content=TOOL_RESULT).
         const chatReqs = mock.requests.filter(r => r.url.includes('chat/completions'));
         expect(chatReqs.length).toBeGreaterThanOrEqual(2);
-
         const firstReq = chatReqs[chatReqs.length - 2];
         const secondReq = chatReqs[chatReqs.length - 1];
-        // First request must advertise the tool.
         expect(Array.isArray(firstReq.body.tools)).toBe(true);
         const toolNames = firstReq.body.tools.map(t => t?.function?.name);
         expect(toolNames).toContain('get_weather');
-        // Second request must carry the tool result back as a tool message.
         const secondMsgs = secondReq.body.messages || [];
         const toolMsg = secondMsgs.find(m => m.role === 'tool');
         expect(toolMsg, 'tool result must be appended to the next turn as a role=tool message').toBeTruthy();
-        const toolContent = typeof toolMsg.content === 'string'
-            ? toolMsg.content
-            : JSON.stringify(toolMsg.content);
+        const toolContent = typeof toolMsg.content === 'string' ? toolMsg.content : JSON.stringify(toolMsg.content);
         expect(toolContent).toContain('sunny');
         expect(toolContent).toContain('21°C');
 
-        // ===== Assert the final assistant bubble has both tokens. =====
-        const finalBubble = await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            for (let i = ctx.chat.length - 1; i >= 0; i--) {
-                const m = ctx.chat[i];
-                if (!m.is_user && !m.is_system && typeof m.mes === 'string') {
-                    return m.mes;
-                }
-            }
-            return null;
-        });
-        expect(finalBubble, 'final assistant message must exist').toBeTruthy();
-        // Per feedback_no_silent_truncation, the bubble is 1:1 with model
-        // output. Both tokens must be present.
+        // ===== Assert the final assistant bubble in DOM has both tokens. =====
+        // Read .mes_text directly from the rendered chat — proves the user
+        // actually sees the answer, not just that ctx.chat has it.
+        const renderedTexts = await page.locator('#chat .mes .mes_text').allInnerTexts();
+        const finalBubble = [...renderedTexts].reverse().find(t => /sunny/.test(t) && /21/.test(t));
+        expect(finalBubble, `expected DOM .mes_text containing sunny + 21°C; saw ${JSON.stringify(renderedTexts.slice(-3))}`).toBeTruthy();
         expect(finalBubble).toContain('sunny');
         expect(finalBubble).toContain('21°C');
 
-        // ===== Sanity: the registered tool was actually invoked. =====
-        // saveFunctionToolInvocations pushes a system message with
-        // extra.tool_invocations[] — find it and check its `result`.
+        // ===== Sanity: the tool was actually invoked. =====
+        // saveFunctionToolInvocations writes a system message with
+        // extra.tool_invocations[] — find it and confirm the result.
         const invocationRecord = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
             for (let i = ctx.chat.length - 1; i >= 0; i--) {

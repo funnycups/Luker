@@ -163,9 +163,7 @@ test.describe('#47 — basicAuth + CSRF full flow', () => {
         });
         expect(noToken.status, `missing CSRF token should be rejected; got ${noToken.status}`).toBe(403);
 
-        // POST with valid CSRF token → not a CSRF rejection. Status will be
-        // some non-403 (could be 200 or a 4xx for body-shape reasons, but
-        // definitively not the CSRF guard's 403).
+        // POST with valid CSRF token → not a CSRF rejection.
         const withToken = await page.evaluate(async (tok) => {
             const r = await fetch('/api/settings/save', {
                 method: 'POST',
@@ -176,6 +174,57 @@ test.describe('#47 — basicAuth + CSRF full flow', () => {
             return { status: r.status };
         }, token);
         expect(withToken.status, `valid CSRF token should not be rejected; got ${withToken.status}`).not.toBe(403);
+
+        await ctx.close();
+    });
+
+    test('CSRF (UI): real settings save via Luker.getContext().saveSettings succeeds (no 403 toast)', async ({ browser }) => {
+        // The SPA's settings save path runs through getRequestHeaders()
+        // which auto-attaches X-CSRF-Token. This test confirms the full
+        // round-trip via the same path a user gesture triggers — e.g.
+        // every checkbox-toggled drawer ultimately calls ctx.saveSettings.
+        // We do NOT inject the token by hand; the SPA does.
+        const ctx = await browser.newContext({
+            httpCredentials: { username: BASIC_USER, password: BASIC_PASS },
+        });
+        const page = await ctx.newPage();
+        await page.goto(`${server.baseURL}/`);
+        await page.waitForFunction(() => document.getElementById('preloader') === null, { timeout: 60_000 });
+        await page.waitForFunction(() => !!window.Luker?.getContext, { timeout: 30_000 });
+
+        // Watch for a toastr error (CSRF rejection would surface as a
+        // 403-derived "Forbidden" or similar toast).
+        const toastErrors = [];
+        await page.exposeFunction('__recordToastError', (msg) => { toastErrors.push(msg); });
+        await page.evaluate(() => {
+            const obs = new MutationObserver(() => {
+                const errs = document.querySelectorAll('#toast-container .toast-error');
+                errs.forEach(e => {
+                    const t = e.textContent || '';
+                    if (/forbidden|csrf|403/i.test(t)) {
+                        // @ts-ignore
+                        window.__recordToastError?.(t);
+                    }
+                });
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+        });
+
+        // Drive a real save via the production saveSettings API. The same
+        // call is fired by every checkbox-flip in User Settings.
+        const result = await page.evaluate(async () => {
+            const ctx = window.Luker.getContext();
+            try {
+                await ctx.saveSettings();
+                return { ok: true };
+            } catch (e) {
+                return { ok: false, error: String(e?.message || e) };
+            }
+        });
+        expect(result.ok, `saveSettings should succeed (no CSRF reject); got error: ${result.error || ''}`).toBe(true);
+
+        await page.waitForTimeout(500);
+        expect(toastErrors.length, `expected no CSRF toast errors; saw ${toastErrors.join(' | ')}`).toBe(0);
 
         await ctx.close();
     });

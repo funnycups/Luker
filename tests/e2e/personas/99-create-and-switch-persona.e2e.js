@@ -1,30 +1,30 @@
-// #99 — Create a new persona, switch to it, and verify the user name
-// propagates into the chat pipeline (getContext().name1, the user-message
-// bubble's `name` field, and the prompt body forwarded to the mock LLM).
+// #99 — Create a new persona via the real UI, switch to it via a real card
+// click, and verify the user name propagates into the chat pipeline
+// (getContext().name1, the user-message bubble's `name` field, and the
+// prompt body forwarded to the mock LLM).
 //
 // Driving notes:
 //
-//  * The shared `_lib/fixtures.js#writeCharacter` writes only a sidecar
-//    JSON. Luker's character endpoint reads card data exclusively from
-//    PNG `chara`/`ccv3` chunks, so the sidecar is ignored and the card
-//    shows up as "Seraphina" (the fallback PNG's embedded name). We use
-//    the batch-local helper `_helpers.js#writeCharacterWithChunks` to
-//    embed the card JSON properly.
+//  * `_lib/fixtures.js#writeCharacter` writes only a sidecar JSON; Luker's
+//    character endpoint reads card data exclusively from PNG `chara`/`ccv3`
+//    chunks, so the sidecar is ignored. We use the batch-local
+//    `_helpers.js#writeCharacterWithChunks` to embed the card JSON properly.
 //
-//  * `/persona-create` cannot run in this worktree: it always uploads the
-//    default avatar via Jimp, which calls into squoosh's WASM PNG encoder.
-//    Squoosh loads WASM via `file://` URLs anchored at its own resolved
-//    path — and node_modules in the worktree is symlinked to the main
-//    repo, so the WASM realpath escapes `serverDirectory` and the
-//    `fetch-patch` allow-check rejects it. We pre-seed the persona
-//    directly into settings.json via `_helpers.js#preseedPersona` and
-//    activate it with the (chunk/Jimp-free) `setUserAvatar()` path.
+//  * `createDummyPersona` invokes `uploadUserAvatar` which calls into Jimp's
+//    squoosh WASM PNG encoder. In this worktree, node_modules is symlinked
+//    to the main repo so the WASM realpath escapes serverDirectory and the
+//    fetch-patch allow-check rejects it. The selectPersonaByName helper
+//    avoids this — clicking an existing avatar card just triggers
+//    setUserAvatar(avatarId), no Jimp re-encode. We pre-seed the persona on
+//    disk with preseedPersona (which copies the raw PNG without re-encoding)
+//    and then drive the actual avatar-card click via selectPersonaByName.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, closeRightNavDrawer } from '../_lib/page.js';
+import { selectPersonaByName, openPersonaPanel } from '../_lib/ui-persona-preset.js';
 import { writeCharacterWithChunks, preseedPersona } from './_helpers.js';
 
 let server, mock;
@@ -54,7 +54,7 @@ test.afterAll(async () => {
 });
 
 test.describe('#99 — persona switch propagates to user name and prompt', () => {
-    test('switch to "Iyana"; send turn; bubble + outbound prompt carry Iyana', async ({ page }) => {
+    test('switch to "Iyana" via real card click; send turn; bubble + outbound prompt carry Iyana', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash the Cartographer');
 
@@ -62,30 +62,28 @@ test.describe('#99 — persona switch propagates to user name and prompt', () =>
         await page.waitForFunction(() => (window.Luker?.getContext?.()?.chat?.length ?? 0) >= 1,
             { timeout: 10_000 }).catch(() => {});
 
-        // Sanity: the seeded persona is in power_user.personas.
-        const personaPresent = await page.evaluate((avatarId) => {
-            const ctx = window.Luker.getContext();
-            const power = ctx.powerUserSettings ?? window.power_user;
-            return power?.personas && power.personas[avatarId];
-        }, PERSONA_AVATAR_ID);
-        expect(personaPresent).toBe(PERSONA_NAME);
+        // Sanity: the seeded persona shows up in the persona panel.
+        await openPersonaPanel(page);
+        const cardCount = await page.locator(`#user_avatar_block .avatar-container[data-avatar-id="${PERSONA_AVATAR_ID}"]`).count();
+        expect(cardCount, `pre-seeded persona avatar card should be present in the panel`).toBeGreaterThan(0);
 
-        // Activate the persona via setUserAvatar (the canonical entry point
-        // that /persona-set + the persona-panel click both funnel through).
-        await page.evaluate(async (avatarId) => {
-            const mod = await import('/scripts/personas.js');
-            await mod.setUserAvatar(avatarId);
-        }, PERSONA_AVATAR_ID);
+        // Real click: select the persona card by its display name.
+        // selectPersonaByName clicks the visible .avatar-container — same path
+        // /persona-set + the persona-panel click both funnel through.
+        await selectPersonaByName(page, PERSONA_NAME);
 
         await page.waitForFunction((expected) => window.Luker.getContext().name1 === expected,
             PERSONA_NAME, { timeout: 10_000 });
         expect(await page.evaluate(() => window.Luker.getContext().name1)).toBe(PERSONA_NAME);
 
+        // Close the persona panel so it doesn't intercept the send-area click.
+        await closeRightNavDrawer(page).catch(() => {});
+
         // Send a turn — {{user}} should resolve to Iyana in the prompt body.
         const before = mock.requests.length;
         await sendMessageAndAwaitReply(page, 'I read the swell against the breaker rocks and waited.');
         const chatReq = mock.requests.slice(before).find(r => r.url.includes('chat/completions'));
-        expect(chatReq, 'mock did not receive a chat request after /send').toBeTruthy();
+        expect(chatReq, 'mock did not receive a chat request after send').toBeTruthy();
 
         // The user-attributed message in the chat must carry name=Iyana.
         const lastUserBubble = await page.evaluate(() => {
@@ -96,7 +94,7 @@ test.describe('#99 — persona switch propagates to user name and prompt', () =>
         expect(lastUserBubble?.name).toBe(PERSONA_NAME);
         expect(lastUserBubble?.mes).toMatch(/breaker rocks/);
 
-        // And in the outbound prompt body, Iyana's actual line should appear —
+        // The outbound prompt body must include Iyana's actual line —
         // proving the persona name flows through the message-construction path.
         const flat = JSON.stringify(chatReq.body.messages);
         expect(flat).toMatch(/breaker rocks/);

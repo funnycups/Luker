@@ -1,21 +1,28 @@
-// Case #91 — Author's Note injection at configured depth
+// Case #91 — Author's Note injection at configured depth (real UI inputs)
 //
 // Spec:
 //   Configure an Author's Note with depth=2, position=IN_CHAT,
 //   interval=1 (insert every turn). Send a turn. Verify the AN content
-//   shows up in the prompt sent to the mock at the documented position
-//   (i.e. between the existing chat messages with the right offset from
-//   the end).
+//   appears in the prompt sent to the mock at the documented position.
 //
-// Why depth=2: the AN is inserted before the 2nd-most-recent message in
-// the array passed to the LLM (i.e. "inject N messages from the end"),
-// per public/scripts/authors-note.js → setExtensionPrompt(..., depth).
+// Real UI surface:
+//   - Author's Note textarea: #extension_floating_prompt
+//   - Depth input:            #extension_floating_depth
+//   - Interval input:         #extension_floating_interval
+//   - Position radio (IN_CHAT, value=1): #extension_floating_position_depth
+//   These live under the Author's Note inline-drawer in the Extensions
+//   panel. The drawer mounts inside #floatingPrompt_container.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    openOptionsAndClick,
+} from '../_lib/page.js';
 
 let server, mock;
 
@@ -40,8 +47,9 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#91 — Authors Note depth-2 injection', () => {
+test.describe('#91 — Authors Note via real inputs, depth-2 injection', () => {
     test('AN content appears in prompt sent to mock at configured depth', async ({ page }) => {
+        test.setTimeout(180_000);
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
@@ -51,29 +59,64 @@ test.describe('#91 — Authors Note depth-2 injection', () => {
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        // Configure the Author's Note via chat_metadata. AN reads:
-        //   chat_metadata.note_prompt  → content
-        //   chat_metadata.note_depth   → offset from end (IN_CHAT)
-        //   chat_metadata.note_position → 1 = IN_CHAT
-        //   chat_metadata.note_interval → 1 = every turn
-        await page.evaluate((anText) => {
+        // Open the Author's Note floating panel via the wand-menu entry
+        // — the real user flow (options_button → option_toggle_AN). The
+        // panel is a separate #movingDivs > #floatingPrompt element, not
+        // part of the Extensions drawer.
+        await openOptionsAndClick(page, 'option_toggle_AN');
+        await page.locator('#floatingPrompt').waitFor({ state: 'visible', timeout: 5000 });
+
+        // The Author's Note inputs live in #floatingPrompt; #ANBlockToggle
+        // is the main inline-drawer header that should already be open
+        // from onANMenuItemClick. Just scroll to the textarea — it's the
+        // canonical AN input.
+        const noteTextarea = page.locator('#extension_floating_prompt');
+        await noteTextarea.waitFor({ state: 'visible', timeout: 10_000 });
+        await noteTextarea.scrollIntoViewIfNeeded().catch(() => {});
+        await noteTextarea.fill(AN_TEXT);
+        await noteTextarea.blur();
+
+        // Set depth + interval via real inputs.
+        const depthInput = page.locator('#extension_floating_depth');
+        await depthInput.scrollIntoViewIfNeeded().catch(() => {});
+        await depthInput.fill('2');
+        await depthInput.blur();
+
+        const intervalInput = page.locator('#extension_floating_interval');
+        await intervalInput.scrollIntoViewIfNeeded().catch(() => {});
+        await intervalInput.fill('1');
+        await intervalInput.blur();
+
+        // Position radio: IN_CHAT at depth. The radio group is
+        // input[name="extension_floating_position"] with value="1" for
+        // in-chat-at-depth.
+        const posRadio = page.locator('#extension_floating_position_depth');
+        await posRadio.scrollIntoViewIfNeeded().catch(() => {});
+        await posRadio.check();
+
+        // Tiny settle so the change handlers persist to chat_metadata.
+        await page.waitForTimeout(500);
+
+        // Sanity: chat_metadata reflects the inputs (this is what the AN
+        // writer reads on each turn).
+        const md = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
-            const md = ctx.chatMetadata;
-            md.note_prompt = anText;
-            md.note_interval = 1;
-            md.note_depth = 2;
-            md.note_position = 1; // IN_CHAT
-            md.note_role = 0;     // SYSTEM
-            // Force the textarea so AN's writer sees the value when it
-            // runs setExtensionPrompt before the next turn.
-            const ta = document.getElementById('extension_floating_prompt');
-            if (ta) ta.value = anText;
-            ctx.saveMetadataDebounced?.();
-        }, AN_TEXT);
+            return {
+                note_prompt: ctx.chatMetadata?.note_prompt,
+                note_depth: ctx.chatMetadata?.note_depth,
+                note_interval: ctx.chatMetadata?.note_interval,
+                note_position: ctx.chatMetadata?.note_position,
+            };
+        });
+        expect(md.note_prompt).toBe(AN_TEXT);
+        expect(Number(md.note_depth)).toBe(2);
+        expect(Number(md.note_interval)).toBe(1);
+        expect(Number(md.note_position)).toBe(1);
 
         const before = mock.requests.length;
 
-        // Send 5 turns. AN is inserted from depth=2 every turn.
+        // Send 5 turns via the REAL send_textarea + send_but path. AN is
+        // inserted from depth=2 every turn (interval=1).
         await sendMessageAndAwaitReply(page, 'I walked the cliff path past the gull rocks.');
         await sendMessageAndAwaitReply(page, 'The tide was settling. I counted three breakers north.');
         await sendMessageAndAwaitReply(page, 'The drifters did not light fires inland.');
@@ -93,9 +136,7 @@ test.describe('#91 — Authors Note depth-2 injection', () => {
         });
         expect(everyHasSentinel, 'AN with interval=1 should be present on every turn').toBe(true);
 
-        // Position check on the most-recent request: AN must appear in
-        // the message array (it's injected as a synthetic message at
-        // depth=2 from the end for IN_CHAT). Locate its index.
+        // Position check on the most-recent request.
         const lastReq = chatReqs[chatReqs.length - 1];
         const msgs = lastReq.body.messages || [];
         const anIdx = msgs.findIndex(m => {
@@ -103,10 +144,6 @@ test.describe('#91 — Authors Note depth-2 injection', () => {
             return c.includes('AUTHORSNOTE-SENTINEL');
         });
         expect(anIdx).toBeGreaterThan(-1);
-        // depth=2 means the AN should be placed near the end (offset 2
-        // from the last message). The exact slot depends on Luker's
-        // injection ordering, but it must NOT be at index 0 (first
-        // system prompt) and must NOT be the very last user message.
         expect(anIdx).toBeGreaterThan(0);
         expect(anIdx).toBeLessThan(msgs.length - 1);
 

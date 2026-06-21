@@ -5,14 +5,15 @@
 //      group (each turn produces 3 assistant messages, one per member);
 //      stop the server, restart, re-open the same group + chat, and
 //      assert every persisted message survives byte-for-byte.
-//   2. Branch — call /branch-create at the middle assistant message,
-//      verify a brand-new group chat is created with the same members
-//      and the first N persisted messages copied; verify the original
-//      group chat is left intact.
-//   3. Export/Import — POST /api/chats/export with is_group:true to
-//      get the JSONL back; POST /api/chats/group/import (multipart) to
-//      re-import as a fresh group chat; verify byte-for-byte equivalence
-//      of every message after the chat_metadata header.
+//   2. Branch — click the .mes_create_branch button on the middle
+//      assistant message; verify a brand-new group chat is created with
+//      the same members and the first N persisted messages copied;
+//      verify the original group chat is left intact.
+//   3. Export/Import — click the .exportRawChatButton[data-format="jsonl"]
+//      on the source chat's past-chats row, capture the download; click
+//      the #chat_import_button (which triggers the hidden file chooser),
+//      feed the JSONL back, and verify byte-for-byte equivalence of every
+//      message after the chat_metadata header.
 //
 // All three sections assert on the on-disk `group chats/<chatId>.jsonl`
 // files as the source of truth (per repo convention e2e_real_user_flow:
@@ -29,7 +30,7 @@ import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
+import { awaitMainUI, reloadAndAwait, branchFromMessageViaUI } from '../_lib/page.js';
 import {
     seedThreeCartographers,
     createGroupViaApi,
@@ -37,6 +38,11 @@ import {
     sendUserAndAwaitGroupTurn,
     readGroupChatOnDisk,
     listGroupsOnDisk,
+    switchGroupChatViaUI,
+    exportGroupChatViaUI,
+    importGroupChatViaUI,
+    closePastChatsPopup,
+    ensureMessageInView,
 } from './_helpers.js';
 
 let server, mock, trio, groupId, chatId;
@@ -185,7 +191,7 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         }
 
         // ============================================================
-        // Section 2: Branch via /branch-create.
+        // Section 2: Branch via the real .mes_create_branch button.
         // ============================================================
         // Branch at the middle assistant message — the 2nd member of
         // turn 3 (= Rhonin's third bell line). Slice up to and
@@ -204,21 +210,25 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         const groupChatsBefore = readdirSync(
             resolve(server.dataRoot, 'default-user', 'group chats'),
         ).filter(f => f.endsWith('.jsonl'));
-        const branchEventP = page.evaluate(() => new Promise((resolve) => {
+        // Subscribe to CHAT_BRANCH_CREATED BEFORE the click so the branch
+        // signal isn't dropped (branchChat fires it synchronously
+        // before navigating). Park the result on window for waitFor.
+        await page.evaluate(() => {
             const ctx = window.Luker.getContext();
-            const t = setTimeout(() => resolve('timeout'), 30_000);
+            window.__branchSignal = { resolved: false, payload: null };
             const handler = (data) => {
-                clearTimeout(t);
                 try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_BRANCH_CREATED, handler); } catch {}
-                resolve(data ?? 'event');
+                window.__branchSignal.resolved = true;
+                window.__branchSignal.payload = data ?? 'event';
             };
             ctx.eventSource.on(ctx.eventTypes.CHAT_BRANCH_CREATED, handler);
-        }));
-        await page.evaluate(async (id) => {
-            await window.Luker.getContext().executeSlashCommandsWithOptions(`/branch-create ${id}`);
-        }, branchAt);
-        const branchEventResult = await branchEventP;
-        expect(branchEventResult, '/branch-create must fire CHAT_BRANCH_CREATED for the group chat').not.toBe('timeout');
+        });
+        // Click the real .mes_create_branch button on the chosen bubble.
+        // The chat lazy-loads only the most recent N messages; ensure the
+        // target message is in DOM (and scrolled into view) first.
+        await ensureMessageInView(page, branchAt);
+        await branchFromMessageViaUI(page, branchAt, { timeoutMs: 30_000 });
+        await page.waitForFunction(() => window.__branchSignal?.resolved === true, null, { timeout: 30_000 });
 
         // Wait for the chat to switch into the new branch.
         await page.waitForFunction((origChat) => {
@@ -275,40 +285,16 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         ).toBe(diskBefore.messages.length);
 
         // ============================================================
-        // Section 3: Export → Import roundtrip.
+        // Section 3: Export → Import roundtrip via the real past-chats UI.
         // ============================================================
-        // First switch back to the source chat so export targets it.
-        await page.evaluate(async ({ gId, cId }) => {
-            const mod = await import('/scripts/group-chats.js');
-            await mod.openGroupChat(gId, cId);
-        }, { gId: groupId, cId: chatId });
-        await page.waitForFunction((wantId) => {
-            const ctx = window.Luker.getContext();
-            return ctx.getCurrentChatId?.() === wantId;
-        }, chatId, { timeout: 15_000 });
+        // Switch back to the source chat by clicking its row in the
+        // past-chats popup (option_select_chat → .select_chat_block).
+        await switchGroupChatViaUI(page, chatId);
 
-        // /api/chats/export with is_group:true returns the raw jsonl in
-        // `result` (the same payload trySaveChat wrote to disk).
-        const exportResult = await page.evaluate(async (cId) => {
-            const ctx = window.Luker.getContext();
-            const headers = ctx.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
-            const res = await fetch('/api/chats/export', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                    is_group: true,
-                    avatar_url: '',
-                    file: `${cId}.jsonl`,
-                    exportfilename: `${cId}.jsonl`,
-                    format: 'jsonl',
-                }),
-            });
-            const json = await res.json();
-            return { ok: res.ok, status: res.status, json };
-        }, chatId);
-        expect(exportResult.ok, `group chat export failed: ${JSON.stringify(exportResult.json)}`).toBe(true);
-        const exportedJsonl = exportResult.json.result;
-        expect(typeof exportedJsonl, 'export should return a JSONL string in `result`').toBe('string');
+        // Click .exportRawChatButton[data-format="jsonl"] on the source
+        // chat's row in the past-chats popup; capture the download.
+        const exportedJsonl = await exportGroupChatViaUI(page, chatId);
+        expect(typeof exportedJsonl, 'JSONL export download should produce a string body').toBe('string');
 
         // Parse the exported JSONL: first line is the chat_metadata
         // header; subsequent lines are message objects. Asserting on
@@ -337,26 +323,15 @@ test.describe('#88 — group chat persistence + branch + export', () => {
             ).toBe(true);
         }
 
-        // /api/chats/group/import expects a multipart file upload (no
-        // avatar_url; the chat is materialized in the user's `group chats`
-        // dir with a freshly generated chat name).
-        const importResult = await page.evaluate(async (jsonl) => {
-            const ctx = window.Luker.getContext();
-            const headers = ctx.getRequestHeaders?.({ omitContentType: true }) || {};
-            const form = new FormData();
-            form.append('avatar', new Blob([jsonl], { type: 'application/octet-stream' }), 'group-roundtrip.jsonl');
-            const res = await fetch('/api/chats/group/import', {
-                method: 'POST',
-                headers,
-                body: form,
-                cache: 'no-cache',
-            });
-            const json = await res.json();
-            return { ok: res.ok, status: res.status, json };
-        }, exportedJsonl);
-        expect(importResult.ok, `group chat import failed: ${JSON.stringify(importResult)}`).toBe(true);
-        const importedChatId = importResult.json.res;
-        expect(importedChatId, 'group/import must return the new chat id in `res`').toBeTruthy();
+        // Import a fresh group chat by clicking #chat_import_button and
+        // feeding the JSONL payload through the file chooser. The
+        // popup is still open from exportGroupChatViaUI.
+        const importedChatId = await importGroupChatViaUI(page, exportedJsonl, 'group-roundtrip.jsonl');
+        expect(importedChatId, 'import must return the new chat id').toBeTruthy();
+
+        // Close the past-chats popup so any subsequent test gestures
+        // aren't blocked by its modal shadow.
+        await closePastChatsPopup(page);
 
         // The new chat jsonl must be on disk.
         const importedPath = resolve(server.dataRoot, 'default-user', 'group chats', `${importedChatId}.jsonl`);

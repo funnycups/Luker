@@ -10,7 +10,8 @@
     ],
     "testPathIgnorePatterns": [
         "/node_modules/",
-        "/skills-ui/playwright/"
+        "/skills-ui/playwright/",
+        "/frontend/"
     ],
     "moduleNameMapper": {
         "^(.*/)?public/lib\\.js$": "<rootDir>/util/lib-stub.js",

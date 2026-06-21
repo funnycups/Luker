@@ -227,6 +227,102 @@ export async function openGroupForChat(page, groupId) {
 }
 
 /**
+ * Make sure the right-nav drawer is open and the group edit panel
+ * (`#rm_group_chats_block`) is the visible right_menu. After
+ * `openGroupForChat` has run, `select_group_chats` has already shown the
+ * panel, but the drawer wrapper might still be in `closedDrawer`. This
+ * mirrors a real user clicking the address-card chevron to reveal the
+ * group editor on the side panel.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function openGroupEditPanel(page) {
+    // Open the right-nav drawer if it's closed.
+    const drawerClosed = await page.evaluate(() => {
+        const i = document.querySelector('#rightNavDrawerIcon');
+        return i && i.classList.contains('closedIcon');
+    });
+    if (drawerClosed) {
+        await page.evaluate(() => {
+            const i = document.querySelector('#rightNavDrawerIcon');
+            const toggle = i?.closest('.drawer-toggle') || i;
+            toggle?.click();
+        });
+        await page.waitForFunction(() => {
+            const i = document.querySelector('#rightNavDrawerIcon');
+            return i && i.classList.contains('openIcon');
+        }, { timeout: 5000 }).catch(() => {});
+    }
+    // The group edit panel becomes display:flex when select_group_chats
+    // runs. Wait for it (it should already be visible if openGroupForChat
+    // was called before this helper).
+    await page.locator('#rm_group_chats_block').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.locator('#rm_group_members .group_member').first().waitFor({ state: 'visible', timeout: 10_000 });
+}
+
+/**
+ * Click the disable toggle on a group member row inside the right-nav
+ * group edit panel. Resolves once the underlying group state reflects
+ * the change (member's avatar appears in `group.disabled_members`).
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} groupId
+ * @param {string} memberName  display name of the character
+ */
+export async function clickDisableMemberInUI(page, groupId, memberName) {
+    await openGroupEditPanel(page);
+    // Members render with `.ch_name` showing the display name; the
+    // disable button only renders visibly while the row is NOT disabled.
+    const row = page.locator(`#rm_group_members .group_member:not(.disabled)`, {
+        has: page.locator(`.ch_name`, { hasText: memberName }),
+    }).first();
+    await row.waitFor({ state: 'visible', timeout: 10_000 });
+    const disableBtn = row.locator('[data-action="disable"]').first();
+    // Even though the button has opacity:0.4 by default the click target
+    // is real and clickable; we just need to bypass any pointer-events
+    // gating from sibling hover styles, so dispatch through JS.
+    await disableBtn.evaluate(el => el.click());
+    // editGroup is async; wait for the disabled_members list to reflect
+    // the click (the in-memory groups[] is the source the activation
+    // strategy reads).
+    await page.waitForFunction(({ gid, avatarHint }) => {
+        const ctx = window.Luker.getContext();
+        const groups = ctx.groups || [];
+        const g = groups.find(x => x.id === gid);
+        if (!g) return false;
+        const disabled = Array.isArray(g.disabled_members) ? g.disabled_members : [];
+        // We don't know the avatar from the test side; the row also got
+        // the `.disabled` class via the click handler. The row's
+        // `disabled` class is the most reliable visible flag.
+        return disabled.some(a => typeof a === 'string' && a.includes(avatarHint));
+    }, { gid: groupId, avatarHint: '' }, { timeout: 5000 }).catch(() => {});
+    // Final wait: confirm the row picked up `.disabled` class (CSS toggle).
+    await page.locator(`#rm_group_members .group_member.disabled`, {
+        has: page.locator(`.ch_name`, { hasText: memberName }),
+    }).first().waitFor({ state: 'visible', timeout: 5000 });
+}
+
+/**
+ * Click the enable toggle on a previously-disabled group member row.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} groupId
+ * @param {string} memberName
+ */
+export async function clickEnableMemberInUI(page, groupId, memberName) {
+    await openGroupEditPanel(page);
+    const row = page.locator(`#rm_group_members .group_member.disabled`, {
+        has: page.locator(`.ch_name`, { hasText: memberName }),
+    }).first();
+    await row.waitFor({ state: 'visible', timeout: 10_000 });
+    const enableBtn = row.locator('[data-action="enable"]').first();
+    await enableBtn.evaluate(el => el.click());
+    await page.locator(`#rm_group_members .group_member:not(.disabled)`, {
+        has: page.locator(`.ch_name`, { hasText: memberName }),
+    }).first().waitFor({ state: 'visible', timeout: 5000 });
+}
+
+/**
  * Send a user message in a group and wait for the WHOLE rotation to
  * finish — listens for GROUP_WRAPPER_FINISHED (which only fires after
  * every activated member has spoken). Returns the assistant message
@@ -271,6 +367,166 @@ export async function sendUserAndAwaitGroupTurn(page, text, { timeoutMs = 120_00
     }, lengthBefore);
 
     return { messages, chatLengthBefore: lengthBefore };
+}
+
+/**
+ * Ensure the `.mes[mesid="<n>"]` bubble is loaded into the DOM. The
+ * chat lazily renders only the most recent N messages and surfaces a
+ * `#show_more_messages` button when older messages exist on disk.
+ * This helper clicks that button until the target mesid is in DOM,
+ * then scrolls it into view so subsequent gestures (.mes_edit /
+ * .mes_create_branch) can find it.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {number} mesid
+ */
+export async function ensureMessageInView(page, mesid) {
+    for (let i = 0; i < 30; i++) {
+        const present = await page.locator(`.mes[mesid="${mesid}"]`).count();
+        if (present > 0) break;
+        const more = page.locator('#show_more_messages');
+        const moreExists = await more.count();
+        if (!moreExists) break;
+        await more.click({ force: true }).catch(() => {});
+        // displayChat is async; let the next frame settle before polling.
+        await page.waitForTimeout(150);
+    }
+    await page.locator(`.mes[mesid="${mesid}"]`).waitFor({ state: 'attached', timeout: 10_000 });
+    await page.evaluate((id) => {
+        const el = document.querySelector(`.mes[mesid="${id}"]`);
+        if (el) el.scrollIntoView({ block: 'center' });
+    }, mesid);
+}
+
+/**
+ * Open the past-chats popup (option_select_chat) for the currently
+ * selected group. The popup lists every chat under the group with
+ * inline export / delete buttons; clicking a row switches to that chat.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function openPastChatsPopupForGroup(page) {
+    // Make sure no top-settings drawer covers the composer / options area.
+    await page.locator('#options_button').waitFor({ state: 'visible', timeout: 10_000 });
+    // The options dropdown is hover-revealed; click the button to open it
+    // and then click the "Manage chat files" entry.
+    await page.locator('#options_button').click();
+    const item = page.locator('#option_select_chat');
+    await item.waitFor({ state: 'visible', timeout: 5000 });
+    await item.click();
+    await page.locator('#select_chat_popup').waitFor({ state: 'visible', timeout: 10_000 });
+    // Wait for at least one chat block to render (displayPastChats is async).
+    await page.locator('#select_chat_div .select_chat_block').first()
+        .waitFor({ state: 'visible', timeout: 10_000 });
+}
+
+/**
+ * Close the past-chats popup.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function closePastChatsPopup(page) {
+    const popup = page.locator('#shadow_select_chat_popup');
+    const visible = await popup.evaluate(el => el && getComputedStyle(el).display !== 'none').catch(() => false);
+    if (!visible) return;
+    await page.locator('#select_chat_cross').click();
+    await page.waitForFunction(() => {
+        const el = document.querySelector('#shadow_select_chat_popup');
+        return !el || getComputedStyle(el).display === 'none';
+    }, null, { timeout: 5000 }).catch(() => {});
+}
+
+/**
+ * Switch to a specific group chat from the past-chats popup by clicking
+ * the .select_chat_block row whose file_name matches `chatId`. Returns
+ * once ctx.getCurrentChatId() reflects the switch.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} chatId
+ */
+export async function switchGroupChatViaUI(page, chatId) {
+    await openPastChatsPopupForGroup(page);
+    const row = page.locator(`#select_chat_div .select_chat_block[file_name="${chatId}"]`).first();
+    await row.waitFor({ state: 'visible', timeout: 10_000 });
+    await row.click();
+    await page.waitForFunction((want) => {
+        const ctx = window.Luker.getContext();
+        return ctx.getCurrentChatId?.() === want;
+    }, chatId, { timeout: 15_000 });
+}
+
+/**
+ * Click the JSONL export button on a specific chat row in the past-chats
+ * popup and capture the downloaded payload as a string. Mirrors the real
+ * .exportRawChatButton[data-format="jsonl"] click in the past-chats UI.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} chatId  the chat whose row's export button to click
+ * @returns {Promise<string>} the downloaded JSONL contents
+ */
+export async function exportGroupChatViaUI(page, chatId) {
+    await openPastChatsPopupForGroup(page);
+    const row = page.locator(`#select_chat_div .select_chat_block[file_name="${chatId}"]`).first();
+    await row.waitFor({ state: 'visible', timeout: 10_000 });
+    const button = row.locator('.exportRawChatButton[data-format="jsonl"]').first();
+    await button.waitFor({ state: 'attached', timeout: 5000 });
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    // The button has opacity:0.5 and may be partially hidden under hover
+    // gating; dispatch via JS click so the jQuery delegated handler fires
+    // identically to a real click without actionability heuristics.
+    await button.evaluate(el => el.click());
+    const download = await downloadPromise;
+    // Pull the file off disk and return the contents.
+    const path = await download.path();
+    if (!path) throw new Error('download path unavailable');
+    const { readFileSync } = await import('node:fs');
+    return readFileSync(path, 'utf8');
+}
+
+/**
+ * Import a group chat by clicking #chat_import_button (which triggers
+ * the hidden file input click) and providing the JSONL payload via the
+ * filechooser event. Returns once the new chat appears in the past-chats
+ * popup (which displayPastChats re-renders after import).
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} jsonl       JSONL contents to import as a fresh chat
+ * @param {string} fileName    filename to present to the chooser
+ * @returns {Promise<string>}  imported chat id (filename sans extension)
+ */
+export async function importGroupChatViaUI(page, jsonl, fileName = 'group-roundtrip.jsonl') {
+    // Past chats popup must be visible (the import button lives in its header).
+    await page.locator('#select_chat_popup').waitFor({ state: 'visible', timeout: 5000 });
+    // Snapshot the chat list before so we can detect the new entry.
+    const beforeFiles = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('#select_chat_div .select_chat_block'))
+            .map(el => el.getAttribute('file_name'))
+            .filter(Boolean);
+    });
+    const chooserPromise = page.waitForEvent('filechooser', { timeout: 10_000 });
+    await page.locator('#chat_import_button').click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles({
+        name: fileName,
+        mimeType: 'application/octet-stream',
+        buffer: Buffer.from(jsonl, 'utf8'),
+    });
+    // Wait for displayPastChats to re-render with the new file.
+    await page.waitForFunction((before) => {
+        const after = Array.from(document.querySelectorAll('#select_chat_div .select_chat_block'))
+            .map(el => el.getAttribute('file_name'))
+            .filter(Boolean);
+        return after.length > before.length;
+    }, beforeFiles, { timeout: 30_000 });
+    const newFiles = await page.evaluate((before) => {
+        const after = Array.from(document.querySelectorAll('#select_chat_div .select_chat_block'))
+            .map(el => el.getAttribute('file_name'))
+            .filter(Boolean);
+        const beforeSet = new Set(before);
+        return after.filter(f => !beforeSet.has(f));
+    }, beforeFiles);
+    if (newFiles.length === 0) throw new Error('imported chat row did not appear in past-chats popup');
+    return newFiles[0];
 }
 
 /**

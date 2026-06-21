@@ -93,13 +93,10 @@ test.describe('#48 — private-request-filter blocks outgoing fetches to disallo
             try { parsed = JSON.parse(minted.body); } catch {}
             expect(parsed, `/api/ws-ticket returned non-JSON: ${minted.body}`).toBeTruthy();
             expect(typeof parsed.ticket || typeof parsed.token, 'expected a ticket or token field').toBeTruthy();
-        } else if (minted.status === 404) {
-            // If the endpoint was renamed, mark as fixme so we don't blame the
-            // ws-proxy infra for a route move.
-            test.fixme(true, `/api/ws-ticket returned 404 — route may have moved (body=${minted.body})`);
         } else {
-            // Any other status is unexpected — record it loudly.
-            expect.soft(minted.status).toBe(200);
+            // 404 or anything else: hard fail — ws-ticket is a real route and
+            // a regression (renamed / disabled / unauthorized) must surface.
+            expect.soft(minted.status, `unexpected ws-ticket status; body=${minted.body}`).toBe(200);
         }
     });
 });

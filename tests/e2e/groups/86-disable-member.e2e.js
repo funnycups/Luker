@@ -15,6 +15,8 @@ import {
     createGroupViaApi,
     openGroupForChat,
     sendUserAndAwaitGroupTurn,
+    clickDisableMemberInUI,
+    clickEnableMemberInUI,
 } from './_helpers.js';
 
 let server, mock, trio, groupId;
@@ -67,22 +69,9 @@ test.describe('#86 — Disable / re-enable group member', () => {
         const round1Speakers = r1.messages.filter(m => !m.is_user && !m.is_system).map(m => m.name);
         expect(round1Speakers, 'round 1 should rotate through all three members').toEqual(trio.map(c => c.name));
 
-        // --- Disable Rhonin (index 1). ---
-        await page.evaluate(async ({ id, disableAvatar }) => {
-            const headers = window.Luker.getContext().getRequestHeaders();
-            // Fetch the current group, mutate disabled_members, push back.
-            const all = await fetch('/api/groups/all', { method: 'POST', headers, body: JSON.stringify({}) }).then(r => r.json());
-            const g = (all || []).find(x => x.id === id);
-            if (!g) throw new Error('group not found in /api/groups/all');
-            g.disabled_members = [disableAvatar];
-            await fetch('/api/groups/edit', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(g),
-            });
-            // Refresh in-memory state.
-            await window.Luker.getContext().getCharacters();
-        }, { id: groupId, disableAvatar: trio[1].avatar });
+        // --- Disable Rhonin (index 1) via the right-nav group editor's
+        //     real disable button (data-action="disable" on the member row).
+        await clickDisableMemberInUI(page, groupId, trio[1].name);
 
         // --- Round 2: only Ash + Kestrel should rotate. ---
         const r2 = await sendUserAndAwaitGroupTurn(page, 'Status check after the inner chart is finished.');
@@ -91,19 +80,8 @@ test.describe('#86 — Disable / re-enable group member', () => {
         expect(round2Speakers, 'remaining members should still rotate in order')
             .toEqual([trio[0].name, trio[2].name]);
 
-        // --- Re-enable Rhonin. ---
-        await page.evaluate(async ({ id }) => {
-            const headers = window.Luker.getContext().getRequestHeaders();
-            const all = await fetch('/api/groups/all', { method: 'POST', headers, body: JSON.stringify({}) }).then(r => r.json());
-            const g = (all || []).find(x => x.id === id);
-            g.disabled_members = [];
-            await fetch('/api/groups/edit', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(g),
-            });
-            await window.Luker.getContext().getCharacters();
-        }, { id: groupId });
+        // --- Re-enable Rhonin via the real enable button. ---
+        await clickEnableMemberInUI(page, groupId, trio[1].name);
 
         // --- Round 3: full rotation should resume. ---
         const r3 = await sendUserAndAwaitGroupTurn(page, 'Status check before the cove walk.');

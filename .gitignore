@@ -77,5 +77,6 @@ android-app/app/.externalNativeBuild/
 !/public/scripts/extensions/third-party/.gitkeep
 tests/skills-ui/playwright/_local-*.spec.js
 tests/.e2e-scratch/
+tests/.frontend-scratch/
 node_modules
 tests/node_modules

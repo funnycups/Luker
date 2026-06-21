@@ -1,29 +1,38 @@
-// #17 — Import a charx character card (ZIP with card.json) via
-// /api/characters/import. CharX is the CCv3-flavor format; we only need
-// `card.json` at the root + an icon asset to exercise the import path.
+// #17 — Import a charx character card via the real UI file picker.
+//
+// CharX is the CCv3 zip format with a `card.json` at root + asset files.
+// Builds a tiny charx zip in /tmp during beforeAll, then drives the
+// import through the visible #character_import_button + setInputFiles
+// on the hidden #character_import_file.
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import AdmZip from 'adm-zip';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, listCharacters } from '../_lib/fixtures.js';
+import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard } from './_helpers.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
+import { importCharacterFile } from '../_lib/ui-character.js';
 
-let server, mock;
+let server, mock, tmpDir, charxPath;
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
+const NAME = 'Riven of the Inland Marsh';
+const DESCRIPTION = 'A reedmaster who maps tide channels by their voice. Carries a brass tuning fork tied to a string at her belt.';
+const FIRST_MES = '*Riven holds up a finger without looking at you.* "Wait. The reeds are about to tell me something."';
 
 const CARD = {
     spec: 'chara_card_v3',
     spec_version: '3.0',
     data: {
-        name: 'Riven of the Inland Marsh',
-        description: 'A reedmaster who maps tide channels by their voice. Carries a brass tuning fork tied to a string at her belt.',
+        name: NAME,
+        description: DESCRIPTION,
         personality: 'Curious. Methodical. Will out-wait a heron if it helps her hear the marsh better.',
         scenario: 'You find Riven crouched at the edge of the salt-marsh, listening for the spring tide.',
-        first_mes: '*Riven holds up a finger without looking at you.* "Wait. The reeds are about to tell me something."',
+        first_mes: FIRST_MES,
         mes_example: '',
         creator_notes: 'e2e fixture — import-charx',
         system_prompt: 'You are Riven. Stay in scene. Reply with one or two paragraphs.',
@@ -43,94 +52,58 @@ test.beforeAll(async () => {
     mock = await startMockLLM({});
     server = await startServer({ batchKey: 'character', scenarioId: 'import-charx' });
     markOnboarded({ dataRoot: server.dataRoot });
+    disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+
+    // Build a tiny charx (zip) in /tmp.
+    tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-charx-'));
+    const iconPng = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
+    const zip = new AdmZip();
+    zip.addFile('card.json', Buffer.from(JSON.stringify(CARD), 'utf8'));
+    zip.addFile('main.png', iconPng);
+    charxPath = resolve(tmpDir, 'riven.charx');
+    writeFileSync(charxPath, zip.toBuffer());
 });
 
 test.afterAll(async () => {
     await tearDownServer(server);
     await mock?.stop();
+    if (tmpDir && existsSync(tmpDir)) {
+        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
 });
 
-test.describe('#17 — Import charx character card', () => {
-    test('charx ZIP with card.json + icon asset imports and persists', async ({ page }) => {
-        // Build a tiny charx zip in memory.
-        const iconPng = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
-        const zip = new AdmZip();
-        zip.addFile('card.json', Buffer.from(JSON.stringify(CARD), 'utf8'));
-        zip.addFile('main.png', iconPng);
-        const charxBuf = zip.toBuffer();
-
+test.describe('#17 — Import charx character card via UI file picker', () => {
+    test('charx zip with card.json + icon imports through the file picker and persists', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
-        const importResult = await page.evaluate(async ({ b64, name }) => {
-            const ctx = window.Luker.getContext();
-            const binary = atob(b64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            const file = new File([bytes], `${name}.charx`, { type: 'application/zip' });
-            const form = new FormData();
-            form.append('avatar', file);
-            form.append('file_type', 'charx');
-            const headers = ctx.getRequestHeaders({ omitContentType: true });
-            const res = await fetch('/api/characters/import', { method: 'POST', body: form, headers, cache: 'no-cache' });
-            const text = await res.text();
-            let data; try { data = JSON.parse(text); } catch { data = { rawText: text }; }
-            return { ok: res.ok, status: res.status, data };
-        }, { b64: charxBuf.toString('base64'), name: 'Riven' });
+        await importCharacterFile(page, { filePath: charxPath, expectedName: NAME });
+        await dismissAnyPopup(page);
 
-        expect(importResult.ok, `charx import failed: ${JSON.stringify(importResult.data)}`).toBe(true);
-        expect(importResult.data?.error).toBeFalsy();
-        expect(importResult.data?.file_name).toBeTruthy();
+        const cardCount = await page.locator('#rm_print_characters_block .character_select', { hasText: NAME }).count();
+        expect(cardCount).toBeGreaterThanOrEqual(1);
 
         const onDisk = listCharacters({ dataRoot: server.dataRoot });
-        const expectedAvatar = `${importResult.data.file_name}.png`;
-        expect(onDisk).toContain(expectedAvatar);
+        expect(onDisk.some(f => /Riven/.test(f))).toBe(true);
 
-        await page.evaluate(async () => {
-            const mod = await import('/script.js');
-            await mod.getCharacters();
-        });
-        await page.waitForFunction((name) => {
-            const ctx = window.Luker?.getContext?.();
-            return !!ctx?.characters?.find?.(c => c?.name === name);
-        }, CARD.data.name, { timeout: 15_000 });
+        await clickCharacterCard(page, NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
 
-        const full = await page.evaluate(async (name) => {
-            const ctx = window.Luker.getContext();
-            const shallow = ctx.characters.find(c => c?.name === name);
-            const res = await fetch('/api/characters/get', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: shallow.avatar }),
-                cache: 'no-cache',
-            });
-            const body = await res.json();
-            return {
-                description: body.description || body.data?.description || '',
-                first_mes: body.first_mes || body.data?.first_mes || '',
-            };
-        }, CARD.data.name);
-        expect(full.description).toContain('reedmaster');
-        expect(full.first_mes).toContain('reeds are about to tell me');
+        expect(await page.locator('#character_name_pole').inputValue()).toBe(NAME);
+        expect(await page.locator('#description_textarea').inputValue()).toContain('reedmaster');
+        expect(await page.locator('#firstmessage_textarea').inputValue()).toContain('reeds are about to tell me');
 
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
 
-        const persisted = await page.evaluate(async (name) => {
-            const ctx = window.Luker.getContext();
-            const shallow = ctx.characters.find(c => c?.name === name);
-            if (!shallow) return null;
-            const res = await fetch('/api/characters/get', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: shallow.avatar }),
-                cache: 'no-cache',
-            });
-            const body = await res.json();
-            return { description: body.description || body.data?.description || '' };
-        }, CARD.data.name);
-        expect(persisted, 'Riven survived restart').toBeTruthy();
-        expect(persisted.description).toContain('reedmaster');
+        const after = await page.locator('#rm_print_characters_block .character_select', { hasText: NAME }).count();
+        expect(after).toBeGreaterThanOrEqual(1);
+
+        await clickCharacterCard(page, NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
+        expect(await page.locator('#description_textarea').inputValue()).toContain('reedmaster');
     });
 });

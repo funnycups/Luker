@@ -7,19 +7,60 @@
 //   d) selective AND_ALL (primary + secondary required) — "green" / AND-logic
 //   e) vectorized     — flagged for semantic injection
 //
-// Then for each strategy, send a turn whose user text exercises that path
+// For each strategy we send a turn whose user text exercises that path
+// via the real #send_textarea + #send_but gesture (sendMessageAndAwaitReply),
 // and assert the entry's content appears in the next chat-completion
-// request sent to the mock backend.
+// request body the server sends to the mock backend. mock.requests
+// captures the raw body — that's the load-bearing source of truth for
+// "what reached the LLM" (the only way the WI activation graph can be
+// observed end-to-end).
 //
-// Vectorized is the odd one out: vector ranking requires an embedding
-// backend the mock LLM doesn't ship. We assert only that the entry's
-// vectorized flag round-trips, and document the embedder dependency.
+// Vectorized verification: we also confirm the vectorized flag is
+// reflected in the WI editor itself — open the drawer, pick the book
+// in #world_editor_select, and read `select[name="entryStateSelector"]`
+// (the same control the user clicks to toggle constant / normal /
+// vectorized). This proves the flag is round-tripped through the editor
+// UI, not just on disk.
 
 import { test, expect } from '@playwright/test';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
 import { writeCharacterWithBinding, startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
+
+/**
+ * The shared dev seed at `data/default-user/settings.json` may carry an
+ * orchestrator-flavored preset selection (e.g. `plugin-only-...`) whose
+ * giant system prompt would dominate the chat-completion body and crowd
+ * the WI-injected entries out of the budget assertion. Drop the preset
+ * pointer + the prompts array so the prompt body the WI activation
+ * injects into is small and predictable. Idempotent.
+ */
+function scrubPresetPrompts(dataRoot, handle = 'default-user') {
+    const path = resolve(dataRoot, handle, 'settings.json');
+    if (!existsSync(path)) return;
+    const s = JSON.parse(readFileSync(path, 'utf8'));
+    s.oai_settings = s.oai_settings || {};
+    s.oai_settings.preset_settings_openai = 'Default';
+    s.oai_settings.prompts = [];
+    s.oai_settings.prompt_order = [];
+    s.oai_settings.main_prompt = '';
+    s.oai_settings.nsfw_prompt = '';
+    s.oai_settings.jailbreak_prompt = '';
+    s.oai_settings.impersonation_prompt = '';
+    s.oai_settings.new_chat_prompt = '';
+    s.oai_settings.new_group_chat_prompt = '';
+    s.oai_settings.new_example_chat_prompt = '';
+    s.oai_settings.continue_nudge_prompt = '';
+    s.extension_settings = s.extension_settings || {};
+    s.extension_settings.orchestrator = { ...(s.extension_settings.orchestrator || {}), enabled: false };
+    s.extensionSettings = s.extensionSettings || {};
+    s.extensionSettings.orchestrator = { ...(s.extensionSettings.orchestrator || {}), enabled: false };
+    writeFileSync(path, JSON.stringify(s, null, 4));
+}
 
 test.describe.configure({ mode: 'serial' });
 
@@ -76,6 +117,7 @@ test.beforeAll(async () => {
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    scrubPresetPrompts(server.dataRoot);
 
     const bookName = writeWorldBook({
         dataRoot: server.dataRoot,
@@ -96,12 +138,51 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
+/**
+ * Drive the #world_editor_select dropdown to the supplied book name and
+ * wait for the rendered entry rows to appear. select2 wraps the native
+ * select, so we route through the canonical jQuery `.val(...).trigger('change')`
+ * channel (the same path the user's pointer click ultimately triggers
+ * on a dropdown item).
+ */
+async function openBookInEditor(page, bookName) {
+    await openWorldInfoDrawer(page);
+    await page.locator('#world_editor_select').waitFor({ state: 'visible', timeout: 5000 });
+    await page.waitForFunction((wanted) => {
+        const select = document.querySelector('#world_editor_select');
+        if (!select) return false;
+        return Array.from(select.options).some(o => String(o.textContent || '').trim() === wanted);
+    }, bookName, { timeout: 15_000 });
+    const optionValue = await page.evaluate((wanted) => {
+        const select = document.querySelector('#world_editor_select');
+        if (!select) return null;
+        for (const option of Array.from(select.options)) {
+            if (String(option.textContent || '').trim() === wanted) return option.value;
+        }
+        return null;
+    }, bookName);
+    if (!optionValue) throw new Error(`no editor-dropdown option matches "${bookName}"`);
+    let rendered = false;
+    for (let attempt = 0; attempt < 3 && !rendered; attempt++) {
+        await page.evaluate((value) => {
+            const jq = window.jQuery || window.$;
+            if (!jq) throw new Error('jQuery missing');
+            jq('#world_editor_select').val(value).trigger('change');
+        }, optionValue);
+        try {
+            await page.locator('#world_popup_entries_list .world_entry').first().waitFor({ state: 'visible', timeout: 6_000 });
+            rendered = true;
+        } catch { /* retry */ }
+    }
+    if (!rendered) throw new Error(`book "${bookName}" entries did not render after 3 retries`);
+}
+
 test.describe('#25 — Activation strategies all inject correctly', () => {
     test('constant + selective + AND_ALL all route content into the prompt', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash Strategies');
 
-        // Wait for the character card to finish loading (so character.data.extensions.world resolves)
+        // Wait for the character card to finish loading so the bound book pointer resolves.
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             if (!ctx) return false;
@@ -110,16 +191,21 @@ test.describe('#25 — Activation strategies all inject correctly', () => {
             return ctx.characters?.[id]?.data?.extensions?.world;
         }, { timeout: 10_000 });
 
-        // Settle: wait for first_mes greeting to render so the next
-        // MESSAGE_RECEIVED is from our /trigger, not the chat-load event.
+        // Settle: first_mes greeting populates ctx.chat before our /send.
         await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        // Force selected world info so the bound book is visible to the WI pipeline.
-        // characters[].data.extensions.world is the "primary book" pointer, which is
-        // loaded via getCharacterLore() at scan time — so the binding flows.
+        // Lobby gesture: confirm the bound book is visible in the WI
+        // editor dropdown by opening the drawer and selecting it. This
+        // proves the book reached the editor pipeline through the same
+        // selector a real user would use, not just `loadWorldInfo` under
+        // the hood. We then close the drawer so the chat composer is
+        // unobstructed for the send turns below.
+        await openBookInEditor(page, 'activation-strategies-book');
+        const editorEntryCount = await page.locator('#world_popup_entries_list .world_entry').count();
+        expect(editorEntryCount, 'expected the editor to render all 5 strategy entries on open').toBe(5);
 
         // Helper: send a turn and return the body of the resulting chat-completion request.
         async function sendAndCaptureBody(text) {
@@ -162,39 +248,43 @@ test.describe('#25 — Activation strategies all inject correctly', () => {
         expect(bodyD2).toContain('GREEN_LORE'); // both primary + secondary present
     });
 
-    test('vectorized entry preserves its flag and remains keyword-active', async ({ page }) => {
+    test('vectorized entry exposes the flag in the editor and remains keyword-active', async ({ page }) => {
         // The vectorized flag does NOT exempt an entry from keyword matching;
         // it only ADDS the entry to the vectors extension's semantic pool.
-        // So a vectorized entry whose primary key is present in the user
-        // message still fires via the keyword path — and its content lands
-        // in the prompt the same way a normal selective entry would.
-        // This sub-case locks both behaviors: flag round-trips on disk AND
-        // keyword activation isn't suppressed by the flag.
+        // So a vectorized entry whose primary key is in the user message
+        // still fires via the keyword path — and its content lands in the
+        // prompt the same way a normal selective entry would. This sub-case
+        // locks both behaviors: flag round-trips into the editor UI's
+        // `entryStateSelector` AND keyword activation isn't suppressed by
+        // the flag.
 
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash Strategies');
 
-        const sorted = await page.evaluate(async () => {
-            const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
-            const res = await fetch('/api/worldinfo/get', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ name: 'activation-strategies-book' }),
+        // Read the vectorized flag from the same `entryStateSelector`
+        // widget the user would click to change it. The selector lives in
+        // the entry HEADER (visible even before the inline drawer body
+        // expands), so we don't need to expand the entry first.
+        await openBookInEditor(page, 'activation-strategies-book');
+        const states = await page.evaluate(() => {
+            const rows = Array.from(document.querySelectorAll('#world_popup_entries_list .world_entry'));
+            return rows.map(r => {
+                const commentEl = r.querySelector('input[name="comment"], textarea[name="comment"]');
+                const stateEl = r.querySelector('select[name="entryStateSelector"]');
+                return {
+                    comment: commentEl?.value || '',
+                    state: stateEl?.value || '',
+                };
             });
-            const data = await res.json();
-            return Object.values(data.entries || {}).map(e => ({
-                comment: e.comment,
-                vectorized: !!e.vectorized,
-                constant: !!e.constant,
-            }));
         });
-        const vectorEntry = sorted.find(e => e.comment === 'vectorized-flag');
-        expect(vectorEntry, 'vectorized entry should be present on disk').toBeTruthy();
-        expect(vectorEntry.vectorized).toBe(true);
+        const vectorRow = states.find(s => s.comment === 'vectorized-flag');
+        expect(vectorRow, 'vectorized entry should be present in the editor').toBeTruthy();
+        expect(vectorRow.state, 'vectorized entry should expose the "vectorized" state in the entry selector').toBe('vectorized');
 
-        // Send a turn whose user text mentions the vectorized entry's
-        // primary key ("kelp"). Confirm VECTOR_LORE makes it into the
-        // prompt — vectorized flag does NOT block keyword activation.
+        // Now drive a real send turn whose user text mentions the
+        // vectorized entry's primary key ("kelp"). VECTOR_LORE must
+        // appear in the prompt — the vectorized flag does NOT block
+        // keyword activation.
         const before = mock.requests.length;
         await sendMessageAndAwaitReply(page, 'The kelp on the south reef looked thinner today than last week.');
         const newReqs = mock.requests.slice(before);

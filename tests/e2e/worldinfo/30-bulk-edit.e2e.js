@@ -1,27 +1,28 @@
-// #30 — WI bulk edit — jest → e2e
+// #30 — WI bulk edit via the real toolbar
 //
-// The jest unit test `tests/world-info-bulk-edit.test.js` covers the pure
-// helpers (inferCommonValue, buildBulkFieldPatchSnapshot,
-// applyPatchToEntries, restoreEntriesFromSnapshot). This e2e exercises
-// the most load-bearing bulk-edit scenario END-TO-END:
-//
-//   1. Create a book with multiple entries that differ on a target field
-//      (depth: some 4, some 0).
-//   2. Apply applyPatchToEntries via the real client module — same function
-//      the bulk-edit popup invokes — patching all selected entries to
-//      depth: 9 atomically.
-//   3. Save via the live saveWorldInfo path (/api/worldinfo/edit).
-//   4. Restart the server.
-//   5. Reload the book, confirm all entries persist with depth=9.
-//
-// This matches the unit test's "writes patch fields to all changedUids"
-// scenario but routes through the real disk-write code path, locking
-// the integration that the jest test can't reach.
+// Drive the entire bulk-edit flow through actual DOM gestures — the
+// jest unit tests cover the pure helpers (inferCommonValue,
+// buildBulkFieldPatchSnapshot, applyPatchToEntries,
+// restoreEntriesFromSnapshot). This e2e exercises the user-visible
+// chain:
+//   1. Open the WI editor on a book with 5 mixed-depth entries.
+//   2. Click .world_entry_select on each entry (real checkbox click);
+//      the toolbar's #world_entries_select_page button is the canonical
+//      "select all on page" gesture so we use it for parity.
+//   3. Click #world_entries_bulk_set_field → the menu builds in the
+//      DOM as #world_bulk_set_field_menu with one .world_bulk_field_menu_item
+//      per BULK_EDITABLE_FIELDS entry. Click the "Injection Depth" leaf.
+//   4. The Popup opens with a number input; fill 9 + click "Apply".
+//   5. Read entries from disk after the popup closes — all 5 depths
+//      should now be 9, and the change must survive a server restart.
 
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
+import { openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
 import { startWorldInfoServer, tearDownWorldInfoServer } from './_helpers.js';
 
 test.describe.configure({ mode: 'serial' });
@@ -38,6 +39,58 @@ const BULK_ENTRIES = [
 
 const BOOK_NAME = 'bulk-edit-routes';
 
+async function openBookInEditor(page, bookName) {
+    await openWorldInfoDrawer(page);
+    await page.locator('#world_editor_select').waitFor({ state: 'visible', timeout: 5000 });
+    // Wait for world_names to be populated — without this, the change
+    // handler may run before the editor wiring is fully bound, leaving
+    // the entries list empty on the first try.
+    await page.waitForFunction((wanted) => {
+        const select = document.querySelector('#world_editor_select');
+        if (!select) return false;
+        return Array.from(select.options).some(o => String(o.textContent || '').trim() === wanted);
+    }, bookName, { timeout: 15_000 });
+    const optionValue = await page.evaluate((wanted) => {
+        const select = document.querySelector('#world_editor_select');
+        if (!select) return null;
+        for (const option of Array.from(select.options)) {
+            if (String(option.textContent || '').trim() === wanted) return option.value;
+        }
+        return null;
+    }, bookName);
+    if (!optionValue) throw new Error(`no editor-dropdown option matches "${bookName}"`);
+    // Try the change up to 3 times — the editor's render is async and
+    // can race against the page's initial bootstrap when the test
+    // worker is under load.
+    let rendered = false;
+    for (let attempt = 0; attempt < 3 && !rendered; attempt++) {
+        await page.evaluate((value) => {
+            const jq = window.jQuery || window.$;
+            if (!jq) throw new Error('jQuery missing');
+            jq('#world_editor_select').val(value).trigger('change');
+        }, optionValue);
+        try {
+            await page.locator('#world_popup_entries_list .world_entry').first().waitFor({ state: 'visible', timeout: 6_000 });
+            rendered = true;
+        } catch { /* retry */ }
+    }
+    if (!rendered) {
+        throw new Error(`book "${bookName}" entries did not render after 3 retries`);
+    }
+}
+
+/**
+ * Read the on-disk shape of a book directly from the test data root.
+ * The bulk edit goes through saveWorldInfo → repo.save → fs write, so
+ * inspecting the file gives us the load-bearing "did the change land"
+ * assertion (the editor's in-memory state isn't sufficient — the user
+ * cares about persistence).
+ */
+function readBookFromDisk(dataRoot, bookName, handle = 'default-user') {
+    const path = resolve(dataRoot, handle, 'worlds', `${bookName}.json`);
+    return JSON.parse(readFileSync(path, 'utf8'));
+}
+
 test.beforeAll(async () => {
     mock = await startMockLLM();
     server = await startWorldInfoServer({ specBaseName: '30-bulk-edit', scenarioId: 'bulk-edit' });
@@ -52,79 +105,76 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function loadBook(page, name) {
-    return page.evaluate(async (n) => {
-        const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
-        const res = await fetch('/api/worldinfo/get', { method: 'POST', headers, body: JSON.stringify({ name: n }) });
-        return res.json();
-    }, name);
-}
-
-async function saveBook(page, name, data) {
-    return page.evaluate(async ({ n, d }) => {
-        const headers = { 'Content-Type': 'application/json', ...window.Luker.getContext().getRequestHeaders() };
-        const res = await fetch('/api/worldinfo/edit', { method: 'POST', headers, body: JSON.stringify({ name: n, data: d }) });
-        return res.json();
-    }, { n: name, d: data });
-}
-
-test.describe('#30 — WI bulk edit lands depth change for all selected entries', () => {
-    test('bulk depth patch applied via applyPatchToEntries persists to disk', async ({ page }) => {
+test.describe('#30 — WI bulk edit via the real toolbar', () => {
+    test('bulk-select + Injection Depth = 9 lands on disk for every entry', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
+        await openBookInEditor(page, BOOK_NAME);
 
-        const original = await loadBook(page, BOOK_NAME);
+        // Pre-condition: the book has 5 entries with mixed depths.
+        const original = readBookFromDisk(server.dataRoot, BOOK_NAME);
         expect(Object.keys(original.entries).length).toBe(5);
-
-        // Sanity: mixed depths in the original (2 with depth=0, 3 with depth=4)
         const originalDepths = Object.values(original.entries).map(e => e.depth).sort((a, b) => a - b);
         expect(originalDepths).toEqual([0, 0, 4, 4, 4]);
 
-        // Drive the SAME pure helper the bulk-edit popup calls. We import it
-        // dynamically from the client module so we exercise the real
-        // implementation, not a re-implementation.
-        const result = await page.evaluate(async ({ name, entries }) => {
-            const mod = await import('/scripts/world-info-bulk-edit.js');
-            const allUids = Object.keys(entries);
-            const patch = { depth: 9 };
-            const { changedUids, snapshot } = mod.buildBulkFieldPatchSnapshot(entries, allUids, patch);
-            mod.applyPatchToEntries(entries, changedUids, patch);
-            return {
-                changedUids,
-                snapshot,
-                entries,
-            };
-        }, { name: BOOK_NAME, entries: original.entries });
+        // 1. Select all entries on the current page via the real
+        //    "Select Page" toolbar button. This drives the same path the
+        //    user clicks — toggles every visible .world_entry_select
+        //    checkbox at once.
+        const selectPageBtn = page.locator('#world_entries_select_page');
+        await selectPageBtn.waitFor({ state: 'visible', timeout: 5000 });
+        await selectPageBtn.click();
+        // Wait for the bulk status text to show "5 entries selected".
+        await page.waitForFunction(() => {
+            const status = document.querySelector('#world_entry_bulk_status');
+            return status && /5/.test(String(status.textContent || ''));
+        }, { timeout: 5000 });
 
-        // The snapshot is what the toast undo path would use to revert;
-        // ensure it captured the original values for entries that did change.
-        expect(result.changedUids.length).toBe(5); // all 5 differ from depth=9
-        const snapshotByUid = Object.fromEntries(result.snapshot.map(s => [s.uid, s.oldValues]));
-        // The two depth-0 and three depth-4 entries all changed.
-        const oldDepths = Object.values(snapshotByUid).map(v => v.depth).sort((a, b) => a - b);
-        expect(oldDepths).toEqual([0, 0, 4, 4, 4]);
+        // 2. Click the bulk-edit button. The dynamic menu mounts on
+        //    document.body as #world_bulk_set_field_menu.
+        const bulkBtn = page.locator('#world_entries_bulk_set_field');
+        await bulkBtn.waitFor({ state: 'visible', timeout: 5000 });
+        await bulkBtn.click();
+        const menu = page.locator('#world_bulk_set_field_menu');
+        await menu.waitFor({ state: 'visible', timeout: 5000 });
 
-        // Save through the real edit endpoint (saveWorldInfo wraps this).
-        const saved = await saveBook(page, BOOK_NAME, { entries: result.entries });
-        expect(saved).toEqual({ ok: true });
+        // 3. Click the "Injection Depth" leaf in the menu (depth is in
+        //    the top group, so it appears as a direct child item).
+        const depthLeaf = menu.locator('.world_bulk_field_menu_item', { hasText: 'Injection Depth' }).first();
+        await depthLeaf.waitFor({ state: 'visible', timeout: 5000 });
+        await depthLeaf.click();
 
-        // Re-load and confirm the on-disk state has depth=9 across the board.
-        const afterSave = await loadBook(page, BOOK_NAME);
-        for (const entry of Object.values(afterSave.entries)) {
-            expect(entry.depth, `entry uid=${entry.uid} (${entry.comment}) should have depth=9`).toBe(9);
-        }
-    });
+        // 4. The Popup opens with a number input. Fill 9 and click Apply.
+        const popup = page.locator('.popup:visible').last();
+        await popup.waitFor({ state: 'visible', timeout: 5000 });
+        const numberInput = popup.locator('input[type="number"]').first();
+        await numberInput.waitFor({ state: 'visible', timeout: 5000 });
+        await numberInput.fill('9');
+        // The Apply button is rendered as a custom button — match by visible text.
+        const applyBtn = popup.locator('.popup-button-custom', { hasText: /Apply/i }).first();
+        await applyBtn.waitFor({ state: 'visible', timeout: 5000 });
+        await applyBtn.click();
+        // Wait for the popup to close (save → toast → close).
+        await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
 
-    test('bulk edit survives a server restart', async ({ page }) => {
-        await server.restart();
-        await awaitMainUI(page, server.baseURL);
+        // 5. Read the book from disk; every entry should have depth=9.
+        // Give the autosave a moment to flush before reading.
+        await page.waitForFunction(() => {
+            const status = document.querySelector('#world_entry_bulk_status');
+            // Status changes once the save completes. Even if we miss
+            // the specific text, the data on disk is the load-bearing
+            // assertion below.
+            return status !== null;
+        }, { timeout: 5000 });
+        // Brief settle for the disk write.
+        await page.waitForTimeout(500);
 
-        const reloaded = await loadBook(page, BOOK_NAME);
-        expect(Object.keys(reloaded.entries).length).toBe(5);
-        for (const entry of Object.values(reloaded.entries)) {
-            expect(entry.depth).toBe(9);
-        }
-        // Make sure no other fields drifted in the round trip
-        const comments = Object.values(reloaded.entries).map(e => e.comment).sort();
+        const afterSave = readBookFromDisk(server.dataRoot, BOOK_NAME);
+        const newDepths = Object.values(afterSave.entries).map(e => e.depth).sort((a, b) => a - b);
+        expect(newDepths, 'bulk edit should set depth=9 on every entry').toEqual([9, 9, 9, 9, 9]);
+
+        // The other fields shouldn't drift — verify a few load-bearing
+        // ones round-trip.
+        const comments = Object.values(afterSave.entries).map(e => e.comment).sort();
         expect(comments).toEqual([
             'coastal-route',
             'estuary-crossing',
@@ -132,5 +182,16 @@ test.describe('#30 — WI bulk edit lands depth change for all selected entries'
             'mountain-pass',
             'ridgeline-trail',
         ]);
+    });
+
+    test('bulk edit survives a server restart', async ({ page }) => {
+        await server.restart();
+        await awaitMainUI(page, server.baseURL);
+
+        const reloaded = readBookFromDisk(server.dataRoot, BOOK_NAME);
+        expect(Object.keys(reloaded.entries).length).toBe(5);
+        for (const entry of Object.values(reloaded.entries)) {
+            expect(entry.depth).toBe(9);
+        }
     });
 });

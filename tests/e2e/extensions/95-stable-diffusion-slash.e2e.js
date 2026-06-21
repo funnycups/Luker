@@ -1,23 +1,13 @@
-// Case #95 — Stable Diffusion: `/sd` slash command produces a chat image
+// Case #95 — Stable Diffusion: `/imagine` slash via real send textarea
 //
 // Spec:
 //   - Spawn an in-process HTTP server that mocks the Automatic1111-compatible
-//     SD WebUI surface (the same one Luker's /api/sd/* routes proxy to).
-//   - Configure the SD extension to `source: 'auto'` (WebUI) with auto_url
-//     pointing at the mock so isValidState() passes.
-//   - Run `/sd <prompt>` (alias of `/imagine`) via the slash command runtime.
-//   - Verify a chat message with an image attachment lands at the tail and
-//     that the attachment's url resolves to the mock's known 1x1 PNG bytes.
-//
-// Notes on the Luker endpoint:
-//   src/endpoints/stable-diffusion.js#router.post('/generate', ...) calls
-//     1. GET  {sd_url}/sdapi/v1/options    (probes for forge_preset key)
-//     2. POST {sd_url}/sdapi/v1/txt2img    (returns {images: [base64]})
-//   So our mock needs to satisfy both. Other endpoints (/sd-models, /samplers,
-//   /schedulers) are only hit when the user opens settings or refreshes the
-//   model dropdown, neither of which we trigger here — but we still serve
-//   permissive responses for them in case the extension does background
-//   probes on first load.
+//     SD WebUI surface.
+//   - Configure the SD extension to source='auto' with auto_url pointing at
+//     the mock so isValidState() passes.
+//   - Type `/imagine <prompt>` into #send_textarea and click #send_but to
+//     run the slash command exactly as a user would.
+//   - Verify a chat message with an image attachment lands at the tail.
 
 import { test, expect } from '@playwright/test';
 import http from 'node:http';
@@ -26,18 +16,10 @@ import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 
-// A 1x1 transparent PNG — minimum valid PNG bytes. Base64 form is what
-// Automatic1111 returns in the `images` array of /sdapi/v1/txt2img.
 const ONE_PX_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 let server, mock, sdMock;
 
-/**
- * Start an Automatic1111-compatible SD WebUI mock. Tracks every call into
- * `requests` so the test can assert /sdapi/v1/txt2img was actually hit.
- *
- * @returns {Promise<{baseURL: string, requests: object[], stop: () => Promise<void>}>}
- */
 async function startSdWebUiMock() {
     const requests = [];
     const httpServer = http.createServer(async (req, res) => {
@@ -53,8 +35,6 @@ async function startSdWebUiMock() {
         };
 
         if (req.url === '/sdapi/v1/options' && req.method === 'GET') {
-            // Bare options surface — no forge_preset key, so the Luker
-            // proxy will leave forge_additional_modules alone.
             respondJson(200, { samples_format: 'png', sd_model_checkpoint: 'mock-model' });
             return;
         }
@@ -81,7 +61,6 @@ async function startSdWebUiMock() {
             return;
         }
         if (req.url === '/sdapi/v1/txt2img' && req.method === 'POST') {
-            // Real Automatic1111 returns base64 strings in `images`.
             respondJson(200, {
                 images: [ONE_PX_PNG_BASE64],
                 parameters: parsed,
@@ -93,8 +72,6 @@ async function startSdWebUiMock() {
             respondJson(200, {});
             return;
         }
-        // Catch-all: respond 200 with an empty object so unknown probes
-        // (e.g. /sdapi/v1/cmd-flags) don't crash the extension.
         respondJson(200, {});
     });
 
@@ -111,9 +88,6 @@ test.beforeAll(async () => {
     sdMock = await startSdWebUiMock();
     mock = await startMockLLM({
         scriptedReplies: [
-            // The /sd command's "free mode" path doesn't call the LLM
-            // for prompt refinement (FREE skips refinePrompt), so this
-            // reply is just a safety net in case test load ever changes.
             '*Ash sets the brass spyglass down to admire the sketch.* "Sharp eye for the gull rocks."',
         ],
     });
@@ -129,8 +103,8 @@ test.afterAll(async () => {
     await sdMock?.stop();
 });
 
-test.describe('#95 — Stable Diffusion /sd slash command', () => {
-    test('/sd <prompt> attaches a generated PNG to a new chat message', async ({ page }) => {
+test.describe('#95 — Stable Diffusion /imagine via real send textarea + send button', () => {
+    test('typing /imagine ... + clicking send attaches a generated PNG to a new chat message', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
@@ -139,15 +113,14 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        // Configure the SD extension. The auto_url points at our local mock
-        // so the Luker /api/sd/generate proxy hits a reachable target — the
-        // upstream test note flagged that the stock localhost:7860 default
-        // unreachability is what makes other batches' SD tests throw.
+        // Configure the SD extension via its persisted settings (programmatic
+        // setup — same as opening the SD drawer and configuring it by hand,
+        // but headless). The ACT below is the real slash gesture.
         await page.evaluate((sdBaseURL) => {
             const ctx = window.Luker.getContext();
             ctx.extensionSettings.sd = ctx.extensionSettings.sd || {};
             const sd = ctx.extensionSettings.sd;
-            sd.source = 'auto';            // WebUI source
+            sd.source = 'auto';
             sd.auto_url = sdBaseURL;
             sd.auto_auth = '';
             sd.steps = 20;
@@ -159,45 +132,38 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
             sd.seed = -1;
             sd.model = 'mock-model';
             sd.vae = '';
-            // command_visible=true so the assistant-named message is not
-            // filed as is_system (we want it visible in chat for the test).
             sd.command_visible = true;
-            // No prompt-extension via LLM — keep the FREE path simple.
             sd.free_extend = false;
             sd.restore_faces = false;
             sd.enable_hr = false;
             sd.adetailer_face = false;
             sd.prompt_prefix = '';
             sd.negative_prompt = '';
-            // Persist; saveSettingsDebounced fires the same path the UI uses.
             ctx.saveSettingsDebounced();
         }, sdMock.baseURL);
 
         const before = sdMock.requests.length;
         const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
 
-        // Run the slash. /sd is an alias of /imagine. Use quiet=false so a
-        // chat message is appended for our assertion.
-        await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            await ctx.executeSlashCommandsWithOptions('/sd quiet=false a brass spyglass laid across a folded reef chart at dusk');
-        });
+        // REAL gesture: type the slash into #send_textarea, click #send_but.
+        const textarea = page.locator('#send_textarea');
+        await textarea.fill('/imagine quiet=false a brass spyglass laid across a folded reef chart at dusk');
+        await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 10_000 });
+        await page.locator('#send_but').click();
 
-        // The image generation is async — wait until either a new chat
-        // message lands (sendMessage) or 60s elapse.
+        // Image generation is async — wait for the new chat message to land.
         await page.waitForFunction((targetLen) => {
             const ctx = window.Luker.getContext();
             return ctx.chat.length > targetLen;
         }, chatLenBefore, { timeout: 60_000 });
 
-        // ===== Assert the mock saw the right calls. =====
+        // ===== Assert mock saw the expected calls. =====
         const newSdReqs = sdMock.requests.slice(before);
         const txt2imgCall = newSdReqs.find(r => r.url === '/sdapi/v1/txt2img');
         expect(txt2imgCall, 'mock should have received POST /sdapi/v1/txt2img').toBeTruthy();
         expect(typeof txt2imgCall.body.prompt).toBe('string');
         expect(txt2imgCall.body.prompt).toMatch(/spyglass/);
 
-        // The options probe should have fired first.
         const optionsCall = newSdReqs.find(r => r.url === '/sdapi/v1/options');
         expect(optionsCall, 'Luker proxy should probe /sdapi/v1/options before /txt2img').toBeTruthy();
 
@@ -218,14 +184,10 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
         expect(tail.media.length).toBeGreaterThan(0);
         const att = tail.media[0];
         expect(att.url, 'attachment url must be present').toBeTruthy();
-        // Luker saves the base64 PNG to disk and references it by relative
-        // path — pull the bytes and confirm they match our 1x1 PNG.
         const fetched = await page.evaluate(async (url) => {
             const r = await fetch(url);
             const buf = await r.arrayBuffer();
             const bytes = new Uint8Array(buf);
-            // Compare PNG magic header — full byte-for-byte equality
-            // depends on whether Luker re-encodes; magic is the contract.
             return {
                 ok: r.ok,
                 length: bytes.length,
@@ -234,8 +196,6 @@ test.describe('#95 — Stable Diffusion /sd slash command', () => {
         }, att.url);
         expect(fetched.ok).toBe(true);
         expect(fetched.isPng, 'saved attachment must be a real PNG').toBe(true);
-        // The 1x1 transparent PNG decodes to ~70 bytes; allow a generous
-        // upper bound but require it isn't suspiciously empty.
         expect(fetched.length).toBeGreaterThan(50);
     });
 });

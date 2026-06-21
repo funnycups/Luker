@@ -1,10 +1,11 @@
-// Case #92 — Quick Reply triggers slash command
+// Case #92 — Quick Reply triggers slash command (real DOM button click)
 //
 // Spec:
 //   Create a quick-reply set, attach it as a global visible set, define
 //   a single quick reply whose `message` is a slash command pipeline
-//   `/send hello world | /trigger`. Click the QR button in the bar.
-//   Verify the message was sent and an assistant reply came back.
+//   `/send hello world | /trigger`. Click the QR button in the actual
+//   #qr--bar in the composer area. Verify the message was sent and an
+//   assistant reply came back.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -29,8 +30,8 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#92 — Quick Reply triggers slash command', () => {
-    test('clicking the QR button sends a message via /send and triggers reply', async ({ page }) => {
+test.describe('#92 — Quick Reply triggers slash command via real button click', () => {
+    test('clicking the rendered .qr--button in #qr--bar sends a message and triggers reply', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
 
@@ -43,13 +44,14 @@ test.describe('#92 — Quick Reply triggers slash command', () => {
         // Wait for the QR extension's API to attach.
         await page.waitForFunction(() => !!globalThis.quickReplyApi, { timeout: 10_000 });
 
-        // Build a set with one quick reply and expose it as a global
-        // visible set. The QR's `message` is a slash pipeline.
+        // Build a set with one quick reply and expose it globally. The
+        // quickReplyApi is the canonical interaction surface for tests
+        // and equivalent to what the Manage popup does — both end up
+        // calling settings.save(). We use it strictly for the setup
+        // phase; the actual ACT (button click) is a real DOM gesture.
         await page.evaluate(async () => {
             const api = globalThis.quickReplyApi;
-            // settings.isEnabled gates the whole bar; ensure it's on.
             api.settings.isEnabled = true;
-            // Make sure the bar host is in the DOM before we render.
             await api.createSet('e2e-set', { disableSend: false, placeBeforeInput: false, injectInput: false });
             api.createQuickReply('e2e-set', 'Greet', {
                 icon: '',
@@ -58,12 +60,11 @@ test.describe('#92 — Quick Reply triggers slash command', () => {
                 title: 'Send hello world',
             });
             api.addGlobalSet('e2e-set', true);
-            // settings.save persists+rerenders.
             await api.settings.save();
         });
 
-        // Wait for the actual DOM button to render in the QR bar.
-        const qrBtn = page.locator('.qr--button', { has: page.locator('.qr--button-label', { hasText: 'Greet' }) }).first();
+        // Wait for the rendered button in #qr--bar.
+        const qrBtn = page.locator('#qr--bar .qr--button', { has: page.locator('.qr--button-label', { hasText: 'Greet' }) }).first();
         await qrBtn.waitFor({ state: 'visible', timeout: 10_000 });
 
         // Subscribe to MESSAGE_RECEIVED before clicking.
@@ -79,6 +80,7 @@ test.describe('#92 — Quick Reply triggers slash command', () => {
 
         const before = mock.requests.length;
 
+        // REAL click: the user's gesture on the rendered button.
         await qrBtn.click();
 
         // Await reply.

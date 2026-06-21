@@ -1,4 +1,15 @@
-// #13 — Rename chat via /renamechat.
+// #13 — Rename chat via the Manage Chat Files UI flow.
+//
+// Real-user gesture:
+//   1. Open the options dropdown, click "Manage chat files"
+//      (option_select_chat). This shows the past-chats popup, which
+//      renders one .select_chat_block_wrapper per chat file with a
+//      .renameChatButton pencil.
+//   2. Click the .renameChatButton for the current chat. ST opens a
+//      generic INPUT popup pre-filled with the old name.
+//   3. Type the new name in the popup input and click OK.
+//   4. ST renames the file on disk and refreshes the recent-chats index.
+//
 // File on disk should be renamed; recent-chats index should reflect the
 // new file_name.
 
@@ -6,7 +17,12 @@ import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    openOptionsAndClick,
+} from '../_lib/page.js';
 import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -27,14 +43,11 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#13 — rename chat', () => {
-    test('/renamechat updates file on disk and recent-chat index', async ({ page }) => {
+test.describe('#13 — rename chat via Manage Chat Files UI', () => {
+    test('clicking the pencil + entering a new name updates the file on disk and recent index', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-        }, { timeout: 10_000 }).catch(() => {});
+        await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
         await sendMessageAndAwaitReply(page, 'Tell me when you will be ready.');
 
@@ -51,23 +64,42 @@ test.describe('#13 — rename chat', () => {
 
         const newName = 'bryn-headland-night-watch';
 
-        await page.evaluate(async (name) => {
-            await window.Luker.getContext().executeSlashCommandsWithOptions(`/renamechat ${name}`);
-        }, newName);
+        // Real user gesture #1: open options → Manage Chat Files.
+        await openOptionsAndClick(page, 'option_select_chat');
+        // The past-chats popup renders the chat list. Wait for the row
+        // wrapper that contains the current chat's filename.
+        const row = page.locator('.select_chat_block_wrapper', { has: page.locator('.select_chat_block_filename', { hasText: originalChatId }) }).first();
+        await row.waitFor({ state: 'visible', timeout: 10_000 });
 
+        // Real user gesture #2: click the rename pencil. ST opens an
+        // INPUT popup pre-filled with the old name.
+        await row.locator('.renameChatButton').click();
+
+        // Real user gesture #3: clear the pre-filled input, type new
+        // name, click OK on the topmost popup.
+        const popup = page.locator('dialog.popup[open]').last();
+        const popupInput = popup.locator('.popup-input').last();
+        await popupInput.waitFor({ state: 'visible', timeout: 5000 });
+        await popupInput.fill(newName);
+        await popup.locator('.popup-button-ok').click();
+
+        // Wait for the chat to flip to the new name.
         await page.waitForFunction((expected) => {
             return window.Luker.getContext().getCurrentChatId() === expected;
         }, newName, { timeout: 15_000 });
-        // small settle for the file rename + index refresh
         await page.waitForTimeout(800);
 
+        // Disk-side check.
         const filesAfter = readdirSync(chatsDir).filter(f => f.endsWith('.jsonl'));
         expect(filesAfter, `disk rename should produce new filename; got ${JSON.stringify(filesAfter)}`)
             .toContain(`${newName}.jsonl`);
         expect(filesAfter, `original filename should be gone after rename`)
             .not.toContain(`${originalChatId}.jsonl`);
 
-        // /api/chats/recent (recent-chats index) should reflect new name.
+        // Recent-chats index should reflect the new name. This is a
+        // server-side index assertion; we still fire it via a real fetch
+        // from the page rather than reading the disk index directly so
+        // we exercise the same endpoint the UI uses.
         const recent = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();
             const res = await fetch('/api/chats/recent', {

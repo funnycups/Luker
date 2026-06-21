@@ -7,17 +7,9 @@
 // toggled to display:'' by `refreshButtonVisibility` when the message has
 // non-empty extra.var_ops.
 //
-// Crucially, the button lives inside `.extraMesButtons`, a hover-shown
-// row (CSS `.extraMesButtons { display: none; }`, then unhidden via
-// hover or `.expanded`). For an e2e test we don't want to fight CSS hover
-// semantics — we assert the BUTTON's own display style flipped to non-none
-// (the handler's contract), and then open the panel programmatically by
-// firing a click on the flask icon (which works even when the parent
-// container is hover-hidden, since click dispatches don't require
-// visibility).
-//
 // What this case pins:
-//   a) Each assistant turn's extra.var_ops faithfully records the macros.
+//   a) Each assistant turn's extra.var_ops faithfully records the macros
+//      (assertion via panel rows read from rendered DOM, not from chat).
 //   b) The .mes_var_ops button's inline display style is flipped to ''
 //      (not 'none') for every floor with ops — proving the visibility
 //      handler ran.
@@ -31,6 +23,7 @@ import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import { openVarOpsPanel, getRenderedVarOpsRows } from '../_lib/ui-mg-varops.js';
 
 let server, mock;
 
@@ -62,47 +55,29 @@ test.describe('#62 — Floor-state inspector UI shows current floor full state',
         }, { timeout: 10_000 }).catch(() => {});
 
         // ── Three turns ────────────────────────────────────────────────
+        const replyIds = [];
         for (const text of [
             'Light the lantern — I need to see the breakers.',
             'The wind is still; what does the sea look like to you?',
             'Hand me what I need before the tide turns.',
         ]) {
-            await sendMessageAndAwaitReply(page, text);
+            const { replyId } = await sendMessageAndAwaitReply(page, text);
+            await page.waitForFunction((id) => {
+                const ctx = window.Luker.getContext();
+                const m = ctx.chat?.[id];
+                return Boolean(m && Array.isArray(m?.extra?.var_ops) && m.extra.var_ops.length > 0);
+            }, replyId, { timeout: 15_000 });
+            replyIds.push(replyId);
         }
-
-        // Per-floor recorded ops (source of truth) — assistant messages only.
-        const recorded = await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            return ctx.chat.map((m, idx) => ({
-                idx,
-                isUser: !!m.is_user,
-                ops: m?.extra?.var_ops ?? null,
-            }));
-        });
-
-        const asstFloors = recorded.filter(r => !r.isUser && Array.isArray(r.ops) && r.ops.length > 0);
-        expect(asstFloors.length, 'three assistant turns recorded ops').toBeGreaterThanOrEqual(3);
-
-        // Latest assistant floor should carry the two pushvar ops.
-        const latest = asstFloors[asstFloors.length - 1];
-        expect(latest.ops).toEqual([
-            { op: 'pushvar', key: 'inventory', value: 'lantern' },
-            { op: 'pushvar', key: 'inventory', value: 'spyglass' },
-        ]);
 
         // For each assistant floor with ops, the button's inline display style
         // should have been flipped from "none" to "" by refreshButtonVisibility.
-        // (We don't assert .toBeVisible because the parent .extraMesButtons row
-        // is CSS-hover-shown and Playwright would report the button hidden until
-        // hovered — that's a CSS concern, not the contract this test exercises.)
         const buttonStyles = await page.evaluate((idxs) => {
             return idxs.map((idx) => {
                 const el = document.querySelector(`.mes[mesid="${idx}"] .mes_var_ops`);
-                if (!el) return { idx, exists: false };
-                const inline = el.style.display;
-                return { idx, exists: true, inlineDisplay: inline };
+                return { idx, exists: !!el, inlineDisplay: el?.style.display ?? null };
             });
-        }, asstFloors.map(r => r.idx));
+        }, replyIds);
         for (const b of buttonStyles) {
             expect(b.exists, `flask icon DOM exists for floor ${b.idx}`).toBe(true);
             expect(
@@ -111,43 +86,19 @@ test.describe('#62 — Floor-state inspector UI shows current floor full state',
             ).not.toBe('none');
         }
 
-        // Open the panel for the latest floor programmatically. Click dispatches
-        // even when the parent's display is none (CSS hover only affects render).
-        await page.locator(`.mes[mesid="${latest.idx}"] .mes_var_ops`).first().dispatchEvent('click');
+        // Open the panel for the latest floor via the helper and assert
+        // every rendered row matches the recorded ops 1:1.
+        const latestId = replyIds[replyIds.length - 1];
+        await openVarOpsPanel(page, latestId);
+        const rows = await getRenderedVarOpsRows(page);
+        // Latest reply ops: two pushvars onto inventory.
+        expect(rows).toEqual([
+            { op: 'pushvar', key: 'inventory', value: 'lantern', path: '' },
+            { op: 'pushvar', key: 'inventory', value: 'spyglass', path: '' },
+        ]);
 
-        // The panel renders inside a generic popup. Wait for at least one row.
-        const panel = page.locator('.var-ops-panel');
-        await expect(panel).toBeVisible({ timeout: 5_000 });
-        const rows = panel.locator('.var-ops-panel__row');
-        await expect(rows, 'panel renders one row per recorded op').toHaveCount(latest.ops.length, { timeout: 5_000 });
-
-        // Each row's op selector + key input + value textarea should match the
-        // corresponding recorded op. Read all rows in one snapshot.
-        const panelView = await page.evaluate(() => {
-            const out = [];
-            const rows = document.querySelectorAll('.var-ops-panel__row');
-            rows.forEach((row) => {
-                const opSel = row.querySelector('select.var-ops-panel__op');
-                const keyInput = row.querySelector('input.var-ops-panel__key');
-                const valueArea = row.querySelector('textarea.var-ops-panel__value');
-                out.push({
-                    op: opSel?.value ?? null,
-                    key: keyInput?.value ?? null,
-                    value: valueArea ? valueArea.value : undefined,
-                });
-            });
-            return out;
-        });
-
-        expect(panelView).toEqual(latest.ops.map(op => ({
-            op: op.op,
-            key: op.key,
-            value: op.value, // pushvar carries a value field
-        })));
-
-        // Dismiss the panel (Cancel — we don't want to mutate state in this case).
+        // Dismiss the panel (Cancel — we do not want to mutate state).
         await page.locator('.popup-button-cancel').first().click().catch(() => {});
-        await expect(panel).not.toBeVisible({ timeout: 5_000 }).catch(() => {});
 
         // Also confirm the materialized state on the chat metadata reflects
         // all surviving ops from every floor we sent — this is the "full

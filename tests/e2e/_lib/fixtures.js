@@ -188,6 +188,11 @@ export function appendConnectionProfile({ dataRoot, handle = 'default-user', nam
  * mock. Done because connection-manager profile activation in the UI
  * happens after page load — bootstrapping the settings keys directly
  * avoids a click+wait race in chat-flow tests.
+ *
+ * Also neutralizes dev-env pollution so plugin LLM nodes (orchestrator,
+ * CPA, memory-graph, CEA, iter-studios) all fall through to the active
+ * oai_settings (= our mock) instead of routing via a missing connection
+ * profile or a real-API connection name.
  */
 export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', baseURL, model = 'mock-gpt-4o' }) {
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
@@ -200,6 +205,29 @@ export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', base
     s.oai_settings.custom_model = model;
     s.oai_settings.openai_model = model;
     s.oai_settings.stream_openai = true;
+    // Wipe legacy fields the dev's settings.json may have left behind that
+    // would otherwise reroute orchestrator/CPA/MG/CEA LLM calls via a real
+    // provider URL. The mirrored values live under extension_settings
+    // (snake_case) — the SPA reads from there at load.
+    const ext = (s.extension_settings = s.extension_settings || {});
+    for (const slot of ['orchestrator', 'completion_preset_assistant', 'memory_graph', 'character_editor_assistant']) {
+        const m = (ext[slot] = ext[slot] || {});
+        for (const key of [
+            'llmNodeApiPresetName', 'llmNodePresetName',
+            'requestApiPresetName', 'requestLlmPresetName',
+            'schemaIterationApiPresetName', 'schemaIterationLlmPresetName',
+            'iterationApiPresetName', 'iterationLlmPresetName',
+            'recallApiPresetName', 'recallLlmPresetName',
+            'extractApiPresetName', 'extractLlmPresetName',
+        ]) {
+            m[key] = '';
+        }
+    }
+    // Clear the active connection profile so resolveProfile doesn't
+    // override chat_completion_source/custom_url with a dev's "Claude"
+    // / "Gemini" profile blob.
+    ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };
+    ext.connectionManager.selectedProfile = null;
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
 }
 

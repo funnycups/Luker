@@ -1,9 +1,14 @@
-// #23 — Delete character; verify the embedded skill cascade fires
-// (skills under that character's scope are gone), and verify the bound
-// WI book persists on disk (per Luker convention — /api/characters/delete
-// removes the avatar + chats + state sidecars + CardApp files; the
-// bound world book is only an extension reference and is preserved so
-// other characters or the user's library can still reach it).
+// #23 — Delete character via the real UI delete flow + verify the
+// embedded skill cascade fires and the bound WI book persists on disk.
+//
+// Real flow:
+//   1. seed Ash with a bound WI book via fs fixture
+//   2. install a character-scope skill via ctx.skills.executeExtractEmbed
+//      (no UI for this — install is its own e2e in skills-ui/)
+//   3. click into Ash → click #delete_button → tick confirm checkbox
+//      → click popup OK
+//   4. assert: card gone from list; WI book file still on disk
+//   5. cascade: character-scope skills list is empty (or skill missing)
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
@@ -11,24 +16,25 @@ import { existsSync, readFileSync } from 'node:fs';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook, BRYN_ENTRIES, listCharacters } from '../_lib/fixtures.js';
-import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
-import { writeEmbeddedCharacter } from './_helpers.js';
+import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
+import { awaitMainUI } from '../_lib/page.js';
+import { deleteSelectedCharacter } from '../_lib/ui-character.js';
 
 let server, mock, avatar, bookName;
+
+const ASH_NAME = 'Ash the Cartographer';
 
 test.beforeAll(async () => {
     mock = await startMockLLM({});
     server = await startServer({ batchKey: 'character', scenarioId: 'delete-cascade' });
     markOnboarded({ dataRoot: server.dataRoot });
+    disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bookName = writeWorldBook({ dataRoot: server.dataRoot, name: 'bryn-headland', entries: BRYN_ENTRIES });
-    // Seed a character with the WI book bound.
     avatar = writeEmbeddedCharacter({
         dataRoot: server.dataRoot,
-        overrides: {
-            extensions: { world: bookName },
-        },
+        overrides: { extensions: { world: bookName } },
     });
 });
 
@@ -37,44 +43,41 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#23 — Delete character — embedded skill cascade + WI book persists', () => {
-    test('character-scope skill is cascaded; bound WI book stays on disk', async ({ page }) => {
+test.describe('#23 — Delete character via UI — embedded skill cascade + WI book persists', () => {
+    test('delete via #delete_button: character-scope skill is cascaded, bound WI book stays on disk', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
-        await page.evaluate(async () => {
-            const mod = await import('/script.js');
-            await mod.getCharacters();
-        });
-        await page.waitForFunction(() => {
-            const ctx = window.Luker?.getContext?.();
-            return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
-        }, { timeout: 15_000 });
+
+        // Click into Ash via the card.
+        await clickCharacterCard(page, ASH_NAME);
+        await dismissAnyPopup(page);
+        await openCharacterEditPanel(page);
 
         const charScope = { kind: 'character', characterFile: avatar };
 
-        // Install a character-scope skill via the public skills API.
+        // Install a character-scope skill via the public skills API
+        // (there's no user-facing UI for "install a skill from arbitrary
+        // payload" — that flow has its own e2e under skills-ui/).
         const installSummary = await page.evaluate(async ({ scope }) => {
             const ctx = window.Luker.getContext();
             if (!ctx.skills?.executeExtractEmbed) return { ok: false, reason: 'skills API not exposed' };
             const payload = {
                 version: 1,
-                items: [
-                    {
-                        bundleFormat: 'inline-files-v1',
-                        name: 'cartographer-protocol',
-                        files: [{
-                            path: 'SKILL.md',
-                            encoding: 'utf8',
-                            content: [
-                                '---',
-                                'name: cartographer-protocol',
-                                'description: "Protocol for reading the reef chart"',
-                                '---',
-                                '',
-                                'Body anchor: delete-cascade fixture v1.',
-                            ].join('\n'),
-                        }],
-                    },
-                ],
+                items: [{
+                    bundleFormat: 'inline-files-v1',
+                    name: 'cartographer-protocol',
+                    files: [{
+                        path: 'SKILL.md',
+                        encoding: 'utf8',
+                        content: [
+                            '---',
+                            'name: cartographer-protocol',
+                            'description: "Protocol for reading the reef chart"',
+                            '---',
+                            '',
+                            'Body anchor: delete-cascade fixture v1.',
+                        ].join('\n'),
+                    }],
+                }],
             };
             const result = await ctx.skills.executeExtractEmbed({ payload, targetScope: scope, conflictStrategies: {} });
             return { ok: true, result };
@@ -85,7 +88,7 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
             return;
         }
 
-        // Confirm skill is present under character scope before deletion.
+        // Confirm skill is present pre-delete.
         const beforeSkills = await page.evaluate(async (scope) => {
             const ctx = window.Luker.getContext();
             const list = await ctx.skills.list({ scope });
@@ -93,76 +96,48 @@ test.describe('#23 — Delete character — embedded skill cascade + WI book per
         }, charScope);
         expect(beforeSkills, 'character-scope skill installed').toContain('cartographer-protocol');
 
-        // Confirm WI book on disk before deletion.
+        // Confirm WI book on disk pre-delete.
         const bookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${bookName}.json`);
         expect(existsSync(bookPath), 'WI book on disk before delete').toBe(true);
         const bookBefore = JSON.parse(readFileSync(bookPath, 'utf8'));
 
-        // Delete via the server API. We don't rely on the client-side
-        // deleteCharacter helper because in headless mode the confirm
-        // popups are unreliable. After the avatar is gone from disk, we
-        // explicitly emit CHARACTER_DELETED so the embed-lifecycle
-        // listener (the cascade) fires, just like the real client path
-        // does at the end of deleteCharacter().
-        const deleteResult = await page.evaluate(async (avatar) => {
+        // ── DELETE VIA UI: click trash icon → tick "Also delete the
+        //    chat files" checkbox → click OK. ────────────────────────
+        await deleteSelectedCharacter(page);
+        // The shared helper handles the checkbox + OK click. Wait for
+        // CHARACTER_DELETED to propagate.
+        await page.waitForFunction((wantAvatar) => {
+            const ctx = window.Luker?.getContext?.();
+            return !(ctx?.characters || []).some(c => c?.avatar === wantAvatar);
+        }, avatar, { timeout: 15_000 });
+        await page.waitForTimeout(500);
+
+        // ── DOM assertion: card gone from list. ─────────────────────
+        const remainingCards = await page.evaluate((wantAvatar) => {
             const ctx = window.Luker.getContext();
-            const res = await fetch('/api/characters/delete', {
-                method: 'POST',
-                headers: ctx.getRequestHeaders(),
-                body: JSON.stringify({ avatar_url: avatar, delete_chats: true }),
-            });
-            const ok = res.ok;
-            // Mirror the client emit body shape — { id, character }.
-            // The character object only needs `avatar` for the cascade.
-            try {
-                ctx.eventSource.emit(ctx.eventTypes.CHARACTER_DELETED, {
-                    id: -1,
-                    character: { avatar },
-                });
-            } catch {}
-            return { ok, status: res.status };
+            return (ctx.characters || []).filter(c => c?.avatar === wantAvatar).length;
         }, avatar);
-        expect(deleteResult.ok, `delete failed: ${deleteResult.status}`).toBe(true);
+        expect(remainingCards, 'Ash gone from ctx.characters').toBe(0);
 
         const serverDeleted = !listCharacters({ dataRoot: server.dataRoot }).includes(avatar);
         expect(serverDeleted, 'avatar file gone from disk after delete').toBe(true);
 
-        // Cascade is async — give the handler a beat to call ctx.skills.delete.
-        await page.waitForTimeout(1000);
+        // Wait for the undo-toast window to expire (default 5000ms) so
+        // commitDeletedCharacterUndoSnapshot fires CHARACTER_DELETED.
+        // Then give the cascade chain (which is now awaited by
+        // eventSource.emit since CHARACTER_DELETED listener was
+        // converted to `async (event) => await onCharacterDeletedCascade`)
+        // a beat to complete its skill-delete fetches.
+        await page.waitForTimeout(6000);
 
-        // If the event-driven cascade didn't run (e.g. embed-lifecycle's
-        // listener hasn't registered yet on this fresh page), invoke the
-        // public cascade helper directly. The contract under test is "after
-        // a character is deleted, its scope's skills are cleaned" — both
-        // paths produce that outcome; the event path is just the wrapper
-        // around the same helper.
-        const stillThere = await page.evaluate(async (scope) => {
-            const ctx = window.Luker.getContext();
-            const list = await ctx.skills.list({ scope });
-            return (list || []).some(s => s.name === 'cartographer-protocol');
-        }, charScope);
-        if (stillThere) {
-            await page.evaluate(async (avatar) => {
-                try {
-                    const mod = await import('/scripts/skills/embed-lifecycle.js');
-                    const ctx = window.Luker.getContext();
-                    await mod.cascadeDeleteSkillsInScope({
-                        context: ctx,
-                        scope: { kind: 'character', characterFile: avatar },
-                    });
-                } catch {}
-            }, avatar);
-            await page.waitForTimeout(500);
-        }
-
-        // After cascade: the character-scope list must be empty (or at
-        // least the fixture skill must be gone).
+        // After cascade: the character-scope list must NOT contain the
+        // fixture skill.
         const afterSkills = await page.evaluate(async (scope) => {
             const ctx = window.Luker.getContext();
             try {
                 const list = await ctx.skills.list({ scope });
                 return (list || []).map(s => s.name);
-            } catch {
+            } catch (_) {
                 return [];
             }
         }, charScope);

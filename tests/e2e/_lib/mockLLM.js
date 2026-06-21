@@ -181,11 +181,16 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
 
         const lastUser = userMessages.length > 0 ? userMessages[userMessages.length - 1] : '';
 
-        // Sub-agent fingerprint: META_FRAME stamped as the first system
-        // message in the dispatcher's assembled prompt. Robust against
+        // Sub-agent fingerprint: META_FRAME stamped as one of the system
+        // messages in the dispatcher's assembled prompt. Robust against
         // user-defined main system prompts because the META_FRAME wording
         // is hard-coded in the runtime and never reused for the main agent.
-        const hasSubagentFrame = systemPrompts.some(s => s.startsWith(SUBAGENT_META_FRAME_PREFIX));
+        // We `includes` (not `startsWith`) because some chat-completion
+        // presets concatenate multiple system messages into one block
+        // (the openai preset's "main" prompt prepends character / scenario
+        // text before the orchestrator's META_FRAME message), so the
+        // META_FRAME isn't necessarily at index 0 of its own system entry.
+        const hasSubagentFrame = systemPrompts.some(s => s.includes(SUBAGENT_META_FRAME_PREFIX));
         // Main-agent fingerprint: any of the main-only tool names appear
         // in the tools array. dispatch_subagent is gated on having
         // sub-agents configured, but the message-production tools

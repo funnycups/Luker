@@ -1,14 +1,12 @@
-// #43 — Switching profiles does not pollute settings.
+// #43 — Switching profiles does not pollute settings (real dropdown).
 //
-// Snapshot settings.json after profile A is active. Switch to B. Switch
-// back to A. Settings.json after the second A-active state should be
-// effectively the same as after the first A-active state — modulo
-// volatile/non-load-bearing fields (timestamps, generated IDs that don't
-// affect routing, version markers).
+// Snapshot settings.json after profile A is active. Switch to B via the
+// real #connection_profiles dropdown. Switch back to A via the dropdown.
+// Settings.json after the second A-active state should be effectively
+// the same as after the first A-active state, modulo volatile fields.
 //
 // "Pollution" here means residue from B that should have been cleaned up
-// on the way back: e.g. mock-B's URL still sitting in oai_settings.custom_url,
-// or selectedProfile pointing to neither A nor B, etc.
+// on the way back (e.g. mock-B's URL still in oai_settings.custom_url).
 
 import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -16,7 +14,7 @@ import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { awaitMainUI, openExtensionsDrawer } from '../_lib/page.js';
 
 let server, mockA, mockB;
 
@@ -28,14 +26,10 @@ function snapshotSettings(dataRoot) {
 function seedTwoProfiles({ dataRoot, urlA, urlB }) {
     const settingsPath = resolve(dataRoot, 'default-user', 'settings.json');
     const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    // settings.json uses snake_case `extension_settings` on disk — the client
-    // rehydrates `extensionSettings` (camelCase) at load time from it.
     s.extension_settings = s.extension_settings || {};
     const profileA = {
         id: 'pid-A',
         name: 'mock-A',
-        // See #39: api must be 'custom' to route via /api custom → custom_url,
-        // not 'openai' (which would target the default OpenAI source).
         api: 'custom',
         mode: 'cc',
         preset: '',
@@ -73,20 +67,13 @@ test.afterAll(async () => {
     await mockB?.stop();
 });
 
-// Fields we don't care about being byte-identical across snapshots — they are
-// expected to drift on every save (timestamps, ephemeral counters, etc).
-const VOLATILE_TOP_KEYS = new Set([
-    'lastUseDate',
-    'lastVersion',
-    'last_imported_version',
-]);
+const VOLATILE_TOP_KEYS = new Set(['lastUseDate', 'lastVersion', 'last_imported_version']);
 
 function diff(a, b, basePath = '') {
     const out = [];
     const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
     for (const k of keys) {
         const path = basePath ? `${basePath}.${k}` : k;
-        // Skip volatile top-level keys.
         if (!basePath && VOLATILE_TOP_KEYS.has(k)) continue;
         const va = a?.[k];
         const vb = b?.[k];
@@ -103,61 +90,75 @@ function diff(a, b, basePath = '') {
     return out;
 }
 
-test.describe('#43 — switching profiles does not pollute settings on round-trip', () => {
-    test('A → B → A: settings.json after second A is equivalent to settings.json after first A', async ({ page }) => {
+/**
+ * Open the Extensions drawer and select a connection profile via the real
+ * #connection_profiles dropdown. The change handler re-applies the
+ * profile via the /profile slash chain and saves.
+ *
+ * The select is wrapped by initActionableSingleSelect (select2), so the
+ * underlying <select> is hidden — Playwright's selectOption refuses
+ * hidden selects with "expected string, got object". We drive the change
+ * via jQuery the same way the select2 widget's selection notifies its
+ * onChange listener.
+ */
+async function selectProfileFromDropdown(page, profileName) {
+    await openExtensionsDrawer(page);
+    const sel = page.locator('#connection_profiles');
+    await sel.waitFor({ state: 'attached', timeout: 10_000 });
+    await page.waitForFunction((name) => {
+        const s = document.querySelector('#connection_profiles');
+        if (!s) return false;
+        return Array.from(s.options).some(o => o.textContent === name);
+    }, profileName, { timeout: 10_000 });
+    await page.evaluate(async (name) => {
+        const s = document.querySelector('#connection_profiles');
+        const opt = Array.from(s.options).find(o => o.textContent === name);
+        if (!opt) throw new Error(`profile option "${name}" not found`);
+        const $ = window.jQuery;
+        $(s).val(opt.value);
+        $(s).trigger('change');
+    }, profileName);
+    // Wait for the manager to register the selection then for the
+    // settings-save debounce to flush.
+    await page.waitForFunction((name) => {
+        const ctx = window.Luker?.getContext?.();
+        const cm = ctx?.extensionSettings?.connectionManager;
+        if (!cm) return false;
+        const sel = cm.profiles?.find(p => p.id === cm.selectedProfile);
+        return sel?.name === name;
+    }, profileName, { timeout: 10_000 });
+    await page.waitForTimeout(2500);
+}
+
+test.describe('#43 — switching profiles does not pollute settings on round-trip (real dropdown)', () => {
+    test('A → B → A via dropdown: settings.json after second A is equivalent to settings.json after first A', async ({ page }) => {
+        test.setTimeout(120_000);
         await awaitMainUI(page, server.baseURL);
 
-        // Force a save so the disk state reflects the post-load settings.
-        await page.evaluate(async () => {
-            await window.Luker.getContext().executeSlashCommandsWithOptions('/profile mock-A');
-            // Wait for the save-debounce + spinner.
-        });
-        await page.waitForTimeout(2000);
+        // Make sure A is active (it should be by virtue of seed). Snapshot.
+        await selectProfileFromDropdown(page, 'mock-A');
         const snapAfterFirstA = snapshotSettings(server.dataRoot);
 
-        // Switch to B.
-        await page.evaluate(async () => {
-            await window.Luker.getContext().executeSlashCommandsWithOptions('/profile mock-B');
-        });
-        await page.waitForTimeout(2000);
+        // Switch to B via dropdown.
+        await selectProfileFromDropdown(page, 'mock-B');
 
-        // Switch back to A.
-        await page.evaluate(async () => {
-            await window.Luker.getContext().executeSlashCommandsWithOptions('/profile mock-A');
-        });
-        await page.waitForTimeout(2000);
+        // Switch back to A via dropdown.
+        await selectProfileFromDropdown(page, 'mock-A');
         const snapAfterReturnA = snapshotSettings(server.dataRoot);
 
         const diffs = diff(snapAfterFirstA, snapAfterReturnA);
-
-        // Acceptable drift:
-        //   - `lastSaveTimestamp` style fields (covered by VOLATILE_TOP_KEYS)
-        //   - field-order changes (we re-parse JSON so they're equivalent)
-        //
-        // Unacceptable drift:
-        //   - oai_settings.custom_url contains mock-B URL after we're back on A
-        //   - selectedProfile points to anything other than pid-A
-        //   - new top-level keys introduced by the B-visit
         const fail = diffs.filter(d => {
-            // Allow `online_status_text` / friends — these are runtime not saved
-            // but if they appear they're harmless.
             if (/online_status|connection_status/.test(d.path)) return false;
-            // Allow benign cosmetic stat counters.
             if (/usage|tokens|stats/.test(d.path)) return false;
             return true;
         });
 
-        // The two crucial invariants:
         expect(snapAfterReturnA.oai_settings?.custom_url, `custom_url should be mock A's after returning to profile A; saw ${snapAfterReturnA.oai_settings?.custom_url}`).toBe(mockA.baseURL);
         expect(snapAfterReturnA.extension_settings?.connectionManager?.selectedProfile).toBe('pid-A');
 
-        // The remaining drift should be tiny — capture it as a soft assertion
-        // so spurious additions surface in the failure log without blocking
-        // the byte-equal check above.
         if (fail.length > 0) {
             console.warn('[#43] non-empty settings drift after A → B → A:', JSON.stringify(fail, null, 2));
         }
-        // Real bug guard: any field with both URLs in either side is a leak.
         for (const d of fail) {
             const bothUrls = (s) => typeof s === 'string' && s.includes(mockA.baseURL) && s.includes(mockB.baseURL);
             expect(bothUrls(d.a) || bothUrls(d.b), `field ${d.path} contains both mock URLs => leak`).toBe(false);

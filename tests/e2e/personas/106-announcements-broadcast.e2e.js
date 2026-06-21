@@ -1,9 +1,15 @@
 // #106 — Admin posts an announcement; a regular user sees it on next
 // page load (toast/banner); after dismissing, the banner doesn't reappear.
 //
-// Backend coverage of the announcement store lives in tests/announcements.test.js
-// (Jest); we cover the user-facing flow here: admin -> create, user ->
-// see, user -> dismiss, user -> reload-without-reappearance.
+// Admin-post leg: the admin endpoint is API-only in this build —
+// public/scripts/announcements.js renders the banner / inbox UI for
+// recipients but does not expose an admin "post announcement" form.
+// The admin POST goes through /api/users/announcements/create
+// (mounted under users-admin.js). When/if an admin panel form lands
+// later, swap the admin leg below for a real form-fill + button click.
+//
+// User-side leg IS real UI: page.goto, wait for #announcement-banner,
+// click .announcement-banner-dismiss, reload, assert banner gone.
 //
 // The bell + banner + warning-modal routing in
 // public/scripts/announcements.js only activates in multi-user mode

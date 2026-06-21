@@ -1,17 +1,30 @@
-// #12 — /branch-create regression test.
+// #12 — Branch from a message via the message-action button
+// (.mes_create_branch in the .extraMesButtons row).
 //
 // Locks regression for the `chatMetadata.main_chat` legacy-fallback bug
-// (memory: known_bug_branch_legacy_fallback). Branch a chat at turn 2,
-// confirm:
-//   a) A new chat is created with the first 2 turns copied,
+// (memory: known_bug_branch_legacy_fallback). Branch at the 2nd
+// assistant turn and confirm:
+//   a) A new chat is created with the prefix copied (UI loads it),
 //   b) The ORIGINAL chat still has all 4 turns (no truncation),
 //   c) After server restart, both chats persist on disk.
+//
+// Real-user gesture: click .extraMesButtonsHint (ellipsis) to reveal
+// the action row, then click .mes_create_branch. Luker's branch handler
+// emits CHAT_CHANGED on the switch — we wait for that.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, reloadAndAwait, selectCharacterByName, sendMessageAndAwaitReply, getChatSnapshot } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    reloadAndAwait,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    branchFromMessageViaUI,
+    getChatSnapshot,
+    getRenderedChatTexts,
+} from '../_lib/page.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -37,20 +50,19 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#12 — /branch-create regression', () => {
-    test('branch at turn 2 copies prefix, leaves original chat intact', async ({ page }) => {
+test.describe('#12 — branch-from-message regression', () => {
+    test('clicking .mes_create_branch at turn 2 copies prefix, leaves original chat intact', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-        }, { timeout: 10_000 }).catch(() => {});
+        await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
         await sendMessageAndAwaitReply(page, 'Turn 1: chart fresh?');
         await sendMessageAndAwaitReply(page, 'Turn 2: east?');
         await sendMessageAndAwaitReply(page, 'Turn 3: south?');
         await sendMessageAndAwaitReply(page, 'Turn 4: any worry?');
 
+        // Capture original chat state via DOM + ctx.chat snapshot.
+        const renderedBefore = await getRenderedChatTexts(page);
         const beforeBranch = await getChatSnapshot(page);
         const originalChatId = beforeBranch.chatId;
         const originalLen = beforeBranch.length;
@@ -63,30 +75,12 @@ test.describe('#12 — /branch-create regression', () => {
         const filesBefore = readdirSync(chatsDir).filter(f => f.endsWith('.jsonl'));
         expect(filesBefore.length).toBe(1);
 
-        // Find the second assistant turn (turn 2 of conversation = reply 2).
-        const asstIdxs = beforeBranch.messages.map((m, i) => ({ i, m })).filter(({ m }) => !m.is_user).map(({ i }) => i);
-        // asstIdxs[0] = greeting; [1]..[4] = replies 1..4. Branch at reply 2.
-        const branchAt = asstIdxs[2];
-        expect(typeof branchAt === 'number').toBe(true);
+        // Locate "Reply 2" via DOM and branch from its mesid.
+        const branchAt = renderedBefore.findIndex(t => /Reply 2/.test(t || ''));
+        expect(branchAt).toBeGreaterThanOrEqual(0);
 
-        // /branch-create <mesId>
-        const branchEventP = page.evaluate(() => new Promise((resolve) => {
-            const ctx = window.Luker.getContext();
-            const t = setTimeout(() => resolve('timeout'), 30_000);
-            const handler = (data) => {
-                clearTimeout(t);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_BRANCH_CREATED, handler); } catch {}
-                resolve(data ?? 'event');
-            };
-            ctx.eventSource.on(ctx.eventTypes.CHAT_BRANCH_CREATED, handler);
-        }));
-        await page.evaluate(async (id) => {
-            await window.Luker.getContext().executeSlashCommandsWithOptions(`/branch-create ${id}`);
-        }, branchAt);
-        await branchEventP;
-
-        // After branch-create, Luker opens the new branch chat. Wait for
-        // chat-changed.
+        // Real user gesture: ellipsis → .mes_create_branch.
+        await branchFromMessageViaUI(page, branchAt);
         await page.waitForFunction((origId) => {
             const ctx = window.Luker.getContext();
             const cur = ctx.getCurrentChatId?.();
@@ -94,13 +88,19 @@ test.describe('#12 — /branch-create regression', () => {
         }, originalChatId, { timeout: 15_000 });
         await page.waitForTimeout(500);
 
+        // DOM-side: the branch chat is loaded and contains exactly the
+        // prefix bubbles (greeting + first 2 turns).
+        const renderedInBranch = await getRenderedChatTexts(page);
+        expect(renderedInBranch.length, `branch chat should have prefix up to and including msg ${branchAt}`).toBe(branchAt + 1);
+        expect(renderedInBranch.some(t => /Reply 1/.test(t))).toBe(true);
+        expect(renderedInBranch.some(t => /Reply 2/.test(t))).toBe(true);
+        expect(renderedInBranch.some(t => /Reply 3/.test(t))).toBe(false);
+        expect(renderedInBranch.some(t => /Reply 4/.test(t))).toBe(false);
+
         const inBranch = await getChatSnapshot(page);
         const branchChatId = inBranch.chatId;
         expect(branchChatId).not.toBe(originalChatId);
-        // Branch should contain greeting + first 2 turns = 5 messages
-        // (greeting + user1 + asst1 + user2 + asst2).
-        expect(inBranch.length, `branch chat should have prefix up to and including msg ${branchAt}; got ${JSON.stringify(inBranch.messages.map(m => m.mes?.slice(0, 40)))}`)
-            .toBe(branchAt + 1);
+        expect(inBranch.length).toBe(branchAt + 1);
         // Confirm branch metadata main_chat points back at original.
         expect(inBranch.metadata?.main_chat).toBe(originalChatId);
 
@@ -111,20 +111,21 @@ test.describe('#12 — /branch-create regression', () => {
         // Original chat file untouched: same number of lines as before branch.
         const origPath = resolve(chatsDir, `${originalChatId}.jsonl`);
         const origLines = readFileSync(origPath, 'utf8').trim().split('\n');
-        // header + originalLen messages
         expect(origLines.length, 'original chat file lines should NOT be truncated by branch').toBeGreaterThanOrEqual(originalLen);
 
         // Restart and re-load original chat; turn 3+4 should still be there.
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
-        }, { timeout: 15_000 });
+        await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 15_000 });
 
-        // After reload, character will load most-recent chat (likely the
-        // branch). Switch back to the original via openCharacterChat.
+        // Switch back to the original chat. After reload the character
+        // loads its MOST-RECENT chat (likely the branch), so we use
+        // openCharacterChat to flip. This is still triggered by the UI's
+        // "Manage Chat Files" flow — clicking a select_chat_block fires
+        // openCharacterChat under the hood — but doing it programmatically
+        // here keeps the test honest about WHICH chat we expect to
+        // assert on.
         const switched = await page.evaluate(async (origId) => {
             const ctx = window.Luker.getContext();
             const fn = ctx.openCharacterChat || (await import('/script.js')).openCharacterChat;
@@ -134,13 +135,16 @@ test.describe('#12 — /branch-create regression', () => {
         expect(switched).toBe(originalChatId);
         await page.waitForFunction(({ id, len }) => {
             const ctx = window.Luker.getContext();
-            return ctx.getCurrentChatId?.() === id && ctx.chat.length >= len;
+            return ctx.getCurrentChatId?.() === id && document.querySelectorAll('#chat .mes').length >= len;
         }, { id: originalChatId, len: originalLen }, { timeout: 10_000 });
 
+        const renderedAfter = await getRenderedChatTexts(page);
+        expect(renderedAfter.length, `original chat must retain all 4 turns post-restart`).toBe(originalLen);
+        expect(renderedAfter.some(t => /Reply 3/.test(t))).toBe(true);
+        expect(renderedAfter.some(t => /Reply 4/.test(t))).toBe(true);
+
         const after = await getChatSnapshot(page);
-        expect(after.length, `original chat must retain all 4 turns post-restart; got ${JSON.stringify(after.messages.map(m => m.mes?.slice(0, 40)))}`)
-            .toBe(originalLen);
-        // Turn 3 and 4 still present.
+        expect(after.length).toBe(originalLen);
         expect(after.messages.some(m => /Reply 3/.test(m.mes || ''))).toBe(true);
         expect(after.messages.some(m => /Reply 4/.test(m.mes || ''))).toBe(true);
     });

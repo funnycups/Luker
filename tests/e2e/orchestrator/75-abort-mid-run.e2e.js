@@ -1,4 +1,4 @@
-// Case #75 — Abort mid-run
+// Case #75 — Abort mid-run (real e2e portion)
 //
 // Spec:
 //   - Start a long-running director turn (mock with latency).
@@ -6,22 +6,20 @@
 //   - Verify: in-flight sub-agents abort, partial state in chat history
 //     is preserved (not corrupted), next user turn works normally.
 //
-// Approach for the unit-test-shaped cases (still useful):
-//   We exercise the RunStateStore abort path directly, since the user-
-//   visible stop button drives the runner's abortFn. This gives us:
-//     (a) `startRun` registers an abortFn (callable on stop)
-//     (b) `finishRun({ status: 'aborted' })` updates the store
-//     (c) `clearCurrentRun` puts the store back to a usable state for
-//         the next turn
+// What stays as e2e (this file):
+//   The full mid-run abort case, which drives the production
+//   takeover-hook → director-runtime → store flow end-to-end against
+//   a real Luker server with a slow mock LLM, then asserts the next
+//   user turn renders normally. This tests cross-module coordination
+//   (script.js stopGeneration → director-runtime's signal handler →
+//   store finishRun(aborted) → chat-array integrity → next turn
+//   commits) that has no useful sub-test boundary.
 //
-// What unlocked the full mid-run abort case:
-//   The director-aware mock LLM (`scriptDirectorRun`) + per-handler
-//   latency makes it possible to start a real director run, hold a
-//   sub-agent in flight (the mock sleeps for `latencyMs` before
-//   responding), click the production stop button, and observe the run
-//   transition through `running → aborted` while sub-agent requests are
-//   cancelled client-side. The chat array is not mutated by the abort
-//   path (no committed bubble), so subsequent turns work normally.
+// What moved to Jest (`tests/orchestrator/abort-mid-run.test.js`):
+//   The two unit-shaped cases that exercise the RunStateStore abort
+//   path directly. Those previously paid the per-spec server-boot
+//   cost despite testing a pure module — they are now ESM imports of
+//   `run-state/store.js` and run in milliseconds.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -38,124 +36,7 @@ import {
     installMinimalDirectorProfile,
 } from '../_lib/page.js';
 
-let server, mock;
-
-test.beforeAll(async () => {
-    mock = await startMockLLM({ scriptedReplies: ['*ack*'] });
-    server = await startServer({ batchKey: 'orchestrator', scenarioId: '75-abort' });
-    markOnboarded({ dataRoot: server.dataRoot });
-    bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
-    appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
-});
-
-test.afterAll(async () => {
-    await tearDownServer(server);
-    await mock?.stop();
-});
-
 test.describe('#75 — Abort mid-run', () => {
-    test('RunStateStore abort path: startRun → user stop → finishRun(aborted) → clearCurrentRun → next run starts', async ({ page }) => {
-        await awaitMainUI(page, server.baseURL);
-
-        const result = await page.evaluate(async () => {
-            const mod = await import('/scripts/extensions/orchestrator/run-state/store.js');
-
-            // Make sure no prior run is lingering.
-            mod.clearCurrentRun();
-
-            // Simulate a runner: it registers an abortFn the user clicks
-            // to stop the in-flight loop.
-            let abortCalled = false;
-            const runId = mod.startRun({
-                mode: 'director',
-                chatKey: 'char:test.png:scenario-75',
-                abortFn: () => { abortCalled = true; },
-            });
-
-            const running = mod.getCurrentRun();
-            const startedStatus = running.status;
-
-            // User clicks stop. In production, the stop button invokes
-            // currentRun.abortFn(). We simulate that:
-            const stopReturn = running.abortFn?.();
-            // ...and the runner's exception handler eventually calls finishRun
-            // with status='aborted'.
-            mod.finishRun({
-                runId,
-                status: 'aborted',
-                finalText: null,
-                error: null,
-            });
-
-            const stopped = mod.getCurrentRun();
-            const stoppedStatus = stopped?.status;
-
-            // Clean up for next user turn (production does this on
-            // RUN_CLEARED — the panel listens for it).
-            mod.clearCurrentRun();
-            const cleared = mod.getCurrentRun();
-
-            // Start a fresh run, which would throw if abort hadn't fully
-            // cleared the singleton.
-            const nextRunId = mod.startRun({
-                mode: 'director',
-                chatKey: 'char:test.png:scenario-75',
-                abortFn: null,
-            });
-            const nextRunStatus = mod.getCurrentRun()?.status;
-            mod.clearCurrentRun();
-
-            return {
-                abortCalled,
-                startedStatus,
-                stoppedStatus,
-                cleared,
-                nextRunId,
-                nextRunStatus,
-            };
-        });
-
-        // The abortFn was invoked (proving the wiring).
-        expect(result.abortCalled).toBe(true);
-        // The run transitioned through running → aborted.
-        expect(result.startedStatus).toBe('running');
-        expect(result.stoppedStatus).toBe('aborted');
-        // After clear, getCurrentRun returns null.
-        expect(result.cleared).toBeNull();
-        // A fresh run starts cleanly.
-        expect(typeof result.nextRunId).toBe('string');
-        expect(result.nextRunStatus).toBe('running');
-    });
-
-    test('chat history is unaffected by an aborted run (the chat array is not corrupted)', async ({ page }) => {
-        await awaitMainUI(page, server.baseURL);
-
-        // Capture the chat state before any orchestration runs, abort a
-        // run, and verify the chat array is still parseable + same length.
-        const result = await page.evaluate(async () => {
-            const mod = await import('/scripts/extensions/orchestrator/run-state/store.js');
-            const ctx = window.Luker.getContext();
-
-            const chatBefore = Array.isArray(ctx.chat) ? ctx.chat.length : 0;
-
-            // Open a run and abort it without committing anything.
-            mod.clearCurrentRun();
-            const runId = mod.startRun({
-                mode: 'loop',
-                chatKey: 'char:test.png:scenario-75-chat',
-                abortFn: () => {},
-            });
-            mod.finishRun({ runId, status: 'aborted', finalText: null });
-            mod.clearCurrentRun();
-
-            const chatAfter = Array.isArray(ctx.chat) ? ctx.chat.length : 0;
-            return { chatBefore, chatAfter };
-        });
-
-        // The chat array is not mutated by the abort path.
-        expect(result.chatAfter).toBe(result.chatBefore);
-    });
-
     test('full mid-run abort: director main loop + in-flight sub-agent cancel; runStore transitions to aborted; next turn works', async ({ browser }) => {
         // Fresh page + fresh mock so latency doesn't affect previous tests.
         const slowMock = await startMockLLM({ latencyMs: 2000 });

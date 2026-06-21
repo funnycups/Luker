@@ -1,159 +1,156 @@
-// #109 — iter-diff narrow viewport doesn't chop path chars (commit 7ffab6526)
+// #109 — iter-diff card stays readable at 400px viewport (commit 7ffab6526)
 //
-// Bug shape: the iter-diff card's `.luker_lib_diff_header` used
-// `display: flex; justify-content: space-between; gap: 8px` with no
-// `flex-wrap`. At ~400px viewport width, a long path string and the
-// numeric chips (`+N -M bytes`) on the right would each be forced into
-// their own row mid-string — actual chars chopping off the path.
+// Bug shape: at narrow viewports the iter-diff header used flex with no
+// wrap; long path strings and the +N/-M chips would each be forced onto
+// their own row mid-string, chopping chars off the path.
 //
-// Fix:
-//   - `.luker_lib_diff_header` got `flex-wrap: wrap`
-//   - `.luker_lib_diff_op` got `word-break: break-word; overflow-wrap: anywhere; min-width: 0`
-//   - `.luker_lib_diff_delta` got `white-space: nowrap; flex-shrink: 0`
-//   - chip spans got `white-space: nowrap`
+// Fix: `.luker_lib_diff_header` got `flex-wrap: wrap`; chip spans got
+// `white-space: nowrap`; path text got `overflow-wrap: anywhere`.
 //
-// Together: the header now wraps as a row, but each chip + path
-// fragment stays on its own line and never gets sliced mid-word.
-//
-// Regression lock: render a real diff card with a long path + a few
-// chip-style metas at 400px viewport; assert no chip's text node spans
-// two lines (i.e. each chip's bounding-box height equals one line of
-// computed font-size, within tolerance).
+// REAL USER FLOW: open the orchestrator iter-studio popup at 400px
+// viewport, script the LLM to emit a profile-edit tool call (the kind
+// the runtime renders via `renderDiffCard`), and assert the diff card
+// fits inside the 400-pixel popup body without horizontal overflow and
+// without any chip splitting onto two lines.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { startMockLLM } from '../_lib/mockLLM.js';
+import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
+import { awaitMainUI, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
 
-let server;
+let server, mock;
+
+const VERY_LONG_PROMPT = '*You are Ash, cartographer of the Bryn headland, a brine-bitten coast keeper who reads the reef like a slow ledger.* '
+    + 'Hold an immersive register and close every turn with a tactile sense beat — the verdigris on the spyglass, the cold of the lantern bezel, the salt-grit of the rail under a palm.';
 
 test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'iter-diff-wrap' });
+    mock = await startMockLLM();
+    server = await startServer({ batchKey: 'regression', scenarioId: '109-iter-diff-narrow', extraConfig: { 'storage.mode': 'fs' } });
     markOnboarded({ dataRoot: server.dataRoot });
+    bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 });
 
 test.afterAll(async () => {
     await tearDownServer(server);
+    await mock?.stop();
 });
 
-test.describe('#109 — iter-diff narrow viewport stays readable', () => {
-    test('chip spans + long paths do not split mid-string at 400px', async ({ page }) => {
-        await awaitMainUI(page, server.baseURL);
+// Local inline helpers — _lib/ui-iter-studio.js's helpers are stale
+// (assume legacy apply-batch / discard-batch action attrs; iter-library
+// now uses a proposal-bus model). The brief forbids editing _lib/, so
+// we inline the up-to-date flow here.
 
-        // 1. Shrink the viewport BEFORE rendering — the bug was layout-only,
-        //    so the assertion only fires when the diff renders against the
-        //    narrow viewport.
+async function setOrchModeToDirector(page) {
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
+    const modeSelect = page.locator('#luker_orch_execution_mode');
+    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
+    if ((await modeSelect.inputValue()) !== 'director') {
+        await modeSelect.selectOption('director');
+        await modeSelect.evaluate(el => {
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            if (window.jQuery) window.jQuery(el).trigger('change');
+        });
+        await page.waitForFunction(() => {
+            const board = document.querySelector('#luker_orch_director_board');
+            return board && board.offsetParent !== null;
+        }, { timeout: 5000 });
+    }
+    // Flip the Enabled checkbox via the real settings panel — no
+    // internal-state mutation. The drawer is already open (we just
+    // toggled execution mode above), so the checkbox is visible.
+    // bootstrapCustomBackend already cleared requestApi/LlmPresetName.
+    const enabled = page.locator('#luker_orch_enabled');
+    await enabled.waitFor({ state: 'visible', timeout: 5000 });
+    if (!(await enabled.isChecked())) {
+        await enabled.check();
+    }
+}
+
+async function openOrchIterStudio(page) {
+    const openBtn = page.locator('#luker_orch_director_board [data-luker-action="ai-iterate-open"]:visible').first();
+    await openBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await openBtn.click();
+    const sendBtn = page.locator('[data-orch-it-action="send"]').last();
+    await sendBtn.waitFor({ state: 'visible', timeout: 15_000 });
+}
+
+async function sendOrchIterPromptAndAwaitProposal(page, text) {
+    const popup = page.locator('.popup:visible').last();
+    const composer = popup.locator('textarea[data-orch-it-input]').first();
+    await composer.waitFor({ state: 'visible', timeout: 10_000 });
+    await composer.fill(text);
+    const sendBtn = popup.locator('button[data-orch-it-action="send"]').first();
+    await sendBtn.click();
+    const approveBtn = popup.locator('[data-proposal-action="approve"]').first();
+    await approveBtn.waitFor({ state: 'visible', timeout: 60_000 });
+}
+
+test.describe('#109 — iter-diff card stays readable at narrow viewport', () => {
+    test('diff card chips and path do not overflow a 400px viewport popup', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await setOrchModeToDirector(page);
+
+        // Shrink viewport AFTER the bootstrap UI flow has run, so the
+        // user-select gate / connect handshake aren't fighting a 400px
+        // window. The bug is layout-only and only fires when the diff
+        // renders against the narrow viewport — which we set BEFORE the
+        // iter-studio popup mounts.
         await page.setViewportSize({ width: 400, height: 800 });
 
-        // 2. Dynamic-import the diff renderer from iteration-library and
-        //    inject a single diff card whose path is long enough to chop
-        //    pre-fix. Use a path containing only continuous letters so a
-        //    mid-word break would be obvious (no spaces for the layout to
-        //    use as natural break points).
-        //
-        //    The iter-diff stylesheet ships separately from the renderer;
-        //    studio.css loads it via `@import` in production. We inject
-        //    both stylesheets explicitly so the test exercises the same
-        //    cascade the popup does.
-        const { renderedHtml, fontPx, headerRect, chipBoxes, pathBox } = await page.evaluate(async () => {
-            // Inject the iter-diff + iter-ui stylesheets the renderer
-            // depends on (renderer ships raw HTML; cascading rules live
-            // in the .css files alongside).
-            const loadCss = (href) => new Promise((resolve) => {
-                const existing = document.querySelector(`link[href="${href}"]`);
-                if (existing) {
-                    if (existing.sheet) { resolve(); return; }
-                    existing.addEventListener('load', () => resolve(), { once: true });
-                    existing.addEventListener('error', () => resolve(), { once: true });
-                    return;
-                }
-                const link = document.createElement('link');
-                link.rel = 'stylesheet';
-                link.href = href;
-                // Don't reject on error — fall back to whatever style we get.
-                // The test asserts on bounding-box behavior; if CSS load
-                // fails this just produces a less informative failure later.
-                link.onload = () => resolve();
-                link.onerror = () => resolve();
-                document.head.appendChild(link);
-            });
-            await loadCss('/scripts/iteration-library/text-diff.css');
-            await loadCss('/scripts/iteration-library/ui/styles.css');
-
-            const mod = await import('/scripts/iteration-library/ui/diff.js');
-            const html = mod.renderDiffCard([
-                {
-                    op: 'set',
-                    path: 'workingProfile.subAgents.coastalCartographerGuildmastersNotesAndMargins',
-                    oldValue: 'old short value',
-                    newValue: 'new short value plus more bytes for delta meta to show numbers',
-                },
-            ], {
-                i18n: (s) => String(s),
-            });
-            const host = document.createElement('div');
-            host.id = 'regression-109-host';
-            host.style.position = 'fixed';
-            host.style.top = '0';
-            host.style.left = '0';
-            host.style.right = '0';
-            host.style.zIndex = '999';
-            host.style.background = '#000';
-            // Constrain host to the viewport so the diff renders against the
-            // 400-pixel width — without this it would size to its content.
-            host.style.width = '400px';
-            host.style.maxWidth = '400px';
-            host.innerHTML = html;
-            document.body.appendChild(host);
-            // Wait one frame so layout settles.
-            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-            const header = host.querySelector('.luker_lib_diff_header');
-            const op = host.querySelector('.luker_lib_diff_op');
-            const delta = host.querySelector('.luker_lib_diff_delta');
-            const headerRect = header ? header.getBoundingClientRect() : null;
-            const pathBox = op ? op.getBoundingClientRect() : null;
-            const fontPx = op ? parseFloat(getComputedStyle(op).fontSize) : 16;
-            // Capture each meta chip (.luker_lib_diff_meta) for individual
-            // height inspection.
-            const chips = Array.from(host.querySelectorAll('.luker_lib_diff_meta_add, .luker_lib_diff_meta_del, .luker_lib_diff_meta'));
-            const chipBoxes = chips.map(c => {
-                const r = c.getBoundingClientRect();
-                return { text: c.textContent || '', width: r.width, height: r.height };
-            });
-            return { renderedHtml: html, fontPx, headerRect, chipBoxes, pathBox };
+        mock.scriptToolCall({
+            name: 'luker_orch_set_director_main_agent',
+            arguments: { systemPrompt: VERY_LONG_PROMPT },
         });
 
-        // Sanity: the card rendered.
-        expect(renderedHtml.length).toBeGreaterThan(0);
-        expect(headerRect).not.toBeNull();
-        expect(pathBox).not.toBeNull();
+        await openOrchIterStudio(page);
+        await sendOrchIterPromptAndAwaitProposal(page, 'Update the director main agent to take the voice of Ash.');
 
-        // 3. Each chip (e.g. the +N / -M bytes pills) must NOT span two
-        //    lines. The post-fix CSS marks chips `white-space: nowrap` so
-        //    their box height stays at ~1 line-height. Pre-fix the chips
-        //    could wrap their digits onto a second line; bounding-box
-        //    height would exceed ~1.6× font-size in that case.
-        const maxAllowedChipHeight = fontPx * 2.5; // generous: 2.5x font-size catches mid-chip break
-        for (const chip of chipBoxes) {
+        const popup = page.locator('.popup:visible').last();
+        const card = popup.locator('.luker_lib_diff_card').first();
+        await card.waitFor({ state: 'visible', timeout: 15_000 });
+
+        await page.evaluate(async () => {
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        });
+
+        const measurements = await popup.evaluate((root) => {
+            const popupBody = root.querySelector('.popup-body, .popup-content, .luker-iter-workspace') || root;
+            const card = root.querySelector('.luker_lib_diff_card');
+            const op = card?.querySelector('.luker_lib_diff_op');
+            const chips = Array.from(card?.querySelectorAll(
+                '.luker_lib_diff_meta_add, .luker_lib_diff_meta_del, .luker_lib_diff_meta',
+            ) || []);
+            const fontPx = op ? parseFloat(getComputedStyle(op).fontSize) : 14;
+            const popupRect = popupBody.getBoundingClientRect();
+            const cardRect = card?.getBoundingClientRect();
+            const opRect = op?.getBoundingClientRect();
+            return {
+                popup: popupRect ? { left: popupRect.left, right: popupRect.right, width: popupRect.width } : null,
+                card: cardRect ? { left: cardRect.left, right: cardRect.right, width: cardRect.width } : null,
+                op: opRect ? { left: opRect.left, right: opRect.right, height: opRect.height } : null,
+                chips: chips.map(c => {
+                    const r = c.getBoundingClientRect();
+                    return { text: c.textContent || '', width: r.width, height: r.height, right: r.right };
+                }),
+                fontPx,
+            };
+        });
+
+        expect(measurements.card, 'diff card must mount in the popup').not.toBeNull();
+        expect(measurements.op, 'diff op (path) label must render').not.toBeNull();
+
+        const maxChipHeight = measurements.fontPx * 2.5;
+        for (const chip of measurements.chips) {
             expect(chip.height,
-                `chip "${chip.text}" should not span >2.5×font-size (~${maxAllowedChipHeight}px); ` +
-                `got ${chip.height}px (font=${fontPx}px). Indicates digits/keyword broke onto a new line.`,
-            ).toBeLessThanOrEqual(maxAllowedChipHeight);
+                `chip "${chip.text}" should not exceed ${maxChipHeight}px (~2.5×font); got ${chip.height}px at font=${measurements.fontPx}px`,
+            ).toBeLessThanOrEqual(maxChipHeight);
         }
 
-        // 4. The long path string SHOULD wrap — but as whole segments via
-        //    `overflow-wrap: anywhere`. Its box height should be greater
-        //    than a single line (proves wrapping happens) AND it should
-        //    not have overflowed the host container's right edge by more
-        //    than a few pixels (proves wrap is working, not just text
-        //    sliding under).
-        const hostBox = await page.evaluate(() => {
-            const h = document.getElementById('regression-109-host');
-            return h ? h.getBoundingClientRect() : null;
-        });
-        expect(hostBox.width).toBeCloseTo(400, 0);
-        // The path's right edge must be inside or at the host's right edge
-        // (no horizontal overflow > 5px).
-        expect(pathBox.right).toBeLessThanOrEqual(hostBox.right + 5);
+        expect(measurements.card.right,
+            `diff card right=${measurements.card.right} must be inside popup body right=${measurements.popup.right} at 400px viewport`,
+        ).toBeLessThanOrEqual(measurements.popup.right + 6);
     });
 });

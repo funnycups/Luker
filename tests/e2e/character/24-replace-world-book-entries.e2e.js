@@ -1,31 +1,33 @@
 // #24 — Luker-only CardApp.replaceWorldBookEntries dynamic world book.
 //
-// Bind a WI book to Ash. Drive a sequence equivalent to what a CardApp
-// init() would do via `ctx.replaceWorldBookEntries(bookName, entries)`:
-// load → wipe → assign → save → reload. Verify
-//   - the WI editor / loadWorldInfo shows the NEW entries
-//   - the baseline entries are gone (replaced, not merged)
-//   - across restart, the new entries are still there
-//   - the legacy uids the test held before replace are NOT honored
-//     (uid assignment is the contract — caller-supplied uids ignored).
+// Per memory `dynamic_worldbook_decision`, the team chose
+// `ctx.replaceWorldBookEntries` as the supported path for CardApps that
+// need to wipe + repopulate a world book in one shot. The function
+// lives on the CardApp ctx (public/scripts/extensions/card-app/context.js:916),
+// which is BUILT by `buildContext(container, charId, config)` and
+// exposed only to CardApps at runtime.
 //
-// Per memory `dynamic_worldbook_decision`, this is the path the team
-// chose for dynamic world-book regeneration. The implementation lives
-// in public/scripts/extensions/card-app/context.js#replaceWorldBookEntries.
-// We replicate its body here (load → reset entries → create → save) so
-// the test doesn't depend on a live CardApp; the contract is the same.
+// There is no user-facing UI for "regenerate this book from a
+// variable"; the API is for the CardApp to call. This test invokes
+// `replaceWorldBookEntries` via the CardApp ctx builder + then VERIFIES
+// the result by opening the WI editor UI and confirming the rendered
+// entries match. That keeps the production code path identical to the
+// real CardApp call site while still exercising the WI editor UI as
+// the load-bearing DOM-side assertion.
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook, BRYN_ENTRIES } from '../_lib/fixtures.js';
-import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
-import { writeEmbeddedCharacter } from './_helpers.js';
+import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
+import { awaitMainUI, reloadAndAwait, closeRightNavDrawer } from '../_lib/page.js';
+import { openWorldInfoDrawer, selectWorldBook, getRenderedWorldEntries } from '../_lib/ui-worldinfo.js';
 
 let server, mock, avatar, bookName;
 
+const ASH_NAME = 'Ash the Cartographer';
 const REPLACEMENT_ENTRIES = [
     {
         key: ['eastern light'],
@@ -51,6 +53,7 @@ test.beforeAll(async () => {
     mock = await startMockLLM({});
     server = await startServer({ batchKey: 'character', scenarioId: 'replace-wi' });
     markOnboarded({ dataRoot: server.dataRoot });
+    disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bookName = writeWorldBook({ dataRoot: server.dataRoot, name: 'bryn-headland-replace', entries: BRYN_ENTRIES });
@@ -66,60 +69,55 @@ test.afterAll(async () => {
 });
 
 test.describe('#24 — CardApp.replaceWorldBookEntries (Luker-only dynamic world book)', () => {
-    test('replace wipes baseline + writes new entries; persists across restart', async ({ page }) => {
+    test('replace wipes baseline + writes new entries; new entries surface in the WI editor; survives restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
-        await page.evaluate(async () => {
-            const mod = await import('/script.js');
-            await mod.getCharacters();
-        });
-        await page.waitForFunction(() => {
-            const ctx = window.Luker?.getContext?.();
-            return !!ctx?.characters?.find?.(c => c?.name === 'Ash the Cartographer');
-        }, { timeout: 15_000 });
+
+        // Select Ash so the CardApp ctx has a valid charId.
+        await clickCharacterCard(page, ASH_NAME);
+        await dismissAnyPopup(page);
 
         // Baseline on disk: BRYN_ENTRIES (2 entries).
         const bookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${bookName}.json`);
         const baseline = JSON.parse(readFileSync(bookPath, 'utf8'));
         expect(Object.keys(baseline.entries).length).toBe(2);
-        const baselineKeys = Object.values(baseline.entries).map(e => e.comment).sort();
-        expect(baselineKeys).toEqual(expect.arrayContaining(['reef-conditions', 'drifters']));
+        const baselineComments = Object.values(baseline.entries).map(e => e.comment).sort();
+        expect(baselineComments).toEqual(expect.arrayContaining(['reef-conditions', 'drifters']));
 
-        // Drive replaceWorldBookEntries (Luker's CardApp ctx method).
+        // ── Drive ctx.replaceWorldBookEntries via the CardApp ctx
+        //    builder. This is the production code path that real
+        //    CardApps go through — `import buildContext from
+        //    /scripts/extensions/card-app/context.js`, build a ctx,
+        //    call ctx.replaceWorldBookEntries. The function reassigns
+        //    uids on every call (so caller-supplied uids must be
+        //    ignored — that's the documented contract).
         const replaceResult = await page.evaluate(async ({ bookName, entries }) => {
-            const ctx = window.Luker.getContext();
-            // Mirror context.js#replaceWorldBookEntries body — load, wipe,
-            // create new entries from partials, save.
-            const data = await ctx.loadWorldInfo(bookName);
-            if (!data) return { ok: false, reason: 'book not found' };
-            data.entries = {};
-            const created = [];
-            for (const partial of entries) {
-                const newEntry = ctx.worldInfoEntry.create(bookName, data);
-                if (!newEntry) continue;
-                if (partial && typeof partial === 'object') {
-                    // Caller-supplied uids must be ignored — that's the contract.
-                    const { uid: _ignored, ...fields } = partial;
-                    Object.assign(newEntry, fields);
-                }
-                created.push(newEntry);
+            const mod = await import('/scripts/extensions/card-app/context.js');
+            const ctx0 = window.Luker.getContext();
+            const charId = String(ctx0.characterId);
+            const container = document.createElement('div');
+            const cardAppCtx = mod.buildContext(container, charId, {});
+            if (typeof cardAppCtx.replaceWorldBookEntries !== 'function') {
+                return { ok: false, reason: 'replaceWorldBookEntries not on CardApp ctx' };
             }
-            await ctx.saveWorldInfo(bookName, data, true);
+            // Pass caller-supplied uids that should be ignored (9999+).
+            const partial = entries.map((e, i) => ({ ...e, uid: 9999 + i }));
+            const created = await cardAppCtx.replaceWorldBookEntries(bookName, partial);
             return {
                 ok: true,
-                createdCount: created.length,
-                createdUids: created.map(e => e.uid),
+                createdCount: Array.isArray(created) ? created.length : 0,
+                createdUids: Array.isArray(created) ? created.map(e => e.uid) : [],
             };
-        }, { bookName, entries: REPLACEMENT_ENTRIES.map((e, i) => ({ ...e, uid: 9999 + i })) });
+        }, { bookName, entries: REPLACEMENT_ENTRIES });
 
         expect(replaceResult.ok, `replace failed: ${replaceResult.reason}`).toBe(true);
         expect(replaceResult.createdCount).toBe(REPLACEMENT_ENTRIES.length);
-        // Caller's uids (9999+) should have been ignored — assigned uids
+        // Caller's uids (9999+) MUST have been ignored — assigned uids
         // start from a fresh counter (≤ 3 typically).
         for (const uid of replaceResult.createdUids) {
             expect(uid, 'caller-supplied uids are NOT honored').toBeLessThan(9999);
         }
 
-        // On-disk: original entries gone, replacement entries present.
+        // ── On-disk: original entries gone, replacement entries present.
         const afterReplace = JSON.parse(readFileSync(bookPath, 'utf8'));
         const afterComments = Object.values(afterReplace.entries).map(e => e.comment).sort();
         expect(afterComments.length).toBe(3);
@@ -131,17 +129,27 @@ test.describe('#24 — CardApp.replaceWorldBookEntries (Luker-only dynamic world
         expect(afterComments).not.toContain('reef-conditions');
         expect(afterComments).not.toContain('drifters');
 
-        // In-memory editor view also reflects the replacement.
-        const inMemory = await page.evaluate(async (bookName) => {
-            const ctx = window.Luker.getContext();
-            const data = await ctx.loadWorldInfo(bookName);
-            return Object.values(data?.entries || {}).map(e => e.comment).sort();
-        }, bookName);
-        expect(inMemory).toEqual(expect.arrayContaining([
-            'replaced/eastern-light', 'replaced/skiff-alpha', 'replaced/skiff-beta',
+        // ── DOM-side assertion: open the WI editor, select the book,
+        //    verify the rendered entries reflect the replacement. The
+        //    saveWorldInfo call inside replaceWorldBookEntries uses
+        //    `{refreshEditor: true}`, so a freshly-opened editor sees
+        //    the new entries even if it was open at the time of
+        //    replacement.
+        await closeRightNavDrawer(page);
+        await dismissAnyPopup(page);
+        await openWorldInfoDrawer(page);
+        await selectWorldBook(page, bookName);
+        const rendered = await getRenderedWorldEntries(page);
+        const renderedComments = rendered.map(r => r.comment).sort();
+        expect(renderedComments).toEqual(expect.arrayContaining([
+            'replaced/eastern-light',
+            'replaced/skiff-alpha',
+            'replaced/skiff-beta',
         ]));
+        expect(renderedComments).not.toContain('reef-conditions');
+        expect(renderedComments).not.toContain('drifters');
 
-        // Survives restart.
+        // ── Persistence ─────────────────────────────────────────────────
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
 

@@ -1,4 +1,4 @@
-// Case #71 — Critic regex search: full critic flow + extended branches
+// Case #71 — Critic regex search: extended director-driven branches (real e2e portion)
 //
 // Spec: extend critic-regex-search.spec.js. Add:
 //   - critic votes reject → main agent does NOT commit suggested change
@@ -12,11 +12,16 @@
 //   The sub-agent's reply lands in main's history as a tool result; main
 //   reads it next round and branches accordingly.
 //
-// What we DO cover via the smoke test (still useful):
-//   - The regex tool primitives (chat_search, draft_search) exposed via
-//     loop-tools.js / director-tools.js return the documented grep-style
-//     shape on valid + invalid regex inputs. This is the standalone
-//     contract that critics depend on regardless of director runtime.
+// What stays here (this file): the two real director-driven branches.
+// They commit a bubble to chat and assert on the persisted body, so
+// they require the live takeover path + message-editor handle through
+// a real Luker server.
+//
+// What moved to Jest (`tests/orchestrator/critic-regex-search-tool-primitives.test.js`):
+//   The smoke test of the regex tool primitives (chat_search,
+//   draft_search). Those were `page.evaluate(import(...))` calls
+//   against pure functions and paid the server-boot cost despite
+//   testing module contracts.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -33,9 +38,6 @@ import {
     installMinimalDirectorProfile,
 } from '../_lib/page.js';
 
-const ESTABLISHED_NAME = '张明远';
-const KNOWN_AGE = '二十';
-
 let server, mock;
 
 test.beforeAll(async () => {
@@ -51,71 +53,7 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#71 — Critic regex search: tool primitives + extended branches', () => {
-    test('chat_search + draft_search: valid regex returns grep-style ok=true; invalid regex returns explanatory error', async ({ page }) => {
-        await awaitMainUI(page, server.baseURL);
-
-        const smoke = await page.evaluate(async ({ establishedName, knownAge }) => {
-            const loopMod = await import('/scripts/extensions/orchestrator/loop-tools.js');
-            const dirMod = await import('/scripts/extensions/orchestrator/director-tools.js');
-
-            const chat = [
-                { is_user: false, mes: `narrator: 灯下走廊一片寂静。${establishedName} 端坐窗前。` },
-                {
-                    is_user: false,
-                    mes: `她端起茶盏，目光落在他脸上：「你的名字是${establishedName}，今年${knownAge}岁。」`,
-                },
-                { is_user: true, mes: '我点了点头，没说话。' },
-            ];
-
-            const validResult = await loopMod.executeLoopTool(
-                'chat_search',
-                { pattern: establishedName, flags: 'gm' },
-                { chat },
-            );
-
-            const invalidResult = await loopMod.executeLoopTool(
-                'chat_search',
-                { pattern: '[unclosed', flags: 'gm' },
-                { chat },
-            );
-
-            const draftText = `第一行无事。\n第二行出现 ${establishedName}。\n第三行又出现 ${establishedName} 和邻人。`;
-            const fakeHandle = { getText: () => draftText };
-            const draftValid = await dirMod.executeDraftSearchTool(
-                fakeHandle,
-                { pattern: establishedName, flags: 'gm' },
-            );
-            const draftInvalid = await dirMod.executeDraftSearchTool(
-                fakeHandle,
-                { pattern: '(unclosed', flags: 'gm' },
-            );
-
-            return { validResult, invalidResult, draftValid, draftInvalid };
-        }, { establishedName: ESTABLISHED_NAME, knownAge: KNOWN_AGE });
-
-        // chat_search — valid regex.
-        expect(smoke.validResult).toBeTruthy();
-        expect(smoke.validResult.ok).toBe(true);
-        expect(typeof smoke.validResult.output).toBe('string');
-        expect(smoke.validResult.output).toContain(ESTABLISHED_NAME);
-        // grep -n shape: `floor_{N} [{role}]:{lineno}: {line}`.
-        expect(smoke.validResult.output).toMatch(/floor_\d+ \[assistant\]:\d+: /);
-
-        // chat_search — invalid regex returns explanatory error.
-        expect(smoke.invalidResult.ok).toBe(false);
-        expect(smoke.invalidResult.error).toMatch(/escape regex metacharacters/);
-
-        // draft_search — valid regex over the in-flight draft text.
-        expect(smoke.draftValid.ok).toBe(true);
-        expect(smoke.draftValid.output).toMatch(/^2: .*张明远/m);
-        expect(smoke.draftValid.output).toMatch(/^3: .*张明远/m);
-
-        // draft_search — invalid regex.
-        expect(smoke.draftInvalid.ok).toBe(false);
-        expect(smoke.draftInvalid.error).toMatch(/escape regex metacharacters/);
-    });
-
+test.describe('#71 — Critic regex search: extended director-driven branches', () => {
     test('critic votes reject → main agent keeps original draft (does NOT apply the suggested change)', async ({ page }) => {
         // The contract: when the critic returns a "reject" vote, the
         // main agent's draft is committed as-is. We exercise it by
@@ -171,14 +109,22 @@ test.describe('#71 — Critic regex search: tool primitives + extended branches'
             },
         });
 
-        const { text: bubble } = await sendMessageAndAwaitReply(
+        const { replyId } = await sendMessageAndAwaitReply(
             page,
             '*Hand on the rail, eyes seaward.* "Read the reef for me."',
             { timeoutMs: 60_000 },
         );
 
-        // Contract: critic-reject leg never touches the draft.
-        expect(bubble.trim()).toBe(ORIGINAL_DRAFT.trim());
+        // Contract: critic-reject leg never touches the draft. We compare
+        // against the raw `chat[id].mes` (not DOM `.mes_text` innerText)
+        // because the renderer turns markdown asterisks into <em> tags
+        // and innerText strips them — the 1:1 fidelity check is about
+        // the persisted body.
+        const committedMes = await page.evaluate((id) => {
+            const ctx = window.Luker.getContext();
+            return String(ctx.chat?.[id]?.mes ?? '');
+        }, replyId);
+        expect(committedMes.trim()).toBe(ORIGINAL_DRAFT.trim());
 
         // Defensive: confirm the critic verdict actually fired (the
         // sub-agent request must have hit the mock) so the test would
@@ -248,15 +194,22 @@ test.describe('#71 — Critic regex search: tool primitives + extended branches'
             },
         });
 
-        const { text: bubble } = await sendMessageAndAwaitReply(
+        const { replyId } = await sendMessageAndAwaitReply(
             page,
             '*她抬手挡风。*「读今夜的暗礁。」',
             { timeoutMs: 60_000 },
         );
 
         // Contract: the suggested edit lands in the committed bubble.
-        expect(bubble).toContain(REPLACEMENT_PHRASE);
-        expect(bubble).not.toContain(ORIGINAL_PHRASE);
+        // Compare against raw `chat[id].mes` rather than the DOM
+        // .mes_text innerText (which strips markdown rendering) so the
+        // assertion is on the persisted body, not the HTML rendering.
+        const committedMes = await page.evaluate((id) => {
+            const ctx = window.Luker.getContext();
+            return String(ctx.chat?.[id]?.mes ?? '');
+        }, replyId);
+        expect(committedMes).toContain(REPLACEMENT_PHRASE);
+        expect(committedMes).not.toContain(ORIGINAL_PHRASE);
 
         // Sanity: the critic verdict did appear in main's tool-result
         // history (proves the dispatch / await actually happened, not

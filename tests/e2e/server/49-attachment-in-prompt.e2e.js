@@ -1,18 +1,17 @@
 // #49 — Attachment upload → in chat → in prompt.
 //
-// Drive the in-chat attachment workflow programmatically:
-//   1. Upload a text file via POST /api/files/upload (the same endpoint the
-//      drag-drop UI calls under the hood).
-//   2. Attach it to the next user message by populating message.extra.files
-//      (the same data shape that drag-drop produces).
-//   3. Trigger a generation and verify the mock LLM receives a request whose
-//      body references the attachment (either inline text content or a file
-//      URL referenced in the message body).
-//
-// The test deliberately programmatic-drives the attach because the
-// drag-and-drop primitive in Playwright is brittle and the data-shape
-// contract (message.extra.files entries) is what we actually care about
-// locking in for the prompt-injection regression class.
+// Drive the user-visible attachment workflow:
+//   1. Open the extensions wand menu (#extensionsMenuButton).
+//   2. Click the visible "Attach a File" item (#attachFile) which the
+//      attachments extension renders inside #attach_file_wand_container.
+//   3. Set the file on the hidden #file_form_input via setInputFiles —
+//      ST's onFileAttach change handler picks it up.
+//   4. Send a real user message via the send_textarea + send_but path.
+//      The composer's populateFileAttachment uploads the file under
+//      <user-root>/files/<name> and writes the URL + base64 text into
+//      extra.files on the outgoing message.
+//   5. Assert the mock LLM receives a request whose body references the
+//      attachment (URL, filename, or text content).
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -43,7 +42,7 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#49 — chat attachment → upload → referenced in prompt body', () => {
+test.describe('#49 — chat attachment via real paperclip → referenced in prompt body', () => {
     test('text file attachment surfaces in the next LLM request', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
@@ -52,71 +51,57 @@ test.describe('#49 — chat attachment → upload → referenced in prompt body'
             return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
         }, { timeout: 10_000 }).catch(() => {});
 
-        // (1) Upload the file via /api/files/upload (server stores it under
-        //     <user-root>/files/<name>).
-        const uploadResult = await page.evaluate(async ({ name, text }) => {
-            const csrfResp = await fetch('/csrf-token', { credentials: 'same-origin' });
-            const { token } = await csrfResp.json();
-            const data = btoa(unescape(encodeURIComponent(text)));
-            const resp = await fetch('/api/files/upload', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-                body: JSON.stringify({ name, data }),
-            });
-            const body = await resp.text();
-            return { status: resp.status, body: body.slice(0, 200) };
-        }, { name: 'reef-log.txt', text: ATTACHMENT_TEXT });
+        // Open the extensions wand menu so #attachFile becomes interactable.
+        // The wand sits in the composer row; clicking it shows #extensionsMenu.
+        await page.locator('#extensionsMenuButton').click();
+        const attachItem = page.locator('#attachFile');
+        await attachItem.waitFor({ state: 'visible', timeout: 5000 });
+        // Clicking #attachFile arms the .on('change') for #file_form_input
+        // and triggers a click on it. setInputFiles then fires change with
+        // the bytes we provide, which onFileAttach picks up.
+        await attachItem.click();
 
-        expect(uploadResult.status, `upload returned ${uploadResult.status} ${uploadResult.body}`).toBe(200);
-        const uploadedPath = JSON.parse(uploadResult.body).path;
-        expect(uploadedPath).toMatch(/files\//);
+        // Drop the file into the now-armed hidden input. Use a real
+        // text/plain payload so populateFileAttachment encodes it cleanly
+        // and the prompt body carries the original text.
+        const fileInput = page.locator('#file_form_input');
+        await fileInput.setInputFiles({
+            name: 'reef-log.txt',
+            mimeType: 'text/plain',
+            buffer: Buffer.from(ATTACHMENT_TEXT, 'utf8'),
+        });
 
-        // (2) Attach to the next user message by writing extra.files on the
-        //     intended turn. Easiest approach: send a user message via slash,
-        //     then mutate the just-added user msg's extra.files BEFORE the
-        //     /trigger fires. But our sendMessageAndAwaitReply does
-        //     `/send | /trigger` as one chain. Instead, do it in two steps:
-        //     append the user message + attachment, then /trigger.
+        // Wait for the form-display row to flip out of displayNone — that's
+        // the user-visible indicator the file is attached + queued.
+        await page.locator('#file_form:not(.displayNone)').waitFor({ state: 'visible', timeout: 10_000 });
+
         const userText = 'Take a look at this reef log I picked up at the headland.';
         const before = mock.requests.length;
-        await page.evaluate(async ({ text, fileUrl, fileName, fileText }) => {
-            const ctx = window.Luker.getContext();
-            // Append the user message manually with extra.files populated.
-            ctx.chat.push({
-                name: ctx.name1 || 'You',
-                is_user: true,
-                send_date: new Date().toString(),
-                mes: text,
-                extra: {
-                    files: [{
-                        url: fileUrl,
-                        name: fileName,
-                        text: fileText,
-                        size: fileText.length,
-                    }],
-                },
-            });
-            await ctx.saveChat();
-            // Now trigger generation.
-            await ctx.executeSlashCommandsWithOptions('/trigger');
-        }, { text: userText, fileUrl: uploadedPath, fileName: 'reef-log.txt', fileText: ATTACHMENT_TEXT });
+        await sendMessageAndAwaitReply(page, userText);
 
-        // Wait for the reply event.
-        await page.waitForFunction(() => {
-            const ctx = window.Luker.getContext();
-            const last = ctx.chat?.[ctx.chat.length - 1];
-            return last && !last.is_user && (last.mes || '').length > 0;
-        }, { timeout: 30_000 });
-
-        // (3) Inspect the most recent chat-completions request and verify it
-        //     references the attachment — either by URL, filename, or text.
+        // Inspect the chat completion request and verify it references the
+        // attachment — either by URL, filename, or text content.
         const newReq = mock.requests.slice(before).find(r => r.url.includes('chat/completions'));
-        expect(newReq, `no chat/completions request observed after /trigger; saw ${mock.requests.slice(before).map(r => r.url).join(',')}`).toBeTruthy();
+        expect(newReq, `no chat/completions request observed after send; saw ${mock.requests.slice(before).map(r => r.url).join(',')}`).toBeTruthy();
         const payload = JSON.stringify(newReq.body);
         const referenced = payload.includes('reef-log.txt')
             || payload.includes('Bryn-headland reef log')
-            || payload.includes(uploadedPath);
+            || payload.includes('Salt-mark drifter')
+            || /files\/.*reef-log/.test(payload);
         expect(referenced, `prompt body should reference attachment (filename/text/URL). Body snippet: ${payload.slice(0, 800)}`).toBe(true);
+
+        // Sanity: the just-sent user message in chat carries extra.files
+        // with the captured upload URL. This proves we went through the
+        // real onFileAttach + populateFileAttachment chain, not a side
+        // injection.
+        const lastUserFiles = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            const last = [...ctx.chat].reverse().find(m => m.is_user);
+            return last?.extra?.files || null;
+        });
+        expect(lastUserFiles, 'sent user message should carry extra.files').toBeTruthy();
+        expect(Array.isArray(lastUserFiles)).toBe(true);
+        expect(lastUserFiles.length).toBeGreaterThan(0);
+        expect(String(lastUserFiles[0]?.name || '')).toBe('reef-log.txt');
     });
 });

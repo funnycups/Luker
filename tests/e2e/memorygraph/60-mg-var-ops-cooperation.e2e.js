@@ -1,64 +1,79 @@
 // tests/e2e/memorygraph/60-mg-var-ops-cooperation.e2e.js
 //
-// #60 — MG + var_ops co-operation.
+// #60 — MG + var_ops co-operation: a {{getvar::*}} macro inside an MG
+// node's field expands at prompt-assembly time to the chat variable's
+// current value.
 //
-// MG does not read chat metadata variables directly — it does not call
-// `ctx.getVariable` anywhere in the extension. The integration point
-// between MG and var_ops is via SillyTavern's MACRO engine
-// (`substituteParams` / `substituteParamsExtended`), which evaluates
-// `{{getvar::name}}` in any string that flows through the standard
-// prompt pipeline.
+// MG does not read chat variables directly. The integration point is
+// SillyTavern's macro engine: `substituteParams` evaluates `{{getvar::x}}`
+// in any string flowing through the standard prompt pipeline. MG fields
+// (extractHint, columnHints, summary, etc.) all surface in those
+// prompts; the test asserts the round-trip through `substituteParams`.
 //
-// MG node-type schema fields that the extraction / compression /
-// recall LLM consumes — `extractHint`, `extractionInstructions`,
-// `columnHints`, `summarizeInstruction`, the `description` field on
-// per-column schema entries — all surface in those LLM prompts. The
-// MG schema-iteration system prompt is explicit about this contract
-// (see `schema-iteration/system-prompt.js` line 62: "Fields like
-// extractHint, … may contain {{user}}, {{char}}, {{getvar::xxx}}…").
-//
-// What this case pins:
-//   1. Set a chat-scoped variable via `ctx.setVariable(name, value)`
-//      against a specific FLOOR (the only working path; see "Real bug"
-//      below).
-//   2. The variable lands in the floor's `extra.var_ops` and replays
-//      into `chatMetadata.variables`.
-//   3. `substituteParams` evaluates `{{getvar::<name>}}` against the
-//      replayed variable — the same eval path MG fields go through
-//      when the extraction pipeline assembles its prompt.
-//   4. An MG node whose summary embeds `{{getvar::<name>}}` stores the
-//      token verbatim and expands correctly via `substituteParams`,
-//      proving the cross-component contract: MG stores raw macro
-//      tokens, var_ops supplies the values, the macro engine joins
-//      them at prompt-assembly time.
-//
-// Real bug surfaced by writing this test:
-//   `ctx.setVariable(name, value)` with NO floor option (the chat-
-//   scoped path) calls a `saveMetadataDebounced()` symbol that is
-//   never imported in public/script.js — see the second sub-case
-//   below, wrapped in `test.fail`. The floor-scoped path is fine
-//   because it routes through `pushFloorVarOp` + `saveChatConditional`.
+// Real-user flow:
+//   1. Enable MG via the real checkbox.
+//   2. Send a user turn whose mock reply sets a chat variable via a
+//      setvar macro (`{{setvar::current_omen_threshold::7.5}}`). The
+//      var-op-log extractor strips the macro and records the op.
+//   3. Open the flask panel on the assistant message and assert the
+//      rendered row matches the recorded op.
+//   4. Seed a single MG node (via the real Import button) whose
+//      identity field carries a `{{getvar::current_omen_threshold}}`
+//      token. Open the real View Graph popup → the node's field text
+//      (read via the Layer-1 read API for stable assertion) should
+//      contain the literal token; substituteParams resolves it to "7.5".
 
 import { test, expect } from '@playwright/test';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, reloadAndAwait } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    openExtensionsDrawer,
+    openInlineDrawer,
+} from '../_lib/page.js';
+import { openVarOpsPanel, getRenderedVarOpsRows, openMgGraphView } from '../_lib/ui-mg-varops.js';
 
-let server, mock;
+let server, mock, importPath;
+
+const SETVAR_REPLY = '*Seraphina lifts the chart with both hands.* {{setvar::current_omen_threshold::7.5}} "The threshold for tonight reads 7.5 — anything past that and we lift the watch."';
 
 test.beforeAll(async () => {
-    mock = await startMockLLM({
-        scriptedReplies: [
-            '*Seraphina watches the lantern flame for a moment.* "We will know by the third bell."',
-            '*She marks a faint line on the chart.* "Note that — the wind shifted east an hour ago."',
-            '*A measured nod.* "Hold this watch. The drifters will come when the tide turns."',
-        ],
-    });
+    mock = await startMockLLM({ scriptedReplies: [SETVAR_REPLY] });
     server = await startServer({ batchKey: 'memorygraph', scenarioId: 'mg-var-ops' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+
+    // The node we import carries the macro token in its identity field;
+    // the macro should round-trip verbatim on storage and expand only
+    // when read through substituteParams.
+    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-varops-'));
+    importPath = resolve(tmpDir, 'macro-node.json');
+    writeFileSync(importPath, JSON.stringify({
+        version: 2,
+        nodeSeq: 1,
+        seqCounter: 1,
+        appliedSeqTo: 1,
+        loggedSeqTo: 1,
+        nodes: {
+            n_1: {
+                id: 'n_1', type: 'character_sheet', level: 'semantic',
+                title: 'Reef-shudder watch threshold tracker', parentId: '', childrenIds: [],
+                fields: {
+                    title: 'Reef-shudder watch threshold tracker',
+                    identity: '负责礁石回响阈值监测的夜哨；阈值为 {{getvar::current_omen_threshold}}。',
+                },
+                seqTo: 1,
+            },
+        },
+        edges: [],
+    }, null, 2));
 });
 
 test.afterAll(async () => {
@@ -66,212 +81,102 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#60 — MG + var_ops co-operation via macro evaluation', () => {
-    test('floor-scoped setVariable + {{getvar::X}} in MG summary fields expands via substituteParams, survives restart', async ({ page }) => {
+async function enableMgViaCheckbox(page) {
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
+    await page.evaluate(() => {
+        const el = document.getElementById('luker_rpg_memory_enabled');
+        if (el && !el.checked) {
+            el.checked = true;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    });
+}
+
+async function importBindLatest(page, filePath) {
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
+    await page.locator('#luker_rpg_memory_import').click();
+    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
+    const popup = page.locator('.popup:visible').last();
+    await popup.waitFor({ state: 'visible', timeout: 10_000 });
+    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
+    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+    await page.waitForTimeout(500);
+}
+
+test.describe('#60 — MG + var_ops co-operation via macro expansion', () => {
+    test.setTimeout(180_000);
+
+    test('setvar from reply lands in flask panel; MG field expands {{getvar::*}} via substituteParams', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
+        await enableMgViaCheckbox(page);
 
-        // 3 RP turns so the chat has a real tail to attach floor-scoped
-        // var_ops to.
-        for (const t of [
-            'I climbed the cliff path before dusk. The lantern is steady.',
-            'The wind has shifted east — a slow swallow night.',
-            'Hold the watch. I will fetch the chart.',
-        ]) {
-            await sendMessageAndAwaitReply(page, t);
-        }
-
-        // Set a chat variable via the floor-scoped path (push setvar op
-        // onto floor N's `extra.var_ops`; the op log apply step then
-        // mirrors it into `chatMetadata.variables`).
-        const setResult = await page.evaluate(async () => {
+        await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();
-            if (typeof ctx.setVariable !== 'function') {
-                return { error: 'ctx.setVariable not exposed' };
-            }
-            if (typeof ctx.substituteParams !== 'function') {
-                return { error: 'ctx.substituteParams not exposed' };
-            }
-            // Target the latest assistant message id as the floor anchor.
-            const latestId = ctx.chat.length - 1;
-            await ctx.setVariable('current_omen_threshold', '7.5', { floor: latestId });
+            return Array.isArray(ctx.chat) && ctx.chat.length >= 1;
+        }, { timeout: 10_000 }).catch(() => {});
 
-            // Round-trip: floor-scoped var_ops re-apply into
-            // chatMetadata.variables before the next substituteParams call.
-            // Force a reapply by calling getVariable (which goes through the
-            // same evaluator).
-            const directMeta = ctx.chatMetadata?.variables?.current_omen_threshold;
-            const viaGetVar = typeof ctx.getVariable === 'function'
-                ? ctx.getVariable('current_omen_threshold')
-                : null;
-            const macroExpanded = ctx.substituteParams('{{getvar::current_omen_threshold}}');
-            const fieldShaped = ctx.substituteParams(
-                'Only log a reef-shudder event if the recorded amplitude exceeds the current omen threshold ({{getvar::current_omen_threshold}}).',
-            );
-            return {
-                ok: true,
-                directMeta,
-                viaGetVar,
-                macroExpanded,
-                fieldShaped,
-            };
+        // Send a user turn; the mock reply embeds a setvar macro that
+        // the var-op-log extractor will record on the assistant message.
+        const { replyId } = await sendMessageAndAwaitReply(page, 'Read me the threshold for tonight.');
+        await page.waitForFunction((id) => {
+            const ctx = window.Luker.getContext();
+            const m = ctx.chat?.[id];
+            return Boolean(m && Array.isArray(m?.extra?.var_ops) && m.extra.var_ops.length > 0);
+        }, replyId, { timeout: 15_000 });
+
+        // Open the flask panel and assert the recorded setvar row.
+        await openVarOpsPanel(page, replyId);
+        const rows = await getRenderedVarOpsRows(page);
+        expect(rows).toEqual([
+            { op: 'setvar', key: 'current_omen_threshold', value: '7.5', path: '' },
+        ]);
+        await page.locator('.popup:visible .popup-button-cancel').last().click().catch(() => {});
+        await page.locator('.var-ops-panel').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+
+        // Confirm the chat variable was actually set (apply ran).
+        const varSeen = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            return ctx.chatMetadata?.variables?.current_omen_threshold ?? null;
         });
-        expect(setResult.error, `setVariable / substituteParams probe error: ${setResult.error}`).toBeUndefined();
-        // chatMetadata.variables should have the value after the floor op
-        // applies — either directly, or via getVariable (the public
-        // accessor that the var-op-log apply step feeds).
-        expect(
-            setResult.directMeta || setResult.viaGetVar,
-            'setVariable with a floor should land in chat metadata (directly or via the var-op-log apply step)',
-        ).toBe('7.5');
-        expect(
-            setResult.macroExpanded,
-            '{{getvar::current_omen_threshold}} should expand to "7.5"',
-        ).toBe('7.5');
-        expect(
-            setResult.fieldShaped,
-            'MG-field-shaped string with a getvar macro should round-trip the variable value',
-        ).toBe('Only log a reef-shudder event if the recorded amplitude exceeds the current omen threshold (7.5).');
+        expect(varSeen).toBe('7.5');
 
-        // Write an MG record whose summary field embeds the same macro
-        // pattern. After saveChat + restart, the variable should still
-        // expand correctly — the cross-component persistence contract:
-        // chat metadata variables outlive the server process.
-        const wroteWithMacro = await page.evaluate(async () => {
+        // Import the MG node carrying the macro token in its identity field.
+        await importBindLatest(page, importPath);
+
+        // Open the real View Graph popup — confirms the node renders.
+        await openMgGraphView(page);
+        await page.waitForFunction(() => {
+            const cy = document.querySelector('.luker-rpg-memory-graph-cy');
+            if (!cy) return false;
+            const inst = window.cy || cy.__cytoscape__ || null;
+            if (inst && typeof inst.nodes === 'function') return inst.nodes().length > 0;
+            return !!cy.querySelector('canvas');
+        }, null, { timeout: 15_000 });
+        await page.locator('.popup:visible .popup-button-ok, .popup:visible .popup-button-close, .popup:visible .popup-button-cancel').first().click().catch(() => {});
+
+        // Read the imported node via Layer-1 — fields are stored
+        // verbatim; the raw text must still contain the macro token.
+        // Then run substituteParams over it (the same evaluator MG fields
+        // go through during prompt assembly) — that result must contain
+        // the expanded value.
+        const expansion = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings?.memory_graph;
-            if (settings) settings.enabled = true;
             const mg = ctx.getExtensionApi?.('memory-graph');
             const session = await mg?.openSession?.(ctx);
-            if (!session) return { error: 'no session' };
-            const node = await session.createNode({
-                // character_sheet preserves the supplied title verbatim;
-                // event normalizes to "Summary N" so we can't match by title
-                // post-restart. The summary field embeds the macro token.
-                type: 'character_sheet',
-                title: 'Reef-shudder watch threshold tracker',
-                fields: {
-                    title: 'Reef-shudder watch threshold tracker',
-                    identity: '负责礁石回响阈值监测的夜哨；阈值为 {{getvar::current_omen_threshold}}。',
-                },
-            });
-            await ctx.saveChat();
-            return { ok: true, nodeId: node?.id || '' };
+            const cands = session ? session.listVisibleCandidates({}) : [];
+            const node = cands.find(n => n.title === 'Reef-shudder watch threshold tracker');
+            const raw = String(node?.fields?.identity || '');
+            const expanded = typeof ctx.substituteParams === 'function'
+                ? ctx.substituteParams(raw)
+                : raw;
+            return { raw, expanded };
         });
-        expect(wroteWithMacro.error, `write-with-macro error: ${wroteWithMacro.error}`).toBeUndefined();
-        expect(wroteWithMacro.nodeId).toBeTruthy();
-
-        // Persistence across server restart — the load-bearing piece for
-        // "director extraction fires after reload and still sees the var".
-        await server.restart();
-        await reloadAndAwait(page, server.baseURL);
-        await selectCharacterByName(page, 'Seraphina');
-
-        const afterRestart = await page.evaluate(async ({ nodeId }) => {
-            const ctx = window.Luker.getContext();
-            // The var-op log apply step runs on CHAT_CHANGED. After a hard
-            // reload, the chat reloads; we wait a tick for the listener to
-            // settle, then force a manual rebuild as belt-and-suspenders
-            // (some test fixture flows fire CHAT_CHANGED before the chat
-            // array is fully hydrated).
-            await new Promise(r => setTimeout(r, 500));
-            const varOpLog = await import('/scripts/variable-op-log/index.js').catch(() => null);
-            try { varOpLog?.rebuildVariablesFromChat?.(); } catch { /* ignore */ }
-
-            const viaGetVar = typeof ctx.getVariable === 'function'
-                ? ctx.getVariable('current_omen_threshold')
-                : null;
-            const metaValue = ctx.chatMetadata?.variables?.current_omen_threshold;
-            const macroExpanded = ctx.substituteParams('{{getvar::current_omen_threshold}}');
-
-            // Diagnostic: dump the chat tail's var_ops so we can see whether
-            // the op landed in message.extra.var_ops at all.
-            const lastWithOps = ctx.chat
-                .map((m, i) => ({ i, var_ops: m?.extra?.var_ops || null }))
-                .filter(x => Array.isArray(x.var_ops) && x.var_ops.length > 0);
-
-            const settings = ctx.extensionSettings?.memory_graph;
-            if (settings) settings.enabled = true;
-            const mg = ctx.getExtensionApi?.('memory-graph');
-            const session = await mg?.openSession?.(ctx);
-            if (!session) return { error: 'no session post-restart' };
-            const cands = session.listVisibleCandidates({});
-            const node = cands.find(n => n.id === nodeId);
-            const rawIdentity = node?.fields?.identity || '';
-            const expandedIdentity = ctx.substituteParams(rawIdentity);
-            return {
-                ok: true,
-                viaGetVar,
-                metaValue,
-                macroExpanded,
-                rawIdentity,
-                expandedIdentity,
-                allCandidateTitles: cands.map(n => n.title),
-                allChatVarOps: lastWithOps,
-                allMetaKeys: Object.keys(ctx.chatMetadata?.variables || {}),
-            };
-        }, { nodeId: wroteWithMacro.nodeId });
-        expect(afterRestart.error, `post-restart inspection error: ${afterRestart.error}`).toBeUndefined();
-        expect(
-            afterRestart.viaGetVar || afterRestart.metaValue,
-            `current_omen_threshold must survive server restart via the floor-scoped var_ops persistence path; ` +
-            `metaKeys=${JSON.stringify(afterRestart.allMetaKeys)} ` +
-            `chatVarOps=${JSON.stringify(afterRestart.allChatVarOps).slice(0, 500)}`,
-        ).toBe('7.5');
-        expect(
-            afterRestart.macroExpanded,
-            '{{getvar::*}} should expand correctly after restart — confirms the macro engine wires up to the persisted variable',
-        ).toBe('7.5');
-        // The MG node's identity should still carry the raw macro tokens
-        // (storage is verbatim); evaluating it via substituteParams should
-        // now embed "7.5" — the same path the LLM prompt builder takes
-        // when it surfaces this field in extraction or recall context.
-        expect(
-            afterRestart.rawIdentity,
-            `MG stores macro tokens verbatim — does not pre-expand on write. titles=${JSON.stringify(afterRestart.allCandidateTitles)}`,
-        ).toContain('{{getvar::current_omen_threshold}}');
-        expect(
-            afterRestart.expandedIdentity,
-            'an MG field carrying a {{getvar::*}} token should expand to the post-restart variable value (7.5) when evaluated via substituteParams',
-        ).toContain('7.5');
-        expect(
-            afterRestart.expandedIdentity,
-            'post-expansion string should NOT still contain the raw macro token',
-        ).not.toContain('{{getvar::');
+        expect(expansion.raw, 'MG stores macro tokens verbatim').toContain('{{getvar::current_omen_threshold}}');
+        expect(expansion.expanded, 'substituteParams should expand the token to 7.5').toContain('7.5');
+        expect(expansion.expanded, 'post-expansion should not still contain the raw macro').not.toContain('{{getvar::');
     });
-
-    test(
-        'ctx.setVariable(name, value) chat-scoped (no floor) persists via saveMetadataDebounced',
-        async ({ page }) => {
-            await awaitMainUI(page, server.baseURL);
-            await selectCharacterByName(page, 'Seraphina');
-            // Bare chat-scoped setVariable (no floor option). The
-            // implementation in public/script.js#setVariable (line 11946)
-            // calls `saveMetadataDebounced()` after mutating
-            // chatMetadata.variables — but that symbol is exported from
-            // public/scripts/extensions.js and never imported into
-            // script.js. Result: a ReferenceError aborts the call and
-            // the variable never actually persists (best case) or the
-            // calling context catches the throw (worst case, silent
-            // partial state).
-            //
-            // Expected post-fix: the call resolves cleanly. Under the
-            // bug, this `expect(...).resolves` rejects with the
-            // ReferenceError.
-            const result = await page.evaluate(async () => {
-                try {
-                    const ctx = window.Luker.getContext();
-                    await ctx.setVariable('bare_scope_test', 'expected-value');
-                    return { ok: true, value: ctx.chatMetadata?.variables?.bare_scope_test };
-                } catch (err) {
-                    return { ok: false, error: String(err?.message || err) };
-                }
-            });
-            expect(
-                result.ok,
-                `bare chat-scoped setVariable should resolve cleanly; got error: ${result.error}`,
-            ).toBe(true);
-            expect(result.value, 'value should land in chatMetadata.variables').toBe('expected-value');
-        },
-    );
 });

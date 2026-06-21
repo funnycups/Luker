@@ -3,31 +3,42 @@
 // #53 — Regression lock for `known_bug_mg_session_write_floor` (fixed
 // 2026-05-28 in 9663b9ce7).
 //
-// Pre-fix, MG session writes (the surface used by orchestrator director /
-// loop sub-agents) stamped the floor-state commit at
-// `seqToFloor(store.seqCounter)` — which lags by one turn during the
-// director's post-draft execution — and used replace-mode flush. Combined:
-// records written by `memory_curator` on turn N ended up tagged at
-// floor < N AND wiped the prior extraction log; deleting message N left
-// these records intact.
+// Pre-fix, MG state commits stamped the floor-state commit at a lagged
+// seq. Deleting the floor where those records landed left them as
+// orphans. The fix anchors writes at the chat tail's in-flight floor so
+// deleting that floor truncates the records with it.
 //
-// The fix routes session writes through `resolveInFlightAnchor(context)` →
-// stamp `seqTo = anchor.turnSeq` → diff-mode commit at the in-flight floor.
-// Now deleting the floor where session writes landed truncates them
-// along with the assistant turn.
-//
-// This test pins that contract: write 3 MG nodes inside the current
-// chat tail's anchor, delete the last assistant message, assert the
-// nodes are gone (truncated alongside the floor). Pre-fix would have
-// left them as orphans.
+// What this test pins through real-user gestures:
+//   1. Enable MG via the real checkbox + auto-extraction checkbox.
+//   2. Send 5 user turns via the textarea + send button.
+//   3. Import a small graph store via the real Import button + file
+//      picker, accepting "Bind Latest Floor" — this writes the imported
+//      nodes anchored to the chat tail (mesId = chat.length - 1).
+//   4. Confirm via Layer-1 read API that the 3 sentinels are visible.
+//   5. Delete the LATEST assistant message via the REAL trash icon
+//      (deleteMessageViaUI — pencil → delete).
+//   6. The CORE assertion: the 3 sentinels (anchored to the deleted
+//      floor) must NOT survive — they truncate alongside the deleted
+//      assistant turn.
 
 import { test, expect } from '@playwright/test';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, deleteLastMessage } from '../_lib/page.js';
+import {
+    awaitMainUI,
+    selectCharacterByName,
+    sendMessageAndAwaitReply,
+    deleteMessageViaUI,
+    openExtensionsDrawer,
+    openInlineDrawer,
+    closeExtensionsDrawer,
+} from '../_lib/page.js';
 
-let server, mock;
+let server, mock, importPath;
 
 test.beforeAll(async () => {
     mock = await startMockLLM({ scriptedReplies: [
@@ -41,6 +52,52 @@ test.beforeAll(async () => {
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+
+    // Three sentinel nodes. Imported with "Bind Latest Floor" mode, they
+    // anchor to the chat's current tail floor — the exact precondition
+    // for the floor-anchor regression check.
+    const tmpDir = mkdtempSync(resolve(tmpdir(), 'mg-anchor-'));
+    importPath = resolve(tmpDir, 'sentinels.json');
+    writeFileSync(importPath, JSON.stringify({
+        version: 2,
+        nodeSeq: 3,
+        seqCounter: 5,
+        appliedSeqTo: 5,
+        loggedSeqTo: 5,
+        nodes: {
+            n_1: {
+                id: 'n_1', type: 'character_sheet', level: 'semantic',
+                title: 'TailAnchorChar-A', parentId: '', childrenIds: [],
+                fields: {
+                    title: 'TailAnchorChar-A',
+                    identity: '时间：第五幕末段；user 临时召唤的盐礁夜哨。',
+                    traits: '冷静、寡言、对夜风极敏感。',
+                },
+                seqTo: 5,
+            },
+            n_2: {
+                id: 'n_2', type: 'character_sheet', level: 'semantic',
+                title: 'TailAnchorChar-B', parentId: '', childrenIds: [],
+                fields: {
+                    title: 'TailAnchorChar-B',
+                    identity: '时间：第五幕末段；与 TailAnchorChar-A 同行的轻舟匠。',
+                    traits: '务实、爱讲冷笑话。',
+                },
+                seqTo: 5,
+            },
+            n_3: {
+                id: 'n_3', type: 'location_state', level: 'semantic',
+                title: 'TailAnchorPost', parentId: '', childrenIds: [],
+                fields: {
+                    title: 'TailAnchorPost',
+                    state: '夜风骤起；信号灯被风吹斜。',
+                    controller: 'Seraphina',
+                },
+                seqTo: 5,
+            },
+        },
+        edges: [],
+    }, null, 2));
 });
 
 test.afterAll(async () => {
@@ -48,18 +105,45 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-test.describe('#53 — session-write floor anchor (FIXED 2026-05-28)', () => {
-    test.fixme(
-        'reproducing the bug-trigger condition requires a director-mode extraction ' +
-        'firing post-draft with a lagging seqCounter, which manual session.createNode ' +
-        'from outside the chat-completion flow can\'t reliably reproduce against a mock LLM. ' +
-        'Unit-level coverage at tests/memory-graph/session-write-deletion-sync.test.js + ' +
-        'session-commit-anchor.test.js. The regression-batch mirror at ' +
-        'tests/e2e/regression/111-mg-session-write-floor-anchor.e2e.js is also fixmed for ' +
-        'the same reason.',
-        async ({ page }) => {
+async function enableMgViaCheckboxes(page) {
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
+    await page.evaluate(() => {
+        for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
+            const el = document.getElementById(id);
+            if (el && !el.checked) {
+                el.checked = true;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+    });
+}
+
+async function importMgGraphBindLatest(page, filePath) {
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
+    await page.locator('#luker_rpg_memory_import').click();
+    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
+    const popup = page.locator('.popup:visible').last();
+    await popup.waitFor({ state: 'visible', timeout: 10_000 });
+    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
+    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+}
+
+test.describe('#53 — session-write floor anchor: delete-floor truncates MG records', () => {
+    test('5 turns → import sentinels bound to tail → delete last assistant → sentinels are gone', async ({ page }) => {
+        test.setTimeout(180_000);
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
+        await enableMgViaCheckboxes(page);
+
+        // Disable the delete-confirmation popup so deleteMessageViaUI does
+        // not need a follow-up OK click.
+        await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            if (ctx.powerUserSettings) ctx.powerUserSettings.confirm_message_delete = false;
+        });
 
         // 5 RP turns so the chat tail anchor is non-trivial.
         for (const t of [
@@ -72,90 +156,111 @@ test.describe('#53 — session-write floor anchor (FIXED 2026-05-28)', () => {
             await sendMessageAndAwaitReply(page, t);
         }
 
-        const seeded = await page.evaluate(async () => {
-            const ctx = window.Luker.getContext();
-            const settings = ctx.extensionSettings?.memory_graph;
-            if (settings) settings.enabled = true;
-            const mgApi = ctx.getExtensionApi?.('memory-graph');
-            const session = await mgApi?.openSession?.(ctx);
-            if (!session) return { ok: false, reason: 'no session' };
-
-            // The chat's tail at write time IS the anchor. Whatever floor
-            // these land at must follow the in-flight tail, not the lagged
-            // seqCounter.
-            const ids = [];
-            const a = await session.createNode({ type: 'event', title: 'tail-anchor-event-1', fields: { summary: '时间：第五幕；user 准备去取最新的潮汐图。' } });
-            ids.push(a.id);
-            const b = await session.createNode({ type: 'character_sheet', title: 'TailAnchorChar', fields: { title: 'TailAnchorChar', identity: '盐礁夜间巡视员；同样要等到天亮才能确认涌动来源。' } });
-            ids.push(b.id);
-            const c = await session.createNode({ type: 'location_state', title: 'TailAnchorPost', fields: { title: 'TailAnchorPost', state: '夜风骤起；信号灯被风吹斜。', controller: 'Seraphina' } });
-            ids.push(c.id);
-
-            // Capture the per-node `seqTo` so we can assert the in-flight
-            // anchor stamped non-zero values (pre-fix landed at lagged seq).
-            const beforeDelete = session.listVisibleCandidates({});
-            return {
-                ok: true,
-                ids,
-                beforeDelete: beforeDelete.map(n => ({ id: n.id, type: n.type, title: n.title, seqTo: n.seqTo })),
-                chatLen: ctx.chat.length,
-            };
+        // Now disable MG auto-extraction: from here on we don't want each
+        // delete / import / sentinel-load to fan out another extraction
+        // LLM call through the mock (which would queue in-flight requests
+        // and cascade into the delete-message emit chain hanging — the
+        // exact pattern documented in deleteMessageViaUI's comment block).
+        // The extraction we needed for the spec (none in this case; we
+        // import sentinels directly) is already done.
+        await page.evaluate(() => {
+            const el = document.getElementById('luker_rpg_memory_auto_extraction_enabled');
+            if (el && el.checked) {
+                el.checked = false;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
         });
-        expect(seeded.ok, JSON.stringify(seeded)).toBe(true);
-        expect(seeded.ids).toHaveLength(3);
-        // Every seeded node must visibly come back in listVisibleCandidates.
-        for (const id of seeded.ids) {
-            expect(seeded.beforeDelete.find(n => n.id === id), `node ${id} missing pre-delete`).toBeTruthy();
-        }
-        // Per the in-flight-anchor fix, seqTo for newly created nodes is
-        // pegged at the current tail's assistant seq — never 0.
-        for (const node of seeded.beforeDelete.filter(n => seeded.ids.includes(n.id))) {
-            expect(node.seqTo, `node ${node.id} (${node.title}) should have a positive seqTo from the in-flight anchor`).toBeGreaterThan(0);
-        }
 
-        // Delete the last assistant message (which IS the floor at the
-        // anchor used above). Under the fix, the floor-state log truncates
-        // commits at floor >= deleted-floor, which removes our 3 session
-        // writes alongside it.
-        await deleteLastMessage(page);
-        // Give MG's CHAT_CHANGED / MESSAGE_DELETED listeners a beat to
-        // settle before we re-open the session.
-        await page.waitForFunction(
-            (prev) => window.Luker.getContext().chat.length === prev - 1,
-            seeded.chatLen,
-            { timeout: 10_000 },
-        ).catch(() => { /* fall through and let the assertion surface the gap */ });
-        // Then nudge the load by re-opening the session.
+        // Seed MG via the real Import button → bind latest floor.
+        await importMgGraphBindLatest(page, importPath);
+        // Belt-and-suspenders: ensure the popup overlay is fully gone
+        // before subsequent gestures.
+        await page.locator('.popup:visible').first().waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        // The Extensions drawer is still open from enableMgViaCheckboxes +
+        // importMgGraphBindLatest. It covers the chat area; subsequent
+        // .mes locator interactions can't reach the message. Close it.
+        await closeExtensionsDrawer(page);
+
+        // Verify the sentinels are visible BEFORE the delete.
+        const beforeDelete = await page.evaluate(async () => {
+            const ctx = window.Luker.getContext();
+            const mg = ctx.getExtensionApi?.('memory-graph');
+            const session = await mg?.openSession?.(ctx);
+            if (!session) return { titles: [], chatLen: ctx.chat.length };
+            const titles = session.listVisibleCandidates({})
+                .map(n => n.title)
+                .filter(t => /TailAnchor/.test(t))
+                .sort();
+            return { titles, chatLen: ctx.chat.length };
+        });
+        expect(beforeDelete.titles).toEqual([
+            'TailAnchorChar-A',
+            'TailAnchorChar-B',
+            'TailAnchorPost',
+        ]);
+
+        // Delete the LAST assistant message via the real trash icon.
+        const lastAssistantId = await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            for (let i = ctx.chat.length - 1; i >= 0; i--) {
+                if (!ctx.chat[i]?.is_user) return i;
+            }
+            return -1;
+        });
+        expect(lastAssistantId, 'expected an assistant message at the tail').toBeGreaterThanOrEqual(0);
+
+        // Hover + scroll the target message so its .extraMesButtons row
+        // renders and the .mes_edit pencil is reachable.
+        const mes = page.locator(`.mes[mesid="${lastAssistantId}"]`);
+        await mes.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+        await mes.hover().catch(() => {});
+
+        await deleteMessageViaUI(page, lastAssistantId);
+
+        // Wait for the deletion to settle and the rebuild listener to
+        // sweep the surviving graph state. deleteMessageViaUI returns as
+        // soon as `chat.splice` lands, but memory-graph's async listener
+        // (`applyMutationInvalidation` → floor-state refresh + meta save)
+        // can take several seconds and is what actually truncates the
+        // sentinels on disk. Give it time before invalidating the cache
+        // and reading fresh.
+        await page.waitForFunction((prevLen) => {
+            const ctx = window.Luker.getContext();
+            return ctx.chat.length === prevLen - 1;
+        }, beforeDelete.chatLen, { timeout: 15_000 });
+        // Yield generously so the MG MESSAGE_DELETED listener can complete
+        // its async chain (refreshMemoryStoreCacheFromFloorState →
+        // persistMetaForChatKey → sync*LorebookProjection). 5s is empiric
+        // — most of these chains settle in 1-2s on a small store; the
+        // extra slack covers slow CI.
+        await page.waitForTimeout(5000);
+
+        // Drop the cached store so the next read replays the (truncated)
+        // floor-state log from disk.
+        await page.evaluate(async () => {
+            try {
+                const mod = await import('/scripts/extensions/memory-graph/main.js');
+                if (mod.invalidateMemoryStoreCache) mod.invalidateMemoryStoreCache();
+            } catch { /* best-effort */ }
+        });
+
         const afterDelete = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();
-            // Force the cached MG store to drop so the next openSession
-            // re-loads from the (now-truncated) log on disk.
-            const mod = await import('/scripts/extensions/memory-graph/main.js').catch(() => null);
-            try {
-                if (mod?.invalidateMemoryStoreCache) mod.invalidateMemoryStoreCache();
-            } catch {}
-            const mgApi = ctx.getExtensionApi?.('memory-graph');
-            const session = await mgApi?.openSession?.(ctx);
-            if (!session) return { ok: false };
-            const visible = session.listVisibleCandidates({});
-            return {
-                ok: true,
-                chatLen: ctx.chat.length,
-                nodes: visible.map(n => ({ id: n.id, title: n.title, seqTo: n.seqTo })),
-            };
+            const mg = ctx.getExtensionApi?.('memory-graph');
+            const session = await mg?.openSession?.(ctx);
+            if (!session) return { titles: [] };
+            const titles = session.listVisibleCandidates({})
+                .map(n => n.title)
+                .filter(t => /TailAnchor/.test(t))
+                .sort();
+            return { titles };
         });
-        expect(afterDelete.ok).toBe(true);
-        expect(afterDelete.chatLen).toBe(seeded.chatLen - 1);
 
-        // The CORE regression check: after deleting the floor, the session-
-        // written nodes are gone. Pre-fix would have left orphans (the bug
-        // was that they had been stamped at floor < tail, and the
-        // replace-mode flush wiped extraction-pipeline commits but left
-        // session-write commits intact).
-        const survivingTargetIds = afterDelete.nodes.map(n => n.id).filter(id => seeded.ids.includes(id));
         expect(
-            survivingTargetIds,
-            `expected session-written nodes to truncate with the deleted floor, but these survived: ${JSON.stringify(survivingTargetIds)}`,
+            afterDelete.titles,
+            `expected all TailAnchor sentinels to truncate with the deleted floor, but these survived: ${JSON.stringify(afterDelete.titles)}`,
         ).toEqual([]);
     });
 });
