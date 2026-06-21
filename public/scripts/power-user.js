@@ -553,6 +553,21 @@ function onAudioActivationEnded() {
     audioActivationSync();
 }
 
+// Image generation shares the same counter so the audio session covers any
+// image request in flight even when no LLM generation is active (e.g. wand
+// button image generation while reading a long reply).
+function onImageActivationStarted() {
+    if (!isAudioKeepAliveSettingEnabled()) return;
+    audioActivationCount += 1;
+    audioActivationSync();
+}
+
+function onImageActivationEnded() {
+    if (!isAudioKeepAliveSettingEnabled()) return;
+    audioActivationCount = Math.max(0, audioActivationCount - 1);
+    audioActivationSync();
+}
+
 function cancelAudioDeactivateTimer() {
     if (audioDeactivateTimer) {
         clearTimeout(audioDeactivateTimer);
@@ -565,6 +580,8 @@ function syncMobileKeepAliveUi() {
         initKeepAlive();
         eventSource.on(event_types.GENERATION_STARTED, onAudioActivationStarted);
         eventSource.on(event_types.GENERATION_ENDED, onAudioActivationEnded);
+        eventSource.on(event_types.IMAGE_GENERATION_STARTED, onImageActivationStarted);
+        eventSource.on(event_types.IMAGE_GENERATION_ENDED, onImageActivationEnded);
         onKeepAliveStateChanged(() => {
             // Reflect whatever the module says is currently in effect — the user closing the
             // PiP window from the OS UI or autoplay being denied both land here.
