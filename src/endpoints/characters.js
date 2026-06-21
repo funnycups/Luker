@@ -17,7 +17,6 @@ import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction, 
 import { deepMerge, humanizedDateTime, tryParse, tryReadFileSync, MemoryLimitedMap, getConfigValue, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
-import { readWorldInfoFile } from './worldinfo.js';
 import { invalidateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
@@ -28,7 +27,7 @@ import cacheBuster from '../middleware/cacheBuster.js';
 import { extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from './card-app.js';
 import { deleteRecentChatIndexEntriesUnderDirectory, invalidateRecentChatIndex } from './chats.js';
 import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
-import { getChatRepo } from '../storage/index.js';
+import { getChatRepo, getWorldInfoRepo } from '../storage/index.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -934,16 +933,22 @@ function charaFormatData(data, directories) {
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {string} worldInfoName Linked world info name
  */
-function syncCharacterBookFromWorldInfo(char, directories, worldInfoName) {
+async function syncCharacterBookFromWorldInfo(char, handle, worldInfoName) {
     const normalizedWorldInfoName = String(worldInfoName || '').trim();
     if (!normalizedWorldInfoName) {
         return;
     }
 
     try {
-        const file = readWorldInfoFile(directories, normalizedWorldInfoName, false);
+        // Drive through WorldInfoRepo so this works in every storage engine.
+        // The legacy fs path missed db-mode worlds entirely, and the export
+        // silently shipped without a character_book.
+        const canonicalName = await getWorldInfoRepo().resolveName(handle, normalizedWorldInfoName);
+        if (!canonicalName) return;
+        const file = await getWorldInfoRepo().get(handle, canonicalName);
+        if (!file) return;
 
-        if (file && _.isObjectLike(file.entries) && !Array.isArray(file.entries)) {
+        if (_.isObjectLike(file.entries) && !Array.isArray(file.entries)) {
             _.set(char, 'data.character_book', convertWorldInfoToCharacterBook(normalizedWorldInfoName, file.entries));
             return;
         }
@@ -954,7 +959,7 @@ function syncCharacterBookFromWorldInfo(char, directories, worldInfoName) {
             _.set(char, 'data.character_book', fallbackCharacterBook);
         }
     } catch {
-        console.warn(`Failed to read world info file: ${normalizedWorldInfoName}. Character book will not be available.`);
+        console.warn(`Failed to read world info: ${normalizedWorldInfoName}. Character book will not be available.`);
     }
 }
 
@@ -2501,7 +2506,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                 const rawBuffer = await fsPromises.readFile(filename);
                 const rawData = read(rawBuffer);
                 const jsonObject = getStoredCharaCardV2(JSON.parse(rawData), request.user.directories);
-                syncCharacterBookFromWorldInfo(jsonObject, request.user.directories, _.get(jsonObject, 'data.extensions.world'));
+                await syncCharacterBookFromWorldInfo(jsonObject, request.user.profile.handle, _.get(jsonObject, 'data.extensions.world'));
                 unsetPrivateFields(jsonObject);
                 // Pack CardApp files into export data
                 const exportCharId = sanitize(request.body.avatar_url).replace('.png', '');
@@ -2517,7 +2522,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                     const json = await readCharacterData(filename);
                     if (json === undefined) return response.sendStatus(400);
                     const jsonObject = getStoredCharaCardV2(JSON.parse(json), request.user.directories);
-                    syncCharacterBookFromWorldInfo(jsonObject, request.user.directories, _.get(jsonObject, 'data.extensions.world'));
+                    await syncCharacterBookFromWorldInfo(jsonObject, request.user.profile.handle, _.get(jsonObject, 'data.extensions.world'));
                     unsetPrivateFields(jsonObject);
                     // Pack CardApp files into export data
                     const exportCharIdJson = sanitize(request.body.avatar_url).replace('.png', '');

@@ -3,11 +3,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import express from 'express';
+import sanitize from 'sanitize-filename';
 
 const readdir = fs.promises.readdir;
 
 import { getAllUserHandles, getUserDirectories } from '../users.js';
-import { getStatsRepo } from '../storage/index.js';
+import { getStatsRepo, getChatRepo } from '../storage/index.js';
 
 const monthNames = [
     'January',
@@ -114,19 +115,25 @@ function parseTimestamp(timestamp) {
 }
 
 /**
- * Collects and aggregates stats for all characters.
+ * Collects and aggregates stats for all characters under a handle.
  *
- * @param {string} chatsPath - The path to the directory containing the chat files.
+ * @param {string} handle - User handle (storage scope).
  * @param {string} charactersPath - The path to the directory containing the character files.
  * @returns {Promise<Object>} The aggregated stats object.
  */
-async function collectAndCreateStats(chatsPath, charactersPath) {
-    const files = await readdir(charactersPath);
+async function collectAndCreateStats(handle, charactersPath) {
+    let files = [];
+    try {
+        files = await readdir(charactersPath);
+    } catch {
+        // No characters directory yet: produce a timestamp-only stats record.
+        return { timestamp: Date.now() };
+    }
 
     const pngFiles = files.filter((file) => file.endsWith('.png'));
 
     let processingPromises = pngFiles.map((file) =>
-        calculateStats(chatsPath, file),
+        calculateStats(handle, file),
     );
     const statsArr = await Promise.all(processingPromises);
 
@@ -142,14 +149,18 @@ async function collectAndCreateStats(chatsPath, charactersPath) {
 /**
  * Recreates the stats object for a user.
  * @param {string} handle User handle
- * @param {string} chatsPath Path to the directory containing the chat files.
+ * @param {string} _chatsPath Legacy path (ignored — stats now come from ChatRepo).
  * @param {string} charactersPath Path to the directory containing the character files.
  */
-export async function recreateStats(handle, chatsPath, charactersPath) {
+export async function recreateStats(handle, _chatsPath, charactersPath) {
     console.info('Collecting and creating stats for user:', handle);
-    const stats = await collectAndCreateStats(chatsPath, charactersPath);
+    const stats = await collectAndCreateStats(handle, charactersPath);
     STATS.set(handle, stats);
-    await saveStatsToFile();
+    // Persist directly through StatsRepo so a single user can recreate
+    // without iterating every user's saved stats (which is what
+    // saveStatsToFile does, and which needs node-persist initialized).
+    await getStatsRepo().save(handle, stats);
+    TIMESTAMPS.set(handle, stats.timestamp || Date.now());
 }
 
 /**
@@ -257,12 +268,21 @@ function countWordsInString(str) {
 /**
  * calculateStats - Calculate statistics for a given character chat directory.
  *
- * @param  {string} chatsPath The directory containing the chat files.
- * @param  {string} item     The name of the character.
- * @return {object}          An object containing the calculated statistics.
+ * Pre-Phase 8 this read jsonl files directly off disk. That path returned
+ * empty stats in db modes (the engine holds the chats, the directory is
+ * empty), so the boot-time recreate-on-empty-stats path silently overwrote
+ * the user's saved stats with zeros.
+ *
+ * Now drives through ChatRepo so every storage engine returns identical
+ * stats. Body messages are pulled from the engine once and walked in-memory
+ * to compute genTime/wordCount/swipeCount aggregates.
+ *
+ * @param  {string} handle  User handle (storage scope).
+ * @param  {string} item    Avatar file name with `.png` suffix.
+ * @return {Promise<object>} Stats object keyed by sanitized character name.
  */
-const calculateStats = (chatsPath, item) => {
-    const chatDir = path.join(chatsPath, item.replace('.png', ''));
+const calculateStats = async (handle, item) => {
+    const charDir = item.replace('.png', '');
     const stats = {
         total_gen_time: 0,
         user_word_count: 0,
@@ -274,40 +294,103 @@ const calculateStats = (chatsPath, item) => {
         date_last_chat: 0,
         date_first_chat: new Date('9999-12-31T23:59:59.999Z').getTime(),
     };
-    let uniqueGenStartTimes = new Set();
+    const uniqueGenStartTimes = new Set();
 
-    if (fs.existsSync(chatDir)) {
-        const chats = fs.readdirSync(chatDir);
-        if (Array.isArray(chats) && chats.length) {
-            for (const chat of chats) {
-                const result = calculateTotalGenTimeAndWordCount(
-                    chatDir,
-                    chat,
-                    uniqueGenStartTimes,
-                );
-                stats.total_gen_time += result.totalGenTime || 0;
-                stats.user_word_count += result.userWordCount || 0;
-                stats.non_user_word_count += result.nonUserWordCount || 0;
-                stats.user_msg_count += result.userMsgCount || 0;
-                stats.non_user_msg_count += result.nonUserMsgCount || 0;
-                stats.total_swipe_count += result.totalSwipeCount || 0;
+    let entries;
+    try {
+        entries = await getChatRepo().listForCharacter(handle, charDir);
+    } catch (err) {
+        console.warn(`calculateStats: failed to list chats for ${charDir}`, err?.message || err);
+        // Strip the unreachable sentinel value before returning to match legacy
+        // shape (final stats from collectAndCreateStats omits the unset sentinel).
+        if (stats.date_first_chat > Date.now()) stats.date_first_chat = 0;
+        return { [sanitize(charDir)]: stats };
+    }
 
-                const chatStat = fs.statSync(path.join(chatDir, chat));
-                stats.chat_size += chatStat.size;
-                stats.date_last_chat = Math.max(
-                    stats.date_last_chat,
-                    Math.floor(chatStat.mtimeMs),
-                );
-                stats.date_first_chat = Math.min(
-                    stats.date_first_chat,
-                    result.firstChatTime,
-                );
+    for (const entry of entries) {
+        const chatName = entry.key.name;
+        let chat;
+        try {
+            chat = await getChatRepo().get(handle, charDir, chatName);
+        } catch {
+            continue;
+        }
+        if (chat == null || !Array.isArray(chat.body)) continue;
+        const result = calculateTotalGenTimeAndWordCountFromBody(
+            chat.body,
+            uniqueGenStartTimes,
+        );
+        stats.total_gen_time += result.totalGenTime || 0;
+        stats.user_word_count += result.userWordCount || 0;
+        stats.non_user_word_count += result.nonUserWordCount || 0;
+        stats.user_msg_count += result.userMsgCount || 0;
+        stats.non_user_msg_count += result.nonUserMsgCount || 0;
+        stats.total_swipe_count += result.totalSwipeCount || 0;
+        // Use the engine-provided timestamps (seconds for SQL, mtime for FS).
+        const updatedAtMs = (typeof entry.updatedAt === 'number')
+            ? (entry.updatedAt > 1e12 ? entry.updatedAt : entry.updatedAt * 1000)
+            : 0;
+        const createdAtMs = (typeof entry.createdAt === 'number')
+            ? (entry.createdAt > 1e12 ? entry.createdAt : entry.createdAt * 1000)
+            : 0;
+        if (updatedAtMs > stats.date_last_chat) stats.date_last_chat = updatedAtMs;
+        if (createdAtMs > 0 && createdAtMs < stats.date_first_chat) stats.date_first_chat = createdAtMs;
+    }
+    if (stats.date_first_chat > Date.now()) stats.date_first_chat = 0;
+    return { [sanitize(charDir)]: stats };
+};
+
+/**
+ * In-memory equivalent of calculateTotalGenTimeAndWordCount that accepts the
+ * full body array directly. Keep behavior byte-for-byte identical to the
+ * jsonl-streaming version above so stats stay stable across the migration.
+ */
+function calculateTotalGenTimeAndWordCountFromBody(body, uniqueGenStartTimes) {
+    let totalGenTime = 0;
+    let userWordCount = 0;
+    let nonUserWordCount = 0;
+    let nonUserMsgCount = 0;
+    let userMsgCount = 0;
+    let totalSwipeCount = 0;
+    for (const json of body) {
+        if (!json || typeof json !== 'object') continue;
+        if (json.mes) {
+            const hash = crypto.createHash('sha256').update(json.mes).digest('hex');
+            if (uniqueGenStartTimes.has(hash)) continue;
+            if (hash) uniqueGenStartTimes.add(hash);
+        }
+        if (json.gen_started && json.gen_finished) {
+            const genTime = calculateGenTime(json.gen_started, json.gen_finished);
+            totalGenTime += genTime;
+            if (json.swipes && !json.swipe_info) {
+                totalGenTime += genTime * json.swipes.length;
+            }
+        }
+        if (json.mes) {
+            const wordCount = countWordsInString(json.mes);
+            json.is_user ? (userWordCount += wordCount) : (nonUserWordCount += wordCount);
+            json.is_user ? userMsgCount++ : nonUserMsgCount++;
+        }
+        if (json.swipes && json.swipes.length > 1) {
+            totalSwipeCount += json.swipes.length - 1;
+            for (let i = 1; i < json.swipes.length; i++) {
+                const wordCount = countWordsInString(json.swipes[i]);
+                json.is_user ? (userWordCount += wordCount) : (nonUserWordCount += wordCount);
+                json.is_user ? userMsgCount++ : nonUserMsgCount++;
+            }
+        }
+        if (json.swipe_info && json.swipe_info.length > 1) {
+            for (let i = 1; i < json.swipe_info.length; i++) {
+                const swipe = json.swipe_info[i];
+                if (swipe && swipe.gen_started && swipe.gen_finished) {
+                    totalGenTime += calculateGenTime(swipe.gen_started, swipe.gen_finished);
+                }
             }
         }
     }
+    return { totalGenTime, userWordCount, nonUserWordCount, userMsgCount, nonUserMsgCount, totalSwipeCount };
+}
 
-    return { [item]: stats };
-};
 
 /**
  * Sets the current charStats object.
