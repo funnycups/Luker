@@ -15326,32 +15326,52 @@ jQuery(() => {
     }
     // Floor-state has already settled (driven by core via settleXxx) before
     // these listeners run. Our work here is the non-graph state: cache
-    // invalidation, lorebook re-projection, extraction restart. We do it
-    // inline (await it as part of emit) so prompt build downstream sees
-    // a consistent runtime store.
-    context.eventSource.on(context.eventTypes.MESSAGE_DELETED, async (_messageCount, mutationMeta) => {
+    // invalidation, lorebook re-projection, extraction restart. The chain
+    // (refreshMemoryStoreCacheFromFloorState → persistMetaForChatKey →
+    // sync*LorebookProjection) fans out several server fetches and on a
+    // medium store can take 5+ seconds; on a slow fetch it can hang
+    // longer. `eventSource.emit` awaits every listener in sequence, so
+    // awaiting that chain inline would block the emit loop and freeze
+    // every other listener (var-ops rebuild, card-app refresh, UI), as
+    // well as any caller that awaits emit itself (`deleteMessage` ends
+    // with `await eventSource.emit(MESSAGE_DELETED, ...)`).
+    //
+    // Detach instead: schedule `applyMutationInvalidation` on a
+    // microtask so the listener resolves synchronously, the emit loop
+    // returns immediately, and the heavy chain runs in the background.
+    // Readers that depend on a settled post-mutation state still gate on
+    // `pendingMutationInvalidation` (e.g. the WI scan listener above).
+    const scheduleMutationInvalidation = (fromSeq) => {
+        queueMicrotask(() => {
+            applyMutationInvalidation(fromSeq, { scheduleReplay: true })
+                .catch(error => {
+                    console.error(`[${MODULE_NAME}] applyMutationInvalidation failed`, error);
+                });
+        });
+    };
+    context.eventSource.on(context.eventTypes.MESSAGE_DELETED, (_messageCount, mutationMeta) => {
         const runtimeContext = getContext();
         const assistantFromSeq = Number(mutationMeta?.deletedAssistantSeqFrom || 0);
         const playableFromSeq = Number(mutationMeta?.deletedPlayableSeqFrom || 0);
         const fromSeq = Number.isFinite(assistantFromSeq) && assistantFromSeq > 0
             ? assistantFromSeq
             : findAssistantSeqFromPlayableSeq(runtimeContext, playableFromSeq);
-        await applyMutationInvalidation(fromSeq, { scheduleReplay: true });
+        scheduleMutationInvalidation(fromSeq);
     });
     if (context.eventTypes.MESSAGE_SWIPED) {
-        context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, async (messageId, _meta) => {
+        context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, (messageId, _meta) => {
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
-            await applyMutationInvalidation(fromSeq, { scheduleReplay: true });
+            scheduleMutationInvalidation(fromSeq);
         });
     }
     if (context.eventTypes.MESSAGE_RECEIVED) {
-        context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, async (messageId, generationType) => {
+        context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, (messageId, generationType) => {
             const normalizedType = String(generationType || '').trim().toLowerCase();
             if (!['swipe', 'continue', 'append', 'appendfinal'].includes(normalizedType)) {
                 return;
             }
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
-            await applyMutationInvalidation(fromSeq, { scheduleReplay: true });
+            scheduleMutationInvalidation(fromSeq);
         });
     }
     if (context.eventTypes.PRESET_CHANGED) {
