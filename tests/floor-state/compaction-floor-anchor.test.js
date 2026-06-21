@@ -222,22 +222,26 @@ describe('compaction commit floor anchor — invariants', () => {
     });
 
     /**
-     * Bug demo: this is what happens when compression is deferred to the END
-     * of all batches but anchored at seqToFloor(parent.seqTo) — the rollup
-     * commit lands in the log AFTER batches at later floors, but anchors
-     * back at an earlier floor. Log-append-order anchors become [0, 2, 4, 2]
-     * — non-monotonic. Truncate to length=3 (floor >= 3) keeps [0, 2, 2],
-     * but the surviving floor-2 compression commit's `add /edges/3` assumes
-     * edges.length === 3 (the post-batch-3 state), while the surviving
-     * prefix only built edges to length 2 → patch out of bounds → recovery
-     * truncates floor >= 2 → user loses half the graph.
+     * Regression for the "整个图被废掉" outcome: a compression commit whose
+     * caller-supplied anchor floor is BELOW the log tail (e.g. compression
+     * folds in pre-existing older nodes and the caller anchors at
+     * `parent.seqTo` rather than the triggering batch's endSeq).
      *
-     * Pins the failure mode the production fix avoids by running compression
-     * INLINE (test above) rather than deferring it to the pass tail.
+     * Pre-fix: the out-of-order commit landed in the log; on delete,
+     * `truncateCommits` dropped a mid-log slice and left a dangling
+     * compression commit whose `add /edges/3` referenced an edges array
+     * that the surviving prefix had only built up to length 2 → fast-json-patch
+     * throws "Array index out of bounds" → recovery truncated by brokenFloor
+     * and the rest of the graph went with it.
+     *
+     * Post-fix: `appendCommit` clamps any out-of-order commit's floor up to
+     * the log tail's floor, preserving the chain. The user's data still
+     * lands, and the commit survives until the chat shrinks past the prior
+     * tail.
      */
-    test('deferred compression at historical anchor causes catastrophic data loss', async () => {
+    test('out-of-order compression commit is clamped to log tail and survives', async () => {
         const chatRef = { value: [msg(), msg(), msg(), msg(), msg()] };
-        const { deps } = makeDeps(chatRef);
+        const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'mg' }, deps);
 
         await updateToPayload(fs, (cur) => ({
@@ -250,25 +254,89 @@ describe('compaction commit floor anchor — invariants', () => {
             edges: [...(cur.edges || []), { from: 'c', to: 'd' }],
         }), { floor: 4 });
 
-        // BUG: compression deferred to pass tail, anchored at the historical
-        // floor of rollup.parent.seqTo (which compresses batches 1+2, so
-        // parent.seqTo maps back to floor 2).
+        // Buggy caller anchors compression at a historical floor (2) even
+        // though the log tail is already at floor 4. appendCommit's clamp
+        // pulls the floor up to 4 to keep the chain monotone.
         const HISTORICAL_FLOOR = 2;
         await updateToPayload(fs, (cur) => ({
             edges: [...(cur.edges || []), { from: 'rollup', to: 'parent' }],
         }), { floor: HISTORICAL_FLOOR });
 
+        // Log floors: [0, 2, 4, 4] — strictly non-decreasing thanks to clamp.
+        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 4, 4]);
+
         chatRef.value = chatRef.value.slice(0, 3);
         await fs.__handleMessageDeleted(3);
         await fs.ready();
 
-        // Replay: floor-0 ext → floor-2 ext → floor-2 compression.
-        // Compression's `add /edges/3` assumes edges.length === 3, but the
-        // surviving prefix only built edges up to length 2 → out of bounds.
-        // Recovery catches the throw, identifies brokenFloor=2, truncates
-        // floor >= 2 → drops the floor-2 extraction commit too. Result:
-        // only the floor-0 edge survives. This is the "整个图被废掉" outcome.
+        // Truncate floor >= 3 drops the floor-4 batch and the clamped-to-4
+        // compression together — a clean log suffix. The historical-floor
+        // batches survive intact.
         const recovered = await fs.get();
-        expect(recovered.edges).toEqual([{ from: 'a', to: 'b' }]);
+        expect(recovered.edges).toEqual([
+            { from: 'a', to: 'b' },
+            { from: 'b', to: 'c' },
+        ]);
+        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2]);
+    });
+
+    /**
+     * The same scenario that produced the user's "记忆图清零" report from a
+     * real chat: extraction batches advance the log to floor 12, then manual
+     * compression folds in pre-existing older nodes and the rollup's
+     * parent.seqTo translates back to a much earlier floor (8, then 0, 0, 0,
+     * 0 across multiple rounds). Without clamp this is the exact failure
+     * mode that orphaned 5 compression commits at floor=0 in the brokenLog.
+     * With clamp every out-of-order commit gets pulled up to floor 12, so
+     * delete-on-tail still yields a monotone chain and a clean truncate.
+     */
+    test('multi-round compression folding old nodes stays monotone via clamp', async () => {
+        const chatRef = { value: Array.from({ length: 14 }, msg) };
+        const { store, deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'mg' }, deps);
+
+        // Extraction batches at floors 0, 2, 6, 8, 10, 12 — monotone.
+        for (const floor of [0, 2, 6, 8, 10, 12]) {
+            await updateToPayload(fs, (cur) => ({
+                edges: [...(cur.edges || []), { from: `batch-${floor}`, to: 'x' }],
+            }), { floor });
+        }
+
+        // Five compression rounds, each anchored at a historical floor that
+        // matches the rollup's parent.seqTo (the bug). 8 → 0 → 0 → 0 → 0.
+        for (const buggyFloor of [8, 0, 0, 0, 0]) {
+            await updateToPayload(fs, (cur) => ({
+                edges: [...(cur.edges || []), { from: `rollup-at-${buggyFloor}`, to: 'parent' }],
+            }), { floor: buggyFloor });
+        }
+
+        // Log floors are clamped to the tail (12) for every out-of-order
+        // commit. Monotone.
+        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([
+            0, 2, 6, 8, 10, 12,   // batches
+            12, 12, 12, 12, 12,    // clamped compression commits
+        ]);
+
+        // Replay from scratch (no recovery path) — should never throw.
+        const replayed = await fs.get();
+        expect(replayed).not.toBeNull();
+        expect(replayed.edges).toHaveLength(11);
+
+        // Delete back to length=11 → truncate floor >= 11 → drops the
+        // floor-12 batch and all clamped compression commits. The
+        // floor-0..10 batches survive.
+        chatRef.value = chatRef.value.slice(0, 11);
+        await fs.__handleMessageDeleted(11);
+        await fs.ready();
+
+        const recovered = await fs.get();
+        expect(recovered).not.toBeNull();
+        expect(recovered.edges).toEqual([
+            { from: 'batch-0', to: 'x' },
+            { from: 'batch-2', to: 'x' },
+            { from: 'batch-6', to: 'x' },
+            { from: 'batch-8', to: 'x' },
+            { from: 'batch-10', to: 'x' },
+        ]);
     });
 });

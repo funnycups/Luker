@@ -240,12 +240,35 @@ export function createFloorStateWithDeps(options, deps) {
      * Append a single commit. Read-modify-write under updateChatState's
      * own retry semantics; commit log lives in its own namespace so this
      * does not contend with business writes.
+     *
+     * Enforces the log-append-order monotonicity invariant: a commit whose
+     * floor is below the most recent commit's floor is clamped UP to that
+     * floor before being appended. Truncate-by-floor on MESSAGE_DELETED only
+     * preserves a valid replay chain when floors never go backwards in append
+     * order — a single out-of-order commit lets `truncateCommits` drop a
+     * mid-log slice and leave later commits dangling, which then crashes
+     * replay inside fast-json-patch. Clamping up preserves the user's data
+     * (the commit still lands; only its anchor is adjusted to the safest
+     * value that maintains the invariant) and keeps the commit visible until
+     * the chat shrinks past the prior commit's floor, which matches how a
+     * user thinks about "stuff I just did sticks around until I delete the
+     * thing that triggered it."
      */
     async function appendCommit(commit) {
         if (!isValidCommit(commit)) return false;
         const result = await runtime.updateChatState(logNamespace, (current) => {
             const next = normalizeLog(current);
-            next.commits.push(commit);
+            let toAppend = commit;
+            if (next.commits.length > 0) {
+                const lastFloor = next.commits[next.commits.length - 1].floor;
+                if (commit.floor < lastFloor) {
+                    console.warn(
+                        `[floor-state:${namespace}] commit floor ${commit.floor} below log tail ${lastFloor}; clamping up to preserve monotonicity`,
+                    );
+                    toAppend = { ...commit, floor: lastFloor };
+                }
+            }
+            next.commits.push(toAppend);
             return next;
         });
         if (!result || result.ok === false) {

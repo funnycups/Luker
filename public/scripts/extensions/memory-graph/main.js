@@ -7901,10 +7901,13 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
     const rebuilt = createEmptyStore();
     let hasCommittedBatch = false;
     // Each batch commit and each compression round commit anchors at the floor
-    // of the seq it covers (seqToFloor(endSeq | roundSeqTo)). Compression runs
-    // inline after every successful batch, so anchors stay monotonic in log
-    // append order and tail-truncation on delete drops a clean log suffix —
-    // see runExtractionForStore for the invariant.
+    // of the batch that triggered it (seqToFloor(batchEndSeq)). Compression
+    // runs inline after every successful batch, so anchors stay monotonic in
+    // log append order and tail-truncation on delete drops a clean log suffix —
+    // see runExtractionForStore for the invariant. Anchoring compression at
+    // the rollup parent's own seqTo would mis-place the commit when the
+    // compression pulls in pre-existing older nodes (parent.seqTo can be far
+    // earlier than the triggering batch); use batchEndSeq instead.
     const extracted = await runExtractionForStore(context, rebuilt, {
         force: true,
         startSeq: 1,
@@ -7923,14 +7926,13 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
             }
             await commitMemoryStoreReplaceByChatKey(context, chatKey, rebuilt, endSeq, { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) });
         },
-        onCompressionApplied: async ({ roundSeqTo, batchEndSeq }) => {
-            const anchorSeq = Number(roundSeqTo || batchEndSeq || getStoreCoveredSeqTo(rebuilt) || 0);
+        onCompressionApplied: async ({ batchEndSeq }) => {
             await commitMemoryStoreReplaceByChatKey(
                 context,
                 chatKey,
                 rebuilt,
-                anchorSeq,
-                { syncPersistentProjection: true, floor: seqToFloor(context, anchorSeq) },
+                batchEndSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
             );
         },
         rebuildCreateOnly: true,
@@ -8567,9 +8569,13 @@ async function runScheduledExtractionPass(chatKey) {
             },
         });
         // Each batch + each compression round commit anchors at the floor of
-        // the seq it covers (seqToFloor of endSeq | roundSeqTo). Compression
-        // runs inline after every batch, so anchors stay monotonic in log
-        // append order — see runExtractionForStore for the invariant.
+        // the triggering batch (seqToFloor(batchEndSeq)). Compression runs
+        // inline after every batch and uses the batch's endSeq, never the
+        // rollup parent's own seqTo — the parent can fold in pre-existing
+        // older nodes whose seqTo predates the current batch, which would
+        // anchor the commit at a much earlier floor and break log-append
+        // monotonicity (see tests/floor-state/compaction-floor-anchor.test.js
+        // for the failure mode this avoids).
         await runExtractionForStore(runtimeContext, workingStore, {
             abortSignal: extractionAbortController.signal,
             onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
@@ -8585,15 +8591,14 @@ async function runScheduledExtractionPass(chatKey) {
                     { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
                 );
             },
-            onCompressionApplied: async ({ beforeStore, roundSeqTo, batchEndSeq }) => {
-                const anchorSeq = Number(roundSeqTo || batchEndSeq || 0);
+            onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
                 committedStore = await commitMemoryStoreDiffByChatKey(
                     runtimeContext,
                     chatKey,
                     beforeStore,
                     workingStore,
-                    anchorSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, anchorSeq) },
+                    batchEndSeq,
+                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, batchEndSeq) },
                 );
             },
         });
@@ -14643,15 +14648,14 @@ function bindUi() {
                         { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
                     );
                 },
-                onCompressionApplied: async ({ beforeStore, roundSeqTo, batchEndSeq }) => {
-                    const anchorSeq = Number(roundSeqTo || batchEndSeq || 0);
+                onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
                     committedStore = await commitMemoryStoreDiffByChatKey(
                         context,
                         chatKey,
                         beforeStore,
                         workingStore,
-                        anchorSeq,
-                        { syncPersistentProjection: true, floor: seqToFloor(context, anchorSeq) },
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
                     );
                 },
             });
@@ -14856,14 +14860,13 @@ function bindUi() {
                         { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
                     );
                 },
-                onCompressionApplied: async ({ roundSeqTo, batchEndSeq }) => {
-                    const anchorSeq = Number(roundSeqTo || batchEndSeq || latestSeq || getStoreCoveredSeqTo(workingStore) || 0);
+                onCompressionApplied: async ({ batchEndSeq }) => {
                     await commitMemoryStoreReplaceByChatKey(
                         context,
                         chatKey,
                         workingStore,
-                        anchorSeq,
-                        { syncPersistentProjection: true, floor: seqToFloor(context, anchorSeq) },
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
                     );
                 },
             });
