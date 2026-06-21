@@ -117,6 +117,7 @@ All event types are accessed via `context.eventTypes`. The full set covers chat 
 | Chat lifecycle | `CHAT_CHANGED`, `CHAT_LOADED`, `CHAT_BRANCH_CREATED` |
 | Message events | `MESSAGE_SENT`, `MESSAGE_RECEIVED`, `MESSAGE_RENDERED`, `MESSAGE_EDITED`, `MESSAGE_UPDATED`, `MESSAGE_DELETED`, `MESSAGE_SWIPED`, `MESSAGE_SWIPE_DELETED` |
 | Generation hooks | `GENERATION_STARTED`, `GENERATION_CONTEXT_READY`, `GENERATION_BEFORE_WORLD_INFO_SCAN`, `GENERATION_BEFORE_API_REQUEST`, `GENERATION_ENDED`, `GENERATION_STOPPED`, `WORLD_INFO_ACTIVATED` |
+| Image generation | `IMAGE_GENERATION_STARTED`, `IMAGE_GENERATION_ENDED` |
 | App-level | `APP_READY`, `SETTINGS_LOADED_AFTER`, `EXTENSIONS_FIRST_LOAD` |
 
 For full event payload shapes, see [Frontend Plugin Development → Event System](/development/frontend-plugin#event-system).

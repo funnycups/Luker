@@ -318,6 +318,12 @@ GENERATION_ENDED / GENERATION_STOPPED
 }
 ```
 
+### 图像生成事件
+
+`IMAGE_GENERATION_STARTED` 与 `IMAGE_GENERATION_ENDED` 在每一次图像生成请求上各触发一次。无论请求是正常完成、被中止还是出错，每个 STARTED 都恰好对应一个 ENDED；并发请求各自配对。两者都不携带任何参数。需要维护「当前是否在生成」状态的监听者应当做引用计数：STARTED 时 +1，ENDED 时 -1。
+
+该契约覆盖通过内置图像生成扩展（Automatic1111、ComfyUI、NovelAI、Horde、OpenAI Images 等）调度的所有后端。提供自有图像生成管线的插件应遵循同样的契约：每次请求各 emit 一次 STARTED 与 ENDED；这样跨插件的功能（例如后台保活）就能统一处理任何来源的图像生成。
+
 ### APP_READY 事件
 
 `APP_READY` 是一个特殊事件——它具有自动触发特性。如果监听器在应用启动后才注册，仍然会立即收到最后一次 `APP_READY` 的参数。这确保了延迟加载的插件也能正确初始化。

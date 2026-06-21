@@ -324,6 +324,12 @@ GENERATION_ENDED / GENERATION_STOPPED
 }
 ```
 
+### 圖像生成事件
+
+`IMAGE_GENERATION_STARTED` 與 `IMAGE_GENERATION_ENDED` 在每一次圖像生成請求上各觸發一次。無論請求是正常完成、被中止還是出錯，每個 STARTED 都恰好對應一個 ENDED；並行請求各自配對。兩者都不攜帶任何參數。需要維護「當前是否在生成」狀態的監聽者應當做引用計數：STARTED 時 +1，ENDED 時 -1。
+
+該契約涵蓋通過內建圖像生成擴充功能（Automatic1111、ComfyUI、NovelAI、Horde、OpenAI Images 等）調度的所有後端。提供自有圖像生成管線的外掛應遵循同樣的契約：每次請求各 emit 一次 STARTED 與 ENDED；這樣跨外掛的功能（例如後台保活）就能統一處理任何來源的圖像生成。
+
 ### APP_READY 事件
 
 `APP_READY` 是一個特殊事件——它具有自動觸發特性。如果監聽器在應用啟動後才註冊，仍然會立即收到最後一次 `APP_READY` 的參數。這確保了延遲載入的外掛也能正確初始化。

@@ -324,6 +324,12 @@ GENERATION_ENDED / GENERATION_STOPPED
 }
 ```
 
+### Image Generation Events
+
+`IMAGE_GENERATION_STARTED` and `IMAGE_GENERATION_ENDED` fire once per image-generation request. Each STARTED is paired with exactly one ENDED — including for aborted, errored, or concurrent requests. Both fire with no payload arguments. Listeners that need a "currently generating" state should reference-count: increment on STARTED, decrement on ENDED.
+
+This contract covers all backends routed through the built-in image-generation extension (Automatic1111, ComfyUI, NovelAI, Horde, OpenAI Images, etc.). Plugins providing their own image-generation pipelines should follow the same contract — one STARTED and one ENDED per request — so cross-plugin features (e.g. background keep-alive) can treat all image generation uniformly.
+
 ### APP_READY Event
 
 `APP_READY` is a special event with an auto-trigger behavior. If a listener is registered after the application has already started, it will immediately receive the arguments from the last `APP_READY` emission. This ensures that lazily loaded plugins can still initialize correctly.

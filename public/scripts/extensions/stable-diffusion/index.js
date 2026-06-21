@@ -2991,17 +2991,29 @@ function syncGenerationTrackingState() {
 }
 
 function startGenerationTracking(controller = null) {
+    let added = false;
     if (controller instanceof AbortController) {
+        const before = trackedGenerationControllers.size;
         trackedGenerationControllers.add(controller);
+        added = trackedGenerationControllers.size > before;
+    } else {
+        // Untracked invocation (no controller) — still counts as one job for
+        // lifecycle bookkeeping so STARTED/ENDED stay paired.
+        added = true;
     }
     syncGenerationTrackingState();
+    if (added) eventSource.emit(event_types.IMAGE_GENERATION_STARTED);
 }
 
 function endGenerationTracking(controller = null) {
+    let removed = false;
     if (controller instanceof AbortController) {
-        trackedGenerationControllers.delete(controller);
+        removed = trackedGenerationControllers.delete(controller);
+    } else {
+        removed = true;
     }
     syncGenerationTrackingState();
+    if (removed) eventSource.emit(event_types.IMAGE_GENERATION_ENDED);
 }
 
 function endGenerationTrackingEarly(controller) {
