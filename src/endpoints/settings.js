@@ -5,11 +5,10 @@ import express from 'express';
 import _ from 'lodash';
 import bytes from 'bytes';
 
-import { SETTINGS_FILE } from '../constants.js';
 import { getConfigValue, generateTimestamp, removeOldBackups } from '../util.js';
 import { getAllUserHandles, getUserDirectories } from '../users.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { getSettingsRepo } from '../storage/index.js';
+import { getSettingsRepo, getPresetRepo, getNamedDocRepo, getWorldInfoRepo } from '../storage/index.js';
 import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { NotFoundError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 
@@ -34,11 +33,15 @@ const AUTOSAVE_FUNCTIONS = new Map();
 /**
  * Triggers autosave for a user every 10 minutes.
  * @param {string} handle User handle
+ * @param {object} userDirectories Per-user directory map
  * @returns {void}
  */
-function triggerAutoSave(handle) {
+function triggerAutoSave(handle, userDirectories) {
     if (!AUTOSAVE_FUNCTIONS.has(handle)) {
-        const throttledAutoSave = _.throttle(() => backupUserSettings(handle, true), AUTOSAVE_INTERVAL);
+        const throttledAutoSave = _.throttle(
+            () => { backupUserSettings(handle, userDirectories, true).catch((err) => console.error('autosave failed:', err)); },
+            AUTOSAVE_INTERVAL,
+        );
         AUTOSAVE_FUNCTIONS.set(handle, throttledAutoSave);
     }
 
@@ -175,6 +178,39 @@ function retainSelectedPresetContents(fileContents, fileNames, selectedName) {
     return fileNames.map((name, index) => name === selectedName ? fileContents[index] : null);
 }
 
+// Engine-agnostic adapter: shape PresetRepo.listWithDocs() output to match
+// the legacy `{fileContents: string[], fileNames: string[]}` payload the
+// frontend expects (openai.js#hydrateOpenAIPresetData JSON.parses each
+// element). Keeping the strings means clients don't have to be re-taught.
+async function presetsFromRepo(handle, apiId) {
+    const entries = await getPresetRepo().listWithDocs(handle, apiId);
+    const fileContents = entries.map((e) => JSON.stringify(e.doc));
+    const fileNames = entries.map((e) => e.name);
+    return { fileContents, fileNames };
+}
+
+// Engine-agnostic adapter: matches readAndParseFromDirectory's
+// "parsed JSON objects only" shape, but also stamps each entry's `name`
+// field from the Repo key so the frontend can resolve themes / movingUI
+// presets back. The legacy fs reader trusted each file's internal `.name`
+// property — which is what the existing serializers write — but we keep
+// the same shape regardless of where the data came from.
+async function namedDocsFromRepo(handle, bucket) {
+    const entries = await getNamedDocRepo().listWithDocs(handle, bucket);
+    return entries.map((e) => {
+        // Most named docs are written by save-with-name endpoints, so their
+        // body already has `name`. Preserve the body's existing field if it
+        // matches, otherwise stamp from the Repo key.
+        if (e.doc && typeof e.doc === 'object' && !Array.isArray(e.doc)) {
+            if (typeof e.doc.name !== 'string' || !e.doc.name) {
+                return { ...e.doc, name: e.name };
+            }
+            return e.doc;
+        }
+        return { name: e.name };
+    });
+}
+
 export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
     const handle = request.user.profile.handle;
     const parsedSettings = await getSettingsRepo().get(handle);
@@ -184,43 +220,44 @@ export async function buildSettingsResponse(request, { includePresetContents = t
     const settings = JSON.stringify(parsedSettings);
 
     const { fileContents: novelai_settings, fileNames: novelai_setting_names }
-        = readPresetsFromDirectory(request.user.directories.novelAI_Settings, {
-            sortFunction: sortByName(request.user.directories.novelAI_Settings),
-            removeFileExtension: true,
-            excludePresetStateSidecars: true,
-        });
-
+        = await presetsFromRepo(handle, 'novel');
     const { fileContents: openai_settings, fileNames: openai_setting_names }
-        = readPresetsFromDirectory(request.user.directories.openAI_Settings, {
-            sortFunction: sortByName(request.user.directories.openAI_Settings),
-            removeFileExtension: true,
-            excludePresetStateSidecars: true,
-        });
-
+        = await presetsFromRepo(handle, 'openai');
     const { fileContents: textgenerationwebui_presets, fileNames: textgenerationwebui_preset_names }
-        = readPresetsFromDirectory(request.user.directories.textGen_Settings, {
-            sortFunction: sortByName(request.user.directories.textGen_Settings),
-            removeFileExtension: true,
-            excludePresetStateSidecars: true,
-        });
-
+        = await presetsFromRepo(handle, 'textgenerationwebui');
     const { fileContents: koboldai_settings, fileNames: koboldai_setting_names }
-        = readPresetsFromDirectory(request.user.directories.koboldAI_Settings, {
-            sortFunction: sortByName(request.user.directories.koboldAI_Settings),
-            removeFileExtension: true,
-            excludePresetStateSidecars: true,
-        });
+        = await presetsFromRepo(handle, 'kobold');
 
-    const world_names = readWorldNames(request.user.directories.worlds);
+    const world_names = await getWorldInfoRepo().listNames(handle);
 
-    const themes = readAndParseFromDirectory(request.user.directories.themes);
-    const movingUIPresets = readAndParseFromDirectory(request.user.directories.movingUI);
-    const quickReplyPresets = includeQuickReplyPresets ? readAndParseFromDirectory(request.user.directories.quickreplies) : [];
+    const themes = await namedDocsFromRepo(handle, 'themes');
+    const movingUIPresets = await namedDocsFromRepo(handle, 'movingUI');
+    const quickReplyPresets = includeQuickReplyPresets
+        ? await namedDocsFromRepo(handle, 'quickReplies')
+        : [];
 
-    const instruct = readAndParseFromDirectory(request.user.directories.instruct, { excludePresetStateSidecars: true });
-    const context = readAndParseFromDirectory(request.user.directories.context, { excludePresetStateSidecars: true });
-    const sysprompt = readAndParseFromDirectory(request.user.directories.sysprompt, { excludePresetStateSidecars: true });
-    const reasoning = readAndParseFromDirectory(request.user.directories.reasoning, { excludePresetStateSidecars: true });
+    // instruct / context / sysprompt / reasoning are still in PresetRepo (not
+    // NamedDocRepo) — their bodies use the `name` field internally and the
+    // frontend expects raw parsed objects, not the {fileContents, fileNames}
+    // pair. Drop the wrapper.
+    const instructEntries = await getPresetRepo().listWithDocs(handle, 'instruct');
+    const contextEntries = await getPresetRepo().listWithDocs(handle, 'context');
+    const syspromptEntries = await getPresetRepo().listWithDocs(handle, 'sysprompt');
+    const reasoningEntries = await getPresetRepo().listWithDocs(handle, 'reasoning');
+    const stampedName = (e) => {
+        if (e.doc && typeof e.doc === 'object' && !Array.isArray(e.doc)) {
+            if (typeof e.doc.name !== 'string' || !e.doc.name) {
+                return { ...e.doc, name: e.name };
+            }
+            return e.doc;
+        }
+        return { name: e.name };
+    };
+    const instruct = instructEntries.map(stampedName);
+    const context = contextEntries.map(stampedName);
+    const sysprompt = syspromptEntries.map(stampedName);
+    const reasoning = reasoningEntries.map(stampedName);
+
 
     const selectedKoboldPreset = parsedSettings?.kai_settings?.preset_settings ?? parsedSettings?.preset_settings;
     const selectedNovelPreset = parsedSettings?.preset_settings_novel;
@@ -264,7 +301,8 @@ async function backupSettings() {
         const userHandles = await getAllUserHandles();
 
         for (const handle of userHandles) {
-            backupUserSettings(handle, true);
+            const userDirectories = getUserDirectories(handle);
+            await backupUserSettings(handle, userDirectories, true);
         }
     } catch (err) {
         console.error('Could not backup settings file', err);
@@ -272,69 +310,56 @@ async function backupSettings() {
 }
 
 /**
- * Makes a backup of the user's settings file.
+ * Makes a backup of the user's settings doc by reading the LIVE state from
+ * SettingsRepo (not the on-disk settings.json — that file is only the FS
+ * engine's storage shape and is empty in db modes). Writes the resulting
+ * JSON to `<backups>/settings_<handle>_<ts>.json`.
  * @param {string} handle User handle
- * @param {boolean} preventDuplicates Prevent duplicate backups
- * @returns {void}
+ * @param {object} userDirectories Per-user directory map (from request.user.directories or getUserDirectories)
+ * @param {boolean} preventDuplicates Skip when content matches the latest backup
+ * @returns {Promise<void>}
  */
-function backupUserSettings(handle, preventDuplicates) {
-    const userDirectories = getUserDirectories(handle);
-
+async function backupUserSettings(handle, userDirectories, preventDuplicates) {
     if (!fs.existsSync(userDirectories.root)) {
+        return;
+    }
+    fs.mkdirSync(userDirectories.backups, { recursive: true });
+
+    const settingsDoc = await getSettingsRepo().get(handle);
+    if (settingsDoc == null) return;
+    const serialized = JSON.stringify(settingsDoc, null, 4);
+
+    if (preventDuplicates && isDuplicateBackup(userDirectories, handle, serialized)) {
         return;
     }
 
     const backupFile = path.join(userDirectories.backups, `${getSettingsBackupFilePrefix(handle)}${generateTimestamp()}.json`);
-    const sourceFile = path.join(userDirectories.root, SETTINGS_FILE);
-
-    if (preventDuplicates && isDuplicateBackup(handle, sourceFile)) {
-        return;
-    }
-
-    if (!fs.existsSync(sourceFile)) {
-        return;
-    }
-
-    fs.copyFileSync(sourceFile, backupFile);
+    fs.writeFileSync(backupFile, serialized, 'utf8');
     removeOldBackups(userDirectories.backups, `settings_${handle}`);
 }
 
 /**
- * Checks if the backup would be a duplicate.
- * @param {string} handle User handle
- * @param {string} sourceFile Source file path
- * @returns {boolean} True if the backup is a duplicate
+ * Checks whether the latest backup file matches the current Repo snapshot.
+ * Reads the previous backup off disk and string-compares against the
+ * already-serialized current content.
  */
-function isDuplicateBackup(handle, sourceFile) {
-    const latestBackup = getLatestBackup(handle);
+function isDuplicateBackup(userDirectories, handle, currentSerialized) {
+    const latestBackup = getLatestBackup(userDirectories, handle);
     if (!latestBackup) {
         return false;
     }
-    return areFilesEqual(latestBackup, sourceFile);
-}
-
-/**
- * Returns true if the two files are equal.
- * @param {string} file1 File path
- * @param {string} file2 File path
- */
-function areFilesEqual(file1, file2) {
-    if (!fs.existsSync(file1) || !fs.existsSync(file2)) {
+    try {
+        return fs.readFileSync(latestBackup, 'utf8') === currentSerialized;
+    } catch {
         return false;
     }
-
-    const content1 = fs.readFileSync(file1);
-    const content2 = fs.readFileSync(file2);
-    return content1.toString() === content2.toString();
 }
 
 /**
  * Gets the latest backup file for a user.
- * @param {string} handle User handle
- * @returns {string|null} Latest backup file. Null if no backup exists.
  */
-function getLatestBackup(handle) {
-    const userDirectories = getUserDirectories(handle);
+function getLatestBackup(userDirectories, handle) {
+    if (!fs.existsSync(userDirectories.backups)) return null;
     const backupFiles = fs.readdirSync(userDirectories.backups)
         .filter(x => x.startsWith(getSettingsBackupFilePrefix(handle)))
         .map(x => ({ name: x, ctime: fs.statSync(path.join(userDirectories.backups, x)).ctimeMs }));
@@ -371,7 +396,7 @@ router.post('/patch', async function (request, response) {
                 throw err;
             }
         }
-        triggerAutoSave(handle);
+        triggerAutoSave(handle, request.user.directories);
         return response.send({ result: 'ok', applied: operations.length });
     } catch (error) {
         if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
@@ -397,7 +422,7 @@ router.post('/save', async function (request, response) {
     try {
         const handle = request.user.profile.handle;
         await getSettingsRepo().save(handle, request.body);
-        triggerAutoSave(handle);
+        triggerAutoSave(handle, request.user.directories);
         response.send({ result: 'ok' });
     } catch (err) {
         console.error(err);
@@ -425,7 +450,11 @@ router.post('/bootstrap', async (request, response) => {
     }
 });
 
-// TODO(storage-phase-2): route through engine-level snapshot API
+// Settings snapshots live on disk as `<backups>/settings_<handle>_<ts>.json`
+// regardless of storage mode. They're admin-visible artifacts (rotation,
+// archival tools, manual recovery) so leaving them on the filesystem is
+// intentional. The CONTENTS of those files now come from SettingsRepo, not
+// from a stale on-disk settings.json. See backupUserSettings.
 router.post('/get-snapshots', async (request, response) => {
     try {
         const snapshots = fs.readdirSync(request.user.directories.backups);
@@ -444,7 +473,6 @@ router.post('/get-snapshots', async (request, response) => {
     }
 });
 
-// TODO(storage-phase-2): route through engine-level snapshot API
 router.post('/load-snapshot', getFileNameValidationFunction('name'), async (request, response) => {
     try {
         const userFilesPattern = getSettingsBackupFilePrefix(request.user.profile.handle);
@@ -469,10 +497,9 @@ router.post('/load-snapshot', getFileNameValidationFunction('name'), async (requ
     }
 });
 
-// TODO(storage-phase-2): route through engine-level snapshot API
 router.post('/make-snapshot', async (request, response) => {
     try {
-        backupUserSettings(request.user.profile.handle, false);
+        await backupUserSettings(request.user.profile.handle, request.user.directories, false);
         response.sendStatus(204);
     } catch (error) {
         console.error(error);
@@ -480,7 +507,6 @@ router.post('/make-snapshot', async (request, response) => {
     }
 });
 
-// TODO(storage-phase-2): route through engine-level snapshot API
 router.post('/restore-snapshot', getFileNameValidationFunction('name'), async (request, response) => {
     try {
         const userFilesPattern = getSettingsBackupFilePrefix(request.user.profile.handle);
@@ -496,9 +522,19 @@ router.post('/restore-snapshot', getFileNameValidationFunction('name'), async (r
             return response.sendStatus(404);
         }
 
-        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        fs.rmSync(pathToSettings, { force: true });
-        fs.copyFileSync(snapshotPath, pathToSettings);
+        // Load the snapshot from disk and write it through SettingsRepo. The
+        // legacy implementation overwrote `<root>/settings.json` directly,
+        // which is a silent no-op in db modes (the engine reads from a SQL
+        // table, not from disk).
+        const raw = fs.readFileSync(snapshotPath, 'utf8');
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (parseErr) {
+            console.error('restore-snapshot: snapshot file is not valid JSON', parseErr);
+            return response.status(400).send({ error: 'Snapshot file is corrupt.' });
+        }
+        await getSettingsRepo().save(request.user.profile.handle, parsed);
 
         response.sendStatus(204);
     } catch (error) {

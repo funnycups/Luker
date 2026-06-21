@@ -145,11 +145,25 @@ export function registerChatHandler(tx) {
             return result.affectedRows > 0;
         },
         async list(filter) {
+            const where = ['handle = ?'];
+            const args = [filter.handle];
+            if (typeof filter.charDir === 'string') {
+                where.push('char_dir = ?');
+                args.push(filter.charDir);
+            }
+            if (typeof filter.isGroup === 'boolean') {
+                where.push('is_group = ?');
+                args.push(filter.isGroup ? 1 : 0);
+            }
+            if (typeof filter.groupId === 'string') {
+                where.push('group_id = ?');
+                args.push(filter.groupId);
+            }
             const orderClause = filter.orderBy === 'name' ? 'ORDER BY name ASC' : 'ORDER BY updated_at DESC';
             const [rows] = await conn.execute(
                 `SELECT char_dir, name, is_group, group_id, updated_at, created_at
-                 FROM chats WHERE handle=? ${orderClause}`,
-                [filter.handle],
+                 FROM chats WHERE ${where.join(' AND ')} ${orderClause}`,
+                args,
             );
             const out = rows.map((row) => ({
                 key: {

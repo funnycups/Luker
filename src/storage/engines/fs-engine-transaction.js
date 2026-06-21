@@ -169,18 +169,62 @@ function registerChatHandler(tx) {
         list(filter) {
             const dirs = tx._directoriesByHandle(filter.handle);
             const out = [];
-            if (!fs.existsSync(dirs.chats)) return out;
-            for (const charDir of fs.readdirSync(dirs.chats)) {
-                const charDirPath = path.join(dirs.chats, charDir);
-                const st = fs.statSync(charDirPath);
-                if (!st.isDirectory()) continue;
-                for (const entry of fs.readdirSync(charDirPath)) {
+
+            // Walk per-character chats. Each subdirectory is one character's
+            // chat folder; ".jsonl" files inside are individual chats. Honors
+            // the optional filter.charDir filter; if absent, includes every
+            // character.
+            const walkCharacterChats = () => {
+                if (!fs.existsSync(dirs.chats)) return;
+                const charDirs = (typeof filter.charDir === 'string')
+                    ? [filter.charDir]
+                    : fs.readdirSync(dirs.chats);
+                for (const charDir of charDirs) {
+                    const charDirPath = path.join(dirs.chats, charDir);
+                    let st;
+                    try { st = fs.statSync(charDirPath); } catch { continue; }
+                    if (!st.isDirectory()) continue;
+                    for (const entry of fs.readdirSync(charDirPath)) {
+                        if (!entry.endsWith('.jsonl')) continue;
+                        const name = entry.slice(0, -'.jsonl'.length);
+                        const filePath = path.join(charDirPath, entry);
+                        const fileStat = fs.statSync(filePath);
+                        out.push({
+                            key: { kind: 'chat', handle: filter.handle, charDir, name, isGroup: false },
+                            header: undefined,
+                            body: undefined,
+                            integrity: undefined,
+                            updatedAt: Math.floor(fileStat.mtimeMs),
+                            createdAt: Math.floor(fileStat.birthtimeMs || fileStat.ctimeMs),
+                        });
+                    }
+                }
+            };
+
+            // Walk group chats. The chat row's `groupId` is the file's base
+            // name minus ".jsonl"; the on-disk file lives flat under
+            // <groupChats>/. There is no per-group subdirectory.
+            const walkGroupChats = () => {
+                if (!fs.existsSync(dirs.groupChats)) return;
+                for (const entry of fs.readdirSync(dirs.groupChats)) {
                     if (!entry.endsWith('.jsonl')) continue;
                     const name = entry.slice(0, -'.jsonl'.length);
-                    const filePath = path.join(charDirPath, entry);
-                    const fileStat = fs.statSync(filePath);
+                    const filePath = path.join(dirs.groupChats, entry);
+                    let fileStat;
+                    try { fileStat = fs.statSync(filePath); } catch { continue; }
                     out.push({
-                        key: { kind: 'chat', handle: filter.handle, charDir, name },
+                        key: {
+                            kind: 'chat',
+                            handle: filter.handle,
+                            charDir: '',
+                            name,
+                            isGroup: true,
+                            // For group chats the on-disk filename IS the chatId,
+                            // and in the FS engine that chatId doubles as the
+                            // groupId-routing key. Surface it so callers can
+                            // resolve group identity without a second read.
+                            groupId: name,
+                        },
                         header: undefined,
                         body: undefined,
                         integrity: undefined,
@@ -188,7 +232,30 @@ function registerChatHandler(tx) {
                         createdAt: Math.floor(fileStat.birthtimeMs || fileStat.ctimeMs),
                     });
                 }
+            };
+
+            // Branch by filter:
+            //   isGroup=false       → only character chats
+            //   isGroup=true        → only group chats
+            //   isGroup=undefined   → both, character first (insertion order
+            //                         not load-bearing; downstream sorts by
+            //                         orderBy)
+            //   groupId given       → only group chats matching that id
+            //   charDir given       → only that character (forced isGroup=false)
+            if (typeof filter.groupId === 'string') {
+                walkGroupChats();
+                for (let i = out.length - 1; i >= 0; i--) {
+                    if (out[i].key.groupId !== filter.groupId) out.splice(i, 1);
+                }
+            } else if (filter.isGroup === true) {
+                walkGroupChats();
+            } else if (filter.isGroup === false || typeof filter.charDir === 'string') {
+                walkCharacterChats();
+            } else {
+                walkCharacterChats();
+                walkGroupChats();
             }
+
             if (filter.orderBy === 'updatedAt') {
                 out.sort((a, b) => b.updatedAt - a.updatedAt);
             } else if (filter.orderBy === 'name') {

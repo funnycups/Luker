@@ -11,8 +11,9 @@ export const router = express.Router();
 router.post('/bootstrap', async (request, response) => {
     try {
         const directories = request.user.directories;
-        const charactersPromise = getCharactersSnapshot(directories, { useShallowCharacters: true });
-        const groupsPromise = getGroupsSnapshot(request.user.profile.handle);
+        const handle = request.user.profile.handle;
+        const charactersPromise = getCharactersSnapshot(directories, { useShallowCharacters: true, handle });
+        const groupsPromise = getGroupsSnapshot(handle);
         const settings = await buildSettingsResponse(request, {
             includePresetContents: false,
             includeQuickReplyPresets: false,

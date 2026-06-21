@@ -39,6 +39,26 @@ export class NamedDocRepo {
             tx.listResources({ kind: 'named-doc', handle, bucket }));
     }
 
+    // Like list(), but also fetches each doc's body in the same transaction.
+    // Used by endpoints that need to ship named-doc contents to the client
+    // (e.g. /api/settings/get and /api/settings/bootstrap surface themes /
+    // movingUI / quickReplies as full objects, not just names).
+    async listWithDocs(handle, bucket) {
+        this._key(handle, bucket, '__list__');
+        return this._engine.withTransaction(handle, async (tx) => {
+            const entries = await tx.listResources({ kind: 'named-doc', handle, bucket });
+            const out = [];
+            for (const entry of entries) {
+                const name = entry?.key?.name;
+                if (!name) continue;
+                const doc = await tx.getResource({ kind: 'named-doc', handle, bucket, name });
+                if (doc != null) out.push({ name, doc });
+            }
+            out.sort((a, b) => a.name.localeCompare(b.name));
+            return out;
+        });
+    }
+
     async delete(handle, bucket, name, { strict = false } = {}) {
         assertWritable();
         const removed = await this._engine.withTransaction(handle, (tx) =>

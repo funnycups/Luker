@@ -119,6 +119,29 @@ export class PresetRepo {
             tx.listResources({ kind: 'preset', handle, apiId, dirKey }));
     }
 
+    // Like list(), but also fetches each preset's full doc in the same
+    // transaction. Used by endpoints that need to ship preset *contents* to
+    // the client (e.g. /api/settings/get and /api/settings/bootstrap). Doing
+    // this in a single withTransaction means SQL engines reuse one connection
+    // and FS mode opens each file once instead of round-tripping through the
+    // Repo. Sorted by name ASC to match FS readdir's default presentation.
+    async listWithDocs(handle, apiId) {
+        const dirKey = PRESET_FOLDER_BY_API_ID[apiId];
+        if (!dirKey) throw new Error(`PresetRepo.listWithDocs: invalid apiId ${apiId}`);
+        return this._engine.withTransaction(handle, async (tx) => {
+            const entries = await tx.listResources({ kind: 'preset', handle, apiId, dirKey });
+            const out = [];
+            for (const entry of entries) {
+                const name = entry?.key?.name;
+                if (!name) continue;
+                const doc = await tx.getResource({ kind: 'preset', handle, dirKey, name });
+                if (doc != null) out.push({ name, doc });
+            }
+            out.sort((a, b) => a.name.localeCompare(b.name));
+            return out;
+        });
+    }
+
     async listStateNamespaces(handle, apiId, name) {
         return this._engine.withTransaction(handle, (tx) =>
             tx.listPresetStateNamespaces(this._key(handle, apiId, name)));

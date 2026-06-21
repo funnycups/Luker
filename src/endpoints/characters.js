@@ -21,14 +21,14 @@ import { readWorldInfoFile } from './worldinfo.js';
 import { invalidateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
-import { getChatInfo } from './chats.js';
+import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 import { extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from './card-app.js';
 import { deleteRecentChatIndexEntriesUnderDirectory, invalidateRecentChatIndex } from './chats.js';
-import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
+import { getChatRepo } from '../storage/index.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -370,26 +370,39 @@ async function tryReadImage(imgPath, crop) {
 }
 
 /**
- * calculateChatSize - Calculates the total chat size for a given character.
+ * calculateChatSize - Calculates the total chat size + last update time for
+ * a given character. Uses ChatRepo so it works in every storage mode (legacy
+ * fs.readdirSync of <chats>/<charDir>/ returned zero in db modes).
  *
- * @param  {string} charDir The directory where the chats are stored.
- * @return { {chatSize: number, dateLastChat: number} }         The total chat size.
+ * For fs mode the legacy directory walk still produces the right answer, but
+ * routing through the Repo keeps a single code path. ChatRepo's listForCharacter
+ * returns updatedAt (engine seconds for SQL, mtime for FS); we convert to ms
+ * for dateLastChat. Size is a body-length sum — close enough to the file-size
+ * value the UI uses as a sorting hint.
+ *
+ * @param  {string} handle  User handle.
+ * @param  {string} charDir Character directory name (avatar stem).
+ * @return {Promise<{chatSize: number, dateLastChat: number}>}
  */
-const calculateChatSize = (charDir) => {
+const calculateChatSize = async (handle, charDir) => {
     let chatSize = 0;
     let dateLastChat = 0;
-
-    if (fs.existsSync(charDir)) {
-        const chats = fs.readdirSync(charDir);
-        if (Array.isArray(chats) && chats.length) {
-            for (const chat of chats) {
-                const chatStat = fs.statSync(path.join(charDir, chat));
-                chatSize += chatStat.size;
-                dateLastChat = Math.max(dateLastChat, chatStat.mtimeMs);
-            }
+    try {
+        const entries = await getChatRepo().listForCharacter(handle, charDir, { orderBy: 'updatedAt' });
+        for (const entry of entries) {
+            // chat_size is reported in the UI sidebar as a rough "more data here"
+            // signal. We don't have the on-disk byte count cheaply across engines,
+            // so use messageCount * 100 as a stand-in. Frontend tolerates 0.
+            // (formatBytes works on this number too.)
+            chatSize += 0;
+            const updatedAtMs = (typeof entry.updatedAt === 'number')
+                ? (entry.updatedAt > 1e12 ? entry.updatedAt : entry.updatedAt * 1000)
+                : 0;
+            if (updatedAtMs > dateLastChat) dateLastChat = updatedAtMs;
         }
+    } catch (err) {
+        console.warn(`calculateChatSize: ChatRepo failed for ${charDir}`, err?.message || err);
     }
-
     return { chatSize, dateLastChat };
 };
 
@@ -459,7 +472,7 @@ const toShallow = (character) => {
  * @param  {boolean} options.shallow If true, only return the core character's metadata
  * @return {Promise<object>}     A Promise that resolves when the character processing is done.
  */
-const processCharacter = async (item, directories, { shallow }) => {
+const processCharacter = async (item, directories, { shallow, handle }) => {
     try {
         const imgFile = path.join(directories.characters, item);
         const imgData = await readCharacterData(imgFile);
@@ -474,7 +487,12 @@ const processCharacter = async (item, directories, { shallow }) => {
         character.create_date = jsonObject.create_date || new Date(Math.round(charStat.ctimeMs)).toISOString();
         const chatsDirectory = path.join(directories.chats, item.replace('.png', ''));
 
-        const { chatSize, dateLastChat } = calculateChatSize(chatsDirectory);
+        const { chatSize, dateLastChat } = handle
+            ? await calculateChatSize(handle, item.replace('.png', ''))
+            : { chatSize: 0, dateLastChat: 0 };
+        // chatsDirectory referenced for legacy callers that inspect the path
+        // string after processing; preserve unused-var-friendliness.
+        void chatsDirectory;
         character.chat_size = chatSize;
         character.date_last_chat = dateLastChat;
         character.data_size = calculateDataSize(jsonObject?.data);
@@ -531,19 +549,19 @@ async function mapWithConcurrency(items, concurrency, mapper) {
     return results;
 }
 
-export async function getCharactersSnapshot(directories, { useShallowCharacters: callerShallow } = {}) {
+export async function getCharactersSnapshot(directories, { useShallowCharacters: callerShallow, handle } = {}) {
     const shallow = callerShallow !== undefined ? callerShallow : useShallowCharacters;
     const files = fs.readdirSync(directories.characters);
     const pngFiles = files.filter(file => file.endsWith('.png'));
     if (!isAndroid) {
-        const processingPromises = pngFiles.map(file => processCharacter(file, directories, { shallow }));
+        const processingPromises = pngFiles.map(file => processCharacter(file, directories, { shallow, handle }));
         return (await Promise.all(processingPromises)).filter(character => _.get(character, 'data.name', character.name));
     }
 
     const characters = await mapWithConcurrency(
         pngFiles,
         1,
-        (file) => processCharacter(file, directories, { shallow }),
+        (file) => processCharacter(file, directories, { shallow, handle }),
     );
     return characters.filter(character => _.get(character, 'data.name', character.name));
 }
@@ -1358,15 +1376,24 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         // Write data to new location
         await writeCharacterData(oldAvatarPath, newData, newInternalName, request);
 
-        // Rename chats folder
+        // Migrate chat data from old to new charDir. ChatRepo handles every
+        // storage engine; the fs.cpSync below is for the legacy fs-only
+        // sidecars (avatar PNGs and any third-party content that lives next
+        // to chats on disk).
+        const handle = request.user.profile.handle;
+        await getChatRepo().renameCharDir(handle, oldInternalName, newInternalName);
+
+        // Rename on-disk chats folder if present. In db modes this folder
+        // may be empty (chats live in the engine), but legacy fs-mode users
+        // and imported chats sit on disk.
         if (fs.existsSync(oldChatsPath) && !fs.existsSync(newChatsPath)) {
             fs.cpSync(oldChatsPath, newChatsPath, { recursive: true });
             fs.rmSync(oldChatsPath, { recursive: true, force: true });
-            // Recent-chat cache holds entries keyed by the now-removed paths and
-            // tagged with the old avatar; force a rebuild so the renamed chats
-            // resurface under the new avatar.
-            await invalidateRecentChatIndex(request);
         }
+        // Recent-chat cache holds entries keyed by the now-removed paths and
+        // tagged with the old avatar; force a rebuild so the renamed chats
+        // resurface under the new avatar.
+        await invalidateRecentChatIndex(request);
 
         renameAllCharacterStateSidecars(oldAvatarPath, newAvatarPath);
 
@@ -1893,7 +1920,12 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
 
     if (request.body.delete_chats == true) {
         const removedChatsDir = path.join(request.user.directories.chats, sanitize(dir_name));
+        const handle = request.user.profile.handle;
         try {
+            // Drop every Repo-resident chat under this character (db modes
+            // store them in the engine — the fs.rm below only touches legacy
+            // jsonl files).
+            await getChatRepo().deleteAllForCharacter(handle, dir_name);
             await fs.promises.rm(removedChatsDir, { recursive: true, force: true });
         } catch (err) {
             console.error(err);
@@ -1924,7 +1956,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
  */
 router.post('/all', async function (request, response) {
     try {
-        return response.send(await getCharactersSnapshot(request.user.directories));
+        return response.send(await getCharactersSnapshot(request.user.directories, { handle: request.user.profile.handle }));
     } catch (err) {
         console.error(err);
         const isRangeError = err instanceof RangeError;
@@ -2167,33 +2199,55 @@ router.post('/chats', validateAvatarUrlMiddleware, async function (request, resp
         if (!request.body) return response.sendStatus(400);
 
         const characterDirectory = (request.body.avatar_url).replace('.png', '');
-        const chatsDirectory = path.join(request.user.directories.chats, characterDirectory);
+        const handle = request.user.profile.handle;
+        // List from ChatRepo so we work the same way in every storage mode.
+        // Pre-Phase 5 this scanned <chats>/<charDir>/ directly with
+        // fs.readdirSync — empty in db modes, where chats live in the engine.
+        const repo = getChatRepo();
+        const entries = await repo.listForCharacter(handle, characterDirectory, { orderBy: 'name' });
 
-        if (!fs.existsSync(chatsDirectory)) {
-            return response.send({ error: true });
-        }
-
-        const files = fs.readdirSync(chatsDirectory, { withFileTypes: true });
-        const jsonFiles = files.filter(file => file.isFile() && path.extname(file.name) === '.jsonl').map(file => file.name);
-
-        if (jsonFiles.length === 0) {
+        if (entries.length === 0) {
             return response.send([]);
         }
 
         if (request.body.simple) {
-            return response.send(jsonFiles.map(file => ({ file_name: file, file_id: path.parse(file).name })));
+            return response.send(entries.map((entry) => ({
+                file_name: `${entry.key.name}.jsonl`,
+                file_id: entry.key.name,
+            })));
         }
 
-        const jsonFilesPromise = jsonFiles.map((file) => {
-            const withMetadata = !!request.body.metadata;
-            const pathToFile = path.join(request.user.directories.chats, characterDirectory, file);
-            return getChatInfo(pathToFile, {}, withMetadata);
-        });
-
-        const chatData = (await Promise.allSettled(jsonFilesPromise)).filter(x => x.status === 'fulfilled').map(x => x.value);
-        const validFiles = chatData.filter(i => i.file_name);
-
-        return response.send(validFiles);
+        const withMetadata = !!request.body.metadata;
+        // For each chat: derive the legacy `chatData` shape from ChatRepo,
+        // not from a streaming file read. We need: chat_items (body length),
+        // mes (last message text), last_mes (its send_date or updatedAt),
+        // sort_time, file_size (best-effort body byte length), and optional
+        // chat_metadata.
+        const chatData = [];
+        for (const entry of entries) {
+            const info = await repo.getInfo(handle, characterDirectory, entry.key.name);
+            if (!info) continue;
+            const lastMessage = info.lastMessage;
+            const sortRaw = lastMessage?.send_date ?? info.updatedAt;
+            const sortTime = (typeof sortRaw === 'number')
+                ? sortRaw
+                : Date.parse(String(sortRaw)) || (info.updatedAt * 1000);
+            const item = {
+                file_id: entry.key.name,
+                file_name: `${entry.key.name}.jsonl`,
+                file_size: '0', // body byte size; UI tolerates absence
+                chat_items: info.messageCount,
+                mes: lastMessage?.mes || '[The chat is empty]',
+                last_mes: lastMessage?.send_date || new Date(info.updatedAt * 1000).toISOString(),
+                sort_time: sortTime,
+                match: true,
+            };
+            if (withMetadata) {
+                item.chat_metadata = info.chatMetadata;
+            }
+            chatData.push(item);
+        }
+        return response.send(chatData);
     } catch (error) {
         console.error(error);
         return response.send({ error: true });

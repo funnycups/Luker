@@ -227,100 +227,78 @@ async function getReadyRecentChatIndexState(request) {
  * @param {import('../users.js').UserDirectoryList} directories
  * @returns {Promise<RecentChatDescriptor[]>}
  */
-async function listRecentChatDescriptors(directories) {
+async function listRecentChatDescriptors(directories, handle) {
     /** @type {RecentChatDescriptor[]} */
     const allChatFiles = [];
 
-    const getCharacterChatFiles = async () => {
-        const pngDirents = await fs.promises.readdir(directories.characters, { withFileTypes: true });
-        const pngFiles = pngDirents.filter(entry => entry.isFile() && path.extname(entry.name) === '.png').map(entry => entry.name);
-
-        for (const pngFile of pngFiles) {
-            const chatsDirectory = pngFile.replace('.png', '');
-            const pathToChats = path.join(directories.chats, chatsDirectory);
-            if (!fs.existsSync(pathToChats)) {
-                continue;
-            }
-
-            const pathStats = await fs.promises.stat(pathToChats);
-            if (!pathStats.isDirectory()) {
-                continue;
-            }
-
-            const chatFiles = await fs.promises.readdir(pathToChats);
-            const jsonlFiles = chatFiles.filter(file => path.extname(file) === '.jsonl');
-
-            for (const file of jsonlFiles) {
+    // 1) Character chats — enumerate via ChatRepo. The character PNG list
+    //    still lives on fs (characters have no Repo), but every chat that
+    //    belongs to a character must exist in ChatRepo if it's to be visible
+    //    in any storage mode. We use the Repo's listAll() + filter by
+    //    !isGroup for the character branch and ===true for the group branch.
+    //    The filePath we synthesize is the on-disk path the FS engine would
+    //    use; downstream code uses this only as a stable key + for sidecar
+    //    paths.
+    try {
+        const repo = getChatRepo();
+        const entries = await repo.listAll(handle, { orderBy: 'updatedAt' });
+        // Build a name→png map for character chats: charDir is the file
+        // stem; on disk the avatar is `<charDir>.png`.
+        for (const entry of entries) {
+            if (entry.key.isGroup) {
                 allChatFiles.push({
-                    avatar: pngFile,
-                    filePath: path.join(pathToChats, file),
+                    group: String(entry.key.groupId || entry.key.name),
+                    filePath: path.join(directories.groupChats, `${entry.key.name}.jsonl`),
+                });
+            } else if (entry.key.charDir) {
+                allChatFiles.push({
+                    avatar: `${entry.key.charDir}.png`,
+                    filePath: path.join(directories.chats, entry.key.charDir, `${entry.key.name}.jsonl`),
                 });
             }
         }
-    };
+    } catch (err) {
+        console.error('listRecentChatDescriptors: ChatRepo.listAll failed', err);
+    }
 
-    const getGroupChatFiles = async () => {
-        const groupDirents = await fs.promises.readdir(directories.groups, { withFileTypes: true });
-        const groups = groupDirents.filter(entry => entry.isFile() && path.extname(entry.name) === '.json').map(entry => entry.name);
-
-        for (const groupFileName of groups) {
-            try {
-                const groupPath = path.join(directories.groups, groupFileName);
-                const groupContents = await fs.promises.readFile(groupPath, 'utf8');
-                const groupData = JSON.parse(groupContents);
-
-                if (!Array.isArray(groupData.chats)) {
-                    continue;
-                }
-
-                for (const chatId of groupData.chats) {
-                    const filePath = path.join(directories.groupChats, `${chatId}.jsonl`);
-                    if (!fs.existsSync(filePath)) {
-                        continue;
-                    }
-
-                    allChatFiles.push({
-                        group: String(groupData.id || ''),
-                        filePath,
-                    });
-                }
-            } catch {
-                continue;
-            }
-        }
-    };
-
-    const getRootChatFiles = async () => {
-        const dirents = await fs.promises.readdir(directories.chats, { withFileTypes: true });
-        const chatFiles = dirents.filter(entry => entry.isFile() && path.extname(entry.name) === '.jsonl').map(entry => entry.name);
-
-        for (const file of chatFiles) {
-            allChatFiles.push({
-                filePath: path.join(directories.chats, file),
-            });
-        }
-    };
-
-    await Promise.allSettled([getCharacterChatFiles(), getGroupChatFiles(), getRootChatFiles()]);
     return allChatFiles;
 }
 
 async function buildRecentChatIndexEntries(request) {
-    const descriptors = await listRecentChatDescriptors(request.user.directories);
+    const handle = request.user.profile.handle;
+    const descriptors = await listRecentChatDescriptors(request.user.directories, handle);
     const entries = new Map();
-    const infoResults = await Promise.allSettled(descriptors.map((descriptor) => getChatInfo(descriptor.filePath, {
-        ...(descriptor.avatar ? { avatar: descriptor.avatar } : {}),
-        ...(descriptor.group ? { group: descriptor.group } : {}),
-    })));
 
-    infoResults.forEach((result, index) => {
-        if (result.status !== 'fulfilled' || !result.value?.file_name) {
-            return;
-        }
-
-        const descriptor = descriptors[index];
-        entries.set(path.resolve(descriptor.filePath), result.value);
-    });
+    const repo = getChatRepo();
+    // Build each entry's "info" record from the Repo, not from a streaming
+    // file read. The legacy `getChatInfo(filePath)` accepted optional
+    // additionalData {avatar, group} for tagging — we preserve that here.
+    for (const descriptor of descriptors) {
+        const parsed = path.parse(descriptor.filePath);
+        const isGroup = !!descriptor.group;
+        // For character chats the charDir is the parent directory name.
+        const charDir = isGroup ? '' : path.basename(parsed.dir);
+        const name = parsed.name;
+        const info = await repo.getInfo(handle, charDir, name, {
+            isGroup,
+            groupId: isGroup ? (descriptor.group || name) : undefined,
+        });
+        if (!info) continue;
+        const lastMessage = info.lastMessage;
+        const last_mes = lastMessage?.send_date || new Date(info.updatedAt * 1000).toISOString();
+        const value = {
+            file_id: name,
+            file_name: `${name}.jsonl`,
+            file_size: '0',
+            chat_items: info.messageCount,
+            mes: lastMessage?.mes || '[The chat is empty]',
+            last_mes,
+            sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt * 1000),
+            ...(descriptor.avatar ? { avatar: descriptor.avatar } : {}),
+            ...(descriptor.group ? { group: descriptor.group } : {}),
+        };
+        entries.set(path.resolve(descriptor.filePath), value);
+    }
 
     return entries;
 }
@@ -1470,10 +1448,93 @@ function buildIdempotentMessagePatchOperations(currentMessages, operations) {
  *   the field is intentionally NOT taken from the messages themselves anymore.
  * @returns {Promise<{appended:number, created:boolean}>}
  */
-export async function appendMessagesToChatFile({ filePath, messages, chatMetadata = {}, integritySlug, force = false, incomingGenerationId = '' }) {
+export async function appendMessagesToChatFile({ filePath, messages, chatMetadata = {}, integritySlug, force = false, incomingGenerationId = '', handle, charDir, name, isGroup, groupId }) {
     if (!Array.isArray(messages) || messages.length === 0) {
         return { appended: 0, created: false, integrity: getCurrentChatIntegrity(filePath) };
     }
+
+    // ---- Storage-engine path ----
+    //
+    // When the caller supplies a (handle, charDir, name) routing tuple we go
+    // through ChatRepo. This is the only path that works in db modes; in fs
+    // mode it's equivalent (the FsEngine writes the same on-disk jsonl).
+    //
+    // The legacy fs branch below is preserved only for the two callsites
+    // that haven't been migrated yet (notably the chats.js /append handler
+    // when it stays on the file-write path). luker-generation passes the
+    // routing tuple, so it flows through the Repo branch.
+    if (typeof handle === 'string' && typeof name === 'string') {
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, charDir ?? '', name, { isGroup: !!isGroup, groupId });
+        const cleanedMessages = messages.map(m => stripLukerGenerationIdFromMessage(_.cloneDeep(m)));
+        const incomingId = String(incomingGenerationId || '').trim();
+
+        // Integrity gate: if provided, the slug must match the chat's current
+        // integrity. Force=true skips. Missing chat = creation, which always
+        // proceeds.
+        if (existing && integritySlug && !force && existing.integrity !== integritySlug) {
+            throw createIntegrityMismatchError(filePath || `<repo>/${charDir}/${name}`, integritySlug);
+        }
+
+        if (!existing) {
+            // Create: write header + messages atomically.
+            const header = createChatHeader(chatMetadata);
+            const saved = await repo.save(handle, charDir ?? '', name, header, cleanedMessages, null,
+                { isGroup: !!isGroup, groupId });
+            if (incomingId && filePath) {
+                writeLastChatGenerationId(filePath, incomingId);
+            }
+            return { appended: cleanedMessages.length, created: true, integrity: saved.integrity };
+        }
+
+        // Dedup logic, identical to the fs branch: drop the leading incoming
+        // messages while they match the tail of the existing body (content or
+        // gen-id match).
+        const existingBody = Array.isArray(existing.body) ? existing.body : [];
+        const lastStoredMessage = existingBody.length > 0 ? existingBody[existingBody.length - 1] : null;
+        const sidecarLastGenerationId = filePath ? readLastChatGenerationId(filePath) : '';
+        const dedupedMessages = cleanedMessages.slice();
+        let matchedExistingGenerationId = false;
+        while (dedupedMessages.length > 0) {
+            const lastStoredStripped = isChatMessageLike(lastStoredMessage)
+                ? stripLukerGenerationIdFromMessage(_.cloneDeep(lastStoredMessage))
+                : null;
+            if (lastStoredStripped && isChatMessageLike(dedupedMessages[0]) && _.isEqual(lastStoredStripped, dedupedMessages[0])) {
+                dedupedMessages.shift();
+                continue;
+            }
+            if (!sidecarLastGenerationId || !incomingId || incomingId !== sidecarLastGenerationId) {
+                break;
+            }
+            matchedExistingGenerationId = true;
+            dedupedMessages.shift();
+        }
+        if (dedupedMessages.length === 0) {
+            return {
+                appended: 0,
+                created: false,
+                skipped: cleanedMessages.length,
+                matched_existing_generation_id: matchedExistingGenerationId,
+                integrity: existing.integrity,
+            };
+        }
+
+        const nextBody = existingBody.concat(dedupedMessages);
+        const saved = await repo.save(handle, charDir ?? '', name, existing.header, nextBody, existing.integrity,
+            { isGroup: !!isGroup, groupId });
+        if (incomingId && filePath) {
+            writeLastChatGenerationId(filePath, incomingId);
+        }
+        return {
+            appended: dedupedMessages.length,
+            created: false,
+            skipped: cleanedMessages.length - dedupedMessages.length,
+            matched_existing_generation_id: matchedExistingGenerationId,
+            integrity: saved.integrity,
+        };
+    }
+
+    // ---- Legacy fs path (no routing tuple supplied) ----
 
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
@@ -2146,22 +2207,47 @@ router.post('/meta', validateAvatarUrlMiddleware, async function (request, respo
             return response.status(400).send({ error: 'Expected body.file_name string.' });
         }
 
+        const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
-        const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
+        const fileName = String(request.body.file_name);
+        const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(`${fileName}.jsonl`));
         const chatMetadata = request.body.chat_metadata;
-        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
+        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : null;
         const force = Boolean(request.body.force);
 
-        const result = await updateChatMetadataInFile({
-            filePath: chatFilePath,
-            chatMetadata,
-            integritySlug,
-            force,
-        });
+        // Drive through ChatRepo so db modes work; expected_integrity is
+        // honored unless caller explicitly forces. NotFoundError → caller
+        // expects 404, but the legacy helper auto-created the chat on miss
+        // — preserve that behavior by saving a header-only chat when missing.
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, cardName, fileName);
+        if (existing == null) {
+            // Create header-only chat with the supplied metadata, matching the
+            // legacy "create on first /meta" behavior.
+            const newHeader = createChatHeader({ chat_metadata: chatMetadata });
+            const saved = await repo.save(handle, cardName, fileName, newHeader, [], null);
+            await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
+            return response.send({ ok: true, updated: true, total_messages: 0, created: true, integrity: saved.integrity });
+        }
 
+        const expected = force ? null : integritySlug;
+        let result;
+        try {
+            result = await repo.updateChatMetadata(handle, cardName, fileName, chatMetadata, expected);
+        } catch (err) {
+            if (err instanceof ConflictError) {
+                return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
+            }
+            throw err;
+        }
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
-        return response.send({ ok: true, ...result });
+        return response.send({
+            ok: true,
+            updated: true,
+            total_messages: Array.isArray(existing.body) ? existing.body.length : 0,
+            created: false,
+            integrity: result.integrity,
+        });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -2185,32 +2271,72 @@ router.post('/meta/patch', validateAvatarUrlMiddleware, async function (request,
             return response.status(400).send({ error: 'No metadata patch operations found. Expected body.operations or body.operation.' });
         }
 
+        const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
-        const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
-        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
+        const fileName = String(request.body.file_name);
+        const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(`${fileName}.jsonl`));
+        // Some legacy frontends send body.integrity, others body.expected_integrity — accept both.
+        const integritySlug = typeof request.body.integrity === 'string'
+            ? request.body.integrity
+            : (typeof request.body.expected_integrity === 'string' ? request.body.expected_integrity : null);
         const force = Boolean(request.body.force);
 
-        let result;
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, cardName, fileName);
+        // Compute the new metadata by applying the JSON Patch to current
+        // chat_metadata. If the chat is missing, seed an empty metadata
+        // object so the patch can create fields. applyJsonPatch (== fast-json-patch
+        // applyPatch) returns a results array; .newDocument carries the
+        // post-patch document.
+        const currentMetadata = existing?.header?.chat_metadata ?? {};
+        let nextMetadata;
         try {
-            result = await patchChatMetadataInFile({
-                filePath: chatFilePath,
-                operations,
-                integritySlug,
-                force,
-            });
+            const patchResult = applyJsonPatch(currentMetadata, operations, true, false);
+            nextMetadata = patchResult.newDocument;
         } catch (error) {
-            if (isChatStatePatchConflictError(error)) {
-                return response.status(409).send({ error: 'Chat metadata patch conflict.' });
-            }
             if (isJsonPatchValidationError(error)) {
                 return response.status(400).send({ error: 'Invalid metadata patch payload.' });
             }
+            if (isChatStatePatchConflictError(error)) {
+                return response.status(409).send({ error: 'Chat metadata patch conflict.' });
+            }
             throw error;
         }
-
+        if (existing == null) {
+            const newHeader = createChatHeader({ chat_metadata: nextMetadata });
+            const saved = await repo.save(handle, cardName, fileName, newHeader, [], null);
+            await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
+            return response.send({ ok: true, applied: operations.length, total_messages: 0, created: true, integrity: saved.integrity });
+        }
+        const expected = force ? null : integritySlug;
+        let result;
+        try {
+            // Replace the metadata entirely (we already merged via the JSON
+            // Patch). updateChatMetadata shallow-merges; to *replace* we wipe
+            // the old keys first by passing the diff. Simpler: use save with
+            // a hand-rolled header.
+            // For correctness across modes, use a full save with the new
+            // header so the metadata exactly matches the patched value
+            // including key removals.
+            const newHeader = {
+                ...(existing.header ?? {}),
+                chat_metadata: nextMetadata,
+            };
+            result = await repo.save(handle, cardName, fileName, newHeader, existing.body ?? [], expected);
+        } catch (err) {
+            if (err instanceof ConflictError) {
+                return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
+            }
+            throw err;
+        }
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
-        return response.send({ ok: true, ...result });
+        return response.send({
+            ok: true,
+            applied: operations.length,
+            total_messages: Array.isArray(existing.body) ? existing.body.length : 0,
+            created: false,
+            integrity: result.integrity,
+        });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -2301,13 +2427,10 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
     }
 });
 
-router.post('/get-delta', validateAvatarUrlMiddleware, function (request, response) {
+router.post('/get-delta', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         const dirName = String(request.body.avatar_url).replace('.png', '');
-        const directoryPath = path.join(request.user.directories.chats, dirName);
-        const chatDirExists = fs.existsSync(directoryPath);
-
-        if (!chatDirExists || !request.body.file_name) {
+        if (!request.body.file_name) {
             return response.send({
                 chat: [],
                 chat_metadata: {},
@@ -2320,10 +2443,32 @@ router.post('/get-delta', validateAvatarUrlMiddleware, function (request, respon
 
         const fromIndex = Number(request.body.from_index) || 0;
         const limit = Number(request.body.limit) || 0;
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
-        const chatFilePath = path.join(directoryPath, sanitize(chatFileName));
+        const handle = request.user.profile.handle;
+        const chat = await getChatRepo().get(handle, dirName, String(request.body.file_name));
+        if (chat == null) {
+            return response.send({
+                chat: [],
+                chat_metadata: {},
+                from_index: 0,
+                next_index: 0,
+                total_messages: 0,
+                has_more: false,
+            });
+        }
 
-        return response.send(getChatDataDelta(chatFilePath, fromIndex, limit));
+        const body = Array.isArray(chat.body) ? chat.body : [];
+        const total = body.length;
+        const start = Math.max(0, Math.min(fromIndex, total));
+        const end = limit > 0 ? Math.min(start + limit, total) : total;
+        const slice = body.slice(start, end);
+        return response.send({
+            chat: slice,
+            chat_metadata: chat.header?.chat_metadata ?? {},
+            from_index: start,
+            next_index: end,
+            total_messages: total,
+            has_more: end < total,
+        });
     } catch (error) {
         console.error(error);
         return response.send({
@@ -2494,17 +2639,33 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         console.debug('Old chat name', pathToOriginalFile);
         console.debug('New chat name', pathToRenamedFile);
 
-        if (!fs.existsSync(pathToOriginalFile) || fs.existsSync(pathToRenamedFile)) {
-            console.error('Either Source or Destination files are not available');
-            return response.status(400).send({ error: true });
-        }
+        // (Existence/collision is verified through the Repo below — fs.existsSync
+        // gates fail in db modes where chats live only in the engine.)
 
         const existingIndexState = await getReadyRecentChatIndexState(request);
         const previousRecentEntry = existingIndexState?.entries?.get(path.resolve(pathToOriginalFile)) || null;
         const oldName = path.parse(safeOriginal).name;
         const newName = path.parse(safeRenamed).name;
+
+        // Existence check via Repo (not fs.existsSync) so db modes work too.
+        // Group chats use name === groupId in luker convention; for character
+        // chats only the (charDir, name) pair matters.
+        const repo = getChatRepo();
+        const groupId = isGroup ? oldName : undefined;
+        const existing = await repo.get(handle, charDir, oldName, { isGroup, groupId });
+        if (existing == null) {
+            console.error(`/rename: chat not found in Repo: charDir=${charDir} name=${oldName} isGroup=${isGroup}`);
+            return response.status(400).send({ error: true });
+        }
+        const newGroupId = isGroup ? newName : undefined;
+        const collision = await repo.get(handle, charDir, newName, { isGroup, groupId: newGroupId });
+        if (collision != null) {
+            console.error(`/rename: destination already exists: charDir=${charDir} name=${newName}`);
+            return response.status(400).send({ error: true });
+        }
+
         try {
-            await getChatRepo().rename(handle, charDir, oldName, newName, { isGroup });
+            await repo.rename(handle, charDir, oldName, newName, { isGroup, groupId });
         } catch (err) {
             if (err instanceof NotFoundError) {
                 return response.status(400).send({ error: true });
@@ -2543,12 +2704,16 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
             return response.sendStatus(400);
         }
-        if (!fs.existsSync(chatFilePath)) {
-            console.error('The chat file was not deleted.');
+        const name = path.parse(safeFileName).name;
+        const repo = getChatRepo();
+        // Existence check via Repo; the legacy fs.existsSync gate fails in
+        // db modes even when the row exists in the engine.
+        const existing = await repo.get(handle, dirName, name);
+        if (existing == null) {
+            console.error(`/delete: chat not found in Repo: charDir=${dirName} name=${name}`);
             return response.sendStatus(400);
         }
-        const name = path.parse(safeFileName).name;
-        await getChatRepo().delete(handle, dirName, name);
+        await repo.delete(handle, dirName, name);
         deleteAllChatStateSidecars(chatFilePath);
         await deleteRecentChatIndexEntry(request, chatFilePath);
         return response.send({ ok: true });
@@ -2562,68 +2727,61 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
     if (!request.body.file || (!request.body.avatar_url && request.body.is_group === false)) {
         return response.sendStatus(400);
     }
-    const pathToFolder = request.body.is_group
-        ? request.user.directories.groupChats
-        : path.join(request.user.directories.chats, String(request.body.avatar_url).replace('.png', ''));
-    const filename = resolvePathInsideDirectory(pathToFolder, request.body.file);
-    if (!filename) {
-        return response.sendStatus(400);
-    }
-    let exportfilename = request.body.exportfilename;
-    if (!fs.existsSync(filename)) {
-        const errorMessage = {
-            message: `Could not find JSONL file to export. Source chat file: ${filename}.`,
-        };
-        console.error(errorMessage.message);
-        return response.status(404).json(errorMessage);
-    }
-    try {
-        // Short path for JSONL files
-        if (request.body.format === 'jsonl') {
-            try {
-                const rawFile = fs.readFileSync(filename, 'utf8');
-                const successMessage = {
-                    message: `Chat saved to ${exportfilename}`,
-                    result: rawFile,
-                };
+    const isGroup = !!request.body.is_group;
+    const dirName = isGroup
+        ? ''
+        : String(request.body.avatar_url).replace('.png', '');
+    const fileBase = String(request.body.file);
+    const name = fileBase.replace(/\.jsonl$/i, '');
+    const exportfilename = request.body.exportfilename;
 
-                console.info(`Chat exported as ${exportfilename}`);
-                return response.status(200).json(successMessage);
-            } catch (err) {
-                console.error(err);
-                const errorMessage = {
-                    message: `Could not read JSONL file to export. Source chat file: ${filename}.`,
-                };
-                console.error(errorMessage.message);
-                return response.status(500).json(errorMessage);
-            }
+    try {
+        const repo = getChatRepo();
+        const chat = isGroup
+            ? await repo.get(request.user.profile.handle, '', name, { isGroup: true, groupId: name })
+            : await repo.get(request.user.profile.handle, dirName, name);
+        if (chat == null) {
+            const errorMessage = {
+                message: `Could not find chat to export. Source chat: ${dirName || 'group'}/${name}.`,
+            };
+            console.error(errorMessage.message);
+            return response.status(404).json(errorMessage);
         }
 
-        const readStream = fs.createReadStream(filename);
-        const rl = readline.createInterface({
-            input: readStream,
-        });
-        let buffer = '';
-        rl.on('line', (line) => {
-            const data = JSON.parse(line);
-            // Skip non-printable/prompt-hidden messages
-            if (data.is_system) {
-                return;
-            }
-            if (data.mes) {
-                const name = data.name;
-                const message = (data?.extra?.display_text || data?.mes || '').replace(/\r?\n/g, '\n');
-                buffer += (`${name}: ${message}\n\n`);
-            }
-        });
-        rl.on('close', () => {
+        if (request.body.format === 'jsonl') {
+            // Reassemble the on-disk jsonl shape (header + one message per line).
+            const headerWithIntegrity = {
+                ...(chat.header ?? {}),
+                chat_metadata: {
+                    ...(chat.header?.chat_metadata ?? {}),
+                    integrity: chat.integrity,
+                },
+            };
+            const lines = [JSON.stringify(headerWithIntegrity)];
+            for (const msg of (chat.body ?? [])) lines.push(JSON.stringify(msg));
+            const rawFile = lines.join('\n') + '\n';
             const successMessage = {
                 message: `Chat saved to ${exportfilename}`,
-                result: buffer,
+                result: rawFile,
             };
             console.info(`Chat exported as ${exportfilename}`);
             return response.status(200).json(successMessage);
-        });
+        }
+
+        // Plain-text format: name/message per body row, hidden/system skipped.
+        let buffer = '';
+        for (const data of (chat.body ?? [])) {
+            if (data?.is_system) continue;
+            if (!data?.mes) continue;
+            const message = String(data?.extra?.display_text || data?.mes || '').replace(/\r?\n/g, '\n');
+            buffer += `${data.name}: ${message}\n\n`;
+        }
+        const successMessage = {
+            message: `Chat saved to ${exportfilename}`,
+            result: buffer,
+        };
+        console.info(`Chat exported as ${exportfilename}`);
+        return response.status(200).json(successMessage);
     } catch (err) {
         console.error('chat export failed.', err);
         return response.sendStatus(400);
@@ -2758,27 +2916,61 @@ router.post('/import', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
-router.post('/group/get', (request, response) => {
+router.post('/group/get', async (request, response) => {
     if (!request.body || !request.body.id) {
         return response.sendStatus(400);
     }
 
-    const id = request.body.id;
-    const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
-
-    return response.send(getChatData(chatFilePath));
+    const id = String(request.body.id);
+    const handle = request.user.profile.handle;
+    const chat = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
+    if (chat == null) {
+        // Match legacy /group/get behavior: return empty array for missing chats.
+        return response.send([]);
+    }
+    // Reconstruct the legacy "header + messages" array shape from the Repo.
+    const headerWithIntegrity = {
+        ...(chat.header ?? {}),
+        chat_metadata: {
+            ...(chat.header?.chat_metadata ?? {}),
+            integrity: chat.integrity,
+        },
+    };
+    return response.send([headerWithIntegrity, ...(chat.body ?? [])]);
 });
 
-router.post('/group/get-delta', (request, response) => {
+router.post('/group/get-delta', async (request, response) => {
     if (!request.body || !request.body.id) {
         return response.sendStatus(400);
     }
 
-    const id = request.body.id;
+    const id = String(request.body.id);
     const fromIndex = Number(request.body.from_index) || 0;
     const limit = Number(request.body.limit) || 0;
-    const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
-    return response.send(getChatDataDelta(chatFilePath, fromIndex, limit));
+    const handle = request.user.profile.handle;
+    const chat = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
+    if (chat == null) {
+        return response.send({
+            chat: [],
+            chat_metadata: {},
+            from_index: 0,
+            next_index: 0,
+            total_messages: 0,
+            has_more: false,
+        });
+    }
+    const body = Array.isArray(chat.body) ? chat.body : [];
+    const total = body.length;
+    const start = Math.max(0, Math.min(fromIndex, total));
+    const end = limit > 0 ? Math.min(start + limit, total) : total;
+    return response.send({
+        chat: body.slice(start, end),
+        chat_metadata: chat.header?.chat_metadata ?? {},
+        from_index: start,
+        next_index: end,
+        total_messages: total,
+        has_more: end < total,
+    });
 });
 
 router.post('/group/info', async (request, response) => {
@@ -2787,11 +2979,26 @@ router.post('/group/info', async (request, response) => {
             return response.sendStatus(400);
         }
 
-        const id = request.body.id;
-        const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
-
-        const chatInfo = await getChatInfo(chatFilePath);
-        return response.send(chatInfo);
+        const id = String(request.body.id);
+        const handle = request.user.profile.handle;
+        const info = await getChatRepo().getInfo(handle, '', id, { isGroup: true, groupId: id });
+        if (info == null) {
+            return response.send({});
+        }
+        // Match getChatInfo's legacy shape: file_id, file_name, file_size,
+        // chat_items, mes, last_mes, sort_time. The group/info caller mainly
+        // wants chat_items + last_mes for the sidebar preview.
+        const lastMessage = info.lastMessage;
+        const last_mes = lastMessage?.send_date || new Date(info.updatedAt * 1000).toISOString();
+        return response.send({
+            file_id: id,
+            file_name: `${id}.jsonl`,
+            file_size: '0',
+            chat_items: info.messageCount,
+            mes: lastMessage?.mes || '[The chat is empty]',
+            last_mes,
+            sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt * 1000),
+        });
     } catch (error) {
         console.error(error);
         return response.sendStatus(500);
@@ -2804,18 +3011,20 @@ router.post('/group/delete', async (request, response) => {
             return response.sendStatus(400);
         }
 
-        const id = request.body.id;
+        const id = String(request.body.id);
+        const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
 
-        //Return success if the file was deleted.
-        if (tryDeleteFile(chatFilePath)) {
-            deleteAllChatStateSidecars(chatFilePath);
-            await deleteRecentChatIndexEntry(request, chatFilePath);
-            return response.send({ ok: true });
-        } else {
-            console.error('The group chat file was not deleted.');
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, '', id, { isGroup: true, groupId: id });
+        if (existing == null) {
             return response.sendStatus(400);
         }
+        await repo.delete(handle, '', id, { isGroup: true, groupId: id });
+        // Best-effort fs cleanup for legacy on-disk sidecars; harmless if absent.
+        try { deleteAllChatStateSidecars(chatFilePath); } catch { /* no-op */ }
+        await deleteRecentChatIndexEntry(request, chatFilePath);
+        return response.send({ ok: true });
     } catch (error) {
         console.error(error);
         return response.sendStatus(500);
@@ -2828,20 +3037,57 @@ router.post('/group/save', async function (request, response) {
             return response.sendStatus(400);
         }
 
-        const id = request.body.id;
+        const id = String(request.body.id);
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatData = request.body.chat;
 
-        if (Array.isArray(chatData)) {
-            const integrity = await trySaveChat(chatData, chatFilePath, request.body.force, handle, String(id), request.user.directories.backups);
-            await refreshRecentChatIndexEntry(request, chatFilePath);
-            acknowledgeGenerationFromValueOrPersistTarget(request, chatData, buildGroupPersistTargetHint(request));
-            return response.send({ ok: true, integrity });
-        }
-        else {
+        if (!Array.isArray(chatData)) {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });
         }
+
+        // The legacy `trySaveChat` accepted the entire chat as either a header
+        // + messages array, or just messages (header auto-generated). Mirror
+        // that contract here so callers don't need to change.
+        const repo = getChatRepo();
+        const force = Boolean(request.body.force);
+
+        let header;
+        let messages;
+        const looksLikeHeader = chatData.length > 0 && _.isObjectLike(chatData[0]) &&
+            (Object.hasOwn(chatData[0], 'chat_metadata') ||
+             Object.hasOwn(chatData[0], 'user_name') ||
+             Object.hasOwn(chatData[0], 'character_name'));
+        if (looksLikeHeader) {
+            header = chatData[0];
+            messages = chatData.slice(1);
+        } else {
+            header = createChatHeader({});
+            messages = chatData;
+        }
+
+        const existing = await repo.get(handle, '', id, { isGroup: true, groupId: id });
+        let expected = null;
+        if (!force && existing) {
+            // Honor expected integrity from header_metadata if present.
+            const hdrIntegrity = header?.chat_metadata?.integrity;
+            if (typeof hdrIntegrity === 'string' && hdrIntegrity) {
+                expected = hdrIntegrity;
+            }
+        }
+        let result;
+        try {
+            result = await repo.save(handle, '', id, header, messages, expected,
+                { isGroup: true, groupId: id });
+        } catch (err) {
+            if (err instanceof ConflictError) {
+                return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, expected));
+            }
+            throw err;
+        }
+        await refreshRecentChatIndexEntry(request, chatFilePath);
+        acknowledgeGenerationFromValueOrPersistTarget(request, chatData, buildGroupPersistTargetHint(request));
+        return response.send({ ok: true, integrity: result.integrity });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -2858,6 +3104,7 @@ router.post('/group/append', async function (request, response) {
         }
 
         const id = String(request.body.id);
+        const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
         const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
@@ -2877,6 +3124,11 @@ router.post('/group/append', async function (request, response) {
             integritySlug,
             force,
             incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
+            handle,
+            charDir: '',
+            name: id,
+            isGroup: true,
+            groupId: id,
         });
 
         await refreshRecentChatIndexEntry(request, chatFilePath);
@@ -2898,9 +3150,10 @@ router.post('/group/patch', async function (request, response) {
         }
 
         const id = String(request.body.id);
+        const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
-        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
+        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : null;
         const force = Boolean(request.body.force);
         const operations = Array.isArray(request.body.operations)
             ? request.body.operations
@@ -2912,15 +3165,41 @@ router.post('/group/patch', async function (request, response) {
             return response.status(400).send({ error: 'No patch operations found. Expected body.operations or body.operation.' });
         }
 
-        let result;
+        // Apply the JSON patch to the live chat document {header, body}.
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, '', id, { isGroup: true, groupId: id });
+        if (existing == null) {
+            return response.status(400).send({ error: 'Chat not found.' });
+        }
+        const expected = force ? null : (integritySlug || existing.integrity);
+        if (expected !== null && expected !== existing.integrity) {
+            return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
+        }
+
+        // Compose a temporary patch doc {header, body} and run the JSON Patch
+        // through the same path the character /patch endpoint uses.
         try {
-            result = await patchChatMessagesInFile({
-                filePath: chatFilePath,
-                operations,
-                chatMetadata,
-                integritySlug,
-                force,
-                incomingGenerationId: typeof request.body.luker_generation_id === 'string' ? request.body.luker_generation_id : '',
+            const docSeed = {
+                header: { ...(existing.header ?? {}) },
+                body: Array.isArray(existing.body) ? existing.body.slice() : [],
+            };
+            // chatMetadata merge first (legacy semantics: header gets a metadata
+            // update before the patch operations run).
+            docSeed.header.chat_metadata = {
+                ...(docSeed.header.chat_metadata ?? {}),
+                ...chatMetadata,
+            };
+            const patched = applyJsonPatch(docSeed, operations, true, false).newDocument;
+            const saved = await repo.save(handle, '', id, patched.header, patched.body, existing.integrity,
+                { isGroup: true, groupId: id });
+
+            await refreshRecentChatIndexEntry(request, chatFilePath);
+            acknowledgeGenerationFromValueOrPersistTarget(request, operations, buildGroupPersistTargetHint(request));
+            return response.send({
+                ok: true,
+                applied: operations.length,
+                total_messages: patched.body.length,
+                integrity: saved.integrity,
             });
         } catch (error) {
             if (isChatStatePatchConflictError(error)) {
@@ -2929,12 +3208,11 @@ router.post('/group/patch', async function (request, response) {
             if (isJsonPatchValidationError(error)) {
                 return response.status(400).send({ error: 'Invalid chat patch payload.' });
             }
+            if (error instanceof ConflictError) {
+                return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
+            }
             throw error;
         }
-
-        await refreshRecentChatIndexEntry(request, chatFilePath);
-        acknowledgeGenerationFromValueOrPersistTarget(request, operations, buildGroupPersistTargetHint(request));
-        return response.send({ ok: true, ...result });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -2954,20 +3232,42 @@ router.post('/group/meta', async function (request, response) {
         }
 
         const id = String(request.body.id);
+        const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatMetadata = request.body.chat_metadata;
-        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
+        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : null;
         const force = Boolean(request.body.force);
 
-        const result = await updateChatMetadataInFile({
-            filePath: chatFilePath,
-            chatMetadata,
-            integritySlug,
-            force,
-        });
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, '', id, { isGroup: true, groupId: id });
+        if (existing == null) {
+            // Create header-only group chat (legacy behavior auto-created on miss).
+            const newHeader = createChatHeader({ chat_metadata: chatMetadata });
+            const saved = await repo.save(handle, '', id, newHeader, [], null,
+                { isGroup: true, groupId: id });
+            await refreshRecentChatIndexEntry(request, chatFilePath);
+            return response.send({ ok: true, updated: true, total_messages: 0, created: true, integrity: saved.integrity });
+        }
+        const expected = force ? null : integritySlug;
+        let result;
+        try {
+            result = await repo.updateChatMetadata(handle, '', id, chatMetadata, expected,
+                { isGroup: true, groupId: id });
+        } catch (err) {
+            if (err instanceof ConflictError) {
+                return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
+            }
+            throw err;
+        }
 
         await refreshRecentChatIndexEntry(request, chatFilePath);
-        return response.send({ ok: true, ...result });
+        return response.send({
+            ok: true,
+            updated: true,
+            total_messages: Array.isArray(existing.body) ? existing.body.length : 0,
+            created: false,
+            integrity: result.integrity,
+        });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -2992,30 +3292,55 @@ router.post('/group/meta/patch', async function (request, response) {
         }
 
         const id = String(request.body.id);
+        const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
-        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : undefined;
+        const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : null;
         const force = Boolean(request.body.force);
 
-        let result;
+        const repo = getChatRepo();
+        const existing = await repo.get(handle, '', id, { isGroup: true, groupId: id });
+        const currentMetadata = existing?.header?.chat_metadata ?? {};
+        let nextMetadata;
         try {
-            result = await patchChatMetadataInFile({
-                filePath: chatFilePath,
-                operations,
-                integritySlug,
-                force,
-            });
+            const patchResult = applyJsonPatch(currentMetadata, operations, true, false);
+            nextMetadata = patchResult.newDocument;
         } catch (error) {
-            if (isChatStatePatchConflictError(error)) {
-                return response.status(409).send({ error: 'Chat metadata patch conflict.' });
-            }
             if (isJsonPatchValidationError(error)) {
                 return response.status(400).send({ error: 'Invalid metadata patch payload.' });
             }
+            if (isChatStatePatchConflictError(error)) {
+                return response.status(409).send({ error: 'Chat metadata patch conflict.' });
+            }
             throw error;
+        }
+        if (existing == null) {
+            const newHeader = createChatHeader({ chat_metadata: nextMetadata });
+            const saved = await repo.save(handle, '', id, newHeader, [], null,
+                { isGroup: true, groupId: id });
+            await refreshRecentChatIndexEntry(request, chatFilePath);
+            return response.send({ ok: true, applied: operations.length, total_messages: 0, created: true, integrity: saved.integrity });
+        }
+        const expected = force ? null : integritySlug;
+        let result;
+        try {
+            const newHeader = { ...(existing.header ?? {}), chat_metadata: nextMetadata };
+            result = await repo.save(handle, '', id, newHeader, existing.body ?? [], expected,
+                { isGroup: true, groupId: id });
+        } catch (err) {
+            if (err instanceof ConflictError) {
+                return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
+            }
+            throw err;
         }
 
         await refreshRecentChatIndexEntry(request, chatFilePath);
-        return response.send({ ok: true, ...result });
+        return response.send({
+            ok: true,
+            applied: operations.length,
+            total_messages: Array.isArray(existing.body) ? existing.body.length : 0,
+            created: false,
+            integrity: result.integrity,
+        });
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
@@ -3028,99 +3353,57 @@ router.post('/group/meta/patch', async function (request, response) {
 router.post('/search', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         const { query, avatar_url, group_id } = request.body;
+        const handle = request.user.profile.handle;
+        const repo = getChatRepo();
 
-        /** @type {string[]} */
-        let chatFiles = [];
-
+        // Find candidate chats based on the scope (group id or character).
+        let candidates = [];
         if (group_id) {
-            // Find group's chat IDs first
-            const groupDir = path.join(request.user.directories.groups);
-            const groupFiles = fs.readdirSync(groupDir)
-                .filter(file => path.extname(file) === '.json');
-
-            let targetGroup;
-            for (const groupFile of groupFiles) {
-                try {
-                    const groupData = JSON.parse(fs.readFileSync(path.join(groupDir, groupFile), 'utf8'));
-                    if (groupData.id === group_id) {
-                        targetGroup = groupData;
-                        break;
-                    }
-                } catch (error) {
-                    console.warn(groupFile, 'group file is corrupted:', error);
-                }
-            }
-
-            if (!Array.isArray(targetGroup?.chats)) {
-                return response.send([]);
-            }
-
-            // Find group chat files for given group ID
-            const groupChatsDir = path.join(request.user.directories.groupChats);
-            chatFiles = targetGroup.chats
-                .map(chatId => path.join(groupChatsDir, `${chatId}.jsonl`))
-                .filter(fileName => fs.existsSync(fileName));
+            // Group chats live in ChatRepo too; let the engine filter by groupId.
+            candidates = await repo.listForGroup(handle, String(group_id), { orderBy: 'updatedAt' });
+        } else if (avatar_url) {
+            const charDir = String(avatar_url).replace('.png', '');
+            candidates = await repo.listForCharacter(handle, charDir, { orderBy: 'updatedAt' });
         } else {
-            // Regular character chat directory
-            const character_name = avatar_url.replace('.png', '');
-            const directoryPath = path.join(request.user.directories.chats, character_name);
-
-            if (!fs.existsSync(directoryPath)) {
-                return response.send([]);
-            }
-
-            chatFiles = fs.readdirSync(directoryPath)
-                .filter(file => path.extname(file) === '.jsonl')
-                .map(fileName => path.join(directoryPath, fileName));
+            return response.send([]);
         }
 
-        /**
-         * @type {SearchChatResult[]}
-         * @typedef {object} SearchChatResult
-         * @property {string} [file_name] - The name of the chat file
-         * @property {string} [file_size] - The size of the chat file in a human-readable format
-         * @property {number} [message_count] - The number of messages in the chat
-         * @property {number|string} [last_mes] - The timestamp of the last message
-         * @property {string} [preview_message] - A preview of the last message
-         */
-        const results = [];
-
-        /** @type {string[]} */
-        const fragments = query ? query.trim().toLowerCase().split(/\s+/).filter(x => x) : [];
-
-        /** @type {ChatMatchFunction} */
+        const fragments = query ? query.trim().toLowerCase().split(/\s+/).filter(Boolean) : [];
         const hasTextMatch = (textArray) => {
-            if (fragments.length === 0) {
-                return true;
-            }
-            return fragments.every(fragment => textArray.some(text => String(text ?? '').toLowerCase().includes(fragment)));
+            if (fragments.length === 0) return true;
+            return fragments.every((fragment) =>
+                textArray.some((text) => String(text ?? '').toLowerCase().includes(fragment)));
         };
 
-        for (const chatFile of chatFiles) {
-            const matcher = query ? hasTextMatch : null;
-            const chatInfo = await getChatInfo(chatFile, {}, false, matcher);
-            const hasMatch = chatInfo.match || hasTextMatch([chatInfo.file_id ?? '']);
+        const results = [];
+        for (const entry of candidates) {
+            // For each candidate, pull the full chat. Cheap on FS (already
+            // serialized line-by-line) and the SQL engines fetch one row.
+            const chat = await repo.get(handle, entry.key.charDir, entry.key.name, {
+                isGroup: entry.key.isGroup,
+                groupId: entry.key.groupId,
+            });
+            if (chat == null) continue;
+            const body = Array.isArray(chat.body) ? chat.body : [];
+            const messageCount = body.length;
+            const last = body.length > 0 ? body[body.length - 1] : null;
+            const allText = body.map((m) => m?.mes ?? '');
 
-            // Skip corrupted or invalid chat files
-            if (!chatInfo.file_name) {
-                continue;
-            }
+            const matchedByText = hasTextMatch(allText);
+            const matchedByName = hasTextMatch([entry.key.name]);
+            const matched = matchedByText || matchedByName;
 
-            // Empty chats without a file name match are skipped when searching with a query
-            if (query && chatInfo.chat_items === 0 && !hasMatch) {
-                continue;
-            }
+            if (!matched) continue;
+            if (query && messageCount === 0 && !matchedByName) continue;
 
-            // If no search query or a match was found, include the chat in results
-            if (!query || hasMatch) {
-                results.push({
-                    file_name: chatInfo.file_id,
-                    file_size: chatInfo.file_size,
-                    message_count: chatInfo.chat_items,
-                    last_mes: chatInfo.last_mes,
-                    preview_message: getPreviewMessage(chatInfo.mes),
-                });
-            }
+            results.push({
+                file_name: `${entry.key.name}.jsonl`,
+                // file_size is omitted — we no longer have a cheap byte count
+                // and clients show it as a hint only.
+                message_count: messageCount,
+                last_mes: last?.send_date || new Date(entry.updatedAt * 1000).toISOString(),
+                preview_message: getPreviewMessage(last?.mes || ''),
+            });
         }
 
         return response.send(results);

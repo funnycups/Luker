@@ -157,11 +157,25 @@ export function registerChatHandler(tx) {
             return r.rowCount > 0;
         },
         async list(filter) {
+            const where = ['handle = $1'];
+            const args = [filter.handle];
+            if (typeof filter.charDir === 'string') {
+                args.push(filter.charDir);
+                where.push(`char_dir = $${args.length}`);
+            }
+            if (typeof filter.isGroup === 'boolean') {
+                args.push(filter.isGroup ? 1 : 0);
+                where.push(`is_group = $${args.length}`);
+            }
+            if (typeof filter.groupId === 'string') {
+                args.push(filter.groupId);
+                where.push(`group_id = $${args.length}`);
+            }
             const orderClause = filter.orderBy === 'name' ? 'ORDER BY name ASC' : 'ORDER BY updated_at DESC';
             const r = await client.query(
                 `SELECT char_dir, name, is_group, group_id, updated_at, created_at
-                 FROM chats WHERE handle=$1 ${orderClause}`,
-                [filter.handle],
+                 FROM chats WHERE ${where.join(' AND ')} ${orderClause}`,
+                args,
             );
             const out = r.rows.map((row) => ({
                 key: {

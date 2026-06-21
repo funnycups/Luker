@@ -504,6 +504,14 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
             chatMetadata: persistTarget.chat_metadata || {},
             integritySlug: persistTarget.integrity || '',
             force: Boolean(persistTarget.force),
+            // Route through ChatRepo so writes land in the active engine,
+            // not just the FS scratch directory. (filePath is still passed
+            // so the sidecar gen-id helpers see a stable key.)
+            handle: job?.requestMeta?.handle,
+            charDir: '',
+            name: groupId,
+            isGroup: true,
+            groupId,
         });
         return true;
     }
@@ -520,12 +528,17 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
             avatar,
             fileName,
         );
+        const baseName = fileName.replace(/\.jsonl$/i, '');
         await appendMessagesToChatFile({
             filePath: chatFilePath,
             messages: [message],
             chatMetadata: persistTarget.chat_metadata || {},
             integritySlug: persistTarget.integrity || '',
             force: Boolean(persistTarget.force),
+            handle: job?.requestMeta?.handle,
+            charDir: avatar,
+            name: baseName,
+            isGroup: false,
         });
         return true;
     }

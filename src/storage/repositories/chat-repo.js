@@ -189,6 +189,219 @@ export class ChatRepo {
         });
     }
 
+    // Filtered list helpers added in db-parity Phase 5. Each one is a thin
+    // shape around the engine-level filter contract so endpoints can avoid
+    // direct fs scans.
+
+    async listForCharacter(handle, charDir, { orderBy = 'updatedAt', limit } = {}) {
+        return this._engine.withTransaction(handle, async (tx) =>
+            tx.listResources({ kind: 'chat', handle, charDir, isGroup: false, orderBy, limit }));
+    }
+
+    async listForGroup(handle, groupId, { orderBy = 'updatedAt', limit } = {}) {
+        return this._engine.withTransaction(handle, async (tx) =>
+            tx.listResources({ kind: 'chat', handle, isGroup: true, groupId, orderBy, limit }));
+    }
+
+    async listAllGroupChats(handle, { orderBy = 'updatedAt', limit } = {}) {
+        return this._engine.withTransaction(handle, async (tx) =>
+            tx.listResources({ kind: 'chat', handle, isGroup: true, orderBy, limit }));
+    }
+
+    async listAll(handle, { orderBy = 'updatedAt', limit } = {}) {
+        return this._engine.withTransaction(handle, async (tx) =>
+            tx.listResources({ kind: 'chat', handle, orderBy, limit }));
+    }
+
+    // Drop every chat (and its cascaded state sidecars) under a character.
+    // Used by /api/characters/delete with delete_chats=true so the db rows
+    // don't outlive the avatar file in db modes.
+    async deleteAllForCharacter(handle, charDir) {
+        assertWritable();
+        if (typeof charDir !== 'string' || !charDir) throw new Error('deleteAllForCharacter: charDir required');
+        return this._engine.withTransaction(handle, async (tx) => {
+            const entries = await tx.listResources({
+                kind: 'chat', handle, charDir, isGroup: false,
+            });
+            for (const e of entries) {
+                await tx.deleteResource({ kind: 'chat', handle, charDir, name: e.key.name, isGroup: false });
+            }
+            return entries.length;
+        });
+    }
+
+    // Move every character chat from oldCharDir to newCharDir in a single
+    // transaction. Used by /api/characters/rename so chats follow the
+    // character to its new on-disk avatar name in db modes too.
+    // Returns the number of chats moved (including their state sidecars).
+    async renameCharDir(handle, oldCharDir, newCharDir) {
+        assertWritable();
+        if (typeof oldCharDir !== 'string' || !oldCharDir) throw new Error('renameCharDir: oldCharDir required');
+        if (typeof newCharDir !== 'string' || !newCharDir) throw new Error('renameCharDir: newCharDir required');
+        if (oldCharDir === newCharDir) return 0;
+        return this._engine.withTransaction(handle, async (tx) => {
+            const entries = await tx.listResources({
+                kind: 'chat', handle, charDir: oldCharDir, isGroup: false,
+            });
+            if (entries.length === 0) return 0;
+
+            // For each chat under oldCharDir: read full payload, migrate state
+            // sidecars (we list ns then re-attach to the new key), then put
+            // the chat under newCharDir, then delete the old. Order matters
+            // because chat_states reference (handle, char_dir, name, ...).
+            for (const e of entries) {
+                const oldKey = { kind: 'chat', handle, charDir: oldCharDir, name: e.key.name, isGroup: false };
+                const newKey = { kind: 'chat', handle, charDir: newCharDir, name: e.key.name, isGroup: false };
+                const full = await tx.getResource(oldKey);
+                if (full == null) continue;
+
+                // Migrate state sidecars first by namespace.
+                const namespaces = await tx.listChatStateNamespaces(oldKey);
+                for (const ns of namespaces) {
+                    const doc = await tx.getChatState(oldKey, ns);
+                    if (doc !== null && doc !== undefined) {
+                        // putChatState requires the new parent to exist; do that
+                        // BEFORE writing the sidecar. We need an order:
+                        //   1. write new parent chat
+                        //   2. write new sidecars
+                        //   3. delete old parent (which cascades old sidecars)
+                        // Defer the sidecar writes until after step 1 by holding
+                        // them in a Map; we'll write them next.
+                        // (handled below)
+                        e._sidecars = e._sidecars || new Map();
+                        e._sidecars.set(ns, doc);
+                    }
+                }
+
+                // 1. Write the chat under the new key.
+                await tx.putResource(newKey, {
+                    header: full.header,
+                    body: full.body,
+                    integrity: full.integrity,
+                    updatedAt: full.updatedAt,
+                    createdAt: full.createdAt,
+                });
+                // 2. Replay sidecars under the new key.
+                if (e._sidecars) {
+                    for (const [ns, doc] of e._sidecars) {
+                        await tx.putChatState(newKey, ns, doc);
+                    }
+                }
+                // 3. Drop the old chat (cascades old sidecars).
+                await tx.deleteResource(oldKey);
+            }
+            return entries.length;
+        });
+    }
+
+    // Lightweight "chat info" — body length, last message preview, header
+    // chat_metadata. Used by /api/characters/chats?metadata=1 and
+    // /api/chats/recent. Implemented as a Repo.get + projection because
+    // engines all hold the full body in memory after a get anyway; this
+    // keeps a single shape across engines without per-engine SQL.
+    async getInfo(handle, charDir, name, { isGroup = false, groupId } = {}) {
+        const chat = await this.get(handle, charDir, name, { isGroup, groupId });
+        if (chat == null) return null;
+        const body = Array.isArray(chat.body) ? chat.body : [];
+        const lastMessage = body.length > 0 ? body[body.length - 1] : null;
+        return {
+            handle,
+            charDir,
+            name,
+            isGroup: !!isGroup,
+            groupId: groupId || undefined,
+            messageCount: body.length,
+            lastMessage,
+            chatMetadata: chat.header?.chat_metadata ?? {},
+            updatedAt: chat.updatedAt,
+            createdAt: chat.createdAt,
+            integrity: chat.integrity,
+        };
+    }
+
+    // Patch the in-place `chat_metadata` block of an existing chat header
+    // without rewriting body messages. Single round-trip transaction so the
+    // integrity check + merge + put run atomically. Returns the new integrity.
+    async updateChatMetadata(handle, charDir, name, metadataPatch, expectedIntegrity, { isGroup = false, groupId } = {}) {
+        assertWritable();
+        const key = this._key(handle, charDir, name, { isGroup, groupId });
+        const newIntegrity = randomUUID();
+        const now = this._now();
+        return this._engine.withTransaction(handle, async (tx) => {
+            const existing = await tx.getResource(key);
+            if (!existing) throw new NotFoundError('chat', { handle, charDir, name });
+            if (expectedIntegrity !== null && expectedIntegrity !== undefined) {
+                if (existing.integrity !== expectedIntegrity) {
+                    throw new ConflictError('integrity_mismatch', {
+                        expected: expectedIntegrity,
+                        actual: existing.integrity,
+                    });
+                }
+            }
+            const header = existing.header ?? {};
+            const merged = {
+                ...header,
+                chat_metadata: {
+                    ...(header.chat_metadata ?? {}),
+                    ...(metadataPatch ?? {}),
+                },
+            };
+            await tx.putResource(key, {
+                header: merged,
+                body: existing.body,
+                integrity: newIntegrity,
+                updatedAt: now,
+                createdAt: existing.createdAt,
+            });
+            return { integrity: newIntegrity };
+        });
+    }
+
+    // Substring search over chat body messages. Returns chats whose at least
+    // one message contains the query (case-insensitive) anywhere in the
+    // text of `mes`. Lightweight: walks bodies in-memory rather than asking
+    // each engine for full-text search (sqlite has FTS but mysql/pg would
+    // need separate tablespaces).
+    async searchByContent(handle, query, { charDir, groupId, isGroup, maxResults = 200 } = {}) {
+        const needle = String(query ?? '').toLowerCase();
+        if (!needle) return [];
+        return this._engine.withTransaction(handle, async (tx) => {
+            const filter = { kind: 'chat', handle };
+            if (typeof charDir === 'string') filter.charDir = charDir;
+            if (typeof isGroup === 'boolean') filter.isGroup = isGroup;
+            if (typeof groupId === 'string') filter.groupId = groupId;
+            filter.orderBy = 'updatedAt';
+            const entries = await tx.listResources(filter);
+
+            const out = [];
+            for (const e of entries) {
+                if (out.length >= maxResults) break;
+                const full = await tx.getResource(e.key);
+                if (!full || !Array.isArray(full.body)) continue;
+                const hits = [];
+                for (let i = 0; i < full.body.length; i++) {
+                    const msg = full.body[i];
+                    const text = String(msg?.mes ?? '');
+                    if (text.toLowerCase().includes(needle)) {
+                        hits.push({ messageIndex: i, text });
+                    }
+                }
+                if (hits.length > 0) {
+                    out.push({
+                        handle,
+                        charDir: e.key.charDir,
+                        name: e.key.name,
+                        isGroup: !!e.key.isGroup,
+                        groupId: e.key.groupId,
+                        snippets: hits,
+                        updatedAt: e.updatedAt,
+                    });
+                }
+            }
+            return out;
+        });
+    }
+
     async listStateNamespaces(handle, charDir, name, { isGroup = false, groupId } = {}) {
         const key = this._key(handle, charDir, name, { isGroup, groupId });
         return this._engine.withTransaction(handle, (tx) => tx.listChatStateNamespaces(key));

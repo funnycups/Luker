@@ -54,6 +54,18 @@ export class WorldInfoRepo {
         return this._engine.withTransaction(handle, (tx) => tx.listResources({ kind: 'world', handle }));
     }
 
+    // Convenience: just the canonical names, sorted. Used by buildSettingsResponse
+    // to populate `world_names` in the settings payload. Cheaper than list()
+    // because every engine handler already projects `name` into the listResources
+    // result, so this just narrows the projection.
+    async listNames(handle) {
+        const entries = await this.list(handle);
+        return entries
+            .map((entry) => entry?.key?.name)
+            .filter((name) => typeof name === 'string' && name.length > 0)
+            .sort((a, b) => a.localeCompare(b));
+    }
+
     async resolveName(handle, requested) {
         return this._engine.withTransaction(handle, (tx) => tx.resolveWorldName(this._key(handle, requested)));
     }

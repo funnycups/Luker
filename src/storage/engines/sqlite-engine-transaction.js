@@ -126,8 +126,29 @@ export function registerChatHandler(tx) {
             return result.changes > 0;
         },
         list(filter) {
-            const stmtToUse = filter.orderBy === 'name' ? stmt.listByName : stmt.listByUpdated;
-            const rows = stmtToUse.all(filter.handle);
+            // Build the WHERE clause dynamically — sqlite handles this fine
+            // without prepared-statement caching since the contracts run once
+            // per query shape. Filters: charDir, isGroup, groupId, limit, orderBy.
+            const where = ['handle = ?'];
+            const args = [filter.handle];
+            if (typeof filter.charDir === 'string') {
+                where.push('char_dir = ?');
+                args.push(filter.charDir);
+            }
+            if (typeof filter.isGroup === 'boolean') {
+                where.push('is_group = ?');
+                args.push(filter.isGroup ? 1 : 0);
+            }
+            if (typeof filter.groupId === 'string') {
+                where.push('group_id = ?');
+                args.push(filter.groupId);
+            }
+            const orderClause = filter.orderBy === 'name'
+                ? 'ORDER BY name ASC'
+                : 'ORDER BY updated_at DESC';
+            const sql = `SELECT char_dir, name, is_group, group_id, updated_at, created_at
+                         FROM chats WHERE ${where.join(' AND ')} ${orderClause}`;
+            const rows = db.prepare(sql).all(...args);
             const out = rows.map((row) => ({
                 key: {
                     kind: 'chat',
