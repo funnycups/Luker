@@ -190,3 +190,61 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
     });
 });
 
+// Fresh-storage seeding: a user who flips storage.mode from fs to a db mode
+// without first running the migration script must still be able to hit
+// /api/settings/get without a 500. The endpoint imports the legacy
+// settings.json off disk if SettingsRepo is empty.
+
+describe.each(ENDPOINT_HARNESSES)('settings.js fresh-storage handling on $name', ({ mode }) => {
+    let harness;
+
+    beforeEach(async () => {
+        harness = await makeEndpointHarness({
+            mode,
+            mount: (app) => { app.use('/api/settings', settingsRouter); },
+        });
+        // DO NOT seed SettingsRepo — that's the whole point of this test.
+    });
+
+    afterEach(async () => {
+        if (harness) await harness.cleanup();
+    });
+
+    test('REGRESSION: missing settings doc + missing settings.json → 200 with empty defaults', async () => {
+        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const parsed = typeof res.body.settings === 'string' ? JSON.parse(res.body.settings) : res.body.settings;
+        expect(parsed).toEqual({});
+    });
+
+    test('REGRESSION: missing settings doc + existing settings.json → settings imported into Repo', async () => {
+        // Plant a legacy on-disk settings.json (the FS engine's storage shape)
+        // for a user who had data but never ran storage:migrate after switching
+        // to a db mode. The endpoint must one-shot import it into SettingsRepo.
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        fs.mkdirSync(harness.dirs.root, { recursive: true });
+        fs.writeFileSync(
+            path.join(harness.dirs.root, 'settings.json'),
+            JSON.stringify({ user_name: 'legacy-fs-user', custom: 'imported' }),
+            'utf8',
+        );
+
+        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const parsed = typeof res.body.settings === 'string' ? JSON.parse(res.body.settings) : res.body.settings;
+        expect(parsed.user_name).toBe('legacy-fs-user');
+        expect(parsed.custom).toBe('imported');
+
+        if (mode !== 'fs') {
+            // For db modes specifically: future /get calls must come from
+            // SettingsRepo, not from a re-read of the legacy fs file. Wipe
+            // the on-disk file and confirm the in-engine copy still answers.
+            // (In fs mode this is a no-op assertion because settings.json IS
+            // the engine storage.)
+            fs.unlinkSync(path.join(harness.dirs.root, 'settings.json'));
+            const res2 = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+            const parsed2 = typeof res2.body.settings === 'string' ? JSON.parse(res2.body.settings) : res2.body.settings;
+            expect(parsed2.user_name).toBe('legacy-fs-user');
+        }
+    });
+});
+

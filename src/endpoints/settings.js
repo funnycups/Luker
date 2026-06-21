@@ -213,9 +213,32 @@ async function namedDocsFromRepo(handle, bucket) {
 
 export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
     const handle = request.user.profile.handle;
-    const parsedSettings = await getSettingsRepo().get(handle);
+    let parsedSettings = await getSettingsRepo().get(handle);
+
     if (parsedSettings == null) {
-        throw new Error(`settings missing for handle ${handle}`);
+        // Fresh user (or fresh-db user whose data hasn't been migrated yet)
+        // — seed the empty doc through the Repo so future /get + /patch
+        // calls work, and so we never bomb out the bootstrap with a 500.
+        // The legacy fs-mode path used `existsSync(settings.json)` and an
+        // empty object on miss; mirror that here.
+        const pathToSettings = path.join(request.user.directories.root, 'settings.json');
+        if (fs.existsSync(pathToSettings)) {
+            // One-shot import from the user's existing fs file (covers the
+            // fs→db migration case, where a switch from `storage.mode: fs`
+            // to `sqlite`/`mysql`/`postgres` happens without running the
+            // `storage:migrate` script first).
+            try {
+                parsedSettings = JSON.parse(fs.readFileSync(pathToSettings, 'utf8'));
+                await getSettingsRepo().save(handle, parsedSettings);
+            } catch (err) {
+                console.warn(`Failed to import legacy settings.json for ${handle}; using empty defaults.`, err?.message || err);
+                parsedSettings = {};
+                await getSettingsRepo().save(handle, parsedSettings);
+            }
+        } else {
+            parsedSettings = {};
+            await getSettingsRepo().save(handle, parsedSettings);
+        }
     }
     const settings = JSON.stringify(parsedSettings);
 
