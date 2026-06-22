@@ -6,9 +6,17 @@
 //   const jsonBody = array.flatMap(x => Object.values(x)).join('\n\n');
 //   const ids = instance.encodeIds(jsonBody);
 //   return ids.length;
+//
+// All tokenization runs in a dedicated module worker
+// (workers/sentencepiece-worker.js) so the synchronous WASM encode doesn't
+// block the main thread — a single chat with a large bound lorebook was
+// observed pinning the renderer for >50s while the worldinfo budget loop
+// re-tokenized growing accumulators. An in-thread fallback stays available
+// for environments without Web Workers.
 
 const libPromise = () => import('/lib/tokenizers/sentencepiece-js-bundle.js');
 
+// Mirrors MODEL_URLS in workers/sentencepiece-worker.js — keep in sync.
 const MODEL_URLS = {
     llama: '/tokenizers/llama.model',
     mistral: '/tokenizers/mistral.model',
@@ -21,14 +29,91 @@ const MODEL_URLS = {
     nerdstash_v2: '/tokenizers/nerdstash_v2.model',
 };
 
-const instanceCache = new Map();
+// ---- Worker bridge -------------------------------------------------------
 
-async function getInstance(model) {
-    if (instanceCache.has(model)) return instanceCache.get(model);
+let workerInstance = null;
+let workerDisabled = false;
+let workerSequence = 0;
+const workerPending = new Map();
+const WORKER_REQUEST_TIMEOUT_MS = 30000;
+
+function ensureWorker() {
+    if (workerDisabled || typeof Worker === 'undefined') return null;
+    if (workerInstance) return workerInstance;
+
+    try {
+        workerInstance = new Worker(
+            new URL('../workers/sentencepiece-worker.js', import.meta.url),
+            { type: 'module' },
+        );
+    } catch (error) {
+        console.warn('[sentencepiece-adapter] Failed to spawn worker, falling back to main-thread tokenizer', error);
+        workerDisabled = true;
+        workerInstance = null;
+        return null;
+    }
+
+    workerInstance.addEventListener('message', (event) => {
+        const id = Number(event?.data?.id);
+        if (!Number.isInteger(id)) return;
+        const pending = workerPending.get(id);
+        if (!pending) return;
+        clearTimeout(pending.timeoutId);
+        workerPending.delete(id);
+        if (event.data?.ok) {
+            pending.resolve(event.data.result);
+        } else {
+            pending.reject(new Error(String(event.data?.error || 'sentencepiece worker failed')));
+        }
+    });
+
+    workerInstance.addEventListener('error', (event) => {
+        console.warn('[sentencepiece-adapter] Worker crashed, disabling and falling back', event?.error || event);
+        const crashErr = event?.error || new Error('sentencepiece worker crashed');
+        for (const [, pending] of workerPending) {
+            clearTimeout(pending.timeoutId);
+            pending.reject(crashErr);
+        }
+        workerPending.clear();
+        try { workerInstance?.terminate(); } catch { /* ignore */ }
+        workerInstance = null;
+        workerDisabled = true;
+    });
+
+    return workerInstance;
+}
+
+function callWorker(op, payload) {
+    const worker = ensureWorker();
+    if (!worker) return Promise.reject(new Error('sentencepiece worker unavailable'));
+
+    return new Promise((resolve, reject) => {
+        const id = ++workerSequence;
+        const timeoutId = setTimeout(() => {
+            workerPending.delete(id);
+            reject(new Error(`sentencepiece worker ${op} timed out`));
+        }, WORKER_REQUEST_TIMEOUT_MS);
+        workerPending.set(id, { resolve, reject, timeoutId });
+        try {
+            worker.postMessage({ id, op, ...payload });
+        } catch (error) {
+            clearTimeout(timeoutId);
+            workerPending.delete(id);
+            reject(error);
+        }
+    });
+}
+
+// ---- In-thread fallback (also exercised on worker errors) ----------------
+
+const fallbackInstanceCache = new Map();
+
+async function getFallbackInstance(model) {
+    if (fallbackInstanceCache.has(model)) return fallbackInstanceCache.get(model);
     const promise = (async () => {
         const url = MODEL_URLS[model];
         if (!url) throw new Error(`No sentencepiece model URL for "${model}"`);
-        // Sentencepiece-js's .load() calls fs.readFileSync(url) synchronously
+        // sentencepiece-js's .load() calls fs.readFileSync(url) synchronously
         // inside the wasm init. The bundle wrapper's fs shim reads from a
         // shared Map; we prefetch the bytes and stash them before sp.load runs.
         const { SentencePieceProcessor, __spFileCache } = await libPromise();
@@ -42,26 +127,54 @@ async function getInstance(model) {
             __spFileCache.delete(url);
         }
     })();
-    instanceCache.set(model, promise);
-    promise.catch(() => instanceCache.delete(model));
+    fallbackInstanceCache.set(model, promise);
+    promise.catch(() => fallbackInstanceCache.delete(model));
     return promise;
 }
 
-export async function countMessages(model, messages) {
-    const sp = await getInstance(model);
+async function countMessagesFallback(model, messages) {
+    const sp = await getFallbackInstance(model);
     const text = messages.flatMap(x => Object.values(x)).join('\n\n');
-    const ids = sp.encodeIds(String(text ?? ''));
-    return ids.length;
+    return sp.encodeIds(String(text ?? '')).length;
 }
 
-export async function encode(model, text) {
-    const sp = await getInstance(model);
+async function encodeFallback(model, text) {
+    const sp = await getFallbackInstance(model);
     return Array.from(sp.encodeIds(String(text ?? '')));
 }
 
-export async function decode(model, ids) {
-    const sp = await getInstance(model);
+async function decodeFallback(model, ids) {
+    const sp = await getFallbackInstance(model);
     return sp.decodeIds(Array.from(ids));
+}
+
+// ---- Public surface ------------------------------------------------------
+
+export async function countMessages(model, messages) {
+    try {
+        return await callWorker('countMessages', { model, messages });
+    } catch (error) {
+        console.warn(`[sentencepiece-adapter] worker countMessages failed for ${model}, falling back`, error);
+        return countMessagesFallback(model, messages);
+    }
+}
+
+export async function encode(model, text) {
+    try {
+        return await callWorker('encode', { model, text });
+    } catch (error) {
+        console.warn(`[sentencepiece-adapter] worker encode failed for ${model}, falling back`, error);
+        return encodeFallback(model, text);
+    }
+}
+
+export async function decode(model, ids) {
+    try {
+        return await callWorker('decode', { model, ids });
+    } catch (error) {
+        console.warn(`[sentencepiece-adapter] worker decode failed for ${model}, falling back`, error);
+        return decodeFallback(model, ids);
+    }
 }
 
 export function supports(model) {
