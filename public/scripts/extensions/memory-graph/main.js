@@ -1150,6 +1150,20 @@ let lastKnownChatKey = '';
 let latestRecallSnapshot = null;
 let generationInProgress = false;
 let generationVisibleHistoryRegexProvider = null;
+
+// Pending mutation-invalidation chain. Lives at module scope so the
+// GENERATION_BEFORE_WORLD_INFO_SCAN listener can drain it before WI scan
+// captures lorebook entries — otherwise a manual delete + immediate
+// regenerate races the cache/lorebook refresh and stale persistent
+// entries (event summaries) leak into the prompt.
+let pendingMutationInvalidation = Promise.resolve();
+
+// Test-only injection points. Production keeps these null; the dedicated
+// test suite (tests/memory-graph/wi-scan-listeners.test.js) installs
+// stubs via the `_set*HookForTest` exports below to assert side effects
+// without exercising the real LLM / lorebook stack.
+let __testSafeInjectMemoryPromptsHook = null;
+let __testPersistentDrainHook = null;
 function getGenerationVisibleHistoryRuntimeRegexScripts() {
     const context = getContext();
     const settings = getEffectiveSettings(context, getSettings());
@@ -15038,6 +15052,295 @@ function ensureUi() {
     bindUi();
 }
 
+/**
+ * Refresh the in-memory runtime store cache for `chatKey` from the
+ * floor-state graph payload + the __meta sidecar. Awaits fs.ready()
+ * so any in-flight write (a concurrent fs.patch from extraction) has
+ * landed before we read.
+ */
+async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
+    if (!chatKey || chatKey === 'invalid_target') return null;
+    const target = memoryStoreTargets.get(chatKey);
+    // fs.get() owns migration + replay-failure recovery. If it still
+    // throws after that, the store is genuinely broken — surface to the
+    // user and leave the cache as-is rather than overwriting with an
+    // empty store (which would visually erase the user's data).
+    let payload;
+    try {
+        const fs = await getFloorStateInstance(runtimeContext);
+        await fs.ready();
+        payload = await fs.get();
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] floor-state get failed during cache refresh`, error);
+        notifyError(i18nFormat('Memory graph load failed: ${0}', error?.message || error));
+        return memoryStoreCache.get(chatKey) || null;
+    }
+    let meta = null;
+    if (target) {
+        try {
+            meta = await loadMetaFields(runtimeContext, target);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] meta sidecar read failed during cache refresh`, error);
+        }
+    }
+    if (meta) setCachedMeta(chatKey, meta);
+    const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta || getCachedMeta(chatKey));
+    memoryStoreCache.set(chatKey, runtimeStore);
+    return runtimeStore;
+}
+
+/**
+ * Coalesce structural-event reactions:
+ *  - cancel any in-flight extraction
+ *  - wait for floor-state to finish its truncate / swipe-delete settle
+ *  - rebuild the in-memory runtime store from the replayed fs payload
+ *  - clear stale recall trace + sourceMessageCount, persist to __meta
+ *  - re-sync the persistent + runtime lorebook projections
+ *  - optionally schedule a fresh extraction replay
+ *
+ * Floor-state owns the graph payload's response to MESSAGE_DELETED /
+ * MESSAGE_SWIPED / MESSAGE_SWIPE_DELETED. Memory-graph's job here is only
+ * to flush its read-side caches and reset its non-floor metadata.
+ *
+ * Floor-state has already settled by the time this runs (core invokes
+ * `settleMessageDeleted/Swiped/SwipeDeleted` before the corresponding
+ * `eventSource.emit`), so `refreshMemoryStoreCacheFromFloorState` replays
+ * the post-truncate / post-swipe log.
+ */
+async function applyMutationInvalidationImpl(fromSeq = null, { scheduleReplay = false } = {}) {
+    const liveContext = getContext();
+    const chatKey = getChatKey(liveContext);
+    if (!chatKey || chatKey === 'invalid_target') {
+        latestRecallSnapshot = null;
+        return;
+    }
+    const normalizedFromSeq = Number.isFinite(Number(fromSeq)) && Number(fromSeq) > 0
+        ? Math.max(1, Math.floor(Number(fromSeq)))
+        : null;
+    const isCurrentChat = getChatKey(liveContext) === chatKey;
+    const preserveLatestRecallSnapshot = shouldPreserveLatestRecallSnapshotForAssistantMutation(liveContext, normalizedFromSeq);
+    if (!preserveLatestRecallSnapshot) {
+        latestRecallSnapshot = null;
+    }
+    if (extractionTimers.has(chatKey)) {
+        clearTimeout(extractionTimers.get(chatKey));
+        extractionTimers.delete(chatKey);
+    }
+    if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
+        if (isCurrentChat) {
+            clearRuntimeInfoToast('extraction');
+        }
+        activeExtractionAbortController.abort();
+    }
+    let store = null;
+    try {
+        store = await refreshMemoryStoreCacheFromFloorState(liveContext, chatKey);
+    } catch (error) {
+        console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache after mutation`, error);
+    }
+    if (!store) {
+        store = memoryStoreCache.get(chatKey) || null;
+    }
+    if (store) {
+        updateStoreSourceState(store, liveContext);
+        store.lastRecallTrace = [];
+        store.lastRecallProjection = null;
+        try {
+            await persistMetaForChatKey(liveContext, chatKey, store);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] Failed to persist meta after mutation for ${chatKey}`, error);
+        }
+        if (isCurrentChat) {
+            const effectiveSettings = getEffectiveSettings(liveContext, getSettings());
+            try {
+                if (!effectiveSettings.enabled) {
+                    await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
+                } else {
+                    await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
+                    await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
+                }
+            } catch (error) {
+                console.warn(`[${MODULE_NAME}] Lorebook projection sync failed after mutation`, error);
+            }
+        }
+    }
+    refreshUiStats();
+    if (scheduleReplay && isCurrentChat && !generationInProgress) {
+        scheduleExtraction(getContext());
+    }
+}
+
+/**
+ * Public wrapper around `applyMutationInvalidationImpl`. Serializes
+ * concurrent invocations through a Promise chain rooted at
+ * `pendingMutationInvalidation`, and publishes the in-flight task so
+ * the WI-scan listeners can gate on it.
+ */
+function applyMutationInvalidation(fromSeq = null, opts = {}) {
+    const previous = pendingMutationInvalidation;
+    const task = previous
+        .catch(() => {})
+        .then(() => applyMutationInvalidationImpl(fromSeq, opts));
+    pendingMutationInvalidation = task;
+    return task;
+}
+
+// Floor-state has already settled (driven by core via settleXxx) before
+// MESSAGE_DELETED / MESSAGE_SWIPED / MESSAGE_SWIPE_DELETED listeners run.
+// Our work here is the non-graph state: cache invalidation, lorebook
+// re-projection, extraction restart. The chain
+// (refreshMemoryStoreCacheFromFloorState → persistMetaForChatKey →
+// sync*LorebookProjection) fans out several server fetches and on a
+// medium store can take 5+ seconds; on a slow fetch it can hang longer.
+// `eventSource.emit` awaits every listener in sequence, so awaiting that
+// chain inline would block the emit loop and freeze every other listener
+// (var-ops rebuild, card-app refresh, UI), as well as any caller that
+// awaits emit itself (`deleteMessage` ends with
+// `await eventSource.emit(MESSAGE_DELETED, ...)`).
+//
+// Detach instead: schedule `applyMutationInvalidation` on a microtask so
+// the MESSAGE_DELETED listener resolves synchronously, the emit loop
+// returns immediately, and the heavy chain runs in the background.
+// Readers that depend on a settled post-mutation state still gate on
+// `pendingMutationInvalidation` — see `_handleWiBeforeScan` below.
+function scheduleMutationInvalidation(fromSeq) {
+    queueMicrotask(() => {
+        applyMutationInvalidation(fromSeq, { scheduleReplay: true })
+            .catch(error => {
+                console.error(`[${MODULE_NAME}] applyMutationInvalidation failed`, error);
+            });
+    });
+}
+
+// Quiet / dry-run generations must NEVER reach the recall machinery.
+//
+// PromptManager.scheduleDeferredTryGenerate (public/scripts/PromptManager.js)
+// fires a debounced `Generate('normal', {}, true)` (dryRun=true) on every
+// re-render — and MESSAGE_DELETED forces a re-render. If we let the
+// dry-run reach safeInjectMemoryPrompts, it would (1) abort the live
+// `activeRecallAbortController` from a real in-flight Generate and (2)
+// bump `activeRecallRunToken`, which makes the real recall throw
+// AbortError → surfaces as "Memory recall cancelled by user." in the
+// status bar even though the user never clicked Stop. Both side effects
+// happen BEFORE the dry-run check inside injectMemoryPrompts (which
+// returns false too late at line 8115).
+//
+// Quiet generations don't send a prompt either, so they should bail for
+// the same reason.
+function isRecallEligiblePayload(payload) {
+    if (payload?.dryRun === true) return false;
+    const generationType = String(payload?.type || '').trim().toLowerCase();
+    if (generationType === 'quiet') return false;
+    return true;
+}
+
+/**
+ * Drain any in-flight mutation invalidation and re-sync the persistent
+ * lorebook projection (corePacket / event summaries). Called on
+ * GENERATION_BEFORE_WORLD_INFO_SCAN — which core `await`s — so by the
+ * time runWIScan() captures lorebook entries they are fresh.
+ *
+ * The lorebook clear in applyMutationInvalidation may run after a
+ * MESSAGE_DELETED but BEFORE this Generate's WI scan; the extra
+ * syncPersistentLorebookProjection call here is idempotent (the
+ * managed-entry diff at upsertManagedLorebookProjection returns
+ * changed=false when nothing actually differs) and protects against the
+ * "cleared on disk but WI scan snapshotted the stale entries" race.
+ */
+async function drainAndSyncPersistentForCurrentChat() {
+    await pendingMutationInvalidation.catch(() => {});
+    if (__testPersistentDrainHook) {
+        await __testPersistentDrainHook();
+        return;
+    }
+    const ctx = getContext();
+    const settings = getEffectiveSettings(ctx, getSettings());
+    if (!settings.enabled) {
+        try {
+            await clearAllMemoryLorebookProjection(ctx, settings);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] Failed to clear lorebook projections before WI scan`, error);
+        }
+        return;
+    }
+    const store = await ensureStoreSyncedWithChat(ctx);
+    if (!store) return;
+    try {
+        await syncPersistentLorebookProjection(ctx, settings, store);
+    } catch (error) {
+        console.warn(`[${MODULE_NAME}] Persistent lorebook sync failed before WI scan`, error);
+    }
+}
+
+/**
+ * GENERATION_BEFORE_WORLD_INFO_SCAN handler. Bails on dry-run / quiet
+ * payloads; otherwise drains the mutation-invalidation chain and refreshes
+ * the persistent lorebook projection so the WI scan sees a current
+ * snapshot.
+ */
+async function _handleWiBeforeScan(payload) {
+    if (!isRecallEligiblePayload(payload)) return;
+    await drainAndSyncPersistentForCurrentChat();
+}
+
+/**
+ * GENERATION_AFTER_WORLD_INFO_SCAN handler. Bails on dry-run / quiet
+ * payloads (see isRecallEligiblePayload). Otherwise runs recall via
+ * safeInjectMemoryPrompts and propagates `__lukerRpgMemoryNeedRescan`
+ * to `payload.requestRescan` so core re-runs runWIScan when the
+ * focusPacket changed.
+ *
+ * The persistent-lorebook drain already happened in the BEFORE handler;
+ * we still await `pendingMutationInvalidation` here as a cheap safety
+ * net in case a fresh mutation was scheduled between BEFORE and AFTER.
+ */
+async function _handleWiAfterScan(payload) {
+    if (!isRecallEligiblePayload(payload)) return;
+    await pendingMutationInvalidation.catch(() => {});
+    const inject = __testSafeInjectMemoryPromptsHook || safeInjectMemoryPrompts;
+    await inject(getContext(), payload, 'after_world_info_scan');
+    if (payload?.signal?.aborted) {
+        if (payload && typeof payload === 'object') {
+            payload.__lukerRpgMemoryNeedRescan = false;
+            payload.requestRescan = false;
+        }
+        return;
+    }
+    if (payload && typeof payload === 'object' && payload.__lukerRpgMemoryNeedRescan) {
+        payload.requestRescan = true;
+    }
+}
+
+// ---- Test-only exports --------------------------------------------------
+// Mirror the `_*ForTest` convention used elsewhere in this module
+// (`_createNodeForTest`, etc.). Production code never touches these.
+export { _handleWiBeforeScan as _handleWiBeforeScanForTest };
+export { _handleWiAfterScan as _handleWiAfterScanForTest };
+export function _getRecallRuntimeStateForTest() {
+    return {
+        activeRecallRunToken,
+        activeRecallAbortController,
+        pendingMutationInvalidation,
+    };
+}
+export function _resetRecallRuntimeStateForTest(seed = {}) {
+    activeRecallRunToken = Number.isFinite(Number(seed.activeRecallRunToken))
+        ? Number(seed.activeRecallRunToken)
+        : 0;
+    activeRecallAbortController = Object.prototype.hasOwnProperty.call(seed, 'activeRecallAbortController')
+        ? seed.activeRecallAbortController
+        : null;
+    pendingMutationInvalidation = seed.pendingMutationInvalidation instanceof Promise
+        ? seed.pendingMutationInvalidation
+        : Promise.resolve();
+}
+export function _setSafeInjectMemoryPromptsHookForTest(hook) {
+    __testSafeInjectMemoryPromptsHook = (typeof hook === 'function') ? hook : null;
+}
+export function _setPersistentDrainHookForTest(hook) {
+    __testPersistentDrainHook = (typeof hook === 'function') ? hook : null;
+}
+
 jQuery(() => {
     const context = getContext();
     registerLocaleData();
@@ -15122,65 +15425,13 @@ jQuery(() => {
         }
     })();
 
-    /**
-     * Refresh the in-memory runtime store cache for `chatKey` from the
-     * floor-state graph payload + the __meta sidecar. Awaits fs.ready()
-     * so any in-flight write (a concurrent fs.patch from extraction) has
-     * landed before we read.
-     */
-    const refreshMemoryStoreCacheFromFloorState = async (runtimeContext, chatKey) => {
-        if (!chatKey || chatKey === 'invalid_target') return null;
-        const target = memoryStoreTargets.get(chatKey);
-        // fs.get() owns migration + replay-failure recovery. If it still
-        // throws after that, the store is genuinely broken — surface to the
-        // user and leave the cache as-is rather than overwriting with an
-        // empty store (which would visually erase the user's data).
-        let payload;
-        try {
-            const fs = await getFloorStateInstance(runtimeContext);
-            await fs.ready();
-            payload = await fs.get();
-        } catch (error) {
-            console.error(`[${MODULE_NAME}] floor-state get failed during cache refresh`, error);
-            notifyError(i18nFormat('Memory graph load failed: ${0}', error?.message || error));
-            return memoryStoreCache.get(chatKey) || null;
-        }
-        let meta = null;
-        if (target) {
-            try {
-                meta = await loadMetaFields(runtimeContext, target);
-            } catch (error) {
-                console.warn(`[${MODULE_NAME}] meta sidecar read failed during cache refresh`, error);
-            }
-        }
-        if (meta) setCachedMeta(chatKey, meta);
-        const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta || getCachedMeta(chatKey));
-        memoryStoreCache.set(chatKey, runtimeStore);
-        return runtimeStore;
-    };
-
+    const wiBeforeEvent = context.eventTypes.GENERATION_BEFORE_WORLD_INFO_SCAN;
+    if (wiBeforeEvent) {
+        context.eventSource.on(wiBeforeEvent, _handleWiBeforeScan);
+    }
     const wiAfterEvent = context.eventTypes.GENERATION_AFTER_WORLD_INFO_SCAN;
     if (wiAfterEvent) {
-        context.eventSource.on(wiAfterEvent, async (payload) => {
-            // Drain any in-flight mutation invalidation before reading the
-            // memory store. Closes the race where a user manually deletes a
-            // message and immediately regenerates: the delete's MESSAGE_DELETED
-            // listener may still be refreshing cache + lorebook when this
-            // recall listener fires from the new Generate() stack.
-            await pendingMutationInvalidation.catch(() => {});
-            const runtimeContext = getContext();
-            await safeInjectMemoryPrompts(runtimeContext, payload, 'after_world_info_scan');
-            if (payload?.signal?.aborted) {
-                if (payload && typeof payload === 'object') {
-                    payload.__lukerRpgMemoryNeedRescan = false;
-                    payload.requestRescan = false;
-                }
-                return;
-            }
-            if (payload && typeof payload === 'object' && payload.__lukerRpgMemoryNeedRescan) {
-                payload.requestRescan = true;
-            }
-        });
+        context.eventSource.on(wiAfterEvent, _handleWiAfterScan);
     }
     const clearRuntimeProjectionAfterGeneration = async () => {
         const runtimeContext = getContext();
@@ -15189,112 +15440,6 @@ jQuery(() => {
         } catch (error) {
             console.warn(`[${MODULE_NAME}] Failed to clear runtime lorebook projection after generation`, error);
         }
-    };
-    /**
-     * Gate that exposes the in-flight `applyMutationInvalidation` task.
-     * Readers that depend on a settled post-mutation state (currently the
-     * GENERATION_AFTER_WORLD_INFO_SCAN recall listener) await this before
-     * touching memoryStoreCache / lorebook projection.
-     *
-     * Closes the race where a manual delete and an immediate regenerate
-     * run as two separate click handlers: `eventSource.emit(MESSAGE_DELETED)`
-     * only awaits its listeners on its own call stack, so the new Generate()
-     * stack can reach the WI scan while our cache refresh + lorebook re-sync
-     * are still running.
-     */
-    let pendingMutationInvalidation = Promise.resolve();
-    /**
-     * Coalesce structural-event reactions into a microtask:
-     *  - cancel any in-flight extraction
-     *  - wait for floor-state to finish its truncate / swipe-delete settle
-     *  - rebuild the in-memory runtime store from the replayed fs payload
-     *  - clear stale recall trace + sourceMessageCount, persist to __meta
-     *  - optionally schedule a fresh extraction replay
-     *
-     * Floor-state owns the graph payload's response to MESSAGE_DELETED /
-     * MESSAGE_SWIPED / MESSAGE_SWIPE_DELETED. Memory-graph's job here is only
-     * to flush its read-side caches and reset its non-floor metadata.
-     *
-     * Floor-state has already settled by the time this runs (core invokes
-     * `settleMessageDeleted/Swiped/SwipeDeleted` before the corresponding
-     * `eventSource.emit`), so `refreshMemoryStoreCacheFromFloorState` replays
-     * the post-truncate / post-swipe log.
-     */
-    const applyMutationInvalidationImpl = async (fromSeq = null, { scheduleReplay = false } = {}) => {
-        const liveContext = getContext();
-        const chatKey = getChatKey(liveContext);
-        if (!chatKey || chatKey === 'invalid_target') {
-            latestRecallSnapshot = null;
-            return;
-        }
-        const normalizedFromSeq = Number.isFinite(Number(fromSeq)) && Number(fromSeq) > 0
-            ? Math.max(1, Math.floor(Number(fromSeq)))
-            : null;
-        const isCurrentChat = getChatKey(liveContext) === chatKey;
-        const preserveLatestRecallSnapshot = shouldPreserveLatestRecallSnapshotForAssistantMutation(liveContext, normalizedFromSeq);
-        if (!preserveLatestRecallSnapshot) {
-            latestRecallSnapshot = null;
-        }
-        if (extractionTimers.has(chatKey)) {
-            clearTimeout(extractionTimers.get(chatKey));
-            extractionTimers.delete(chatKey);
-        }
-        if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
-            if (isCurrentChat) {
-                clearRuntimeInfoToast('extraction');
-            }
-            activeExtractionAbortController.abort();
-        }
-        let store = null;
-        try {
-            store = await refreshMemoryStoreCacheFromFloorState(liveContext, chatKey);
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache after mutation`, error);
-        }
-        if (!store) {
-            store = memoryStoreCache.get(chatKey) || null;
-        }
-        if (store) {
-            updateStoreSourceState(store, liveContext);
-            store.lastRecallTrace = [];
-            store.lastRecallProjection = null;
-            try {
-                await persistMetaForChatKey(liveContext, chatKey, store);
-            } catch (error) {
-                console.warn(`[${MODULE_NAME}] Failed to persist meta after mutation for ${chatKey}`, error);
-            }
-            if (isCurrentChat) {
-                const effectiveSettings = getEffectiveSettings(liveContext, getSettings());
-                try {
-                    if (!effectiveSettings.enabled) {
-                        await clearAllMemoryLorebookProjection(liveContext, effectiveSettings);
-                    } else {
-                        await clearRuntimeLorebookProjection(liveContext, effectiveSettings);
-                        await syncPersistentLorebookProjection(liveContext, effectiveSettings, store);
-                    }
-                } catch (error) {
-                    console.warn(`[${MODULE_NAME}] Lorebook projection sync failed after mutation`, error);
-                }
-            }
-        }
-        refreshUiStats();
-        if (scheduleReplay && isCurrentChat && !generationInProgress) {
-            scheduleExtraction(getContext());
-        }
-    };
-    /**
-     * Public wrapper around `applyMutationInvalidationImpl`. Serializes
-     * concurrent invocations through a Promise chain rooted at
-     * `pendingMutationInvalidation`, and publishes the in-flight task so
-     * the recall listener can gate on it.
-     */
-    const applyMutationInvalidation = (fromSeq = null, opts = {}) => {
-        const previous = pendingMutationInvalidation;
-        const task = previous
-            .catch(() => {})
-            .then(() => applyMutationInvalidationImpl(fromSeq, opts));
-        pendingMutationInvalidation = task;
-        return task;
     };
     if (context.eventTypes.GENERATION_STARTED) {
         context.eventSource.on(context.eventTypes.GENERATION_STARTED, () => {
@@ -15324,31 +15469,12 @@ jQuery(() => {
             }
         });
     }
-    // Floor-state has already settled (driven by core via settleXxx) before
-    // these listeners run. Our work here is the non-graph state: cache
-    // invalidation, lorebook re-projection, extraction restart. The chain
-    // (refreshMemoryStoreCacheFromFloorState → persistMetaForChatKey →
-    // sync*LorebookProjection) fans out several server fetches and on a
-    // medium store can take 5+ seconds; on a slow fetch it can hang
-    // longer. `eventSource.emit` awaits every listener in sequence, so
-    // awaiting that chain inline would block the emit loop and freeze
-    // every other listener (var-ops rebuild, card-app refresh, UI), as
-    // well as any caller that awaits emit itself (`deleteMessage` ends
-    // with `await eventSource.emit(MESSAGE_DELETED, ...)`).
-    //
-    // Detach instead: schedule `applyMutationInvalidation` on a
-    // microtask so the listener resolves synchronously, the emit loop
-    // returns immediately, and the heavy chain runs in the background.
-    // Readers that depend on a settled post-mutation state still gate on
-    // `pendingMutationInvalidation` (e.g. the WI scan listener above).
-    const scheduleMutationInvalidation = (fromSeq) => {
-        queueMicrotask(() => {
-            applyMutationInvalidation(fromSeq, { scheduleReplay: true })
-                .catch(error => {
-                    console.error(`[${MODULE_NAME}] applyMutationInvalidation failed`, error);
-                });
-        });
-    };
+    // MESSAGE_DELETED / MESSAGE_SWIPED / MESSAGE_RECEIVED kick the
+    // module-level `scheduleMutationInvalidation` (defined above the
+    // jQuery init) which queues `applyMutationInvalidation` on a
+    // microtask. The detached chain keeps `eventSource.emit` non-blocking;
+    // readers that need a settled post-mutation state await
+    // `pendingMutationInvalidation` — see `_handleWiBeforeScan`.
     context.eventSource.on(context.eventTypes.MESSAGE_DELETED, (_messageCount, mutationMeta) => {
         const runtimeContext = getContext();
         const assistantFromSeq = Number(mutationMeta?.deletedAssistantSeqFrom || 0);
