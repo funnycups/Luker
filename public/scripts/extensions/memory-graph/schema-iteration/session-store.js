@@ -13,30 +13,12 @@
  */
 
 import { migrateToV3, MigrationFailedError } from '/scripts/iteration-library/storage/migrate-v3.js';
-import { STR } from '/scripts/iteration-library/ui/strings.js';
+import { notifyMigrationFailed } from '/scripts/iteration-library/storage/migration-toast.js';
 
 export const MG_SIDECAR_NAMESPACE = 'memory_graph_schema_iter_history';
 export const MG_GLOBAL_BUCKET_KEY = 'schema_iter_global_sessions';
 
 const SIDECAR_SCHEMA_VERSION = 1;
-
-/**
- * Surface a migration failure to the user. session-store.js doesn't carry
- * a popup-scoped translator; we fetch translate() off the ctx (registered
- * by the extension's locale-data hook at jQuery-ready). On the rare path
- * where the toast can't be shown (no toastr, no translate), the error
- * stays a console.error so the user can still find it in devtools.
- */
-function notifyMigrationFailed(ctx, sessionTitle) {
-    try {
-        const translate = (ctx && typeof ctx.translate === 'function') ? ctx.translate : ((s) => s);
-        const localized = translate(STR.migrationFailed_toast);
-        const message = String(localized).replace('${0}', String(sessionTitle));
-        if (typeof toastr !== 'undefined' && toastr && typeof toastr.error === 'function') {
-            toastr.error(message);
-        }
-    } catch { /* best-effort UI surface */ }
-}
 
 export function makeMessageId() {
     return `mg_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;

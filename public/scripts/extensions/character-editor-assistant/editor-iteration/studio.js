@@ -69,6 +69,7 @@ import {
 } from '../../../iteration-library/index.js';
 import { registerTarget, resolveTarget } from '../../../iteration-library/storage/target-registry.js';
 import { decodeBackward } from '../../../iteration-library/storage/patch-codec.js';
+import { safeClone } from '../../../iteration-library/storage/safe-clone.js';
 import {
     commitCharacterEditorOperations,
     commitLorebookOperations,
@@ -99,31 +100,6 @@ const STYLESHEET_ID = 'cea_editor_studio_stylesheet';
 const STYLESHEET_HREF = '/scripts/extensions/character-editor-assistant/editor-iteration/studio.css';
 const PROPOSAL_BUS_STYLESHEET_ID = 'cea_editor_proposal_bus_stylesheet';
 const PROPOSAL_BUS_STYLESHEET_HREF = '/scripts/iteration-library/proposal-bus/proposal-bus.css';
-
-/**
- * Deep clone that survives ST's live character records. The live shape
- * carries non-cloneable refs (browser-side proxy descriptors on the
- * shared `context.characters[i]` reference) that make `structuredClone`
- * throw `DataCloneError`. The bus snapshot pair must be a value clone —
- * holding a live ref would let later commits silently mutate the
- * propose-time `before`, defeating drift detection. Falls through to
- * JSON for those cases; nothing in the editor pipeline carries
- * functions, Dates, or other JSON-lossy shapes.
- */
-function safeClone(value) {
-    if (value === undefined) return undefined;
-    if (value === null) return null;
-    if (typeof value !== 'object') return value;
-    try {
-        return structuredClone(value);
-    } catch {
-        try {
-            return JSON.parse(JSON.stringify(value));
-        } catch {
-            return value;
-        }
-    }
-}
 
 /**
  * Loose AbortError detector. The runner may throw a DOMException with name
@@ -1848,7 +1824,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         kind: 'cea-character-edits',
         targetType: 'character',
         renderDiffCard: (entry, helpers) => {
-            const edits = Array.isArray(entry?.meta?.edits) ? entry.meta.edits : [];
+            const edits = Array.isArray(entry?.target?._edits) ? entry.target._edits : [];
             if (edits.length === 0) return '';
             const body = edits.map((e) => ITER_UI.diff.renderDiffCard([e], {
                 i18n: tf,
@@ -1866,7 +1842,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         kind: 'cea-lorebook-edits',
         targetType: 'lorebook',
         renderDiffCard: (entry, helpers) => {
-            const edits = Array.isArray(entry?.meta?.edits) ? entry.meta.edits : [];
+            const edits = Array.isArray(entry?.target?._edits) ? entry.target._edits : [];
             if (edits.length === 0) return '';
             const body = edits.map((e) => ITER_UI.diff.renderDiffCard([e], {
                 i18n: tf,
@@ -1877,7 +1853,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         },
         label: () => t('Lorebook edits'),
         icon: () => '📚',
-        target: (entry) => String(entry?.target?.name || entry?.meta?.bookName || ''),
+        target: (entry) => String(entry?.target?.name || ''),
     });
 
     bus.setMessageResolver((messageId) => {
@@ -2007,7 +1983,6 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     before: characterBefore,
                     after: characterAfter,
                     sourceCallId,
-                    meta: { edits: charEdits, before: characterBefore, after: characterAfter },
                 });
             }
             for (const [bookName, edits] of Object.entries(grouped.lorebooks)) {
@@ -2027,7 +2002,6 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     before: bookBefore,
                     after: bookAfter,
                     sourceCallId,
-                    meta: { bookName, edits: bookEdits, before: bookBefore, after: bookAfter },
                 });
             }
         } finally {

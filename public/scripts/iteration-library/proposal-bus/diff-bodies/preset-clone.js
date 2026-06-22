@@ -20,7 +20,6 @@
  *   entry.meta — opaque to this renderer; populated for tool-trace
  *                purposes by the popup
  */
-
 function escapeHtmlLocal(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
@@ -28,13 +27,12 @@ function escapeHtmlLocal(s) {
 }
 
 /**
- * @param {Object} _snapshot  ProposalBus entry.snapshot (unused — clone
- *                            body has nothing to diff)
- * @param {Object} op         ProposalBus entry.op
- * @param {Object} helpers    { i18n: (s, ...args) => string }
+ * @param {Object} _unused  legacy positional arg, always pass null
+ * @param {Object} op       ProposalBus entry.op
+ * @param {Object} helpers  { i18n: (s, ...args) => string }
  * @returns {string} HTML for the card body
  */
-export function renderPresetCloneBody(_snapshot, op, helpers) {
+export function renderPresetCloneBody(_unused, op, helpers) {
     const i18n = typeof helpers?.i18n === 'function' ? helpers.i18n : (s) => String(s ?? '');
     const t = i18n;
     const tf = i18n;

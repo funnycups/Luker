@@ -1533,9 +1533,10 @@ export async function openSchemaIterationStudio(deps) {
                 for (const entry of bus._testOnly_entries()) {
                     if (entry.status !== 'pending' && entry.status !== 'conflict') continue;
                     if (entry.kind !== 'profile-edit') continue;
-                    const newValue = entry?.op?.newValue;
-                    if (typeof newValue === 'undefined') continue;
-                    pendingEditsForPreview.push({ op: 'set', path: '', oldValue: entry.snapshot, newValue });
+                    const before = entry?.meta?.before ?? null;
+                    const after = entry?.meta?.after;
+                    if (typeof after === 'undefined') continue;
+                    pendingEditsForPreview.push({ op: 'set', path: '', oldValue: before, newValue: after });
                 }
                 const previewHtml = renderMgSchemaPreviewPane(
                     state.live,

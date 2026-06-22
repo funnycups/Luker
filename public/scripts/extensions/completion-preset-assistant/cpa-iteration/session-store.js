@@ -31,28 +31,9 @@
  */
 
 import { migrateToV3, MigrationFailedError } from '/scripts/iteration-library/storage/migrate-v3.js';
-import { STR } from '/scripts/iteration-library/ui/strings.js';
+import { notifyMigrationFailed } from '/scripts/iteration-library/storage/migration-toast.js';
 
 const SESSION_NAMESPACE = 'completion_preset_assistant_session';
-
-/**
- * Surface a migration failure to the user. Session-store.js modules don't
- * carry a popup-scoped translator, so we fetch translate() off the context
- * (registered by the extension's locale-data hook at jQuery-ready); on the
- * rare path where the toast can't be shown (no toastr, no translate), the
- * error stays a console.error so the user can still find it in devtools.
- */
-function notifyMigrationFailed(getContext, sessionTitle) {
-    try {
-        const ctx = (typeof getContext === 'function') ? getContext() : null;
-        const translate = (ctx && typeof ctx.translate === 'function') ? ctx.translate : ((s) => s);
-        const localized = translate(STR.migrationFailed_toast);
-        const message = String(localized).replace('${0}', String(sessionTitle));
-        if (typeof toastr !== 'undefined' && toastr && typeof toastr.error === 'function') {
-            toastr.error(message);
-        }
-    } catch { /* best-effort UI surface */ }
-}
 
 /**
  * Generate a stable per-message id. The studio renders messages keyed by

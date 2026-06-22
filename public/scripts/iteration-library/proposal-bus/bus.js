@@ -162,28 +162,6 @@ export function createBus(opts = {}) {
         return false;
     }
 
-    /**
-     * Look up the most recent pending entry of `kind` and return its
-     * propose-time `after` state. Used by replace-mode kinds when the
-     * popup needs to chain proposals before any approve: the next
-     * propose() should record the state the live system will be in
-     * AFTER prior pending entries commit, not the current live state.
-     *
-     * Returns { found: false } when no pending entry of this kind exists
-     * (fresh session or all prior approved/rejected) so callers can
-     * distinguish "use state.live" from "use undefined as before".
-     */
-    function getLastPendingNewValue(kind) {
-        for (let i = entries.length - 1; i >= 0; i--) {
-            const e = entries[i];
-            if (e.kind !== kind) continue;
-            if (e.status !== 'pending') continue;
-            if (!Object.prototype.hasOwnProperty.call(e, '_pendingAfter')) continue;
-            return { found: true, newValue: e._pendingAfter };
-        }
-        return { found: false, newValue: undefined };
-    }
-
     function deepTargetMatch(a, b) {
         if (a === b) return true;
         if (!a || !b) return false;
@@ -638,7 +616,6 @@ export function createBus(opts = {}) {
             return out;
         },
         hasOutstanding,
-        getLastPendingNewValue,
         getCurrentPendingState,
         approve,
         reject,
@@ -661,11 +638,6 @@ export function createBus(opts = {}) {
         events,
         _testOnly_entries: () => entries.map((e) => ({ ...e })),
         _testOnly_outcomeQueue: () => outcomeQueue.slice(),
-        _kinds: kinds,
-        _entries: entries,
-        _outcomeQueue: outcomeQueue,
-        _emitChange: onChange,
-        _i18n: i18n,
     };
     return returnedApi;
 }

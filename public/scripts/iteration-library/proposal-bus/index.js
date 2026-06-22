@@ -7,9 +7,6 @@
  * so popups import one symbol and get the complete bus.
  *
  * Re-exports for popup-defined custom kinds and target descriptors:
- *   - sha256OfJson / canonicalJson / sha256OfString from `drift-hash.js`
- *     remain available for popups that hash external state for their
- *     own purposes (e.g. CEA's content fingerprints).
  *   - createProfileEditHandler / createLorebookWriteHandler /
  *     createSkillAuthorHandler / createPresetCloneHandler return the
  *     descriptor `{kind, targetType}`; popups register these on the
@@ -19,7 +16,6 @@
 
 import { createBus } from './bus.js';
 
-export { sha256OfJson, sha256OfString, canonicalJson } from './drift-hash.js';
 export { createProfileEditHandler, profileEdit } from './kinds/profile-edit.js';
 export { createLorebookWriteHandler, lorebookWrite } from './kinds/lorebook-write.js';
 export { createSkillAuthorHandler, skillAuthor } from './kinds/skill-author.js';
@@ -28,4 +24,5 @@ export { createPresetCloneHandler, presetClone } from './kinds/preset-clone.js';
 export function createProposalBus(opts) {
     return createBus(opts);
 }
+
 

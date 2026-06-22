@@ -1,6 +1,6 @@
 import * as textDiff from '../text-diff.js';
 import { decodeBackward } from '../storage/patch-codec.js';
-import { resolveTarget, UnknownTargetError } from '../storage/target-registry.js';
+import { resolveTarget } from '../storage/target-registry.js';
 
 /**
  * Render a diff card.
@@ -57,9 +57,9 @@ async function renderEntryDiffCard(entry, opts) {
     try {
         handler = resolveTarget(entry.target);
     } catch (err) {
-        if (err instanceof UnknownTargetError) {
-            return renderRawRecord(entry, { ...opts, translate: translator });
-        }
+        // UnknownTargetError or anything else: fall back to raw record. We
+        // collapse both arms because the rendered output is identical;
+        // the discriminator is purely informational.
         return renderRawRecord(entry, { ...opts, translate: translator });
     }
     let live;
@@ -74,7 +74,13 @@ async function renderEntryDiffCard(entry, opts) {
             targetType: entry.target.type,
             targetName: entry.target.name || null,
         });
-    } catch {
+    } catch (err) {
+        // Inverse-patch failure means storage + live state can no longer
+        // reconstruct the propose-time before-snapshot — a genuine
+        // data-integrity signal worth surfacing in devtools even though
+        // the UI falls back to raw-record gracefully.
+        // eslint-disable-next-line no-console
+        console.warn('[iter-lib diff] decodeBackward failed for entry', entry?.id, err);
         return renderRawRecord(entry, { ...opts, translate: translator });
     }
     const after = live;

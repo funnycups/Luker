@@ -152,7 +152,6 @@ test.describe('ProposalBus — real-browser, real-disk flows over the skill-auth
                 hasProfileEdit: typeof bus?.createProfileEditHandler === 'function',
                 hasLorebookWrite: typeof bus?.createLorebookWriteHandler === 'function',
                 hasPresetClone: typeof bus?.createPresetCloneHandler === 'function',
-                hasFingerprint: typeof bus?.sha256OfJson === 'function',
             };
         });
         expect(surface).toEqual({
@@ -162,7 +161,6 @@ test.describe('ProposalBus — real-browser, real-disk flows over the skill-auth
             hasProfileEdit: true,
             hasLorebookWrite: true,
             hasPresetClone: true,
-            hasFingerprint: true,
         });
     });
 
