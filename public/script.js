@@ -14073,15 +14073,22 @@ export async function openCharacterChat(file_name) {
     if (!await waitForChatSwitchAvailability()) {
         return;
     }
+    const chidSnapshot = this_chid;
+    if (chidSnapshot === undefined || !characters[chidSnapshot]) {
+        return;
+    }
     await clearChat({ clearData: true });
-    characters[this_chid].chat = file_name;
+    if (this_chid !== chidSnapshot || !characters[chidSnapshot]) {
+        return;
+    }
+    characters[chidSnapshot].chat = file_name;
     chat_metadata = {};
     chatServerState.nextOlderIndex = 0;
     chatServerState.totalMessages = 0;
     chatServerState.hasMore = false;
     await getChat();
     $('#selected_chat_pole').val(file_name);
-    await updateRemoteChatName(this_chid, file_name);
+    await updateRemoteChatName(chidSnapshot, file_name);
 }
 
 ////////// OPTIMZED MAIN API CHANGE FUNCTION ////////////
