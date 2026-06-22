@@ -424,7 +424,12 @@ function getSentencepieceBundle() {
         'const __dirname = "";',
         'const require = (id) => {',
         '    if (id === "fs") return __fsShim;',
-        '    if (id === "path" || id === "url" || id === "module") return {};',
+        // Emscripten boilerplate at index.js:93 dereferences require("url").URL
+        // when `typeof document === "undefined"` (module-worker scope). Without
+        // this, sentencepiece init throws "require(...).URL is not a constructor"
+        // inside the worker and every encode call silently rejects.
+        '    if (id === "url") return { URL };',
+        '    if (id === "path" || id === "module") return {};',
         '    throw new Error("sentencepiece-js bundle: unshimmed require(" + JSON.stringify(id) + ")");',
         '};',
         src,
