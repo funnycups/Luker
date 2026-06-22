@@ -1,16 +1,15 @@
-import { describe, test, expect, jest } from '@jest/globals';
-import { createProposalBus } from '../../../public/scripts/iteration-library/proposal-bus/index.js';
+import { describe, test, expect, jest, beforeEach } from '@jest/globals';
+import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
+import { registerTarget, clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
 
-function makeHandler() {
+beforeEach(() => clearRegistry());
+
+function liveHandler(initial) {
+    let s = JSON.parse(JSON.stringify(initial));
     return {
-        fingerprint: async (s) => `fp:${JSON.stringify(s ?? null)}`,
-        readCurrent: async () => ({ snapshot: null, fingerprint: 'fp:null' }),
-        commit: jest.fn(async () => {}),
-        inverse: () => null,
-        renderDiffCard: () => '',
-        label: () => '',
-        icon: () => '',
-        target: () => '',
+        read: async () => JSON.parse(JSON.stringify(s)),
+        write: async (_meta, next) => { s = JSON.parse(JSON.stringify(next)); },
+        describe: () => 't',
     };
 }
 
@@ -36,7 +35,7 @@ function fakeClick({ action, proposalId, messageId } = {}) {
 
 describe('ProposalBus — event router', () => {
     test('click without data-proposal-action returns false and does not consume', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        const bus = createBus();
         const evt = fakeClick();
         const consumed = await bus.handleClick(evt);
         expect(consumed).toBe(false);
@@ -44,9 +43,12 @@ describe('ProposalBus — event router', () => {
     });
 
     test('approve action routes to bus.approve and consumes event', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        registerTarget('preset', liveHandler({ a: 1 }));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         const evt = fakeClick({ action: 'approve', proposalId: id });
         const consumed = await bus.handleClick(evt);
         expect(consumed).toBe(true);
@@ -56,9 +58,12 @@ describe('ProposalBus — event router', () => {
     });
 
     test('reject action routes to bus.reject', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        registerTarget('preset', liveHandler({ a: 1 }));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         const evt = fakeClick({ action: 'reject', proposalId: id });
         const consumed = await bus.handleClick(evt);
         expect(consumed).toBe(true);
@@ -67,7 +72,7 @@ describe('ProposalBus — event router', () => {
     });
 
     test('unknown action returns false', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        const bus = createBus();
         const evt = fakeClick({ action: 'nope' });
         const consumed = await bus.handleClick(evt);
         expect(consumed).toBe(false);

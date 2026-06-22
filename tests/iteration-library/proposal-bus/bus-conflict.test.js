@@ -1,86 +1,94 @@
-import { describe, test, expect, jest } from '@jest/globals';
-import { createProposalBus } from '../../../public/scripts/iteration-library/proposal-bus/index.js';
+import { describe, test, expect, jest, beforeEach } from '@jest/globals';
+import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
+import { registerTarget, clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
 
-function makeHandler(overrides = {}) {
+beforeEach(() => clearRegistry());
+
+function liveHandler(initial) {
+    let s = JSON.parse(JSON.stringify(initial));
     return {
-        fingerprint: jest.fn(async (snap) => `fp:${JSON.stringify(snap ?? null)}`),
-        readCurrent: jest.fn(async () => ({ snapshot: null, fingerprint: 'fp:null' })),
-        commit: jest.fn(async () => {}),
-        inverse: jest.fn(() => null),
-        renderDiffCard: jest.fn(() => ''),
-        label: jest.fn(() => ''),
-        icon: jest.fn(() => ''),
-        target: jest.fn(() => 'target'),
-        ...overrides,
+        read: jest.fn(async () => JSON.parse(JSON.stringify(s))),
+        write: jest.fn(async (_meta, next) => { s = JSON.parse(JSON.stringify(next)); }),
+        describe: () => 't',
+        _get: () => s,
+        _set: (next) => { s = JSON.parse(JSON.stringify(next)); },
     };
 }
 
-describe('ProposalBus — conflict detection', () => {
-    test('fingerprint mismatch flips status to conflict and skips commit', async () => {
-        const commit = jest.fn();
-        const handler = makeHandler({
-            readCurrent: jest.fn(async () => ({ snapshot: { v: 99 }, fingerprint: 'fp:{"v":99}' })),
-            commit,
+describe('ProposalBus — conflict detection (patch-based)', () => {
+    test('path-overlap drift flips status to conflict and skips write', async () => {
+        const handler = liveHandler({ a: 1 });
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: { v: 1 } });
-
+        // External mutation on the touched path.
+        await handler.write({ type: 'preset' }, { a: 99 });
+        handler.write.mockClear();
         const out = await bus.approve(id);
         expect(out.ok).toBe(false);
         expect(out.status).toBe('conflict');
-        expect(commit).not.toHaveBeenCalled();
-
+        expect(handler.write).not.toHaveBeenCalled();
         const entry = bus._testOnly_entries().find((e) => e.id === id);
         expect(entry.status).toBe('conflict');
-        expect(entry.conflictInfo).toMatchObject({
-            expectedFingerprint: 'fp:{"v":1}',
-            actualFingerprint: 'fp:{"v":99}',
-            actualSnapshot: { v: 99 },
+        expect(entry.conflictError).toMatchObject({
+            targetType: 'preset',
+            jsonPath: '/a',
         });
     });
 
     test('conflict entry does NOT count as outstanding (write was dropped, AI notified via outcome)', async () => {
-        const handler = makeHandler({
-            readCurrent: jest.fn(async () => ({ snapshot: { v: 99 }, fingerprint: 'fp:{"v":99}' })),
+        const handler = liveHandler({ a: 1 });
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: { v: 1 } });
+        await handler.write({ type: 'preset' }, { a: 99 });
         await bus.approve(id);
         // The auto-continue loop checks hasOutstanding to decide whether
         // to fire another round. Treating conflicts as outstanding
         // strands the loop indefinitely because the user has no useful
-        // action ('Approve' against drifted state commits a stale diff;
-        // 'Reject' adds nothing the conflict outcome doesn't already
-        // carry). The conflict was already enqueued as an outcome the
-        // AI will see in the next drainOutcomes message.
+        // action — the conflict outcome is already in the queue.
         expect(bus.hasOutstanding()).toBe(false);
     });
 
-    test('commit-throw flips status to conflict and records error', async () => {
-        const handler = makeHandler({
-            commit: jest.fn(async () => { throw new Error('network broke'); }),
+    test('write-throw flips status to conflict and records error', async () => {
+        const handler = {
+            read: async () => ({ a: 1 }),
+            write: jest.fn(async () => { throw new Error('network broke'); }),
+            describe: () => 't',
+        };
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
         const out = await bus.approve(id);
         expect(out.ok).toBe(false);
         expect(out.status).toBe('conflict');
         expect(out.error).toContain('network broke');
         const entry = bus._testOnly_entries().find((e) => e.id === id);
         expect(entry.status).toBe('conflict');
-        expect(entry.conflictInfo.error).toContain('network broke');
+        expect(entry.conflictError.reason).toContain('network broke');
     });
 
-    test('readCurrent-throw also goes to conflict', async () => {
-        const handler = makeHandler({
-            readCurrent: jest.fn(async () => { throw new Error('disk gone'); }),
+    test('read-throw also goes to conflict', async () => {
+        const handler = {
+            read: async () => { throw new Error('disk gone'); },
+            write: jest.fn(),
+            describe: () => 't',
+        };
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
         const out = await bus.approve(id);
         expect(out.ok).toBe(false);
         expect(out.status).toBe('conflict');
@@ -88,16 +96,19 @@ describe('ProposalBus — conflict detection', () => {
     });
 
     test('re-approving a conflict entry retries and can succeed once disk converges', async () => {
-        let currentFp = 'fp:{"v":99}';
-        const handler = makeHandler({
-            readCurrent: jest.fn(async () => ({ snapshot: null, fingerprint: currentFp })),
+        const handler = liveHandler({ a: 1 });
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: { v: 1 } });
+        // Drift first
+        await handler.write({ type: 'preset' }, { a: 99 });
         let out = await bus.approve(id);
         expect(out.status).toBe('conflict');
-        currentFp = 'fp:{"v":1}';
+        // Converge live back to the propose-time before, then retry
+        await handler.write({ type: 'preset' }, { a: 1 });
         out = await bus.approve(id);
         expect(out.status).toBe('committed');
     });

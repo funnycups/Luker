@@ -1,92 +1,81 @@
-import { describe, test, expect, jest } from '@jest/globals';
-import { createProposalBus } from '../../../public/scripts/iteration-library/proposal-bus/index.js';
+import { jest } from '@jest/globals';
+import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
+import { registerTarget, clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
 
-function makeHandler(overrides = {}) {
+beforeEach(() => clearRegistry());
+
+function liveHandler(initial) {
+    let s = JSON.parse(JSON.stringify(initial));
     return {
-        fingerprint: jest.fn(async (snap) => `fp:${JSON.stringify(snap ?? null)}`),
-        readCurrent: jest.fn(async () => ({ snapshot: null, fingerprint: 'fp:null' })),
-        commit: jest.fn(async () => {}),
-        inverse: jest.fn(() => null),
-        renderDiffCard: jest.fn(() => ''),
-        label: jest.fn(() => ''),
-        icon: jest.fn(() => ''),
-        target: jest.fn(() => ''),
-        ...overrides,
+        read: jest.fn(async () => JSON.parse(JSON.stringify(s))),
+        write: jest.fn(async (_meta, next) => { s = JSON.parse(JSON.stringify(next)); }),
+        describe: () => 'thing',
+        _get: () => s,
     };
 }
 
-describe('ProposalBus — approve flow', () => {
-    test('approve runs readCurrent then commit when fingerprints match', async () => {
-        const handler = makeHandler({
-            readCurrent: jest.fn(async () => ({ snapshot: { v: 1 }, fingerprint: 'fp:{"v":1}' })),
-            commit: jest.fn(async () => {}),
+describe('bus.approve (patch-based commit)', () => {
+    test('approve writes the after-state to the target handler', async () => {
+        const h = liveHandler({ a: 1 });
+        registerTarget('preset', h);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const { id } = await bus.propose({ kind: 'k', op: { do: 'x' }, snapshot: { v: 1 } });
-
-        const out = await bus.approve(id, { user: 'alice' });
+        const out = await bus.approve(id);
         expect(out.ok).toBe(true);
         expect(out.status).toBe('committed');
-        expect(handler.readCurrent).toHaveBeenCalledWith({ do: 'x' }, { user: 'alice' });
-        expect(handler.commit).toHaveBeenCalledWith({ do: 'x' }, { user: 'alice' });
-
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
-        expect(entry.status).toBe('committed');
-        expect(typeof entry.committedAt).toBe('number');
-        expect(typeof entry.decidedAt).toBe('number');
-        expect(entry.conflictInfo).toBe(null);
+        expect(h.write).toHaveBeenCalledWith({ type: 'preset' }, { a: 2 });
+        expect(h._get()).toEqual({ a: 2 });
     });
 
-    test('approve on unknown id returns ok:false', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        const out = await bus.approve('nope_1_xxx');
+    test('approve when ST live has drifted on a patched path → conflict, no write', async () => {
+        const h = liveHandler({ a: 1 });
+        registerTarget('preset', h);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
+        // External mutation on the touched path before approve.
+        await h.write({ type: 'preset' }, { a: 99 });
+        h.write.mockClear();
+        const out = await bus.approve(id);
         expect(out.ok).toBe(false);
-        expect(out.status).toBe('unknown');
+        expect(out.status).toBe('conflict');
+        expect(h.write).not.toHaveBeenCalled();
     });
 
-    test('approve on non-pending entry is a no-op error', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+    test('approve when ST live has drifted on an UNRELATED path → still succeeds', async () => {
+        const h = liveHandler({ a: 1, b: 'untouched' });
+        registerTarget('preset', h);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' },
+            before: { a: 1, b: 'untouched' },
+            after:  { a: 2, b: 'untouched' },
+        });
+        await h.write({ type: 'preset' }, { a: 1, b: 'changed externally' });
+        h.write.mockClear();
+        const out = await bus.approve(id);
+        expect(out.ok).toBe(true);
+        // The unrelated external change is preserved.
+        expect(h._get()).toEqual({ a: 2, b: 'changed externally' });
+    });
+
+    test('already-committed entry returns previous status', async () => {
+        const h = liveHandler({ a: 1 });
+        registerTarget('preset', h);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         await bus.approve(id);
         const out = await bus.approve(id);
         expect(out.ok).toBe(false);
         expect(out.status).toBe('committed');
-    });
-
-    test('approved entry no longer counts as outstanding', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
-        expect(bus.hasOutstanding()).toBe(true);
-        await bus.approve(id);
-        expect(bus.hasOutstanding()).toBe(false);
-    });
-
-    test('approve enqueues a committed outcome', async () => {
-        const handler = makeHandler({ target: jest.fn(() => 'target/foo') });
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
-        await bus.approve(id);
-        const outcomes = bus.drainOutcomes();
-        expect(outcomes).toEqual([{
-            id,
-            kind: 'k',
-            status: 'committed',
-            target: 'target/foo',
-        }]);
-        expect(bus.drainOutcomes()).toEqual([]);
-    });
-
-    test('approve fires onChange', async () => {
-        const onChange = jest.fn();
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
-        onChange.mockClear();
-        await bus.approve(id);
-        expect(onChange).toHaveBeenCalled();
     });
 });

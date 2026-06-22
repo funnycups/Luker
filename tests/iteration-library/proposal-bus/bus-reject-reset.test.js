@@ -1,24 +1,26 @@
-import { describe, test, expect, jest } from '@jest/globals';
-import { createProposalBus } from '../../../public/scripts/iteration-library/proposal-bus/index.js';
+import { describe, test, expect, jest, beforeEach } from '@jest/globals';
+import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
+import { registerTarget, clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
 
-function makeHandler() {
+beforeEach(() => clearRegistry());
+
+function liveHandler(initial) {
+    let s = JSON.parse(JSON.stringify(initial));
     return {
-        fingerprint: async (s) => `fp:${JSON.stringify(s ?? null)}`,
-        readCurrent: async () => ({ snapshot: null, fingerprint: 'fp:null' }),
-        commit: async () => {},
-        inverse: () => null,
-        renderDiffCard: () => '',
-        label: () => '',
-        icon: () => '',
-        target: () => 't',
+        read: async () => JSON.parse(JSON.stringify(s)),
+        write: async (_meta, next) => { s = JSON.parse(JSON.stringify(next)); },
+        describe: () => 't',
     };
 }
 
 describe('ProposalBus — reject + reset', () => {
     test('reject flips pending to rejected and stamps decidedAt', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        registerTarget('preset', liveHandler({ a: 1 }));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         bus.reject(id);
         const entry = bus._testOnly_entries().find((e) => e.id === id);
         expect(entry.status).toBe('rejected');
@@ -26,9 +28,12 @@ describe('ProposalBus — reject + reset', () => {
     });
 
     test('reject enqueues a rejected outcome', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        registerTarget('preset', liveHandler({ a: 1 }));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         bus.reject(id);
         const outcomes = bus.drainOutcomes();
         expect(outcomes).toHaveLength(1);
@@ -36,17 +41,23 @@ describe('ProposalBus — reject + reset', () => {
     });
 
     test('rejected entry does NOT count as outstanding', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        registerTarget('preset', liveHandler({ a: 1 }));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         bus.reject(id);
         expect(bus.hasOutstanding()).toBe(false);
     });
 
     test('reset flips rejected back to pending and clears decidedAt', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        registerTarget('preset', liveHandler({ a: 1 }));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         bus.reject(id);
         bus.reset(id);
         const entry = bus._testOnly_entries().find((e) => e.id === id);
@@ -55,9 +66,12 @@ describe('ProposalBus — reject + reset', () => {
     });
 
     test('reset on committed entry is a no-op', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
+        registerTarget('preset', liveHandler({ a: 1 }));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        const { id } = await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+        });
         await bus.approve(id);
         bus.reset(id);
         const entry = bus._testOnly_entries().find((e) => e.id === id);
@@ -65,7 +79,7 @@ describe('ProposalBus — reject + reset', () => {
     });
 
     test('reject on unknown id is silent', () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
+        const bus = createBus();
         expect(() => bus.reject('nope')).not.toThrow();
     });
 });

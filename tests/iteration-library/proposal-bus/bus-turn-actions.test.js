@@ -1,31 +1,17 @@
-import { describe, test, expect, jest } from '@jest/globals';
-import { createProposalBus } from '../../../public/scripts/iteration-library/proposal-bus/index.js';
+import { jest } from '@jest/globals';
+import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
+import { registerTarget, clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
 
-function makeHandler() {
+beforeEach(() => clearRegistry());
+
+function liveHandler(initial) {
+    let s = JSON.parse(JSON.stringify(initial));
     return {
-        fingerprint: async (s) => `fp:${JSON.stringify(s ?? null)}`,
-        readCurrent: async (op) => ({ snapshot: op?.snapshot ?? null, fingerprint: `fp:${JSON.stringify(op?.snapshot ?? null)}` }),
-        commit: jest.fn(async () => {}),
-        inverse: jest.fn((op, snap) => ({ undo: op, was: snap })),
-        renderDiffCard: () => '',
-        label: () => '',
-        icon: () => '',
-        target: () => '',
+        read: jest.fn(async () => JSON.parse(JSON.stringify(s))),
+        write: jest.fn(async (_meta, next) => { s = JSON.parse(JSON.stringify(next)); }),
+        describe: () => 't',
+        _get: () => s,
     };
-}
-
-async function seedTurn(bus, msgId, n) {
-    const ids = [];
-    for (let i = 0; i < n; i++) {
-        const { id } = await bus.propose({
-            kind: 'k',
-            sourceCallId: `call_${msgId}_${i}`,
-            op: { i, snapshot: { i } },
-            snapshot: { i },
-        });
-        ids.push(id);
-    }
-    return ids;
 }
 
 function buildMessage(msgId, n) {
@@ -35,34 +21,63 @@ function buildMessage(msgId, n) {
     };
 }
 
-describe('ProposalBus — turn-scoped actions', () => {
+async function seedChainedTurn(bus, msgId, n) {
+    // Propose n entries whose `before` chains to the prior `after`, the
+    // same shape iter-studio popups produce: live stays at the original
+    // state, the bus tracks the projected chain via _pendingAfter.
+    const ids = [];
+    for (let i = 0; i < n; i++) {
+        const before = i === 0 ? { v: 0 } : { v: i };
+        const after = { v: i + 1 };
+        const { id } = await bus.propose({
+            kind: 'k',
+            target: { type: 'preset' },
+            sourceCallId: `call_${msgId}_${i}`,
+            before,
+            after,
+        });
+        ids.push(id);
+    }
+    return ids;
+}
+
+describe('ProposalBus — turn-scoped actions (patch-based)', () => {
     test('approveAllPendingInTurn commits every pending entry belonging to the message', async () => {
-        const handler = makeHandler();
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        await seedTurn(bus, 'm1', 3);
-        const msg = buildMessage('m1', 3);
-        const out = await bus.approveAllPendingInTurn(msg);
+        const handler = liveHandler({ v: 0 });
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        await seedChainedTurn(bus, 'm1', 3);
+        const out = await bus.approveAllPendingInTurn(buildMessage('m1', 3));
         expect(out.results).toHaveLength(3);
         expect(out.results.every((r) => r.ok && r.status === 'committed')).toBe(true);
-        expect(handler.commit).toHaveBeenCalledTimes(3);
+        expect(handler.write).toHaveBeenCalledTimes(3);
+        expect(handler._get()).toEqual({ v: 3 });
     });
 
     test('approveAllPendingInTurn skips entries from other messages', async () => {
-        const handler = makeHandler();
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        await seedTurn(bus, 'm1', 2);
-        await seedTurn(bus, 'm2', 2);
+        const handler = liveHandler({ v: 0 });
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        // m1 chain
+        await bus.propose({ kind: 'k', target: { type: 'preset' }, sourceCallId: 'call_m1_0', before: { v: 0 }, after: { v: 1 } });
+        await bus.propose({ kind: 'k', target: { type: 'preset' }, sourceCallId: 'call_m1_1', before: { v: 1 }, after: { v: 2 } });
+        // m2 (different sourceCallId)
+        await bus.propose({ kind: 'k', target: { type: 'preset' }, sourceCallId: 'call_m2_0', before: { v: 2 }, after: { v: 9 } });
+        handler.write.mockClear();
         const out = await bus.approveAllPendingInTurn(buildMessage('m1', 2));
         expect(out.results).toHaveLength(2);
-        expect(handler.commit).toHaveBeenCalledTimes(2);
+        expect(handler.write).toHaveBeenCalledTimes(2);
+        expect(handler._get()).toEqual({ v: 2 });
     });
 
     test('rejectAllPendingInTurn flips matching pending entries to rejected', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        await seedTurn(bus, 'm1', 3);
+        const handler = liveHandler({ v: 0 });
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        await seedChainedTurn(bus, 'm1', 3);
         const out = bus.rejectAllPendingInTurn(buildMessage('m1', 3));
         expect(out.count).toBe(3);
         const stillPending = bus._testOnly_entries().filter((e) => e.status === 'pending');
@@ -70,22 +85,24 @@ describe('ProposalBus — turn-scoped actions', () => {
     });
 
     test('rollbackAllInTurn walks committed entries in reverse commit order', async () => {
-        const inverseCalls = [];
-        const commitInvocations = [];
-        const handler = {
-            ...makeHandler(),
-            commit: jest.fn(async (op) => { commitInvocations.push(op); }),
-            inverse: jest.fn((op) => { inverseCalls.push(op); return { inverseOf: op }; }),
-        };
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', handler);
-        const ids = await seedTurn(bus, 'm1', 3);
-        // sequence approve in order; bus stamps committedAt
-        await bus.approve(ids[0]); await new Promise((r) => setTimeout(r, 2));
-        await bus.approve(ids[1]); await new Promise((r) => setTimeout(r, 2));
-        await bus.approve(ids[2]); await new Promise((r) => setTimeout(r, 2));
-        commitInvocations.length = 0;
-        await bus.rollbackAllInTurn(buildMessage('m1', 3));
-        expect(commitInvocations.map((o) => o.inverseOf.i)).toEqual([2, 1, 0]);
+        const handler = liveHandler({ v: 0 });
+        registerTarget('preset', handler);
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        // Propose then immediately approve three entries.
+        for (let i = 0; i < 3; i++) {
+            const { id } = await bus.propose({
+                kind: 'k', target: { type: 'preset' },
+                sourceCallId: `call_m1_${i}`,
+                before: { v: i }, after: { v: i + 1 },
+            });
+            await bus.approve(id);
+            await new Promise((r) => setTimeout(r, 2));
+        }
+        expect(handler._get()).toEqual({ v: 3 });
+        const out = await bus.rollbackAllInTurn(buildMessage('m1', 3));
+        expect(out.results).toHaveLength(3);
+        // Rollbacks reverse the chain back to the first entry's `before`
+        expect(handler._get()).toEqual({ v: 0 });
     });
 });

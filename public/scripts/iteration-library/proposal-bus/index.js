@@ -6,26 +6,26 @@
  * modules for the full surface; index.js stitches the pieces together
  * so popups import one symbol and get the complete bus.
  *
- * Additional re-exports for popup-defined custom kinds:
+ * Re-exports for popup-defined custom kinds and target descriptors:
  *   - sha256OfJson / canonicalJson / sha256OfString from `drift-hash.js`
- *     so popups can reuse the same hash function the built-in kinds use
- *     (and stay drift-compatible across kinds).
+ *     remain available for popups that hash external state for their
+ *     own purposes (e.g. CEA's content fingerprints).
  *   - createProfileEditHandler / createLorebookWriteHandler /
- *     createSkillAuthorHandler / createPresetCloneHandler so consumers
- *     reaching the bus through the iteration-library public surface
- *     (Layer 2/3 via `getContext().iterationLibrary.proposalBus`) can
- *     build kinds without poking into internal kind file paths. This
- *     mirrors how `tools/index.js` re-exports its named tool catalogs.
+ *     createSkillAuthorHandler / createPresetCloneHandler return the
+ *     descriptor `{kind, targetType}`; popups register these on the
+ *     bus and provide the matching target handler to the
+ *     target-registry.
  */
 
 import { createBus } from './bus.js';
 
 export { sha256OfJson, sha256OfString, canonicalJson } from './drift-hash.js';
-export { createProfileEditHandler } from './kinds/profile-edit.js';
-export { createLorebookWriteHandler } from './kinds/lorebook-write.js';
-export { createSkillAuthorHandler } from './kinds/skill-author.js';
-export { createPresetCloneHandler } from './kinds/preset-clone.js';
+export { createProfileEditHandler, profileEdit } from './kinds/profile-edit.js';
+export { createLorebookWriteHandler, lorebookWrite } from './kinds/lorebook-write.js';
+export { createSkillAuthorHandler, skillAuthor } from './kinds/skill-author.js';
+export { createPresetCloneHandler, presetClone } from './kinds/preset-clone.js';
 
 export function createProposalBus(opts) {
     return createBus(opts);
 }
+

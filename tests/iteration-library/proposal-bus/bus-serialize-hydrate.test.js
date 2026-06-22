@@ -1,91 +1,89 @@
-import { describe, test, expect, jest } from '@jest/globals';
-import { createProposalBus } from '../../../public/scripts/iteration-library/proposal-bus/index.js';
+import { jest } from '@jest/globals';
+import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
+import { registerTarget, clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
 
-function makeHandler() {
+beforeEach(() => clearRegistry());
+
+function liveHandler(initial) {
+    let s = JSON.parse(JSON.stringify(initial));
     return {
-        fingerprint: async (s) => `fp:${JSON.stringify(s ?? null)}`,
-        readCurrent: async () => ({ snapshot: null, fingerprint: 'fp:null' }),
-        commit: async () => {},
-        inverse: () => null,
-        renderDiffCard: () => '',
-        label: () => '',
-        icon: () => '',
-        target: () => '',
+        read: async () => JSON.parse(JSON.stringify(s)),
+        write: async (_meta, next) => { s = JSON.parse(JSON.stringify(next)); },
+        describe: () => 't',
     };
 }
 
-describe('ProposalBus — serialize / hydrate', () => {
-    test('serialize returns version 2 envelope with entries + outcomeQueue', async () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        await bus.propose({ kind: 'k', sourceCallId: 'c1', op: { x: 1 }, snapshot: { v: 1 } });
+describe('bus.serialize/hydrate (v3)', () => {
+    test('serialize returns version 3 envelope', async () => {
+        registerTarget('preset', liveHandler({}));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        await bus.propose({
+            kind: 'k', target: { type: 'preset' }, before: {}, after: { a: 1 }, sourceCallId: 'c1',
+        });
         const data = bus.serialize();
-        expect(data.version).toBe(2);
+        expect(data.version).toBe(3);
         expect(data.entries).toHaveLength(1);
         expect(data.entries[0]).toMatchObject({
             kind: 'k',
-            sourceCallId: 'c1',
+            target: { type: 'preset' },
+            inverse: [{ op: 'remove', path: '/a' }],
             status: 'pending',
-            op: { x: 1 },
-            snapshot: { v: 1 },
+            sourceCallId: 'c1',
         });
-        expect(Array.isArray(data.outcomeQueue)).toBe(true);
+        expect(data.entries[0]).not.toHaveProperty('snapshot');
+        expect(data.entries[0]).not.toHaveProperty('op');
+        expect(data.entries[0]).not.toHaveProperty('fingerprint');
+        expect(data.entries[0]).not.toHaveProperty('_pendingAfter');
     });
 
-    test('hydrate restores entries verbatim', async () => {
-        const seed = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        seed.registerKind('k', makeHandler());
-        await seed.propose({ kind: 'k', op: { x: 1 }, snapshot: null });
-        await seed.propose({ kind: 'k', op: { x: 2 }, snapshot: null });
-        const data = seed.serialize();
-
-        const fresh = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        fresh.registerKind('k', makeHandler());
-        fresh.hydrate(data);
-        expect(fresh._testOnly_entries()).toHaveLength(2);
-        expect(fresh.hasOutstanding()).toBe(true);
-    });
-
-    test('hydrate accepts version: undefined (treated as empty)', () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        bus.hydrate({});
-        expect(bus._testOnly_entries()).toHaveLength(0);
-    });
-
-    test('hydrate accepts null and is a no-op', () => {
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.hydrate(null);
-        expect(bus._testOnly_entries()).toHaveLength(0);
-    });
-
-    test('hydrate fires onChange exactly once', () => {
-        const onChange = jest.fn();
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange });
-        bus.registerKind('k', makeHandler());
-        bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
-        expect(onChange).toHaveBeenCalledTimes(1);
-    });
-
-    test('hydrate preserves seq so next propose id does not collide', async () => {
-        const data = {
-            version: 2,
+    test('hydrate restores v3 entries verbatim (excluding _pendingAfter)', async () => {
+        registerTarget('preset', liveHandler({}));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        bus.hydrate({
+            version: 3,
             entries: [{
                 id: 'k_5_aaaaaa',
                 kind: 'k',
+                target: { type: 'preset' },
+                inverse: [{ op: 'replace', path: '/a', value: 1 }],
+                status: 'committed',
                 sourceCallId: null,
-                status: 'pending',
-                op: {}, snapshot: null, fingerprint: 'fp:null', meta: null,
-                createdAt: 1, decidedAt: null, committedAt: null, rolledBackAt: null,
-                conflictInfo: null,
+                meta: null,
+                createdAt: 1,
+                decidedAt: 2,
+                committedAt: 3,
+                rolledBackAt: null,
+                conflictError: null,
             }],
             outcomeQueue: [],
-        };
-        const bus = createProposalBus({ mode: 't', i18n: (s) => s, onChange: () => {} });
-        bus.registerKind('k', makeHandler());
-        bus.hydrate(data);
-        const { id } = await bus.propose({ kind: 'k', op: {}, snapshot: null });
-        const seq = Number(id.split('_')[1]);
-        expect(seq).toBeGreaterThan(5);
+        });
+        expect(bus._testOnly_entries()).toHaveLength(1);
+        expect(bus._testOnly_entries()[0].inverse).toEqual([{ op: 'replace', path: '/a', value: 1 }]);
+    });
+
+    test('hydrate rejects version 2 (no silent acceptance)', () => {
+        const bus = createBus();
+        bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+        expect(bus._testOnly_entries()).toHaveLength(0);
+    });
+
+    test('hydrate preserves seq from id', () => {
+        registerTarget('preset', liveHandler({}));
+        const bus = createBus();
+        bus.registerKind('k', { targetType: 'preset' });
+        bus.hydrate({
+            version: 3,
+            entries: [{ id: 'k_5_xxx', kind: 'k', target: { type: 'preset' }, inverse: [],
+                status: 'pending', sourceCallId: null, meta: null, createdAt: 0, decidedAt: null,
+                committedAt: null, rolledBackAt: null, conflictError: null }],
+            outcomeQueue: [],
+        });
+        return bus.propose({ kind: 'k', target: { type: 'preset' }, before: {}, after: { x: 1 } })
+            .then(({ id }) => {
+                const seqNum = Number(id.split('_')[1]);
+                expect(seqNum).toBeGreaterThan(5);
+            });
     });
 });

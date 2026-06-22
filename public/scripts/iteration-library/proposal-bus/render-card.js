@@ -47,12 +47,15 @@ function controls(entry, handler, i18n) {
     const idAttr = escapeHtml(entry.id);
     const status = entry.status;
     const btns = [];
+    // Inverse availability is now derived from the recorded patch: an
+    // entry whose inverse is empty has no semantic rollback to apply.
+    const hasInverse = Array.isArray(entry.inverse) && entry.inverse.length > 0;
     if (status === 'pending') {
         btns.push(`<button class="menu_button iter_proposal_btn iter_proposal_btn_approve" data-proposal-action="approve" data-proposal-id="${idAttr}">${escapeHtml(i18n('Approve'))}</button>`);
         btns.push(`<button class="menu_button iter_proposal_btn iter_proposal_btn_reject" data-proposal-action="reject" data-proposal-id="${idAttr}">${escapeHtml(i18n('Reject'))}</button>`);
     } else if (status === 'rejected') {
         btns.push(`<button class="menu_button iter_proposal_btn" data-proposal-action="reset" data-proposal-id="${idAttr}">${escapeHtml(i18n('Undo reject'))}</button>`);
-    } else if (status === 'committed' && handler.inverseAvailable !== false) {
+    } else if (status === 'committed' && hasInverse && handler.inverseAvailable !== false) {
         btns.push(`<button class="menu_button iter_proposal_btn" data-proposal-action="rollback" data-proposal-id="${idAttr}">${escapeHtml(i18n('Rollback'))}</button>`);
     }
     // status === 'conflict' / 'rolledBack' — no buttons. Conflicts have
@@ -66,9 +69,10 @@ function controls(entry, handler, i18n) {
 
 function conflictBlock(entry, i18n) {
     if (entry.status !== 'conflict') return '';
-    const info = entry.conflictInfo || null;
-    const errLine = info && info.error
-        ? `<div class="iter_proposal_conflict_error">${escapeHtml(i18n('Error: ${0}', String(info.error)))}</div>`
+    const info = entry.conflictError || entry.conflictInfo || null;
+    const reason = info && (info.reason || info.error);
+    const errLine = reason
+        ? `<div class="iter_proposal_conflict_error">${escapeHtml(i18n('Error: ${0}', String(reason)))}</div>`
         : '';
     return `<div class="iter_proposal_card_conflict">
         <div class="iter_proposal_conflict_summary">${escapeHtml(i18n('The AI called this write tool, but the target had been changed in the meantime — the write was NOT applied. The AI has been notified and can decide whether to retry.'))}</div>
