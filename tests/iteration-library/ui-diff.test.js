@@ -425,3 +425,72 @@ describe('renderDiffCard', () => {
         expect(html).toBe('');
     });
 });
+
+describe('renderDiffCard — bus entry shape', () => {
+    let registerTarget;
+    let clearRegistry;
+    beforeAll(async () => {
+        ({ registerTarget, clearRegistry } = await import(
+            '../../public/scripts/iteration-library/storage/target-registry.js'
+        ));
+    });
+
+    beforeEach(() => clearRegistry());
+
+    it('derives before/after from inverse + live and renders a diff card', async () => {
+        registerTarget('preset', {
+            read: async () => ({ temperature: 1.0, max_tokens: 200 }),
+            write: async () => {},
+            describe: () => 'preset',
+        });
+        const entry = {
+            target: { type: 'preset' },
+            inverse: [{ op: 'replace', path: '/temperature', value: 0.5 }],
+        };
+        const html = await renderDiffCard(entry, { i18n: ident });
+        // The recovered before is { temperature: 0.5, max_tokens: 200 };
+        // after is the registry's live ({ temperature: 1.0, ... }). The
+        // leaf walker emits one card for the changed leaf, no card for
+        // the unchanged max_tokens.
+        expect(html).toContain('luker_lib_diff_card');
+        expect(html).toContain('temperature');
+        expect(html).not.toContain('max_tokens');
+    });
+
+    it('falls back to a raw-record card when the inverse cannot be replayed against live', async () => {
+        // Target drift: live no longer contains the path the inverse
+        // touches. decodeBackward throws PatchConflictError; renderer
+        // emits the raw record so the user still sees the entry exists.
+        registerTarget('preset', {
+            read: async () => ({ /* missing temperature */ }),
+            write: async () => {},
+            describe: () => 'preset',
+        });
+        const entry = {
+            target: { type: 'preset' },
+            inverse: [{ op: 'replace', path: '/temperature', value: 0.5 }],
+        };
+        const html = await renderDiffCard(entry, { i18n: ident });
+        expect(html).toContain('data-action="view-raw-record"');
+    });
+
+    it('falls back to a raw-record card when the target type is not registered', async () => {
+        // Registry miss: surface the raw record rather than throwing.
+        const entry = {
+            target: { type: 'unknown-target-type' },
+            inverse: [{ op: 'replace', path: '/x', value: 0 }],
+        };
+        const html = await renderDiffCard(entry, { i18n: ident });
+        expect(html).toContain('data-action="view-raw-record"');
+    });
+
+    it('routes a legacy edit-list (array) through the leaf walker unchanged', () => {
+        // The polymorphic entry sniff must not break the legacy array
+        // shape: callers still pass `[{op:'set', oldValue, newValue}]`.
+        const html = renderDiffCard(
+            [{ op: 'set', path: 'name', oldValue: 'Alice', newValue: 'Bob' }],
+            { i18n: ident },
+        );
+        expect(html).toContain('luker_lib_diff_card');
+    });
+});

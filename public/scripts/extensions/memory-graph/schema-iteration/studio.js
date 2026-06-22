@@ -69,7 +69,8 @@ import {
     ui as ITER_UI,
     proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
-import { createProfileEditHandler } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
+import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
+import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
 import {
     TOOL_DEFS,
     buildToolCatalog,
@@ -638,7 +639,7 @@ function buildPopupHtml({
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="mg_schema_it_messages" data-mg-schema-it-messages></div>
             <div class="mg_schema_it_composer">
-                <textarea class="text_pole" rows="2" data-mg-schema-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
+                <textarea class="text_pole" rows="2" data-mg-schema-it-input data-iter-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="mg_schema_it_composer_actions">
                     <label class="mg_schema_it_composer_auto_apply">
                         <input type="checkbox" data-mg-schema-it-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
@@ -794,20 +795,29 @@ export async function openSchemaIterationStudio(deps) {
             scheduleBusRender();
         },
     });
-    bus.registerKind('profile-edit', createProfileEditHandler({
-        commitLive: async (newSchema) => {
-            state.live = newSchema;
+    registerTarget('schema', {
+        read: async () => {
+            await loadLive();
+            return structuredClone(state.live);
+        },
+        write: async (_target, next) => {
+            state.live = structuredClone(next);
             await commitLiveToSchema();
         },
-        readLive: async () => {
-            await loadLive();
-            return state.live;
+        describe: () => 'schema',
+    });
+    bus.registerKind('profile-edit', {
+        ...profileEdit,
+        targetType: 'schema',
+        renderDiffCard: (entry, _helpers) => {
+            const before = entry?.meta?.before ?? null;
+            const after = entry?.meta?.after ?? null;
+            return renderSchemaArrayPendingCards(before, after);
         },
-        renderDiff: (before, after) => renderSchemaArrayPendingCards(before, after),
         label: () => t('Schema change'),
         icon: () => '🧩',
         target: () => t('schema'),
-    }));
+    });
     bus.setMessageResolver((messageId) => {
         const msgs = state.session?.messages || [];
         const m = msgs.find((x) => String(x?.id || '') === String(messageId));
@@ -1187,13 +1197,15 @@ export async function openSchemaIterationStudio(deps) {
                     if (edit?.op !== 'set' || edit?.path !== '') continue;
                     await bus.propose({
                         kind: 'profile-edit',
-                        op: { op: 'set', path: '', newValue: edit.newValue },
-                        snapshot: edit.oldValue ?? null,
+                        target: { type: 'schema' },
+                        before: edit.oldValue ?? null,
+                        after: edit.newValue ?? null,
                         sourceCallId: null,
+                        meta: { before: edit.oldValue ?? null, after: edit.newValue ?? null },
                     });
                 }
             } else {
-                bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+                bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
             }
         } finally {
             state.__suspendBusOnChange = false;
@@ -1226,7 +1238,7 @@ export async function openSchemaIterationStudio(deps) {
         // Reset bus to a clean slate. autoApprove follows surfaceState.
         state.__suspendBusOnChange = true;
         try {
-            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+            bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
         } finally {
             state.__suspendBusOnChange = false;
         }
@@ -1968,25 +1980,19 @@ export async function openSchemaIterationStudio(deps) {
             // bus.setAutoApprove drives auto-commit; either way, propose
             // here so the user (or the auto-approve microtask) sees a card.
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
-            // Snapshot chaining: when the user batches multiple AI turns
-            // without approving between them, each new proposal must record
-            // the state the live schema WILL be in by the time the user
-            // approves through this card (i.e. the previous pending
-            // proposal's newValue). state.live only advances on approve, so
-            // using it directly here means all batched proposals share the
-            // same fingerprint of the initial state.live — after the user
-            // approves proposal #1, state.live moves to #1's newValue, and
-            // proposal #2's stale snapshot mismatches the new readCurrent
-            // fingerprint and gets parked in `conflict`. Chaining off the
-            // last pending entry's newValue keeps the per-proposal
-            // fingerprints in sync with the approve-in-order replay.
-            const lastPending = bus.getLastPendingNewValue('profile-edit');
-            const proposalSnapshot = lastPending.found ? lastPending.newValue : state.live;
+            // Chain across earlier pending proposals: the next proposal's
+            // before-state must reflect the disk state if every pending
+            // entry committed. The bus's getCurrentPendingState walks the
+            // chain, so the patch we record here lines up cleanly with
+            // the approve-in-order replay.
+            const proposalSnapshot = await bus.getCurrentPendingState('profile-edit', { type: 'schema' });
             await bus.propose({
                 kind: 'profile-edit',
-                op: { op: 'set', path: '', newValue: lastEdit.newValue },
-                snapshot: proposalSnapshot,
+                target: { type: 'schema' },
+                before: proposalSnapshot,
+                after: lastEdit.newValue,
                 sourceCallId: firstCallId,
+                meta: { before: proposalSnapshot, after: lastEdit.newValue },
             });
         }
 
@@ -2208,6 +2214,13 @@ export async function openSchemaIterationStudio(deps) {
         i18n: t,
     });
 
+    // When the bus detects that the underlying target has drifted in a
+    // way it can no longer chain off, lock the composer and surface a
+    // banner. Unbind runs in the teardown `finally` block below.
+    const unbindChainBroken = ITER_UI.message.bindChainBrokenBanner($root[0], bus, {
+        translate: (s) => t(s),
+    });
+
     // No mount-time persist — the session is _transient until the user
     // sends their first message. persistSession()'s _transient guard
     // defers the write so opening + closing the popup without sending
@@ -2388,6 +2401,7 @@ export async function openSchemaIterationStudio(deps) {
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
         try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { unbindChainBroken?.(); } catch { /* ignore */ }
         try { state.abortController?.abort(); } catch { /* ignore */ }
         // Stop accepting new bus-driven renders before final persist —
         // a propose() that lands during teardown would otherwise queue

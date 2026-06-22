@@ -117,6 +117,50 @@ describe('renderProposalCard', () => {
         const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
         expect(html).not.toContain('iter_proposal_card_controls');
     });
+
+    test('conflict card renders force-discard and export-record buttons', () => {
+        const e = entry({
+            status: 'conflict',
+            conflictError: { targetType: 'preset', targetName: null, jsonPath: '/a', reason: 'value mismatch' },
+        });
+        const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
+        expect(html).toContain('data-action="force-discard"');
+        expect(html).toContain('data-action="export-record"');
+        // Buttons also carry the bus event-router contract attribute so the
+        // popup can route clicks through bus.handleClick.
+        expect(html).toContain('data-proposal-action="force-discard"');
+        expect(html).toContain('data-proposal-action="export-record"');
+    });
+
+    test('conflict summary copy is keyed by target type — preset', () => {
+        const e = entry({
+            status: 'conflict',
+            target: { type: 'preset' },
+            conflictError: { targetType: 'preset', reason: 'value mismatch' },
+        });
+        const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
+        expect(html).toContain('Cannot undo this change: the preset has been modified elsewhere.');
+    });
+
+    test('conflict summary copy is keyed by target type — schema', () => {
+        const e = entry({
+            status: 'conflict',
+            target: { type: 'schema' },
+            conflictError: { targetType: 'schema', reason: 'value mismatch' },
+        });
+        const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
+        expect(html).toContain('Cannot undo this change: the memory graph schema has been modified elsewhere.');
+    });
+
+    test('conflict summary copy falls back to the generic preview-fail line for an unknown target type', () => {
+        const e = entry({
+            status: 'conflict',
+            target: { type: 'mystery' },
+            conflictError: { targetType: 'mystery', reason: 'value mismatch' },
+        });
+        const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
+        expect(html).toContain('Cannot show details for this change: related content has been modified.');
+    });
 });
 
 describe('preset-clone descriptor suppresses the Rollback button even with non-empty inverse', () => {

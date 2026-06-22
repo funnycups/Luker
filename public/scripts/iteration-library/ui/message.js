@@ -1,4 +1,5 @@
 import { renderToolCallChip } from './toolcall.js';
+import { STR } from './strings.js';
 
 /**
  * @param {Object} message - Persisted iter message
@@ -174,4 +175,52 @@ function escapeHtmlAttr(s) {
         '"': '&quot;',
         '\'': '&#39;',
     }[c]));
+}
+
+/**
+ * Listen for the bus's `bus:chain-broken` event and lock the message
+ * host's input area. Once the underlying target has drifted in a way
+ * the bus can no longer chain off, the session's prior proposals cannot
+ * be safely re-derived; we disable the composer and surface a banner so
+ * the user knows to start a fresh session.
+ *
+ * The popup wires this once at mount: pass the popup root, the bus
+ * created for the popup, and an optional translator. Returns an unbind
+ * function the popup can call at teardown.
+ *
+ * @param {Element} root  The popup root. Must expose `[data-iter-input]`
+ *                        if input disabling is desired.
+ * @param {Object} bus    A ProposalBus with `bus.events` (EventTarget).
+ * @param {Object} [opts]
+ * @param {Function} [opts.translate]  Translator. Defaults to identity.
+ * @returns {Function} Unbind function (idempotent).
+ */
+export function bindChainBrokenBanner(root, bus, opts = {}) {
+    if (!root || !bus || !bus.events || typeof bus.events.addEventListener !== 'function') {
+        return () => {};
+    }
+    const t = typeof opts.translate === 'function' ? opts.translate : (s) => String(s ?? '');
+    let installed = false;
+    const handler = () => {
+        if (installed) return;
+        installed = true;
+        try {
+            const input = root.querySelector ? root.querySelector('[data-iter-input]') : null;
+            if (input) input.disabled = true;
+        } catch { /* tolerate stub roots */ }
+        try {
+            const banner = root.ownerDocument
+                ? root.ownerDocument.createElement('div')
+                : (typeof document !== 'undefined' ? document.createElement('div') : null);
+            if (banner) {
+                banner.className = 'iter-chain-broken-banner';
+                banner.textContent = t(STR.chainBroken_generic);
+                if (typeof root.appendChild === 'function') root.appendChild(banner);
+            }
+        } catch { /* best-effort */ }
+    };
+    bus.events.addEventListener('bus:chain-broken', handler);
+    return () => {
+        try { bus.events.removeEventListener('bus:chain-broken', handler); } catch { /* ignore */ }
+    };
 }

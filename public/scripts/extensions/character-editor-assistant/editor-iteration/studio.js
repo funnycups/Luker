@@ -67,6 +67,7 @@ import {
     zoomOverlay as ITER_ZOOM_OVERLAY,
     proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
+import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
 import {
     commitCharacterEditorOperations,
     commitLorebookOperations,
@@ -97,6 +98,31 @@ const STYLESHEET_ID = 'cea_editor_studio_stylesheet';
 const STYLESHEET_HREF = '/scripts/extensions/character-editor-assistant/editor-iteration/studio.css';
 const PROPOSAL_BUS_STYLESHEET_ID = 'cea_editor_proposal_bus_stylesheet';
 const PROPOSAL_BUS_STYLESHEET_HREF = '/scripts/iteration-library/proposal-bus/proposal-bus.css';
+
+/**
+ * Deep clone that survives ST's live character records. The live shape
+ * carries non-cloneable refs (browser-side proxy descriptors on the
+ * shared `context.characters[i]` reference) that make `structuredClone`
+ * throw `DataCloneError`. The bus snapshot pair must be a value clone —
+ * holding a live ref would let later commits silently mutate the
+ * propose-time `before`, defeating drift detection. Falls through to
+ * JSON for those cases; nothing in the editor pipeline carries
+ * functions, Dates, or other JSON-lossy shapes.
+ */
+function safeClone(value) {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value !== 'object') return value;
+    try {
+        return structuredClone(value);
+    } catch {
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch {
+            return value;
+        }
+    }
+}
 
 /**
  * Loose AbortError detector. The runner may throw a DOMException with name
@@ -1681,59 +1707,109 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         busRenderScheduler.schedule();
     }
 
-    const { sha256OfJson } = ITER_PROPOSAL_BUS;
-    const fingerprintOfJson = sha256OfJson;
-
-    bus.registerKind('cea-character-edits', {
-        fingerprint: (snapshot) => fingerprintOfJson(snapshot ?? null),
-        readCurrent: async () => {
+    // Target handlers: bus.approve/rollback route disk reads + writes
+    // through these. CEA has two stores: the character card (one per
+    // popup, addressed by avatar) and any number of lorebooks (one per
+    // book name). The forward write path delegates to the existing
+    // commit helpers (which already handle per-edit conflict + alreadyDone
+    // detection); the rollback path falls back to a whole-state write
+    // when no edits list is available on the target.
+    registerTarget('character', {
+        read: async () => {
             try {
                 const built = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
-                const snap = built?.character || {};
-                return { snapshot: snap, fingerprint: await fingerprintOfJson(snap) };
+                return safeClone(built?.character || {});
             } catch {
-                return { snapshot: null, fingerprint: await fingerprintOfJson(null) };
+                return {};
             }
         },
-        commit: async (op) => {
-            const edits = Array.isArray(op?.edits) ? op.edits.map(rebasePathToTarget) : [];
-            if (edits.length === 0) return;
+        write: async (target, next) => {
+            const edits = Array.isArray(target?._edits) ? target._edits.map(rebasePathToTarget) : [];
+            if (edits.length > 0) {
+                const result = await commitCharacterEditorOperations(
+                    context,
+                    String(avatar || state.session?.avatar || ''),
+                    edits,
+                    { liveCharacter: state.live?.character || {} },
+                );
+                if (result && Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+                    const reasons = result.conflicts.map(c => c?.reason).filter(Boolean).join('; ');
+                    throw new Error(`${result.conflicts.length} conflict(s)${reasons ? ': ' + reasons : ''}`);
+                }
+                try {
+                    const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                    if (refreshed?.character) state.live.character = refreshed.character;
+                } catch { /* best-effort */ }
+                return;
+            }
+            // Rollback / whole-state path: synthesize a single empty-
+            // path set so the existing engine plumbing carries the
+            // commit. The engine already knows how to split a top-level
+            // object replace across the data.* + extension paths.
+            const wholeEdit = [{ op: 'set', path: '', oldValue: state.live?.character || {}, newValue: next }];
             const result = await commitCharacterEditorOperations(
                 context,
                 String(avatar || state.session?.avatar || ''),
-                edits,
+                wholeEdit,
                 { liveCharacter: state.live?.character || {} },
             );
             if (result && Array.isArray(result.conflicts) && result.conflicts.length > 0) {
                 const reasons = result.conflicts.map(c => c?.reason).filter(Boolean).join('; ');
                 throw new Error(`${result.conflicts.length} conflict(s)${reasons ? ': ' + reasons : ''}`);
             }
-            // Refresh live so subsequent edits see committed state.
             try {
                 const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
                 if (refreshed?.character) state.live.character = refreshed.character;
             } catch { /* best-effort */ }
         },
-        inverse: (op, snapshot) => {
-            if (!snapshot || typeof snapshot !== 'object') return null;
-            const edits = Array.isArray(op?.edits) ? op.edits : [];
-            if (edits.length === 0) return null;
-            const inverses = [];
+        describe: () => String(state.live?.character?.name || avatar || ''),
+    });
+    registerTarget('lorebook', {
+        read: async (target) => {
+            const bookName = target?.name || '';
             try {
-                for (const e of [...edits].reverse()) {
-                    const inv = inverseEdit(e);
-                    if (inv) inverses.push(inv);
-                }
+                const built = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                return safeClone(built?.lorebooks?.[bookName] || { entries: {} });
             } catch {
-                return null;
+                return { entries: {} };
             }
-            if (inverses.length === 0) return null;
-            return { edits: inverses };
         },
+        write: async (target, next) => {
+            const bookName = target?.name || '';
+            const edits = Array.isArray(target?._edits) ? target._edits.map(rebasePathToTarget) : [];
+            if (bookName && edits.length > 0) {
+                const liveBook = state.live?.lorebooks?.[bookName] || { entries: {} };
+                const result = await commitLorebookOperations(bookName, liveBook, edits, { context, settings });
+                if (result && Array.isArray(result.conflicts) && result.conflicts.length > 0) {
+                    const reasons = result.conflicts.map(c => c?.reason).filter(Boolean).join('; ');
+                    throw new Error(`${result.conflicts.length} conflict(s)${reasons ? ': ' + reasons : ''}`);
+                }
+                try {
+                    const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                    if (refreshed?.lorebooks) state.live.lorebooks = refreshed.lorebooks;
+                } catch { /* best-effort */ }
+                return;
+            }
+            // Rollback / whole-state path: write the next book object
+            // verbatim. Saves bypass the per-edit engine but match the
+            // shape ST's saveWorldInfo expects.
+            if (bookName) {
+                await context.saveWorldInfo(bookName, next, true, { refreshEditor: true });
+                try {
+                    const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
+                    if (refreshed?.lorebooks) state.live.lorebooks = refreshed.lorebooks;
+                } catch { /* best-effort */ }
+            }
+        },
+        describe: (target) => `lorebook:${target?.name || ''}`,
+    });
+
+    bus.registerKind('cea-character-edits', {
+        kind: 'cea-character-edits',
+        targetType: 'character',
         renderDiffCard: (entry, helpers) => {
-            const edits = Array.isArray(entry?.op?.edits) ? entry.op.edits : [];
+            const edits = Array.isArray(entry?.meta?.edits) ? entry.meta.edits : [];
             if (edits.length === 0) return '';
-            const escape = helpers?.escapeHtml || ((s) => String(s ?? ''));
             const body = edits.map((e) => ITER_UI.diff.renderDiffCard([e], {
                 i18n: tf,
                 fieldLabels: computeEditFieldLabels(e, state.live, t),
@@ -1743,58 +1819,14 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         },
         label: () => t('Character edits'),
         icon: () => '👤',
-        target: () => {
-            const name = state.live?.character?.name || avatar;
-            return String(name);
-        },
-        inverseAvailable: true,
+        target: () => String(state.live?.character?.name || avatar),
     });
 
     bus.registerKind('cea-lorebook-edits', {
-        fingerprint: (snapshot) => fingerprintOfJson(snapshot ?? null),
-        readCurrent: async (op) => {
-            const bookName = op?.bookName ?? '';
-            try {
-                const built = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
-                const snap = built?.lorebooks?.[bookName] || null;
-                return { snapshot: snap, fingerprint: await fingerprintOfJson(snap) };
-            } catch {
-                return { snapshot: null, fingerprint: await fingerprintOfJson(null) };
-            }
-        },
-        commit: async (op) => {
-            const bookName = op?.bookName ?? '';
-            const edits = Array.isArray(op?.edits) ? op.edits.map(rebasePathToTarget) : [];
-            if (!bookName || edits.length === 0) return;
-            const liveBook = state.live?.lorebooks?.[bookName] || { entries: {} };
-            const result = await commitLorebookOperations(bookName, liveBook, edits, { context, settings });
-            if (result && Array.isArray(result.conflicts) && result.conflicts.length > 0) {
-                const reasons = result.conflicts.map(c => c?.reason).filter(Boolean).join('; ');
-                throw new Error(`${result.conflicts.length} conflict(s)${reasons ? ': ' + reasons : ''}`);
-            }
-            try {
-                const refreshed = await buildUnifiedCharacterEditorLiveSnapshot(context, avatar);
-                if (refreshed?.lorebooks) state.live.lorebooks = refreshed.lorebooks;
-            } catch { /* best-effort */ }
-        },
-        inverse: (op, snapshot) => {
-            if (!snapshot || typeof snapshot !== 'object') return null;
-            const edits = Array.isArray(op?.edits) ? op.edits : [];
-            if (edits.length === 0) return null;
-            const inverses = [];
-            try {
-                for (const e of [...edits].reverse()) {
-                    const inv = inverseEdit(e);
-                    if (inv) inverses.push(inv);
-                }
-            } catch {
-                return null;
-            }
-            if (inverses.length === 0) return null;
-            return { bookName: op?.bookName, edits: inverses };
-        },
+        kind: 'cea-lorebook-edits',
+        targetType: 'lorebook',
         renderDiffCard: (entry, helpers) => {
-            const edits = Array.isArray(entry?.op?.edits) ? entry.op.edits : [];
+            const edits = Array.isArray(entry?.meta?.edits) ? entry.meta.edits : [];
             if (edits.length === 0) return '';
             const body = edits.map((e) => ITER_UI.diff.renderDiffCard([e], {
                 i18n: tf,
@@ -1805,8 +1837,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         },
         label: () => t('Lorebook edits'),
         icon: () => '📚',
-        target: (entry) => String(entry?.op?.bookName || ''),
-        inverseAvailable: true,
+        target: (entry) => String(entry?.target?.name || entry?.meta?.bookName || ''),
     });
 
     bus.setMessageResolver((messageId) => {
@@ -1918,20 +1949,45 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         state.__suspendBusOnChange = true;
         try {
             if (grouped.character.length > 0) {
+                const charEdits = grouped.character.slice();
+                // ST character objects are not structuredClone-able (the live
+                // record carries non-cloneable refs that throw DataCloneError);
+                // use the JSON-safe clone helper for the bus snapshot pair.
+                const characterBefore = safeClone(state.live?.character || {});
+                let characterAfter;
+                try {
+                    const applied = applyEdits(charEdits, safeClone(characterBefore));
+                    characterAfter = applied?.newLive ?? characterBefore;
+                } catch {
+                    characterAfter = characterBefore;
+                }
                 await bus.propose({
                     kind: 'cea-character-edits',
-                    op: { edits: grouped.character.slice() },
-                    snapshot: state.live?.character || {},
+                    target: { type: 'character', _edits: charEdits },
+                    before: characterBefore,
+                    after: characterAfter,
                     sourceCallId,
+                    meta: { edits: charEdits, before: characterBefore, after: characterAfter },
                 });
             }
             for (const [bookName, edits] of Object.entries(grouped.lorebooks)) {
                 if (!edits.length) continue;
+                const bookEdits = edits.slice();
+                const bookBefore = safeClone(state.live?.lorebooks?.[bookName] || { entries: {} });
+                let bookAfter;
+                try {
+                    const applied = applyEdits(bookEdits, safeClone(bookBefore));
+                    bookAfter = applied?.newLive ?? bookBefore;
+                } catch {
+                    bookAfter = bookBefore;
+                }
                 await bus.propose({
                     kind: 'cea-lorebook-edits',
-                    op: { bookName, edits: edits.slice() },
-                    snapshot: state.live?.lorebooks?.[bookName] || { entries: {} },
+                    target: { type: 'lorebook', name: bookName, _edits: bookEdits },
+                    before: bookBefore,
+                    after: bookAfter,
                     sourceCallId,
+                    meta: { bookName, edits: bookEdits, before: bookBefore, after: bookAfter },
                 });
             }
         } finally {
@@ -2035,6 +2091,18 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             zoomOverlayUnbind = ITER_ZOOM_OVERLAY.attachZoomOverlay($root[0], {
                 namespace: `.ceaEditorDiff_${popupId}`,
                 i18n: t,
+            }) || (() => {});
+        } catch { /* ignore */ }
+    }
+
+    // When the bus detects that the underlying target has drifted in a
+    // way it can no longer chain off, lock the composer and surface a
+    // banner. Unbind runs in the teardown `finally` block below.
+    let unbindChainBroken = () => {};
+    if ($root && $root.length > 0) {
+        try {
+            unbindChainBroken = ITER_UI.message.bindChainBrokenBanner($root[0], bus, {
+                translate: (s) => t(s),
             }) || (() => {});
         } catch { /* ignore */ }
     }
@@ -2817,7 +2885,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             state.session = createNewSession(avatar);
             state.pendingEdits = [];
             state.__suspendBusOnChange = true;
-            try { bus.hydrate({ version: 2, entries: [], outcomeQueue: [] }); }
+            try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); }
             finally { state.__suspendBusOnChange = false; }
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
             await persistSession();
@@ -2841,7 +2909,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             state.session = createNewSession(avatar);
             state.pendingEdits = [];
             state.__suspendBusOnChange = true;
-            try { bus.hydrate({ version: 2, entries: [], outcomeQueue: [] }); }
+            try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); }
             finally { state.__suspendBusOnChange = false; }
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
             await persistSession();
@@ -2866,7 +2934,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 state.session = createNewSession(avatar);
                 state.pendingEdits = [];
                 state.__suspendBusOnChange = true;
-                try { bus.hydrate({ version: 2, entries: [], outcomeQueue: [] }); }
+                try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); }
                 finally { state.__suspendBusOnChange = false; }
                 bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
                 await persistSession();
@@ -2894,7 +2962,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                             state.pendingEdits = loadedSession.pendingEdits.slice();
                             await mirrorPendingEditsToBus();
                         } else {
-                            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+                            bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
                         }
                     } finally {
                         state.__suspendBusOnChange = false;
@@ -2979,6 +3047,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         try { state.abortController?.abort(); } catch { /* ignore */ }
         try { unbindResizer(); } catch { /* ignore */ }
         try { zoomOverlayUnbind(); } catch { /* ignore */ }
+        try { unbindChainBroken(); } catch { /* ignore */ }
         // Stop accepting new bus-driven renders before final persist —
         // a propose() that lands during teardown would otherwise queue
         // a frame that fires after popup DOM has detached.
@@ -3031,7 +3100,7 @@ function buildPopupHtml({
             <div class="cea_editor_messages" data-cea-editor-messages></div>
             <div class="cea_editor_pending" data-cea-editor-pending hidden></div>
             <div class="cea_editor_composer">
-                <textarea class="text_pole" rows="2" data-cea-editor-input placeholder="${esc(composerPlaceholder)}"></textarea>
+                <textarea class="text_pole" rows="2" data-cea-editor-input data-iter-input placeholder="${esc(composerPlaceholder)}"></textarea>
                 <div class="cea_editor_composer_actions">
                     <label class="cea_editor_composer_auto_apply">
                         <input type="checkbox" data-cea-editor-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>

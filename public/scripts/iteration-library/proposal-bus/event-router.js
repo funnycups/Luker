@@ -13,6 +13,8 @@ const ACTIONS = new Set([
     'reject',
     'reset',
     'rollback',
+    'force-discard',
+    'export-record',
     'approve-all-pending',
     'reject-all-pending',
     'rollback-turn',
@@ -34,6 +36,8 @@ export async function dispatch(event, bus, messageResolver) {
         case 'reject':   bus.reject(proposalId); break;
         case 'reset':    bus.reset(proposalId); break;
         case 'rollback': await bus.rollback(proposalId); break;
+        case 'force-discard':  bus.forceDiscard(proposalId); break;
+        case 'export-record':  bus.exportRecord(proposalId); break;
         case 'approve-all-pending': {
             const msg = messageResolver ? messageResolver(messageId) : { id: messageId };
             await bus.approveAllPendingInTurn(msg);

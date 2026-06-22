@@ -1,5 +1,8 @@
+/**
+ * @jest-environment jsdom
+ */
 import { jest } from '@jest/globals';
-import { renderMessageCard } from '../../public/scripts/iteration-library/ui/message.js';
+import { renderMessageCard, bindChainBrokenBanner } from '../../public/scripts/iteration-library/ui/message.js';
 import { renderApplyControls } from '../../public/scripts/iteration-library/ui/apply.js';
 
 const ident = (s) => s;
@@ -161,5 +164,63 @@ describe('renderMessageCard', () => {
             { toolDisplay: {}, renderEditCard: noopEdit, isLast: true, i18n: ident },
         );
         expect(html).toContain('Applied');
+    });
+});
+
+describe('bindChainBrokenBanner', () => {
+    function setupRoot() {
+        const root = document.createElement('div');
+        const input = document.createElement('textarea');
+        input.dataset.iterInput = '';
+        root.appendChild(input);
+        return { root, input };
+    }
+    function fakeBus() {
+        const events = new EventTarget();
+        return { events };
+    }
+
+    it('disables the session input area and appends a chain-broken banner on bus:chain-broken', () => {
+        const { root, input } = setupRoot();
+        const bus = fakeBus();
+        bindChainBrokenBanner(root, bus, { translate: (s) => s });
+        bus.events.dispatchEvent(new CustomEvent('bus:chain-broken', {
+            detail: { kind: 'profile-edit', target: { type: 'preset' } },
+        }));
+        expect(input.disabled).toBe(true);
+        expect(root.textContent).toContain('Cannot continue editing in this session');
+        expect(root.querySelector('.iter-chain-broken-banner')).toBeTruthy();
+    });
+
+    it('is idempotent: a second chain-broken event does not append a second banner', () => {
+        const { root } = setupRoot();
+        const bus = fakeBus();
+        bindChainBrokenBanner(root, bus, { translate: (s) => s });
+        bus.events.dispatchEvent(new CustomEvent('bus:chain-broken', { detail: {} }));
+        bus.events.dispatchEvent(new CustomEvent('bus:chain-broken', { detail: {} }));
+        const banners = root.querySelectorAll('.iter-chain-broken-banner');
+        expect(banners.length).toBe(1);
+    });
+
+    it('returns an unbind function that detaches the listener', () => {
+        const { root, input } = setupRoot();
+        const bus = fakeBus();
+        const unbind = bindChainBrokenBanner(root, bus, { translate: (s) => s });
+        unbind();
+        bus.events.dispatchEvent(new CustomEvent('bus:chain-broken', { detail: {} }));
+        expect(input.disabled).toBe(false);
+        expect(root.querySelector('.iter-chain-broken-banner')).toBeFalsy();
+    });
+
+    it('translates the banner copy via the provided translator', () => {
+        const { root } = setupRoot();
+        const bus = fakeBus();
+        bindChainBrokenBanner(root, bus, {
+            translate: (s) => s === 'Cannot continue editing in this session: the underlying content has changed. Please start a new session.'
+                ? 'CN_MESSAGE_SENTINEL'
+                : s,
+        });
+        bus.events.dispatchEvent(new CustomEvent('bus:chain-broken', { detail: {} }));
+        expect(root.textContent).toContain('CN_MESSAGE_SENTINEL');
     });
 });

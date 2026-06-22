@@ -93,9 +93,10 @@ import {
     zoomOverlay as ITER_ZOOM_OVERLAY,
     proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
-import { createProfileEditHandler } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
-import { createLorebookWriteHandler } from '../../../iteration-library/proposal-bus/kinds/lorebook-write.js';
-import { createSkillAuthorHandler } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
+import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
+import { lorebookWrite } from '../../../iteration-library/proposal-bus/kinds/lorebook-write.js';
+import { skillAuthor } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
+import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
 import {
     renderSkillBody,
     skillLabel as skillBodyLabel,
@@ -897,7 +898,7 @@ function buildPopupHtml({
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="orch_it_messages" data-orch-it-messages></div>
             <div class="orch_it_composer">
-                <textarea class="text_pole" rows="2" data-orch-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
+                <textarea class="text_pole" rows="2" data-orch-it-input data-iter-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="orch_it_composer_actions">
                     <label class="orch_it_composer_auto_apply">
                         <input type="checkbox" data-orch-it-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
@@ -1136,59 +1137,113 @@ export async function openOrchestratorIterationStudio(deps) {
         busRenderScheduler.schedule();
     }
 
-    bus.registerKind('profile-edit', createProfileEditHandler({
-        commitLive: async (newProfile) => {
-            state.live = newProfile;
+    // Target handlers route disk reads + writes through the bus. Each
+    // popup mount owns one profile mode (spec/loop/agenda/director); the
+    // lorebook target dispatches per-book via target.name (and an optional
+    // target._op for orch's per-entry proposal flow); skill-registry's
+    // write delegates to commitApprovedSkillProposal via target._op.
+    registerTarget('profile', {
+        read: async () => {
+            await loadLive();
+            return structuredClone(state.live);
+        },
+        write: async (_target, next) => {
+            state.live = structuredClone(next);
             const scope = getIterationDefaultScope(context);
             if (scope === 'character') await commitLiveToCharacter();
             else await commitLiveToGlobal();
         },
-        readLive: async () => {
-            await loadLive();
-            return state.live;
+        describe: () => `profile:${mode}`,
+    });
+    // Namespaced lorebook target. CEA registers `'lorebook'` for its
+    // own per-edit/whole-state writes; orch's lorebook flow always
+    // commits via the CEA helper-api proposal envelope (`target._op`),
+    // so we use a distinct type to avoid the target-registry singleton
+    // collision (last-register wins) when both popups boot in the
+    // same session.
+    registerTarget('orch-lorebook', {
+        read: async (target) => {
+            const book = await context.loadWorldInfo(target?.name || '');
+            return structuredClone(book || {});
         },
-        renderDiff: (before, after) => {
+        write: async (target, next) => {
+            if (target?._op) {
+                // Orchestrator's per-entry proposal path: re-derive the
+                // commit against current state via the CEA helper-api so
+                // concurrent drift surfaces as a fresh validation error.
+                return getCea().applyCharacterEditorLorebookProposal(context, target._op);
+            }
+            await context.saveWorldInfo(target?.name || '', next, true, { refreshEditor: true });
+        },
+        describe: (target) => `lorebook:${target?.name || ''}`,
+    });
+    registerTarget('skill-registry', {
+        read: async (target) => {
+            return { skill: target?.name || '', path: target?.path || '' };
+        },
+        write: async (target, _next) => {
+            if (target?._op) {
+                await commitApprovedSkillProposal(target._op);
+            }
+        },
+        describe: (target) => String(target?.name || 'skill'),
+    });
+
+    bus.registerKind('profile-edit', {
+        ...profileEdit,
+        renderDiffCard: (entry, _helpers) => {
+            const before = entry?.meta?.before ?? null;
+            const after = entry?.meta?.after ?? null;
             const edit = { op: 'set', path: '', oldValue: before, newValue: after };
             return ITER_UI.diff.renderDiffCard([edit], { i18n: tf, live: state.live });
         },
         label: () => t('Profile change'),
         icon: () => '✏',
         target: () => String(TITLES_BY_MODE[mode] || mode),
-    }));
-    bus.registerKind('lorebook-write', createLorebookWriteHandler({
-        applyProposal: async (_ctx, opPayload) => {
-            return getCea().applyCharacterEditorLorebookProposal(context, opPayload);
+    });
+    bus.registerKind('lorebook-write', {
+        ...lorebookWrite,
+        // Override the descriptor's default `'lorebook'` so the bus
+        // accepts orch's namespaced target type. CEA still owns
+        // `'lorebook'`; orch's flow uses `'orch-lorebook'` to avoid
+        // the target-registry singleton collision.
+        targetType: 'orch-lorebook',
+        renderDiffCard: (entry, helpers) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return renderLorebookBody(adapted, helpers);
         },
-        loadWorldInfo: async (bookName) => context.loadWorldInfo(bookName),
-        renderDiff: (entry, helpers) => renderLorebookBody(entry, helpers),
-        label: (entry) => lorebookBodyLabel(entry, { i18n: tf }),
-        icon: (entry) => lorebookBodyIcon(entry),
-        target: (entry) => lorebookBodyTarget(entry),
-    }));
-    bus.registerKind('skill-author', createSkillAuthorHandler({
-        commitOp: commitApprovedSkillProposal,
-        readFile: async ({ scope, name, path }) => {
-            const skillsApi = __ctx.skills;
-            try {
-                const raw = await skillsApi.readFile({ scope, name, path });
-                if (typeof raw === 'string') return raw;
-                if (raw && typeof raw.content === 'string') return raw.content;
-                return null;
-            } catch (err) {
-                // Match status:404 + ENOENT alongside the literal
-                // "404"/"not found" strings — the skills API wraps
-                // Node ENOENT verbatim, so the bare regex would miss
-                // the most common server-side shape.
-                if (err && typeof err === 'object' && Number(err.status) === 404) return null;
-                if (/404|not found|ENOENT/i.test(String(err?.message || err || ''))) return null;
-                throw err;
-            }
+        label: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return lorebookBodyLabel(adapted, { i18n: tf });
         },
-        renderDiff: (entry, helpers) => renderSkillBody(entry, helpers),
-        label: (entry) => skillBodyLabel(entry, { i18n: tf }),
-        icon: (entry) => skillBodyIcon(entry),
-        target: (entry) => skillBodyTarget(entry, { i18n: tf }),
-    }));
+        icon: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return lorebookBodyIcon(adapted);
+        },
+        target: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return lorebookBodyTarget(adapted);
+        },
+    });
+    bus.registerKind('skill-author', {
+        ...skillAuthor,
+        renderDiffCard: (entry, helpers) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return renderSkillBody(adapted, helpers);
+        },
+        label: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return skillBodyLabel(adapted, { i18n: tf });
+        },
+        icon: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return skillBodyIcon(adapted);
+        },
+        target: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return skillBodyTarget(adapted, { i18n: tf });
+        },
+    });
     bus.setMessageResolver((messageId) => {
         const msgs = state.session?.messages || [];
         const m = msgs.find((x) => String(x?.id || '') === String(messageId));
@@ -1524,13 +1579,15 @@ export async function openOrchestratorIterationStudio(deps) {
                     if (edit?.op !== 'set' || edit?.path !== '') continue;
                     await bus.propose({
                         kind: 'profile-edit',
-                        op: { op: 'set', path: '', newValue: edit.newValue },
-                        snapshot: edit.oldValue ?? null,
+                        target: { type: 'profile' },
+                        before: edit.oldValue ?? null,
+                        after: edit.newValue ?? null,
                         sourceCallId: null,
+                        meta: { before: edit.oldValue ?? null, after: edit.newValue ?? null },
                     });
                 }
             } else {
-                bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+                bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
             }
         } finally {
             state.__suspendBusOnChange = false;
@@ -1557,7 +1614,7 @@ export async function openOrchestratorIterationStudio(deps) {
         }
         state.__suspendBusOnChange = true;
         try {
-            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+            bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
         } finally {
             state.__suspendBusOnChange = false;
         }
@@ -2001,8 +2058,18 @@ export async function openOrchestratorIterationStudio(deps) {
             console.warn(`[${MODULE}:${mode}] sandbox executor failed`, error);
             return null;
         }
+        // Loop / spec executors reassign `session.workingProfile = next`
+        // (not in-place mutation), so the original `sandbox` reference is
+        // left untouched and only `fakeSession.workingProfile` carries the
+        // post-tool-call state. Director / agenda mutate the object in
+        // place, so `sandbox === fakeSession.workingProfile` for those
+        // modes — either way, the authoritative post-call value lives on
+        // `fakeSession.workingProfile`. Read it back to cover both shapes.
+        const after = fakeSession.workingProfile != null
+            ? fakeSession.workingProfile
+            : sandbox;
         try {
-            if (JSON.stringify(sandbox) === JSON.stringify(before)) {
+            if (JSON.stringify(after) === JSON.stringify(before)) {
                 return [];
             }
         } catch {
@@ -2012,7 +2079,7 @@ export async function openOrchestratorIterationStudio(deps) {
             op: 'set',
             path: '',
             oldValue: before,
-            newValue: sandbox,
+            newValue: after,
         }];
     }
 
@@ -2480,32 +2547,36 @@ export async function openOrchestratorIterationStudio(deps) {
                             skillToolChainedLive = out.pendingEdit.newValue;
                         }
                         if (out.pendingSkillEdit) {
-                            // Skill authoring proposal → ProposalBus.
-                            // Snapshot is the prior file content (for
-                            // file-mutating ops) or null (for create /
-                            // rename / change_scope / delete). The kind
-                            // handler's readCurrent re-reads disk at
-                            // approve time and refuses to commit if the
-                            // file content drifted.
-                            const snapshot = (out.pendingSkillEdit.before != null
-                                && typeof out.pendingSkillEdit.before === 'object'
-                                && typeof out.pendingSkillEdit.before.content === 'string')
-                                ? { content: out.pendingSkillEdit.before.content }
-                                : (typeof out.pendingSkillEdit.before === 'string'
-                                    ? { content: out.pendingSkillEdit.before }
-                                    : null);
+                            // Skill authoring proposal → ProposalBus. We
+                            // pass before === after so the inverse patch
+                            // is empty (no rollback). The skill-registry
+                            // target's write dispatches to
+                            // commitApprovedSkillProposal via target._op.
+                            const pendingSkillEdit = out.pendingSkillEdit;
+                            const stableShape = {
+                                skillName: pendingSkillEdit.skillName || '',
+                                scope: pendingSkillEdit.scope || null,
+                                path: pendingSkillEdit.path || '',
+                            };
                             await bus.propose({
                                 kind: 'skill-author',
-                                op: out.pendingSkillEdit.op,
-                                snapshot,
+                                target: {
+                                    type: 'skill-registry',
+                                    name: stableShape.skillName,
+                                    path: stableShape.path,
+                                    _op: pendingSkillEdit.op,
+                                },
+                                before: stableShape,
+                                after: stableShape,
                                 sourceCallId: callId,
                                 meta: {
-                                    skillName: out.pendingSkillEdit.skillName,
-                                    scope: out.pendingSkillEdit.scope,
-                                    path: out.pendingSkillEdit.path,
-                                    before: out.pendingSkillEdit.before,
-                                    after: out.pendingSkillEdit.after,
-                                    extras: out.pendingSkillEdit.extras || null,
+                                    op: pendingSkillEdit.op,
+                                    skillName: pendingSkillEdit.skillName,
+                                    scope: pendingSkillEdit.scope,
+                                    path: pendingSkillEdit.path,
+                                    before: pendingSkillEdit.before,
+                                    after: pendingSkillEdit.after,
+                                    extras: pendingSkillEdit.extras || null,
                                 },
                             });
                         }
@@ -2529,16 +2600,32 @@ export async function openOrchestratorIterationStudio(deps) {
                             kind: out.result.kind,
                             args: (call?.args && typeof call.args === 'object') ? call.args : {},
                         };
+                        const bookName = out.result.book_name;
+                        // Use the entry's before/after (provided by CEA's
+                        // helper-api proposal envelope) as the bus's diff
+                        // shape — the lorebook target's write delegates
+                        // to CEA's commit helper via target._op so concurrent
+                        // drift surfaces as a fresh validation error rather
+                        // than clobbering with a stale after-image.
+                        const entryBefore = out.result.before || {};
+                        const entryAfter = out.result.after || {};
                         const { id: pendingId } = await bus.propose({
                             kind: 'lorebook-write',
-                            op,
-                            snapshot: out.result.before,
+                            target: {
+                                type: 'orch-lorebook',
+                                name: bookName,
+                                uid: out.result.uid,
+                                _op: op,
+                            },
+                            before: entryBefore,
+                            after: entryAfter,
                             sourceCallId: callId,
                             meta: {
-                                bookName: out.result.book_name,
+                                op,
+                                bookName,
                                 uid: out.result.uid,
-                                before: out.result.before,
-                                after: out.result.after,
+                                before: entryBefore,
+                                after: entryAfter,
                             },
                         });
                         const summary = out.result.kind === 'update'
@@ -2710,15 +2797,21 @@ export async function openOrchestratorIterationStudio(deps) {
         const combinedEdits = [...skillToolEdits, ...edits];
         if (combinedEdits.length > 0) {
             // The bus `profile-edit` kind below renders the actual diff
-            // body — but skill policy-binding tool calls also attach a
-            // `skillVisibilityChange` blob to their pendingEdit that
-            // describes the before / after effective visible skill set in
-            // human terms (resolving the opaque `'+'` / `'*'` sentinels).
-            // We persist the raw edits on the message so `renderEditCard`
-            // can surface that context strip above the bus card; the
-            // legacy renderer no longer emits a diff body of its own to
-            // avoid double-rendering.
-            assistantMsg.edits = combinedEdits.slice();
+            // body from `entry.meta.before/after` — we never need to
+            // persist the full v2 `{op:'set', path:'', oldValue, newValue}`
+            // payload on the message. The ONLY consumer of `m.edits` is
+            // `renderPendingEditCard`, which reads `skillVisibilityChange`
+            // off skill policy-binding edits to surface a human-readable
+            // context strip above the bus card (resolving the opaque
+            // `'+'` / `'*'` enums into the actual effective visible-skill
+            // set). Persist just that slim sidecar — dropping the v2
+            // oldValue/newValue carriers keeps `m.edits` v3-clean.
+            const slim = combinedEdits
+                .filter((e) => e && e.skillVisibilityChange)
+                .map((e) => ({ skillVisibilityChange: e.skillVisibilityChange }));
+            if (slim.length > 0) {
+                assistantMsg.edits = slim;
+            }
         }
         state.session.messages.push(assistantMsg);
 
@@ -2730,11 +2823,18 @@ export async function openOrchestratorIterationStudio(deps) {
             const lastEdit = combinedEdits[combinedEdits.length - 1];
             const firstCallId = (editToolCalls.find((c) => c?.id)?.id) || assistantMsg.id;
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+            // Chain across earlier pending proposals: the bus's
+            // getCurrentPendingState walks any same-target pending entries
+            // so the patch we record here lines up with the approve-in-
+            // order replay (no stale-snapshot conflicts).
+            const proposalBefore = await bus.getCurrentPendingState('profile-edit', { type: 'profile' });
             await bus.propose({
                 kind: 'profile-edit',
-                op: { op: 'set', path: '', newValue: lastEdit.newValue },
-                snapshot: state.live,
+                target: { type: 'profile' },
+                before: proposalBefore,
+                after: lastEdit.newValue,
                 sourceCallId: firstCallId,
+                meta: { before: proposalBefore, after: lastEdit.newValue },
             });
         }
 
@@ -2951,6 +3051,13 @@ export async function openOrchestratorIterationStudio(deps) {
     const zoomOverlayUnbind = ITER_ZOOM_OVERLAY.attachZoomOverlay($root[0], {
         namespace: `.orchItDiff_${popupId}`,
         i18n: t,
+    });
+
+    // When the bus detects that the underlying target has drifted in a
+    // way it can no longer chain off, lock the composer and surface a
+    // banner. Unbind runs in the teardown `finally` block below.
+    const unbindChainBroken = ITER_UI.message.bindChainBrokenBanner($root[0], bus, {
+        translate: (s) => t(s),
     });
 
     // No mount-time persist — the session is _transient until the user
@@ -3180,6 +3287,7 @@ export async function openOrchestratorIterationStudio(deps) {
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
         try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { unbindChainBroken?.(); } catch { /* ignore */ }
         try { unsubscribeChatChanged?.(); } catch { /* ignore */ }
         try { state.abortController?.abort(); } catch { /* ignore */ }
         // Stop accepting new bus-driven renders before final persist —

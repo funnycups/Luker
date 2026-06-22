@@ -359,6 +359,45 @@ export function createBus(opts = {}) {
         onChange();
     }
 
+    // Conflict-state escape hatch. A conflict entry has already had its
+    // outcome enqueued; force-discard transitions it to 'rolledBack' so
+    // the card collapses out of the actionable buttons. We do NOT write
+    // to ST live — that's the whole point of "discard anyway": the user
+    // has decided the bus's drift detection was right and they don't
+    // want this turn applied at all.
+    function forceDiscard(id) {
+        const entry = findEntry(id);
+        if (!entry) return { ok: false, status: 'unknown' };
+        if (entry.status !== 'conflict') return { ok: false, status: entry.status };
+        entry.status = 'rolledBack';
+        entry.rolledBackAt = Date.now();
+        // Outcome already enqueued at parkConflict time; do not duplicate.
+        delete entry._pendingAfter;
+        onChange();
+        return { ok: true, status: 'rolledBack' };
+    }
+
+    // Conflict-state escape hatch. Surfaces the entry's raw inverse
+    // patch + target so the user (or a popup-level listener) can copy
+    // it for support / manual reconciliation. Dispatches a
+    // `bus:export-record` event with the payload; popups that want a
+    // dialog can listen on the bus's events target. We never auto-copy
+    // to clipboard from the bus core (no DOM dependency).
+    function exportRecord(id) {
+        const entry = findEntry(id);
+        if (!entry) return { ok: false, status: 'unknown' };
+        const detail = {
+            entryId: entry.id,
+            kind: entry.kind,
+            target: entry.target,
+            inverse: Array.isArray(entry.inverse) ? entry.inverse.slice() : [],
+            status: entry.status,
+            conflictError: entry.conflictError ?? null,
+        };
+        events.dispatchEvent(new CustomEvent('bus:export-record', { detail }));
+        return { ok: true, detail };
+    }
+
     function wrapConflict(err, target) {
         if (err instanceof PatchConflictError) return err;
         return new PatchConflictError({
@@ -605,6 +644,8 @@ export function createBus(opts = {}) {
         reject,
         reset,
         rollback,
+        forceDiscard,
+        exportRecord,
         approveAllPendingInTurn,
         rejectAllPendingInTurn,
         rollbackAllInTurn,

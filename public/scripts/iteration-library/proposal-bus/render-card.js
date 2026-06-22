@@ -17,6 +17,8 @@
  * popups never see these attribute names directly.
  */
 
+import { STR, rollbackFailKeyForTargetType } from '../ui/strings.js';
+
 function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
@@ -71,12 +73,21 @@ function conflictBlock(entry, i18n) {
     if (entry.status !== 'conflict') return '';
     const info = entry.conflictError || entry.conflictInfo || null;
     const reason = info && (info.reason || info.error);
+    const targetType = (info && info.targetType) || entry?.target?.type || '';
+    const idAttr = escapeHtml(entry.id);
+    const messageEnglish = rollbackFailKeyForTargetType(targetType) || STR.previewFail_generic;
+    const message = i18n(messageEnglish);
     const errLine = reason
         ? `<div class="iter_proposal_conflict_error">${escapeHtml(i18n('Error: ${0}', String(reason)))}</div>`
         : '';
+    const buttons = `<div class="iter_proposal_conflict_actions">
+            <button class="menu_button iter_proposal_btn" data-action="force-discard" data-proposal-action="force-discard" data-proposal-id="${idAttr}">${escapeHtml(i18n('Discard this step anyway'))}</button>
+            <button class="menu_button iter_proposal_btn" data-action="export-record" data-proposal-action="export-record" data-proposal-id="${idAttr}">${escapeHtml(i18n('Export change details'))}</button>
+        </div>`;
     return `<div class="iter_proposal_card_conflict">
-        <div class="iter_proposal_conflict_summary">${escapeHtml(i18n('The AI called this write tool, but the target had been changed in the meantime — the write was NOT applied. The AI has been notified and can decide whether to retry.'))}</div>
+        <div class="iter_proposal_conflict_summary">${escapeHtml(message)}</div>
         ${errLine}
+        ${buttons}
     </div>`;
 }
 

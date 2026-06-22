@@ -410,6 +410,28 @@ export function registerLocaleData() {
         'Vector recompute complete: ${0} indexed.': '向量重算完成：共索引 ${0} 个节点。',
         'Vector recompute complete: ${0} indexed, ${1} failed (see console).': '向量重算完成：成功 ${0} 个，失败 ${1} 个（详见控制台）。',
         'Vector recompute failed: ${0}': '向量重算失败：${0}',
+        // Patch-storage conflict UI (shared keys; each extension owns its locale table).
+        'Cannot undo this change: the preset has been modified elsewhere.':
+            '无法回退此次修改：预设的相关内容已经发生改变。',
+        'Cannot undo this change: the memory graph schema has been modified elsewhere.':
+            '无法回退此次修改：记忆图谱的相关内容已经发生改变。',
+        'Cannot undo this change: the character card has been modified elsewhere.':
+            '无法回退此次修改：角色卡的相关内容已经发生改变。',
+        'Cannot undo this change: the world book has been modified elsewhere.':
+            '无法回退此次修改：世界书的相关内容已经发生改变。',
+        'Cannot undo this change: the profile has been modified elsewhere.':
+            '无法回退此次修改：配置文件的相关内容已经发生改变。',
+        'Cannot undo this change: the skills have been modified elsewhere.':
+            '无法回退此次修改：技能的相关内容已经发生改变。',
+        'Cannot show details for this change: related content has been modified.':
+            '无法显示此步的修改详情：相关内容已经发生改变。',
+        'Cannot continue editing in this session: the underlying content has changed. Please start a new session.':
+            '无法继续在此次会话中修改：基础内容已变化，请新建会话。',
+        'Discard this step anyway': '仍然丢弃此步',
+        'Export change details': '导出修改详情',
+        'View raw record': '查看原始记录',
+        'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
+            '会话「${0}」无法迁移到新格式，已跳过，该会话不可用。',
     });
     addLocaleData('zh-tw', {
         'Memory': '記憶',
@@ -799,5 +821,27 @@ export function registerLocaleData() {
         'Vector recompute complete: ${0} indexed.': '向量重算完成：共索引 ${0} 個節點。',
         'Vector recompute complete: ${0} indexed, ${1} failed (see console).': '向量重算完成：成功 ${0} 個，失敗 ${1} 個（詳見主控台）。',
         'Vector recompute failed: ${0}': '向量重算失敗：${0}',
+        // Patch-storage conflict UI (shared keys).
+        'Cannot undo this change: the preset has been modified elsewhere.':
+            '無法回退此次修改：預設的相關內容已經發生改變。',
+        'Cannot undo this change: the memory graph schema has been modified elsewhere.':
+            '無法回退此次修改：記憶圖譜的相關內容已經發生改變。',
+        'Cannot undo this change: the character card has been modified elsewhere.':
+            '無法回退此次修改：角色卡的相關內容已經發生改變。',
+        'Cannot undo this change: the world book has been modified elsewhere.':
+            '無法回退此次修改：世界書的相關內容已經發生改變。',
+        'Cannot undo this change: the profile has been modified elsewhere.':
+            '無法回退此次修改：設定檔的相關內容已經發生改變。',
+        'Cannot undo this change: the skills have been modified elsewhere.':
+            '無法回退此次修改：技能的相關內容已經發生改變。',
+        'Cannot show details for this change: related content has been modified.':
+            '無法顯示此步的修改詳情：相關內容已經發生改變。',
+        'Cannot continue editing in this session: the underlying content has changed. Please start a new session.':
+            '無法繼續在此次會話中修改：基礎內容已變化，請新建會話。',
+        'Discard this step anyway': '仍然丟棄此步',
+        'Export change details': '匯出修改詳情',
+        'View raw record': '檢視原始記錄',
+        'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
+            '會話「${0}」無法遷移到新格式，已跳過，該會話不可用。',
     });
 }

@@ -70,9 +70,10 @@ import {
     ui as ITER_UI,
     proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
-import { createProfileEditHandler } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
-import { createSkillAuthorHandler } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
-import { createPresetCloneHandler } from '../../../iteration-library/proposal-bus/kinds/preset-clone.js';
+import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
+import { skillAuthor } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
+import { presetClone } from '../../../iteration-library/proposal-bus/kinds/preset-clone.js';
+import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
 import {
     renderSkillBody,
     skillLabel as skillBodyLabel,
@@ -437,7 +438,7 @@ function buildPopupHtml({
             <div class="cpa_it_messages" data-cpa-it-messages></div>
             <div class="cpa_it_skl_summary" data-cpa-it-skl-summary></div>
             <div class="cpa_it_composer">
-                <textarea class="text_pole" rows="2" data-cpa-it-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
+                <textarea class="text_pole" rows="2" data-cpa-it-input data-iter-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="cpa_it_composer_actions">
                     <label class="cpa_it_composer_auto_apply">
                         <input type="checkbox" data-cpa-it-action="toggle-auto-apply"${autoApply ? ' checked' : ''}>
@@ -599,73 +600,105 @@ export async function openCpaIterationStudio(deps) {
         busRenderScheduler.schedule();
     }
 
-    bus.registerKind('profile-edit', createProfileEditHandler({
-        commitLive: async (newProfile) => {
-            state.live = newProfile;
+    // Target handlers: bus.approve/rollback route disk reads + writes
+    // through these. preset is the CPA primary store; skill-registry is
+    // the per-file skill body store (write path delegates to the existing
+    // commitApprovedSkillProposal helper via target._commit).
+    registerTarget('preset', {
+        read: async (target) => {
+            // preset-clone proposals pass before === after, so the read
+            // shape is irrelevant for them; return the clone snapshot so
+            // any drift detection can see the source preset.
+            if (target?._cloneOp) {
+                return await readPresetCloneSnapshot(target._cloneOp);
+            }
+            const ref = getTargetRef();
+            const stored = getContext()?.presets?.getStored?.(ref);
+            const body = stored?.body ? stripOpenAIConnectionFieldsFromPreset(stored.body) : null;
+            return structuredClone(body || {});
+        },
+        write: async (target, next) => {
+            if (target?._cloneOp) {
+                const op = target._cloneOp;
+                if (typeof cloneAndSwitchTarget !== 'function') {
+                    throw new Error('cloneAndSwitchTarget unavailable');
+                }
+                const result = await cloneAndSwitchTarget(op.newName);
+                const newRefRaw = getTargetRef();
+                const newRef = newRefRaw ? { collection: newRefRaw.collection, name: newRefRaw.name } : null;
+                const oldRef = op?._oldRef || null;
+                if (oldRef && newRef && (oldRef.name !== newRef.name || oldRef.collection !== newRef.collection)) {
+                    await migrateCurrentSessionAcrossClone(oldRef, newRef);
+                }
+                await loadLive();
+                return result;
+            }
+            state.live = structuredClone(next);
             await commitLiveToPreset();
         },
-        readLive: async () => {
-            await loadLive();
-            return state.live;
+        describe: () => String(getTargetRef()?.name || 'preset'),
+    });
+    registerTarget('skill-registry', {
+        read: async (target) => {
+            // The bus computes inverse via compare(after, before). Skill
+            // proposals run with before === after so the inverse is empty
+            // (no rollback) — read just returns an addressable shape.
+            return { skill: target?.name || '', path: target?.path || '' };
         },
-        renderDiff: (before, after) => {
+        write: async (target, _next) => {
+            if (target?._op) {
+                await commitApprovedSkillProposal(target._op);
+            }
+        },
+        describe: (target) => String(target?.name || 'skill'),
+    });
+
+    bus.registerKind('profile-edit', {
+        ...profileEdit,
+        targetType: 'preset',
+        renderDiffCard: (entry, helpers) => {
+            const tfInner = typeof helpers?.i18n === 'function' ? helpers.i18n : tf;
+            const before = entry?.meta?.before ?? null;
+            const after = entry?.meta?.after ?? null;
             const edit = { op: 'set', path: '', oldValue: before, newValue: after };
-            return ITER_UI.diff.renderDiffCard([edit], { i18n: tf, live: state.live });
+            return ITER_UI.diff.renderDiffCard([edit], { i18n: tfInner, live: state.live });
         },
         label: () => t('Preset change'),
         icon: () => '✏',
         target: () => String(getTargetRef()?.name || ''),
-    }));
-    bus.registerKind('skill-author', createSkillAuthorHandler({
-        commitOp: commitApprovedSkillProposal,
-        readFile: async ({ scope, name, path }) => {
-            try {
-                const raw = await skillsApi.readFile({ scope, name, path });
-                if (typeof raw === 'string') return raw;
-                if (raw && typeof raw.content === 'string') return raw.content;
-                return null;
-            } catch (err) {
-                // Match status:404 + ENOENT alongside the literal
-                // "404"/"not found" strings — the skills API wraps
-                // Node ENOENT verbatim, so the bare regex would miss
-                // the most common server-side shape.
-                if (err && typeof err === 'object' && Number(err.status) === 404) return null;
-                if (/404|not found|ENOENT/i.test(String(err?.message || err || ''))) return null;
-                throw err;
-            }
+    });
+    bus.registerKind('skill-author', {
+        ...skillAuthor,
+        renderDiffCard: (entry, helpers) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return renderSkillBody(adapted, helpers);
         },
-        renderDiff: (entry, helpers) => renderSkillBody(entry, helpers),
-        label: (entry) => skillBodyLabel(entry, { i18n: tf }),
-        icon: (entry) => skillBodyIcon(entry),
-        target: (entry) => skillBodyTarget(entry, { i18n: tf }),
-    }));
-    bus.registerKind('preset-clone', createPresetCloneHandler({
-        cloneAndSwitchTarget: async (newName) => {
-            if (typeof cloneAndSwitchTarget !== 'function') {
-                return { ok: false, error: 'cloneAndSwitchTarget unavailable' };
-            }
-            return cloneAndSwitchTarget(newName);
+        label: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return skillBodyLabel(adapted, { i18n: tf });
         },
-        // Snapshot fields follow the spec in
-        // iteration-library/proposal-bus/kinds/preset-clone.js — { exists,
-        // sourceBody, target_taken } captures the three things that can
-        // legitimately drift between propose and approve: source preset
-        // deleted, source body edited, or new name occupied by a sibling
-        // preset that didn't exist at propose time. The bus's
-        // canonical-JSON hash digests sourceBody for us, so we hand it the
-        // live object instead of pre-hashing.
-        readSourceSnapshot: readPresetCloneSnapshot,
-        renderDiff: renderPresetCloneBody,
-        afterClone: async (op, _result) => {
-            const newRefRaw = getTargetRef();
-            const newRef = newRefRaw ? { collection: newRefRaw.collection, name: newRefRaw.name } : null;
-            const oldRef = op?._oldRef || null;
-            if (oldRef && newRef && (oldRef.name !== newRef.name || oldRef.collection !== newRef.collection)) {
-                await migrateCurrentSessionAcrossClone(oldRef, newRef);
-            }
-            await loadLive();
+        icon: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return skillBodyIcon(adapted);
         },
-    }));
+        target: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return skillBodyTarget(adapted, { i18n: tf });
+        },
+    });
+    bus.registerKind('preset-clone', {
+        ...presetClone,
+        renderDiffCard: (entry, helpers) => {
+            const op = entry?.meta?.op || null;
+            return renderPresetCloneBody(null, op, helpers);
+        },
+        label: () => t('Clone preset'),
+        icon: () => '🗐',
+        target: (entry) => {
+            const op = entry?.meta?.op || {};
+            return `${op.sourceName || ''} → ${op.newName || ''}`;
+        },
+    });
     bus.setMessageResolver((messageId) => {
         const msgs = state.session?.messages || [];
         const m = msgs.find((x) => String(x?.id || '') === String(messageId));
@@ -855,13 +888,15 @@ export async function openCpaIterationStudio(deps) {
                     if (edit?.op !== 'set' || edit?.path !== '') continue;
                     await bus.propose({
                         kind: 'profile-edit',
-                        op: { op: 'set', path: '', newValue: edit.newValue },
-                        snapshot: edit.oldValue ?? null,
+                        target: { type: 'preset' },
+                        before: edit.oldValue ?? null,
+                        after: edit.newValue ?? null,
                         sourceCallId: null,
+                        meta: { before: edit.oldValue ?? null, after: edit.newValue ?? null },
                     });
                 }
             } else {
-                bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+                bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
             }
         } finally {
             state.__suspendBusOnChange = false;
@@ -888,7 +923,7 @@ export async function openCpaIterationStudio(deps) {
         state.session._transient = true;
         state.__suspendBusOnChange = true;
         try {
-            bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+            bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
         } finally {
             state.__suspendBusOnChange = false;
         }
@@ -1714,12 +1749,19 @@ export async function openCpaIterationStudio(deps) {
                             newName: out.pendingCloneEdit.newName,
                             _oldRef: oldRef,
                         };
+                        // preset-clone is non-rollbackable (descriptor sets
+                        // inverseAvailable: false). We pass before === after
+                        // so the inverse patch is empty; the clone semantic
+                        // runs through the preset target's _cloneOp branch
+                        // at approve time.
+                        const cloneSnapshot = await readPresetCloneSnapshot(op);
                         const { id: pendingId } = await bus.propose({
                             kind: 'preset-clone',
-                            op,
-                            snapshot: await readPresetCloneSnapshot(op),
+                            target: { type: 'preset', _cloneOp: op },
+                            before: cloneSnapshot,
+                            after: cloneSnapshot,
                             sourceCallId: callId,
-                            meta: out.pendingCloneEdit,
+                            meta: { op, ...(out.pendingCloneEdit || {}) },
                         });
                         // Annotate the AI's tool result with the pending_id
                         // so a future tool call could reference it.
@@ -1782,29 +1824,36 @@ export async function openCpaIterationStudio(deps) {
                 if (out?.ok) {
                     if (out.pendingSkillEdit) {
                         // Stage as a ProposalBus skill-author entry. The
-                        // handler's readCurrent re-reads the file at
-                        // approve time and refuses to commit if it has
-                        // drifted; snapshot is the {content} captured by
-                        // the tool itself (or null for non-file ops).
-                        const snapshot = (out.pendingSkillEdit.before != null
-                            && typeof out.pendingSkillEdit.before === 'object'
-                            && typeof out.pendingSkillEdit.before.content === 'string')
-                            ? { content: out.pendingSkillEdit.before.content }
-                            : (typeof out.pendingSkillEdit.before === 'string'
-                                ? { content: out.pendingSkillEdit.before }
-                                : null);
+                        // skill-registry target's write delegates to
+                        // commitApprovedSkillProposal using target._op (a
+                        // serializable JSON payload). We pass before ===
+                        // after so the inverse patch is empty — rollback
+                        // is structurally a no-op for skill ops.
+                        const pendingSkillEdit = out.pendingSkillEdit;
+                        const stableShape = {
+                            skillName: pendingSkillEdit.skillName || '',
+                            scope: pendingSkillEdit.scope || null,
+                            path: pendingSkillEdit.path || '',
+                        };
                         const { id: pendingId } = await bus.propose({
                             kind: 'skill-author',
-                            op: out.pendingSkillEdit.op,
-                            snapshot,
+                            target: {
+                                type: 'skill-registry',
+                                name: stableShape.skillName,
+                                path: stableShape.path,
+                                _op: pendingSkillEdit.op,
+                            },
+                            before: stableShape,
+                            after: stableShape,
                             sourceCallId: callId,
                             meta: {
-                                skillName: out.pendingSkillEdit.skillName,
-                                scope: out.pendingSkillEdit.scope,
-                                path: out.pendingSkillEdit.path,
-                                before: out.pendingSkillEdit.before,
-                                after: out.pendingSkillEdit.after,
-                                extras: out.pendingSkillEdit.extras || null,
+                                op: pendingSkillEdit.op,
+                                skillName: pendingSkillEdit.skillName,
+                                scope: pendingSkillEdit.scope,
+                                path: pendingSkillEdit.path,
+                                before: pendingSkillEdit.before,
+                                after: pendingSkillEdit.after,
+                                extras: pendingSkillEdit.extras || null,
                             },
                         });
                         // Slim ack to the LLM: keep the dispatcher's own
@@ -1985,11 +2034,19 @@ export async function openCpaIterationStudio(deps) {
         if (edits.length > 0) {
             const firstCallId = (editToolCalls.find((c) => c?.id)?.id) || assistantMsg.id;
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
+            // Chain across earlier pending proposals: if a prior turn in this
+            // session staged a preset edit and is still awaiting Approve, our
+            // "before" must reflect the state the disk would have IF those
+            // pending entries committed — not the disk's current value. The
+            // bus's getCurrentPendingState walks the pending chain for us.
+            const chainedBefore = await bus.getCurrentPendingState('profile-edit', { type: 'preset' });
             await bus.propose({
                 kind: 'profile-edit',
-                op: { op: 'set', path: '', newValue: chainedLive },
-                snapshot: state.live,
+                target: { type: 'preset' },
+                before: chainedBefore,
+                after: chainedLive,
                 sourceCallId: firstCallId,
+                meta: { before: chainedBefore, after: chainedLive },
             });
         }
 
@@ -2285,13 +2342,15 @@ export async function openCpaIterationStudio(deps) {
                             if (edit?.op !== 'set' || edit?.path !== '') continue;
                             await bus.propose({
                                 kind: 'profile-edit',
-                                op: { op: 'set', path: '', newValue: edit.newValue },
-                                snapshot: edit.oldValue ?? null,
+                                target: { type: 'preset' },
+                                before: edit.oldValue ?? null,
+                                after: edit.newValue ?? null,
                                 sourceCallId: null,
+                                meta: { before: edit.oldValue ?? null, after: edit.newValue ?? null },
                             });
                         }
                     } else {
-                        bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
+                        bus.hydrate({ version: 3, entries: [], outcomeQueue: [] });
                     }
                 } finally {
                     state.__suspendBusOnChange = false;
@@ -2372,6 +2431,13 @@ export async function openCpaIterationStudio(deps) {
     const zoomOverlayUnbind = ITER_ZOOM_OVERLAY.attachZoomOverlay($root[0], {
         namespace: `.cpaItDiff_${popupId}`,
         i18n: t,
+    });
+
+    // When the bus detects that the underlying target has drifted in a
+    // way it can no longer chain off, lock the composer and surface a
+    // banner. Unbind runs in the teardown `finally` block below.
+    const unbindChainBroken = ITER_UI.message.bindChainBrokenBanner($root[0], bus, {
+        translate: (s) => t(s),
     });
 
     // ── Delegated events ──────────────────────────────────────────────
@@ -2643,6 +2709,7 @@ export async function openCpaIterationStudio(deps) {
     } finally {
         try { unbindResizer(); } catch { /* ignore */ }
         try { zoomOverlayUnbind?.(); } catch { /* ignore */ }
+        try { unbindChainBroken?.(); } catch { /* ignore */ }
         try { state.abortController?.abort(); } catch { /* ignore */ }
         // Stop accepting new bus-driven renders before final persist —
         // a propose() that lands during teardown would otherwise queue

@@ -1,27 +1,98 @@
 import * as textDiff from '../text-diff.js';
+import { decodeBackward } from '../storage/patch-codec.js';
+import { resolveTarget, UnknownTargetError } from '../storage/target-registry.js';
 
 /**
- * @param {Array} edits  Array of { op, path, oldValue, newValue, ... }
+ * Render a diff card.
+ *
+ * Two input shapes are accepted:
+ *
+ *   1. Legacy edit-list: `renderDiffCard(edits, opts)` where `edits` is an
+ *      array of `{op, path, oldValue, newValue, ...}` objects. Used by
+ *      adapters that still feed the per-tool edit shape (CPA / CEA tool
+ *      output, MG schema array splits, orch lorebook body renderer).
+ *
+ *   2. Bus-entry shape: `renderDiffCard(entry, opts)` where `entry` is an
+ *      object with `{target, inverse}`. Used by the new patch-storage
+ *      proposal cards. The renderer fetches `live` via the target
+ *      registry, reconstructs the propose-time `before` via
+ *      decodeBackward(live, inverse), and synthesizes a single
+ *      whole-state `set` edit to feed the legacy leaf walker. When the
+ *      inverse cannot be replayed against `live` (target drift /
+ *      registry miss), falls back to a raw record card so the user
+ *      still sees that the entry exists.
+ *
+ * @param {Array|Object} input  Either an edits array or a bus entry.
  * @param {Object} opts
  * @param {Object}   [opts.fieldLabels]   Map field path → friendly label.
  * @param {boolean}  [opts.includeRawArgs] Embed a folded raw-args details below each card.
  * @param {Object}   [opts.live]           Pre-edit snapshot. When provided, str_replace /
  *                                         str_insert / str_delete resolve `edit.path` against
- *                                         this object, virtually apply the op, and render the
- *                                         FULL before/after of the field — so the user sees
- *                                         surrounding context instead of just the anchor +
- *                                         inserted/replaced fragment. Pending edits should
- *                                         pass the studio's live state here. Already-applied
- *                                         history edits should leave this unset so the
- *                                         renderer falls back to the focused find→replace
- *                                         card (the studio's `state.live` has moved on past
- *                                         them).
- * @param {Function} opts.i18n
- * @returns {string} HTML
+ *                                         this object. Pending edits should pass the studio's
+ *                                         live state here. Already-applied history edits should
+ *                                         leave this unset so the renderer falls back to the
+ *                                         focused find→replace card.
+ * @param {Function} [opts.i18n]
+ * @param {Function} [opts.translate]      Alternate name for the translator (entry path uses this).
+ * @returns {string|Promise<string>} HTML. Returns a Promise when the entry
+ *                                       path is taken (target.read is async);
+ *                                       array path stays synchronous.
  */
-export function renderDiffCard(edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) return '';
-    return edits.map(edit => renderOneEdit(edit, opts)).join('');
+export function renderDiffCard(input, opts = {}) {
+    if (Array.isArray(input)) {
+        if (input.length === 0) return '';
+        return input.map(edit => renderOneEdit(edit, opts)).join('');
+    }
+    if (input && typeof input === 'object' && input.target && Array.isArray(input.inverse)) {
+        return renderEntryDiffCard(input, opts);
+    }
+    return '';
+}
+
+async function renderEntryDiffCard(entry, opts) {
+    const translator = typeof opts?.translate === 'function'
+        ? opts.translate
+        : (typeof opts?.i18n === 'function' ? opts.i18n : (s) => String(s ?? ''));
+    let handler;
+    try {
+        handler = resolveTarget(entry.target);
+    } catch (err) {
+        if (err instanceof UnknownTargetError) {
+            return renderRawRecord(entry, { ...opts, translate: translator });
+        }
+        return renderRawRecord(entry, { ...opts, translate: translator });
+    }
+    let live;
+    try {
+        live = await handler.read(entry.target);
+    } catch {
+        return renderRawRecord(entry, { ...opts, translate: translator });
+    }
+    let before;
+    try {
+        before = decodeBackward(live, entry.inverse, {
+            targetType: entry.target.type,
+            targetName: entry.target.name || null,
+        });
+    } catch {
+        return renderRawRecord(entry, { ...opts, translate: translator });
+    }
+    const after = live;
+    const synthEdit = { op: 'set', path: '', oldValue: before, newValue: after };
+    return renderOneEdit(synthEdit, { ...opts, i18n: typeof opts?.i18n === 'function' ? opts.i18n : translator });
+}
+
+function renderRawRecord(entry, opts) {
+    const t = typeof opts?.translate === 'function'
+        ? opts.translate
+        : (typeof opts?.i18n === 'function' ? opts.i18n : (s) => String(s ?? ''));
+    const json = JSON.stringify(entry?.inverse ?? null, null, 2);
+    const safeJson = escapeHtml(json);
+    const label = escapeHtml(t('View raw record'));
+    return `<div class="iter-diff-raw luker_lib_diff_card">
+        <pre>${safeJson}</pre>
+        <button data-action="view-raw-record">${label}</button>
+    </div>`;
 }
 
 function renderOneEdit(edit, opts) {
