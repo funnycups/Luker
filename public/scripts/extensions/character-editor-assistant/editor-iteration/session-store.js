@@ -15,9 +15,30 @@
  * so the factory takes `avatar` and binds to one sidecar for its lifetime.
  */
 
+import { migrateToV3, MigrationFailedError } from '/scripts/iteration-library/storage/migrate-v3.js';
+import { STR } from '/scripts/iteration-library/ui/strings.js';
+
 export const CEA_SIDECAR_NAMESPACE = 'character_editor_assistant_iter_sessions';
 
 const SIDECAR_SCHEMA_VERSION = 1;
+
+/**
+ * Surface a migration failure to the user. session-store.js doesn't carry
+ * a popup-scoped translator; we fetch translate() off the ctx (registered
+ * by the extension's locale-data hook at jQuery-ready). On the rare path
+ * where the toast can't be shown (no toastr, no translate), the error
+ * stays a console.error so the user can still find it in devtools.
+ */
+function notifyMigrationFailed(ctx, sessionTitle) {
+    try {
+        const translate = (ctx && typeof ctx.translate === 'function') ? ctx.translate : ((s) => s);
+        const localized = translate(STR.migrationFailed_toast);
+        const message = String(localized).replace('${0}', String(sessionTitle));
+        if (typeof toastr !== 'undefined' && toastr && typeof toastr.error === 'function') {
+            toastr.error(message);
+        }
+    } catch { /* best-effort UI surface */ }
+}
 
 export function makeMessageId() {
     return `cea_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -87,14 +108,39 @@ export function createUnifiedCeaEditorSessionStore(opts = {}) {
     async function load(id) {
         const payload = await readSidecar(ctx, avatar);
         const stored = payload.sessions[String(id)];
-        return stored ? structuredClone(stored) : null;
+        if (!stored) return null;
+        const cloned = structuredClone(stored);
+        if (cloned.version === 3) return cloned;
+        try {
+            const migrated = migrateToV3(cloned, {
+                defaultTargetForKind: (kind) => kind === 'cea-lorebook-edits'
+                    ? null
+                    : { type: 'character' },
+            });
+            await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
+                buildNextSidecar(current, (sessions) => {
+                    sessions[String(id)] = structuredClone(migrated);
+                }),
+            );
+            return migrated;
+        } catch (err) {
+            if (err instanceof MigrationFailedError) {
+                notifyMigrationFailed(ctx, stored?.title || id);
+                // eslint-disable-next-line no-console
+                console.error(`[cea-session-store] migration failed for ${id}:`, err.message);
+                return null;
+            }
+            throw err;
+        }
     }
 
     async function save(session) {
         if (!session?.id) return;
+        const sessionClone = structuredClone(session);
+        sessionClone.version = 3;
         await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
             buildNextSidecar(current, (sessions) => {
-                sessions[String(session.id)] = structuredClone(session);
+                sessions[String(session.id)] = sessionClone;
             }),
         );
     }

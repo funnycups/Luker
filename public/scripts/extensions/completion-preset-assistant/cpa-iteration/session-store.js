@@ -30,7 +30,29 @@
  * Pure ESM. No DOM, no jQuery, no globals.
  */
 
+import { migrateToV3, MigrationFailedError } from '/scripts/iteration-library/storage/migrate-v3.js';
+import { STR } from '/scripts/iteration-library/ui/strings.js';
+
 const SESSION_NAMESPACE = 'completion_preset_assistant_session';
+
+/**
+ * Surface a migration failure to the user. Session-store.js modules don't
+ * carry a popup-scoped translator, so we fetch translate() off the context
+ * (registered by the extension's locale-data hook at jQuery-ready); on the
+ * rare path where the toast can't be shown (no toastr, no translate), the
+ * error stays a console.error so the user can still find it in devtools.
+ */
+function notifyMigrationFailed(getContext, sessionTitle) {
+    try {
+        const ctx = (typeof getContext === 'function') ? getContext() : null;
+        const translate = (ctx && typeof ctx.translate === 'function') ? ctx.translate : ((s) => s);
+        const localized = translate(STR.migrationFailed_toast);
+        const message = String(localized).replace('${0}', String(sessionTitle));
+        if (typeof toastr !== 'undefined' && toastr && typeof toastr.error === 'function') {
+            toastr.error(message);
+        }
+    } catch { /* best-effort UI surface */ }
+}
 
 /**
  * Generate a stable per-message id. The studio renders messages keyed by
@@ -143,13 +165,33 @@ export function createCpaIterationSessionStore({ getContext, getTargetRef }) {
             const s = store.sessions.find(x => x.id === id);
             if (!s) return null;
             const clone = structuredClone(s);
-            return migrateLegacySession(clone);
+            const surfaceMigrated = migrateLegacySession(clone);
+            if (surfaceMigrated && surfaceMigrated.version !== 3) {
+                try {
+                    const migrated = migrateToV3(surfaceMigrated, {
+                        defaultTargetForKind: () => ({ type: 'preset' }),
+                    });
+                    store.sessions = store.sessions.map(x => x.id === id ? structuredClone(migrated) : x);
+                    await writeStore(store);
+                    return migrated;
+                } catch (err) {
+                    if (err instanceof MigrationFailedError) {
+                        notifyMigrationFailed(getContext, s.title || id);
+                        // eslint-disable-next-line no-console
+                        console.error(`[cpa-session-store] migration failed for ${id}:`, err.message);
+                        return null;
+                    }
+                    throw err;
+                }
+            }
+            return surfaceMigrated;
         },
 
         save: async (session) => {
             const store = await readStore();
             const idx = store.sessions.findIndex(x => x.id === session.id);
             const clone = structuredClone(session);
+            clone.version = 3;
             if (idx >= 0) store.sessions[idx] = clone;
             else store.sessions.push(clone);
             store.currentSessionId = session.id;

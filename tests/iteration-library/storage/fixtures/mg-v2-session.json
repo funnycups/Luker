@@ -1,0 +1,63 @@
+{
+    "_fixture_source": "synthetic",
+    "id": "mg-legacy-1",
+    "title": "Add affection field",
+    "createdAt": 1700000000000,
+    "updatedAt": 1700000001000,
+    "summary": "",
+    "messages": [
+        {
+            "id": "mg_msg_a",
+            "role": "user",
+            "content": "Track affection level",
+            "at": 1700000000000
+        },
+        {
+            "id": "mg_msg_b",
+            "role": "assistant",
+            "content": "Added affection field to character schema.",
+            "at": 1700000000500,
+            "toolCalls": [
+                {
+                    "id": "tc1",
+                    "name": "schema_upsert_field",
+                    "args": { "path": "character.affection", "value": 0 }
+                }
+            ],
+            "edits": [
+                {
+                    "op": "set",
+                    "path": "",
+                    "oldValue": { "character": { "name": "x" } },
+                    "newValue": { "character": { "name": "x", "affection": 0 } }
+                }
+            ],
+            "appliedAt": 1700000001000,
+            "appliedTarget": "schema",
+            "rolledBackAt": null
+        }
+    ],
+    "busState": {
+        "version": 2,
+        "entries": [
+            {
+                "id": "schema-edit_1_a",
+                "kind": "schema-edit",
+                "sourceCallId": "tc1",
+                "op": {
+                    "op": "set",
+                    "path": "",
+                    "newValue": { "character": { "name": "x", "affection": 0 } }
+                },
+                "snapshot": { "character": { "name": "x" } },
+                "status": "committed",
+                "fingerprint": "fp-before",
+                "afterFingerprint": "fp-after",
+                "createdAt": 1700000000600,
+                "decidedAt": 1700000000800,
+                "committedAt": 1700000001000
+            }
+        ],
+        "outcomeQueue": []
+    }
+}

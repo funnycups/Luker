@@ -1,0 +1,82 @@
+{
+    "_fixture_source": "synthetic",
+    "id": "orch-legacy-1",
+    "title": "Tighten director focus",
+    "mode": "director",
+    "createdAt": 1700000000000,
+    "updatedAt": 1700000001000,
+    "summary": "",
+    "messages": [
+        {
+            "id": "orch_msg_a",
+            "role": "user",
+            "content": "Be more concise",
+            "at": 1700000000000
+        },
+        {
+            "id": "orch_msg_b",
+            "role": "assistant",
+            "content": "Edited the director profile.",
+            "at": 1700000000500,
+            "toolCalls": [
+                {
+                    "id": "tc1",
+                    "name": "profile_set_field",
+                    "args": { "path": "instructions", "value": "Be concise." }
+                }
+            ],
+            "edits": [
+                {
+                    "op": "set",
+                    "path": "",
+                    "oldValue": { "instructions": "Default." },
+                    "newValue": { "instructions": "Be concise." }
+                }
+            ],
+            "appliedAt": 1700000001000,
+            "appliedTarget": "profile",
+            "rolledBackAt": null
+        }
+    ],
+    "busState": {
+        "version": 2,
+        "entries": [
+            {
+                "id": "profile-edit_1_a",
+                "kind": "profile-edit",
+                "sourceCallId": "tc1",
+                "op": {
+                    "op": "set",
+                    "path": "",
+                    "newValue": { "instructions": "Be concise." }
+                },
+                "snapshot": { "instructions": "Default." },
+                "status": "committed",
+                "fingerprint": "fp-before",
+                "afterFingerprint": "fp-after",
+                "createdAt": 1700000000600,
+                "decidedAt": 1700000000800,
+                "committedAt": 1700000001000
+            },
+            {
+                "id": "lorebook-write_1_b",
+                "kind": "lorebook-write",
+                "sourceCallId": "tc2",
+                "op": {
+                    "op": "set",
+                    "path": "",
+                    "args": { "book": "World Lore" },
+                    "newValue": { "entries": { "1": { "content": "new entry" } } }
+                },
+                "snapshot": { "entries": {} },
+                "status": "committed",
+                "fingerprint": "fp-lore-before",
+                "afterFingerprint": "fp-lore-after",
+                "createdAt": 1700000000700,
+                "decidedAt": 1700000000900,
+                "committedAt": 1700000001000
+            }
+        ],
+        "outcomeQueue": []
+    }
+}

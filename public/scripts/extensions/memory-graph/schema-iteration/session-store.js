@@ -12,10 +12,31 @@
  *   - global scope    → extension_settings.memory_graph.schema_iter_global_sessions
  */
 
+import { migrateToV3, MigrationFailedError } from '/scripts/iteration-library/storage/migrate-v3.js';
+import { STR } from '/scripts/iteration-library/ui/strings.js';
+
 export const MG_SIDECAR_NAMESPACE = 'memory_graph_schema_iter_history';
 export const MG_GLOBAL_BUCKET_KEY = 'schema_iter_global_sessions';
 
 const SIDECAR_SCHEMA_VERSION = 1;
+
+/**
+ * Surface a migration failure to the user. session-store.js doesn't carry
+ * a popup-scoped translator; we fetch translate() off the ctx (registered
+ * by the extension's locale-data hook at jQuery-ready). On the rare path
+ * where the toast can't be shown (no toastr, no translate), the error
+ * stays a console.error so the user can still find it in devtools.
+ */
+function notifyMigrationFailed(ctx, sessionTitle) {
+    try {
+        const translate = (ctx && typeof ctx.translate === 'function') ? ctx.translate : ((s) => s);
+        const localized = translate(STR.migrationFailed_toast);
+        const message = String(localized).replace('${0}', String(sessionTitle));
+        if (typeof toastr !== 'undefined' && toastr && typeof toastr.error === 'function') {
+            toastr.error(message);
+        }
+    } catch { /* best-effort UI surface */ }
+}
 
 export function makeMessageId() {
     return `mg_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -114,27 +135,68 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
         if (avatar) {
             const payload = await readSidecar(ctx, avatar);
             const stored = payload.sessions[String(id)];
-            return stored ? structuredClone(stored) : null;
+            if (!stored) return null;
+            const cloned = structuredClone(stored);
+            if (cloned.version === 3) return cloned;
+            try {
+                const migrated = migrateToV3(cloned, {
+                    defaultTargetForKind: () => ({ type: 'schema' }),
+                });
+                await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
+                    buildNextSidecar(current, (sessions) => {
+                        sessions[String(id)] = structuredClone(migrated);
+                    }),
+                );
+                return migrated;
+            } catch (err) {
+                if (err instanceof MigrationFailedError) {
+                    notifyMigrationFailed(ctx, stored?.title || id);
+                    // eslint-disable-next-line no-console
+                    console.error(`[mg-session-store] migration failed for ${id}:`, err.message);
+                    return null;
+                }
+                throw err;
+            }
         }
         const bucket = getGlobalBucket(getMgSettingsRoot() || {});
         const stored = bucket[String(id)];
-        return stored ? structuredClone(stored) : null;
+        if (!stored) return null;
+        const cloned = structuredClone(stored);
+        if (cloned.version === 3) return cloned;
+        try {
+            const migrated = migrateToV3(cloned, {
+                defaultTargetForKind: () => ({ type: 'schema' }),
+            });
+            bucket[String(id)] = structuredClone(migrated);
+            persistSettings();
+            return migrated;
+        } catch (err) {
+            if (err instanceof MigrationFailedError) {
+                notifyMigrationFailed(ctx, stored?.title || id);
+                // eslint-disable-next-line no-console
+                console.error(`[mg-session-store] migration failed for ${id}:`, err.message);
+                return null;
+            }
+            throw err;
+        }
     }
 
     async function save(session) {
         if (!session?.id) return;
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
+        const sessionClone = structuredClone(session);
+        sessionClone.version = 3;
         if (avatar) {
             await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
                 buildNextSidecar(current, (sessions) => {
-                    sessions[String(session.id)] = structuredClone(session);
+                    sessions[String(session.id)] = sessionClone;
                 }),
             );
             return;
         }
         const bucket = getGlobalBucket(getMgSettingsRoot() || {});
-        bucket[String(session.id)] = structuredClone(session);
+        bucket[String(session.id)] = sessionClone;
         persistSettings();
     }
 

@@ -19,11 +19,32 @@
  * Pure ESM. No DOM, no jQuery, no globals.
  */
 
+import { migrateToV3, MigrationFailedError } from '/scripts/iteration-library/storage/migrate-v3.js';
+import { STR } from '/scripts/iteration-library/ui/strings.js';
+
 export const ORCH_SIDECAR_NAMESPACE = 'orchestrator_iter_studio_history';
 export const ORCH_GLOBAL_BUCKET_KEY = 'iter_studio_global_sessions';
 
 const LEGACY_GLOBAL_HISTORY_KEY = 'global_iteration_history';
 const SIDECAR_SCHEMA_VERSION = 1;
+
+/**
+ * Surface a migration failure to the user. session-store.js doesn't carry
+ * a popup-scoped translator; we fetch translate() off the ctx (registered
+ * by the extension's locale-data hook at jQuery-ready). On the rare path
+ * where the toast can't be shown (no toastr, no translate), the error
+ * stays a console.error so the user can still find it in devtools.
+ */
+function notifyMigrationFailed(ctx, sessionTitle) {
+    try {
+        const translate = (ctx && typeof ctx.translate === 'function') ? ctx.translate : ((s) => s);
+        const localized = translate(STR.migrationFailed_toast);
+        const message = String(localized).replace('${0}', String(sessionTitle));
+        if (typeof toastr !== 'undefined' && toastr && typeof toastr.error === 'function') {
+            toastr.error(message);
+        }
+    } catch { /* best-effort UI surface */ }
+}
 
 export function makeMessageId() {
     return `orch_msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -136,27 +157,72 @@ export function createOrchestratorIterationSessionStore({
         if (avatar) {
             const payload = await readSidecar(ctx, avatar);
             const stored = payload.sessions[String(id)];
-            return stored && (stored.mode === mode || !stored.mode) ? structuredClone(stored) : null;
+            if (!stored || (stored.mode && stored.mode !== mode)) return null;
+            const cloned = structuredClone(stored);
+            if (cloned.version === 3) return cloned;
+            try {
+                const migrated = migrateToV3(cloned, {
+                    defaultTargetForKind: (kind) => kind === 'lorebook-write'
+                        ? null
+                        : { type: 'profile', mode: cloned.mode || mode },
+                });
+                await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) =>
+                    buildNextSidecar(current, (sessions) => {
+                        sessions[String(id)] = structuredClone(migrated);
+                    }),
+                );
+                return migrated;
+            } catch (err) {
+                if (err instanceof MigrationFailedError) {
+                    notifyMigrationFailed(ctx, stored?.title || id);
+                    // eslint-disable-next-line no-console
+                    console.error(`[orch-session-store] migration failed for ${id}:`, err.message);
+                    return null;
+                }
+                throw err;
+            }
         }
         const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
         const stored = bucket[String(id)];
-        return stored ? structuredClone(stored) : null;
+        if (!stored) return null;
+        const cloned = structuredClone(stored);
+        if (cloned.version === 3) return cloned;
+        try {
+            const migrated = migrateToV3(cloned, {
+                defaultTargetForKind: (kind) => kind === 'lorebook-write'
+                    ? null
+                    : { type: 'profile', mode: cloned.mode || mode },
+            });
+            bucket[String(id)] = structuredClone(migrated);
+            persistSettings();
+            return migrated;
+        } catch (err) {
+            if (err instanceof MigrationFailedError) {
+                notifyMigrationFailed(ctx, stored?.title || id);
+                // eslint-disable-next-line no-console
+                console.error(`[orch-session-store] migration failed for ${id}:`, err.message);
+                return null;
+            }
+            throw err;
+        }
     }
 
     async function save(session) {
         if (!session?.id) return;
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
+        const sessionClone = structuredClone(session);
+        sessionClone.version = 3;
         if (avatar) {
             await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) =>
                 buildNextSidecar(current, (sessions) => {
-                    sessions[String(session.id)] = structuredClone(session);
+                    sessions[String(session.id)] = sessionClone;
                 }),
             );
             return;
         }
         const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
-        bucket[String(session.id)] = structuredClone(session);
+        bucket[String(session.id)] = sessionClone;
         persistSettings();
     }
 
@@ -164,16 +230,18 @@ export function createOrchestratorIterationSessionStore({
         if (!session?.id) return;
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
+        const sessionClone = structuredClone(session);
+        sessionClone.version = 3;
         if (avatar) {
             await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) =>
                 buildNextSidecar(current, (sessions) => {
-                    sessions[String(session.id)] = structuredClone(session);
+                    sessions[String(session.id)] = sessionClone;
                 }),
             );
             return;
         }
         const bucket = getGlobalBucket(getOrchestratorSettingsRoot() || {}, mode);
-        bucket[String(session.id)] = structuredClone(session);
+        bucket[String(session.id)] = sessionClone;
         if (typeof persistSettingsImmediate === 'function') {
             await persistSettingsImmediate();
         } else {

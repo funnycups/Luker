@@ -1,0 +1,64 @@
+{
+    "_fixture_source": "synthetic",
+    "id": "cpa-legacy-1",
+    "title": "Lower temperature",
+    "createdAt": 1700000000000,
+    "updatedAt": 1700000001000,
+    "summary": "",
+    "surfaceState": { "sessionMode": "general" },
+    "messages": [
+        {
+            "id": "cpa_msg_a",
+            "role": "user",
+            "content": "Make it more focused",
+            "at": 1700000000000
+        },
+        {
+            "id": "cpa_msg_b",
+            "role": "assistant",
+            "content": "Lowered temperature from 1 to 0.5.",
+            "at": 1700000000500,
+            "toolCalls": [
+                {
+                    "id": "tc1",
+                    "name": "preset_set_field",
+                    "args": { "path": "temperature", "value": 0.5 }
+                }
+            ],
+            "edits": [
+                {
+                    "op": "set",
+                    "path": "",
+                    "oldValue": { "temperature": 1.0, "top_p": 0.9 },
+                    "newValue": { "temperature": 0.5, "top_p": 0.9 }
+                }
+            ],
+            "appliedAt": 1700000001000,
+            "appliedTarget": "preset",
+            "rolledBackAt": null
+        }
+    ],
+    "busState": {
+        "version": 2,
+        "entries": [
+            {
+                "id": "profile-edit_1_a",
+                "kind": "profile-edit",
+                "sourceCallId": "tc1",
+                "op": {
+                    "op": "set",
+                    "path": "",
+                    "newValue": { "temperature": 0.5, "top_p": 0.9 }
+                },
+                "snapshot": { "temperature": 1.0, "top_p": 0.9 },
+                "status": "committed",
+                "fingerprint": "fp-before",
+                "afterFingerprint": "fp-after",
+                "createdAt": 1700000000600,
+                "decidedAt": 1700000000800,
+                "committedAt": 1700000001000
+            }
+        ],
+        "outcomeQueue": []
+    }
+}

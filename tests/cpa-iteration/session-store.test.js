@@ -66,6 +66,66 @@ describe('CPA — session store', () => {
         expect(loaded.id).toBe('legacy-1');
     });
 
+    test('load() migrates v1/v2 sessions to v3 on first read and persists back', async () => {
+        const legacy = {
+            id: 'old-s', title: 'legacy', updatedAt: 50,
+            messages: [{
+                id: 'm1', role: 'assistant', content: 'lowered',
+                edits: [{ op: 'set', path: '', oldValue: { temperature: 1.0 }, newValue: { temperature: 0.5 } }],
+                appliedAt: 100,
+            }],
+        };
+        stateBackend._state.sessions.push(legacy);
+        const loaded = await store.load('old-s');
+        expect(loaded.version).toBe(3);
+        expect(loaded.messages[0].edits[0].target).toEqual({ type: 'preset' });
+        expect(loaded.messages[0].edits[0]).not.toHaveProperty('oldValue');
+        expect(Array.isArray(loaded.messages[0].edits[0].inverse)).toBe(true);
+        // Persisted back: next load returns the already-v3 entry without rewrite.
+        const persisted = stateBackend._state.sessions.find(s => s.id === 'old-s');
+        expect(persisted.version).toBe(3);
+    });
+
+    test('load() returns null and does not mutate store when migration fails', async () => {
+        const broken = {
+            id: 'bad-s', title: 'broken', updatedAt: 50,
+            messages: [{ id: 'm1', role: 'assistant',
+                edits: [{ op: 'set', path: '', oldValue: { a: 1 } }] }],
+        };
+        stateBackend._state.sessions.push(broken);
+        const before = JSON.stringify(stateBackend._state);
+        const loaded = await store.load('bad-s');
+        expect(loaded).toBeNull();
+        expect(JSON.stringify(stateBackend._state)).toBe(before);
+    });
+
+    test('load() surfaces migration failures via toastr.error using the session title', async () => {
+        const toastrErrorSpy = jest.fn();
+        const prevToastr = global.toastr;
+        global.toastr = { error: toastrErrorSpy };
+        // ctx.translate is exercised by the helper — falls back to identity
+        // when missing, so the English string lands.
+        context.translate = (s) => s;
+
+        const broken = {
+            id: 'bad-s', title: 'My broken session', updatedAt: 50,
+            messages: [{ id: 'm1', role: 'assistant',
+                edits: [{ op: 'set', path: '', oldValue: { a: 1 } }] }],
+        };
+        stateBackend._state.sessions.push(broken);
+        const loaded = await store.load('bad-s');
+        expect(loaded).toBeNull();
+        expect(toastrErrorSpy).toHaveBeenCalledTimes(1);
+        const message = String(toastrErrorSpy.mock.calls[0][0] || '');
+        // The toast must mention the session title so the user can identify
+        // which session was skipped (the placeholder substitution happened).
+        expect(message).toContain('My broken session');
+        // And the message comes from the shared STR.migrationFailed_toast key.
+        expect(message).toContain('cannot be migrated to the new format');
+
+        global.toastr = prevToastr;
+    });
+
     test('delete removes entry and clears currentSessionId if it matched', async () => {
         await store.save({ id: 'a', title: 'one', messages: [], updatedAt: 1 });
         expect(stateBackend._state.currentSessionId).toBe('a');

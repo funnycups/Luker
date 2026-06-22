@@ -67,7 +67,8 @@ import {
     zoomOverlay as ITER_ZOOM_OVERLAY,
     proposalBus as ITER_PROPOSAL_BUS,
 } from '../../../iteration-library/index.js';
-import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
+import { registerTarget, resolveTarget } from '../../../iteration-library/storage/target-registry.js';
+import { decodeBackward } from '../../../iteration-library/storage/patch-codec.js';
 import {
     commitCharacterEditorOperations,
     commitLorebookOperations,
@@ -1380,52 +1381,91 @@ async function rollbackBatch(state, messageId, opts = {}) {
     // eslint-disable-next-line no-alert
     if (typeof confirm === 'function' && !confirm(t('Roll back this batch? The changes will be reversed in the target.'))) return;
 
-    const inverses = [];
-    for (const edit of msg.edits.slice().reverse()) {
-        try {
-            const inv = inverseEdit(edit);
-            if (edit?.target) inv.target = edit.target;
-            inverses.push(inv);
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] inverseEdit failed`, edit, err);
-            try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* toastr may be unavailable in tests */ }
-            return;
-        }
-    }
-
-    const groupsRaw = groupEditsByTarget(inverses);
-    const groups = {
-        character: groupsRaw.character.map(rebasePathToTarget),
-        lorebooks: Object.fromEntries(
-            Object.entries(groupsRaw.lorebooks)
-                .map(([name, list]) => [name, list.map(rebasePathToTarget)]),
-        ),
-    };
+    // Sessions migrated from v2 to v3 carry edits in {target:{type,...},
+    // inverse:[<RFC6902>...]} shape — no `op`, no `path`, no `oldValue`.
+    // inverseEdit() would throw on them. Branch on edit shape: v3 edits
+    // roll back through the target-registry handler (the same path the
+    // bus uses); legacy v2 edits keep their inverseEdit + commit-helper
+    // path so nothing in production behavior shifts for un-migrated
+    // sessions.
+    const isV3Edit = (e) => e && e.target && typeof e.target === 'object'
+        && typeof e.target.type === 'string' && Array.isArray(e.inverse);
 
     const errors = [];
-    if (groups.character.length > 0) {
+
+    // Process v3 edits first, newest-to-oldest, one target at a time.
+    // We resolve each handler, read current, decode the inverse back to
+    // the previous state, and write through the handler — mirroring
+    // bus.rollback's path so the chain stays drift-checked end-to-end.
+    const v3Edits = msg.edits.filter(isV3Edit);
+    for (const edit of v3Edits.slice().reverse()) {
         try {
-            await commitCharacterEditorOperations(
-                context,
-                String(avatar || state.session?.avatar || ''),
-                groups.character,
-                { liveCharacter: state.live?.character || {} },
-            );
+            const handler = resolveTarget(edit.target);
+            const current = await handler.read(edit.target);
+            const previous = decodeBackward(current, edit.inverse, {
+                targetType: edit.target.type,
+                targetName: edit.target.name || null,
+            });
+            await handler.write(edit.target, previous);
         } catch (err) {
             // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] rollback commitCharacterEditorOperations failed`, err);
-            errors.push({ target: 'character', err });
+            console.warn(`[${MODULE}] rollback target-registry write failed`, edit, err);
+            const label = edit?.target?.name
+                ? `${edit.target.type}:${edit.target.name}`
+                : String(edit?.target?.type || 'unknown');
+            errors.push({ target: label, err });
         }
     }
-    for (const [bookName, edits] of Object.entries(groups.lorebooks)) {
-        const liveBook = state.live?.lorebooks?.[bookName] || { entries: {} };
-        try {
-            await commitLorebookOperations(bookName, liveBook, edits, { context, settings });
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] rollback commitLorebookOperations failed for ${bookName}`, err);
-            errors.push({ target: `lorebook:${bookName}`, err });
+
+    // Legacy v2 path — only edits NOT in v3 shape go through here.
+    const legacyEdits = msg.edits.filter(e => !isV3Edit(e));
+    if (legacyEdits.length > 0) {
+        const inverses = [];
+        for (const edit of legacyEdits.slice().reverse()) {
+            try {
+                const inv = inverseEdit(edit);
+                if (edit?.target) inv.target = edit.target;
+                inverses.push(inv);
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] inverseEdit failed`, edit, err);
+                try { toastr.error(tf('Cannot rollback edit type: ${0}', String(edit?.op || 'unknown'))); } catch { /* toastr may be unavailable in tests */ }
+                return;
+            }
+        }
+
+        const groupsRaw = groupEditsByTarget(inverses);
+        const groups = {
+            character: groupsRaw.character.map(rebasePathToTarget),
+            lorebooks: Object.fromEntries(
+                Object.entries(groupsRaw.lorebooks)
+                    .map(([name, list]) => [name, list.map(rebasePathToTarget)]),
+            ),
+        };
+
+        if (groups.character.length > 0) {
+            try {
+                await commitCharacterEditorOperations(
+                    context,
+                    String(avatar || state.session?.avatar || ''),
+                    groups.character,
+                    { liveCharacter: state.live?.character || {} },
+                );
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] rollback commitCharacterEditorOperations failed`, err);
+                errors.push({ target: 'character', err });
+            }
+        }
+        for (const [bookName, edits] of Object.entries(groups.lorebooks)) {
+            const liveBook = state.live?.lorebooks?.[bookName] || { entries: {} };
+            try {
+                await commitLorebookOperations(bookName, liveBook, edits, { context, settings });
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] rollback commitLorebookOperations failed for ${bookName}`, err);
+                errors.push({ target: `lorebook:${bookName}`, err });
+            }
         }
     }
 
