@@ -918,6 +918,11 @@ function charaFormatData(data, directories) {
     // endpoints (`/export?format=png` / `format=json`) already invoke
     // `syncCharacterBookFromWorldInfo` themselves — that's where the
     // mirror belongs, and only there.
+    //
+    // Whatever value already sits on `data.character_book` is left intact:
+    // for cards imported with a V2/V3 embedded book it is the original
+    // offline copy from the card author, which stays useful as a fallback
+    // when the user later deletes the bound world book.
 
     return toStoredV2Character(char);
 }
@@ -1438,18 +1443,6 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             } catch (error) {
                 console.warn('Failed to parse existing character while preserving extension fields in /edit', error);
             }
-        }
-
-        // `data.character_book` is regenerated from the bound world by the
-        // export endpoints (`/export?format=png` / `format=json`). Never
-        // persist a mirror in the runtime save — it would just become a
-        // stale ghost that re-triggers the import-embedded-book dialog
-        // when the bound world drifts. Older versions of luker mirrored
-        // unconditionally inside `charaFormatData`, so existing cards may
-        // have a leftover; the deepMerge above carries that ghost over,
-        // and this strip is what cleans it. New saves never produce one.
-        if (char?.data?.character_book !== undefined) {
-            delete char.data.character_book;
         }
 
         char.chat = request.body.chat;
