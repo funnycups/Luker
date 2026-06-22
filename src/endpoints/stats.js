@@ -326,13 +326,10 @@ const calculateStats = async (handle, item) => {
         stats.user_msg_count += result.userMsgCount || 0;
         stats.non_user_msg_count += result.nonUserMsgCount || 0;
         stats.total_swipe_count += result.totalSwipeCount || 0;
-        // Use the engine-provided timestamps (seconds for SQL, mtime for FS).
-        const updatedAtMs = (typeof entry.updatedAt === 'number')
-            ? (entry.updatedAt > 1e12 ? entry.updatedAt : entry.updatedAt * 1000)
-            : 0;
-        const createdAtMs = (typeof entry.createdAt === 'number')
-            ? (entry.createdAt > 1e12 ? entry.createdAt : entry.createdAt * 1000)
-            : 0;
+        // Engine-provided timestamps are always ms (Date.now() for SQL,
+        // Math.floor(mtimeMs) for FS).
+        const updatedAtMs = typeof entry.updatedAt === 'number' ? entry.updatedAt : 0;
+        const createdAtMs = typeof entry.createdAt === 'number' ? entry.createdAt : 0;
         if (updatedAtMs > stats.date_last_chat) stats.date_last_chat = updatedAtMs;
         if (createdAtMs > 0 && createdAtMs < stats.date_first_chat) stats.date_first_chat = createdAtMs;
     }

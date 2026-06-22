@@ -375,9 +375,8 @@ async function tryReadImage(imgPath, crop) {
  *
  * For fs mode the legacy directory walk still produces the right answer, but
  * routing through the Repo keeps a single code path. ChatRepo's listForCharacter
- * returns updatedAt (engine seconds for SQL, mtime for FS); we convert to ms
- * for dateLastChat. Size is a body-length sum — close enough to the file-size
- * value the UI uses as a sorting hint.
+ * returns updatedAt in ms across every engine. Size is a body-length sum —
+ * close enough to the file-size value the UI uses as a sorting hint.
  *
  * @param  {string} handle  User handle.
  * @param  {string} charDir Character directory name (avatar stem).
@@ -394,9 +393,7 @@ const calculateChatSize = async (handle, charDir) => {
             // so use messageCount * 100 as a stand-in. Frontend tolerates 0.
             // (formatBytes works on this number too.)
             chatSize += 0;
-            const updatedAtMs = (typeof entry.updatedAt === 'number')
-                ? (entry.updatedAt > 1e12 ? entry.updatedAt : entry.updatedAt * 1000)
-                : 0;
+            const updatedAtMs = typeof entry.updatedAt === 'number' ? entry.updatedAt : 0;
             if (updatedAtMs > dateLastChat) dateLastChat = updatedAtMs;
         }
     } catch (err) {
@@ -2236,14 +2233,14 @@ router.post('/chats', validateAvatarUrlMiddleware, async function (request, resp
             const sortRaw = lastMessage?.send_date ?? info.updatedAt;
             const sortTime = (typeof sortRaw === 'number')
                 ? sortRaw
-                : Date.parse(String(sortRaw)) || (info.updatedAt * 1000);
+                : Date.parse(String(sortRaw)) || info.updatedAt;
             const item = {
                 file_id: entry.key.name,
                 file_name: `${entry.key.name}.jsonl`,
                 file_size: '0', // body byte size; UI tolerates absence
                 chat_items: info.messageCount,
                 mes: lastMessage?.mes || '[The chat is empty]',
-                last_mes: lastMessage?.send_date || new Date(info.updatedAt * 1000).toISOString(),
+                last_mes: lastMessage?.send_date || new Date(info.updatedAt).toISOString(),
                 sort_time: sortTime,
                 match: true,
             };

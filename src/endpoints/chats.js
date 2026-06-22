@@ -285,7 +285,7 @@ async function buildRecentChatIndexEntries(request) {
         });
         if (!info) continue;
         const lastMessage = info.lastMessage;
-        const last_mes = lastMessage?.send_date || new Date(info.updatedAt * 1000).toISOString();
+        const last_mes = lastMessage?.send_date || new Date(info.updatedAt).toISOString();
         const value = {
             file_id: name,
             file_name: `${name}.jsonl`,
@@ -293,7 +293,7 @@ async function buildRecentChatIndexEntries(request) {
             chat_items: info.messageCount,
             mes: lastMessage?.mes || '[The chat is empty]',
             last_mes,
-            sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt * 1000),
+            sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt),
             ...(descriptor.avatar ? { avatar: descriptor.avatar } : {}),
             ...(descriptor.group ? { group: descriptor.group } : {}),
         };
@@ -2989,7 +2989,7 @@ router.post('/group/info', async (request, response) => {
         // chat_items, mes, last_mes, sort_time. The group/info caller mainly
         // wants chat_items + last_mes for the sidebar preview.
         const lastMessage = info.lastMessage;
-        const last_mes = lastMessage?.send_date || new Date(info.updatedAt * 1000).toISOString();
+        const last_mes = lastMessage?.send_date || new Date(info.updatedAt).toISOString();
         return response.send({
             file_id: id,
             file_name: `${id}.jsonl`,
@@ -2997,7 +2997,7 @@ router.post('/group/info', async (request, response) => {
             chat_items: info.messageCount,
             mes: lastMessage?.mes || '[The chat is empty]',
             last_mes,
-            sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt * 1000),
+            sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt),
         });
     } catch (error) {
         console.error(error);
@@ -3401,7 +3401,7 @@ router.post('/search', validateAvatarUrlMiddleware, async function (request, res
                 // file_size is omitted — we no longer have a cheap byte count
                 // and clients show it as a hint only.
                 message_count: messageCount,
-                last_mes: last?.send_date || new Date(entry.updatedAt * 1000).toISOString(),
+                last_mes: last?.send_date || new Date(entry.updatedAt).toISOString(),
                 preview_message: getPreviewMessage(last?.mes || ''),
             });
         }
