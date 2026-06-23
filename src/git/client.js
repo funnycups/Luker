@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 import { sync as commandExistsSync } from 'command-exists';
 import git from 'isomorphic-git';
@@ -79,6 +80,44 @@ function normalizeCloneOptions(options = {}) {
  */
 
 const DEFAULT_AUTHOR = { name: 'CardApp Studio', email: 'studio@luker.local' };
+
+/**
+ * Recursively enumerate every regular file inside a working directory, skipping
+ * the `.git` directory. Returns POSIX-style paths relative to `dir`, matching
+ * how isomorphic-git addresses filepaths.
+ * @param {string} dir
+ * @returns {Promise<string[]>}
+ */
+async function listWorkdirFiles(dir) {
+    const out = [];
+    async function walk(absDir, relPrefix) {
+        const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.name === '.git') continue;
+            const absChild = path.join(absDir, entry.name);
+            const relChild = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+                await walk(absChild, relChild);
+            } else if (entry.isFile() || entry.isSymbolicLink()) {
+                out.push(relChild);
+            }
+        }
+    }
+    await walk(dir, '');
+    return out;
+}
+
+/**
+ * @param {string} dir
+ * @returns {Promise<string | null>}
+ */
+async function resolveHeadOidOrNull(dir) {
+    try {
+        return await git.resolveRef({ fs, dir, ref: 'HEAD' });
+    } catch {
+        return null;
+    }
+}
 
 /**
  * @param {{ backend?: string }} [options]
@@ -226,12 +265,19 @@ class IsomorphicGitClient {
 
     /** @param {string} dir */
     async addAll(dir) {
-        const matrix = await git.statusMatrix({ fs, dir });
-        for (const [filepath, , workdir] of matrix) {
-            if (workdir === 0) {
+        // git.statusMatrix follows the "racy git" optimization and may report a
+        // file as unchanged when its size and second-precision mtime match the
+        // index entry, even if the contents differ. Walk the workdir ourselves
+        // and stage everything we find through git.add, then sweep the index for
+        // entries whose backing file no longer exists.
+        const tracked = new Set();
+        for (const filepath of await listWorkdirFiles(dir)) {
+            await git.add({ fs, dir, filepath });
+            tracked.add(filepath);
+        }
+        for (const filepath of await git.listFiles({ fs, dir })) {
+            if (!tracked.has(filepath)) {
                 await git.remove({ fs, dir, filepath });
-            } else {
-                await git.add({ fs, dir, filepath });
             }
         }
     }
@@ -243,20 +289,29 @@ class IsomorphicGitClient {
      * @returns {Promise<boolean>}
      */
     async commitIfChanged(dir, message, author = DEFAULT_AUTHOR) {
-        const matrix = await git.statusMatrix({ fs, dir });
-        let hasChanges = false;
-        for (const [filepath, head, workdir, stage] of matrix) {
-            if (head !== workdir || head !== stage) {
-                if (workdir === 0) {
-                    await git.remove({ fs, dir, filepath });
-                } else {
-                    await git.add({ fs, dir, filepath });
-                }
-                hasChanges = true;
+        await this.addAll(dir);
+
+        // statusMatrix is unreliable for change detection (see addAll above) so
+        // we go directly to the source of truth — the git object database. Make
+        // a real commit, then compare its tree against HEAD's prior tree. If
+        // they match the index produced no semantic change; roll the branch
+        // pointer back to the previous commit and leave the orphan object for
+        // git gc to reclaim.
+        const previousHeadOid = await resolveHeadOidOrNull(dir);
+        const previousTreeOid = previousHeadOid
+            ? (await git.readCommit({ fs, dir, oid: previousHeadOid })).commit.tree
+            : null;
+
+        const newOid = await git.commit({ fs, dir, message, author });
+        const newCommit = await git.readCommit({ fs, dir, oid: newOid });
+        if (previousTreeOid !== null && newCommit.commit.tree === previousTreeOid) {
+            const branch = await git.currentBranch({ fs, dir, fullname: true });
+            if (branch && previousHeadOid) {
+                await git.writeRef({ fs, dir, ref: branch, value: previousHeadOid, force: true });
             }
+            return false;
         }
-        if (!hasChanges) return false;
-        await git.commit({ fs, dir, message, author });
+
         return true;
     }
 
