@@ -231,4 +231,66 @@ describe('applyLoopProfilePatchArgs partial-merge contract', () => {
         });
         expect(sanitizeLoopProfile(patched)).toEqual(patched);
     });
+
+    // ──────────────────────────────────────────────────────────────────
+    // Strict arg validation (anti-silent-drop). Each of these cases used
+    // to silently fall back to the current value via a typeof guard,
+    // collapsing onto the iter-studio's misleading "already matches"
+    // noop. They now throw so the executor's catch arm can produce a
+    // real `{ok:false, error:'invalid_args', detail}` tool reply.
+    // ──────────────────────────────────────────────────────────────────
+    test('throws invalid_args when system_prompt is the wrong type', () => {
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { system_prompt: 42 }))
+            .toThrow(/invalid_args.*system_prompt.*number/);
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { system_prompt: null }))
+            .toThrow(/invalid_args.*system_prompt/);
+    });
+
+    test('throws invalid_args when apiPresetName / promptPresetName are not strings', () => {
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { apiPresetName: 5 }))
+            .toThrow(/invalid_args.*apiPresetName/);
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { promptPresetName: {} }))
+            .toThrow(/invalid_args.*promptPresetName/);
+    });
+
+    test('throws invalid_args when max_rounds / wall_clock_budget_ms are not numbers', () => {
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { max_rounds: '12' }))
+            .toThrow(/invalid_args.*max_rounds/);
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { wall_clock_budget_ms: 'soon' }))
+            .toThrow(/invalid_args.*wall_clock_budget_ms/);
+        // Non-finite numbers (NaN / Infinity) are also rejected.
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { max_rounds: NaN }))
+            .toThrow(/invalid_args.*max_rounds/);
+    });
+
+    test('throws invalid_args when tools is not an object', () => {
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { tools: 'enable_all' }))
+            .toThrow(/invalid_args.*tools/);
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { tools: null }))
+            .toThrow(/invalid_args.*tools/);
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { tools: [] }))
+            .toThrow(/invalid_args.*tools/);
+    });
+
+    test('throws invalid_args when a tool-namespace patch carries a non-boolean flag value', () => {
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { tools: { note: { open: 'yes' } } }))
+            .toThrow(/invalid_args.*note\.open.*boolean/);
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { tools: { lorebook: { search: 1 } } }))
+            .toThrow(/invalid_args.*lorebook\.search.*boolean/);
+    });
+
+    test('throws invalid_args when a tool-namespace value itself is wrong-shape', () => {
+        expect(() => applyLoopProfilePatchArgs(baseProfile(), { tools: { note: 'all' } }))
+            .toThrow(/invalid_args.*tools\.note/);
+    });
+
+    test('still inherits silently when a key is simply absent (partial-merge semantics survive)', () => {
+        // Regression guard: stricter type checks must NOT make partial
+        // merge harder. Absent keys still inherit from current.
+        const before = baseProfile();
+        const after = applyLoopProfilePatchArgs(before, { max_rounds: 7 });
+        expect(after.system_prompt).toBe(before.system_prompt);
+        expect(after.apiPresetName).toBe(before.apiPresetName);
+        expect(after.tools).toEqual(before.tools);
+    });
 });

@@ -240,6 +240,7 @@ import {
     SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS,
     applyStringPatch,
 } from './system-prompt-patch.js';
+import { readIterationStringArg } from './iter-arg-validator.js';
 import {
     createNewStage,
     ensureDirectorEditorIntegrity,
@@ -4704,10 +4705,28 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
                 continue;
             }
             const beforeAgent = session.workingProfile.agents[agentId] || null;
+            // Strict optional-string fields — only overwrite when the
+            // AI passed a string, otherwise inherit existing.
+            // The pre-fix code unconditionally overwrote systemPrompt
+            // and userPromptTemplate with `String(args.X || '').trim()`,
+            // which meant an `apiPresetName`-only patch wiped both
+            // prompt fields to '' — a real destructive bug, not merely
+            // a silent-noop one. Wrong-type args also throw so the
+            // executor reports `{ok:false, error:'invalid_args'}`.
+            let nextSystemPrompt, nextUserPromptTemplate;
+            try {
+                nextSystemPrompt = readIterationStringArg(args, 'systemPrompt', name);
+                nextUserPromptTemplate = readIterationStringArg(args, 'userPromptTemplate', name);
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped agenda agent "${agentId}" patch: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped agenda agent "${agentId}" patch: ${detail}` });
+                continue;
+            }
             session.workingProfile.agents[agentId] = createPresetDraft({
                 ...(beforeAgent || {}),
-                systemPrompt: String(args.systemPrompt || '').trim(),
-                userPromptTemplate: String(args.userPromptTemplate || '').trim(),
+                ...(nextSystemPrompt !== undefined ? { systemPrompt: nextSystemPrompt.trim() } : {}),
+                ...(nextUserPromptTemplate !== undefined ? { userPromptTemplate: nextUserPromptTemplate.trim() } : {}),
                 ...(Object.prototype.hasOwnProperty.call(args, 'apiPresetName')
                     ? { apiPresetName: sanitizeConnectionProfileName(args.apiPresetName) }
                     : {}),
@@ -4995,7 +5014,16 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
         }
         if (name === 'luker_orch_set_loop_profile') {
             const before = sanitizeLoopProfile(session.workingProfile);
-            const after = applyLoopProfilePatchArgs(before, args);
+            let after;
+            try {
+                after = applyLoopProfilePatchArgs(before, args);
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                const actionText = `Skipped loop profile patch: ${detail}`;
+                actions.push(actionText);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: actionText });
+                continue;
+            }
             session.workingProfile = after;
             const beforeSnapshot = JSON.stringify(before);
             const afterSnapshot = JSON.stringify(after);
@@ -5130,9 +5158,25 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
                 director.mainAgent = {};
             }
             const before = { ...director.mainAgent };
-            if (typeof args.systemPrompt === 'string') director.mainAgent.systemPrompt = String(args.systemPrompt);
-            if (typeof args.apiPresetName === 'string') director.mainAgent.apiPresetName = String(args.apiPresetName);
-            if (typeof args.promptPresetName === 'string') director.mainAgent.promptPresetName = String(args.promptPresetName);
+            // Strict arg validation: wrong type throws → executor catches
+            // → real `{ok:false, error:'invalid_args'}` tool reply.
+            // Silently substituting the existing value (the old behavior)
+            // collapsed onto the iter-studio's misleading "already
+            // matches" noop and the AI never learned what was wrong.
+            let nextSystemPrompt, nextApi, nextPromptPreset;
+            try {
+                nextSystemPrompt = readIterationStringArg(args, 'systemPrompt', name);
+                nextApi = readIterationStringArg(args, 'apiPresetName', name);
+                nextPromptPreset = readIterationStringArg(args, 'promptPresetName', name);
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped director main agent patch: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped director main agent patch: ${detail}` });
+                continue;
+            }
+            if (nextSystemPrompt !== undefined) director.mainAgent.systemPrompt = nextSystemPrompt;
+            if (nextApi !== undefined) director.mainAgent.apiPresetName = nextApi;
+            if (nextPromptPreset !== undefined) director.mainAgent.promptPresetName = nextPromptPreset;
             const after = { ...director.mainAgent };
             const profileChanged = JSON.stringify(before) !== JSON.stringify(after);
             const actionText = profileChanged ? 'Director main agent updated.' : 'Director main agent patch produced no changes.';
@@ -5154,12 +5198,27 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
             const existingIndex = director.subAgents.findIndex(a => String(a?.id || '') === id);
             const existing = existingIndex >= 0 ? director.subAgents[existingIndex] : null;
             const before = existing ? { ...existing } : null;
+            // Strict optional-string fields — wrong type throws and the
+            // executor surfaces a real `{ok:false, error:'invalid_args'}`
+            // tool reply instead of silently inheriting `existing.X`.
+            let nextDescription, nextSystemPrompt, nextApi, nextPromptPreset;
+            try {
+                nextDescription = readIterationStringArg(args, 'description', name);
+                nextSystemPrompt = readIterationStringArg(args, 'systemPrompt', name);
+                nextApi = readIterationStringArg(args, 'apiPresetName', name);
+                nextPromptPreset = readIterationStringArg(args, 'promptPresetName', name);
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped sub-agent "${id}" patch: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped sub-agent "${id}" patch: ${detail}` });
+                continue;
+            }
             const next = {
                 id,
-                description: typeof args.description === 'string' ? String(args.description) : (existing?.description || ''),
-                systemPrompt: typeof args.systemPrompt === 'string' ? String(args.systemPrompt) : (existing?.systemPrompt || ''),
-                apiPresetName: typeof args.apiPresetName === 'string' ? String(args.apiPresetName) : (existing?.apiPresetName || ''),
-                promptPresetName: typeof args.promptPresetName === 'string' ? String(args.promptPresetName) : (existing?.promptPresetName || ''),
+                description: nextDescription !== undefined ? nextDescription : (existing?.description || ''),
+                systemPrompt: nextSystemPrompt !== undefined ? nextSystemPrompt : (existing?.systemPrompt || ''),
+                apiPresetName: nextApi !== undefined ? nextApi : (existing?.apiPresetName || ''),
+                promptPresetName: nextPromptPreset !== undefined ? nextPromptPreset : (existing?.promptPresetName || ''),
                 tools: existing?.tools ?? null,
                 // Explicit `null` from the AI clears the cap (inherit
                 // runtime default); omitting the key keeps whatever the
@@ -5578,15 +5637,30 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
             }
             const nodes = Array.isArray(stage.nodes) ? stage.nodes : [];
             const existingIndex = nodes.findIndex(item => String(item?.id || '') === nodeId);
-            const nextNodeType = typeof args.type === 'string'
-                ? normalizeNodeType(args.type)
+            // Strict optional-string fields. Wrong-type args throw and
+            // surface as `{ok:false, error:'invalid_args'}` tool replies
+            // — silently falling back to the existing value (the old
+            // behavior) collapsed onto the iter-studio's "already
+            // matches" noop and the AI never learned what was wrong.
+            let nextType, nextUserPromptTemplate;
+            try {
+                nextType = readIterationStringArg(args, 'type', name);
+                nextUserPromptTemplate = readIterationStringArg(args, 'userPromptTemplate', name);
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped node "${nodeId}" patch: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped node "${nodeId}" patch: ${detail}` });
+                continue;
+            }
+            const nextNodeType = nextType !== undefined
+                ? normalizeNodeType(nextType)
                 : normalizeNodeType(existingIndex >= 0 ? nodes[existingIndex]?.type : ORCH_NODE_TYPE_WORKER);
             const nextNode = {
                 id: nodeId,
                 preset: presetId,
                 type: nextNodeType,
-                userPromptTemplate: typeof args.userPromptTemplate === 'string'
-                    ? normalizeTemplateForRuntime(args.userPromptTemplate)
+                userPromptTemplate: nextUserPromptTemplate !== undefined
+                    ? normalizeTemplateForRuntime(nextUserPromptTemplate)
                     : (existingIndex >= 0 ? String(nodes[existingIndex]?.userPromptTemplate || '') : ''),
             };
             if (existingIndex >= 0) {

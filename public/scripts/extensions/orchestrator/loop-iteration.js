@@ -87,31 +87,91 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
  * @param {object} args — Partial patch from the AI tool call.
  * @returns {ReturnType<typeof sanitizeLoopProfile>} fully-sanitized V3 profile.
  */
+/**
+ * Helpers for `applyLoopProfilePatchArgs`'s strict arg validation.
+ *
+ * Each field-level check distinguishes three cases:
+ *   - missing key       → inherit current value (partial-merge semantics)
+ *   - present + correct → adopt patch value
+ *   - present + wrong   → throw `invalid_args` so the executor can
+ *                         surface a real `{ok:false, error, detail}`
+ *                         tool reply (mirrors the anchor-patch contract
+ *                         in system-prompt-patch.js)
+ *
+ * Without the throw the typeof guard used to silently fall back to the
+ * current value, the executor reported `{ok:true, changed:false}`, and
+ * the iter-studio's sandbox-diff saw no change → "already matches"
+ * noop. The AI never learned its arg was the wrong type and looped
+ * trying variants until it gave up.
+ */
+function patchStringField(patch, key, current, toolName) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) return current;
+    const value = patch[key];
+    if (typeof value !== 'string') {
+        throw new Error(`${toolName}: invalid_args — ${key} must be a string, got ${typeof value}.`);
+    }
+    return value;
+}
+
+function patchNumberField(patch, key, current, toolName) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) return current;
+    const value = patch[key];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new Error(`${toolName}: invalid_args — ${key} must be a finite number, got ${typeof value === 'number' ? 'non-finite number' : typeof value}.`);
+    }
+    return value;
+}
+
+/**
+ * Apply a `luker_orch_set_loop_profile` tool-call patch on top of the
+ * caller's current profile. Returns the canonical V3 profile envelope
+ * (sanitized — see `sanitizeLoopProfile`). Partial: keys absent from
+ * `args` inherit from `currentProfile` unchanged. Keys present with the
+ * wrong type throw `invalid_args` instead of silently falling back,
+ * including individual tool-flag entries inside `tools.{namespace}`.
+ *
+ * `tools.finalize` is intentionally ignored: `sanitizeLoopProfile`
+ * always coerces it back to true, so passing it through here would be
+ * misleading.
+ *
+ * @param {object} currentProfile — Any input the sanitizer accepts.
+ * @param {object} args — Partial patch from the AI tool call.
+ * @returns {ReturnType<typeof sanitizeLoopProfile>} fully-sanitized V3 profile.
+ */
 export function applyLoopProfilePatchArgs(currentProfile, args) {
     const current = sanitizeLoopProfile(currentProfile);
+    if (args !== undefined && args !== null && typeof args !== 'object') {
+        throw new Error('luker_orch_set_loop_profile: invalid_args — args must be an object.');
+    }
     const patch = args && typeof args === 'object' ? args : {};
+    const TOOL = 'luker_orch_set_loop_profile';
     const next = {
-        apiPresetName: typeof patch.apiPresetName === 'string' ? patch.apiPresetName : current.apiPresetName,
-        promptPresetName: typeof patch.promptPresetName === 'string' ? patch.promptPresetName : current.promptPresetName,
-        system_prompt: typeof patch.system_prompt === 'string' ? patch.system_prompt : current.system_prompt,
-        max_rounds: Object.prototype.hasOwnProperty.call(patch, 'max_rounds')
-            ? patch.max_rounds
-            : current.max_rounds,
-        wall_clock_budget_ms: Object.prototype.hasOwnProperty.call(patch, 'wall_clock_budget_ms')
-            ? patch.wall_clock_budget_ms
-            : current.wall_clock_budget_ms,
+        apiPresetName: patchStringField(patch, 'apiPresetName', current.apiPresetName, TOOL),
+        promptPresetName: patchStringField(patch, 'promptPresetName', current.promptPresetName, TOOL),
+        system_prompt: patchStringField(patch, 'system_prompt', current.system_prompt, TOOL),
+        max_rounds: patchNumberField(patch, 'max_rounds', current.max_rounds, TOOL),
+        wall_clock_budget_ms: patchNumberField(patch, 'wall_clock_budget_ms', current.wall_clock_budget_ms, TOOL),
         capsule_inject: current.capsule_inject,
         tools: structuredClone(current.tools),
     };
-    const incomingTools = patch.tools && typeof patch.tools === 'object' ? patch.tools : null;
-    if (incomingTools) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'tools')) {
+        const incomingTools = patch.tools;
+        if (incomingTools === null || typeof incomingTools !== 'object' || Array.isArray(incomingTools)) {
+            throw new Error(`${TOOL}: invalid_args — tools must be an object keyed by namespace.`);
+        }
         const merge = (group, key) => {
             const incoming = incomingTools[group];
-            if (incoming && typeof incoming === 'object'
-                && Object.prototype.hasOwnProperty.call(incoming, key)) {
-                if (next.tools[group] && typeof next.tools[group] === 'object') {
-                    next.tools[group][key] = incoming[key];
-                }
+            if (incoming === undefined) return;
+            if (incoming === null || typeof incoming !== 'object' || Array.isArray(incoming)) {
+                throw new Error(`${TOOL}: invalid_args — tools.${group} must be an object.`);
+            }
+            if (!Object.prototype.hasOwnProperty.call(incoming, key)) return;
+            const value = incoming[key];
+            if (typeof value !== 'boolean') {
+                throw new Error(`${TOOL}: invalid_args — tools.${group}.${key} must be a boolean, got ${typeof value}.`);
+            }
+            if (next.tools[group] && typeof next.tools[group] === 'object') {
+                next.tools[group][key] = value;
             }
         };
         // Legacy memory + search namespaces translate into custom entries
@@ -121,20 +181,30 @@ export function applyLoopProfilePatchArgs(currentProfile, args) {
         // dropped legacy subtree.
         const mergeLegacyAsCustom = (legacyGroup, prefix, verb) => {
             const incoming = incomingTools[legacyGroup];
-            if (incoming && typeof incoming === 'object'
-                && Object.prototype.hasOwnProperty.call(incoming, verb)) {
-                if (!next.tools.custom || typeof next.tools.custom !== 'object') {
-                    next.tools.custom = {};
-                }
-                next.tools.custom[`${prefix}${verb}`] = incoming[verb];
+            if (incoming === undefined) return;
+            if (incoming === null || typeof incoming !== 'object' || Array.isArray(incoming)) {
+                throw new Error(`${TOOL}: invalid_args — tools.${legacyGroup} must be an object.`);
             }
-        };
-        // Patches addressed directly at `tools.custom.<name>` merge wholesale.
-        if (incomingTools.custom && typeof incomingTools.custom === 'object') {
+            if (!Object.prototype.hasOwnProperty.call(incoming, verb)) return;
+            const value = incoming[verb];
+            if (typeof value !== 'boolean') {
+                throw new Error(`${TOOL}: invalid_args — tools.${legacyGroup}.${verb} must be a boolean, got ${typeof value}.`);
+            }
             if (!next.tools.custom || typeof next.tools.custom !== 'object') {
                 next.tools.custom = {};
             }
-            for (const [k, v] of Object.entries(incomingTools.custom)) {
+            next.tools.custom[`${prefix}${verb}`] = value;
+        };
+        // Patches addressed directly at `tools.custom.<name>` merge wholesale.
+        if (Object.prototype.hasOwnProperty.call(incomingTools, 'custom')) {
+            const incomingCustom = incomingTools.custom;
+            if (incomingCustom === null || typeof incomingCustom !== 'object' || Array.isArray(incomingCustom)) {
+                throw new Error(`${TOOL}: invalid_args — tools.custom must be an object keyed by tool name.`);
+            }
+            if (!next.tools.custom || typeof next.tools.custom !== 'object') {
+                next.tools.custom = {};
+            }
+            for (const [k, v] of Object.entries(incomingCustom)) {
                 next.tools.custom[String(k)] = v !== false;
             }
         }

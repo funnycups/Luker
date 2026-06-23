@@ -1919,11 +1919,15 @@ export async function openSchemaIterationStudio(deps) {
                     // real outcome (applied vs skipped). Adding "queued"
                     // would double the per-tool feedback.
                 } else {
-                    // Executor returned null/empty. AI can't see what went
-                    // wrong without a tool-shaped reply, so surface it.
+                    // Genuine noop: the executor accepted the call but
+                    // the post-call schema matched the pre-call schema
+                    // (e.g. set_node_type with values that already
+                    // matched). Invalid_args / not_found / not_allowed /
+                    // unknown_tool all throw upstream and land in the
+                    // catch arm below as `{error: '...'}` replies.
                     editToolResults.push({
                         tool_call_id: callId,
-                        content: { status: 'noop', message: 'No edits produced. The target schema state likely already matches what you requested; an earlier round may have already applied this change. Re-read the live schema before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (node_type identifier, value shape).' },
+                        content: { status: 'noop', message: 'No edits produced. The target schema state already matches what you requested; an earlier round may have already applied this change. Re-read the live schema before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (node_type identifier, value shape).' },
                         status: 'fail',
                     });
                 }

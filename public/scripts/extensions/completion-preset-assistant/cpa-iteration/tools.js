@@ -1487,7 +1487,9 @@ export async function normalizeToolCallToEdit(call, ctx) {
         const refBody = await ctx.getReferencePresetBody(refName);
         const fromPath = String(args.from_path || args.path || '').trim();
         const toPath = String(args.path || '').trim();
-        if (!fromPath || !toPath) return [];
+        if (!fromPath || !toPath) {
+            throw new Error(`${name}: invalid_args — both from_path (source) and path (destination) are required non-empty strings.`);
+        }
         const sourceValue = lodash.get(refBody, fromPath);
         if (sourceValue === undefined) {
             throw new Error(`Reference path not found: ${fromPath}`);
@@ -1500,5 +1502,5 @@ export async function normalizeToolCallToEdit(call, ctx) {
         }];
     }
 
-    return [];
+    throw new Error(`unknown_tool — "${name}" is not a recognized cpa-iteration tool. Inspect the tool catalog before retrying.`);
 }

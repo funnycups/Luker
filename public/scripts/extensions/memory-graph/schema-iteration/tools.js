@@ -235,8 +235,13 @@ export function applyToolCallToSandbox(call, sandboxSession, ctx) {
 
     if (name === TOOL_SET_NODE_TYPE) {
         const nodeType = args?.node_type && typeof args.node_type === 'object' ? args.node_type : null;
-        if (!nodeType || !String(nodeType.id || '').trim()) return false;
-        const id = String(nodeType.id).trim();
+        if (!nodeType) {
+            throw new Error(`${name}: invalid_args — node_type must be an object describing the node type to set.`);
+        }
+        const id = String(nodeType.id || '').trim();
+        if (!id) {
+            throw new Error(`${name}: invalid_args — node_type.id is required and must be a non-empty string.`);
+        }
         const existingIndex = list.findIndex(entry => String(entry?.id || '').trim() === id);
         const next = [...list];
         if (existingIndex >= 0) {
@@ -250,10 +255,16 @@ export function applyToolCallToSandbox(call, sandboxSession, ctx) {
 
     if (name === TOOL_REMOVE_NODE_TYPE) {
         const id = String(args?.id || '').trim();
-        if (!id) return false;
-        if (list.length <= 1) return false;
+        if (!id) {
+            throw new Error(`${name}: invalid_args — id is required and must be a non-empty string.`);
+        }
+        if (list.length <= 1) {
+            throw new Error(`${name}: not_allowed — the schema must keep at least one node type; refusing to remove "${id}" when only ${list.length} type(s) remain.`);
+        }
         const next = list.filter(entry => String(entry?.id || '').trim() !== id);
-        if (next.length === list.length) return false;
+        if (next.length === list.length) {
+            throw new Error(`${name}: not_found — no node type with id "${id}" in the current schema. Use the schema-read tool to confirm available ids before retrying.`);
+        }
         sandboxSession.workingProfile.schema = normalizeNodeTypeSchema(next);
         return true;
     }
@@ -262,20 +273,25 @@ export function applyToolCallToSandbox(call, sandboxSession, ctx) {
         const ids = Array.isArray(args?.ids)
             ? args.ids.map(item => String(item || '').trim()).filter(Boolean)
             : [];
-        if (ids.length === 0) return false;
+        if (ids.length === 0) {
+            throw new Error(`${name}: invalid_args — ids must be a non-empty array of node-type identifiers.`);
+        }
         const currentIds = list.map(entry => String(entry?.id || '').trim());
         const sameSet = ids.length === currentIds.length
             && ids.every(id => currentIds.includes(id))
             && currentIds.every(id => ids.includes(id));
-        if (!sameSet) return false;
+        if (!sameSet) {
+            throw new Error(`${name}: invalid_args — ids must contain every existing node-type id exactly once. Current ids: [${currentIds.join(', ')}]; received: [${ids.join(', ')}].`);
+        }
         const byId = new Map(list.map(entry => [String(entry?.id || '').trim(), entry]));
         const next = ids.map(id => byId.get(id)).filter(Boolean);
         sandboxSession.workingProfile.schema = normalizeNodeTypeSchema(next);
         return true;
     }
 
-    // Unknown tool name → no-op in sandbox.
-    return false;
+    // Unknown tool name — surface explicitly so the AI gets a real error
+    // tool reply instead of a misleading "already matches" hint.
+    throw new Error(`unknown_tool — "${name}" is not a recognized schema-iteration tool.`);
 }
 
 /**
@@ -284,26 +300,27 @@ export function applyToolCallToSandbox(call, sandboxSession, ctx) {
  * Uses the sandbox-diff pattern: clone live → run the executor against
  * a fake `{ workingProfile: { schema } }` session → emit one coarse
  * `set('', newSchema)` edit. Returns:
- *   - `null` on executor failure (caller treats this distinctly from "no edits")
- *   - `[]`   on no-op (unchanged list, unknown tool, or same-set reorder)
+ *   - `[]`   on no-op (live state and post-call state are identical —
+ *            e.g. set_node_type called with values that already match)
  *   - `[edit]` otherwise
+ *
+ * Executor failures (invalid_args / not_found / not_allowed / unknown_tool)
+ * are propagated as thrown Errors so the iter-studio's catch arm surfaces
+ * them as real `{error: "..."}` tool replies. Previously each silent
+ * `return false` was collapsed onto the misleading "likely already
+ * matches" iter-studio noop and the AI thought broken calls had
+ * succeeded.
  *
  * @param {object} call tool call object
  * @param {{ live: any, normalizeNodeTypeSchema: (schema: any) => any[] }} ctx
- * @returns {Promise<Array<object>|null>}
+ * @returns {Promise<Array<object>>}
  */
 export async function normalizeToolCallToEdit(call, ctx) {
     const before = ctx?.live;
     if (!Array.isArray(before)) return [];
     const beforeClone = structuredClone(before);
     const sandboxSession = { workingProfile: { schema: structuredClone(before) } };
-    let changed = false;
-    try {
-        changed = applyToolCallToSandbox(call, sandboxSession, ctx);
-    } catch (error) {
-        console.warn('[mg-schema-iteration/tools] sandbox executor failed', error);
-        return null;
-    }
+    const changed = applyToolCallToSandbox(call, sandboxSession, ctx);
     if (!changed) return [];
     const after = Array.isArray(sandboxSession.workingProfile?.schema)
         ? sandboxSession.workingProfile.schema

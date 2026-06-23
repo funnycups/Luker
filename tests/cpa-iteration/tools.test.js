@@ -219,6 +219,32 @@ describe('CPA — tools', () => {
         const edits = await normalizeToolCallToEdit(bad, { live: {} });
         expect(edits).toBeNull();
     });
+
+    test('preset_copy_from_reference throws invalid_args when from_path / path is missing', async () => {
+        // Previously a missing path silently returned [], collapsing onto
+        // the iter-studio "already matches" noop. Throw so the AI sees
+        // the real error.
+        const ctx = {
+            live: {},
+            session: { surfaceState: { referencePresetName: 'ref' } },
+            getReferencePresetBody: async () => ({ deep: { x: 1 } }),
+        };
+        await expect(normalizeToolCallToEdit(
+            call('preset_copy_from_reference', { from_path: '', path: '' }),
+            ctx,
+        )).rejects.toThrow(/invalid_args/);
+        await expect(normalizeToolCallToEdit(
+            call('preset_copy_from_reference', { from_path: 'deep.x' }),
+            ctx,
+        )).rejects.toThrow(/invalid_args/);
+    });
+
+    test('unknown tool name throws unknown_tool', async () => {
+        await expect(normalizeToolCallToEdit(
+            call('preset_invented_tool', {}),
+            { live: {} },
+        )).rejects.toThrow(/unknown_tool/);
+    });
 });
 
 describe('CPA control tools — program-driven auto-continue', () => {
