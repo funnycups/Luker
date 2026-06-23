@@ -33,11 +33,10 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 // agenda-profile → editable-spec → agent-resolution → connection-manager →
 // openai → group-chats → bookmarks → request-compression → '/lib.js' (note
 // leading slash — not the same specifier as the mocked '../../public/lib.js').
-// Sever the chain at agent-resolution, mirroring custom-tool-sanitize.test.js.
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+// Sever the chain at the connection-manager gate so the real agent-resolution
+// runs (it only pulls textgen-models.js transitively through this entry).
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: extensionSettings,

@@ -19,11 +19,11 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return { lodash, yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) } };
 });
-// Sever import chain at agent-resolution, mirroring preset-library.test.js.
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+// Sever import chain at the connection-manager gate so the real
+// agent-resolution runs (it only pulls textgen-models.js transitively
+// through this entry).
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: {},

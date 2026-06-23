@@ -64,10 +64,8 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     user_avatar: '',
     processDroppedFiles: () => {},
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
     world_info_position: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },

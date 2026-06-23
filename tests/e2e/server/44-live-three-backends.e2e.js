@@ -1,10 +1,9 @@
 // #44 — Live LLM 3-backend smoke (Anthropic / OpenAI / Gemini).
 //
-// Gated. Skips by default. Set LIVE=1 (and the relevant API keys) to run.
-// Performs one chat-completion round-trip per backend that has its key set,
-// plus a one-shot tool-call round-trip. Asserts an assistant bubble appears
-// and contains some non-empty content. Tool-call asserts a tool result is
-// surfaced back through the chat lifecycle.
+// Opt-in: set LIVE=1 plus the relevant API keys to enable the spec.
+// When LIVE is not set, the describe block is suppressed entirely —
+// no skipped-test noise, no false sense of coverage. Each per-backend
+// test inside still fails loud if its own API key is missing.
 //
 // IMPORTANT: per memory `feedback_llm_conventions`, do not add timeouts to
 // LLM-request paths. Playwright's per-test timeout is enough.
@@ -17,6 +16,7 @@ import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
 
 const LIVE = process.env.LIVE === '1';
+const liveDescribe = LIVE ? test.describe : test.describe.skip;
 
 let server;
 
@@ -49,12 +49,11 @@ function configureBackend({ dataRoot, source, model, secretKey, value }) {
     writeFileSync(secretsPath, JSON.stringify(secrets, null, 4));
 }
 
-test.describe('#44 — live 3-backend smoke', () => {
+liveDescribe('#44 — live 3-backend smoke', () => {
     test.describe.configure({ mode: 'serial' });
 
     test('Anthropic (Claude) — chat-completion round-trip', async ({ page }) => {
-        test.skip(!LIVE, 'LIVE=1 not set');
-        test.skip(!process.env.ANTHROPIC_API_KEY, 'ANTHROPIC_API_KEY not set');
+        expect(process.env.ANTHROPIC_API_KEY, 'ANTHROPIC_API_KEY required for LIVE=1 run').toBeTruthy();
         configureBackend({
             dataRoot: server.dataRoot,
             source: 'claude',
@@ -74,8 +73,7 @@ test.describe('#44 — live 3-backend smoke', () => {
     });
 
     test('OpenAI — chat-completion round-trip', async ({ page }) => {
-        test.skip(!LIVE, 'LIVE=1 not set');
-        test.skip(!process.env.OPENAI_API_KEY, 'OPENAI_API_KEY not set');
+        expect(process.env.OPENAI_API_KEY, 'OPENAI_API_KEY required for LIVE=1 run').toBeTruthy();
         configureBackend({
             dataRoot: server.dataRoot,
             source: 'openai',
@@ -95,8 +93,7 @@ test.describe('#44 — live 3-backend smoke', () => {
     });
 
     test('Gemini (MakerSuite) — chat-completion round-trip', async ({ page }) => {
-        test.skip(!LIVE, 'LIVE=1 not set');
-        test.skip(!process.env.GOOGLE_API_KEY, 'GOOGLE_API_KEY not set');
+        expect(process.env.GOOGLE_API_KEY, 'GOOGLE_API_KEY required for LIVE=1 run').toBeTruthy();
         configureBackend({
             dataRoot: server.dataRoot,
             source: 'makersuite',

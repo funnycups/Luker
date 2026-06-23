@@ -305,27 +305,76 @@ describe('spec §5.6 — i18n entries present in zh-CN and zh-TW', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Acceptance criteria enforced by code structure — recorded as test.todo
+// Acceptance criteria enforced by code structure — asserted against the
+// actual main.js source so a regression cannot land silently.
 // ---------------------------------------------------------------------------
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve as resolvePath } from 'node:path';
+
+const __mgInjectionTestDir = dirname(fileURLToPath(import.meta.url));
+const MG_MAIN_SOURCE = readFileSync(
+    resolvePath(__mgInjectionTestDir, '..', '..', 'public', 'scripts', 'extensions', 'memory-graph', 'main.js'),
+    'utf8',
+);
+
 describe('spec §5.3 — recall candidate pool unaffected by window', () => {
-    // Structural enforcement: `collectRootCandidates` is invoked downstream of
-    // `collectAlwaysInjectNodes(store, settings, context)` (no options arg) from
-    // `runLLMDrivenRecall` (main.js around line 6698). The new
-    // `mainInjectionAssistantTurnsWindow` setting is read only inside
-    // `syncPersistentLorebookProjection` (the main-context site). Therefore the
-    // recall pool cannot observe the window — there is no plumbing for it to
-    // do so. A runtime regression here would require explicitly threading the
-    // window through the recall call sites, which the spec explicitly forbids.
-    test.todo('recall paths at main.js:6698 and main.js:7182 continue to call collectAlwaysInjectNodes with 3 args');
+    // The injection window is consumed by `syncPersistentLorebookProjection`
+    // (the legitimate main-context site), which DOES pass a 4th `options`
+    // argument carrying `seqWindowFrom`. Every OTHER call site —
+    // specifically the ones inside the recall pipeline
+    // (`runLLMDrivenRecall`, hybrid/rerank fall-through, etc.) — must
+    // NOT pass `options`, otherwise the recall pool would observe the
+    // window. Spec §5.3 forbids this.
+    //
+    // We assert that every recall-context call uses the 3-arg shape by
+    // walking the source: any `collectAlwaysInjectNodes(...)` invocation
+    // NOT inside `syncPersistentLorebookProjection`'s body must be 3-arg.
+    test('every recall-context call site uses the 3-arg shape', () => {
+        // Extract syncPersistentLorebookProjection's body so we can subtract
+        // its lines from consideration. Any collectAlwaysInjectNodes call
+        // INSIDE it is the legitimate main-context site.
+        const mainSiteFn = MG_MAIN_SOURCE.match(
+            /async function syncPersistentLorebookProjection\([^)]*\)\s*\{([\s\S]*?)\n\}\n/,
+        );
+        expect(mainSiteFn).not.toBeNull();
+        const sourceWithoutMainSite = MG_MAIN_SOURCE.replace(mainSiteFn[0], '/* main-context site stripped */');
+
+        // Skip the function definition itself.
+        const callRe = /(?<!function\s)\bcollectAlwaysInjectNodes\s*\(([\s\S]*?)\)\s*;/g;
+        const calls = [...sourceWithoutMainSite.matchAll(callRe)];
+        expect(calls.length).toBeGreaterThan(0);
+        for (const m of calls) {
+            // Strip nested call commas by removing balanced parens / brackets
+            // contents first, then counting top-level commas in the arg list.
+            let args = m[1];
+            for (let i = 0; i < 8; i += 1) {
+                const before = args;
+                args = args.replace(/\([^()]*\)/g, '').replace(/\{[^{}]*\}/g, '').replace(/\[[^\[\]]*\]/g, '');
+                if (args === before) break;
+            }
+            const topLevelCommaCount = (args.match(/,/g) || []).length;
+            // 3 args = 2 commas. Anything else means a fourth `options` arg
+            // (or a missing arg) reached a recall-context call site — spec
+            // §5.3 forbids recall paths from observing the injection window.
+            expect({ call: m[0], commaCount: topLevelCommaCount }).toEqual({ call: m[0], commaCount: 2 });
+        }
+    });
 });
 
 describe('spec §5.4 — recall-selected node bypasses the window', () => {
-    // Structural enforcement: nodes selected by the recall pipeline reach the
-    // main context through the `focusPacket` projection (via
-    // `syncRuntimeLorebookProjection` reading `getLastRecallProjection`), NOT
-    // through `collectAlwaysInjectNodes`. The window only filters the latter;
-    // a node X with seqTo well outside the window that is recall-selected
-    // therefore still surfaces in the runtime focus packet unaffected.
-    test.todo('recall-selected nodes are routed via focusPacket path, never through collectAlwaysInjectNodes');
+    // Recall results flow into runtime injection through the focus-packet
+    // path: `runLLMDrivenRecall` (or hybrid recall) populates
+    // `store.lastRecallProjection`; `syncRuntimeLorebookProjection` reads
+    // it and writes `focusPacket`. That path must NEVER pass through
+    // `collectAlwaysInjectNodes` (which is window-gated).
+    test('syncRuntimeLorebookProjection reads getLastRecallProjection, not collectAlwaysInjectNodes', () => {
+        const fnMatch = MG_MAIN_SOURCE.match(/async function syncRuntimeLorebookProjection\([^)]*\)\s*\{([\s\S]*?)\n\}\n/);
+        expect(fnMatch).not.toBeNull();
+        const body = fnMatch[1];
+        expect(body).toMatch(/getLastRecallProjection\s*\(/);
+        expect(body).toMatch(/focusPacket/);
+        expect(body).not.toMatch(/collectAlwaysInjectNodes/);
+    });
 });

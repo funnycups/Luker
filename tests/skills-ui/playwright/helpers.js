@@ -26,7 +26,7 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -153,10 +153,11 @@ export async function openSkillManagerPanel(page) {
 }
 
 /**
- * Soft-skip the test if the dev server doesn't expose the JS skills
- * API on the context. This shields the smoke suite from environments
- * where the bundled skill installation hook hasn't completed (e.g.
- * upgrade-from-pre-skills user dir without the migration ran).
+ * Hard-assert the dev server exposes the JS skills API on the context.
+ * The Skills API is a load-bearing surface for the skill UI smokes — if
+ * it's missing, the build under test is broken, not the environment.
+ * Fail loud instead of skipping; silent skips here have masked real
+ * regressions (`feedback_no_test_fail_without_authorization`).
  *
  * @param {import('@playwright/test').Page} page
  */
@@ -165,7 +166,7 @@ export async function ensureSkillsApiAvailable(page) {
         const ctx = window.Luker?.getContext?.();
         return Boolean(ctx?.skills && typeof ctx.skills.list === 'function');
     });
-    test.skip(!hasApi, 'context.skills API not exposed — skill UI features disabled in this build');
+    expect(hasApi, 'context.skills API must be exposed by the dev server under test').toBe(true);
 }
 
 /**

@@ -54,7 +54,7 @@ async function ensureConnectionProfile(page) {
         const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
         return Array.isArray(profiles) && profiles.length > 0;
     });
-    test.skip(!hasProfile, 'no connection profile configured');
+    expect(hasProfile, 'PW_INCLUDE_INTEGRATION run requires a connection profile in the integration data dir').toBe(true);
 }
 
 test.describe('Iter-studio workspace split — CPA', () => {
@@ -284,7 +284,7 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
             const ctx = window.Luker?.getContext?.();
             return String(ctx?.characters?.[ctx?.characterId]?.avatar || '').trim();
         });
-        test.skip(!avatar, 'no active character — cannot trigger CEA char iteration popup');
+        expect(avatar, 'PW_INCLUDE_INTEGRATION run requires an active character in the integration data dir').toBeTruthy();
         return avatar;
     }
 

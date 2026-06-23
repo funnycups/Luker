@@ -83,10 +83,10 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
             return { ok: true, result };
         }, { scope: charScope });
 
-        if (!installSummary.ok) {
-            test.fixme(true, `blocker: ${installSummary.reason}`);
-            return;
-        }
+        // Install must succeed; the skills API is part of the public
+        // ctx surface that this spec depends on. If install fails, that's
+        // a real product/setup bug — fail loud instead of skipping.
+        expect(installSummary.ok, `skills install failed: ${installSummary.reason}`).toBe(true);
 
         // Confirm skill is present pre-delete.
         const beforeSkills = await page.evaluate(async (scope) => {

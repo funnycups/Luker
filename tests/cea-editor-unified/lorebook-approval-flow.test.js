@@ -34,6 +34,25 @@ globalThis.toastr = globalThis.toastr || {
     error: () => {}, warning: () => {}, success: () => {}, info: () => {},
 };
 
+// public/lib.js is handled by the global moduleNameMapper (→ tests/util/lib-stub.js).
+
+// popup.js + popup-utils must be mocked BEFORE we touch lib/edits/index.js,
+// since conflict-ui.js → popup.js → power-user.js → textgen-models.js
+// touches `document` at module-load. Register popup mock first so the
+// dynamic `import('../../public/scripts/lib/edits/index.js')` below
+// (used to forward the real applyEdits into the iteration-library mock)
+// doesn't pull the SillyTavern DOM shell.
+jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
+    POPUP_TYPE: { DISPLAY: 'display' },
+    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
+    Popup: class { constructor() {} show() { return Promise.resolve(''); } },
+}));
+
+// Forward the REAL edits engine through the iteration-library umbrella so
+// the studio's applyEdits/inverseEdit calls do real work. Other surfaces
+// stay stubbed (they need DOM and are out of scope for this test).
+const realEdits = await import('../../public/scripts/lib/edits/index.js');
+
 jest.unstable_mockModule('../../public/script.js', () => ({
     converter: { makeHtml: (s) => s },
     generateQuietPrompt: async () => '',
@@ -45,10 +64,6 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     getCharacterScenario: () => '',
     saveSettingsDebounced: () => {},
 }));
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return { DOMPurify: { sanitize: (s) => s }, lodash };
-});
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: { character_editor_assistant: {} },
     getContext: () => ({}),
@@ -58,10 +73,6 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
 jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
     addLocaleData: () => {},
     translate: (s) => s,
-}));
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    POPUP_TYPE: { DISPLAY: 'display' },
-    Popup: class { constructor() {} show() { return Promise.resolve(''); } },
 }));
 jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
     newWorldInfoEntryTemplate: {},
@@ -95,7 +106,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assis
     DEFAULT_SYSTEM_PROMPT: '',
 }));
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
-    applyEdits: () => ({ newLive: null, clean: [], conflicts: [], alreadyDone: [] }),
+    applyEdits: realEdits.applyEdits,
 }));
 jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
     openSimulationReview: () => {},

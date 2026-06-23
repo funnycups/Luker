@@ -16,10 +16,8 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     const { default: lodash } = await import('lodash');
     return { lodash, yaml: { dump: (v) => JSON.stringify(v), load: (s) => JSON.parse(s) } };
 });
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     extension_settings: {},

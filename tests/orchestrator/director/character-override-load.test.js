@@ -102,13 +102,11 @@ jest.unstable_mockModule('../../../public/scripts/i18n.js', () => ({
 }));
 // editable-spec.js → agent-resolution.js → profile-resolver.js → openai.js
 // → group-chats.js → request-compression.js → '/lib.js' (absolute URL,
-// unresolvable under Jest). Cut the chain at the orchestrator-internal
-// boundary by mocking agent-resolution so the heavy SillyTavern modules
-// never load.
-jest.unstable_mockModule('../../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+// unresolvable under Jest). Cut the chain at the connection-manager gate
+// so the real agent-resolution.js can load (it only pulls textgen-models.js
+// transitively through this entry).
+jest.unstable_mockModule('../../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 
 let loadCharacterDirectorEditorState;

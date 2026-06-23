@@ -1,11 +1,9 @@
-import { jest } from '@jest/globals';
-
-// text-diff.js's renderInlineTextDiffHtml pulls a heavy DOM-coupled bundle when
-// real markdown deps load — stub it to a sentinel string so we can assert
-// composition without running the actual line-diff.
-jest.unstable_mockModule('../../public/scripts/iteration-library/text-diff.js', () => ({
-    renderInlineTextDiffHtml: (before, after, opts) => `<div class="luker_lib_diff luker_lib_diff_dual" data-test-file-label="${opts?.fileLabel || ''}">L</div>`,
-}));
+// renderDiffCard tests — runs against the REAL text-diff.js renderer
+// (495 LOC of pure JS that does not touch the DOM at module-load time).
+// Earlier revisions stubbed `renderInlineTextDiffHtml` to a sentinel
+// string, which let every "dual-column diff was emitted" assertion pass
+// trivially. Now the real renderer runs and the assertions look for
+// classes / markers the real renderer emits.
 
 let renderDiffCard;
 beforeAll(async () => {

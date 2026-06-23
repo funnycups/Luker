@@ -1,11 +1,14 @@
 // tests/orchestrator/custom-tool-runtime-spec.test.js
 //
 // Verifies spec runtime constructs the per-run customToolRegistry at
-// orchestration entry and threads it into both the schemas and the per-
-// call executeLoopTool ctx. The spec runtime has no deps injection
-// signature, so we mock the modules it calls into: tool-calling
-// (`requestToolCallsWithRetry`) for the LLM stub and loop-tools
-// (`executeLoopTool`) for the spy on ctx.
+// orchestration entry and threads it into the per-call executeLoopTool
+// ctx. The spec runtime has no deps injection signature, so we only
+// stub the LLM (`tool-calling.js`) — the only inherently non-deterministic
+// surface. The real loop-tools / loop-runtime / agent-resolution / per-run
+// custom-tool registry all run for real. To verify the registry reached
+// `executeLoopTool`, the test profile registers a custom tool whose `body`
+// records its own dispatch (via a sidecar map) and returns a probe value
+// the LLM stub can assert reached the agent on the next round.
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
 
@@ -60,16 +63,15 @@ jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
     wi_anchor_position: {},
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override, fallback) => override || fallback || null,
-    resolveOrchestrationAgentApiPresetName: () => '',
-    resolveOrchestrationAgentPromptPresetName: () => '',
-    resolveOrchestrationRuntimeWorldInfo: async () => null,
+// Stub the connection-manager gate so the real agent-resolution.js can load
+// without pulling textgen-models.js → document.addEventListener under Node.
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 
-// LLM stub — controlled per-test via `llmResponses`.
+// LLM stub — controlled per-test via `llmResponses`. The only legitimate
+// mock surface (LLM is slow / non-deterministic). Everything else runs
+// the real product modules.
 const llmResponses = [];
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/tool-calling.js', () => ({
     appendStandardToolRoundMessages: () => {},
@@ -84,52 +86,14 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/tool-call
     makeRuntimeToolCallId: () => `tc_${Math.random().toString(36).slice(2, 10)}`,
 }));
 
-// executeLoopTool spy — captures the ctx received by each call.
-// `getEnabledToolSchemas` is left as a minimal pass-through that exposes
-// the customTools entries (mirroring the real shape from Unit 1) so the
-// spec runtime advertises them in its node tool list.
-const executeLoopToolCalls = [];
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/loop-tools.js', () => ({
-    executeLoopTool: async (name, args, ctx) => {
-        executeLoopToolCalls.push({ name, args, ctx });
-        return { ok: true, captured: true };
-    },
-    getEnabledToolSchemas: (_profile, customToolRegistry) => {
-        if (!customToolRegistry) return [];
-        const out = [];
-        for (const [, entry] of customToolRegistry) {
-            out.push(entry.schema);
-        }
-        return out;
-    },
-    // Mock mirrors the real precedence (Layer-3 → Layer-1 → Layer-2) at the
-    // level this test cares about: any name present in the per-run registry
-    // wins as 'profile'; everything else falls back to 'unknown' (this test
-    // doesn't register Layer-1/2 entries).
-    resolveToolSource: (name, ctx) => {
-        const reg = ctx?.__customToolRegistry;
-        if (reg && typeof reg.get === 'function' && reg.get(String(name || ''))) return 'profile';
-        return 'unknown';
-    },
-}));
-
-// loop-runtime exports attachToolContext / ToolError / isStructuredToolError;
-// we let the real attachToolContext return a plain object the spec runtime
-// can mutate (it adds __customToolRegistry onto whatever's returned). The
-// duck-type predicate mirrors the real implementation so cross-module
-// tool errors flow through the spec catch path correctly under test.
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/loop-runtime.js', () => ({
-    attachToolContext: async () => ({}),
-    ToolError: class ToolError extends Error {
-        constructor(message, code, hint) { super(message); this.code = code; this.hint = hint; }
-    },
-    isStructuredToolError: (err) => Boolean(
-        err && typeof err === 'object'
-        && err.name === 'ToolError' && typeof err.code === 'string',
-    ),
-}));
-
 let runSpecOrchestration;
+
+// Sidecar the custom-tool body writes into so the test can assert
+// the registry actually dispatched my_tool with the LLM's args. The
+// real executeLoopTool runs the body and the body has access to a
+// global the test reads after the run.
+const customToolDispatches = [];
+globalThis.__customToolDispatchSink = customToolDispatches;
 
 beforeAll(async () => {
     ({ runSpecOrchestration } = await import('../../public/scripts/extensions/orchestrator/spec-runtime.js'));
@@ -137,13 +101,15 @@ beforeAll(async () => {
 
 beforeEach(() => {
     llmResponses.length = 0;
-    executeLoopToolCalls.length = 0;
+    customToolDispatches.length = 0;
 });
 
 describe('spec runtime Layer-3 dispatch', () => {
     test('threads customToolRegistry into the per-call executeLoopTool ctx', async () => {
         // Profile: one stage, one worker node with memory.search enabled
-        // and a single custom tool the LLM is told to call.
+        // and a single custom tool the LLM is told to call. The body
+        // records evidence the registry dispatch worked: it pushes the
+        // received args plus a registry-presence probe onto the sidecar.
         const profile = {
             mode: 'spec',
             spec: {
@@ -159,7 +125,14 @@ describe('spec runtime Layer-3 dispatch', () => {
             },
             presets: { p1: { id: 'p1', systemPrompt: 'sys', userPromptTemplate: 'user' } },
             customTools: [
-                { name: 'my_tool', description: 'd', parameters: {}, mode: 'read', body: 'return { x: args.x };', simulateBody: '' },
+                {
+                    name: 'my_tool',
+                    description: 'd',
+                    parameters: {},
+                    mode: 'read',
+                    body: 'globalThis.__customToolDispatchSink.push({ name: "my_tool", args, hasRegistry: !!(ctx && ctx.__customToolRegistry && ctx.__customToolRegistry.has && ctx.__customToolRegistry.has("my_tool")) }); return { x: args.x };',
+                    simulateBody: '',
+                },
             ],
         };
 
@@ -178,11 +151,11 @@ describe('spec runtime Layer-3 dispatch', () => {
         const messages = [];
         await runSpecOrchestration({}, { signal: new AbortController().signal }, messages, profile);
 
-        // executeLoopTool spy was called for my_tool; the ctx it received
-        // carries the per-run customToolRegistry with the entry compiled.
-        const myToolCall = executeLoopToolCalls.find(c => c.name === 'my_tool');
+        // The real executeLoopTool dispatched my_tool. The body ran with
+        // the LLM's args and saw the per-run customToolRegistry on ctx.
+        const myToolCall = customToolDispatches.find(c => c.name === 'my_tool');
         expect(myToolCall).toBeTruthy();
-        expect(myToolCall.ctx.__customToolRegistry).toBeTruthy();
-        expect(myToolCall.ctx.__customToolRegistry.has('my_tool')).toBe(true);
+        expect(myToolCall.args).toEqual({ x: 5 });
+        expect(myToolCall.hasRegistry).toBe(true);
     });
 });

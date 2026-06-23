@@ -28,9 +28,7 @@
  *         - a connection profile configured in the user dir (Claude /
  *           OpenAI / Anthropic / Gemini) with a working API key, AND
  *         - the data dir has at least one selectable character card.
- *       If either is missing the pass `test.skip()`s with a precise
- *       reason — the smoke pass still runs and is the assertion of
- *       record for the regex-search wiring.
+ *       Missing env hard-fails the pass — the smoke pass still runs.
  *
  * Why both passes live in one file:
  *   The smoke pass is the deterministic regression contract for the
@@ -201,31 +199,22 @@ test.describe('Orchestrator: critic regex-search flow', () => {
 
         // ── (B) Full critic dispatch — real director run ─────────────
         // Requires both a configured connection profile and a loaded
-        // character. Soft-skip the rest of the test when either is
-        // missing so the smoke pass still counts as a green run.
+        // character. These specs run only under PW_INCLUDE_INTEGRATION
+        // — when the developer opted in, they accepted responsibility
+        // for setting up the integration env (`tests/e2e/README.md`
+        // §integration). Missing env is a setup bug, not a silent skip.
         const env = await prepareDirectorEnv(page);
-        test.skip(
-            !env.ok,
-            `critic dispatch pass requires ${env.reason}; smoke pass still asserts the regex-search return shape`,
-        );
-        if (!env.ok) return; // Belt-and-suspenders: ensure no further code runs after skip.
+        expect(env.ok, `critic dispatch pass requires ${env.reason}`).toBe(true);
 
         // Wait for the orchestrator extension to populate its preset
-        // library. It loads asynchronously after the main bootstrap; if
-        // we tried to mutate the active preset before it's there, the
-        // snapshot-and-restore block would throw.
-        try {
-            await page.waitForFunction(
-                () => {
-                    const s = window.Luker?.getContext?.()?.extensionSettings?.orchestrator;
-                    return Boolean(s?.presetLibraries?.director && s?.activePresetIds);
-                },
-                { timeout: 30000 },
-            );
-        } catch {
-            test.skip(true, 'orchestrator preset library is not initialized in this session; smoke pass still asserts the regex-search return shape');
-            return;
-        }
+        // library. It loads asynchronously after the main bootstrap.
+        await page.waitForFunction(
+            () => {
+                const s = window.Luker?.getContext?.()?.extensionSettings?.orchestrator;
+                return Boolean(s?.presetLibraries?.director && s?.activePresetIds);
+            },
+            { timeout: 30000 },
+        );
 
         // Mode + critic-tool gating. Critics ship with `chat.read_range`
         // only; the new skill texts ask them to use `chat_search` /
@@ -492,7 +481,7 @@ test.describe('Orchestrator: critic regex-search flow', () => {
  * Probe the env to decide whether pass (B) can run. Returns
  * `{ ok: true }` when both a working connection profile is activated
  * and a character is loaded; otherwise `{ ok: false, reason }` so the
- * caller can `test.skip()` with a precise message.
+ * caller can hard-fail with a precise message.
  */
 async function prepareDirectorEnv(page) {
     // The connection-manager extension initializes asynchronously AFTER

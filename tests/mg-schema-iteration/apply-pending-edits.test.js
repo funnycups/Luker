@@ -26,8 +26,9 @@
 //   - `_testOnly_createNewSession` (module-level export) — returns the
 //     baseline session shape that the preservation patch overlays on.
 //   - Closure paths (clearAllHistory ordering, the startNewSession patch
-//     itself) are covered by mirroring the same control-flow against a
-//     local fixture, which encodes the expected ordering contract.
+//     itself) are covered by STRUCTURAL ASSERTIONS against the real
+//     studio.js source text (read via fs) at the bottom of this file — a
+//     regression in the closure's control flow trips those expectations.
 
 import { describe, test, expect, jest } from '@jest/globals';
 
@@ -185,133 +186,193 @@ describe('MG schema — createNewSession baseline shape', () => {
     });
 });
 
-describe('MG schema — startNewSession autoApply preservation (MG-10)', () => {
-    // Mirrors the closure logic in studio.js#startNewSession lines 681-689:
-    //   - read priorAutoApply from state.session?.surfaceState?.autoApply
-    //   - overlay { autoApply: true } on the new session ONLY when prior was true
-    // Encoding it as a local helper proves the contract and guards against
-    // someone "simplifying" the patch back into the surface-state default.
-    function applyAutoApplyPreservation(priorSession, newSession) {
-        const priorAutoApply = Boolean(priorSession?.surfaceState?.autoApply);
-        if (priorAutoApply) {
-            newSession.surfaceState = {
-                ...(newSession.surfaceState || {}),
-                autoApply: true,
-            };
-        }
-        return newSession;
+// ---------------------------------------------------------------------------
+// Structural assertions against the actual studio.js source.
+//
+// The previous version of these two describe blocks defined local mirror
+// helpers (`applyAutoApplyPreservation`, `clearAllHistoryMirror`) inside the
+// test file and validated those LOCAL copies. That pattern is banned by the
+// `feedback_e2e_must_expose_real_bugs` rule: an in-file re-implementation
+// locks the test's own copy, not the product — `studio.js` could regress
+// (drop the autoApply overlay, reorder abort-vs-delete) and the test would
+// still pass because it never reads the product file.
+//
+// `startNewSession` and `clearAllHistory` are closure-private inside
+// `openSchemaIterationStudio` and can't be invoked directly under jest, and
+// exposing them as `_testOnly_*` exports would be an invasive product change
+// just for test convenience. The structural-assertion approach used in
+// `tests/memory-graph/injection-window.test.js` (lines 307+) is the right
+// fit here: read the source via fs and assert on the actual function-body
+// text. A regression deleting the overlay or reordering the abort would
+// flip these expectations.
+// ---------------------------------------------------------------------------
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve as resolvePath } from 'node:path';
+
+const __mgSchemaTestDir = dirname(fileURLToPath(import.meta.url));
+const STUDIO_JS = readFileSync(
+    resolvePath(
+        __mgSchemaTestDir, '..', '..',
+        'public', 'scripts', 'extensions', 'memory-graph', 'schema-iteration', 'studio.js',
+    ),
+    'utf8',
+);
+
+// Extract a top-level `async function NAME(...) { ... }` body by balanced-brace
+// scan from the function declaration. Returns the body text between the
+// opening `{` and its matching `}`. The whole-file regex flavor used in
+// injection-window.test.js relies on `\n}\n` as a terminator, which works
+// when the function is followed by a blank line — it isn't always here, so
+// we do an honest brace walk instead.
+function extractAsyncFnBody(source, name) {
+    const decl = new RegExp(`async\\s+function\\s+${name}\\s*\\([^)]*\\)\\s*\\{`);
+    const m = decl.exec(source);
+    if (!m) return null;
+    let depth = 1;
+    let i = m.index + m[0].length;
+    const start = i;
+    while (i < source.length && depth > 0) {
+        const ch = source[i];
+        if (ch === '{') depth += 1;
+        else if (ch === '}') depth -= 1;
+        i += 1;
     }
+    if (depth !== 0) return null;
+    return source.slice(start, i - 1);
+}
 
-    test('preserves autoApply=true from the prior session', () => {
-        const prior = { surfaceState: { historyOpen: true, autoApply: true } };
-        const fresh = _testOnly_createNewSession();
-        const result = applyAutoApplyPreservation(prior, fresh);
-        expect(result.surfaceState.autoApply).toBe(true);
-        // historyOpen is NOT preserved — only the autoApply pref carries.
-        expect(result.surfaceState.historyOpen).toBe(false);
+describe('MG schema — startNewSession autoApply preservation (MG-10) [structural]', () => {
+    // Closure body in studio.js (lines ~1221-1250 at time of writing).
+    // The contract we guard:
+    //   1. priorAutoApply is captured from state.session?.surfaceState?.autoApply
+    //      BEFORE the new session is created (so the read sees the old session,
+    //      not the just-overwritten one).
+    //   2. The overlay sets `autoApply: true` only when priorAutoApply was truthy.
+    //   3. No other surfaceState field is preserved — historyOpen et al. reset
+    //      to the createNewSession default (verified by the baseline-shape
+    //      describe above, which exercises the real export).
+    let body;
+    beforeAll(() => {
+        body = extractAsyncFnBody(STUDIO_JS, 'startNewSession');
+        expect(body).not.toBeNull();
     });
 
-    test('leaves autoApply=false when the prior session had it off', () => {
-        const prior = { surfaceState: { historyOpen: false, autoApply: false } };
-        const fresh = _testOnly_createNewSession();
-        const result = applyAutoApplyPreservation(prior, fresh);
-        expect(result.surfaceState.autoApply).toBe(false);
+    test('captures priorAutoApply from state.session?.surfaceState?.autoApply', () => {
+        // The Boolean() coercion is load-bearing: a missing surfaceState would
+        // otherwise leak `undefined` into the overlay branch.
+        expect(body).toMatch(
+            /priorAutoApply\s*=\s*Boolean\(\s*state\.session\?\.surfaceState\?\.autoApply\s*\)/,
+        );
     });
 
-    test('treats missing prior surfaceState as autoApply=false', () => {
-        // First-run case: no prior session exists yet.
-        const result = applyAutoApplyPreservation(null, _testOnly_createNewSession());
-        expect(result.surfaceState.autoApply).toBe(false);
+    test('read of priorAutoApply happens BEFORE state.session = createNewSession()', () => {
+        // If the read landed after the overwrite, it would always observe the
+        // fresh session's `autoApply: false` default and the overlay would
+        // never fire.
+        const priorReadIdx = body.indexOf('priorAutoApply');
+        const overwriteIdx = body.search(/state\.session\s*=\s*createNewSession\(\)/);
+        expect(priorReadIdx).toBeGreaterThan(-1);
+        expect(overwriteIdx).toBeGreaterThan(-1);
+        expect(priorReadIdx).toBeLessThan(overwriteIdx);
     });
 
-    test('treats prior session with no surfaceState field as autoApply=false', () => {
-        // Defensive: an older persisted session might be missing the
-        // surfaceState key entirely.
-        const prior = { id: 'old', messages: [] };
-        const result = applyAutoApplyPreservation(prior, _testOnly_createNewSession());
-        expect(result.surfaceState.autoApply).toBe(false);
+    test('overlays autoApply: true conditionally on priorAutoApply being truthy', () => {
+        // The `if (priorAutoApply)` gate + `autoApply: true` literal inside
+        // the spread. The structure is what we guard — a regression that
+        // drops the gate (always overlay) or drops the literal would fail.
+        expect(body).toMatch(
+            /if\s*\(\s*priorAutoApply\s*\)\s*\{[\s\S]*?state\.session\.surfaceState\s*=\s*\{[\s\S]*?\.\.\.\(\s*state\.session\.surfaceState\s*\|\|\s*\{\}\s*\)[\s\S]*?autoApply:\s*true[\s\S]*?\}/,
+        );
+    });
+
+    test('does NOT preserve any field other than autoApply', () => {
+        // Defensive: a refactor that adds e.g. `historyOpen: priorSession?.surfaceState?.historyOpen`
+        // to the overlay would break the contract. The overlay block must
+        // set exactly one key (autoApply). We isolate the `if (priorAutoApply) { ... }`
+        // block (balanced-brace scan) and assert the keys assigned inside it
+        // are exactly ['autoApply'] — no historyOpen, no other surface field.
+        const ifIdx = body.search(/if\s*\(\s*priorAutoApply\s*\)\s*\{/);
+        expect(ifIdx).toBeGreaterThan(-1);
+        // Walk to the matching brace from the if's opening `{`.
+        const openIdx = body.indexOf('{', ifIdx);
+        let depth = 1;
+        let j = openIdx + 1;
+        while (j < body.length && depth > 0) {
+            if (body[j] === '{') depth += 1;
+            else if (body[j] === '}') depth -= 1;
+            j += 1;
+        }
+        const overlayBody = body.slice(openIdx + 1, j - 1);
+        // Find the inner object literal assigned to state.session.surfaceState.
+        const innerObj = overlayBody.match(/state\.session\.surfaceState\s*=\s*\{([\s\S]*?)\};/);
+        expect(innerObj).not.toBeNull();
+        // Walk the object literal at its own depth, collecting top-level keys.
+        // Skip the `...spread` entry, count only the literal `key: value` pairs.
+        const objText = innerObj[1];
+        // Remove the spread; whatever's left after the spread is the explicit
+        // key-set list. Top-level keys appear as `KEY:` after a comma or at start.
+        const explicit = objText
+            .replace(/\.\.\.\([^)]*\)\s*,?/g, '')   // drop the spread
+            .replace(/\([^()]*\)/g, '')             // strip nested parens
+            .replace(/\[[^\[\]]*\]/g, '');          // strip nested brackets
+        const keyMatches = [...explicit.matchAll(/(?:^|,)\s*(\w+)\s*:/g)].map(m => m[1]);
+        expect(keyMatches).toEqual(['autoApply']);
     });
 });
 
-describe('MG schema — clearAllHistory abort-then-delete ordering', () => {
-    // The studio's clearAllHistory closure does:
-    //
-    //   1. confirm() — bail if cancelled
-    //   2. state.abortController?.abort()       ← MUST happen first
-    //   3. state.isBusy = false; abortController = null
-    //   4. sessionStore.list() → delete each
-    //   5. startNewSession()
-    //
-    // Step 2 must precede step 4 so a still-running LLM call can't land its
-    // response on a session that's about to be wiped (which would re-stamp
-    // the freshly-seeded session that step 5 produces).
-    //
-    // The closure can't be invoked directly under jest. The test below
-    // mirrors the same control flow against a local fixture and asserts the
-    // abort hits before any delete call, which encodes the ordering contract.
-
-    async function clearAllHistoryMirror(state, sessionStore, startNewSession) {
-        try { state.abortController?.abort(); } catch { /* ignore */ }
-        state.isBusy = false;
-        state.abortController = null;
-        const metas = await sessionStore.list();
-        for (const meta of metas) {
-            await sessionStore.delete(meta.id);
-        }
-        await startNewSession();
-    }
-
-    test('abort() is called before any sessionStore.delete()', async () => {
-        const callLog = [];
-        const abortController = {
-            abort: jest.fn(() => callLog.push('abort')),
-        };
-        const sessionStore = {
-            list: jest.fn(async () => {
-                callLog.push('list');
-                return [{ id: 's1' }, { id: 's2' }];
-            }),
-            delete: jest.fn(async (id) => { callLog.push(`delete:${id}`); }),
-        };
-        const startNewSession = jest.fn(async () => { callLog.push('newSession'); });
-        const state = { abortController, isBusy: true };
-        await clearAllHistoryMirror(state, sessionStore, startNewSession);
-        // Ordering: abort must come first, before any list/delete/newSession.
-        expect(callLog[0]).toBe('abort');
-        expect(callLog).toEqual([
-            'abort',
-            'list',
-            'delete:s1',
-            'delete:s2',
-            'newSession',
-        ]);
+describe('MG schema — clearAllHistory abort-then-delete ordering [structural]', () => {
+    // Closure body in studio.js (lines ~1252-1266 at time of writing).
+    // The contract: any in-flight LLM call MUST be aborted before sessions
+    // are deleted, otherwise a slow response could land in the freshly-
+    // seeded post-clear session and re-stamp it.
+    let body;
+    beforeAll(() => {
+        body = extractAsyncFnBody(STUDIO_JS, 'clearAllHistory');
+        expect(body).not.toBeNull();
     });
 
-    test('isBusy and abortController are cleared after abort', async () => {
-        const sessionStore = {
-            list: jest.fn(async () => []),
-            delete: jest.fn(),
-        };
-        const startNewSession = jest.fn();
-        const state = {
-            abortController: { abort: jest.fn() },
-            isBusy: true,
-        };
-        await clearAllHistoryMirror(state, sessionStore, startNewSession);
-        expect(state.isBusy).toBe(false);
-        expect(state.abortController).toBeNull();
+    test('calls state.abortController?.abort() in the body', () => {
+        expect(body).toMatch(/state\.abortController\?\.abort\(\)/);
     });
 
-    test('survives a null abortController (no in-flight call)', async () => {
-        const sessionStore = {
-            list: jest.fn(async () => [{ id: 'only' }]),
-            delete: jest.fn(),
-        };
-        const startNewSession = jest.fn();
-        const state = { abortController: null, isBusy: false };
-        await expect(
-            clearAllHistoryMirror(state, sessionStore, startNewSession),
-        ).resolves.toBeUndefined();
-        expect(sessionStore.delete).toHaveBeenCalledWith('only');
+    test('calls sessionStore.delete(...) in the body', () => {
+        expect(body).toMatch(/sessionStore\.delete\s*\(/);
+    });
+
+    test('abort() is positioned BEFORE the first sessionStore.delete() call', () => {
+        // The ordering contract. If a refactor moves the abort below the
+        // delete loop, this assertion flips and the regression is caught.
+        const abortIdx = body.indexOf('state.abortController?.abort()');
+        const deleteIdx = body.search(/sessionStore\.delete\s*\(/);
+        expect(abortIdx).toBeGreaterThan(-1);
+        expect(deleteIdx).toBeGreaterThan(-1);
+        expect(abortIdx).toBeLessThan(deleteIdx);
+    });
+
+    test('clears state.abortController and state.isBusy AFTER abort()', () => {
+        // The cleanup sequence: abort → isBusy=false → abortController=null →
+        // delete loop. Both reset lines must appear after the abort, before
+        // the delete loop reaches the store.
+        const abortIdx = body.indexOf('state.abortController?.abort()');
+        const isBusyResetIdx = body.search(/state\.isBusy\s*=\s*false/);
+        const abortCtrlResetIdx = body.search(/state\.abortController\s*=\s*null/);
+        const deleteIdx = body.search(/sessionStore\.delete\s*\(/);
+        expect(isBusyResetIdx).toBeGreaterThan(abortIdx);
+        expect(abortCtrlResetIdx).toBeGreaterThan(abortIdx);
+        expect(isBusyResetIdx).toBeLessThan(deleteIdx);
+        expect(abortCtrlResetIdx).toBeLessThan(deleteIdx);
+    });
+
+    test('confirm() guard still bails before any abort/delete (the early-return shape)', () => {
+        // The very first statement after the function signature is the
+        // confirm() bail. If a regression dropped this guard, an accidental
+        // click would wipe history without prompting. Assert the early
+        // `if (!confirm(...)) return;` shape sits before the abort.
+        const confirmIdx = body.search(/if\s*\(\s*!\s*confirm\s*\([\s\S]*?\)\s*\)\s*return/);
+        const abortIdx = body.indexOf('state.abortController?.abort()');
+        expect(confirmIdx).toBeGreaterThan(-1);
+        expect(confirmIdx).toBeLessThan(abortIdx);
     });
 });

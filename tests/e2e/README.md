@@ -83,26 +83,7 @@ generating these specs. Quick rules:
 
 ## Bugs locked
 
-The suite intentionally fails-as-expected on these (each wrapped in
-`test.fail('...')`):
-
-- `memorygraph/54-mg-apply-multi-edit.e2e.js` and
-  `regression/115-mg-apply-multi-edit.e2e.js` — `applyPendingEdits`
-  silently drops 2+ empty-path edits in one batch (last-wins replace,
-  not merge). Fix is the rollbackBatch every-gate pattern.
-- `memorygraph/60-mg-var-ops-cooperation.e2e.js` — bare
-  `setVariable(name, value)` without a `floor` option trips a
-  `ReferenceError` because `saveMetadataDebounced` is called but never
-  imported in `public/script.js`. Floor-scoped path is fine.
-- `iterstudio/82-cea-character-apply-persist.e2e.js` — CEA character
-  editor's Apply path silently writes the OLD description to disk when
-  a card carries both a v1 legacy root `description` and a v2
-  `data.description` (the canonical in-memory shape). Trace in the
-  spec's header comment.
-- `preset/33-save-switch-reflect.e2e.js` — preset switch-away/back loses
-  alias-mapped fields (`openai_max_tokens`, etc). savePreset writes
-  them to disk, but the re-apply path on switch back reads from the
-  base preset.
-
-When a fix lands, the test flips to ✓ and the `test.fail` must be
-removed.
+None at present. When a regression lands that you cannot fix in the
+same change, wrap the failing assertion in `test.fail('<reason>')` and
+add a row here naming the spec and the broken behaviour. Removing the
+`test.fail` (and this row) is part of the fix.

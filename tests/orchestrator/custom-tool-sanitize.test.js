@@ -63,10 +63,10 @@ jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
     wi_anchor_position: {},
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+// Stub the connection-manager gate so the real agent-resolution.js can load
+// without pulling textgen-models.js → document.addEventListener under Node.
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 
 let sanitizeLoopProfile;

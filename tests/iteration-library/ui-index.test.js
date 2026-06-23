@@ -1,30 +1,24 @@
-import { jest } from '@jest/globals';
-
-// `iteration-library/index.js` re-exports edits/index.js and conflict-ui.js,
-// which transitively pull lib.js (lodash bundle) and popup.js (DOM-bound).
-// Mock both at the direct-import boundary so the umbrella resolves under Jest.
-jest.unstable_mockModule('../../public/scripts/lib/edits/index.js', () => ({
-    applyEdits: jest.fn(),
-    inverseEdit: jest.fn(),
-    registerOp: jest.fn(),
-    BUILT_IN_OPS: {},
-}));
-jest.unstable_mockModule('../../public/scripts/lib/edits/conflict-ui.js', () => ({
-    showConflictResolution: jest.fn(),
-}));
+// iteration-library/ui umbrella — re-export contract.
+//
+// This is a sanity check that the ui umbrella keeps the four canonical
+// namespaces (toolcall / message / diff / apply) and the styles helper
+// in its public surface. It runs against the REAL module — no mocks —
+// because every dep in the chain (edits/index.js → text-diff.js,
+// conflict-ui.js) is plain JS and load-bearing for the actual UI.
+//
+// We intentionally do NOT load the broader `iteration-library/index.js`
+// umbrella here: it re-exports `runner` / `storage` / `tools` /
+// `proposalBus` which transitively pull browser-only modules
+// (textgen-models.js touches `document` at top level). Coverage of the
+// full umbrella belongs in the browser-hosted e2e suite.
 
 describe('iteration-library/ui umbrella', () => {
-    it('re-exports the four ui modules as namespaces', async () => {
+    it('re-exports toolcall / message / diff / apply namespaces + ensureUiStylesheetInjected', async () => {
         const ui = await import('../../public/scripts/iteration-library/ui/index.js');
         expect(ui.toolcall).toBeDefined();
         expect(ui.message).toBeDefined();
         expect(ui.diff).toBeDefined();
         expect(ui.apply).toBeDefined();
-    });
-
-    it('iteration-library index re-exports ui', async () => {
-        const lib = await import('../../public/scripts/iteration-library/index.js');
-        expect(lib.ui).toBeDefined();
-        expect(typeof lib.ui).toBe('object');
+        expect(typeof ui.ensureUiStylesheetInjected).toBe('function');
     });
 });

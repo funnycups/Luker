@@ -8,20 +8,14 @@
  *
  * Dogfood tests (§5) live in a sibling file (Phase 5).
  *
- * read-api.js imports from `./main.js`, which transitively imports
- * `../../../script.js` and `./lib.js`. Both of those touch DOM (jQuery /
- * Popper / document) at module-load and reference the webpack-bundled
- * `lib.core.bundle.js` that does not exist outside a build. We therefore
- * mock `./main.js` and `./vector-index.js` with faithful, in-process
- * implementations of the exact helpers read-api.js consumes — and `./graph-ops.js`
- * + `./external-api.js` (both pure / DOM-free) load for real.
- *
- * The mock implementations follow the same contracts as their main.js
- * counterparts so read-api's wrapping/freezing/factory behavior is
- * exercised end-to-end against in-memory store fixtures.
+ * Uses the shared `_mocks/main-module-stack.js` shim so the real `main.js`
+ * loads under jest. vector-index and character-overrides keep small in-file
+ * mocks (the former needs an embedder, the latter reads the global
+ * `extension_settings`).
  */
 
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
+import './_mocks/main-module-stack.js';
 
 // ---------------------------------------------------------------------------
 // Test holders — let mocks read settings / vector config from a per-test slot
@@ -34,479 +28,69 @@ const testHolder = {
 
 // ---------------------------------------------------------------------------
 // Mock: ./vector-index.js — no real embedding service in unit tests.
+//
+// main.js + retriever.js between them import the full surface of
+// vector-index.js. Tests only exercise findSimilarNodes /
+// getVectorConfigFromSettings; the rest are stubbed to no-ops so the
+// namespace imports in main.js/retriever.js succeed.
 // ---------------------------------------------------------------------------
 jest.unstable_mockModule(
     '../../public/scripts/extensions/memory-graph/vector-index.js',
     () => ({
         findSimilarNodes: jest.fn(async () => testHolder.vectorHits || []),
         getVectorConfigFromSettings: jest.fn(() => testHolder.vectorProfile),
+        getRerankProfileFromSettings: jest.fn(() => null),
+        validateVectorConfig: () => ({ ok: true }),
+        syncVectorIndex: async () => ({}),
+        ensureVectorIndexState: () => ({}),
+        // re-exports from vector-index-core via vector-index.js
+        buildCollectionId: () => '',
+        buildNodeVectorText: () => '',
+        buildNodeVectorHash: () => '',
+        computeVectorSyncPlan: () => ({ inserts: [], deletes: [] }),
+        // EmbeddingService-backed helpers used by retriever.js
+        queryVectorCollection: async () => [],
+        queryVectorCollectionByVector: async () => [],
+        rerankDocuments: async (_q, docs) => docs,
+        insertVectorItems: async () => ({}),
+        deleteVectorItems: async () => ({}),
+        purgeVectorCollection: async () => ({}),
     }),
 );
 
 // ---------------------------------------------------------------------------
 // Mock: ./character-overrides.js — bypass the global `extension_settings`
-// dance. We feed settings via the holder and return them verbatim.
+// dance. Tests inject settings via `testHolder.settings`; we return that
+// when set, otherwise fall through to the caller-supplied base settings.
+// main.js destructures more names than read-api.js does; the unused ones are
+// stubbed to identity / null so the namespace import succeeds.
 // ---------------------------------------------------------------------------
 jest.unstable_mockModule(
     '../../public/scripts/extensions/memory-graph/character-overrides.js',
     () => ({
         configure: () => {},
-        getEffectiveSettings: (_context, baseSettings) => baseSettings || testHolder.settings,
-        getEffectiveNodeTypeSchema: (_context, settings) => {
-            const s = settings || testHolder.settings;
+        getCurrentAvatar: () => '',
+        getCharacterByAvatar: () => null,
+        getCharacterIndexByAvatar: () => -1,
+        getCharacterDisplayNameByAvatar: () => '',
+        getCharacterExtensionDataByAvatar: () => ({}),
+        getCharacterSchemaOverrideByAvatar: () => null,
+        getCharacterAdvancedOverrideByAvatar: () => null,
+        getEffectiveAdvancedSettings: (_context, baseSettings) => testHolder.settings || baseSettings || {},
+        getEffectiveSettings: (_context, baseSettings) => testHolder.settings || baseSettings || {},
+        getEffectiveNodeTypeSchema: (_context, _settings) => {
+            // Prefer the test holder; fall through to whatever settings the
+            // caller resolved (real getSettings() backing extension_settings).
+            const s = testHolder.settings || _settings;
             return Array.isArray(s?.nodeTypeSchema) ? s.nodeTypeSchema : [];
         },
+        getSchemaScopeInfo: () => ({ avatar: '', characterName: '', hasOverride: false, effectiveSchema: [] }),
+        getAdvancedScopeInfo: () => ({ avatar: '', characterName: '', hasOverride: false, effectiveSettings: {} }),
+        persistCharacterSchemaOverride: async () => {},
+        removeCharacterSchemaOverride: async () => {},
+        persistCharacterAdvancedOverride: async () => {},
+        removeCharacterAdvancedOverride: async () => {},
     }),
-);
-
-// ---------------------------------------------------------------------------
-// Mock: ./main.js — re-implement only the exports read-api.js imports.
-//
-// Every helper here mirrors the production semantics documented in main.js.
-// Where the production code is short and self-contained (compareNodesByRecency,
-// getNearestVisibleAncestorId, buildProjectedEdges, getChildren, ...) we copy
-// the logic verbatim. For the heavier helpers (collectRootCandidates,
-// expandRouteCandidates, formatNodeBrief) we ship a faithful reduction that
-// preserves the behavior under test.
-// ---------------------------------------------------------------------------
-jest.unstable_mockModule(
-    '../../public/scripts/extensions/memory-graph/main.js',
-    () => {
-        // Local pure helpers, mirroring main.js shape exactly.
-        function _isRecallDiagnosticNode(node) {
-            const type = String(node?.type || '').trim().toLowerCase();
-            return type === 'recall' || type.startsWith('recall_');
-        }
-
-        function _getChildren(store, nodeId) {
-            const node = store?.nodes?.[nodeId];
-            if (!node || !Array.isArray(node.childrenIds)) return [];
-            return node.childrenIds
-                .map(id => store.nodes[id])
-                .filter(child => Boolean(child) && !child.archived);
-        }
-
-        function _getNearestVisibleAncestorId(store, nodeId, visibleSet) {
-            const target = String(nodeId || '').trim();
-            if (!target) return '';
-            const set = visibleSet instanceof Set ? visibleSet : new Set();
-            let currentId = target;
-            const guard = new Set();
-            while (currentId && !guard.has(currentId)) {
-                guard.add(currentId);
-                const node = store?.nodes?.[currentId];
-                if (!node || node.archived) return '';
-                if (set.has(currentId)) return currentId;
-                currentId = String(node.parentId || '').trim();
-            }
-            return '';
-        }
-
-        function _buildProjectedEdges(store, {
-            visibleNodeIds = null,
-            relationTypes = null,
-            excludeInternal = false,
-        } = {}) {
-            const visibleSet = visibleNodeIds instanceof Set
-                ? visibleNodeIds
-                : Array.isArray(visibleNodeIds)
-                    ? new Set(visibleNodeIds.map(id => String(id || '').trim()).filter(Boolean))
-                    : new Set(
-                        Object.values(store?.nodes || {})
-                            .filter(node => node && !node.archived)
-                            .map(node => String(node.id || '').trim())
-                            .filter(Boolean),
-                    );
-            const relationAllow = Array.isArray(relationTypes) && relationTypes.length > 0
-                ? new Set(relationTypes.map(t => String(t || '').toLowerCase().trim()).filter(Boolean))
-                : null;
-            const internalEdgeTypes = new Set(['contains', 'semantic_contains']);
-            const merged = new Map();
-            for (const edge of store?.edges || []) {
-                if (!edge) continue;
-                const edgeType = String(edge.type || '').toLowerCase().trim() || 'related';
-                if (excludeInternal && internalEdgeTypes.has(edgeType)) continue;
-                if (relationAllow && !relationAllow.has(edgeType)) continue;
-                const fromVisible = _getNearestVisibleAncestorId(store, edge.from, visibleSet);
-                const toVisible = _getNearestVisibleAncestorId(store, edge.to, visibleSet);
-                if (!fromVisible || !toVisible || fromVisible === toVisible) continue;
-                const key = `${fromVisible}::${toVisible}::${edgeType}`;
-                const current = merged.get(key);
-                if (!current) {
-                    merged.set(key, { from: fromVisible, to: toVisible, type: edgeType, weight: 1 });
-                    continue;
-                }
-                current.weight = Number(current.weight || 0) + 1;
-            }
-            return Array.from(merged.values());
-        }
-
-        function _buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes = null, limit = 10 } = {}) {
-            if (!nodeId) return { degree: 0, relations: [], sample_neighbors: [] };
-            const visibleSet = nodeSet instanceof Set
-                ? nodeSet
-                : Array.isArray(nodeSet)
-                    ? new Set(nodeSet.map(id => String(id || '').trim()).filter(Boolean))
-                    : null;
-            const projectedEdges = _buildProjectedEdges(store, {
-                visibleNodeIds: visibleSet,
-                relationTypes,
-                excludeInternal: false,
-            });
-            const byRelation = new Map();
-            const neighborIds = new Set();
-            let degree = 0;
-            for (const edge of projectedEdges) {
-                const edgeType = String(edge.type || '').toLowerCase().trim() || 'related';
-                let neighborId = '';
-                let direction = '';
-                if (edge.from === nodeId) {
-                    neighborId = String(edge.to || '');
-                    direction = 'out';
-                } else if (edge.to === nodeId) {
-                    neighborId = String(edge.from || '');
-                    direction = 'in';
-                } else {
-                    continue;
-                }
-                if (!neighborId) continue;
-                if (visibleSet && !visibleSet.has(neighborId)) continue;
-                if (!store.nodes[neighborId] || store.nodes[neighborId].archived) continue;
-                const supportCount = Math.max(1, Number(edge?.weight || 1));
-                degree += supportCount;
-                neighborIds.add(neighborId);
-                const key = `${edgeType}:${direction}`;
-                byRelation.set(key, Number(byRelation.get(key) || 0) + supportCount);
-            }
-            const relationRows = Array.from(byRelation.entries())
-                .map(([key, count]) => {
-                    const [relation, direction] = key.split(':');
-                    return { relation, direction, count };
-                })
-                .sort((a, b) => b.count - a.count);
-            const sampleNeighbors = Array.from(neighborIds)
-                .slice(0, Math.max(1, Number(limit || 10)))
-                .map(id => {
-                    const node = store.nodes[id];
-                    return {
-                        id,
-                        type: String(node?.type || ''),
-                        title: String(node?.title || ''),
-                    };
-                });
-            return { degree, relations: relationRows, sample_neighbors: sampleNeighbors };
-        }
-
-        function _compareNodesByRecency(a, b) {
-            const aSeq = Number(a?.seqTo ?? -1);
-            const bSeq = Number(b?.seqTo ?? -1);
-            if (aSeq !== bSeq) return bSeq - aSeq;
-            const aDepth = Number(a?.semanticDepth ?? 0);
-            const bDepth = Number(b?.semanticDepth ?? 0);
-            if (aDepth !== bDepth) return bDepth - aDepth;
-            return String(a?.id || '').localeCompare(String(b?.id || ''));
-        }
-
-        function _getSemanticTypeSpec(settings, type, _context = null) {
-            const list = Array.isArray(settings?.nodeTypeSchema) ? settings.nodeTypeSchema : [];
-            return list.find(s => String(s?.id || '').toLowerCase() === String(type || '').toLowerCase()) || null;
-        }
-
-        function _getSemanticCompressionConfig(settings, type, _context = null) {
-            const spec = _getSemanticTypeSpec(settings, type);
-            const raw = spec?.compression && typeof spec.compression === 'object' ? spec.compression : {};
-            const mode = ['none', 'hierarchical'].includes(String(raw.mode || '').toLowerCase())
-                ? String(raw.mode).toLowerCase()
-                : 'none';
-            return {
-                mode,
-                threshold: Math.max(2, Number(raw.threshold) || 6),
-                fanIn: Math.max(2, Number(raw.fanIn) || 3),
-                maxDepth: Math.max(1, Number(raw.maxDepth) || 6),
-                keepRecentLeaves: Math.max(0, Number(raw.keepRecentLeaves) || 0),
-                rule: String(raw.rule || '').trim(),
-                summarizeInstruction: String(raw.summarizeInstruction || '').trim(),
-                label: String(spec?.label || type || 'Semantic'),
-            };
-        }
-
-        function _collectSemanticRootsByDepth(store, type, depth, options = {}) {
-            const rawMaxSeq = options?.maxSeq;
-            const maxSeq = (rawMaxSeq !== null && rawMaxSeq !== undefined && Number.isFinite(Number(rawMaxSeq)))
-                ? Math.max(0, Math.floor(Number(rawMaxSeq)))
-                : null;
-            const targetType = String(type || '').toLowerCase();
-            return Object.values(store?.nodes || {})
-                .filter(node => Boolean(node) && !node.archived)
-                .filter(node => String(node?.level || '') === 'semantic')
-                .filter(node => String(node?.type || '').toLowerCase() === targetType)
-                .filter(node => Number(node?.semanticDepth ?? 0) === Number(depth))
-                .filter(node => !String(node.parentId || '').trim())
-                .filter(node => maxSeq === null || Number(node?.seqTo ?? 0) <= maxSeq)
-                .sort((a, b) => {
-                    const aTo = Number(a.seqTo ?? 0);
-                    const bTo = Number(b.seqTo ?? 0);
-                    if (aTo !== bTo) return aTo - bTo;
-                    return String(a?.id || '').localeCompare(String(b?.id || ''));
-                });
-        }
-
-        function _getNodeRecallExposure(settings, node, _context = null) {
-            if (!node) return 'high_only';
-            if (node.level !== 'semantic') return 'high_only';
-            const config = _getSemanticCompressionConfig(settings, node.type);
-            if (config.mode === 'hierarchical') return 'high_only';
-            return 'full';
-        }
-
-        function _getSchemaProjectionColumns(spec = null) {
-            return Array.isArray(spec?.tableColumns)
-                ? spec.tableColumns.map(c => String(c || '').trim()).filter(Boolean)
-                : [];
-        }
-
-        function _buildGraphNodeHints(store, schema, _limit = 0) {
-            const schemaList = Array.isArray(schema) ? schema : [];
-            const schemaMap = new Map(
-                schemaList.map(item => [String(item?.id || '').trim().toLowerCase(), item]),
-            );
-            const allSemantic = Object.values(store?.nodes || {}).filter(node => {
-                if (!node || node.archived) return false;
-                if (_isRecallDiagnosticNode(node)) return false;
-                return String(node?.level || '') === 'semantic';
-            });
-            // Group by type, then project per type's compression mode. This
-            // mirrors main.js#buildGraphNodeHints (default scope='visible'):
-            // hierarchical types collapse leaves up to their top active ancestor.
-            const typeIds = new Set(
-                allSemantic
-                    .map(node => String(node?.type || '').trim().toLowerCase())
-                    .filter(Boolean),
-            );
-            const out = [];
-            const outIds = new Set();
-            // Also include any non-semantic-level node so episodic / non-typed
-            // helpers still see them (legacy mock behavior).
-            for (const node of Object.values(store?.nodes || {})) {
-                if (!node || node.archived) continue;
-                if (_isRecallDiagnosticNode(node)) continue;
-                if (String(node?.level || '') === 'semantic') continue;
-                if (outIds.has(node.id)) continue;
-                outIds.add(node.id);
-                out.push({ id: String(node.id || '') });
-            }
-            for (const type of typeIds) {
-                const spec = schemaMap.get(type);
-                const mode = String(spec?.compression?.mode || 'none').toLowerCase();
-                const typeNodes = allSemantic
-                    .filter(node => String(node?.type || '').toLowerCase() === type);
-                if (mode !== 'hierarchical') {
-                    for (const node of typeNodes) {
-                        if (!node?.id || outIds.has(node.id)) continue;
-                        outIds.add(node.id);
-                        out.push({ id: String(node.id) });
-                    }
-                    continue;
-                }
-                // Hierarchical: leaves project up to their top active semantic
-                // ancestor of the same type (matching main.js#selectVisibleNodesForType).
-                const byId = new Map(typeNodes.map(n => [String(n.id), n]));
-                const hasActiveChildOfType = (node) => {
-                    const childIds = Array.isArray(node?.childrenIds) ? node.childrenIds : [];
-                    return childIds.some((cid) => {
-                        const child = store?.nodes?.[cid];
-                        if (!child || child.archived) return false;
-                        if (String(child.level || '') !== 'semantic') return false;
-                        return String(child.type || '').toLowerCase() === type;
-                    });
-                };
-                const topAncestorOfType = (node) => {
-                    let cursor = node;
-                    let top = node;
-                    const guard = new Set();
-                    while (cursor && !guard.has(cursor.id)) {
-                        guard.add(cursor.id);
-                        const parentId = String(cursor.parentId || '').trim();
-                        if (!parentId) break;
-                        const parent = store?.nodes?.[parentId];
-                        if (!parent || parent.archived) break;
-                        if (String(parent.level || '') !== 'semantic') break;
-                        if (String(parent.type || '').toLowerCase() !== type) break;
-                        top = parent;
-                        cursor = parent;
-                    }
-                    return top;
-                };
-                for (const node of typeNodes) {
-                    if (hasActiveChildOfType(node)) continue;
-                    const top = topAncestorOfType(node) || node;
-                    if (!top?.id || outIds.has(top.id)) continue;
-                    if (!byId.has(top.id)) continue;
-                    outIds.add(top.id);
-                    out.push({ id: String(top.id) });
-                }
-            }
-            return out;
-        }
-
-        function _getLatestSeqIndex(store) {
-            // Mirrors main.js#getLatestSeqIndex → getStoreCoveredSeqTo:
-            //   max(0, appliedSeqTo, loggedSeqTo).
-            // Tests that need a non-zero index set `store.appliedSeqTo` in the fixture.
-            const applied = Math.max(0, Math.floor(Number(store?.appliedSeqTo || 0)));
-            const logged = Math.max(0, Math.floor(Number(store?.loggedSeqTo || 0)));
-            return Math.max(-1, applied, logged);
-        }
-
-        function _isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages) {
-            const windowSize = Math.max(0, Number(excludeMessages || 0));
-            if (windowSize <= 0 || latestSeqIndex < 0 || !node) return false;
-            const toSeq = Number(node?.seqTo ?? NaN);
-            if (!Number.isFinite(toSeq)) return false;
-            return toSeq >= latestSeqIndex - windowSize + 1;
-        }
-
-        function _collectRootCandidates(store, settings, _qb, alwaysInjectNodes = [], context = null, opts = {}) {
-            const { latestSeqIndex = -1, excludeMessages = 0 } = opts;
-            const schema = Array.isArray(settings?.nodeTypeSchema) ? settings.nodeTypeSchema : [];
-            const visibleRows = _buildGraphNodeHints(store, schema, 0);
-            const visibleNodes = visibleRows
-                .map(row => store?.nodes?.[String(row?.id || '')] || null)
-                .filter(node => Boolean(node) && !node.archived && !_isRecallDiagnosticNode(node))
-                .filter(node => !_isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages));
-            const merged = [
-                ...(alwaysInjectNodes || []).filter(Boolean).slice().sort(_compareNodesByRecency),
-                ...visibleNodes.slice().sort(_compareNodesByRecency),
-            ];
-            const out = [];
-            const seen = new Set();
-            for (const n of merged) {
-                const id = String(n?.id || '');
-                if (!id || seen.has(id)) continue;
-                seen.add(id);
-                out.push(n);
-            }
-            return out;
-        }
-
-        function _addCandidate(map, node) {
-            const id = String(node?.id || '');
-            if (!id || map.has(id)) return;
-            map.set(id, node);
-        }
-
-        function _expandRouteCandidates(store, route, rootCandidates) {
-            const candidateMap = new Map();
-            const expandPlan = Array.isArray(route?.expand_plan) ? route.expand_plan : [];
-            for (const node of rootCandidates || []) _addCandidate(candidateMap, node);
-            for (const request of expandPlan) {
-                const seedId = String(request?.seed_node_id || '').trim();
-                if (!seedId || !store?.nodes?.[seedId]) continue;
-                const relationTypes = Array.isArray(request?.relation_types) && request.relation_types.length > 0
-                    ? request.relation_types
-                    : null;
-                const depth = Math.max(1, Math.floor(Number(request?.depth) || 1));
-                const includeChildren = request?.include_children !== false;
-                const seen = new Set([seedId]);
-                let frontier = [seedId];
-                _addCandidate(candidateMap, store.nodes[seedId]);
-                for (let hop = 0; hop < depth; hop++) {
-                    if (frontier.length === 0) break;
-                    const visibleSet = new Set(candidateMap.keys());
-                    const projectedEdges = _buildProjectedEdges(store, {
-                        visibleNodeIds: visibleSet,
-                        relationTypes,
-                        excludeInternal: false,
-                    });
-                    const next = [];
-                    for (const currentId of frontier) {
-                        const currentNode = store.nodes[currentId];
-                        if (!currentNode || currentNode.archived) continue;
-                        if (includeChildren) {
-                            for (const child of _getChildren(store, currentId)) {
-                                if (!child?.id || child.archived || seen.has(child.id)) continue;
-                                seen.add(child.id);
-                                _addCandidate(candidateMap, child);
-                                next.push(child.id);
-                            }
-                        }
-                        for (const edge of projectedEdges) {
-                            if (!edge) continue;
-                            let neighborId = '';
-                            if (edge.from === currentId) neighborId = String(edge.to || '');
-                            else if (edge.to === currentId) neighborId = String(edge.from || '');
-                            else continue;
-                            if (!neighborId || seen.has(neighborId)) continue;
-                            const neighbor = store.nodes[neighborId];
-                            if (!neighbor || neighbor.archived) continue;
-                            seen.add(neighborId);
-                            _addCandidate(candidateMap, neighbor);
-                            next.push(neighborId);
-                        }
-                    }
-                    frontier = next;
-                }
-            }
-            return Array.from(candidateMap.values());
-        }
-
-        function _formatNodeBrief(node, settings = null, _context = null, extra = {}) {
-            const spec = settings ? _getSemanticTypeSpec(settings, node?.type) : null;
-            const tableColumns = _getSchemaProjectionColumns(spec);
-            const fields = (node?.fields && typeof node.fields === 'object') ? node.fields : {};
-            const rowValues = {};
-            for (const col of tableColumns) {
-                const v = fields[col];
-                if (v !== undefined && v !== null && String(v)) rowValues[col] = String(v);
-            }
-            const keyCols = Array.from(new Set([
-                ...(Array.isArray(spec?.primaryKeyColumns) ? spec.primaryKeyColumns : []),
-                ...(Array.isArray(spec?.requiredColumns) ? spec.requiredColumns : []),
-            ]));
-            const keyValues = {};
-            for (const col of keyCols) {
-                const v = fields[col];
-                if (v !== undefined && v !== null && String(v)) keyValues[col] = String(v);
-            }
-            const summary = String(fields.summary || '');
-            return {
-                id: String(node?.id || ''),
-                level: String(node?.level || ''),
-                type: String(node?.type || ''),
-                table_name: String(spec?.tableName || node?.type || '').trim(),
-                title: String(node?.title || ''),
-                summary,
-                key_values: keyValues,
-                row_values: rowValues,
-                to_seq: Number.isFinite(Number(node?.seqTo)) ? Number(node.seqTo) : null,
-                child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
-                ...extra,
-            };
-        }
-
-        return {
-            getSettings: jest.fn(() => testHolder.settings),
-            getMemoryStore: jest.fn((context, _hint) => context?.__memoryStore || null),
-            getSemanticTypeSpec: _getSemanticTypeSpec,
-            getSemanticCompressionConfig: _getSemanticCompressionConfig,
-            getChildren: _getChildren,
-            getSchemaProjectionColumns: _getSchemaProjectionColumns,
-            buildGraphNodeHints: _buildGraphNodeHints,
-            formatNodeBrief: _formatNodeBrief,
-            compareNodesByRecency: _compareNodesByRecency,
-            getNodeRecallExposure: _getNodeRecallExposure,
-            getNearestVisibleAncestorId: _getNearestVisibleAncestorId,
-            buildProjectedEdges: _buildProjectedEdges,
-            buildEdgeSummary: _buildEdgeSummary,
-            isRecallDiagnosticNode: _isRecallDiagnosticNode,
-            collectRootCandidates: _collectRootCandidates,
-            expandRouteCandidates: _expandRouteCandidates,
-            selectVisibleNodesForType: () => [],
-            getLatestSeqIndex: _getLatestSeqIndex,
-            isNodeInRecentExcludeWindow: _isNodeInRecentExcludeWindow,
-            collectSemanticRootsByDepth: _collectSemanticRootsByDepth,
-        };
-    },
 );
 
 // ---------------------------------------------------------------------------
@@ -701,7 +285,11 @@ function makeContext(store) {
 
 describe('read-api factory signature', () => {
     test('getMemoryGraphReadApi accepts (store, context) and resolves store directly', () => {
-        const store = { nodes: { n1: { id: 'n1', type: 'character_sheet', level: 'episodic', title: 'Alice' } }, edges: [], seqCounter: 1 };
+        // listVisibleCandidates only surfaces level:'semantic' nodes (real
+        // buildGraphNodeHints filters via listNodesByLevel(LEVEL.SEMANTIC)).
+        // The fixture intentionally uses a semantic node so we exercise the
+        // happy path; tests that need episodic coverage live in listNodes().
+        const store = { nodes: { n1: { id: 'n1', type: 'character_sheet', level: 'semantic', title: 'Alice', seqTo: 1 } }, edges: [], seqCounter: 1 };
         const api = getMemoryGraphReadApi(store, {});
         const list = api.listVisibleCandidates({ types: ['character_sheet'] });
         expect(list.some(n => n.id === 'n1')).toBe(true);
@@ -1096,16 +684,16 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         // event has hierarchical compression: leaves a/b under evt_rollup1
         // project up to the rollup; evt_leaf_c is an orphan leaf (no
         // active rollup ancestor) and stays as itself. Active visible pool
-        // after projection:
+        // after projection (semantic level only — episodic epi_log1 is
+        // excluded by real buildGraphNodeHints / listNodesByLevel):
         //   char_root(8), char_alice(7), evt_leaf_c(6), loc_castle(5),
-        //   evt_rollup1(4, depth=1), epi_log1(3, episodic).
+        //   evt_rollup1(4, depth=1).
         expect(result.map(n => n.id)).toEqual([
             'char_root',
             'char_alice',
             'evt_leaf_c',
             'loc_castle',
             'evt_rollup1',
-            'epi_log1',
         ]);
     });
 
@@ -1117,13 +705,21 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
     });
 
     test('listVisibleCandidates({excludeRecentMessages:2}) excludes recent-window nodes', () => {
-        // latestSeqIndex = max seqTo of active = 8 (char_root). window=2 excludes nodes with seqTo >= 7.
+        // Real getLatestSeqIndex() = getStoreCoveredSeqTo() = max of
+        // appliedSeqTo(8), loggedSeqTo(8), getSemanticCoverageSeq(store).
+        // getSemanticCoverageSeq scans all active semantic nodes, including
+        // the recall_state diagnostic at seqTo=9 (semantic level), so the
+        // real watermark is 9. With excludeMessages=2 the cutoff is
+        // 9 - 2 + 1 = 8, so only char_root (seqTo=8) gets excluded;
+        // char_alice (seqTo=7) survives. Episodic epi_log1 is filtered out
+        // by buildGraphNodeHints' semantic-only pass.
         const result = api.listVisibleCandidates({ excludeRecentMessages: 2 });
         const ids = result.map(n => n.id);
         expect(ids).not.toContain('char_root');
-        expect(ids).not.toContain('char_alice');
-        // Older nodes still present (event leaves a/b project up to evt_rollup1).
-        expect(ids).toEqual(expect.arrayContaining(['evt_leaf_c', 'evt_rollup1', 'epi_log1', 'loc_castle']));
+        // char_alice still present (seqTo=7 < cutoff=8).
+        expect(ids).toContain('char_alice');
+        // Older semantic nodes still present (event leaves a/b project up to evt_rollup1).
+        expect(ids).toEqual(expect.arrayContaining(['evt_leaf_c', 'evt_rollup1', 'loc_castle']));
     });
 
     test('getNodeExposure: hierarchical-compression semantic node returns "high_only"', () => {

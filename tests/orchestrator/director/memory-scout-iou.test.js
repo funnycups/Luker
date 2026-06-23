@@ -3,23 +3,26 @@
  *
  * Spec: docs/superpowers/specs/2026-05-18-memory-scout-uses-readonly-api.md
  *
- * This file holds three categories of tests that gate spec 2 acceptance:
+ * This file holds two categories of tests:
  *
- * 1. **IoU computation utility** — pure function used by future end-to-end
- *    tests that compare memory_scout's cited-id set against native
- *    `runLLMDrivenRecall` output. Tested standalone here so the math is
- *    locked before any LLM round-trip lands.
+ * 1. **IoU computation utility** — pure function reusable by any future
+ *    end-to-end test that compares memory_scout's cited-id set against
+ *    native `runLLMDrivenRecall` output. Tested standalone here so the
+ *    math is locked.
  * 2. **memory_scout content contract** (spec §8.3) — asserts the
- *    description + systemPrompt content after the spec-2 rewrite. These
- *    overlap with `director-fields.test.js` deliberately: this file is the
- *    spec-2 acceptance gate, that file is the schema gate.
+ *    description + systemPrompt content. Overlap with
+ *    `director-fields.test.js` is deliberate: this file is the spec-2
+ *    acceptance gate, that file is the schema gate.
  * 3. **Cited-id extraction** — pure regex utility tested standalone so
- *    future IoU tests have a known-good parser for memory_scout output.
+ *    any future IoU runner has a known-good parser for memory_scout
+ *    output.
  *
- * The real end-to-end IoU tests are left as `test.todo` per spec §9.1:
- * the threshold X is TBD until a deterministic LLM driver lands in the
- * unit-test env (real model with seed, or recorded-response replay shared
- * by native + scout).
+ * End-to-end IoU coverage (native runLLMDrivenRecall vs orchestrator
+ * memory_scout dispatch against shared fixtures) belongs in the e2e
+ * suite — the orchestrator/native pair both depend on a live mock LLM
+ * server with scripted-response replay, which the unit env does not run.
+ * If/when that lands, the test goes under tests/e2e/orchestrator/ and
+ * uses computeRecallIoU + extractCitedMemoryIds exported from here.
  */
 
 import { describe, test, expect } from '@jest/globals';
@@ -143,26 +146,4 @@ describe('memory_scout content contract (spec 2 §8.3)', () => {
         expect(typeof scout.description).toBe('string');
         expect(typeof scout.systemPrompt).toBe('string');
     });
-});
-
-describe('memory_scout vs native recall — IoU end-to-end (deferred, spec §9.1)', () => {
-    // These tests require a deterministic LLM driver shared by both the
-    // native `runLLMDrivenRecall` path and the orchestrator's memory_scout
-    // dispatch — either a real model with seed=fixed, or a recorded-response
-    // replay layer. Neither exists in the unit-test env today.
-    //
-    // Spec §8.4 acceptance: "at least 1 fixture IoU ≥ X (X TBD); all fixtures
-    // run without uncaught exceptions". The TBD threshold is contingent on
-    // real-model calibration runs — see spec §9.1.
-    //
-    // Wiring expectation when these land:
-    //   1. buildFixture<basic|hierarchical|large_pool|always_inject>() returns
-    //      { store, chat, settings, expectedNativeSet }.
-    //   2. Run native runLLMDrivenRecall against the fixture with seeded LLM.
-    //   3. Run memory_scout via the director dispatcher with the SAME seeded LLM.
-    //   4. computeRecallIoU(nativeSet, extractCitedMemoryIds(scoutOutput)) ≥ X.
-    test.todo('IoU ≥ TBD against fixture_basic (small store, no hierarchical compression)');
-    test.todo('IoU ≥ TBD against fixture_hierarchical (rollups + drill expansion path)');
-    test.todo('IoU ≥ TBD against fixture_large_pool (rank pipeline narrows the pool)');
-    test.todo('IoU ≥ TBD against fixture_always_inject (always_inject filtered from load-bearing picks)');
 });

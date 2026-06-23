@@ -67,9 +67,10 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         await dismissWelcomeDialogIfPresent(page);
 
         // ── 1. LLM connection gate ──────────────────────────────────────
+        // PW_INCLUDE_INTEGRATION specs require a real LLM in the data
+        // dir. Missing profile = setup bug, not a silent skip.
         const profile = await activateConnectionProfile(page);
-        test.skip(!profile, 'no usable connection profile reachable as online (configure one in Connection Manager or set LUKER_PLAYWRIGHT_PROFILE)');
-        if (!profile) return; // belt-and-suspenders
+        expect(profile, 'no usable connection profile reachable as online (configure one in Connection Manager or set LUKER_PLAYWRIGHT_PROFILE)').toBeTruthy();
 
         const llmReady = await page.evaluate(() => {
             const ctx = window.Luker?.getContext?.();
@@ -80,8 +81,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
 
         // ── 2. Character gate ───────────────────────────────────────────
         const avatar = await ensureCharacterLoaded(page);
-        test.skip(!avatar, 'no loadable character in this data dir (need at least one card)');
-        if (!avatar) return;
+        expect(avatar, 'no loadable character in this data dir (need at least one card)').toBeTruthy();
 
         // ── 3. Orchestrator gate: enabled + director mode ───────────────
         await ensureOrchestratorEnabledDirectorMode(page);
@@ -245,15 +245,15 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
             await dismissWelcomeDialogIfPresent(page);
 
             const profile = await activateConnectionProfile(page);
-            if (!profile) { test.skip(true, 'no usable connection profile (skipped same as primary test)'); return; }
+            expect(profile, 'no usable connection profile (setup integration env first)').toBeTruthy();
             const llmReady = await page.evaluate(() => {
                 const ctx = window.Luker?.getContext?.();
                 const v = ctx?.onlineStatus ?? null;
                 return Boolean(v) && String(v).toLowerCase() !== 'no_connection';
             });
-            if (!llmReady) { test.skip(true, 'connection profile activated but online_status no_connection'); return; }
+            expect(llmReady, 'connection profile activated but online_status no_connection').toBe(true);
             const avatar = await ensureCharacterLoaded(page);
-            if (!avatar) { test.skip(true, 'no character available'); return; }
+            expect(avatar, 'no character available').toBeTruthy();
             await ensureOrchestratorEnabledDirectorMode(page);
             await page.evaluate(async () => {
                 const m = await import('/scripts/extensions/orchestrator/run-state/store.js');

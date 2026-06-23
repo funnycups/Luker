@@ -1,4 +1,14 @@
 // tests/orchestrator/custom-tool-bridge-st.test.js
+//
+// ST's ToolManager is mocked here on purpose: the production
+// `public/scripts/tool-calling.js` ToolManager is bound to the
+// SillyTavern browser shell (it registers UI handlers, talks to the
+// chat/completions middleware, owns generation lifecycle). It cannot
+// be instantiated under Node — the contract under test is "does
+// register-custom-tool's BRIDGE plumbing wrap whatever ToolManager
+// surfaces?", not "does ToolManager itself work" (that is e2e turf).
+// End-to-end coverage of the real bridge → real ToolManager → real
+// generation lives in `tests/e2e/orchestrator/`.
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 
 const mockTools = [

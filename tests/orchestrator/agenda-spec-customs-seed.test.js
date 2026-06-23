@@ -60,13 +60,10 @@ jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
     world_info_position: { before: 0, after: 1 },
     wi_anchor_position: {},
 }));
-// agenda-profile → editable-spec → agent-resolution → openai → group-chats
-// → request-compression → '/lib.js' chain. Sever at agent-resolution to
-// avoid pulling the entire ST chat-completion stack into the test.
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+// Stub the connection-manager gate so the real agent-resolution.js can load
+// without pulling textgen-models.js → document.addEventListener under Node.
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 
 let sanitizeAgendaWorkingProfile;

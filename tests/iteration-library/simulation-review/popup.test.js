@@ -1,5 +1,18 @@
 /**
  * @jest-environment jsdom
+ *
+ * popup-host.js IS mocked here on purpose: the production module wraps
+ * SillyTavern's `Popup` (a DOM-mount chain that pulls power-user.js /
+ * textgen-models.js — both touch `document` at module-load and cannot
+ * be evaluated outside a built browser bundle). The wrapper file even
+ * states "kept in its own file so the rest of the simulation-review
+ * module can be unit-tested under jsdom by mocking this single module."
+ *
+ * The mock supplies the user-gesture signal (calling `onSubmit()`) that
+ * the real popup would supply when the user clicks the Submit button.
+ * Every other surface — the simulation-review module itself, the
+ * annotation engine, the section collapse logic, the re-run flow —
+ * runs against the real implementation.
  */
 import { jest } from '@jest/globals';
 

@@ -53,7 +53,14 @@ import {
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text:latest';
 
-let server, mock, ollamaReachable, ollamaSkipReason;
+// Opt-in: this spec runs only when LIVE_OLLAMA=1 (an Ollama daemon must
+// be reachable at OLLAMA_URL with EMBED_MODEL installed). Otherwise the
+// describe block is suppressed entirely — no skipped-test noise, no
+// false sense of coverage. Inside the describe, every gate is hard-asserted.
+const VECTORS_LIVE = process.env.LIVE_OLLAMA === '1';
+const vectorsDescribe = VECTORS_LIVE ? test.describe : test.describe.skip;
+
+let server, mock;
 
 async function probeOllama() {
     try {
@@ -113,12 +120,12 @@ const TOPICS = [
 const QUERY_USER_TEXT = 'How did the brass lantern on the headland behave tonight — was the three-flash signal still on protocol?';
 const QUERY_AI_REPLY = '*Seraphina glances at the cliff-side post.* "The brass lantern holds — three flashes, as before."';
 
-test.describe('#90 — vectors vectorize+query+inject (real ollama embedder)', () => {
+vectorsDescribe('#90 — vectors vectorize+query+inject (real ollama embedder)', () => {
     test.beforeAll(async () => {
         const probe = await probeOllama();
-        ollamaReachable = probe.ok;
-        ollamaSkipReason = probe.reason || '';
-        if (!ollamaReachable) return;
+        // LIVE_OLLAMA=1 was set, so failures here are setup bugs (daemon
+        // down, model not pulled) — fail loud, do not skip.
+        expect(probe.ok, `LIVE_OLLAMA=1 set but probe failed: ${probe.reason}`).toBe(true);
 
         mock = await startMockLLM({
             scriptedReplies: [
@@ -180,7 +187,6 @@ test.describe('#90 — vectors vectorize+query+inject (real ollama embedder)', (
     });
 
     test('past topical message gets injected into next LLM call when query matches semantically', async ({ page }) => {
-        test.skip(!ollamaReachable, ollamaSkipReason);
         test.setTimeout(240_000);
 
         await awaitMainUI(page, server.baseURL);

@@ -1,10 +1,13 @@
 // tests/orchestrator/custom-tool-runtime-agenda.test.js
 //
 // Verifies agenda runtime constructs the per-run customToolRegistry at
-// orchestration entry and threads it into both the agent schemas and
-// the per-call executeLoopTool ctx. Same mocking strategy as the spec
-// runtime test: heavy module mocks let us drive runAgendaOrchestration
-// end-to-end without a real LLM or live floor-state adapter.
+// orchestration entry and threads it into the per-call executeLoopTool
+// ctx. Same strategy as the spec runtime test: only the LLM is mocked
+// (legitimate non-deterministic surface). The real loop-tools /
+// loop-runtime / agent-resolution / per-run custom-tool registry all
+// run for real. To verify the registry reached `executeLoopTool`, the
+// test profile registers a custom tool whose `body` records its own
+// dispatch onto a sidecar.
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
 
@@ -74,21 +77,15 @@ jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
     wi_anchor_position: {},
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override, fallback) => override || fallback || null,
-    resolveOrchestrationAgentApiPresetName: () => '',
-    resolveOrchestrationAgentPromptPresetName: () => '',
-    resolveOrchestrationRuntimeWorldInfo: async () => null,
+// Stub the connection-manager gate so the real agent-resolution.js can load
+// without pulling textgen-models.js → document.addEventListener under Node.
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 
-// LLM stub — controlled per-test via `llmResponses`. The agenda runtime
-// has two distinct LLM call surfaces: `requestToolCallWithRetry` for the
-// single-shot planner step + finalizer dispatch, and
-// `requestToolCallsWithRetry` for the multi-round agent loop. The first
-// is per-call programmable via `plannerResponses`; the second is
-// per-call programmable via `agentResponses`.
+// LLM stub — controlled per-test via `plannerResponses` / `agentResponses`.
+// The only legitimate mock surface (LLM is slow / non-deterministic).
+// Everything else runs the real product modules.
 const plannerResponses = [];
 const agentResponses = [];
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/tool-calling.js', () => ({
@@ -109,44 +106,14 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/tool-call
     makeRuntimeToolCallId: () => `tc_${Math.random().toString(36).slice(2, 10)}`,
 }));
 
-// executeLoopTool spy — captures the ctx received by each call.
-const executeLoopToolCalls = [];
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/loop-tools.js', () => ({
-    executeLoopTool: async (name, args, ctx) => {
-        executeLoopToolCalls.push({ name, args, ctx });
-        return { ok: true, captured: true };
-    },
-    getEnabledToolSchemas: (_profile, customToolRegistry) => {
-        if (!customToolRegistry) return [];
-        const out = [];
-        for (const [, entry] of customToolRegistry) {
-            out.push(entry.schema);
-        }
-        return out;
-    },
-    // Mock mirrors the real precedence (Layer-3 → Layer-1 → Layer-2) at the
-    // level this test cares about: any name present in the per-run registry
-    // wins as 'profile'; everything else falls back to 'unknown' (this test
-    // doesn't register Layer-1/2 entries).
-    resolveToolSource: (name, ctx) => {
-        const reg = ctx?.__customToolRegistry;
-        if (reg && typeof reg.get === 'function' && reg.get(String(name || ''))) return 'profile';
-        return 'unknown';
-    },
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/loop-runtime.js', () => ({
-    attachToolContext: async () => ({}),
-    ToolError: class ToolError extends Error {
-        constructor(message, code, hint) { super(message); this.code = code; this.hint = hint; }
-    },
-    isStructuredToolError: (err) => Boolean(
-        err && typeof err === 'object'
-        && err.name === 'ToolError' && typeof err.code === 'string',
-    ),
-}));
-
 let runAgendaOrchestration;
+
+// Sidecar the custom-tool body writes into so the test can assert
+// the registry actually dispatched my_tool. The real executeLoopTool
+// runs the body which has access to a global the test reads after the run.
+const customToolDispatches = [];
+globalThis.__customToolDispatchSink = customToolDispatches;
+
 beforeAll(async () => {
     ({ runAgendaOrchestration } = await import('../../public/scripts/extensions/orchestrator/agenda-runtime.js'));
 });
@@ -154,14 +121,15 @@ beforeAll(async () => {
 beforeEach(() => {
     plannerResponses.length = 0;
     agentResponses.length = 0;
-    executeLoopToolCalls.length = 0;
+    customToolDispatches.length = 0;
 });
 
 describe('agenda runtime Layer-3 dispatch', () => {
     test('threads customToolRegistry into the per-call executeLoopTool ctx', async () => {
         // Profile: one agent (writer) with chat.read_range enabled so
         // `hasAnyToolEnabled` triggers the multi-round path. One custom
-        // tool the agent calls before finalizing.
+        // tool the agent calls before finalizing. Body records evidence
+        // the registry reached executeLoopTool.
         const profile = {
             mode: 'agenda',
             planner: { systemPrompt: 'plan', userPromptTemplate: 'plan' },
@@ -175,7 +143,14 @@ describe('agenda runtime Layer-3 dispatch', () => {
             finalAgentId: 'writer',
             limits: { plannerMaxRounds: 2, maxConcurrentAgents: 1, maxTotalRuns: 4 },
             customTools: [
-                { name: 'my_tool', description: 'd', parameters: {}, mode: 'read', body: 'return { x: 1 };', simulateBody: '' },
+                {
+                    name: 'my_tool',
+                    description: 'd',
+                    parameters: {},
+                    mode: 'read',
+                    body: 'globalThis.__customToolDispatchSink.push({ name: "my_tool", args, hasRegistry: !!(ctx && ctx.__customToolRegistry && ctx.__customToolRegistry.has && ctx.__customToolRegistry.has("my_tool")) }); return { x: 1 };',
+                    simulateBody: '',
+                },
             ],
         };
 
@@ -211,9 +186,9 @@ describe('agenda runtime Layer-3 dispatch', () => {
         const messages = [];
         await runAgendaOrchestration({}, { signal: new AbortController().signal }, messages, profile);
 
-        const myToolCall = executeLoopToolCalls.find(c => c.name === 'my_tool');
+        const myToolCall = customToolDispatches.find(c => c.name === 'my_tool');
         expect(myToolCall).toBeTruthy();
-        expect(myToolCall.ctx.__customToolRegistry).toBeTruthy();
-        expect(myToolCall.ctx.__customToolRegistry.has('my_tool')).toBe(true);
+        expect(myToolCall.args).toEqual({ x: 7 });
+        expect(myToolCall.hasRegistry).toBe(true);
     });
 });

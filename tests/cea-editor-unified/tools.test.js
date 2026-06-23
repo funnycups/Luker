@@ -5,24 +5,14 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
     return { lodash };
 });
 
-// Mock the main.js boundary so we don't drag the SillyTavern shell into tests.
-// The unified editor's tools.js wraps the legacy helper-tool runner from
-// main.js; everything else is built on top of character-iteration/tools.js.
+// tools.js only imports `runCharacterEditorHelperToolCall` from main.js;
+// that one helper drags in the entire SillyTavern runtime (jQuery, DOM,
+// world-info popups, etc.) which Node cannot instantiate. Stub it to a
+// minimal record-shape so we can drive `runCeaEditorReadTool` end-to-end
+// without standing up the browser shell. Every other tools.js surface
+// runs against the real implementation.
 jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    splitCharacterEditorToolCalls: (calls) => ({
-        editCalls: (Array.isArray(calls) ? calls : []).filter(c => /^cea_/.test(c?.name || '')),
-        helperCalls: (Array.isArray(calls) ? calls : []).filter(c => !/^cea_/.test(c?.name || '')),
-    }),
     runCharacterEditorHelperToolCall: async (call) => ({ result: { stub: true, name: call?.name || '' } }),
-    normalizeCharacterEditorOperationsFromCalls: (calls) => (Array.isArray(calls) ? calls : []).map(c => ({
-        op: 'set',
-        path: c?.args?.field || '',
-        oldValue: null,
-        newValue: c?.args?.value,
-    })),
-    buildCharacterEditorToolSchemas: () => [
-        { type: 'function', function: { name: 'cea_set_card_field', parameters: {} } },
-    ],
 }));
 
 let tools;

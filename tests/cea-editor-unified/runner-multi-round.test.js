@@ -1,27 +1,36 @@
 import { jest } from '@jest/globals';
 
-// Stub the lib.js boundary the iteration-library helpers reach for lodash through.
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return { lodash };
-});
+// public/lib.js is handled by the global moduleNameMapper (→ tests/util/lib-stub.js).
 
-// Mock the iteration-library runner so we can script LLM responses per round.
-// The studio's multi-round loop calls ITER_RUNNER.requestToolCallsWithRetry once
-// per round; each mock invocation simulates one round of the model emitting
-// tool calls + control flags via onAssistantText / onToolCall / onControlCall.
-// We mock the iteration-library/index umbrella so we don't drag the full
-// dep chain (lib/edits, lib.js core bundle, popup.js shell) into a unit test
-// that only exercises the runner-driven multi-round loop.
+// popup.js + popup-utils must be mocked BEFORE we touch lib/edits/index.js,
+// since conflict-ui.js → popup.js → power-user.js → textgen-models.js
+// touches `document` at module-load. Register popup mock first so the
+// dynamic `import('../../public/scripts/lib/edits/index.js')` below
+// (used to forward the real applyEdits into the iteration-library mock)
+// doesn't pull the SillyTavern DOM shell.
+jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
+    Popup: class { constructor() {} show() { return Promise.resolve('ok'); } completeAffirmative() {} dlg = { close: () => {} }; },
+    POPUP_TYPE: { DISPLAY: 'display' },
+    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
+}));
+
+// Mock the iteration-library umbrella but keep `applyEdits` / `inverseEdit`
+// from the REAL engine — the runner-loop contract under test routes pending
+// edits through them and earlier revisions stubbed both to no-ops, which
+// let "edit applied" assertions pass trivially even when the real engine
+// would have rejected the op.
 const requestToolCallsWithRetryMock = jest.fn();
 const ensureUiStylesheetInjectedMock = jest.fn();
 const ensureMarkdownDepsMock = jest.fn().mockResolvedValue(true);
+
+const realEdits = await import('../../public/scripts/lib/edits/index.js');
+
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
     proposalBus: {},
-    applyEdits: (edits, live) => ({ newLive: live, clean: edits, conflicts: [], alreadyDone: [] }),
-    inverseEdit: (edit) => edit,
-    registerOp: () => {},
-    BUILT_IN_OPS: {},
+    applyEdits: realEdits.applyEdits,
+    inverseEdit: realEdits.inverseEdit,
+    registerOp: realEdits.registerOp,
+    BUILT_IN_OPS: realEdits.BUILT_IN_OPS,
     showConflictResolution: async () => ({}),
     render: {
         ensureMarkdownDeps: ensureMarkdownDepsMock,
@@ -65,12 +74,6 @@ jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assis
     buildUnifiedCharacterEditorLiveSnapshot: async () => ({ character: {}, lorebooks: {} }),
     readLegacyCeaEditorSessions: async () => [],
     readLegacyCharIterPopupSessions: async () => [],
-}));
-
-// Mock popup.js to dodge DOM-mount imports — runner test doesn't open the popup.
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class { constructor() {} show() { return Promise.resolve('ok'); } completeAffirmative() {} dlg = { close: () => {} }; },
-    POPUP_TYPE: { DISPLAY: 'display' },
 }));
 
 let studio;

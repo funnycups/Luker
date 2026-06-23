@@ -86,10 +86,8 @@ jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
     translate: (s) => String(s ?? ''),
     t: (s) => String(s ?? ''),
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/agent-resolution.js', () => ({
-    getPresetApiPresetName: () => '',
-    getPresetPromptPresetName: () => '',
-    resolveAgentToolFlags: (override) => override || null,
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
 }));
 
 let setCharacterSpecOverrideEnabled;

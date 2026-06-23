@@ -185,7 +185,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
         // opening CPA so the preset scope path is actually viable.
         const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
         if (!SAFE_SEGMENT.test(presetMeta.name)) {
-            const candidate = await page.evaluate((re) => {
+            let candidate = await page.evaluate((re) => {
                 const ctx = window.Luker?.getContext?.();
                 const all = (ctx?.presets?.list?.('openai') || [])
                     .map(r => String(r?.name || ''))
@@ -194,8 +194,21 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
                 return all.find(n => regex.test(n)) || '';
             }, SAFE_SEGMENT.source);
             if (!candidate) {
-                test.skip(true, 'no ASCII-safe OpenAI preset available — preset-scope spec needs one (rename your active preset, or create a Default-named one).');
-                return;
+                // Clone the active preset under an ASCII name so the
+                // preset-scope spec can run. Fail loud if clone breaks —
+                // the presets API is part of the contract this spec
+                // depends on.
+                candidate = `e2e-skill-ascii-${Date.now()}`;
+                const cloned = await page.evaluate(async (name) => {
+                    const ctx = window.Luker?.getContext?.();
+                    const active = ctx?.presets?.getSelected?.('openai');
+                    const stored = active ? ctx.presets.getStored(active) : null;
+                    if (!stored?.body) return { ok: false, reason: 'active preset body unavailable' };
+                    const cloneBody = structuredClone(stored.body);
+                    await ctx.presets.save({ collection: 'openai', name }, cloneBody, { select: true });
+                    return { ok: true };
+                }, candidate);
+                expect(cloned.ok, `clone ASCII preset failed: ${cloned.reason}`).toBe(true);
             }
             // Switch via the legacy preset manager UI (the same channel a
             // real user uses), then wait for getSelected to reflect the

@@ -17,25 +17,36 @@
 
 import { jest } from '@jest/globals';
 
-// Lib stub for the iteration-library helpers that reach for lodash.
-jest.unstable_mockModule('../../public/lib.js', async () => {
-    const { default: lodash } = await import('lodash');
-    return { lodash };
-});
+// public/lib.js is handled by the global moduleNameMapper (→ tests/util/lib-stub.js).
 
-// `inverseEdit` real behaviour: invert the op (legacy path). The mock
-// returns a synthetic inverse so we can spot when this path is exercised.
-const inverseEditSpy = jest.fn((edit) => {
-    if (!edit || !edit.op) throw new Error('inverseEdit: missing op');
-    return { op: edit.op, path: edit.path, oldValue: edit.newValue, newValue: edit.oldValue };
-});
+// popup.js + popup-utils must be mocked BEFORE we touch lib/edits/index.js,
+// since conflict-ui.js → popup.js → power-user.js → textgen-models.js
+// touches `document` at module-load. Register popup mock first so the
+// dynamic `import('../../public/scripts/lib/edits/index.js')` below
+// (used to forward the real applyEdits into the iteration-library mock)
+// doesn't pull the SillyTavern DOM shell.
+jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
+    Popup: class { constructor() {} show() { return Promise.resolve('ok'); } completeAffirmative() {} dlg = { close: () => {} }; },
+    POPUP_TYPE: { DISPLAY: 'display' },
+    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
+}));
+
+// Forward the REAL edits engine through the iteration-library umbrella so
+// the studio's applyEdits/inverseEdit calls do real work. Other surfaces
+// stay stubbed (they need DOM and are out of scope for this test).
+const realEdits = await import('../../public/scripts/lib/edits/index.js');
+
+// Wrap the real `inverseEdit` in a spy so the test can still assert on
+// call counts (this suite checks that v3-shape edits do NOT hit the legacy
+// inverseEdit path) — but the underlying engine is real, not a stub.
+const inverseEditSpy = jest.fn((edit) => realEdits.inverseEdit(edit));
 
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
     proposalBus: {},
-    applyEdits: () => ({ newLive: {}, clean: [], conflicts: [], alreadyDone: [] }),
+    applyEdits: realEdits.applyEdits,
     inverseEdit: inverseEditSpy,
-    registerOp: () => {},
-    BUILT_IN_OPS: {},
+    registerOp: realEdits.registerOp,
+    BUILT_IN_OPS: realEdits.BUILT_IN_OPS,
     showConflictResolution: async () => ({}),
     render: {
         ensureMarkdownDeps: async () => true,
@@ -69,11 +80,6 @@ jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assis
     buildUnifiedCharacterEditorLiveSnapshot: async () => ({ character: {}, lorebooks: {} }),
     readLegacyCeaEditorSessions: async () => [],
     readLegacyCharIterPopupSessions: async () => [],
-}));
-
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class { constructor() {} show() { return Promise.resolve('ok'); } completeAffirmative() {} dlg = { close: () => {} }; },
-    POPUP_TYPE: { DISPLAY: 'display' },
 }));
 
 let studio;

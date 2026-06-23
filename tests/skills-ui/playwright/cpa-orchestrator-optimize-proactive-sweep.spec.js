@@ -197,15 +197,29 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
         expect(presetMeta?.name).toBeTruthy();
 
         if (!SAFE_SEGMENT.test(presetMeta.name)) {
-            const candidate = await page.evaluate((re) => {
+            let candidate = await page.evaluate((re) => {
                 const ctx = window.Luker?.getContext?.();
                 const all = (ctx?.presets?.list?.('openai') || []).map(r => String(r?.name || '')).filter(Boolean);
                 const regex = new RegExp(re);
                 return all.find(n => regex.test(n)) || '';
             }, SAFE_SEGMENT.source);
             if (!candidate) {
-                test.skip(true, 'no ASCII-safe OpenAI preset; cannot test preset-scope sweep without one.');
-                return;
+                // No ASCII-safe preset available — clone the active preset
+                // under an ASCII name so the spec can run without forcing
+                // the dev to rename their library. Fail loud if the clone
+                // path is broken (presets API is part of the public
+                // contract this spec depends on).
+                candidate = `e2e-sweep-ascii-${Date.now()}`;
+                const cloned = await page.evaluate(async (name) => {
+                    const ctx = window.Luker?.getContext?.();
+                    const active = ctx?.presets?.getSelected?.('openai');
+                    const stored = active ? ctx.presets.getStored(active) : null;
+                    if (!stored?.body) return { ok: false, reason: 'active preset body unavailable' };
+                    const cloneBody = structuredClone(stored.body);
+                    await ctx.presets.save({ collection: 'openai', name }, cloneBody, { select: true });
+                    return { ok: true };
+                }, candidate);
+                expect(cloned.ok, `clone ASCII preset failed: ${cloned.reason}`).toBe(true);
             }
             await page.evaluate((name) => {
                 const dropdown = document.querySelector('#settings_preset_openai');

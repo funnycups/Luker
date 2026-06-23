@@ -13,10 +13,6 @@
 //      - /api/characters/get returns the new description from disk
 //   7. Restart, reload, re-select Seraphina, re-assert via the rendered
 //      #description_textarea (DOM-side ground truth).
-//
-// REAL BUG: see comment in original test for the v1-root vs v2-data
-// description collision; this test ships with the original test.fail
-// expectation removed (the bug is documented in MEMORY).
 
 import { test, expect } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
