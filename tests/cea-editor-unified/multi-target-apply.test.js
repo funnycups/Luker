@@ -52,6 +52,7 @@ jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () =
         ensureUiStylesheetInjected: () => {},
     },
     bindIterWorkspaceResizer: () => () => {},
+    createRenderScheduler: () => ({ schedule: () => {} }),
 }));
 
 // Spies for the character + lorebook commit helpers. studio.js imports these

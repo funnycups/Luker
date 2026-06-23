@@ -66,6 +66,7 @@ jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () =
         ensureUiStylesheetInjected: () => {},
     },
     bindIterWorkspaceResizer: () => () => {},
+    createRenderScheduler: () => ({ schedule: () => {} }),
 }));
 
 const characterCommitSpy = jest.fn(async () => ({ ok: true }));

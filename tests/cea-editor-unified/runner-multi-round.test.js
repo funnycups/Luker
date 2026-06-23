@@ -43,6 +43,7 @@ jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () =
         ensureUiStylesheetInjected: ensureUiStylesheetInjectedMock,
     },
     bindIterWorkspaceResizer: () => () => {},
+    createRenderScheduler: () => ({ schedule: () => {} }),
 }));
 
 // Mock the legacy CEA editor helper-tool runner so read-tool dispatch returns

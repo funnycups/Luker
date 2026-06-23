@@ -49,6 +49,7 @@ jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () =
         ensureUiStylesheetInjected: () => {},
     },
     bindIterWorkspaceResizer: () => () => {},
+    createRenderScheduler: () => ({ schedule: () => {} }),
 }));
 
 // Spies for the two main.js bootstrap helpers. The unified popup must call
@@ -103,6 +104,15 @@ function makeContext() {
         characterId: 0,
         characters: [],
         saveSettingsDebounced: () => {},
+        // The session-store factory now requires both sidecar helpers
+        // (per-character history backend). These are minimal no-ops — the
+        // bootstrap path doesn't actually read or write the sidecar, only
+        // the constructor sanity check needs them present.
+        getCharacterState: async () => null,
+        updateCharacterState: async (_a, _ns, updater) => {
+            await updater(null, { attempt: 0 });
+            return { ok: true, state: null, updated: false };
+        },
     };
 }
 

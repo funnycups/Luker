@@ -21,6 +21,7 @@ jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () =
         apply: { renderApplyControls: () => '' },
         ensureUiStylesheetInjected: () => {},
     },
+    createRenderScheduler: () => ({ schedule: () => {} }),
 }));
 
 jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
