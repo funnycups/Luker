@@ -116,6 +116,7 @@ import {
 } from './session-store.js';
 import { migrateOrchSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
+import { interpretSandboxOutcome, buildEditCallReply } from './sandbox-result.js';
 // auto-continue gate is now `bus.hasOutstanding()` — the standalone
 // gate module + its unit test were retired during the ProposalBus migration.
 // Character-editor-assistant publishes its helper-tool surface via
@@ -2050,14 +2051,17 @@ export async function openOrchestratorIterationStudio(deps) {
      */
     async function normalizeToolCallToEditInline(call, beforeOverride = null) {
         const before = beforeOverride ?? state.live;
-        if (before === undefined || before === null) return [];
+        if (before === undefined || before === null) {
+            return { kind: 'noop' };
+        }
         const sandbox = structuredClone(before);
         const fakeSession = buildHelperSession(sandbox);
+        let executorResult = null;
         try {
-            await executeAiIterationToolCalls(null, fakeSession, [call], null);
+            executorResult = await executeAiIterationToolCalls(null, fakeSession, [call], null);
         } catch (error) {
             console.warn(`[${MODULE}:${mode}] sandbox executor failed`, error);
-            return null;
+            return { kind: 'throw', error };
         }
         // Loop / spec executors reassign `session.workingProfile = next`
         // (not in-place mutation), so the original `sandbox` reference is
@@ -2069,19 +2073,19 @@ export async function openOrchestratorIterationStudio(deps) {
         const after = fakeSession.workingProfile != null
             ? fakeSession.workingProfile
             : sandbox;
-        try {
-            if (JSON.stringify(after) === JSON.stringify(before)) {
-                return [];
-            }
-        } catch {
-            // Fall through and emit the edit regardless.
+        const outcome = interpretSandboxOutcome({ before, after, executorResult });
+        if (outcome.kind === 'edits') {
+            return {
+                kind: 'edits',
+                edits: [{
+                    op: 'set',
+                    path: '',
+                    oldValue: before,
+                    newValue: after,
+                }],
+            };
         }
-        return [{
-            op: 'set',
-            path: '',
-            oldValue: before,
-            newValue: after,
-        }];
+        return outcome;
     }
 
     /**
@@ -2710,19 +2714,27 @@ export async function openOrchestratorIterationStudio(deps) {
             const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
             call.id = callId;
             try {
-                const normalized = await normalizeToolCallToEditInline(call, chainedBefore);
-                if (Array.isArray(normalized) && normalized.length > 0) {
-                    edits.push(...normalized);
+                const outcome = await normalizeToolCallToEditInline(call, chainedBefore);
+                // The decision/mapping pair is unit-tested in
+                // tests/orch-iteration/sandbox-result.test.js — keep this
+                // call site a thin compose so the tested helpers stay
+                // load-bearing. Failure / throw outcomes used to be
+                // collapsed onto a hardcoded "likely already matches"
+                // noop, which silenced the executor's real error
+                // (anchor not_found / multiple_matches / invalid_args)
+                // and made the AI think a broken patch had succeeded.
+                const reply = buildEditCallReply({ outcome, callId });
+                if (reply.edits.length > 0) {
+                    edits.push(...reply.edits);
+                }
+                if (reply.toolResult) {
+                    editToolResults.push(reply.toolResult);
+                }
+                if (reply.chainAdvanceTo !== undefined) {
                     // Advance the chain so the next tool sees the prior
-                    // tool's mutations. No-op normalizations return `[]`
-                    // and surface a tool reply below.
-                    chainedBefore = normalized[normalized.length - 1].newValue;
-                } else {
-                    editToolResults.push({
-                        tool_call_id: callId,
-                        content: { status: 'noop', message: 'No edits produced. The target profile state likely already matches what you requested; an earlier round may have already applied this change. Re-read the live profile before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (path / mode / value).' },
-                        status: 'fail',
-                    });
+                    // tool's mutations. Failure / noop replies leave the
+                    // chain at `chainedBefore` (chainAdvanceTo undefined).
+                    chainedBefore = reply.chainAdvanceTo;
                 }
             } catch (err) {
                 // eslint-disable-next-line no-console

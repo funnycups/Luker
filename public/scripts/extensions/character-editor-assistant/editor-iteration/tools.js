@@ -309,20 +309,34 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
         // Per-field find/replace on a single entry. Lowered to a
         // `lorebook_entry_update` so the apply / inverse / conflict
         // detector path can stay shared with the full-update variant.
+        //
+        // Anchor / validation failures throw with an explicit code so
+        // studio.js's catch arm surfaces a real `{error: ...}` tool
+        // result. Silently returning `[]` here used to collapse onto
+        // the generic "likely already matches" iter-studio noop and
+        // the AI would think its broken patch had succeeded.
         const field = String(args.field ?? '');
-        if (!field) return [];
+        if (!field) {
+            throw new Error(`${name}: invalid_args — field is required.`);
+        }
         const find = String(args.oldString ?? '');
         const replace = String(args.newString ?? '');
         const cur = liveBook?.entries?.[args.uid];
         const currentValue = cur && Object.hasOwn(cur, field) ? String(cur[field] ?? '') : '';
-        if (find === '') return [];
+        if (find === '') {
+            throw new Error(`${name}: invalid_args — oldString must be a non-empty string (use the regular update tool to clear a field).`);
+        }
         // Apply the replacement client-side so we can stage a precise
         // `{ before, patch }` pair: the apply step won't re-run the find
         // (it sees this as a plain field update). Default semantics:
         // `oldString` must occur exactly once unless `replaceAll: true`.
         const occurrences = currentValue.split(find).length - 1;
-        if (occurrences === 0) return [];
-        if (!args.replaceAll && occurrences !== 1) return [];
+        if (occurrences === 0) {
+            throw new Error(`${name}: not_found — oldString is not present in lorebook entry "${args.uid}".${field} (book "${bookName}"). Re-read the current field with cea_read_live_fields before retrying.`);
+        }
+        if (!args.replaceAll && occurrences !== 1) {
+            throw new Error(`${name}: multiple_matches — oldString occurs ${occurrences} times in lorebook entry "${args.uid}".${field} (book "${bookName}"). Widen oldString with surrounding context until it matches exactly once, or pass replaceAll: true.`);
+        }
         const nextValue = currentValue.split(find).join(replace);
         return [{
             op: 'lorebook_entry_update',

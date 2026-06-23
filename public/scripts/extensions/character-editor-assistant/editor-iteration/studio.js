@@ -506,7 +506,7 @@ async function processRoundOutcome({
             } else {
                 editToolResults.push({
                     tool_call_id: callId,
-                    content: { status: 'noop', message: 'No edits produced. The target state likely already matches what you requested; an earlier round may have already applied this change. Re-read the live state before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (path / field / value).' },
+                    content: { status: 'noop', message: 'No edits produced. The target state already matches what you requested; an earlier round may have already applied this change. Re-read the live state before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (path / field / value).' },
                     status: 'fail',
                 });
             }

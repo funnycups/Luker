@@ -137,6 +137,36 @@ describe('unified CEA editor tools.js', () => {
         expect(out === null || Array.isArray(out)).toBe(true);
     });
 
+    // The next three cases pin behavior that used to silently return [] —
+    // collapsing anchor / argument failures onto the iter-studio's generic
+    // "likely already matches" noop, which made the AI think a broken patch
+    // had succeeded. They now throw with an explicit code so studio.js's
+    // catch arm surfaces a real `{ error: '...' }` tool result.
+    it('cea_str_replace_lorebook_entry_field throws not_found when oldString is absent', async () => {
+        await expect(tools.normalizeToolCallToEdit(
+            { id: 'a1', name: 'cea_str_replace_lorebook_entry_field', args: { book_name: 'BookA', uid: 3, field: 'content', oldString: 'absent', newString: 'x' } },
+            { context: {}, live: { lorebooks: { BookA: { entries: { 3: { content: 'hello world' } } } } } },
+        )).rejects.toThrow(/not_found/);
+    });
+
+    it('cea_str_replace_lorebook_entry_field throws multiple_matches when oldString is ambiguous without replaceAll', async () => {
+        await expect(tools.normalizeToolCallToEdit(
+            { id: 'a2', name: 'cea_str_replace_lorebook_entry_field', args: { book_name: 'BookA', uid: 3, field: 'content', oldString: 'x', newString: 'y' } },
+            { context: {}, live: { lorebooks: { BookA: { entries: { 3: { content: 'xxx' } } } } } },
+        )).rejects.toThrow(/multiple_matches/);
+    });
+
+    it('cea_str_replace_lorebook_entry_field throws invalid_args when field or oldString is empty', async () => {
+        await expect(tools.normalizeToolCallToEdit(
+            { id: 'a3', name: 'cea_str_replace_lorebook_entry_field', args: { book_name: 'BookA', uid: 3, field: '', oldString: 'x', newString: 'y' } },
+            { context: {}, live: { lorebooks: { BookA: { entries: { 3: { content: 'x' } } } } } },
+        )).rejects.toThrow(/invalid_args/);
+        await expect(tools.normalizeToolCallToEdit(
+            { id: 'a4', name: 'cea_str_replace_lorebook_entry_field', args: { book_name: 'BookA', uid: 3, field: 'content', oldString: '', newString: 'y' } },
+            { context: {}, live: { lorebooks: { BookA: { entries: { 3: { content: 'x' } } } } } },
+        )).rejects.toThrow(/invalid_args/);
+    });
+
     it('runCeaEditorReadTool delegates to the legacy helper runner', async () => {
         const out = await tools.runCeaEditorReadTool(
             { id: 'r1', name: 'lorebook_query', args: { book_name: 'BookA', query: 'x' } },
