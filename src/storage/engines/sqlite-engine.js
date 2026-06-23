@@ -74,4 +74,45 @@ export class SqliteEngine {
         this._dbs.clear();
         this._txTail.clear();
     }
+
+    /**
+     * Drop the cached connection for a single handle. Subsequent storage
+     * calls for that handle go through `_dbFor`, which lazily reopens
+     * against whatever DB file is on disk at that time.
+     *
+     * Used by the LAN-sync orchestrator after `reconcileShadowToLive`
+     * swaps in a fresh `luker-storage.sqlite` via `write-file-atomic`'s
+     * rename: better-sqlite3's cached handle pins the OLD (now unlinked)
+     * inode and silently returns stale data, so we MUST drop it before
+     * the next read or write. Per-handle (rather than `close()`)
+     * preserves any other user's connection in the same process — the
+     * sync queue's mutex only covers the syncing user's pairing.
+     *
+     * Concurrency caveat (spec §4.4): an app write that beats this drop
+     * to the cached connection — i.e. lands AFTER `reconcileShadowToLive`'s
+     * rename swap but BEFORE this `closeHandle` runs — would write to the
+     * old (unlinked) inode, then be lost. The spec envisions a
+     * SYNC_IN_PROGRESS gate that 409s save endpoints during sync to
+     * prevent this; that gate is NOT yet implemented (tracked for v1.1).
+     * In v1 the per-(userRoot, peerId) FIFO queue around `runPull`
+     * narrows the race window but does not close it for in-flight writes
+     * the queue cannot see. User-facing docs note "avoid editing during
+     * sync" as the v1 mitigation.
+     *
+     * Idempotent: a handle with no cached connection is a no-op. Safe to
+     * call multiple times in sequence.
+     *
+     * @param {string} handle
+     */
+    closeHandle(handle) {
+        const db = this._dbs.get(handle);
+        if (db) {
+            db.close();
+            this._dbs.delete(handle);
+        }
+        // Drop the per-handle tx tail too; any in-flight transaction
+        // should already be drained by the caller's serialization, and a
+        // dangling tail would keep the chained promise pinned in memory.
+        this._txTail.delete(handle);
+    }
 }

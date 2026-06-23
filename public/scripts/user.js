@@ -12,6 +12,7 @@ import { renderTemplateAsync } from './templates.js';
 import { copyText, debounce, ensureImageFormatSupported, getBase64Async, humanFileSize } from './utils.js';
 import { formatAnnouncementBody } from './announcements.js';
 import { buildStorageBackendCreds } from './admin-storage-backend.js';
+import { openLanSyncPanel } from './lan-sync.js';
 
 /**
  * @type {import('../../src/users.js').UserViewModel} Logged in user
@@ -1077,6 +1078,7 @@ async function openBackupManager(handle, callback) {
     const checkboxes = template.find('input[name="backupCategory"]');
     const summaryText = template.find('.backupCategorySummary');
     const globalExtensionsItem = template.find('.backupCategoryGlobalExtensions');
+    const lanSyncOpenButton = template.find('.backupLanSyncOpenButton');
     const lanCreateLinkButton = template.find('.backupLanCreateLinkButton');
     const lanCopyLinkButton = template.find('.backupLanCopyLinkButton');
     const lanGeneratedLink = template.find('.backupLanGeneratedLink');
@@ -1270,6 +1272,18 @@ async function openBackupManager(handle, callback) {
         const file = this instanceof HTMLInputElement ? this.files?.[0] : null;
         selectedFileText.text(file ? t`${file.name} (${humanFileSize(file.size)})` : t`No ZIP selected.`);
         updateRestoreState();
+    });
+
+    lanSyncOpenButton.on('click', async function () {
+        if ($(this).hasClass('disabled')) {
+            return;
+        }
+        try {
+            await openLanSyncPanel();
+        } catch (error) {
+            console.error('Error opening LAN Sync panel:', error);
+            toastr.error(String(error.message || error), t`Failed to open LAN Sync`);
+        }
     });
 
     lanCreateLinkButton.on('click', async function () {

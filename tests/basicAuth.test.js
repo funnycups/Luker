@@ -62,6 +62,72 @@ describe('isBasicAuthExemptRequest', () => {
             path: '/api/users/login',
         })).toBe(false);
     });
+
+    test('matches LAN-sync session routes on both GET and POST', () => {
+        // GET — peer fetches manifest / single object.
+        expect(isBasicAuthExemptRequest({
+            method: 'GET',
+            path: '/api/sync/v1/session/manifest',
+        })).toBe(true);
+        expect(isBasicAuthExemptRequest({
+            method: 'GET',
+            path: `/api/sync/v1/session/object/${'a'.repeat(40)}`,
+        })).toBe(true);
+
+        // POST — peer uploads object / ref / close.
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
+            path: '/api/sync/v1/session/object',
+        })).toBe(true);
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
+            path: '/api/sync/v1/session/ref',
+        })).toBe(true);
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
+            path: '/api/sync/v1/session/close',
+        })).toBe(true);
+    });
+
+    test('does not exempt the sync /health endpoint or non-session sync paths', () => {
+        // /health is a reachability probe, intentionally still gated by basic auth.
+        expect(isBasicAuthExemptRequest({
+            method: 'GET',
+            path: '/api/sync/v1/health',
+        })).toBe(false);
+        // Anything outside `/session/` is not exempt.
+        expect(isBasicAuthExemptRequest({
+            method: 'GET',
+            path: '/api/sync/v1/',
+        })).toBe(false);
+        // Unexpected HTTP methods on session paths still go through basic auth.
+        expect(isBasicAuthExemptRequest({
+            method: 'DELETE',
+            path: '/api/sync/v1/session/object',
+        })).toBe(false);
+    });
+
+    test('does not exempt /session/offer — it ISSUES tokens and must be basic-auth gated', () => {
+        // The offer route is the bootstrap: the user authenticates with
+        // their normal credentials, then receives a bearer token to use on
+        // the rest of the /session/* routes. If the bypass swallowed it,
+        // any unauthenticated client on the LAN could mint tokens.
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
+            path: '/api/sync/v1/session/offer',
+        })).toBe(false);
+        // Trailing slash variant also stays gated.
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
+            path: '/api/sync/v1/session/offer/',
+        })).toBe(false);
+        // GET is not a valid method for the route, but the test asserts
+        // the bypass is not accidentally permissive on this path either.
+        expect(isBasicAuthExemptRequest({
+            method: 'GET',
+            path: '/api/sync/v1/session/offer',
+        })).toBe(false);
+    });
 });
 
 describe('basicAuthMiddleware', () => {

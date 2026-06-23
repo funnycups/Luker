@@ -17,6 +17,21 @@ const PREFER_REAL_IP_HEADER = !!getConfigValue('rateLimiting.preferRealIpHeader'
 const BASIC_AUTH_ATTEMPTS = getConfigValue('rateLimiting.basicAuthMaxAttempts', 5, 'number');
 const LAN_MIGRATION_TRANSFER_PATH_PATTERN = new RegExp(`^${LAN_MIGRATION_PATH_PREFIX}[a-f0-9]{64}$`, 'i');
 
+/**
+ * LAN-sync session endpoints carry their own bearer token (issued by
+ * `src/sync/session.js`) and must therefore bypass HTTP basic auth. The
+ * sibling `/api/sync/v1/health` route is intentionally excluded from this
+ * pattern — it is a reachability probe and stays gated by basic auth.
+ *
+ * `/api/sync/v1/session/offer` is also excluded: it is the route that
+ * ISSUES tokens, so it cannot itself be token-gated. The initiator hits
+ * it from their own browser with the standard per-user credentials.
+ *
+ * See `docs/superpowers/specs/lan-sync.md` §2.4.
+ */
+const SYNC_SESSION_PATH_PATTERN = /^\/api\/sync\/v1\/session\//i;
+const SYNC_OFFER_PATH_PATTERN = /^\/api\/sync\/v1\/session\/offer\/?$/i;
+
 const basicAuthLimiter = new RateLimiterMemory({
     points: BASIC_AUTH_ATTEMPTS > 0 ? BASIC_AUTH_ATTEMPTS : Number.MAX_SAFE_INTEGER,
     duration: 60,
@@ -34,14 +49,30 @@ const basicAuthLimiter = new RateLimiterMemory({
 export const WS_PROXY_AUTH_BYPASS = Symbol('WS_PROXY_AUTH_BYPASS');
 
 export function isBasicAuthExemptRequest(request) {
-    const method = String(request?.method || '').toUpperCase();
-    if (method !== 'GET') {
-        return false;
-    }
-
     const requestPath = typeof request?.path === 'string'
         ? request.path
         : String(request?.originalUrl || '').split('?')[0];
+    const method = String(request?.method || '').toUpperCase();
+
+    // LAN-sync session endpoints carry their own bearer token, so they
+    // bypass basic auth on both GET (manifest, object fetch) and POST
+    // (object upload, ref update, close). Other HTTP methods on sync
+    // paths still fall through to the basic-auth gate below.
+    //
+    // `/session/offer` is the one exception: it ISSUES tokens, so it
+    // cannot itself be token-gated and must go through basic auth so the
+    // standard user middleware can populate `request.user`.
+    if (SYNC_SESSION_PATH_PATTERN.test(requestPath)) {
+        if (SYNC_OFFER_PATH_PATTERN.test(requestPath)) {
+            return false;
+        }
+        return method === 'GET' || method === 'POST';
+    }
+
+    // LAN-migration transfer URLs are GET-only (one-shot ZIP download).
+    if (method !== 'GET') {
+        return false;
+    }
     return LAN_MIGRATION_TRANSFER_PATH_PATTERN.test(requestPath);
 }
 

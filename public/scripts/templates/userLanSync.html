@@ -1,0 +1,154 @@
+<div class="userLanSync flex-container flexFlowColumn flexNoGap">
+    <h3 class="marginBot5" data-i18n="LAN Sync">LAN Sync</h3>
+    <div class="menu_button_note marginBot10" data-i18n="Sync two Luker devices on the same network. Only changed data crosses the wire; full re-uploads aren't needed.">
+        Sync two Luker devices on the same network. Only changed data crosses the wire; full re-uploads aren't needed.
+    </div>
+
+    <div class="lanSyncStatusBanner displayNone marginBot10"></div>
+
+    <div class="lanSyncUnavailable displayNone marginBot10">
+        <div class="menu_button_note lanSyncUnavailableMessage"></div>
+    </div>
+
+    <div class="lanSyncMain">
+    <div class="lanSyncTabs flex-container flexGap10 marginBot10">
+        <div class="lanSyncTab menu_button menu_button_icon lanSyncTabPeers" data-tab="peers">
+            <i class="fa-fw fa-solid fa-list"></i>
+            <span data-i18n="My devices">My devices</span>
+        </div>
+        <div class="lanSyncTab menu_button menu_button_icon lanSyncTabPairNew" data-tab="pair-new">
+            <i class="fa-fw fa-solid fa-qrcode"></i>
+            <span data-i18n="Pair new device">Pair new device</span>
+        </div>
+        <div class="lanSyncTab menu_button menu_button_icon lanSyncTabPairExisting" data-tab="pair-existing">
+            <i class="fa-fw fa-solid fa-link"></i>
+            <span data-i18n="Pair with existing device">Pair with existing device</span>
+        </div>
+    </div>
+
+    <div class="lanSyncTabPanel lanSyncPanelPeers">
+        <h4 class="marginBot5" data-i18n="Paired devices">Paired devices</h4>
+        <div class="lanSyncPeersEmpty menu_button_note marginBot10" data-i18n="No paired devices yet. Use the tabs above to pair this device with another.">
+            No paired devices yet. Use the tabs above to pair this device with another.
+        </div>
+        <div class="lanSyncPeersList flex-container flexFlowColumn flexGap10"></div>
+    </div>
+
+    <div class="lanSyncTabPanel lanSyncPanelPairNew displayNone">
+        <h4 class="marginBot5" data-i18n="Pair new device">Pair new device</h4>
+        <div class="menu_button_note marginBot10" data-i18n="Generate a one-time pairing link to share with another device on the same network. The other device pastes the URL into its own Pair with existing device tab.">
+            Generate a one-time pairing link to share with another device on the same network. The other device pastes the URL into its own Pair with existing device tab.
+        </div>
+
+        <div class="lanSyncPairNewForm">
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Label for the OTHER device (shown in your devices list)">Label for the OTHER device (shown in your devices list)</span>
+                <input type="text" class="text_pole lanSyncPairLabel" maxlength="80" data-i18n="[placeholder]e.g. Phone, Laptop, Office desktop" placeholder="e.g. Phone, Laptop, Office desktop">
+            </label>
+
+            <div class="marginBot5" data-i18n="Categories to sync:">Categories to sync:</div>
+            <div class="lanSyncCategoryGrid flex-container flexGap10 flexWrap marginBot10"></div>
+
+            <div class="backupActionRow flex-container flexGap10 marginBot10">
+                <div class="lanSyncGenerateLinkButton menu_button menu_button_icon">
+                    <i class="fa-fw fa-solid fa-qrcode"></i>
+                    <span data-i18n="Generate pairing link">Generate pairing link</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="lanSyncPairNewResult displayNone">
+            <h4 class="marginBot5" data-i18n="Share this with the other device">Share this with the other device</h4>
+            <div class="menu_button_note marginBot5" data-i18n="Copy the link and paste it into the OTHER device's Pair with existing device tab.">
+                Copy the link and paste it into the OTHER device's Pair with existing device tab.
+            </div>
+            <input type="text" class="text_pole lanSyncGeneratedLink marginBot10" readonly data-i18n="[placeholder]Pairing link" placeholder="Pairing link">
+            <div class="backupActionRow flex-container flexGap10 marginBot10">
+                <div class="lanSyncCopyLinkButton menu_button menu_button_icon">
+                    <i class="fa-fw fa-solid fa-copy"></i>
+                    <span data-i18n="Copy link">Copy link</span>
+                </div>
+                <div class="lanSyncNewLinkButton menu_button menu_button_icon">
+                    <i class="fa-fw fa-solid fa-rotate"></i>
+                    <span data-i18n="Generate another">Generate another</span>
+                </div>
+            </div>
+            <div class="menu_button_note" data-i18n="The other device must enter THIS device's credentials when pairing if you have basic auth enabled. They are sent over LAN only, never stored.">
+                The other device must enter THIS device's credentials when pairing if you have basic auth enabled. They are sent over LAN only, never stored.
+            </div>
+        </div>
+    </div>
+
+    <div class="lanSyncTabPanel lanSyncPanelPairExisting displayNone">
+        <h4 class="marginBot5" data-i18n="Pair with existing device">Pair with existing device</h4>
+        <div class="menu_button_note marginBot10" data-i18n="Paste the pairing link from the other device, or fill in the fields manually.">
+            Paste the pairing link from the other device, or fill in the fields manually.
+        </div>
+
+        <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+            <span data-i18n="Pairing link">Pairing link</span>
+            <input type="text" class="text_pole lanSyncAcceptLink" data-i18n="[placeholder]Paste pairing link here" placeholder="Paste pairing link here">
+        </label>
+
+        <div class="lanSyncAcceptManualFields flex-container flexFlowColumn flexNoGap">
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Other device base URL">Other device base URL</span>
+                <input type="text" class="text_pole lanSyncAcceptBaseUrl" data-i18n="[placeholder]http://192.168.1.42:8000" placeholder="http://192.168.1.42:8000">
+            </label>
+
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Peer identifier from the other device">Peer identifier from the other device</span>
+                <input type="text" class="text_pole lanSyncAcceptPeerId" data-i18n="[placeholder]Peer ID" placeholder="Peer ID">
+            </label>
+
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Label for the other device">Label for the other device</span>
+                <input type="text" class="text_pole lanSyncAcceptLabel" maxlength="80" data-i18n="[placeholder]e.g. Phone" placeholder="e.g. Phone">
+            </label>
+        </div>
+
+        <div class="marginBot5" data-i18n="Categories to sync:">Categories to sync:</div>
+        <div class="lanSyncAcceptCategoryGrid flex-container flexGap10 flexWrap marginBot10"></div>
+
+        <div class="lanSyncAcceptAuthFields">
+            <div class="menu_button_note marginBot5" data-i18n="If the other device has basic authentication enabled, enter the credentials it expects. Otherwise leave blank.">
+                If the other device has basic authentication enabled, enter the credentials it expects. Otherwise leave blank.
+            </div>
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Basic auth username (optional)">Basic auth username (optional)</span>
+                <input type="text" class="text_pole lanSyncAcceptUsername" autocomplete="off">
+            </label>
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Basic auth password (optional)">Basic auth password (optional)</span>
+                <input type="password" class="text_pole lanSyncAcceptPassword" autocomplete="new-password">
+            </label>
+        </div>
+
+        <div class="backupActionRow flex-container flexGap10 marginBot10">
+            <div class="lanSyncAcceptButton menu_button menu_button_icon">
+                <i class="fa-fw fa-solid fa-link"></i>
+                <span data-i18n="Pair and sync">Pair and sync</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="lanSyncConflictPanel displayNone">
+        <hr class="sysHR marginTopBot10">
+        <h4 class="marginBot5" data-i18n="Resolve conflicts">Resolve conflicts</h4>
+        <div class="menu_button_note marginBot10" data-i18n="The same file was edited on both devices. Pick which version to keep for each file. There's no line-by-line merge.">
+            The same file was edited on both devices. Pick which version to keep for each file. There's no line-by-line merge.
+        </div>
+        <div class="lanSyncConflictList flex-container flexFlowColumn flexGap10 marginBot10"></div>
+        <div class="backupActionRow flex-container flexGap10 marginBot10">
+            <div class="lanSyncApplyResolutionsButton menu_button menu_button_icon">
+                <i class="fa-fw fa-solid fa-check"></i>
+                <span data-i18n="Apply resolutions">Apply resolutions</span>
+            </div>
+            <div class="lanSyncCancelResolutionsButton menu_button menu_button_icon">
+                <i class="fa-fw fa-solid fa-xmark"></i>
+                <span data-i18n="Cancel">Cancel</span>
+            </div>
+        </div>
+    </div>
+    </div>
+</div>

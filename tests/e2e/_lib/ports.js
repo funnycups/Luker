@@ -25,6 +25,7 @@ export const PORT_RANGES = {
     personas:       { base: 8561, count: 6 },
     regression:     { base: 8571, count: 4 },
     storage:        { base: 8581, count: 6 },
+    sync:           { base: 8591, count: 4 },
 };
 
 /**

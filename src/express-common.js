@@ -74,6 +74,24 @@ export function getIpAddress(request, includeHeaderIp) {
 }
 
 /**
+ * Reconstruct the request's externally-visible base URL (e.g.
+ * `https://example.com`) for embedding in responses that hand the client a
+ * fully-qualified follow-up URL (OAuth callbacks, LAN-migration links, sync
+ * session manifests, etc.).
+ *
+ * Trusts `X-Forwarded-Proto`/`X-Forwarded-Host`; assumes the deployment
+ * configured express `trust proxy` upstream or runs on a trusted LAN.
+ * @param {import('express').Request} request Request object
+ * @returns {string} Externally-visible base URL, no trailing slash.
+ */
+export function getRequestBaseUrl(request) {
+    const forwardedProto = request.get('x-forwarded-proto');
+    const protocol = forwardedProto || request.protocol || 'http';
+    const host = request.get('x-forwarded-host') || request.get('host');
+    return `${protocol}://${host}`;
+}
+
+/**
  * Checks if the request is coming from a Firefox browser.
  * @param {import('express').Request} req Request object
  * @returns {boolean} True if the request is from Firefox, false otherwise.

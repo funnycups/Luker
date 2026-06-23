@@ -132,6 +132,8 @@ import {
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
+import { router as syncRouter } from './endpoints/sync.js';
+import { syncInProgressMiddleware } from './sync/in-progress-gate.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
@@ -293,7 +295,25 @@ if (!cliArgs.disableCsrf) {
             req.session.csrfToken = token;
         },
         skipCsrfProtection: (req) => {
-            return cliArgs.enableCorsProxy ? /^\/proxy\//.test(req.path) : false;
+            // CORS proxy passthroughs were the original carve-out.
+            if (cliArgs.enableCorsProxy && /^\/proxy\//.test(req.path)) return true;
+            // LAN sync `/session/*` is the cross-peer protocol: those
+            // routes either authenticate via bearer token (`requireSyncToken`)
+            // or via the user's basic-auth credentials forwarded by the
+            // initiating peer (`/session/offer`). CSRF protection assumes
+            // browser-driven cross-site attacks, which doesn't apply when
+            // every legitimate caller is another Luker server's fetch()
+            // (with no shared cookie jar). Without this carve-out, a server-
+            // side `/pair/accept` call to the peer's `/session/offer` is
+            // rejected with "Invalid CSRF token" — the peer has no way to
+            // know the initiator's session-bound token.
+            //
+            // Limited to `/api/sync/v1/session/*` deliberately: the admin
+            // routes (`/peers`, `/pair/start`, `/pair/accept`, etc.) are
+            // browser-driven from the user's own page and remain CSRF-
+            // gated.
+            if (/^\/api\/sync\/v1\/session\//.test(req.path)) return true;
+            return false;
         },
         size: 32,
     });
@@ -480,9 +500,23 @@ app.get('/tokenizers-remote/:file', async (req, res) => {
 // Public API
 app.use('/api/users', usersPublicRouter);
 
+// LAN-sync protocol. Mounted alongside the public router so peer-to-peer
+// session traffic (`/session/*`, bearer-token auth) is reachable without a
+// logged-in browser cookie. Basic auth still applies to `/health` via the
+// upstream middleware; the `isBasicAuthExemptRequest` patch lets the
+// `/session/*` paths through on their own token.
+app.use('/api/sync/v1', syncRouter);
+
 // Everything below this line requires authentication
 app.use(requireLoginMiddleware);
 app.use(enforceUserQuotaMiddleware);
+
+// LAN-sync write-gate (spec §4.4). Returns HTTP 409 from user-initiated
+// save endpoints (`/api/chats/save`, `/api/settings/save`, etc.) while a
+// sync is mid-flight for the same user. Mounted AFTER the sync router
+// so /api/sync/v1/* is unaffected, and AFTER requireLoginMiddleware so
+// the middleware can read `request.user.profile.handle`.
+app.use(syncInProgressMiddleware());
 app.post('/api/ping', (request, response) => {
     if (request.query.extend && request.session) {
         request.session.touch = Date.now();

@@ -96,6 +96,7 @@ const zhCNSidebar = [
   items: [
   { text: '改进总览', link: '/zh-CN/improvements/overview' },
   { text: '增量同步', link: '/zh-CN/improvements/incremental-sync' },
+  { text: '局域网同步', link: '/zh-CN/improvements/lan-sync' },
   { text: '预设解耦', link: '/zh-CN/improvements/preset-decoupling' },
   { text: '角色卡绑定预设与人设', link: '/zh-CN/improvements/card-bound-presets' },
   { text: '函数调用运行时', link: '/zh-CN/improvements/function-call-runtime' },
@@ -209,6 +210,7 @@ const zhCNSidebar = [
             ],
           },
           { text: '角色卡开发者指南', link: '/zh-CN/development/card-developers' },
+          { text: '局域网同步', link: '/zh-CN/development/lan-sync' },
           { text: '贡献指南', link: '/zh-CN/development/contributing' },
   ],
   },
@@ -244,6 +246,7 @@ const zhTWSidebar = [
     items: [
       { text: '改進總覽', link: '/zh-TW/improvements/overview' },
       { text: '增量同步', link: '/zh-TW/improvements/incremental-sync' },
+      { text: '區域網路同步', link: '/zh-TW/improvements/lan-sync' },
       { text: '預設解耦', link: '/zh-TW/improvements/preset-decoupling' },
       { text: '角色卡綁定預設與人設', link: '/zh-TW/improvements/card-bound-presets' },
       { text: '函數調用運行時', link: '/zh-TW/improvements/function-call-runtime' },
@@ -357,6 +360,7 @@ const zhTWSidebar = [
                 ],
               },
               { text: '角色卡開發者指南', link: '/zh-TW/development/card-developers' },
+              { text: '區域網路同步', link: '/zh-TW/development/lan-sync' },
               { text: '貢獻指南', link: '/zh-TW/development/contributing' },
     ],
   },
@@ -392,6 +396,7 @@ const enSidebar = [
     items: [
       { text: 'Overview', link: '/improvements/overview' },
       { text: 'Incremental Sync', link: '/improvements/incremental-sync' },
+      { text: 'LAN Sync', link: '/improvements/lan-sync' },
       { text: 'Preset Decoupling', link: '/improvements/preset-decoupling' },
       { text: 'Card-Bound Presets & Personas', link: '/improvements/card-bound-presets' },
       { text: 'Function Call Runtime', link: '/improvements/function-call-runtime' },
@@ -505,6 +510,7 @@ const enSidebar = [
                 ],
               },
               { text: 'Card Developer Guide', link: '/development/card-developers' },
+              { text: 'LAN Sync', link: '/development/lan-sync' },
               { text: 'Contributing', link: '/development/contributing' },
     ],
   },
