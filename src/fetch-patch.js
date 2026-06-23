@@ -19,7 +19,17 @@ globalThis.fetch = async (/** @type {string | URL | Request} */ request, /** @ty
     const url = getRequestURL(request);
     const filePath = path.resolve(fileURLToPath(url));
     const isUnderServerDirectory = isPathUnderParent(serverDirectory, filePath);
-    if (!isUnderServerDirectory) {
+    // npm dependencies (e.g. @jsquash/* squoosh WASM codecs loaded by jimp)
+    // resolve their WASM via package-relative file:// URLs. When the install
+    // is symlinked (worktrees, pnpm hoist, manual ln -s), the realpath can
+    // land outside `serverDirectory` even though the file is still part of
+    // the resolved dependency graph. Trust any .wasm file whose path
+    // includes a `node_modules` segment — the extension check below is the
+    // backstop, and WASM bytes come from the installed package, not user
+    // input.
+    const segments = filePath.split(path.sep);
+    const isUnderNodeModules = segments.includes('node_modules');
+    if (!isUnderServerDirectory && !isUnderNodeModules) {
         throw new Error('Requested file path is outside of the server directory.');
     }
     const parsedPath = path.parse(filePath);
