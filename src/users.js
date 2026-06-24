@@ -975,6 +975,51 @@ async function headerUserLogin(request, header = 'Remote-User') {
 }
 
 /**
+ * Walks the basic-auth credential list without touching the request session.
+ * Returns the matching user's profile + directories on success, or null when
+ * the credentials do not resolve to an enabled account. I/O errors from the
+ * underlying user store still propagate to the caller — the helper does not
+ * mask infrastructure faults as auth misses.
+ * @param {import('express').Request} request Request object
+ * @returns {Promise<{ profile: User, directories: UserDirectoryList } | null>}
+ */
+export async function resolveUserFromBasicAuth(request) {
+    const authHeader = request.headers?.authorization;
+
+    if (!authHeader) {
+        return null;
+    }
+
+    const [scheme, credentials] = authHeader.split(' ');
+
+    if (scheme !== 'Basic' || !credentials) {
+        return null;
+    }
+
+    const decoded = Buffer.from(credentials, 'base64').toString('utf8');
+    const colonIndex = decoded.indexOf(':');
+    if (colonIndex === -1) {
+        return null;
+    }
+    const username = decoded.slice(0, colonIndex);
+    const password = decoded.slice(colonIndex + 1);
+
+    const userHandles = await getAllUserHandles();
+    for (const userHandle of userHandles) {
+        if (username !== userHandle) continue;
+        const user = await storage.getItem(toKey(userHandle));
+        if (user && user.enabled && user.password && user.password === getPasswordHash(password, user.salt)) {
+            return {
+                profile: user,
+                directories: getUserDirectories(userHandle),
+            };
+        }
+    }
+
+    return null;
+}
+
+/**
  * Tries auto-login with basic auth username.
  * @param {import('express').Request} request Request object
  * @returns {Promise<boolean>} Whether auto-login was performed
@@ -984,37 +1029,14 @@ async function basicUserLogin(request) {
         return false;
     }
 
-    const authHeader = request.headers.authorization;
-
-    if (!authHeader) {
+    const resolved = await resolveUserFromBasicAuth(request);
+    if (!resolved) {
         return false;
     }
 
-    const [scheme, credentials] = authHeader.split(' ');
-
-    if (scheme !== 'Basic' || !credentials) {
-        return false;
-    }
-
-    const [username, ...passwordParts] = Buffer.from(credentials, 'base64')
-        .toString('utf8')
-        .split(':');
-    const password = passwordParts.join(':');
-
-    const userHandles = await getAllUserHandles();
-    for (const userHandle of userHandles) {
-        if (username === userHandle) {
-            const user = await storage.getItem(toKey(userHandle));
-            // Verify pass again here just to be sure
-            if (user && user.enabled && user.password && user.password === getPasswordHash(password, user.salt)) {
-                request.session.handle = userHandle;
-                request.session.version = getAccountVersion(user);
-                return true;
-            }
-        }
-    }
-
-    return false;
+    request.session.handle = resolved.profile.handle;
+    request.session.version = getAccountVersion(resolved.profile);
+    return true;
 }
 
 /**
