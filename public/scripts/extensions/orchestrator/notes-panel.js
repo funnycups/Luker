@@ -41,7 +41,11 @@ export async function mountNotesPanel(host, context) {
      * panel reading from a stale floor-state adapter.
      */
     async function reattachFloorState() {
-        const adapterCtx = {};
+        // Must inherit from the live extension context — attachNotesFloorState
+        // reaches through to `createFloorState`, which lives on getContext().
+        // A bare `{}` here would throw inside the factory, get swallowed by
+        // attachNotesFloorState's try/catch, and leave fs=null forever.
+        const adapterCtx = context ? Object.create(context) : {};
         try {
             await attachNotesFloorState(adapterCtx);
         } catch (err) {
