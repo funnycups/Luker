@@ -27,7 +27,7 @@ import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../../storage/harness/e
 import { router as syncRouter } from '../../../src/endpoints/sync.js';
 
 const FS_HARNESSES = ENDPOINT_HARNESSES.filter(h => h.mode === 'fs');
-const PEER_ID = 'alice-link';
+const PEER_ID = 'u@a1b2c3d4';
 
 /**
  * Wrap an Express app in a real `http.Server` on a random loopback

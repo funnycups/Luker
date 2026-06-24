@@ -32,6 +32,7 @@ const ENDPOINTS = {
     peer: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}`,
     peerLabel: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}/label`,
     peerSync: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}/sync`,
+    peerAuth: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}/auth`,
     pairStart: '/api/sync/v1/pair/start',
     pairAccept: '/api/sync/v1/pair/accept',
     pull: '/api/sync/v1/pull',
@@ -124,6 +125,27 @@ async function loadAvailability() {
         return await res.json();
     } catch {
         return { available: false, reason: 'unreachable' };
+    }
+}
+
+/**
+ * Fetch the logged-in user's handle for the pairing pre-flight check.
+ * Returns the handle string, `''` if the call succeeded but the response
+ * had no handle, or `null` if the request failed entirely — `null` lets
+ * the caller fall through to the server-side gate rather than blocking
+ * the user on a transient network error.
+ *
+ * @returns {Promise<string | null>}
+ */
+async function getCurrentHandleForSync() {
+    try {
+        const res = await fetch('/api/users/me', { headers: getRequestHeaders() });
+        if (!res.ok) return null;
+        const body = await res.json().catch(() => null);
+        if (!body) return null;
+        return String(body.handle || '');
+    } catch {
+        return null;
     }
 }
 
@@ -225,6 +247,17 @@ function renderPeersList(template, peers, handlers) {
         const undoBtn = $(`<div class="menu_button menu_button_icon lanSyncPeerUndoButton"><i class="fa-fw fa-solid fa-arrow-rotate-left"></i><span data-i18n="Undo last sync">${t`Undo last sync`}</span></div>`);
         const forgetBtn = $(`<div class="menu_button menu_button_icon lanSyncPeerForgetButton"><i class="fa-fw fa-solid fa-trash"></i><span data-i18n="Forget">${t`Forget`}</span></div>`);
         actions.append(syncBtn).append(undoBtn).append(forgetBtn);
+
+        // "Clear credentials" only when the server reports stored ones —
+        // showing it otherwise would be a dead button (the DELETE route
+        // is idempotent but it'd still confuse the user). The flag is
+        // derived server-side in /peers from peerAuth presence; the
+        // password itself never leaves the disk via this route.
+        if (peer.hasStoredCredentials) {
+            const clearAuthBtn = $(`<div class="menu_button menu_button_icon lanSyncPeerClearAuthButton"><i class="fa-fw fa-solid fa-key"></i><span data-i18n="Clear credentials">${t`Clear credentials`}</span></div>`);
+            clearAuthBtn.on('click', () => handlers.onClearAuth(peerId, peer));
+            actions.append(clearAuthBtn);
+        }
 
         syncBtn.on('click', () => handlers.onSync(peerId, peer));
         undoBtn.on('click', () => handlers.onUndo(peerId, peer));
@@ -459,6 +492,28 @@ export async function openLanSyncPanel() {
                 toastr.error(String(e.message || e), t`Forget failed`);
             }
         },
+        async onClearAuth(peerId, peer) {
+            // No confirm popup — the action is non-destructive (re-pair
+            // can reinstate credentials) and the button only appears
+            // when credentials are actually stored, so a stray click
+            // can't hit nothing. After success we refresh the peer
+            // list, which makes the button vanish (server's
+            // hasStoredCredentials flag flips to false).
+            try {
+                const res = await fetch(ENDPOINTS.peerAuth(peerId), {
+                    method: 'DELETE',
+                    headers: getRequestHeaders(),
+                });
+                if (!res.ok) {
+                    const body = await res.json().catch(() => ({}));
+                    throw new Error(body.error || `HTTP ${res.status}`);
+                }
+                toastr.success(t`Credentials cleared.`, t`LAN Sync`);
+                await refreshPeers(template, handlers);
+            } catch (e) {
+                toastr.error(String(e.message || e), t`Failed to clear credentials for ${peer.label || peerId}.`);
+            }
+        },
     };
 
     renderPeersList(template, peers, handlers);
@@ -607,6 +662,25 @@ async function collectAuthIfNeeded(/* baseUrl */) {
 
 async function runPairAccept(template, payload) {
     clearStatusBanner(template);
+
+    // Pre-flight handle check (spec §3.4). The server enforces the same
+    // gate on `/pair/accept`, but doing it here avoids even hitting the
+    // network when the user is clearly logged in as the wrong account
+    // (e.g. accepted a link minted for `alice` while logged in as `bob`).
+    // The regex MUST stay in sync with `sanitizeHandleForPeerId` in
+    // `src/endpoints/sync.js` — both sides need to agree on the
+    // sanitized form to compare correctly.
+    const peerIdPrefix = String(payload.remotePeerId || '').split('@')[0];
+    const localHandle = await getCurrentHandleForSync();
+    if (localHandle !== null) {
+        const expected = String(localHandle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_');
+        if (expected !== peerIdPrefix) {
+            showStatusBanner(template, 'error',
+                t`This pairing link is for ${peerIdPrefix}, but you're logged in as ${expected}. Pair from the matching account, or use the same handle on both devices.`);
+            return;
+        }
+    }
+
     showStatusBanner(template, 'info', t`Syncing with ${payload.label || payload.remotePeerId}…`);
     try {
         const res = await fetch(ENDPOINTS.pairAccept, {
@@ -616,6 +690,13 @@ async function runPairAccept(template, payload) {
         });
         const body = await res.json().catch(() => ({}));
 
+        if (res.status === 412 && body.code === 'HANDLE_MISMATCH') {
+            const got = String(body.gotHandle || '');
+            const expected = String(body.expectedHandle || '');
+            showStatusBanner(template, 'error',
+                t`This pairing link is for ${got}, but you're logged in as ${expected}. Pair from the matching account, or use the same handle on both devices.`);
+            return;
+        }
         if (res.status === 401 && body.stage === 'offer') {
             showStatusBanner(template, 'error', t`Authentication to the other device failed. Check your credentials.`);
             return;
@@ -671,6 +752,7 @@ function handleSyncResult(template, payload, body) {
             if (res.ok && result.ok !== false) {
                 template.find('.lanSyncConflictPanel').addClass('displayNone');
                 showStatusBanner(template, 'success', t`Sync complete.`);
+                notifyCredentialsStored(payload);
             } else {
                 showStatusBanner(template, 'error', result.error || `HTTP ${res.status}`);
             }
@@ -680,5 +762,26 @@ function handleSyncResult(template, payload, body) {
     if (body.ok) {
         showStatusBanner(template, 'success', t`Synced with ${payload.label || payload.remotePeerId}.`);
         template.find('.lanSyncConflictPanel').addClass('displayNone');
+        notifyCredentialsStored(payload);
+    }
+}
+
+/**
+ * Toast the "credentials saved" notice after a successful pair when the
+ * user supplied basic-auth fields. The server persists them on the peer
+ * entry (file mode 0600) so subsequent Sync now calls don't need them
+ * supplied again; surfacing the "Clear credentials" affordance avoids
+ * the trap where a user changes their other device's password and gets
+ * silent 401s on every sync.
+ *
+ * No-op when the pair was credential-less, so the notice doesn't fire
+ * for a pure-loopback / single-user setup.
+ */
+function notifyCredentialsStored(payload) {
+    if (payload?.peerAuth?.username && payload?.peerAuth?.password) {
+        toastr.info(
+            t`Credentials saved for this peer. Use 'Clear credentials' on the peer card to remove them.`,
+            t`LAN Sync`,
+        );
     }
 }

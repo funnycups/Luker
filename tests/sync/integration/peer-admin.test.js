@@ -279,7 +279,7 @@ describe.each(FS_HARNESSES)('LAN Sync admin endpoints on $name', ({ mode }) => {
                 .post('/api/sync/v1/pair/accept')
                 .send({
                     peerBaseUrl: 'http://127.0.0.1:1',  // refused — TCP/1 is reserved
-                    remotePeerId: 'p@deadbeef',
+                    remotePeerId: `${B.handle}@deadbeef`,
                     label: 'A',
                     categories: ['chats'],
                 });

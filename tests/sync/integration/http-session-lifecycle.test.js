@@ -46,7 +46,7 @@ describe.each(FS_HARNESSES)('sync session lifecycle on $name', ({ mode }) => {
         const r = await request(harness.app)
             .post('/api/sync/v1/session/offer')
             .send({
-                peerId: 'alice@phone',
+                peerId: `${harness.handle}@phone`,
                 label: 'Phone',
                 categories: ['characters', 'chats'],
             });
@@ -54,7 +54,7 @@ describe.each(FS_HARNESSES)('sync session lifecycle on $name', ({ mode }) => {
         expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
         expect(r.body.url).toContain('/api/sync/v1/session/manifest');
         expect(r.body.expiresAt).toBeGreaterThan(Date.now());
-        expect(r.body.peerId).toBe('alice@phone');
+        expect(r.body.peerId).toBe(`${harness.handle}@phone`);
         expect(r.body.label).toBe('Phone');
 
         // The token must unlock the manifest route. This is the actual
@@ -65,7 +65,7 @@ describe.each(FS_HARNESSES)('sync session lifecycle on $name', ({ mode }) => {
             .set('Authorization', `Bearer ${r.body.token}`);
         expect(m.status).toBe(200);
         expect(m.body).toEqual(expect.objectContaining({
-            peerId: 'alice@phone',
+            peerId: `${harness.handle}@phone`,
             handle: harness.handle,
         }));
     });
@@ -91,7 +91,7 @@ describe.each(FS_HARNESSES)('sync session lifecycle on $name', ({ mode }) => {
         // orchestrator (Task 13) trusts `categories` to be an array.
         const r = await request(harness.app)
             .post('/api/sync/v1/session/offer')
-            .send({ peerId: 'alice@phone', categories: 'not-an-array' });
+            .send({ peerId: `${harness.handle}@phone`, categories: 'not-an-array' });
         expect(r.status).toBe(200);
         expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
     });
@@ -99,7 +99,7 @@ describe.each(FS_HARNESSES)('sync session lifecycle on $name', ({ mode }) => {
     test('POST /session/close invalidates the bearer token', async () => {
         const offer = await request(harness.app)
             .post('/api/sync/v1/session/offer')
-            .send({ peerId: 'alice@phone', label: 'Phone', categories: [] });
+            .send({ peerId: `${harness.handle}@phone`, label: 'Phone', categories: [] });
         expect(offer.status).toBe(200);
         const token = offer.body.token;
 

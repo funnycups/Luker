@@ -57,12 +57,18 @@ export function readSyncState({ userRoot }) {
  * completes or doesn't, and readers always see either the prior state or the
  * new one.
  *
+ * File mode is fixed to 0600 because the registry may hold basic-auth
+ * credentials in plaintext (see `recordPeer.peerAuth`); narrowing perms to
+ * owner-only keeps other local users on a shared box from reading them.
+ * Stronger at-rest encryption (per-handle key derivation, etc.) is a v2
+ * problem — owner-only file mode is the minimum acceptable today.
+ *
  * @param {{ userRoot: string, state: { peers: Record<string, object> } }} args
  */
 async function writeSyncState({ userRoot, state }) {
     const p = statePathFor(userRoot);
     await fs.promises.mkdir(path.dirname(p), { recursive: true });
-    writeFileAtomicSync(p, JSON.stringify(state, null, 2), 'utf8');
+    writeFileAtomicSync(p, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
 }
 
 /**
@@ -77,12 +83,27 @@ async function writeSyncState({ userRoot, state }) {
  * `/pair/accept`, OR — for re-syncs from the same device — pulled from
  * the existing entry without re-prompting the user.
  *
- * @param {{ userRoot: string, peerId: string, label: string, categories: string[], peerBaseUrl?: string }} args
+ * `peerAuth` is optional `{ username, password }`. Only stored when BOTH
+ * fields are non-empty strings — a half-filled blob is treated as "no
+ * auth supplied" and silently dropped (rather than persisting a useless
+ * partial credential). When `peerAuth` is omitted/null, any previously-
+ * stored credentials are preserved, mirroring the `peerBaseUrl` carry-
+ * forward pattern: `/pair/start` doesn't know auth and must not clobber
+ * what `/pair/accept` saved later. Stored in plaintext; see
+ * `writeSyncState` for the file-mode policy that keeps the credentials
+ * owner-readable only.
+ *
+ * @param {{ userRoot: string, peerId: string, label: string, categories: string[], peerBaseUrl?: string, peerAuth?: { username?: string, password?: string } | null }} args
  */
-export async function recordPeer({ userRoot, peerId, label, categories, peerBaseUrl }) {
+export async function recordPeer({ userRoot, peerId, label, categories, peerBaseUrl, peerAuth }) {
     assertSafePeerId(peerId);
     const state = readSyncState({ userRoot });
     const previous = state.peers[peerId] ?? {};
+    const nextPeerAuth = (peerAuth && typeof peerAuth === 'object'
+        && typeof peerAuth.username === 'string' && peerAuth.username.length
+        && typeof peerAuth.password === 'string' && peerAuth.password.length)
+        ? { username: peerAuth.username, password: peerAuth.password }
+        : undefined;
     state.peers[peerId] = {
         ...previous,
         label,
@@ -92,7 +113,31 @@ export async function recordPeer({ userRoot, peerId, label, categories, peerBase
         // supply one; this keeps `/pair/start` (which has no peer URL
         // yet) from clobbering data recorded by a later `/pair/accept`.
         ...(peerBaseUrl ? { peerBaseUrl } : {}),
+        // Same carry-forward for credentials: omitted/incomplete input
+        // leaves the existing `peerAuth` (if any) intact.
+        ...(nextPeerAuth ? { peerAuth: nextPeerAuth } : {}),
     };
+    await writeSyncState({ userRoot, state });
+}
+
+/**
+ * Drop stored basic-auth credentials for a peer. Used by the UI's
+ * "Clear credentials" button when the user wants `Sync now` to start
+ * prompting again (e.g. they rotated the other device's password and
+ * want to enter the new one through the full pair flow).
+ *
+ * Idempotent — no-op when the peer isn't registered or has no stored
+ * credentials. Other peer fields (label, categories, pairedAt,
+ * peerBaseUrl, lastSyncAt, ...) are untouched.
+ *
+ * @param {{ userRoot: string, peerId: string }} args
+ */
+export async function clearPeerAuth({ userRoot, peerId }) {
+    assertSafePeerId(peerId);
+    const state = readSyncState({ userRoot });
+    const peer = state.peers[peerId];
+    if (!peer || !peer.peerAuth) return;
+    delete peer.peerAuth;
     await writeSyncState({ userRoot, state });
 }
 

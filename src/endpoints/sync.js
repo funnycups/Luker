@@ -28,10 +28,11 @@ import {
 } from '../sync/orchestrator.js';
 import { materializeUserDataIntoWorkdir, dematerializeWorkdirIntoUserData, buildWorkdirDirectoriesView } from '../sync/materialize.js';
 import { markSyncInProgress, clearSyncInProgress } from '../sync/in-progress-gate.js';
-import { readSyncState, recordPeer, removePeerCompletely } from '../sync/state.js';
+import { readSyncState, recordPeer, removePeerCompletely, clearPeerAuth } from '../sync/state.js';
 import { SYNC_CATEGORIES } from '../sync/categories.js';
 import { getStorageEngine } from '../storage/index.js';
 import { getRequestBaseUrl } from '../express-common.js';
+import { ENABLE_ACCOUNTS, resolveUserFromBasicAuth } from '../users.js';
 
 export const router = express.Router();
 
@@ -383,7 +384,10 @@ router.post('/session/ref', requireSyncToken, express.json(), async (request, re
  * without going back through the per-handle directory cache.
  */
 router.post('/session/offer', express.json({ limit: '16kb' }), async (request, response) => {
-    const user = request.user;
+    let user = request.user;
+    if (!user?.profile?.handle && ENABLE_ACCOUNTS) {
+        user = await resolveUserFromBasicAuth(request);
+    }
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
     }
@@ -397,6 +401,25 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
 
     if (!peerId) {
         return response.status(400).json({ error: 'peerId required' });
+    }
+
+    // Spec §3.4 — pairing requires the same sanitized handle on both
+    // devices. The peerId encodes the issuing user's sanitized handle as
+    // its prefix; the local user MUST share that prefix, otherwise we'd
+    // be silently overwriting one user's data with another's on the next
+    // sync. Returns 412 (Precondition Failed) so the UI can distinguish
+    // "wrong account" from auth (401) or bad payload (400) errors. The
+    // frontend duplicates this check pre-flight to avoid even minting an
+    // outbound request; this is the backstop for callers that bypass it.
+    const expectedHandle = sanitizeHandleForPeerId(handle);
+    const peerIdPrefix = peerId.split('@')[0];
+    if (expectedHandle !== peerIdPrefix) {
+        return response.status(412).json({
+            error: 'Handle mismatch',
+            code: 'HANDLE_MISMATCH',
+            expectedHandle,
+            gotHandle: peerIdPrefix,
+        });
     }
 
     const engine = getStorageEngine();
@@ -623,16 +646,36 @@ router.post('/undo', express.json({ limit: '16kb' }), async (request, response) 
 
 const PEER_ID_SUFFIX_BYTES = 4; // 8 hex chars
 
+/**
+ * Sanitize a Luker handle into the prefix half of a peerId
+ * (`<sanitized-handle>@<suffix>`).
+ *
+ * Exported because both `generatePeerId` and the handle-mismatch gate
+ * on `/session/offer` + `/pair/accept` need to compare against the same
+ * sanitized form, and the same regex is duplicated client-side in
+ * `public/scripts/lan-sync.js` for the pre-flight check. Keep this
+ * helper and the literal client-side regex in sync.
+ *
+ * @param {string} handle
+ * @returns {string}
+ */
+export function sanitizeHandleForPeerId(handle) {
+    return String(handle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_');
+}
+
 function generatePeerId(handle) {
-    const safeHandle = String(handle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_');
-    const suffix = crypto.randomBytes(PEER_ID_SUFFIX_BYTES).toString('hex');
-    return `${safeHandle}@${suffix}`;
+    return `${sanitizeHandleForPeerId(handle)}@${crypto.randomBytes(PEER_ID_SUFFIX_BYTES).toString('hex')}`;
 }
 
 /**
- * List paired peers for the authenticated user. Returns the raw registry
- * shape from `readSyncState` so the UI can render rows verbatim — label,
- * categories, pairedAt, lastSyncAt, lastSyncedOid.
+ * List paired peers for the authenticated user. Returns the registry shape
+ * from `readSyncState` so the UI can render rows verbatim — label,
+ * categories, pairedAt, lastSyncAt, lastSyncedOid — with one transform:
+ * the stored `peerAuth` blob is replaced by a boolean `hasStoredCredentials`
+ * so the UI knows whether to show the "Clear credentials" button without
+ * the password ever crossing the wire. State.json mode 0600 narrows local
+ * exposure; never echoing the password in API responses closes the
+ * cross-origin / shoulder-surf path on top of that.
  *
  * Empty result is `{ peers: {} }` (never 404) so the UI can render an
  * empty-state without branching on HTTP status.
@@ -643,7 +686,15 @@ router.get('/peers', (request, response) => {
         return response.status(401).json({ error: 'Auth required' });
     }
     const state = readSyncState({ userRoot: user.directories.root });
-    response.json({ peers: state.peers });
+    const sanitized = {};
+    for (const [peerId, peer] of Object.entries(state.peers)) {
+        const { peerAuth, ...rest } = peer;
+        sanitized[peerId] = {
+            ...rest,
+            hasStoredCredentials: Boolean(peerAuth && peerAuth.username && peerAuth.password),
+        };
+    }
+    response.json({ peers: sanitized });
 });
 
 /**
@@ -709,6 +760,37 @@ router.delete('/peers/:peerId', async (request, response) => {
         response.status(204).end();
     } catch (e) {
         console.error('[sync] forget peer failed', e);
+        response.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * Clear stored basic-auth credentials for a peer. The peer entry, shadow
+ * repo, and other metadata are preserved — only the `peerAuth` blob is
+ * dropped. After this returns, "Sync now" against the peer will run
+ * without an Authorization header on the outbound `/session/offer` call;
+ * in multi-user mode that 401s until the user re-pairs.
+ *
+ * Idempotent: 200 even when the peer doesn't exist or had no stored
+ * credentials. The 400 branch is reserved for unsafe `:peerId` values
+ * (same gate as `DELETE /peers/:peerId`).
+ */
+router.delete('/peers/:peerId/auth', async (request, response) => {
+    const user = request.user;
+    if (!user?.profile?.handle || !user?.directories?.root) {
+        return response.status(401).json({ error: 'Auth required' });
+    }
+    const peerId = String(request.params.peerId || '').trim();
+    try {
+        assertSafePeerId(peerId);
+    } catch (e) {
+        return response.status(400).json({ error: e.message });
+    }
+    try {
+        await clearPeerAuth({ userRoot: user.directories.root, peerId });
+        response.json({ ok: true });
+    } catch (e) {
+        console.error('[sync] clearPeerAuth failed', e);
         response.status(500).json({ error: e.message });
     }
 });
@@ -831,7 +913,14 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
     }
 
     const body = request.body ?? {};
-    const peerAuth = body.peerAuth && typeof body.peerAuth === 'object' ? body.peerAuth : null;
+    // Prefer the credentials the caller supplied this call (lets the
+    // UI override one-shot, e.g. for a one-time re-auth without storing
+    // anything). Fall back to whatever the registry persisted at pair
+    // time — this is the path that lets the UI's per-peer "Sync now"
+    // button work in multi-user mode without prompting again.
+    const peerAuth = (body.peerAuth && typeof body.peerAuth === 'object')
+        ? body.peerAuth
+        : (peer.peerAuth ?? null);
     const resolutions = (body.resolutions && typeof body.resolutions === 'object') ? body.resolutions : undefined;
 
     // Mint a fresh session token at the peer via /session/offer.
@@ -917,7 +1006,12 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
  *   - `peerAuth`        — optional `{ username, password }` if the OTHER
  *                          device has basic-auth enabled. Forwarded as a
  *                          standard `Authorization: Basic` header on our
- *                          outbound `/session/offer` call. Never persisted.
+ *                          outbound `/session/offer` call. Persisted on
+ *                          the peer entry (file mode 0600) so subsequent
+ *                          `POST /peers/:peerId/sync` calls can re-use
+ *                          them without re-prompting the user. The UI's
+ *                          "Clear credentials" button hits
+ *                          `DELETE /peers/:peerId/auth` to drop them.
  *
  * Flow:
  *   1. POST `peerBaseUrl + /api/sync/v1/session/offer` with our peerId +
@@ -963,6 +1057,26 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
         assertSafePeerId(remotePeerId);
     } catch (e) {
         return response.status(400).json({ error: e.message });
+    }
+
+    // Spec §3.4 — same-handle requirement, mirrored from `/session/offer`.
+    // The remote peerId was minted by the OTHER device using ITS handle
+    // (e.g. `alice@deadbeef` on a server where the user is `alice`).
+    // The accepting (local) user must ALSO be `alice` for the pairing
+    // to be safe — otherwise their data would be silently merged on the
+    // next sync. Same-handle pairings across two real `alice` accounts
+    // on different servers are accepted by design: it's the user's
+    // responsibility to verify identity. Run BEFORE the outbound fetch
+    // so a mismatched peer doesn't even hit the network.
+    const expectedHandle = sanitizeHandleForPeerId(user.profile.handle);
+    const remotePeerIdPrefix = remotePeerId.split('@')[0];
+    if (expectedHandle !== remotePeerIdPrefix) {
+        return response.status(412).json({
+            error: 'Handle mismatch',
+            code: 'HANDLE_MISMATCH',
+            expectedHandle,
+            gotHandle: remotePeerIdPrefix,
+        });
     }
 
     // Step 1: ask the OTHER device to mint a session token for us.
@@ -1018,6 +1132,13 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
             label,
             categories,
             peerBaseUrl,
+            // Stored AFTER the outbound /session/offer succeeded so we
+            // never persist credentials for a pairing that failed auth
+            // upstream. `recordPeer` drops incomplete blobs (missing
+            // username or password) so a no-auth pair leaves the field
+            // unset, and a re-pair without re-supplying credentials
+            // keeps the previously-stored ones.
+            peerAuth,
         });
     } catch (e) {
         console.error('[sync] pair/accept record failed', e);

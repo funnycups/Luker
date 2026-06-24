@@ -118,7 +118,7 @@ describe.each(FS_HARNESSES)('end-to-end sync flow on $name', ({ mode }) => {
         // shadow at `<userRoot>/.sync/<peerId>/`, B stores its mirror
         // shadow at the same path under B's userRoot. The test reuses
         // one canonical id for that reason.
-        const PEER_ID = 'alice-link';
+        const PEER_ID = 'u@a1b2c3d4';
         const offer = await request(A.app)
             .post('/api/sync/v1/session/offer')
             .send({
@@ -164,7 +164,7 @@ describe.each(FS_HARNESSES)('end-to-end sync flow on $name', ({ mode }) => {
         // Pair first — same shape as the pairing test, but kept inline
         // because each `beforeEach` rebuilds the harnesses, so the
         // earlier test's state does not survive into this one.
-        const PEER_ID = 'alice-link';
+        const PEER_ID = 'u@a1b2c3d4';
         fs.writeFileSync(
             path.join(A.dirs.characters, 'shared.png'),
             Buffer.from('SHARED'),
@@ -278,7 +278,7 @@ describe.each(FS_HARNESSES)('end-to-end sync flow on $name', ({ mode }) => {
         // conflicting file. Without that base, `bothModified` wouldn't
         // be the merge classification — isomorphic-git would diagnose
         // a different state and the conflict shape would differ.
-        const PEER_ID = 'alice-link';
+        const PEER_ID = 'u@a1b2c3d4';
         fs.writeFileSync(
             path.join(A.dirs.characters, 'shared.png'),
             Buffer.from('BASE_VERSION'),

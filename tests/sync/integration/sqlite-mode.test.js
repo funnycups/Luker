@@ -216,7 +216,7 @@ describe('SQLite-mode sync', () => {
         // repo. B's pull fetches those git objects, fast-forwards,
         // reconciles into B's live tree, and finally dematerializes
         // the reconciled workdir into B's engine under handle='bob'.
-        const PEER_ID = 'alice-bob-link';
+        const PEER_ID = 'alice@a1b2c3d4';
         const offer = await request(H.aApp)
             .post('/api/sync/v1/session/offer')
             .send({

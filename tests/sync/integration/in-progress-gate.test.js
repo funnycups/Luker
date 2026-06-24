@@ -114,7 +114,7 @@ describe.each(FS_HARNESSES)('SYNC_IN_PROGRESS gate on $name', ({ mode }) => {
             Buffer.from('A'),
         );
 
-        const PEER_ID = 'gate-link';
+        const PEER_ID = 'u@deadbeef';
 
         // Before any sync work: writes pass.
         const before = await request(B.app).post('/api/chats/save').send({});
@@ -153,7 +153,7 @@ describe.each(FS_HARNESSES)('SYNC_IN_PROGRESS gate on $name', ({ mode }) => {
             path.join(A.dirs.characters, 'a.png'),
             Buffer.from('A'),
         );
-        const PEER_ID = 'gate-link';
+        const PEER_ID = 'u@deadbeef';
 
         // Park A's `/session/object/:oid` GETs behind a manually-released
         // latch so B's `runPull` blocks in `fetchMissingObjects`. We
@@ -229,7 +229,7 @@ describe.each(FS_HARNESSES)('SYNC_IN_PROGRESS gate on $name', ({ mode }) => {
     });
 
     test('pull error path still clears the gate', async () => {
-        const PEER_ID = 'gate-link';
+        const PEER_ID = 'u@deadbeef';
 
         // Pick an unbound port: bind an http server on ephemeral port,
         // grab the number, immediately close — the kernel won't recycle
@@ -276,7 +276,7 @@ describe.each(FS_HARNESSES)('SYNC_IN_PROGRESS gate on $name', ({ mode }) => {
 
     test('pending-conflict pull releases the gate so the user can keep working until they post resolutions', async () => {
         // Pair first.
-        const PEER_ID = 'gate-link';
+        const PEER_ID = 'u@deadbeef';
         fs.writeFileSync(
             path.join(A.dirs.characters, 'shared.png'),
             Buffer.from('SHARED'),
@@ -344,7 +344,7 @@ describe.each(FS_HARNESSES)('SYNC_IN_PROGRESS gate on $name', ({ mode }) => {
 
     test('undo last sync also gates writes for the duration', async () => {
         // Pair, then sync once, then undo.
-        const PEER_ID = 'gate-link';
+        const PEER_ID = 'u@deadbeef';
         fs.writeFileSync(
             path.join(A.dirs.characters, 'a.png'),
             Buffer.from('A'),
