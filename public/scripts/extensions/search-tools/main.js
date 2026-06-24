@@ -1371,8 +1371,8 @@ async function requestToolCallsWithRetry(context, settings, {
     const systemText = String(systemPrompt || '').trim() || 'Use tool calls only.';
     const userText = String(userPrompt || '').trim() || 'Use tool calls only.';
     const taskMessages = [
-        ...(Array.isArray(historyMessages) ? historyMessages.map(message => ({ ...message })) : []),
         { role: 'system', content: systemText },
+        ...(Array.isArray(historyMessages) ? historyMessages.map(message => ({ ...message })) : []),
         { role: 'user', content: userText },
     ].filter(message => message && message.content !== undefined);
 
@@ -2110,7 +2110,7 @@ function buildManagedEntryCatalog(entries = []) {
     if (normalized.length === 0) {
         return '[]';
     }
-    return JSON.stringify(normalized.map(entry => ({
+    return JSON.stringify(normalized.slice().sort((a, b) => String(a?.entryId || '').localeCompare(String(b?.entryId || ''))).map(entry => ({
         entry_id: entry.entryId,
         title: entry.title,
         keywords: entry.keywords,
@@ -2147,9 +2147,6 @@ function buildSearchAgentUserPrompt(payload, {
 
     return [
         '# Search Agent Task',
-        isFinalStage
-            ? `Final stage after ${maxRounds} search rounds.`
-            : `Search round ${roundIndex} of ${maxRounds}.`,
         `Generation type: ${String(payload?.type || 'unknown')}.`,
         `Shared lorebook: ${bookName || '(not created yet)'}.`,
         '',

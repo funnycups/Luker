@@ -46,6 +46,7 @@
  */
 
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
+import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { executeLoopTool, getEnabledToolSchemas, resolveToolSource } from './loop-tools.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 import {
@@ -1103,11 +1104,7 @@ function makeToolCallId() {
 }
 
 function safeStringifyArgs(value) {
-    try {
-        return JSON.stringify(value && typeof value === 'object' ? value : {});
-    } catch {
-        return '{}';
-    }
+    return canonicalStringifyArgs(value);
 }
 
 function makeOkToolMessage(toolCallId, payload, round) {

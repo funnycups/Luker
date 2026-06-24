@@ -62,8 +62,7 @@ export function computeActiveExtractionTypes(schema, currentSeq) {
     return active;
 }
 
-export function assembleExtractionSystemPrompt(basePrompt, schema, activeTypes) {
-    const base = String(basePrompt || '').trim();
+export function buildPerTypeRulesBlock(schema, activeTypes) {
     const sections = [];
     const activeSet = activeTypes instanceof Set ? activeTypes : new Set();
     for (const entry of Array.isArray(schema) ? schema : []) {
@@ -73,6 +72,20 @@ export function assembleExtractionSystemPrompt(basePrompt, schema, activeTypes) 
         if (!instructions) continue;
         sections.push(`[${typeId}]\n${instructions}`);
     }
-    if (sections.length === 0) return base;
-    return `${base}\n\n=== Per-type extraction rules (active this round) ===\n\n${sections.join('\n\n')}`;
+    if (sections.length === 0) return '';
+    return `=== Per-type extraction rules (active this round) ===\n\n${sections.join('\n\n')}`;
+}
+
+/**
+ * Trivially returns the base prompt. Kept as a wrapper so existing callers
+ * and the public API surface re-export don't churn; per-type rules are now
+ * appended to the user prompt via {@link buildPerTypeRulesBlock} so the
+ * system prompt remains byte-stable across cadence rounds (Anthropic
+ * prompt-cache friendliness).
+ *
+ * @param {string} basePrompt
+ * @returns {string}
+ */
+export function assembleExtractionSystemPrompt(basePrompt) {
+    return String(basePrompt || '').trim();
 }

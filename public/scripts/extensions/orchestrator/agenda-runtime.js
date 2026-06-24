@@ -43,6 +43,7 @@
 
 const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
+import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
 import {
     AGENDA_PLANNER_TOOL,
@@ -901,7 +902,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
                 type: 'function',
                 function: {
                     name: normalizedName,
-                    arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
+                    arguments: canonicalStringifyArgs(tc?.args),
                 },
                 source: resolveToolSource(normalizedName, toolContext),
             };

@@ -30,8 +30,9 @@ import {
     DEFAULT_PER_TYPE_INSTRUCTIONS,
     computeActiveExtractionTypes,
     assembleExtractionSystemPrompt,
+    buildPerTypeRulesBlock,
 } from './extraction-schedule.js';
-export { DEFAULT_PER_TYPE_INSTRUCTIONS, computeActiveExtractionTypes, assembleExtractionSystemPrompt };
+export { DEFAULT_PER_TYPE_INSTRUCTIONS, computeActiveExtractionTypes, assembleExtractionSystemPrompt, buildPerTypeRulesBlock };
 import {
     configure as configureCharacterOverrides,
     getCurrentAvatar,
@@ -4560,20 +4561,20 @@ function buildExtractInputXml(requiredTypes, graphData, messages) {
 
     return [
         '<extract_input>',
-        '  <input_guide>Below are the extraction inputs. graph_data is the current semantic memory graph state for extraction.</input_guide>',
+        '  <input_guide>dialogue_batch is the current source dialogue to extract from.</input_guide>',
+        '  <dialogue_batch>',
+        messageXml,
+        '  </dialogue_batch>',
+        '  <input_guide>required_types are hard-required types for this batch.</input_guide>',
+        '  <required_types>',
+        requiredTypeXml,
+        '  </required_types>',
+        '  <input_guide>graph_data is the current semantic memory graph state for extraction.</input_guide>',
         '  <input_guide>graph_data is a full schema-aware projection of the current semantic graph for extraction.</input_guide>',
         '  <input_guide>Each graph_data.nodes row contains key_values (identity keys) and row_values (schema columns).</input_guide>',
         '  <input_guide>graph_data.edges contains the currently projected semantic relations between nodes.</input_guide>',
         '  <input_guide>If graph_data.initialized=false, treat graph as uninitialized and prefer create operations over edit/delete.</input_guide>',
-        '  <input_guide>required_types are hard-required types for this batch.</input_guide>',
-        '  <input_guide>dialogue_batch is the current source dialogue to extract from.</input_guide>',
         buildJsonXmlSection('graph_data', safeGraphData),
-        '  <required_types>',
-        requiredTypeXml,
-        '  </required_types>',
-        '  <dialogue_batch>',
-        messageXml,
-        '  </dialogue_batch>',
         '</extract_input>',
     ].join('\n');
 }
@@ -4584,8 +4585,9 @@ function buildRecallRouteInputXml({
     alwaysInjectNodeIds = [],
     schemaOverview = [],
     selectionConstraints = {},
+    recentDialogueContext = null,
 } = {}) {
-    return [
+    const lines = [
         '<recall_route_input>',
         '  <input_guide>Plan recall route from the data blocks below. Use node ids from candidate_nodes only.</input_guide>',
         '  <input_guide>always_inject_node_ids are injected separately; never include them in selected_node_ids.</input_guide>',
@@ -4594,8 +4596,12 @@ function buildRecallRouteInputXml({
         buildJsonXmlSection('always_inject_node_ids', alwaysInjectNodeIds),
         buildJsonXmlSection('schema_overview', schemaOverview),
         buildJsonXmlSection('selection_constraints', selectionConstraints),
-        '</recall_route_input>',
-    ].join('\n');
+    ];
+    if (recentDialogueContext != null) {
+        lines.push(buildJsonXmlSection('recent_dialogue_context', recentDialogueContext));
+    }
+    lines.push('</recall_route_input>');
+    return lines.join('\n');
 }
 
 function buildRecallFinalizeInputXml({
@@ -4604,8 +4610,9 @@ function buildRecallFinalizeInputXml({
     alwaysInjectNodeIds = [],
     routeResult = {},
     selectionConstraints = {},
+    recentDialogueContext = null,
 } = {}) {
-    return [
+    const lines = [
         '<recall_finalize_input>',
         '  <input_guide>Finalize selected node ids for injection from candidate_nodes.</input_guide>',
         '  <input_guide>always_inject_node_ids are injected separately; never include them in selected_node_ids.</input_guide>',
@@ -4614,8 +4621,12 @@ function buildRecallFinalizeInputXml({
         buildJsonXmlSection('always_inject_node_ids', alwaysInjectNodeIds),
         buildJsonXmlSection('route_result', routeResult),
         buildJsonXmlSection('selection_constraints', selectionConstraints),
-        '</recall_finalize_input>',
-    ].join('\n');
+    ];
+    if (recentDialogueContext != null) {
+        lines.push(buildJsonXmlSection('recent_dialogue_context', recentDialogueContext));
+    }
+    lines.push('</recall_finalize_input>');
+    return lines.join('\n');
 }
 
 async function extractNodesWithLLM(context, store, settings, schema, messageBatch, options = {}) {
@@ -4716,12 +4727,16 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         };
         return [];
     }
-    const extractSystemPrompt = assembleExtractionSystemPrompt(baseExtractSystemPrompt, schema, activeTypes);
+    const extractSystemPrompt = assembleExtractionSystemPrompt(baseExtractSystemPrompt);
     const extractUserPrompt = buildExtractInputXml(
         Array.from(forceUpdateTypes),
         graphDataPayload,
         messages,
     );
+    const perTypeRulesBlock = buildPerTypeRulesBlock(schema, activeTypes);
+    const extractUserPromptWithRules = perTypeRulesBlock
+        ? `${extractUserPrompt}\n\n${perTypeRulesBlock}`
+        : extractUserPrompt;
     const resolvedExtractWorldInfo = await resolveMemoryGraphWorldInfo(context, settings, {
         worldInfoMessages: messages.map(item => ({
             role: item.role,
@@ -4763,7 +4778,7 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
             : '';
         const taskMessages = [
             { role: 'system', content: extractSystemPrompt },
-            { role: 'user', content: extractUserPrompt },
+            { role: 'user', content: extractUserPromptWithRules },
             ...(reminderText ? [{ role: 'user', content: reminderText }] : []),
         ];
         let calls = [];
@@ -6772,7 +6787,6 @@ async function chooseRecallRoute(context, settings, recallState) {
             userPrompt: buildRecallRouteInputXml({
                 recallQueryContext: {
                     user_query_text: recallState.query,
-                    recent_dialogue_context: recallState.queryBundle,
                 },
                 candidateNodes: candidateRows,
                 alwaysInjectNodeIds: alwaysInjectIds,
@@ -6782,6 +6796,7 @@ async function chooseRecallRoute(context, settings, recallState) {
                     injection_exclude_recent_messages: Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
                     recall_query_recent_messages: Math.max(1, Number(settings.recallQueryMessages || defaultSettings.recallQueryMessages || 2)),
                 },
+                recentDialogueContext: recallState.queryBundle,
             }),
             apiPresetName: settings.recallApiPresetName || '',
             promptPresetName: String(settings.recallPresetName || '').trim(),
@@ -6971,7 +6986,6 @@ async function chooseFocusNodes(context, settings, recallState) {
             userPrompt: buildRecallFinalizeInputXml({
                 recallQueryContext: {
                     user_query_text: recallState.query,
-                    recent_dialogue_context: recallState.queryBundle,
                 },
                 candidateNodes: detailRows,
                 alwaysInjectNodeIds: alwaysInjectIds,
@@ -6984,6 +6998,7 @@ async function chooseFocusNodes(context, settings, recallState) {
                     recall_query_recent_messages: Math.max(1, Number(settings.recallQueryMessages || defaultSettings.recallQueryMessages || 2)),
                     min_event_nodes_if_available: 2,
                 },
+                recentDialogueContext: recallState.queryBundle,
             }),
             apiPresetName: settings.recallApiPresetName || '',
             promptPresetName: String(settings.recallPresetName || '').trim(),

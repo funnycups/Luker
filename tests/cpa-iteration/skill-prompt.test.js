@@ -1,17 +1,17 @@
 // tests/cpa-iteration/skill-prompt.test.js
-import { describe, test, expect, beforeAll, jest } from '@jest/globals';
+import { describe, test, expect, beforeAll } from '@jest/globals';
 
 // skill-prompt.js is pure (no DOM, no Luker globals, no transitive script.js
 // pull) — no module mocks needed. The catalog fetch is supplied by the caller
 // via opts.listSkillsInScope, so the test threads stubs directly.
 
 let formatCpaSkillsAugmentation;
-let augmentCpaPromptWithSkills;
+let buildCpaSkillsBlock;
 
 beforeAll(async () => {
     ({
         formatCpaSkillsAugmentation,
-        augmentCpaPromptWithSkills,
+        buildCpaSkillsBlock,
     } = await import(
         '../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/skill-prompt.js'
     ));
@@ -62,6 +62,24 @@ describe('CPA — skill-prompt format', () => {
         expect(block).toContain('[global]');
     });
 
+    test('formatCpaSkillsAugmentation sorts skills by name so input order does not float through', () => {
+        // Input order would put 'zeta' first; output should always be
+        // alpha-sorted so Anthropic prompt cache stays stable when the
+        // registry reorders its array (skill install / uninstall reshuffles
+        // the in-memory cache).
+        const block = formatCpaSkillsAugmentation([
+            { name: 'zeta-skill', description: 'z', scope: { kind: 'preset' } },
+            { name: 'alpha-skill', description: 'a', scope: { kind: 'preset' } },
+            { name: 'mid-skill', description: 'm', scope: { kind: 'global' } },
+        ], {});
+        const alphaIdx = block.indexOf('alpha-skill');
+        const midIdx = block.indexOf('mid-skill');
+        const zetaIdx = block.indexOf('zeta-skill');
+        expect(alphaIdx).toBeGreaterThan(-1);
+        expect(midIdx).toBeGreaterThan(alphaIdx);
+        expect(zetaIdx).toBeGreaterThan(midIdx);
+    });
+
     test('formatCpaSkillsAugmentation cross-references the splice-in-reference workflow with preset_str_* tools', () => {
         const block = formatCpaSkillsAugmentation([], {});
         expect(block).toContain('preset_str_delete_in_prompt');
@@ -91,31 +109,26 @@ describe('CPA — skill-prompt format', () => {
     });
 });
 
-describe('CPA — augmentCpaPromptWithSkills', () => {
-    test('returns the base prompt unchanged when mode is not orchestrator-optimize', async () => {
-        const base = 'Base system prompt.';
-        const out = await augmentCpaPromptWithSkills(base, 'general', { presetName: 'x' });
-        expect(out).toBe(base);
-        const out2 = await augmentCpaPromptWithSkills(base, 'jailbreak-only', { presetName: 'x' });
-        expect(out2).toBe(base);
+describe('CPA — buildCpaSkillsBlock', () => {
+    test('returns empty string when mode is not orchestrator-optimize', async () => {
+        const out = await buildCpaSkillsBlock('general', { presetName: 'x' });
+        expect(out).toBe('');
+        const out2 = await buildCpaSkillsBlock('jailbreak-only', { presetName: 'x' });
+        expect(out2).toBe('');
     });
 
-    test('appends the skills block when mode is orchestrator-optimize', async () => {
-        const base = 'Base system prompt.';
-        const out = await augmentCpaPromptWithSkills(
-            base,
+    test('returns the skills block (no basePrompt wrapping) when mode is orchestrator-optimize', async () => {
+        const out = await buildCpaSkillsBlock(
             'orchestrator-optimize',
             { presetName: 'Atlas' },
             { listSkillsInScope: async () => [] },
         );
-        expect(out.startsWith(base)).toBe(true);
         expect(out).toMatch(/Skill management/);
         expect(out).toContain('Atlas');
     });
 
     test('threads listSkillsInScope result into the catalog', async () => {
-        const out = await augmentCpaPromptWithSkills(
-            'B',
+        const out = await buildCpaSkillsBlock(
             'orchestrator-optimize',
             {},
             {
@@ -128,20 +141,21 @@ describe('CPA — augmentCpaPromptWithSkills', () => {
         expect(out).toContain('output format rule');
     });
 
-    test('failing listSkillsInScope falls back to the empty-catalog marker (no throw)', async () => {
-        const out = await augmentCpaPromptWithSkills(
-            'B',
-            'orchestrator-optimize',
-            {},
-            { listSkillsInScope: async () => { throw new Error('http 500'); } },
-        );
-        expect(out).toMatch(/none installed|\(none/);
-        expect(out.startsWith('B')).toBe(true);
+    test('rethrows when listSkillsInScope fails (no silent fallback to empty catalog)', async () => {
+        // Silent fallback would let the prompt lie ("(none installed)") and
+        // risk the AI duplicating an existing skill. The caller (studio.js)
+        // surfaces the failure to the user instead.
+        await expect(
+            buildCpaSkillsBlock(
+                'orchestrator-optimize',
+                {},
+                { listSkillsInScope: async () => { throw new Error('http 500'); } },
+            ),
+        ).rejects.toThrow(/http 500/);
     });
 
-    test('omitted listSkillsInScope still appends the block with an empty catalog', async () => {
-        const out = await augmentCpaPromptWithSkills(
-            'B',
+    test('omitted listSkillsInScope still returns the block with an empty catalog', async () => {
+        const out = await buildCpaSkillsBlock(
             'orchestrator-optimize',
             { presetName: 'Atlas' },
         );

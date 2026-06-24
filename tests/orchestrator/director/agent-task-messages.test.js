@@ -236,16 +236,23 @@ describe('runMainAgentLoop injects ## Open Notes into the main agent system prom
         });
 
         expect(captureRef.taskMessages).not.toBeNull();
-        // The instruction is appended after </story_context> in the last
-        // system message; that's where the ## Open Notes block lands.
-        const closeMsg = captureRef.taskMessages[captureRef.taskMessages.length - 1];
+        // Open Notes now lives in a trailing user-role `<runtime_state>`
+        // message so the stable system prefix can be cached upstream. The
+        // close system message stays byte-identical across dispatches.
+        const msgs = captureRef.taskMessages;
+        const closeMsg = msgs[msgs.length - 2];
         expect(closeMsg.role).toBe('system');
         expect(closeMsg.content.startsWith('</story_context>')).toBe(true);
         expect(closeMsg.content).toContain('You are the main director.');
-        expect(closeMsg.content).toContain('## Open Notes');
-        expect(closeMsg.content).toContain('[o_a3f2] planted key');
+        expect(closeMsg.content).not.toContain('## Open Notes');
+
+        const runtimeStateMsg = msgs[msgs.length - 1];
+        expect(runtimeStateMsg.role).toBe('user');
+        expect(runtimeStateMsg.content).toContain('<runtime_state>');
+        expect(runtimeStateMsg.content).toContain('## Open Notes');
+        expect(runtimeStateMsg.content).toContain('[o_a3f2] planted key');
         // Closed entries must NOT appear.
-        expect(closeMsg.content).not.toContain('old payoff');
+        expect(runtimeStateMsg.content).not.toContain('old payoff');
     });
 
     test('main agent system_close has NO "## Open Notes" block when there are no open notes', async () => {

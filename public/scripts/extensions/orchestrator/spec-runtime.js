@@ -41,6 +41,7 @@
 
 const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
+import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
 import {
     AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE,
@@ -723,8 +724,6 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 autoInjectedPrelude,
                 baseUserPrompt,
                 buildNodeIterationContractText(nodeSpec, { isFinalStage }),
-                '## node_iteration_round',
-                `${round}/${maxRounds}`,
             ].filter(Boolean).join('\n\n');
 
             const systemText = String(preset.systemPrompt || '').trim();
@@ -823,7 +822,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                         type: 'function',
                         function: {
                             name: normalizedName,
-                            arguments: JSON.stringify(tc?.args && typeof tc.args === 'object' ? tc.args : {}),
+                            arguments: canonicalStringifyArgs(tc?.args),
                         },
                         source: resolveToolSource(normalizedName, toolContext),
                     };
@@ -1063,8 +1062,6 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                     rerunMax: maxReruns,
                 }),
                 buildNodeIterationContractText(nodeSpec),
-                '## node_iteration_round',
-                `${round}/${maxRounds}`,
             ].filter(Boolean).join('\n\n');
 
             const systemText = String(preset.systemPrompt || '').trim();

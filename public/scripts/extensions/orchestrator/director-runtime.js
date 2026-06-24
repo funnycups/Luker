@@ -47,6 +47,7 @@ import {
     executeDraftSearchTool,
 } from './director-tools.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
+import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { resolveToolSource } from './loop-tools.js';
 import {
     appendRound, appendToSection, ensureSection,
@@ -320,13 +321,33 @@ export async function readOpenNotesFromContextForNotes(contextForNotes) {
 }
 
 /**
- * Prepend a "## Open Notes" block to the main agent's system prompt
- * when there are any open notes. Empty (or null/undefined) list →
- * the prompt is returned unchanged so the boundary is invisible to
- * the model when there's nothing to surface. Format mirrors the
- * loop-runtime and sub-agent renderers (`- [id] text` per entry) so
- * the same close-by-id contract applies everywhere notes appear in
- * the prompt stack.
+ * Render the "## Open Notes" block for the main agent. Returns an empty
+ * string when there are no open notes so callers can compose it into a
+ * runtime-state body without conditional guards. Format mirrors the
+ * loop-runtime and sub-agent renderers (`- [id] text` per entry) so the
+ * same close-by-id contract applies everywhere notes appear in the
+ * prompt stack.
+ *
+ * @internal exported for tests.
+ *
+ * @param {Array<{id: string, text: string}>|null|undefined} openNotes
+ * @returns {string}
+ */
+export function renderOpenNotesBlock(openNotes) {
+    const open = Array.isArray(openNotes) ? openNotes : [];
+    if (open.length === 0) return '';
+    const lines = ['## Open Notes (your plot-author threads — close with note_close when deployed)'];
+    for (const n of open) {
+        lines.push(`- [${String(n.id || '')}] ${String(n.text || '')}`);
+    }
+    return lines.join('\n');
+}
+
+/**
+ * Back-compat wrapper kept for tests that still target the prior
+ * "concat into systemPrompt" shape. New call sites should use
+ * `renderOpenNotesBlock` and place the block in a trailing
+ * `<runtime_state>` user message instead — see `buildAgentTaskMessages`.
  *
  * @internal exported for tests.
  *
@@ -335,13 +356,8 @@ export async function readOpenNotesFromContextForNotes(contextForNotes) {
  * @returns {string}
  */
 export function renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotes) {
-    const open = Array.isArray(openNotes) ? openNotes : [];
-    if (open.length === 0) return systemPrompt;
-    const lines = ['## Open Notes (your plot-author threads — close with note_close when deployed)'];
-    for (const n of open) {
-        lines.push(`- [${String(n.id || '')}] ${String(n.text || '')}`);
-    }
-    const block = lines.join('\n');
+    const block = renderOpenNotesBlock(openNotes);
+    if (!block) return systemPrompt;
     return systemPrompt ? `${systemPrompt}\n\n${block}` : block;
 }
 
@@ -483,25 +499,26 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         customToolRegistry,
     });
 
-    // Prepend an `## Open Notes` block to the main agent's system
-    // prompt when the notes adapter carries any open entries. Mirrors
-    // the sub-agent renderer (`renderSubSystemPromptWithNotes`) and
-    // the loop runtime so the same notes surface — same id-prefixed
-    // format, same filter-on-open semantics — is visible whether the
-    // turn runs through loop, director main, or a director sub-agent.
-    // Empty list → systemPrompt unchanged.
+    // Per-dispatch runtime state (open notes + available skills catalog)
+    // is delivered in a trailing user `<runtime_state>` block instead of
+    // being concatenated into the main agent's system prompt. The notes
+    // adapter flips status as note_open / note_close fire mid-run, and
+    // the skills catalog mutates when skills are installed / removed —
+    // either change used to invalidate the entire system prefix and
+    // every cache breakpoint downstream of it. The system prompt now
+    // stays byte-identical across dispatches so the upstream prompt
+    // cache holds.
     const openNotesForMain = await readOpenNotesFromContextForNotes(deps?.contextForNotes);
-    const systemPromptWithOpenNotes = renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotesForMain);
+    const openNotesBlock = renderOpenNotesBlock(openNotesForMain);
 
-    // Resolve visible skills for the main agent + append the
-    // `<available_skills>` catalog block to the system prompt. The
-    // resolver loads the inventory lazily so test environments that
-    // never reach this branch (the orchestrator tests stub `runMainLoop`)
-    // don't pay the import cost. Visible skills also get threaded into
-    // each tool-call's ctx below so skill_list / skill_read / skill_search
-    // see the scoped visibility instead of the fail-open global fallback.
+    // Resolve visible skills for the main agent. The resolver loads the
+    // inventory lazily so test environments that never reach this branch
+    // (the orchestrator tests stub `runMainLoop`) don't pay the import
+    // cost. Visible skills also get threaded into each tool-call's ctx
+    // below so skill_list / skill_read / skill_search see the scoped
+    // visibility instead of the fail-open global fallback.
     let visibleSkillsForMain = [];
-    let mainSystemPromptWithSkills = systemPromptWithOpenNotes;
+    let availableSkillsBlock = '';
     try {
         const skillRes = await loadSkillResolution();
         visibleSkillsForMain = await skillRes.resolveAgentVisibleSkills({
@@ -512,8 +529,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                 director.mainAgent || null,
             ),
         });
-        const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForMain);
-        if (block) mainSystemPromptWithSkills = systemPromptWithOpenNotes + '\n\n' + block;
+        availableSkillsBlock = skillRes.buildAvailableSkillsBlock(visibleSkillsForMain) || '';
     } catch (e) {
         // Resolution failure must not abort the agent run. Fall back to
         // an empty visible list (tools resolve via global fallback) and
@@ -521,9 +537,12 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         console.warn('[orchestrator-director] skill resolution failed:', e?.message || e);
     }
 
+    const runtimeStateBlock = [openNotesBlock, availableSkillsBlock].filter(Boolean).join('\n\n');
+
     const messages = buildAgentTaskMessages(
-        { systemPrompt: mainSystemPromptWithSkills },
+        { systemPrompt },
         contentPayload,
+        runtimeStateBlock,
     );
 
     const panelRunId = deps?.runId || null;
@@ -902,18 +921,13 @@ function makeDirectorToolCallId() {
 }
 
 function safeStringifyArgs(value) {
-    try {
-        return JSON.stringify(value && typeof value === 'object' ? value : {});
-    } catch {
-        return '{}';
-    }
+    return canonicalStringifyArgs(value);
 }
 
 function stringifyForSection(value) {
     if (value == null) return '';
     if (typeof value === 'string') return value;
-    try { return JSON.stringify(value, null, 2); }
-    catch { return String(value); }
+    try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
 /**
@@ -940,15 +954,20 @@ function stringifyForSection(value) {
  * @param {object|null} contentPayload - cached payload, or null if missing
  * @returns {Array<{role: string, content: string}>}
  */
-export function buildAgentTaskMessages(agentProfile, contentPayload) {
+export function buildAgentTaskMessages(agentProfile, contentPayload, runtimeStateBlock = '') {
     const instruction = String(agentProfile?.systemPrompt || '');
     const messagesIn = Array.isArray(contentPayload?.messages) ? contentPayload.messages : [];
 
     const closeContent = '</story_context>' + (instruction ? '\n\n' + instruction : '');
+    const runtimeState = String(runtimeStateBlock || '').trim();
 
-    return [
+    const out = [
         { role: 'system', content: '<story_context>' },
         ...messagesIn,
         { role: 'system', content: closeContent },
     ];
+    if (runtimeState) {
+        out.push({ role: 'user', content: '<runtime_state>\n' + runtimeState + '\n</runtime_state>' });
+    }
+    return out;
 }

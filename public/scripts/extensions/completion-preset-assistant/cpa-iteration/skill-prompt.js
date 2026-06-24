@@ -2,14 +2,14 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * CPA system-prompt augmentation: skills catalog + extraction discipline.
+ * CPA skill discipline + catalog block.
  *
  * Mirrors `orchestrator/skill-iter-studio-prompt.js` but adapted for CPA's
- * preset-editing surface. Appended to the model system prompt only when the
- * session is in `orchestrator-optimize` mode — the other modes (general,
- * jailbreak-only) don't benefit from the skill workflow.
+ * preset-editing surface. The block is built only when the session is in
+ * `orchestrator-optimize` mode — the other modes (general, jailbreak-only)
+ * don't benefit from the skill workflow.
  *
- * What this adds to the prompt:
+ * The block contains:
  *   1. A discipline block telling the AI when to prefer authoring a skill
  *      over inline preset edits, and what the splice-in-reference workflow
  *      looks like with CPA's preset-editing tools.
@@ -18,11 +18,12 @@
  *      the AI can recommend reusing an existing skill instead of authoring
  *      a duplicate.
  *
- * The block is appended unconditionally when in orchestrator-optimize mode
- * (no "has long systemPrompt" heuristic — CPA always edits preset content,
- * and the user opened this mode because they want to optimize that content
- * for an orchestrator agent). When the catalog is empty the block still
- * appears so the AI knows the slate is clean.
+ * The block is now appended to the LAST user message (caller's job) rather
+ * than the system prompt, so the base system prompt stays byte-stable across
+ * rounds — Anthropic prompt cache is a prefix match and the catalog changes
+ * every time a skill is created / renamed / deleted, which would invalidate
+ * the whole system cache otherwise. The catalog appearing on the user side
+ * is fine: the AI reads it once per turn either way.
  *
  * Pure module — no DOM, no Luker globals, no Skill API call inline. The
  * catalog fetch is plumbed via `opts.listSkillsInScope` so studio.js owns
@@ -31,8 +32,13 @@
 
 /**
  * Format the discipline + catalog block as plain text. Pure — given the
- * scope chain text + the skills list, returns the block to append. Exported
- * for unit tests; the live call site is `augmentCpaPromptWithSkills`.
+ * scope chain text + the skills list, returns the block to embed. Exported
+ * for unit tests; the live call site is `buildCpaSkillsBlock`.
+ *
+ * The skill list is sorted by `name` (lexicographic, locale-aware) so a
+ * registry order change (skill install / uninstall reordering the array)
+ * doesn't float through into the prompt bytes — important for Anthropic
+ * prompt cache stability on the user-message side.
  *
  * @param {Array<{name: string, description: string, scope?: object}>} visibleSkills
  * @param {{ presetName: string }} scopeHint
@@ -95,10 +101,11 @@ export function formatCpaSkillsAugmentation(visibleSkills, scopeHint = {}) {
     lines.push('');
     lines.push('Currently visible skills for this preset scope:');
     const named = Array.isArray(visibleSkills) ? visibleSkills.filter(s => s && typeof s.name === 'string') : [];
-    if (named.length === 0) {
+    const sorted = named.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    if (sorted.length === 0) {
         lines.push('- (none installed for this scope chain yet)');
     } else {
-        for (const s of named) {
+        for (const s of sorted) {
             const scopeLabel = s.scope && s.scope.kind ? ` [${s.scope.kind}]` : '';
             lines.push(`- ${s.name}${scopeLabel}: ${String(s.description || '')}`);
         }
@@ -108,38 +115,33 @@ export function formatCpaSkillsAugmentation(visibleSkills, scopeHint = {}) {
 }
 
 /**
- * Augment the CPA system prompt with the skill discipline + catalog block.
+ * Build the skill discipline + catalog block. Returns the block string ready
+ * for the caller to splice into the LAST user message (or empty string when
+ * mode is not orchestrator-optimize).
  *
- * Returns the input prompt unchanged when `mode !== 'orchestrator-optimize'`.
- * The other modes don't expose skills in their guidance — keeping the block
- * out of general / jailbreak-only sessions avoids confusing the AI in the
- * common case where the user just wants to tweak sampler params or wrap
- * everything in jailbreak tags.
+ * The block is appended to the user message rather than the system prompt so
+ * the base system stays byte-stable across rounds — the catalog mutates every
+ * time the AI creates / renames / deletes a skill, and putting it in the
+ * system would invalidate Anthropic's prefix cache for every later round.
  *
- * @param {string} basePrompt
+ * `listSkillsInScope` errors propagate — silent fallback to an empty catalog
+ * would lie to the model ("(none installed)") and risk it duplicating an
+ * existing skill. The caller (studio.js) surfaces the failure and refuses
+ * the round.
+ *
  * @param {string} mode  current session mode ('general' / 'orchestrator-optimize' / 'jailbreak-only')
  * @param {{ presetName: string }} scopeHint
  * @param {{
  *   listSkillsInScope?: () => Promise<Array<{ name: string, description: string, scope?: object }>>,
  * }} [opts]
- * @returns {Promise<string>}
+ * @returns {Promise<string>} the catalog block, or empty string when augmentation doesn't apply
  */
-export async function augmentCpaPromptWithSkills(basePrompt, mode, scopeHint = {}, opts = {}) {
-    if (String(mode || '') !== 'orchestrator-optimize') return basePrompt;
+export async function buildCpaSkillsBlock(mode, scopeHint = {}, opts = {}) {
+    if (String(mode || '') !== 'orchestrator-optimize') return '';
     let visible = [];
     if (typeof opts.listSkillsInScope === 'function') {
-        try {
-            visible = await opts.listSkillsInScope();
-            if (!Array.isArray(visible)) visible = [];
-        } catch (e) {
-            // Failing closed keeps the catalog honest — a broken inventory
-            // call should never make the augmentation lie about what's
-            // installed. Log so dev console flags the regression.
-            // eslint-disable-next-line no-console
-            console.warn('[cpa-iteration/skill-prompt] failed to list skills:', e?.message || e);
-            visible = [];
-        }
+        visible = await opts.listSkillsInScope();
+        if (!Array.isArray(visible)) visible = [];
     }
-    const block = formatCpaSkillsAugmentation(visible, scopeHint);
-    return `${basePrompt}\n\n${block}`;
+    return formatCpaSkillsAugmentation(visible, scopeHint);
 }

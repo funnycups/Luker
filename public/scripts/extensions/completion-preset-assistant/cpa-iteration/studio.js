@@ -101,7 +101,7 @@ import {
     SESSION_MODES,
     SESSION_MODE_DEFAULT,
 } from './system-prompts.js';
-import { augmentCpaPromptWithSkills } from './skill-prompt.js';
+import { buildCpaSkillsBlock } from './skill-prompt.js';
 const skillsApi = Luker.getContext().skills;
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { CPA_TOOL_DISPLAY } from './tool-display.js';
@@ -1417,11 +1417,19 @@ export async function openCpaIterationStudio(deps) {
     //   - live preset settings outline
     //   - live preset prompt-layout outline
     //   - reference-preset context (or "none")
+    //   - skill discipline + catalog (only in orchestrator-optimize mode)
     //   - the user's actual text
     // The model sees this as part of the conversation, so it doesn't need
     // to spend tool calls just to see what's already in the live preset.
+    //
+    // The skill block lives here (user message) rather than in the system
+    // prompt so the base system stays byte-stable across rounds — Anthropic
+    // prompt cache is a prefix match and the catalog mutates on every
+    // skill_create / skill_rename / skill_delete. Keeping it on the user
+    // side means only the last-user-message segment of the cache invalidates
+    // per skill mutation, not the entire system prompt.
     // ──────────────────────────────────────────────────────────────────
-    function buildAugmentedUserPrompt(userText) {
+    function buildAugmentedUserPrompt(userText, skillsBlock = '') {
         const live = state.live || {};
         const referenceName = String(state.session.surfaceState?.referencePresetName || '').trim();
         const referenceSection = referenceName
@@ -1431,7 +1439,7 @@ export async function openCpaIterationStudio(deps) {
                 'preset_copy_from_reference can pull one field from the reference into the live preset.',
             ].join('\n')
             : 'Selected reference preset: none.';
-        return [
+        const parts = [
             `Target preset: ${getTargetRef()?.name || ''}`,
             '',
             buildPresetSettingsOutlineText(live),
@@ -1439,10 +1447,13 @@ export async function openCpaIterationStudio(deps) {
             buildPresetPromptOutlineText(live),
             '',
             referenceSection,
-            '',
-            'User request:',
-            String(userText || '').trim(),
-        ].join('\n');
+        ];
+        const block = typeof skillsBlock === 'string' ? skillsBlock.trim() : '';
+        if (block) {
+            parts.push('', block);
+        }
+        parts.push('', 'User request:', String(userText || '').trim());
+        return parts.join('\n');
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1489,7 +1500,7 @@ export async function openCpaIterationStudio(deps) {
         try { return JSON.stringify(result, null, 2); } catch { return String(result); }
     }
 
-    function buildTaskMessages(systemPrompt) {
+    function buildTaskMessages(systemPrompt, skillsBlock = '') {
         const messages = [{ role: 'system', content: systemPrompt }];
         const history = (state.session.messages || []).filter(m => {
             const role = String(m?.role || '').toLowerCase();
@@ -1507,7 +1518,7 @@ export async function openCpaIterationStudio(deps) {
         history.forEach((m, idx) => {
             const role = String(m.role).toLowerCase();
             const content = idx === lastUserIdx && role === 'user'
-                ? buildAugmentedUserPrompt(String(m.content || ''))
+                ? buildAugmentedUserPrompt(String(m.content || ''), skillsBlock)
                 : String(m.content || '');
             // OpenAI-protocol replay: if this assistant turn ran read tools,
             // surface them as `tool_calls` on the assistant message + one
@@ -1567,26 +1578,29 @@ export async function openCpaIterationStudio(deps) {
                 ? settings.iterModePromptJailbreakOnly
                 : '';
         const baseSystemPrompt = modeBlock ? `${base}\n${modeBlock}` : base;
-        // Skill discipline + catalog augmentation. Only kicks in when mode
-        // is 'orchestrator-optimize' — the other modes don't expose skills
-        // in their guidance. Failing closed (no augmentation) is fine: the
-        // tools are still in the catalog, the AI just lacks the discipline
-        // block telling it when to prefer them.
+        // Skill discipline + catalog. Only kicks in when mode is
+        // 'orchestrator-optimize' — the other modes don't expose skills in
+        // their guidance. The block is spliced into the LAST user message
+        // (not the system prompt) so the base system stays byte-stable
+        // across rounds: Anthropic's prompt cache is a prefix match and
+        // the catalog mutates on every skill_create / skill_rename /
+        // skill_delete, which would invalidate the entire system cache
+        // otherwise.
+        //
+        // listSkillsInScope failures propagate to the outer try/catch in
+        // handleSendMessage (which surfaces them as a system message +
+        // toast). Swallowing them here would let the prompt lie about
+        // what's installed and risk the AI duplicating an existing skill.
         const skillScopeHint = getSkillScopeHint ? (() => {
             try { return getSkillScopeHint() || {}; } catch { return {}; }
         })() : {};
-        const systemPrompt = await augmentCpaPromptWithSkills(
-            baseSystemPrompt,
+        const skillsBlock = await buildCpaSkillsBlock(
             mode,
             skillScopeHint,
             {
                 listSkillsInScope: async () => {
-                    try {
-                        const all = await skillsApi.list({ scope: 'all' });
-                        return Array.isArray(all) ? all : [];
-                    } catch {
-                        return [];
-                    }
+                    const all = await skillsApi.list({ scope: 'all' });
+                    return Array.isArray(all) ? all : [];
                 },
             },
         );
@@ -1608,7 +1622,7 @@ export async function openCpaIterationStudio(deps) {
             });
         }
 
-        const taskMessages = buildTaskMessages(systemPrompt);
+        const taskMessages = buildTaskMessages(baseSystemPrompt, skillsBlock);
 
         const presetOptions = typeof getRequestPresetOptions === 'function'
             ? (getRequestPresetOptions() || {})

@@ -4,6 +4,7 @@ import {
     DEFAULT_PER_TYPE_INSTRUCTIONS,
     computeActiveExtractionTypes,
     assembleExtractionSystemPrompt,
+    buildPerTypeRulesBlock,
 } from '../../public/scripts/extensions/memory-graph/extraction-schedule.js';
 
 describe('DEFAULT_PER_TYPE_INSTRUCTIONS', () => {
@@ -84,7 +85,22 @@ describe('computeActiveExtractionTypes', () => {
     });
 });
 
-describe('assembleExtractionSystemPrompt', () => {
+describe('assembleExtractionSystemPrompt (now a trivial passthrough)', () => {
+    test('returns the base prompt unchanged regardless of schema / active set', () => {
+        // Per-type rules used to be concatenated into the system prompt
+        // here; they now live in a separate `buildPerTypeRulesBlock` that
+        // the caller appends to the user message. `assembleExtractionSystemPrompt`
+        // is kept as a trivial passthrough for back-compat and JSDoc.
+        const schema = [
+            { id: 'event', extractionInstructions: 'EVENT_RULES', extractEveryN: 1 },
+        ];
+        expect(assembleExtractionSystemPrompt('BASE_PROMPT', schema, new Set(['event']))).toBe('BASE_PROMPT');
+        expect(assembleExtractionSystemPrompt('BASE_PROMPT', schema, new Set())).toBe('BASE_PROMPT');
+        expect(assembleExtractionSystemPrompt('BASE_PROMPT', [], new Set())).toBe('BASE_PROMPT');
+    });
+});
+
+describe('buildPerTypeRulesBlock', () => {
     test('appends active types instructions in schema order', () => {
         const schema = [
             { id: 'event', extractionInstructions: 'EVENT_RULES', extractEveryN: 1 },
@@ -92,8 +108,7 @@ describe('assembleExtractionSystemPrompt', () => {
             { id: 'location_state', extractionInstructions: 'LOC_RULES', extractEveryN: 1 },
         ];
         const active = new Set(['event', 'location_state']);
-        const out = assembleExtractionSystemPrompt('BASE_PROMPT', schema, active);
-        expect(out).toContain('BASE_PROMPT');
+        const out = buildPerTypeRulesBlock(schema, active);
         expect(out).toContain('EVENT_RULES');
         expect(out).toContain('LOC_RULES');
         expect(out).not.toContain('CHAR_RULES');
@@ -106,19 +121,19 @@ describe('assembleExtractionSystemPrompt', () => {
             { id: 'event', extractionInstructions: 'EVENT_RULES', extractEveryN: 1 },
             { id: 'custom', extractionInstructions: '', extractEveryN: 1 },
         ];
-        const out = assembleExtractionSystemPrompt('BASE', schema, new Set(['event', 'custom']));
+        const out = buildPerTypeRulesBlock(schema, new Set(['event', 'custom']));
         expect(out).toContain('EVENT_RULES');
         expect(out).not.toContain('[custom]');
     });
 
-    test('returns base prompt unchanged when no active types have instructions', () => {
-        expect(assembleExtractionSystemPrompt('BASE', [], new Set())).toBe('BASE');
-        expect(assembleExtractionSystemPrompt('BASE', [{ id: 'event', extractionInstructions: 'X' }], new Set())).toBe('BASE');
+    test('returns empty string when no active types have instructions', () => {
+        expect(buildPerTypeRulesBlock([], new Set())).toBe('');
+        expect(buildPerTypeRulesBlock([{ id: 'event', extractionInstructions: 'X' }], new Set())).toBe('');
     });
 
     test('labels each appended section with the typeId', () => {
         const schema = [{ id: 'event', extractionInstructions: 'X', extractEveryN: 1 }];
-        const out = assembleExtractionSystemPrompt('BASE', schema, new Set(['event']));
+        const out = buildPerTypeRulesBlock(schema, new Set(['event']));
         expect(out).toContain('[event]');
     });
 });

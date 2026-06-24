@@ -1010,11 +1010,15 @@ describe('director integration — scripted main agent', () => {
 
         const brainstormerCall = capturedSubTaskMessages.find(c => c.role === 'brainstormer');
         expect(brainstormerCall).toBeDefined();
-        const digestMessage = brainstormerCall.messages.find(m =>
-            m.role === 'system' && String(m.content || '').includes('## Main agent context'),
+        // Digest now rides in the trailing user-role <runtime_state>
+        // message rather than its own <main_agent_digest> system block,
+        // so the stable system prefix can be cached upstream.
+        const runtimeStateMessage = brainstormerCall.messages.find(m =>
+            m.role === 'user' && String(m.content || '').includes('<runtime_state>'),
         );
-        expect(digestMessage).toBeDefined();
-        expect(digestMessage.content).toContain('CURATOR_BRIEFING_X');
+        expect(runtimeStateMessage).toBeDefined();
+        expect(runtimeStateMessage.content).toContain('## Main agent context');
+        expect(runtimeStateMessage.content).toContain('CURATOR_BRIEFING_X');
     });
 
     test('fork-on-dispatch — same-round sibling sub-agents do not see each other', async () => {
@@ -1229,12 +1233,13 @@ describe('director integration — scripted main agent', () => {
 
         expect(capturedB).toHaveLength(1);
         const bMsgs = capturedB[0];
-        const digest = bMsgs.find(m => m.role === 'system' && String(m.content || '').includes('## Main agent context'));
-        expect(digest).toBeDefined();
-        expect(digest.content).toContain('[Main agent invoked tools: dispatch_subagent]');
+        const runtimeState = bMsgs.find(m => m.role === 'user' && String(m.content || '').includes('<runtime_state>'));
+        expect(runtimeState).toBeDefined();
+        expect(runtimeState.content).toContain('## Main agent context');
+        expect(runtimeState.content).toContain('[Main agent invoked tools: dispatch_subagent]');
         // sub-A's outputText was not yet in main's messages (no await
         // happened) so it must not appear in sub-B's digest.
-        expect(digest.content).not.toContain('OUT_A_UNIQUE');
+        expect(runtimeState.content).not.toContain('OUT_A_UNIQUE');
     });
 
     test('main agent executeLoopTool sees __floorStateForNotes via contextForNotes overlay', async () => {

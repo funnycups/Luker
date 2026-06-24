@@ -613,7 +613,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.CARDAPP_SET_ENABLED,
- description: 'Turn CardApp on or off for this character (writes data.extensions.card_app.enabled). The current toggle state is already provided in the system context — you do NOT need a separate read tool. Only call this AFTER the user has explicitly confirmed they want CardApp enabled (or disabled). Do NOT call this unprompted just because you see CardApp-style code. The character is persisted automatically.',
+ description: 'Turn CardApp on or off for this character (writes data.extensions.card_app.enabled). Only call this AFTER the user has explicitly confirmed they want CardApp enabled (or disabled). Do NOT call this unprompted just because you see CardApp-style code. If you need to know the current toggle state, ask the user — Studio has no read-only inspector for it. The response returns was_enabled so you know what the previous value was. The character is persisted automatically.',
  parameters: {
  type: 'object',
  properties: {
@@ -1790,10 +1790,11 @@ exact slash command name, argument shape, or lukerContext property:
   "development/extension-api/chat-and-state.md" for Floor State,
   "features/state-system.md" for the state system overview, or
   "development/card-developers.md" for the CardApp creator guide.
-- **cardapp_set_enabled({enabled})** — Flip the CardApp toggle. The current
-  toggle state is already in the system context above — no read tool needed.
-  Only call after the user has explicitly confirmed (see "Enabling CardApp"
-  rules below).
+- **cardapp_set_enabled({enabled})** — Flip the CardApp toggle. Studio does
+  not expose a read-only toggle inspector — if you need the current state,
+  ask the user. Only call to change state after the user has explicitly
+  confirmed (see "Enabling CardApp" rules below). The response returns
+  \`was_enabled\` so you know what the previous value was.
 
 ### World book + character-extension tools
 
@@ -2420,8 +2421,8 @@ your code actually runs. If the toggle is OFF, anything you write to
 index.js / style.css is invisible to the user — the chat falls back to the
 default UI.
 
-The current toggle state is provided in the system context above
-("CardApp toggle status"). On every user request, before doing anything else:
+Studio does not surface the current toggle state to you — treat it as
+unknown. On every user request, before doing anything else:
 
 1. Decide whether the request looks like CardApp work. It almost always does
    when the user asks for:
@@ -2432,19 +2433,17 @@ The current toggle state is provided in the system context above
    - Anything that obviously can't be expressed as plain message text
    - Continuing/modifying an existing CardApp (files already exist)
 
-2. If the request looks like CardApp work AND the toggle is currently
-   DISABLED → ask the user **once**, in your very first reply for this
-   request, whether they want CardApp enabled. Phrase it briefly, e.g.
-   "Looks like you want a custom UI for this card. CardApp is currently
-   off — want me to turn it on so the code we write actually shows up?"
+2. If the request looks like CardApp work, ask the user **once**, in your
+   very first reply for this request, whether CardApp should be on. Phrase
+   it briefly, e.g. "Looks like you want a custom UI for this card. Want me
+   to make sure CardApp is turned on so the code we write actually shows up?"
    Do NOT silently call cardapp_set_enabled. Wait for an explicit yes.
 
 3. If the user confirms → call \`cardapp_set_enabled({enabled: true})\`,
-   then proceed with the implementation.
+   then proceed with the implementation. The response's \`was_enabled\` field
+   tells you whether it was already on; either way the next step is the same.
 
-4. If the toggle is already ENABLED → don't ask, just work.
-
-5. If the request is clearly NOT CardApp work (e.g. "edit the character's
+4. If the request is clearly NOT CardApp work (e.g. "edit the character's
    description", "add a world info entry", "rename a file") → don't ask
    about the toggle.
 
@@ -2476,6 +2475,7 @@ When you suspect a failure path but can't see the state directly (the value of a
 When a user reports a CardApp problem informally ("the card isn't working", "it shows an error box"), the diagnostic for that failure is most likely already in this session above your turn — read it before asking the user for more detail. If the diagnostic is missing or insufficient, you can ask the user to reproduce the issue and reopen Studio so the loader records it for you, or to paste any visible error text.
 
 ## Instructions
+- Call \`cardapp_list_files\` at the start of any session that touches files, so you know what exists before reading/writing/patching
 - Use the provided tools to read, write, and modify files
 - When creating a new CardApp, create both index.js and style.css
 - Use patch_file for small changes, write_file for large rewrites or new files
@@ -2525,29 +2525,6 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  // Add user message
  conversationMessages.push({ role: 'user', content: userMessage });
 
- // Build initial file list context
- let fileListContext = '';
- try {
- const files = await fetchFileList(charId);
- const fileNames = files.filter(f => f.type === 'file').map(f => f.path);
- fileListContext = fileNames.length > 0
- ? `\n\nCurrent CardApp files: ${fileNames.join(', ')}`
- : '\n\nNo CardApp files exist yet.';
- } catch {
- fileListContext = '\n\nCould not load file list.';
- }
-
- // Build current CardApp toggle state context
- let cardAppStatusContext = '';
- try {
- const cfg = characters[__ctx.characterId]?.data?.extensions?.card_app || {};
- const enabled = !!cfg.enabled;
- cardAppStatusContext = `\n\nCardApp toggle status: ${enabled ? 'ENABLED' : 'DISABLED'} (data.extensions.card_app.enabled = ${enabled}). ${enabled
- ? 'The custom UI is active for this character.'
- : 'The character is using the default chat UI. Code you write will not be visible to the user until they enable CardApp via the editor checkbox or until the cardapp_set_enabled tool is invoked with their consent.'}`;
- } catch { /* best effort */ }
-
- const fullSystemPrompt = systemPrompt + fileListContext + cardAppStatusContext;
  let lastAssistantText = '';
 
  // Multi-round tool calling loop
@@ -2565,7 +2542,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  const ceaSettings = extension_settings?.character_editor_assistant || {};
  const generateTaskOpts = {
  taskMessages: [
- { role: 'system', content: fullSystemPrompt },
+ { role: 'system', content: systemPrompt },
  ...conversationMessages,
  ],
  includeCharacterCard: true,

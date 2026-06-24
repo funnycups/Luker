@@ -32,6 +32,7 @@ import {
 } from './editor-ops.js';
 import { gatherGrepMatches } from './grep-tool.js';
 import { isAbortError, raceAbortSignal, throwIfAborted } from './abort-utils.js';
+import { canonicalStringifyArgs } from './canonical-stringify.js';
 import {
     appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus, addTokenUsage,
 } from './run-state/store.js';
@@ -202,7 +203,7 @@ export const DRAFT_SEARCH_TOOL = {
                 },
                 flags: {
                     type: 'string',
-                    description: "RegExp flags. 'gm' by default (global + multiline) to mirror grep semantics. Add 'i' for case-insensitive, 's' for dotall. 'g' is auto-injected if you omit it. Note: scan is line-oriented like grep; multi-line patterns that require literal \\n cannot match.",
+                    description: 'RegExp flags. \'gm\' by default (global + multiline) to mirror grep semantics. Add \'i\' for case-insensitive, \'s\' for dotall. \'g\' is auto-injected if you omit it. Note: scan is line-oriented like grep; multi-line patterns that require literal \\n cannot match.',
                     default: 'gm',
                 },
             },
@@ -510,20 +511,17 @@ export function createSubagentDispatcher({
     function panelAppendToSection(roundId, sectionId, delta) {
         if (!runId || !roundId || !sectionId) return;
         if (delta == null || String(delta).length === 0) return;
-        try { appendToSection({ runId, roundId, sectionId, delta: String(delta) }); }
-        catch (_) { /* store may be cleared */ }
+        try { appendToSection({ runId, roundId, sectionId, delta: String(delta) }); } catch (_) { /* store may be cleared */ }
     }
 
     function panelSetSectionStatus(roundId, sectionId, status, meta) {
         if (!runId || !roundId || !sectionId) return;
-        try { setSectionStatus({ runId, roundId, sectionId, status, meta }); }
-        catch (_) { /* store may be cleared */ }
+        try { setSectionStatus({ runId, roundId, sectionId, status, meta }); } catch (_) { /* store may be cleared */ }
     }
 
     function panelSetRoundStatus(roundId, status) {
         if (!runId || !roundId) return;
-        try { setRoundStatus({ runId, roundId, status }); }
-        catch (_) { /* store may be cleared */ }
+        try { setRoundStatus({ runId, roundId, status }); } catch (_) { /* store may be cleared */ }
     }
 
     // ── Trace recording helpers ──
@@ -767,11 +765,13 @@ export function createSubagentDispatcher({
             ? renderMainAgentDigest(parentMessages, payloadMessages.length + 1)
             : null;
 
-        // Augment sub-agent system prompt with the "## Open Notes"
-        // block (mirrors loop-runtime). Re-read on every dispatch so
-        // notes written by earlier sub-agents in this session show up
-        // for later ones. No-op when the adapter isn't mounted.
-        const baseSystemPrompt = await renderSubSystemPromptWithNotes(systemPrompt, contextForNotes);
+        // Read the per-dispatch open-notes block. Notes flip status as
+        // earlier sub-agents call note_open / note_close in this director
+        // session, so this is re-read on every dispatch and lives in the
+        // trailing `<runtime_state>` user message instead of being
+        // concatenated into the orchestration-role system prompt. Empty
+        // when no adapter is mounted or all notes are closed.
+        const openNotesBlock = await loadSubAgentOpenNotesBlock(contextForNotes);
 
         // Resolve visible skills for this sub-agent. Mode-level default
         // lives on `directorProfile.skills`; per-sub-agent `skills` (when
@@ -780,7 +780,7 @@ export function createSubagentDispatcher({
         // catalog and any skill_* tool call rejects (the exec requires a
         // populated __visibleSkillsForAgent).
         let visibleSkillsForSubAgent = [];
-        let baseSystemPromptWithSkills = baseSystemPrompt;
+        let availableSkillsBlock = '';
         if (directorProfile) {
             try {
                 const skillRes = await loadSkillResolution();
@@ -789,8 +789,7 @@ export function createSubagentDispatcher({
                     agentConfig,
                     runtimeContext: skillRes.buildSkillRuntimeContext(contextForNotes || null, agentConfig),
                 });
-                const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForSubAgent);
-                if (block) baseSystemPromptWithSkills = baseSystemPrompt + '\n\n' + block;
+                availableSkillsBlock = skillRes.buildAvailableSkillsBlock(visibleSkillsForSubAgent) || '';
             } catch (e) {
                 console.warn('[orchestrator-director] sub-agent skill resolution failed:', e?.message || e);
             }
@@ -832,28 +831,43 @@ export function createSubagentDispatcher({
         //   3. META_REMINDER — short anti-RP reset, fresh right after
         //      the RP material so recency bias works in our favor.
         //   4. <orchestration_role> — agent's persona / job
-        //      description (plus Open Notes if any), sitting right
-        //      before the task instruction so the model reads its
-        //      identity last.
-        //   5. <main_agent_digest> (optional) and <task> — what to do.
+        //      description (stable across dispatches; volatile per-
+        //      dispatch context moves to the trailing runtime_state).
+        //   5. <task> — what to do (changes every dispatch by design).
+        //   6. <runtime_state> (user role, optional) — Open Notes,
+        //      available skills catalog, main-agent digest, current
+        //      draft snapshot. All four are per-dispatch volatile, so
+        //      they're packed into one user message at the tail to keep
+        //      everything above byte-identical across dispatches for
+        //      prompt-cache reuse.
         const META_FRAME = [
-            'You are an orchestration agent embedded inside a roleplay session. The <story_context> block below is READ-ONLY narrative material — DO NOT continue the roleplay, do NOT emit any in-character prose, dialogue, or narration, and do NOT write "leaving the scene now"-style sign-offs. Your identity is defined inside <orchestration_role>; the specific work you must do is inside <task>. Treat story_context only as background that informs how you carry out the task.',
+            'You are an orchestration agent embedded inside a roleplay session. The <story_context> block below is READ-ONLY narrative material — DO NOT continue the roleplay, do NOT emit any in-character prose, dialogue, or narration, and do NOT write "leaving the scene now"-style sign-offs. Your identity is defined inside <orchestration_role>; the specific work you must do is inside <task>. Volatile per-dispatch context (open notes, available skills catalog, main-agent digest, current draft snapshot) is delivered in a trailing <runtime_state> user message. Treat story_context only as background that informs how you carry out the task.',
             '',
             'Your reply is a structured report / analysis / recommendation written TO the main orchestration agent — never in-character prose. When the task is complete, write the report as your final assistant text and emit no tool calls; that text is what the runtime returns to the main agent. While you still need more information, call the appropriate read tools — the loop continues until you produce a no-tool-call round.',
         ].join('\n');
 
         const META_REMINDER = 'Reminder: the <story_context> above is reference material, not a scene to continue. You are an orchestration agent operating ON the story, not a character IN it. Your reply is a structured report written TO the main orchestration agent — not in-character prose, dialogue, or narration.';
 
-        // Snapshot the in-flight assistant draft at dispatch time and inject
-        // it as a system block so sub-agents that analyze the draft (critics,
-        // image_director, notes_curator, memory_curator) can see it on round
-        // 1 without a wasted get_draft round-trip. Empty draft → omit the
-        // block; sub-agents can still call get_draft to read live state if
-        // the main agent mutates between dispatch and their first round.
+        // Snapshot the in-flight assistant draft at dispatch time so sub-
+        // agents that analyze the draft (critics, image_director,
+        // notes_curator, memory_curator) can see it on round 1 without a
+        // wasted get_draft round-trip. Empty draft → omitted from the
+        // runtime_state block; sub-agents can still call get_draft to
+        // read live state if the main agent mutates between dispatch and
+        // their first round.
         const draftAtDispatch = handle && typeof handle.getText === 'function' ? handle.getText() : '';
-        const draftBlock = draftAtDispatch
-            ? [{ role: 'system', content: '<current_draft note="snapshot at dispatch; call get_draft to re-read if needed">\n' + draftAtDispatch + '\n</current_draft>' }]
-            : [];
+        const currentDraftBlock = draftAtDispatch
+            ? '<current_draft note="snapshot at dispatch; call get_draft to re-read if needed">\n' + draftAtDispatch + '\n</current_draft>'
+            : '';
+        const mainAgentDigestBlock = mainRoundsDigest
+            ? '<main_agent_digest>\n' + mainRoundsDigest + '\n</main_agent_digest>'
+            : '';
+        const runtimeStateBody = [
+            openNotesBlock,
+            availableSkillsBlock,
+            mainAgentDigestBlock,
+            currentDraftBlock,
+        ].filter(Boolean).join('\n\n');
 
         const subMessages = [
             { role: 'system', content: META_FRAME },
@@ -861,10 +875,11 @@ export function createSubagentDispatcher({
             ...payloadMessages,
             { role: 'system', content: '</story_context>' },
             { role: 'system', content: META_REMINDER },
-            { role: 'system', content: '<orchestration_role>\n' + (baseSystemPromptWithSkills || '') + '\n</orchestration_role>' },
-            ...(mainRoundsDigest ? [{ role: 'system', content: '<main_agent_digest>\n' + mainRoundsDigest + '\n</main_agent_digest>' }] : []),
-            ...draftBlock,
+            { role: 'system', content: '<orchestration_role>\n' + (systemPrompt || '') + '\n</orchestration_role>' },
             { role: 'system', content: '<task>\n' + String(task || '') + '\n</task>' },
+            ...(runtimeStateBody
+                ? [{ role: 'user', content: '<runtime_state>\n' + runtimeStateBody + '\n</runtime_state>' }]
+                : []),
         ];
 
         const childCtrl = makeChildAbort();
@@ -1132,18 +1147,13 @@ function makeSubagentToolCallId() {
 }
 
 function safeStringifyArgs(value) {
-    try {
-        return JSON.stringify(value && typeof value === 'object' ? value : {});
-    } catch {
-        return '{}';
-    }
+    return canonicalStringifyArgs(value);
 }
 
 function stringifyForSection(value) {
     if (value == null) return '';
     if (typeof value === 'string') return value;
-    try { return JSON.stringify(value, null, 2); }
-    catch { return String(value); }
+    try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
 /**
@@ -1168,23 +1178,57 @@ function stringifyForSection(value) {
  * @internal exported for tests; consumers should call through the
  *           dispatcher's system_close assembly path.
  */
-export async function renderSubSystemPromptWithNotes(systemPrompt, contextForNotes) {
+/**
+ * Read the open-notes block for a sub-agent dispatch. Returns an empty
+ * string when no notes adapter is mounted, the adapter throws, or the
+ * filtered list is empty so callers can compose it into a runtime-state
+ * body without conditional guards. Format matches the loop-runtime and
+ * main-agent renderers (`- [id] text` per entry) so the same close-by-id
+ * contract applies everywhere notes appear in the prompt stack.
+ *
+ * Closed entries (status === 'closed') are filtered out — only open
+ * threads are surfaced. Legacy entries without a status field default
+ * to open (matching loop-runtime's `(status ?? 'open') === 'open'`
+ * semantics).
+ *
+ * Called on every dispatch (not cached) so notes written by earlier
+ * sub-agents in the same director session show up for later ones.
+ *
+ * @internal exported for tests; consumers should call through the
+ *           dispatcher's runtime-state assembly path.
+ */
+export async function loadSubAgentOpenNotesBlock(contextForNotes) {
     const fs = contextForNotes && contextForNotes.__floorStateForNotes;
-    if (!fs || typeof fs.listAcrossFloors !== 'function') return systemPrompt;
+    if (!fs || typeof fs.listAcrossFloors !== 'function') return '';
     let all;
     try {
         all = await fs.listAcrossFloors();
     } catch (_) {
-        return systemPrompt;
+        return '';
     }
-    if (!Array.isArray(all) || all.length === 0) return systemPrompt;
+    if (!Array.isArray(all) || all.length === 0) return '';
     const open = all.filter(e => e && typeof e === 'object' && (e.status ?? 'open') === 'open');
-    if (open.length === 0) return systemPrompt;
-    const lines = ['', '## Open Notes (your plot-author threads — close with note_close when deployed)'];
+    if (open.length === 0) return '';
+    const lines = ['## Open Notes (your plot-author threads — close with note_close when deployed)'];
     for (const e of open) {
         lines.push(`- [${String(e.id || '')}] ${String(e.text || '')}`);
     }
-    return `${systemPrompt}${lines.join('\n')}`;
+    return lines.join('\n');
+}
+
+/**
+ * Back-compat wrapper around `loadSubAgentOpenNotesBlock` kept for tests
+ * that still target the prior "concat into systemPrompt" shape. New call
+ * sites should use `loadSubAgentOpenNotesBlock` and place the block in a
+ * trailing `<runtime_state>` user message instead.
+ *
+ * @internal exported for tests; consumers should call through the
+ *           dispatcher's runtime-state assembly path.
+ */
+export async function renderSubSystemPromptWithNotes(systemPrompt, contextForNotes) {
+    const block = await loadSubAgentOpenNotesBlock(contextForNotes);
+    if (!block) return systemPrompt;
+    return `${systemPrompt}\n\n${block}`;
 }
 
 /**
@@ -1229,7 +1273,7 @@ export function renderMainAgentDigest(parentMessages, chatHistoryLength) {
 
     const lines = [];
     lines.push('## Main agent context (background, not dialogue)');
-    lines.push("The following is the main orchestrating agent's reasoning and tool-result history up to the moment it dispatched you. This is BACKGROUND for understanding your task — not a conversation you are continuing. Your actual task is in the next message.");
+    lines.push('The following is the main orchestrating agent\'s reasoning and tool-result history up to the moment it dispatched you. This is BACKGROUND for understanding your task — not a conversation you are continuing. Your actual task is in the next message.');
     lines.push('');
 
     for (const msg of rounds) {
