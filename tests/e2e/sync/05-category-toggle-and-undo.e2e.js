@@ -24,12 +24,10 @@ test.beforeAll(async () => {
     A = await startServer({
         batchKey: 'sync',
         scenarioId: 'cat-undo-A',
-        extraConfig: { enableUserAccounts: false },
     });
     B = await startServer({
         batchKey: 'sync',
         scenarioId: 'cat-undo-B',
-        extraConfig: { enableUserAccounts: false },
     });
     markOnboarded({ dataRoot: A.dataRoot });
     markOnboarded({ dataRoot: B.dataRoot });

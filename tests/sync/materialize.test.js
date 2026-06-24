@@ -574,6 +574,364 @@ describe('dematerialize (sqlite — round-trip)', () => {
     });
 });
 
+describe('dematerialize path-traversal defense', () => {
+    // The workdir contents arrive over git from an arbitrary peer — every
+    // entry name is untrusted input. `isUnsafeEntryName` is the gate that
+    // keeps a malicious tree from escaping the user's data root or
+    // surfacing host dotfiles. The tests below plant the malicious shapes
+    // a peer could actually produce, then assert dematerialize ignores
+    // them while still landing a legitimate sibling — proving the guard
+    // is targeted, not blanket-skipping.
+
+    test('charDir containing ".." segment is skipped while a legitimate sibling lands', async () => {
+        // `escape..pwn` — single segment containing `..`. Doesn't start
+        // with `.` so it bypasses the leading-dot rule; the `includes('..')`
+        // arm is what rejects it. Without that arm, a peer could push a
+        // tree like `chats/escape..pwn/` and the engine would acquire a
+        // record with that name unchecked.
+        const dst = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            // Plant the unsafe shape: a charDir whose name embeds `..`,
+            // with one chat file inside.
+            const chatsAbs = path.join(workdir, 'chats');
+            fs.mkdirSync(path.join(chatsAbs, 'escape..pwn'), { recursive: true });
+            fs.writeFileSync(
+                path.join(chatsAbs, 'escape..pwn', 'hostile.jsonl'),
+                JSON.stringify({ user_name: 'attacker', chat_metadata: {} }) + '\n',
+            );
+            // Plant a legitimate sibling so the negative-and-positive assertions
+            // both fire.
+            fs.mkdirSync(path.join(chatsAbs, 'Alice'), { recursive: true });
+            fs.writeFileSync(
+                path.join(chatsAbs, 'Alice', 'normal.jsonl'),
+                JSON.stringify({ user_name: 'U', chat_metadata: {} }) + '\n'
+                + JSON.stringify({ name: 'U', mes: 'hi', is_user: true }) + '\n',
+            );
+
+            await dematerializeWorkdirIntoUserData({
+                handle: dst.handle,
+                directories: dst.dirs,
+                categories: ['chats'],
+                workdir,
+                engine: dst.engine,
+            });
+
+            const dstChat = new ChatRepo({ engine: dst.engine });
+            // Legitimate sibling landed.
+            const alice = await dstChat.get(dst.handle, 'Alice', 'normal');
+            expect(alice).not.toBeNull();
+            expect(alice.body[0].mes).toBe('hi');
+            // Unsafe charDir did NOT land.
+            const hostile = await dstChat.get(dst.handle, 'escape..pwn', 'hostile');
+            expect(hostile).toBeNull();
+            // Confirm via listAll that nothing else slipped in either —
+            // anything containing `..` in its charDir would be a guard
+            // failure regardless of the specific lookup we tried.
+            const all = await dstChat.listAll(dst.handle);
+            for (const entry of all) {
+                expect(entry.key.charDir).not.toMatch(/\.\./);
+            }
+        } finally {
+            dst.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
+    test('leading-dot filename is skipped while a legitimate sibling in the same charDir lands', async () => {
+        // `.hidden.jsonl` — single dot prefix. Covers the host-dotfile
+        // surfacing concern: a peer's tree could include `.DS_Store`,
+        // `.hidden`, etc.; none should become engine records.
+        const dst = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            const aliceDir = path.join(workdir, 'chats', 'Alice');
+            fs.mkdirSync(aliceDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(aliceDir, '.hidden.jsonl'),
+                JSON.stringify({ user_name: 'hidden', chat_metadata: {} }) + '\n',
+            );
+            fs.writeFileSync(
+                path.join(aliceDir, 'normal.jsonl'),
+                JSON.stringify({ user_name: 'U', chat_metadata: {} }) + '\n'
+                + JSON.stringify({ name: 'U', mes: 'hello', is_user: true }) + '\n',
+            );
+
+            await dematerializeWorkdirIntoUserData({
+                handle: dst.handle,
+                directories: dst.dirs,
+                categories: ['chats'],
+                workdir,
+                engine: dst.engine,
+            });
+
+            const dstChat = new ChatRepo({ engine: dst.engine });
+            const normal = await dstChat.get(dst.handle, 'Alice', 'normal');
+            expect(normal).not.toBeNull();
+            expect(normal.body[0].mes).toBe('hello');
+            // The `.hidden` chat must NOT have been acquired. The leading-dot
+            // filter also covers the `.hidden.jsonl` slice — `.slice(0, -6)`
+            // is `.hidden` which still starts with a dot, but the per-file
+            // gate uses isUnsafeEntryName(entry) which catches the raw
+            // filename before any slice happens.
+            const hidden = await dstChat.get(dst.handle, 'Alice', '.hidden');
+            expect(hidden).toBeNull();
+        } finally {
+            dst.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
+    test('leading-dot charDir (e.g. .git, .DS_Store) is skipped while a legitimate sibling lands', async () => {
+        // A peer could push a tree shaped like `chats/.git/...` —
+        // accidentally if their workdir wasn't cleaned, deliberately if
+        // they're hostile. The walker must not descend into it.
+        const dst = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            const chatsAbs = path.join(workdir, 'chats');
+            fs.mkdirSync(path.join(chatsAbs, '.git'), { recursive: true });
+            fs.writeFileSync(
+                path.join(chatsAbs, '.git', 'foo.jsonl'),
+                JSON.stringify({ user_name: 'unreachable', chat_metadata: {} }) + '\n',
+            );
+            fs.mkdirSync(path.join(chatsAbs, '.DS_Store'), { recursive: true });
+            fs.writeFileSync(
+                path.join(chatsAbs, '.DS_Store', 'macmeta.jsonl'),
+                JSON.stringify({ user_name: 'macmeta', chat_metadata: {} }) + '\n',
+            );
+            fs.mkdirSync(path.join(chatsAbs, 'Alice'), { recursive: true });
+            fs.writeFileSync(
+                path.join(chatsAbs, 'Alice', 'normal.jsonl'),
+                JSON.stringify({ user_name: 'U', chat_metadata: {} }) + '\n'
+                + JSON.stringify({ name: 'U', mes: 'sane', is_user: true }) + '\n',
+            );
+
+            await dematerializeWorkdirIntoUserData({
+                handle: dst.handle,
+                directories: dst.dirs,
+                categories: ['chats'],
+                workdir,
+                engine: dst.engine,
+            });
+
+            const dstChat = new ChatRepo({ engine: dst.engine });
+            const alice = await dstChat.get(dst.handle, 'Alice', 'normal');
+            expect(alice).not.toBeNull();
+            expect(alice.body[0].mes).toBe('sane');
+            // Neither dotfile charDir produced a record.
+            const all = await dstChat.listAll(dst.handle);
+            for (const entry of all) {
+                expect(entry.key.charDir.startsWith('.')).toBe(false);
+            }
+        } finally {
+            dst.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
+    test('leading-dot world filename is skipped while a legitimate sibling lands', async () => {
+        // Same guard, exercised on the worlds walker so the protection
+        // isn't accidentally only covering chats.
+        const dst = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            const worldsAbs = path.join(workdir, 'worlds');
+            fs.mkdirSync(worldsAbs, { recursive: true });
+            fs.writeFileSync(
+                path.join(worldsAbs, '.hidden.json'),
+                JSON.stringify({ name: 'hidden', entries: {} }),
+            );
+            fs.writeFileSync(
+                path.join(worldsAbs, 'Lore.json'),
+                JSON.stringify({ name: 'Lore', entries: { '0': { uid: 0, key: ['k'], content: 'v' } } }),
+            );
+
+            await dematerializeWorkdirIntoUserData({
+                handle: dst.handle,
+                directories: dst.dirs,
+                categories: ['worlds'],
+                workdir,
+                engine: dst.engine,
+            });
+
+            const dstWorld = new WorldInfoRepo({ engine: dst.engine });
+            const lore = await dstWorld.get(dst.handle, 'Lore');
+            expect(lore).not.toBeNull();
+            expect(lore.name).toBe('Lore');
+            const hidden = await dstWorld.get(dst.handle, '.hidden');
+            expect(hidden).toBeNull();
+            const names = await dstWorld.listNames(dst.handle);
+            for (const n of names) {
+                expect(n.startsWith('.')).toBe(false);
+            }
+        } finally {
+            dst.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('dematerialize preserves unknown fields (schema drift)', () => {
+    // A peer running a newer Luker may push records that include fields
+    // this side does not know about. The pipeline (workdir JSON →
+    // tx.putResource) must round-trip those fields byte-equal so the
+    // mismatched-version sync direction does not silently drop user data.
+    //
+    // The materialize side writes via JSON.stringify which preserves any
+    // own enumerable property; the dematerialize side parses with
+    // JSON.parse and calls putResource with the whole doc. As long as
+    // neither layer strips fields, the round-trip holds. These tests
+    // pin that behavior so a future "tighten the schema" refactor does
+    // not accidentally regress cross-version compatibility.
+
+    test('chat header preserves a future field through materialize + dematerialize', async () => {
+        const src = await makeTempSqliteEngineHarness();
+        const dst = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            const futureField = { nested: 'value', arr: [1, 2, 3], bool: true };
+            const chat = new ChatRepo({ engine: src.engine });
+            await chat.save(
+                src.handle, 'Alice', 'driftchat',
+                {
+                    user_name: 'U',
+                    chat_metadata: { variables: { v: 1 } },
+                    someFutureField: futureField,
+                },
+                [{ name: 'U', mes: 'pioneer', is_user: true }],
+                null,
+            );
+            // Chat state with a future field too — putChatState / getChatState
+            // round-trip the doc as opaque JSON, so the assertion is just that
+            // the field survives the workdir hop.
+            await chat.setState(src.handle, 'Alice', 'driftchat', 'memory-graph', {
+                nodes: ['root'],
+                futureNamespaceField: 'preserved',
+            });
+            const srcGet = await chat.get(src.handle, 'Alice', 'driftchat');
+            const srcState = await chat.getState(src.handle, 'Alice', 'driftchat', 'memory-graph');
+
+            await materializeUserDataIntoWorkdir({
+                handle: src.handle,
+                directories: src.dirs,
+                categories: ['chats'],
+                workdir,
+                engine: src.engine,
+            });
+            await dematerializeWorkdirIntoUserData({
+                handle: dst.handle,
+                directories: dst.dirs,
+                categories: ['chats'],
+                workdir,
+                engine: dst.engine,
+            });
+
+            const dstChat = new ChatRepo({ engine: dst.engine });
+            const dstGet = await dstChat.get(dst.handle, 'Alice', 'driftchat');
+            // recordsEqual('chat', ...) ignores rotated integrity tokens
+            // and timestamps but checks header + body deep-equal — which
+            // includes our someFutureField on the header.
+            expect(recordsEqual('chat', dstGet, srcGet)).toBe(true);
+            // Spot-check the field directly so a future change to
+            // recordsEqual's tolerance can't hide a regression here.
+            expect(dstGet.header.someFutureField).toEqual(futureField);
+
+            const dstState = await dstChat.getState(dst.handle, 'Alice', 'driftchat', 'memory-graph');
+            expect(dstState).toEqual(srcState);
+            expect(dstState.futureNamespaceField).toBe('preserved');
+        } finally {
+            src.cleanup();
+            dst.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
+    test('world doc preserves extra top-level keys through round-trip', async () => {
+        const src = await makeTempSqliteEngineHarness();
+        const dst = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            const worldDoc = {
+                name: 'Lore',
+                entries: { '0': { uid: 0, key: ['k'], content: 'v' } },
+                futureField: { reason: 'cross-version sync must preserve', count: 42 },
+                anotherFutureField: [1, 2, 3],
+            };
+            const world = new WorldInfoRepo({ engine: src.engine });
+            await world.save(src.handle, 'Lore', worldDoc);
+
+            await materializeUserDataIntoWorkdir({
+                handle: src.handle,
+                directories: src.dirs,
+                categories: ['worlds'],
+                workdir,
+                engine: src.engine,
+            });
+            await dematerializeWorkdirIntoUserData({
+                handle: dst.handle,
+                directories: dst.dirs,
+                categories: ['worlds'],
+                workdir,
+                engine: dst.engine,
+            });
+
+            const dstWorld = new WorldInfoRepo({ engine: dst.engine });
+            const got = await dstWorld.get(dst.handle, 'Lore');
+            expect(recordsEqual('world', got, worldDoc)).toBe(true);
+            // Spot-check unknown fields landed verbatim — guards against
+            // a future "tighten the schema" change that filters before write.
+            expect(got.futureField).toEqual(worldDoc.futureField);
+            expect(got.anotherFutureField).toEqual(worldDoc.anotherFutureField);
+        } finally {
+            src.cleanup();
+            dst.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
+    test('settings doc preserves extra top-level keys through round-trip', async () => {
+        const src = await makeTempSqliteEngineHarness();
+        const dst = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            const settingsDoc = {
+                user_avatar: 'a.png',
+                power_user: { theme: 'dark' },
+                futureSetting: 'preserved across versions',
+                futureBlock: { layers: { a: 1, b: 2 } },
+            };
+            const settings = new SettingsRepo({ engine: src.engine });
+            await settings.save(src.handle, settingsDoc);
+
+            await materializeUserDataIntoWorkdir({
+                handle: src.handle,
+                directories: src.dirs,
+                categories: ['settings'],
+                workdir,
+                engine: src.engine,
+            });
+            await dematerializeWorkdirIntoUserData({
+                handle: dst.handle,
+                directories: dst.dirs,
+                categories: ['settings'],
+                workdir,
+                engine: dst.engine,
+            });
+
+            const dstSettings = new SettingsRepo({ engine: dst.engine });
+            const got = await dstSettings.get(dst.handle);
+            expect(recordsEqual('settings', got, settingsDoc)).toBe(true);
+            expect(got.futureSetting).toBe('preserved across versions');
+            expect(got.futureBlock).toEqual(settingsDoc.futureBlock);
+        } finally {
+            src.cleanup();
+            dst.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+});
+
 describe('sanity: rel-path math is workdir-relative', () => {
     test('a chat at chats/<charDir>/<name>.jsonl maps to the same workdir path', async () => {
         const src = await makeTempSqliteEngineHarness();

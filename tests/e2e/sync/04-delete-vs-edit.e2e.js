@@ -25,12 +25,10 @@ test.beforeAll(async () => {
     A = await startServer({
         batchKey: 'sync',
         scenarioId: 'delvs-A',
-        extraConfig: { enableUserAccounts: false },
     });
     B = await startServer({
         batchKey: 'sync',
         scenarioId: 'delvs-B',
-        extraConfig: { enableUserAccounts: false },
     });
     markOnboarded({ dataRoot: A.dataRoot });
     markOnboarded({ dataRoot: B.dataRoot });

@@ -168,7 +168,29 @@ function writeScenarioConfig(targetPath, extraConfig) {
     for (const [key, value] of Object.entries(extraConfig)) {
         const yamlValue = value === true ? 'true' : value === false ? 'false' : String(value);
         if (key.includes('.')) {
-            const leaf = key.slice(key.lastIndexOf('.') + 1);
+            const segments = key.split('.');
+            const leaf = segments[segments.length - 1];
+            if (segments.length >= 3) {
+                // Anchor the leaf inside its nested parent block so a leaf
+                // name shared across siblings (e.g. `url:` under both
+                // `mysql:` and `postgres:`) lands on the correct one.
+                // Match: <root>:\n ... <parent>:\n ... <leaf>: <scalar>
+                // The middle is captured loosely (any number of lines) up
+                // to the leaf line that lives directly under the parent
+                // header. The leaf indent is preserved via its capture
+                // group so we only touch the scalar value.
+                const root = segments[0];
+                const parent = segments[segments.length - 2];
+                const re = new RegExp(
+                    `^(${root}:[\\s\\S]*?^\\s+${parent}:[\\s\\S]*?^)(\\s+${leaf}\\s*):\\s*[^\\n]*$`,
+                    'm',
+                );
+                if (re.test(out)) {
+                    out = out.replace(re, `$1$2: ${yamlValue}`);
+                    continue;
+                }
+                throw new Error(`writeScenarioConfig: nested key "${key}" not found in seed config.yaml`);
+            }
             // Match an indented "leaf: <scalar>" line (under a parent
             // block). Preserve original indentation via the capture group.
             const re = new RegExp(`^(\\s+${leaf}\\s*):\\s*[^\\n]*$`, 'm');

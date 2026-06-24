@@ -189,4 +189,33 @@ describe('object wire transfer', () => {
         const leftover = fs.existsSync(incoming) ? fs.readdirSync(incoming) : [];
         expect(leftover).toEqual([]);
     });
+
+    test('writeObjectFromWireStream cleans up the tmp file when the stream errors mid-pipe', async () => {
+        // Real-world failure mode: client connection dies after a few
+        // chunks. The pipeline rejects, writeObjectFromWireStream's
+        // finally block must unlink the partial tmp file so a chain of
+        // failed receives doesn't fill <gitdir>/objects/incoming/.
+        const b = await ensureShadowRepo({ userRoot: bRoot, peerId: 'p' });
+
+        const failingStream = Readable.from((async function* () {
+            yield Buffer.from('chunk-1-', 'utf8');
+            yield Buffer.from('chunk-2-', 'utf8');
+            throw new Error('synthetic mid-stream failure');
+        })());
+
+        await expect(writeObjectFromWireStream({
+            dir: b.workdir,
+            gitdir: b.gitDir,
+            oid: '0'.repeat(40),
+            type: 'blob',
+            stream: failingStream,
+        })).rejects.toThrow(/synthetic mid-stream failure/);
+
+        // Tmp file under incoming/ MUST be gone — the function's try/finally
+        // is the only thing keeping a hostile peer streaming gigabytes and
+        // disconnecting from filling the receiver's disk.
+        const incoming = path.join(b.gitDir, 'objects', 'incoming');
+        const leftover = fs.existsSync(incoming) ? fs.readdirSync(incoming) : [];
+        expect(leftover).toEqual([]);
+    });
 });

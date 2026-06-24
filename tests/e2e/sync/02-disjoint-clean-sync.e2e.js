@@ -26,12 +26,10 @@ test.beforeAll(async () => {
     A = await startServer({
         batchKey: 'sync',
         scenarioId: 'disjoint-A',
-        extraConfig: { enableUserAccounts: false },
     });
     B = await startServer({
         batchKey: 'sync',
         scenarioId: 'disjoint-B',
-        extraConfig: { enableUserAccounts: false },
     });
     markOnboarded({ dataRoot: A.dataRoot });
     markOnboarded({ dataRoot: B.dataRoot });

@@ -6,12 +6,8 @@
 // driving each side, real toastr / popup gestures. No LLM calls in
 // this flow, so nothing to mock.
 //
-// Why `enableUserAccounts: false`: spec §4.1's `/pair/accept` does a
-// server-to-server fetch from B's server to A's `/session/offer`. In
-// multi-user mode that fetch can't carry B-user's session cookie, so
-// A returns 401. Single-user mode populates `request.user` for every
-// inbound request, sidestepping the cross-server auth gap. See memory
-// `lan_sync_design_notes` for the underlying constraint.
+// These specs run in default (single-user) mode. Multi-user pairings
+// are exercised by separate specs in the same directory.
 
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
@@ -34,12 +30,10 @@ test.beforeAll(async () => {
     A = await startServer({
         batchKey: 'sync',
         scenarioId: 'pair-A',
-        extraConfig: { enableUserAccounts: false },
     });
     B = await startServer({
         batchKey: 'sync',
         scenarioId: 'pair-B',
-        extraConfig: { enableUserAccounts: false },
     });
     markOnboarded({ dataRoot: A.dataRoot });
     markOnboarded({ dataRoot: B.dataRoot });

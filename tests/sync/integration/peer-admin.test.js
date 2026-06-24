@@ -15,7 +15,7 @@
  * listeners so `/pair/accept`'s outbound `fetch` to the peer is a real
  * round-trip rather than supertest's in-process dispatch.
  */
-import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -403,6 +403,123 @@ describe.each(FS_HARNESSES)('LAN Sync admin endpoints on $name', ({ mode }) => {
                 .send({});
             expect(res.status).toBe(412);
             expect(res.body.code).toBe('NO_BASE_URL');
+        });
+    });
+
+    describe('peer wire failure modes (/pull)', () => {
+        // Coverage for the low-probability, high-impact peer transport
+        // scenarios that the happy-path integration suites do not exercise:
+        //   - peer accepts the TCP connection but never writes a response
+        //     body (Wi-Fi drop mid-request) → orchestrator's peerFetch
+        //     catches the AbortError and re-codes it as PEER_TIMEOUT, which
+        //     /pull maps to 504.
+        //   - peer writes a 200 OK with Content-Length but destroys the
+        //     socket after sending only part of the body → orchestrator's
+        //     `r.json()` / `r.arrayBuffer()` throw on the truncated body,
+        //     which /pull surfaces as a generic 500 (the wrapper only
+        //     special-cases PEER_TIMEOUT and PEER_REF_CHANGED).
+
+        test('reports 504 PEER_TIMEOUT when the orchestrator fetch aborts', async () => {
+            // Drive a real /pull. The offer step is fulfilled by a real
+            // call on A's app so the test exercises the /pull happy path
+            // up to the first peerFetch inside runPull. That peerFetch is
+            // then intercepted via `jest.spyOn(global, 'fetch')` to throw
+            // a synthetic AbortError — the OS-level signal we cannot
+            // produce deterministically inside a unit test without
+            // waiting the real 30s PEER_FETCH_TIMEOUT_MS or threading a
+            // fake-clock through node:internal. The catch branch under
+            // test is real product code (src/sync/orchestrator.js
+            // peerFetch), and the endpoint mapping (504 with stage 'pull')
+            // is real product code in src/endpoints/sync.js. The mock
+            // simulates only the input to peerFetch's catch.
+            const peerId = 'u@deadbeef';
+            const offer = await request(A.app)
+                .post('/api/sync/v1/session/offer')
+                .send({ peerId, label: 'A', categories: ['chats'] });
+            expect(offer.status).toBe(200);
+
+            const realFetch = global.fetch;
+            const spy = jest.spyOn(global, 'fetch').mockImplementationOnce(async () => {
+                // Mirror the shape `AbortSignal.timeout` produces. The
+                // peerFetch catch matches `name === 'AbortError'` OR
+                // `name === 'TimeoutError'` — we pick AbortError here to
+                // exercise the path Node's current undici-backed fetch
+                // surfaces. The TimeoutError name is also covered by the
+                // ` || ` in peerFetch's check so a future undici update
+                // doesn't silently degrade us to a 500.
+                const err = new Error('synthetic abort for test');
+                err.name = 'AbortError';
+                throw err;
+            });
+            try {
+                const pull = await request(B.app)
+                    .post('/api/sync/v1/pull')
+                    .send({
+                        peerId,
+                        peerLabel: 'A',
+                        peerBaseUrl: aListener.baseUrl,
+                        offerToken: offer.body.token,
+                        categories: ['chats'],
+                    });
+                expect(pull.status).toBe(504);
+                expect(pull.body.error).toMatch(/timed out/i);
+            } finally {
+                spy.mockRestore();
+                // Belt and suspenders — confirm restoration so a leak
+                // would surface obviously in the next test instead of
+                // mysteriously timing out.
+                expect(global.fetch).toBe(realFetch);
+            }
+        });
+
+        test('reports 500 when peer truncates the response body mid-stream', async () => {
+            // Real http.Server registered to handle exactly the manifest
+            // route, returns 200 OK with a Content-Length that promises
+            // more bytes than it writes, then destroys the socket. The
+            // orchestrator's `r.json()` call inside fetchRemoteManifestHead
+            // throws on the truncated body — the catch in /pull does NOT
+            // recognize this as PEER_TIMEOUT, so it falls through to the
+            // generic 500 branch. Pins the actual behavior rather than
+            // an aspirational design.
+            const truncatingServer = http.createServer((req, res) => {
+                if (req.url === '/api/sync/v1/session/manifest') {
+                    res.writeHead(200, {
+                        'Content-Type': 'application/json',
+                        'Content-Length': '500',
+                    });
+                    res.write('{"head');
+                    // Force-close the underlying socket so the client sees
+                    // an ECONNRESET / premature-close before the promised
+                    // body completes. `res.end()` would write a clean tail
+                    // and the client could still parse — destroy is what
+                    // produces the genuine truncation case.
+                    res.socket.destroy();
+                    return;
+                }
+                res.writeHead(404).end();
+            });
+            await new Promise(resolve => truncatingServer.listen(0, '127.0.0.1', resolve));
+            const truncatingBaseUrl = `http://127.0.0.1:${truncatingServer.address().port}`;
+            try {
+                const pull = await request(B.app)
+                    .post('/api/sync/v1/pull')
+                    .send({
+                        peerId: 'u@feedface',
+                        peerLabel: 'A',
+                        peerBaseUrl: truncatingBaseUrl,
+                        offerToken: 'unused-the-manifest-fails-first',
+                        categories: ['chats'],
+                    });
+                // 500 because peerFetch returned a Response object (no
+                // throw at the fetch boundary), and then `r.json()` on
+                // the truncated body threw a regular Error whose name is
+                // not Abort/Timeout — so it bypasses both the
+                // PEER_TIMEOUT and PEER_REF_CHANGED branches in /pull.
+                expect(pull.status).toBe(500);
+                expect(typeof pull.body.error).toBe('string');
+            } finally {
+                await new Promise(resolve => truncatingServer.close(resolve));
+            }
         });
     });
 });

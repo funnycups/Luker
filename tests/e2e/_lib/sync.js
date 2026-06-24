@@ -18,6 +18,75 @@
 import { expect } from '@playwright/test';
 
 /**
+ * Real `/login` form login for multi-user specs. Selects the named user
+ * card (or fills the discreet handle input), types the password, clicks
+ * Login, waits for the SPA to come up.
+ *
+ * Mirrors the `loginViaForm` extracted in `personas/105-…` so both the
+ * personas suite and the sync suite drive the same path. Keep this in
+ * sync with that copy if either diverges.
+ */
+export async function loginAs(page, baseURL, { handle, password }) {
+    await page.goto(`${baseURL}/login`);
+    // Settle on the login form OR auto-redirect to /.
+    await page.waitForFunction(() => {
+        if (document.querySelector('#preloader') !== null) {
+            return /\/(login)?$/.test(location.pathname) || location.pathname === '/';
+        }
+        const list = document.querySelector('#userList');
+        const handleBlock = document.querySelector('#handleEntryBlock');
+        if (location.pathname === '/' || location.pathname === '') return true;
+        return list && (list.children.length > 0 || (handleBlock && handleBlock.style.display !== 'none'));
+    }, { timeout: 30_000 });
+
+    const onMain = await page.evaluate(() => location.pathname === '/' || location.pathname === '');
+    if (!onMain) {
+        const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const card = page.locator('#userList .userSelect').filter({
+            has: page.locator('.userHandle', { hasText: new RegExp(`^${escapeRegex(handle)}$`) }),
+        }).first();
+        const cardVisible = await card.isVisible({ timeout: 1500 }).catch(() => false);
+        if (cardVisible) {
+            await card.click();
+        } else {
+            const handleInput = page.locator('#userHandle');
+            await handleInput.waitFor({ state: 'visible', timeout: 5000 });
+            await handleInput.fill(handle);
+        }
+        const passwordInput = page.locator('#userPassword');
+        if (await passwordInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await passwordInput.fill(password);
+            const loginBtn = page.locator('#loginButton');
+            if (await loginBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                await loginBtn.click();
+            }
+        }
+    }
+
+    await page.waitForFunction(() => document.getElementById('preloader') === null, { timeout: 60_000 });
+    await page.waitForFunction(() => !!window.Luker?.getContext, { timeout: 30_000 });
+}
+
+/**
+ * Assert the LAN Sync status banner shows the handle-mismatch error
+ * with BOTH the expected handle (the user's own) and the got handle
+ * (the peerId prefix from the link). The exact English text comes from
+ * `lan-sync.js` via the `t` tagged template and contains both names in
+ * order: "This pairing link is for ${got}, but you're logged in as ${expected}."
+ *
+ * Locale-neutral: we look for the literal substrings of both handles in
+ * the rendered banner text, which survives translation as long as the
+ * translator preserves the two `${0}` / `${1}` placeholders verbatim.
+ */
+export async function expectHandleMismatchToast(page, { expectedHandle, gotHandle }) {
+    const banner = page.locator('.lanSyncStatusBanner.error').first();
+    await banner.waitFor({ state: 'visible', timeout: 10_000 });
+    const text = (await banner.innerText()).trim();
+    expect(text, 'banner must contain the link handle').toContain(gotHandle);
+    expect(text, 'banner must contain the local handle').toContain(expectedHandle);
+}
+
+/**
  * Open Settings → Account → Backup & Restore → LAN Sync.
  *
  * Multi-step popup navigation: User Settings drawer → Account button →
@@ -107,13 +176,24 @@ export async function generatePairingLink(page, { label, categories }) {
  * the OTHER device whatever makes sense locally (typically the opposite
  * of what the URL contained, since the URL embeds the GENERATOR's idea
  * of what the receiver is called).
+ *
+ * `peerAuth` (optional `{ username, password }`) is typed into the basic-
+ * auth fields on the Accept form for specs that pair across multi-user
+ * Luker installs where /api routes are basic-auth-gated. Pass `null` (or
+ * leave the field off) when the peer is a single-user / no-auth install.
  */
-export async function acceptPairingLink(page, link, { categories, localLabel }) {
+export async function acceptPairingLink(page, link, { categories, localLabel, peerAuth = null }) {
     await page.locator('.lanSyncTabPairExisting').click();
     await page.locator('.lanSyncAcceptLink').fill(link);
     await page.locator('.lanSyncAcceptLink').dispatchEvent('input');
     if (localLabel) {
         await page.locator('.lanSyncAcceptLabel').fill(localLabel);
+    }
+    if (peerAuth?.username) {
+        await page.locator('.lanSyncAcceptUsername').fill(peerAuth.username);
+    }
+    if (peerAuth?.password) {
+        await page.locator('.lanSyncAcceptPassword').fill(peerAuth.password);
     }
     await page.evaluate((cats) => {
         document.querySelectorAll('.lanSyncAcceptCategoryGrid input[name="lanSyncCategory"]').forEach((el) => {
