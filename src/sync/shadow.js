@@ -88,11 +88,19 @@ export async function ensureShadowRepo({ userRoot, peerId }) {
  * Mirror the enabled-category subset of the live user data into the shadow
  * worktree, then commit if anything changed.
  *
- * The workdir layout mirrors `directories.root` exactly: a live file at
- * `<userRoot>/characters/char_001.png` lands at
+ * The workdir layout mirrors `liveRoot` exactly: a live file at
+ * `<liveRoot>/characters/char_001.png` lands at
  * `<workdir>/characters/char_001.png`. This 1:1 correspondence lets the
  * reverse step (`reconcileShadowToLive`, Task 5) compute its writes by simply
  * subtracting the shadow root from each relative path.
+ *
+ * `liveRoot` defaults to `directories.root`, which preserves fs-mode
+ * behavior: the walker reads from the live user data tree and rel paths are
+ * anchored there. SQL-mode callers (sqlite/mysql/postgres) materialize their
+ * per-user data into `shadow.workdir` first and pass `liveRoot: shadow.workdir`
+ * so the walker sees the materialized files at their right relative paths;
+ * the same-path guard in `syncWorkdirToDesired` then makes copies a no-op for
+ * already-staged files while the commit step still advances `main`.
  *
  * Implementation notes:
  *   - Symlinks are skipped per spec §4.3 — both the live walker and the
@@ -115,10 +123,11 @@ export async function ensureShadowRepo({ userRoot, peerId }) {
  *   peerId: string,
  *   directories: import('../users.js').UserDirectoryList,
  *   enabledCategoryIds: string[],
+ *   liveRoot?: string,
  * }} args
  * @returns {Promise<{ committed: boolean, oid: string | null }>}
  */
-export async function snapshotLiveToShadow({ userRoot, peerId, directories, enabledCategoryIds }) {
+export async function snapshotLiveToShadow({ userRoot, peerId, directories, enabledCategoryIds, liveRoot = directories.root }) {
     const paths = await ensureShadowRepo({ userRoot, peerId });
 
     const enabled = new Set(enabledCategoryIds);
@@ -128,35 +137,12 @@ export async function snapshotLiveToShadow({ userRoot, peerId, directories, enab
     const desired = new Map();
     for (const category of targets) {
         for (const resolved of resolveCategoryPaths(category, directories)) {
-            // Spec §6.3: the `'database'` category's live source is the
-            // running SQLite engine's DB file. A raw byte-copy of an open
-            // WAL'd DB would either miss in-WAL writes or corrupt the
-            // destination, so the orchestrator pre-places a consistent
-            // `VACUUM INTO` snapshot at `<workdir>/luker-storage.sqlite`
-            // BEFORE calling us. We point `desired` at THAT workdir copy
-            // (instead of the live file) so `syncWorkdirToDesired`'s
-            // `copyFile(src, dst)` becomes a same-path no-op rather than
-            // overwriting our snapshot with a torn read of the live DB.
-            //
-            // The if-exists guard mirrors the file-kind branch below:
-            // when the orchestrator skips the VACUUM (e.g. `fs` mode,
-            // where the DB file legitimately doesn't exist), this
-            // category contributes nothing to the snapshot and the
-            // standard walk proceeds unchanged.
-            if (category.id === 'database') {
-                const rel = toPosixRel(directories.root, resolved.absolutePath);
-                const workdirCopy = path.join(paths.workdir, rel);
-                if (fs.existsSync(workdirCopy)) {
-                    desired.set(rel, workdirCopy);
-                }
-                continue;
-            }
             if (!fs.existsSync(resolved.absolutePath)) continue;
             if (resolved.kind === 'file') {
-                const rel = toPosixRel(directories.root, resolved.absolutePath);
+                const rel = toPosixRel(liveRoot, resolved.absolutePath);
                 desired.set(rel, resolved.absolutePath);
             } else if (resolved.kind === 'directory') {
-                await walkLiveDir(resolved.absolutePath, directories.root, desired);
+                await walkLiveDir(resolved.absolutePath, liveRoot, desired);
             }
         }
     }
@@ -166,16 +152,16 @@ export async function snapshotLiveToShadow({ userRoot, peerId, directories, enab
 }
 
 /**
- * Convert an absolute file path under `userRoot` into the POSIX-style
+ * Convert an absolute file path under `liveRoot` into the POSIX-style
  * relative path that isomorphic-git uses for filepaths. `path.relative` keeps
  * the host separator, so we normalize once at this boundary.
  *
- * @param {string} userRoot
+ * @param {string} liveRoot
  * @param {string} absolutePath
  * @returns {string}
  */
-function toPosixRel(userRoot, absolutePath) {
-    return path.relative(userRoot, absolutePath).split(path.sep).join('/');
+function toPosixRel(liveRoot, absolutePath) {
+    return path.relative(liveRoot, absolutePath).split(path.sep).join('/');
 }
 
 /**
@@ -187,18 +173,18 @@ function toPosixRel(userRoot, absolutePath) {
  * locations).
  *
  * @param {string} absDir
- * @param {string} userRoot
+ * @param {string} liveRoot rel-path basis for entries written into `desired`
  * @param {Map<string, string>} desired
  */
-async function walkLiveDir(absDir, userRoot, desired) {
+async function walkLiveDir(absDir, liveRoot, desired) {
     const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
         if (entry.name === '.git') continue;
         const abs = path.join(absDir, entry.name);
         if (entry.isDirectory()) {
-            await walkLiveDir(abs, userRoot, desired);
+            await walkLiveDir(abs, liveRoot, desired);
         } else if (entry.isFile()) {
-            desired.set(toPosixRel(userRoot, abs), abs);
+            desired.set(toPosixRel(liveRoot, abs), abs);
         } else if (entry.isSymbolicLink()) {
             console.warn('[sync] ignoring symlink at:', abs);
         }
@@ -228,14 +214,11 @@ async function syncWorkdirToDesired(workdir, desired) {
     }
     for (const [rel, src] of desired) {
         const dst = path.join(workdir, rel);
-        // SQLite-mode entry path: `snapshotLiveToShadow` points the
-        // `'database'` category's `src` at the workdir copy that the
-        // orchestrator already produced via `VACUUM INTO`, so `src` and
-        // `dst` are the same file. `fs.copyFile` is a no-op on
-        // identical paths on the platforms we ship, but the kernel
-        // behaviour is OS-defined — skipping explicitly keeps the
-        // semantics platform-portable and avoids the (theoretical)
-        // truncate-then-copy window inside the syscall.
+        // Same-path guard for the SQL-engine flow: the materializer writes
+        // user data into the workdir first and the caller then passes
+        // `liveRoot: workdir`, so `src` and `dst` resolve to the same file
+        // for already-staged entries. Skip the syscall explicitly so the
+        // semantics stay platform-portable.
         if (path.resolve(src) === path.resolve(dst)) continue;
         await fs.promises.mkdir(path.dirname(dst), { recursive: true });
         await fs.promises.copyFile(src, dst);

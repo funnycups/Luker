@@ -1,46 +1,31 @@
 /**
- * Plan Task 16 — SQLite-mode whole-DB snapshot sync.
+ * SQLite-mode sync via the engine-agnostic record materializer.
  *
- * In SQLite mode (`src/storage/engines/sqlite-engine.js`) the bulk of user
- * data is inside `<userRoot>/luker-storage.sqlite` rather than the flat
- * file tree. Per spec §6.3 the sync engine cannot raw-copy that file
- * because the live engine has it open and the OS-level rename swap would
- * leave stale reads against the unlinked inode. The orchestrator's
- * SQLite path solves this with a three-step dance:
+ * The orchestrator no longer ships a whole-DB blob in SQLite mode (the
+ * previous design copied `luker-storage.sqlite` wholesale via VACUUM INTO
+ * and atomically renamed it into place on the receiver, which destroyed
+ * row-level granularity and silently replaced any data the receiver had).
+ * Instead `runPullBody` projects per-user records into the shadow workdir
+ * via `materializeUserDataIntoWorkdir`, snapshots that shape, and
+ * `dematerializeWorkdirIntoUserData` writes the merged tree back through
+ * the engine's normal `tx.putResource` path on the responder side.
  *
- *   1. Before the file walk: `VACUUM INTO` the live DB → the shadow
- *      workdir at `luker-storage.sqlite`. SQLite's online-backup mechanism
- *      grabs a consistent point-in-time copy without blocking the engine.
- *   2. Snapshot + merge as usual: the `'database'` category's `from` is
- *      special-cased in `snapshotLiveToShadow` to point at the workdir
- *      copy, so the standard file walk picks the snapshot up without
- *      re-reading (and corrupting) the live DB.
- *   3. After reconcile: `engine.closeHandle(handle)` releases the cached
- *      better-sqlite3 connection so the engine's next access lazily
- *      reopens against the post-rename inode (`write-file-atomic` swap
- *      done by reconcile).
+ * This test pins the new contract by writing real records on A through
+ * the same repos production code uses, running a full pair-init pull,
+ * and reading those records back on B by B's handle — proving the
+ * dematerialize lands rows under the responder's handle (not A's),
+ * which the legacy whole-DB swap could never do.
  *
- * Architecture notes for the test:
- *
- *   - `src/storage/index.js`'s `_engine` is a process-global; two
- *     `initStorage()` calls in one test would clobber each other (see
- *     `tests/sync/integration/full-flow.test.js` for the fs-mode mirror
- *     of this constraint). We therefore stand up ONE shared
- *     `SqliteEngine` keyed by two distinct handles (`alice`, `bob`)
- *     with its `directoriesByHandle` resolver dispatching on the
- *     handle. Both apps share the engine; each app's middleware injects
- *     its own `req.user.profile.handle`, so storage I/O hits the right
- *     DB file.
- *   - Two real `http.Server` listeners on random ports — mirroring
- *     `full-flow.test.js` — because the orchestrator's `fetch()` runs
- *     real outbound HTTP that supertest's in-process dispatcher cannot
- *     intercept.
- *   - Categories include `'database'` so the SQLite blob participates
- *     in the snapshot/reconcile pipeline.
+ * Harness shape mirrors `full-flow.test.js`: two Express apps wrapped in
+ * real `http.Server` listeners on random ports because the orchestrator's
+ * `fetch()` makes outbound HTTP. A SHARED SqliteEngine with a
+ * handle→directory dispatcher avoids the process-global `_engine`
+ * clobber that two `initStorage()` calls would cause — each app's
+ * middleware injects its own handle and the engine routes to the
+ * matching DB file.
  */
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import bodyParser from 'body-parser';
-import crypto from 'node:crypto';
 import express from 'express';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -50,12 +35,16 @@ import path from 'node:path';
 import request from 'supertest';
 
 import { router as syncRouter } from '../../../src/endpoints/sync.js';
-import { initStorage, getStorageEngine, getSettingsRepo } from '../../../src/storage/index.js';
+import {
+    initStorage,
+    getStorageEngine,
+    getChatRepo,
+    getWorldInfoRepo,
+} from '../../../src/storage/index.js';
 
-// Mirror src/constants.js USER_DIRECTORY_TEMPLATE — copied from
-// tests/storage/harness/endpoint-harness.js so this file is self-contained
-// (the existing helper is hard-coded to a single handle, which clashes with
-// the two-handle setup this test needs).
+// Mirror src/constants.js USER_DIRECTORY_TEMPLATE; copied so this file
+// stays self-contained against the shared endpoint-harness (which is
+// pinned to a single handle and would clash with the two-handle setup).
 const USER_DIRS = Object.freeze({
     root: '',
     thumbnails: 'thumbnails',
@@ -108,12 +97,6 @@ function precreateCommonDirs(dirs) {
     fs.mkdirSync(dirs.worlds, { recursive: true });
 }
 
-/**
- * Wrap an Express app in a real http.Server listening on a random
- * loopback port, mirroring `full-flow.test.js`'s helper so the
- * orchestrator's `fetch(peerBaseUrl + '/...')` resolves real network
- * I/O instead of going through supertest's in-process dispatcher.
- */
 function startListener(app) {
     return new Promise(resolve => {
         const server = http.createServer(app).listen(0, '127.0.0.1', () => {
@@ -127,12 +110,6 @@ function startListener(app) {
     });
 }
 
-/**
- * Build the shared SQLite engine + two Express apps (A and B), each
- * with its own handle and per-handle data root. Returns the two apps,
- * their directories, and a cleanup that closes the engine and removes
- * the temp dirs.
- */
 function buildDualSqliteHarness() {
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-sync-sqlite-mode-'));
     const aDir = path.join(dataRoot, 'alice');
@@ -191,42 +168,61 @@ describe('SQLite-mode sync', () => {
         if (H) H.cleanup();
     });
 
-    test('pair: B receives A\'s SQLite snapshot and reads back the same row via storage API', async () => {
-        // ---- Step 1: write a distinctive settings doc on A through the
-        // real storage API. This proves the snapshot captures live DB
-        // contents end-to-end: a raw filesystem copy of the open WAL'd
-        // DB would either miss the in-WAL writes or corrupt the
-        // snapshot. The settings doc round-trips through `SettingsRepo`,
-        // which goes through `SqliteEngine.withTransaction` — the same
-        // path real Luker uses.
-        const settingsRepo = getSettingsRepo();
-        const seed = {
-            user_avatar: `alice-${crypto.randomBytes(4).toString('hex')}.png`,
-            power_user: { theme: 'sqlite-sync-test', fast: true },
-            marker: 'pair-init-from-alice',
+    test('pair: A\'s chat and world materialize through git and land in B\'s engine under B\'s handle', async () => {
+        // Step 1: seed A with one per-character chat and one world,
+        // through the same repos production code uses. The repos go
+        // through SqliteEngine.withTransaction, so the chat / world
+        // rows land in A's DB file the same way a real user write
+        // would.
+        const chatRepo = getChatRepo();
+        const worldRepo = getWorldInfoRepo();
+        const CHAR_DIR = 'aria_demo';
+        const CHAT_NAME = '2026-06-25 first session';
+        const chatHeader = {
+            user_name: 'Captain',
+            character_name: 'Aria',
+            create_date: '2026-06-25 12:00:00',
+            chat_metadata: { tainted: false },
         };
-        await settingsRepo.save('alice', seed);
+        const chatMessages = [
+            { name: 'Captain', is_user: true, send_date: '2026-06-25', mes: 'Aria, what do you see on the horizon?' },
+            { name: 'Aria', is_user: false, send_date: '2026-06-25', mes: 'Smoke. Three columns, two miles out.' },
+        ];
+        const { integrity: aliceChatIntegrity } = await chatRepo.save(
+            'alice', CHAR_DIR, CHAT_NAME, chatHeader, chatMessages, null,
+        );
+        expect(aliceChatIntegrity).toMatch(/^[a-f0-9-]{36}$/);
 
-        // Pre-flight: B's DB file should NOT exist yet (no storage call
-        // touched the `'bob'` handle), so the orchestrator's `runPull`
-        // takes the fast-forward branch — B has nothing to merge with
-        // A's snapshot. Reading B's settings here would lazy-init B's
-        // DB and force a real two-way merge of A's vs B's empty DB —
-        // a different code path than the pairing case under test.
+        const WORLD_NAME = 'aria_world';
+        const worldDoc = {
+            entries: {
+                1: { uid: 1, key: ['horizon'], content: 'Smoke columns appear at noon.', enabled: true },
+            },
+        };
+        await worldRepo.save('alice', WORLD_NAME, worldDoc);
+
+        // Sanity: B's DB file should NOT exist yet — no storage call
+        // touched the 'bob' handle, so SqliteEngine never lazy-opened
+        // it. The orchestrator's pull is what will create it (via the
+        // dematerialize step writing the synced rows back through the
+        // engine under handle='bob').
         const bDbPath = path.join(H.bDirs.root, 'luker-storage.sqlite');
         expect(fs.existsSync(bDbPath)).toBe(false);
 
-        // ---- Step 2: A offers, B pulls. Categories must include
-        // `'database'` so the SQLite blob participates in the snapshot.
-        // Without it, the standard file walk only ships the empty
-        // characters/chats/worlds directories and B's DB stays empty.
+        // Step 2: A offers, B pulls. The offer route triggers the
+        // engine-agnostic materializer on A's side (project alice's
+        // chat + world rows into A's shadow workdir as JSON/JSONL
+        // files), then snapshots that workdir into the shadow git
+        // repo. B's pull fetches those git objects, fast-forwards,
+        // reconciles into B's live tree, and finally dematerializes
+        // the reconciled workdir into B's engine under handle='bob'.
         const PEER_ID = 'alice-bob-link';
         const offer = await request(H.aApp)
             .post('/api/sync/v1/session/offer')
             .send({
                 peerId: PEER_ID,
                 label: 'B',
-                categories: ['characters', 'chats', 'database'],
+                categories: ['chats', 'worlds'],
             });
         expect(offer.status).toBe(200);
         expect(offer.body.token).toMatch(/^[a-f0-9]{64}$/);
@@ -238,33 +234,53 @@ describe('SQLite-mode sync', () => {
                 peerLabel: 'A',
                 peerBaseUrl: aListener.baseUrl,
                 offerToken: offer.body.token,
-                categories: ['characters', 'chats', 'database'],
+                categories: ['chats', 'worlds'],
             });
         expect(pull.status).toBe(200);
         expect(pull.body.ok).toBe(true);
-        // First pair on B → fastForward path (no prior local main).
+        // First pair on B → fastForward path.
         expect(pull.body.fastForward).toBe(true);
 
-        // ---- Step 3: B's live SQLite file should now exist on disk
-        // (reconcile wrote it via the workdir snapshot blob) and the
-        // settings repo, queried with A's handle, should report A's
-        // seed verbatim. The repo call goes through the same
-        // SqliteEngine instance we tore down with `closeHandle('bob')`
-        // post-reconcile — the next `_dbFor('bob')` lazily reopens
-        // against the new file.
-        //
-        // Why query by A's handle: a SQLite sync wholesale-replaces
-        // B's DB with A's DB (spec §6.3, conflictMode: 'whole-db').
-        // Every row in the resulting DB still carries the handle of
-        // whichever side originally wrote it. The schema is keyed by
-        // `(handle, …)`, so B's storage layer can read those rows by
-        // asking for them under A's handle. There is no rewriting
-        // step that would re-key A's rows to B's handle, and
-        // shouldn't be: the multi-handle structure is the engine's
-        // own data model, not a sync layer concern.
+        // Step 3a: B's DB file now exists — dematerialize wrote
+        // chat + world rows under handle='bob', which lazy-opened the
+        // engine's connection for that handle and created the file.
         expect(fs.existsSync(bDbPath)).toBe(true);
 
-        const bAfter = await settingsRepo.get('alice');
-        expect(bAfter).toEqual(seed);
+        // Step 3b: B's chat repo reports alice's chat content under
+        // B's own handle. This is the new behavior the legacy whole-
+        // DB swap could not produce: rows land scoped to the
+        // receiver's handle so the receiver's storage layer reads
+        // them through its normal access path, instead of forcing
+        // callers to query by the sender's handle.
+        const bobChat = await chatRepo.get('bob', CHAR_DIR, CHAT_NAME);
+        expect(bobChat).not.toBeNull();
+        expect(bobChat.header.user_name).toBe('Captain');
+        expect(bobChat.header.character_name).toBe('Aria');
+        expect(bobChat.body).toHaveLength(2);
+        expect(bobChat.body[0].mes).toBe('Aria, what do you see on the horizon?');
+        expect(bobChat.body[1].mes).toBe('Smoke. Three columns, two miles out.');
+
+        // Integrity tokens travel through the materialize roundtrip:
+        // the materializer reads from the chat header's
+        // chat_metadata.integrity, the snapshot ships that as part of
+        // the JSONL header, and the dematerializer reads it back when
+        // it calls putResource. The receiving side keeps the same
+        // integrity so concurrent edits get conflict detection.
+        expect(bobChat.integrity).toBe(aliceChatIntegrity);
+
+        // Step 3c: world data lands under B's handle too. Worlds use
+        // a separate repo and a different on-disk shape (one JSON
+        // per file under worlds/), so this path exercises the
+        // materializeWorlds / dematerializeWorlds branch in addition
+        // to materializeChats.
+        const bobWorld = await worldRepo.get('bob', WORLD_NAME);
+        expect(bobWorld).toEqual(worldDoc);
+
+        // Step 3d: alice's side is unchanged — the orchestrator never
+        // writes back through the engine under the sender's handle.
+        const aliceChatAfter = await chatRepo.get('alice', CHAR_DIR, CHAT_NAME);
+        expect(aliceChatAfter.body[0].mes).toBe(chatMessages[0].mes);
+        const aliceWorldAfter = await worldRepo.get('alice', WORLD_NAME);
+        expect(aliceWorldAfter).toEqual(worldDoc);
     });
 });

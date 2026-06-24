@@ -25,9 +25,8 @@ import {
     syncQueueKey,
     queueOnKey,
     undoLastSync,
-    snapshotSqliteIntoShadowIfNeeded,
-    closeSqliteEngineHandleIfNeeded,
 } from '../sync/orchestrator.js';
+import { materializeUserDataIntoWorkdir, dematerializeWorkdirIntoUserData, buildWorkdirDirectoriesView } from '../sync/materialize.js';
 import { markSyncInProgress, clearSyncInProgress } from '../sync/in-progress-gate.js';
 import { readSyncState, recordPeer, removePeerCompletely } from '../sync/state.js';
 import { SYNC_CATEGORIES } from '../sync/categories.js';
@@ -340,16 +339,19 @@ router.post('/session/ref', requireSyncToken, express.json(), async (request, re
                                 directories,
                                 enabledCategoryIds: categories,
                             });
-                            // SQLite mode (spec §6.3): the reconcile above
-                            // may have swapped this user's live DB file via
-                            // `write-file-atomic`'s rename. Drop the cached
-                            // engine handle so the next storage read picks
-                            // up the post-rename inode instead of the
-                            // unlinked old one. Shared with the puller-side
-                            // orchestrator so both ends use one gating rule
-                            // (see `closeSqliteEngineHandleIfNeeded` doc for
-                            // the full set of no-op conditions).
-                            closeSqliteEngineHandleIfNeeded({ shadow, handle, categories });
+                            // SQL-engine mode (spec §6.3): project the
+                            // reconciled workdir back into the engine so
+                            // the storage layer reflects the puller's
+                            // edits. Shared with the puller-side
+                            // orchestrator so both ends use one gating
+                            // rule (no-op when engine.kind === 'fs').
+                            const engine = getStorageEngine();
+                            if (engine.kind !== 'fs') {
+                                await dematerializeWorkdirIntoUserData({
+                                    handle, directories, categories,
+                                    workdir: shadow.workdir, engine,
+                                });
+                            }
                         } finally {
                             clearSyncInProgress(handle, peerId);
                         }
@@ -439,38 +441,37 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
     // so the snapshot honors exactly the categories that were just
     // toggled.
     //
-    // SQLite-mode (spec §6.3): the live `luker-storage.sqlite` cannot
-    // be raw-copied without corruption, so VACUUM-INTO a consistent
-    // copy into the shadow workdir BEFORE the file walk runs.
-    // `snapshotLiveToShadow` is taught (in `src/sync/shadow.js`) to
-    // route the `'database'` category's source path through that
-    // workdir copy, so the standard snapshot commits the staged blob
-    // without touching the live file. No-op in fs mode or when the
-    // user opted out of the `'database'` category.
+    // SQL-engine mode (spec §6.3): the engine holds the bulk of the
+    // user's data, so the file walk has nothing meaningful to read out
+    // of the live root. Project the per-user records into the shadow
+    // workdir first via the engine-agnostic materializer, then point
+    // the walk at the workdir instead of the live root. No-op when
+    // `engine.kind === 'fs'` — the live root already IS the on-disk
+    // shape the walk expects.
     //
     // `snapshotLiveToShadow` is idempotent (commits only when the tree
     // actually differs), so a re-offer with no live edits is cheap.
     try {
-        if (categories.includes('database') && engine.kind === 'sqlite') {
-            // Shared with the orchestrator's pre-snapshot step: ensure
-            // the shadow then stage a VACUUM-INTO snapshot at
-            // `<workdir>/luker-storage.sqlite`. `ensureShadowRepo` is
-            // idempotent, and `snapshotSqliteIntoShadowIfNeeded`
-            // self-gates on engine kind + DB-file presence + category
-            // selection — keeping the gating in one helper means the
-            // offer path and the puller's `runPull` cannot drift.
+        let liveRoot = user.directories.root;
+        let snapshotDirs = user.directories;
+        if (engine.kind !== 'fs') {
             const shadow = await ensureShadowRepo({ userRoot: user.directories.root, peerId });
-            await snapshotSqliteIntoShadowIfNeeded({
-                shadow,
+            await materializeUserDataIntoWorkdir({
+                handle: user.profile.handle,
                 directories: user.directories,
                 categories,
+                workdir: shadow.workdir,
+                engine,
             });
+            snapshotDirs = buildWorkdirDirectoriesView(user.directories, shadow.workdir);
+            liveRoot = shadow.workdir;
         }
         await snapshotLiveToShadow({
             userRoot: user.directories.root,
             peerId,
-            directories: user.directories,
+            directories: snapshotDirs,
             enabledCategoryIds: categories,
+            liveRoot,
         });
     } catch (e) {
         console.error('[sync] offer snapshot failed', e);

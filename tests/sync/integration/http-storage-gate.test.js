@@ -31,7 +31,16 @@ import request from 'supertest';
 let currentEngineKind = 'fs';
 
 jest.unstable_mockModule('../../../src/storage/index.js', () => ({
-    getStorageEngine: () => ({ kind: currentEngineKind }),
+    // Materialize/dematerialize call `engine.withTransaction(handle, fn)`
+    // before reading the enabled-category set; with an empty categories
+    // array nothing actually runs inside the txn, but the type guard at
+    // the top of materializeUserDataIntoWorkdir still demands the
+    // function exist. Hand back the tx-callable shape with a stub
+    // that's never invoked under empty `categories: []`.
+    getStorageEngine: () => ({
+        kind: currentEngineKind,
+        withTransaction: async (_handle, fn) => fn({}),
+    }),
     // The endpoints under test only ever touch `getStorageEngine` and
     // `getUserDirectories` (no repos), so we don't need to re-export the
     // repo getters. The session/offer handler reads exclusively from

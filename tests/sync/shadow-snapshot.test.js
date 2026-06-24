@@ -161,6 +161,143 @@ describe('snapshotLiveToShadow', () => {
         expect(files).toContain('settings.json');
     });
 
+    test('default liveRoot equals directories.root (signature default preserves fs-mode behavior)', async () => {
+        // Locks the new signature's default: omitting liveRoot must walk and
+        // produce the same desired-set as before its introduction. Sanity-pin
+        // for callers (sync.js endpoint, orchestrator runPullBody) that omit
+        // the parameter and rely on the default.
+        fs.writeFileSync(path.join(liveRoot, 'characters', 'a.png'), 'A');
+        fs.mkdirSync(path.join(liveRoot, 'chats', 'c1'), { recursive: true });
+        fs.writeFileSync(path.join(liveRoot, 'chats', 'c1', 'log.jsonl'), '{}');
+
+        const result = await snapshotLiveToShadow({
+            userRoot, peerId: 'p',
+            directories: fakeDirsAt(liveRoot),
+            enabledCategoryIds: ['characters', 'chats'],
+            // liveRoot intentionally omitted
+        });
+
+        expect(result.committed).toBe(true);
+        const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
+        const headOid = await git.resolveRef({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: 'HEAD' });
+        const files = await git.listFiles({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: headOid });
+        expect(files.sort()).toEqual(['characters/a.png', 'chats/c1/log.jsonl']);
+    });
+
+    test('liveRoot can be set to an arbitrary directory (rel-path basis follows liveRoot)', async () => {
+        // Prove rel-path computation pivots on liveRoot, not directories.root.
+        // staging/ contains the files at the same relative layout the
+        // categories resolve to; directories.root points to an unrelated tree
+        // with different contents at those same paths. Pointing the resolvers
+        // at staging while keeping directories.root unrelated would normally
+        // produce wrong-rooted rel paths (../staging/...) and corrupt the
+        // workdir layout — passing liveRoot: staging is what makes the walker
+        // anchor rel paths at staging so they land cleanly under workdir.
+        const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-sync-snap-staging-'));
+        try {
+            for (const sub of ['characters', 'chats', 'worlds', 'groups', 'group chats']) {
+                fs.mkdirSync(path.join(staging, sub), { recursive: true });
+            }
+            // Distinct file contents in each tree so we can detect which one
+            // the walker actually copied.
+            fs.writeFileSync(path.join(liveRoot, 'characters', 'shared.png'), 'live-bytes');
+            fs.writeFileSync(path.join(staging, 'characters', 'shared.png'), 'staging-bytes');
+            fs.writeFileSync(path.join(staging, 'characters', 'only-in-staging.png'), 'only');
+
+            // directories.root → liveRoot (unrelated tree), but resolvers
+            // (characters/chats/…) point at staging so the walker reads from
+            // staging. liveRoot: staging anchors rel paths at staging too.
+            const dirs = fakeDirsAt(staging);
+            dirs.root = liveRoot;
+
+            await snapshotLiveToShadow({
+                userRoot, peerId: 'p',
+                directories: dirs,
+                enabledCategoryIds: ['characters'],
+                liveRoot: staging,
+            });
+
+            const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
+            // Workdir entries must come from staging, not the unrelated live tree.
+            expect(fs.readFileSync(path.join(paths.workdir, 'characters/shared.png'), 'utf8')).toBe('staging-bytes');
+            expect(fs.existsSync(path.join(paths.workdir, 'characters/only-in-staging.png'))).toBe(true);
+            const headOid = await git.resolveRef({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: 'HEAD' });
+            const tracked = await git.listFiles({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: headOid });
+            expect(tracked.sort()).toEqual(['characters/only-in-staging.png', 'characters/shared.png']);
+        } finally {
+            fs.rmSync(staging, { recursive: true, force: true });
+        }
+    });
+
+    test('liveRoot === workdir is a no-op copy for already-staged files (Task 4 SQL-mode flow)', async () => {
+        // SQL-mode flow: the materializer writes user data INTO the shadow
+        // workdir, then snapshotLiveToShadow is called with liveRoot=workdir.
+        // For files already at <workdir>/<rel>, src and dst are the same
+        // path and the same-path guard in syncWorkdirToDesired must skip the
+        // copyFile — observable by inode/mtime stability across the call.
+        // The git commit step still runs as normal so the index/HEAD advance.
+        const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
+        // Pre-place files directly inside the workdir at the layout a
+        // SQL-mode materialize step would produce.
+        fs.mkdirSync(path.join(paths.workdir, 'characters'), { recursive: true });
+        fs.writeFileSync(path.join(paths.workdir, 'characters', 'char_a.png'), 'pre-staged');
+        fs.mkdirSync(path.join(paths.workdir, 'chats', 'char_a'), { recursive: true });
+        fs.writeFileSync(path.join(paths.workdir, 'chats', 'char_a', 'log.jsonl'), '{}');
+
+        const beforeStat = fs.statSync(path.join(paths.workdir, 'characters', 'char_a.png'));
+
+        const dirs = fakeDirsAt(paths.workdir);
+        const result = await snapshotLiveToShadow({
+            userRoot, peerId: 'p',
+            directories: dirs,
+            enabledCategoryIds: ['characters', 'chats'],
+            liveRoot: paths.workdir,
+        });
+
+        // Inode preserved → no copy happened. (On platforms where copyFile
+        // preserves inode, this is still a fair signal because mtime/birth
+        // would still change; copyFile generally overwrites the destination.)
+        const afterStat = fs.statSync(path.join(paths.workdir, 'characters', 'char_a.png'));
+        expect(afterStat.ino).toBe(beforeStat.ino);
+        expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs);
+        expect(afterStat.size).toBe(beforeStat.size);
+        expect(fs.readFileSync(path.join(paths.workdir, 'characters', 'char_a.png'), 'utf8')).toBe('pre-staged');
+
+        // Commit step still produces a real commit (first commit on this shadow).
+        expect(result.committed).toBe(true);
+        expect(typeof result.oid).toBe('string');
+        const headOid = await git.resolveRef({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: 'HEAD' });
+        const tracked = await git.listFiles({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: headOid });
+        expect(tracked.sort()).toEqual(['characters/char_a.png', 'chats/char_a/log.jsonl']);
+    });
+
+    test('database category id is no longer special-cased', async () => {
+        // After Task 3 the `database` category gets no special path
+        // rewriting in shadow.js: its file-kind path is treated like any
+        // other file. The category entry still exists in categories.js until
+        // Task 5, so we pin that with a live `luker-storage.sqlite` present
+        // the standard file branch reads it and the snapshot tracks it
+        // verbatim. Under the OLD code the special case would have looked for
+        // a pre-placed workdir copy (orchestrator VACUUM step) and silently
+        // dropped the entry when absent — which is the behavior this test
+        // asserts is gone.
+        fs.writeFileSync(path.join(liveRoot, 'characters', 'char.png'), 'x');
+        fs.writeFileSync(path.join(liveRoot, 'luker-storage.sqlite'), 'live-db-bytes');
+
+        const result = await snapshotLiveToShadow({
+            userRoot, peerId: 'p',
+            directories: fakeDirsAt(liveRoot),
+            enabledCategoryIds: ['characters', 'database'],
+        });
+
+        expect(result.committed).toBe(true);
+        const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
+        const headOid = await git.resolveRef({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: 'HEAD' });
+        const tracked = await git.listFiles({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: headOid });
+        expect(tracked.sort()).toEqual(['characters/char.png', 'luker-storage.sqlite']);
+        expect(fs.readFileSync(path.join(paths.workdir, 'luker-storage.sqlite'), 'utf8')).toBe('live-db-bytes');
+    });
+
     test('skips symlinks in the live tree (spec §4.3)', async () => {
         // Spec §4.3: symlinks are not part of supported user data. The walker
         // warns and skips them; both the staged index AND the workdir must be
