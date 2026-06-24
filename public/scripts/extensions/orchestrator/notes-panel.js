@@ -23,7 +23,7 @@
  */
 
 import { NOTES_PANEL_TEMPLATE } from './ui-templates.js';
-import { attachNotesFloorState } from './loop-runtime.js';
+import { attachNotesFloorState, onNotesChanged } from './loop-runtime.js';
 import { i18n as t } from './i18n.js';
 
 const MODULE_NAME = 'orchestrator';
@@ -145,6 +145,13 @@ export async function mountNotesPanel(host, context) {
             await rerender();
         });
     }
+
+    // Subscribe to adapter-level write events so an LLM-driven note_open /
+    // note_close (or any other in-process mutation) refreshes the panel
+    // without waiting for the user to switch chats. The bus is module-level
+    // and shared across chats — re-querying the current adapter on every
+    // fire naturally renders whatever the active chat now holds.
+    onNotesChanged(() => { void rerender(); });
 
     await rerender();
 }

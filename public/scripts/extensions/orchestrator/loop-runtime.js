@@ -348,6 +348,61 @@ const NOTES_NAMESPACE = 'luker_orch_loop_notes';
 let notesFloorStatePromise = null;
 
 /**
+ * Module-level change broadcaster for notes writes. The adapter built by
+ * `makeNotesAdapter` invokes `emitNotesChanged()` after any successful
+ * append / status flip / text edit / delete; subscribers registered via
+ * `onNotesChanged` then re-read the adapter to reflect the new state.
+ *
+ * This is the wakeup channel the UI panel (`notes-panel.js`) uses to
+ * rerender after an LLM-driven `note_open` / `note_close` lands mid-run —
+ * without it, the panel only refreshes on chat switch.
+ *
+ * Single-emitter design: every chat funnels through the same notesFloor-
+ * State singleton, so a single bus is enough. Subscribers re-query the
+ * adapter on each fire and naturally render whatever the current chat
+ * holds; a stray fire from an unrelated path is at worst one extra
+ * read of the same data.
+ */
+const notesChangeListeners = new Set();
+
+function emitNotesChanged() {
+    for (const fn of notesChangeListeners) {
+        try {
+            fn();
+        } catch (err) {
+            // A misbehaving subscriber must not break the write path or
+            // starve sibling subscribers. The adapter's write already
+            // committed by the time we get here.
+            console.warn('[orchestrator/loop] notes change listener threw', err);
+        }
+    }
+}
+
+/**
+ * Subscribe to notes-mutation events. The callback fires after every
+ * successful adapter write (append / status flip / text edit / delete);
+ * no-op outcomes (`already_closed`, `not_found`, empty-delete) do NOT
+ * fire so subscribers don't rerender on dud calls.
+ *
+ * @param {() => void} listener
+ * @returns {() => void} unsubscribe handle
+ */
+export function onNotesChanged(listener) {
+    if (typeof listener !== 'function') return () => {};
+    notesChangeListeners.add(listener);
+    return () => { notesChangeListeners.delete(listener); };
+}
+
+/**
+ * @internal — exposed for tests. Drop every registered listener so
+ * cross-test bleed (listener from test A still firing during test B)
+ * cannot mask real bugs.
+ */
+export function __resetNotesChangeListenersForTesting() {
+    notesChangeListeners.clear();
+}
+
+/**
  * Singleton lookup for the `luker_orch_loop_notes` floor-state instance.
  * Mirrors `memory-graph/persistence.js::getFloorStateInstance` — once
  * created, the instance lives for the page session; structural events
@@ -463,6 +518,7 @@ function makeNotesAdapter(fs) {
                 entries.push({ id, text: String(text), status: 'open' });
                 return { ...safe, entries };
             }, { floor: targetFloor }));
+            emitNotesChanged();
             return id;
         },
         async listAcrossFloors() {
@@ -517,6 +573,7 @@ function makeNotesAdapter(fs) {
                 outcome = { ok: true };
                 return { ...safe, entries };
             }));
+            if (outcome.ok) emitNotesChanged();
             return outcome;
         },
         async updateTextById(id, text) {
@@ -536,6 +593,7 @@ function makeNotesAdapter(fs) {
                 outcome = { ok: true };
                 return { ...safe, entries };
             }));
+            if (outcome.ok) emitNotesChanged();
             return outcome;
         },
         async deleteByIds(ids) {
@@ -570,6 +628,7 @@ function makeNotesAdapter(fs) {
             for (const id of requested) {
                 if (!seen.has(id)) missing.push(id);
             }
+            if (removed.length > 0) emitNotesChanged();
             return { removed, missing };
         },
     };
