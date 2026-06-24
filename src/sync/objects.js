@@ -1,29 +1,8 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import git from 'isomorphic-git';
-
-/**
- * Hard cap on object size for wire transfer. Matches spec §5.4: 25 MB per
- * object — comfortably accommodates a large settings.json with headroom, and
- * lets oversized objects fail loudly (with a known error code) rather than
- * silently filling the ODB or the HTTP payload buffer.
- */
-/**
- * Hard cap on a single git object's body size, in bytes.
- *
- * Set to 1 GiB rather than the spec's original 25 MB. The original
- * number was sized for individual user files (the largest realistic was
- * settings.json at ~4 MB, with headroom). The SQLite-mode whole-DB
- * snapshot blows past that — a real `data/default-user` migrated to
- * SQLite is ~250 MB+. Without a cap that fits the SQLite blob, sync is
- * unusable in SQLite mode.
- *
- * The cap is NOT zero (i.e. unlimited): a malformed or hostile peer
- * could otherwise stream gigabytes into the raw-body buffer and OOM
- * the responder. 1 GiB fits any plausible SQLite blob a Luker user
- * would have, and is still bounded by the OS process's address space
- * — Express's `raw()` parser refuses on the way in.
- */
-const MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
 
 /**
  * Read a single git object from the local ODB in a form suitable for the wire.
@@ -40,9 +19,10 @@ const MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
  * cheap (no copy when given a Buffer, view-over-same-ArrayBuffer when given a
  * Uint8Array).
  *
- * Size check happens AFTER read so callers see the actual byte count in the
- * error message; the read itself is already paid for by the time we know the
- * size, and there is no streaming readObject API to short-circuit earlier.
+ * No size cap: isomorphic-git has no streaming readObject API, so the read is
+ * already paid for in RAM by the time we'd check a limit, and the caller has
+ * decided (sync/objects route) that any object the responder is willing to
+ * serve is one the peer must be willing to accept.
  *
  * @param {{ dir: string, gitdir: string, oid: string }} args
  * @returns {Promise<{ oid: string, type: 'blob'|'tree'|'commit'|'tag', body: Buffer }>}
@@ -50,11 +30,6 @@ const MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
 export async function readObjectForWire({ dir, gitdir, oid }) {
     const result = await git.readObject({ fs, dir, gitdir, oid, format: 'content' });
     const body = Buffer.from(result.object);
-    if (body.length > MAX_OBJECT_BYTES) {
-        const err = new Error(`Object ${oid} exceeds wire size limit (${body.length} > ${MAX_OBJECT_BYTES})`);
-        err.code = 'OBJECT_TOO_LARGE';
-        throw err;
-    }
     return { oid, type: result.type, body };
 }
 
@@ -62,10 +37,9 @@ export async function readObjectForWire({ dir, gitdir, oid }) {
  * Write a wire-format object into the local ODB and verify the resulting oid
  * matches what the sender claimed.
  *
- * Size check runs BEFORE `git.writeObject` so an oversized payload never
- * touches disk — important because isomorphic-git has no `gc`, so any object
- * we land that turns out to be junk would persist forever. A rejected write
- * leaves the ODB exactly as it was.
+ * Buffer variant — used by `fetchMissingObjects`, which already holds the
+ * fetched body in memory as a Buffer (parsed from the responder's HTTP
+ * response by the transport layer).
  *
  * The post-write oid comparison is the integrity gate. `git.writeObject`
  * computes the oid from the object's wrapped form (type-prefix + length +
@@ -76,11 +50,6 @@ export async function readObjectForWire({ dir, gitdir, oid }) {
  * @param {{ dir: string, gitdir: string, oid: string, type: string, body: Buffer }} args
  */
 export async function writeObjectFromWire({ dir, gitdir, oid, type, body }) {
-    if (body.length > MAX_OBJECT_BYTES) {
-        const err = new Error(`Object ${oid} exceeds wire size limit (${body.length} > ${MAX_OBJECT_BYTES})`);
-        err.code = 'OBJECT_TOO_LARGE';
-        throw err;
-    }
     const writtenOid = await git.writeObject({
         fs, dir, gitdir,
         type,
@@ -89,6 +58,73 @@ export async function writeObjectFromWire({ dir, gitdir, oid, type, body }) {
     });
     if (writtenOid !== oid) {
         throw new Error(`Object oid mismatch on receive: expected ${oid}, got ${writtenOid}`);
+    }
+}
+
+/**
+ * Streaming variant of `writeObjectFromWire` for the HTTP receive path.
+ *
+ * The Express request body is piped to a tmp file under
+ * `<gitdir>/objects/incoming/` so the request bytes are NEVER held in
+ * process RAM as a single buffer — back-pressure flows through the pipe
+ * and the kernel pages the file in and out as `git.writeObject` reads it.
+ * This is the safety net that replaces the old `MAX_OBJECT_BYTES` cap: a
+ * hostile or buggy peer streaming gigabytes still cannot grow the
+ * responder's heap past what isomorphic-git itself needs to hash and
+ * write the object once.
+ *
+ * Why a tmp file at all (vs `request.pipe(into-writeObject)`):
+ * isomorphic-git's `git.writeObject` has no streaming API — it consumes a
+ * single `object: Buffer`. The tmp file is the smallest available
+ * abstraction that lets us accept the body without buffering it in RAM
+ * during transfer; the buffer materializes exactly once, inside
+ * `writeObject`'s sha1+deflate path, which is where it would have lived
+ * regardless of how the bytes arrived.
+ *
+ * On success the tmp file is unlinked (the object is already persisted to
+ * the ODB by `writeObject`'s atomic rename). On any failure path
+ * (pipeline error, oid mismatch, writeObject throw) the tmp file is also
+ * unlinked, so a failed receive leaves no orphans under `incoming/`.
+ *
+ * `incoming/` is created lazily via `mkdir({recursive:true})` — older
+ * shadow repos initialized before this code shipped won't have the
+ * directory pre-created, and creating it on every call is cheap (a single
+ * stat-and-noop after the first hit).
+ *
+ * @param {{
+ *   dir: string,
+ *   gitdir: string,
+ *   oid: string,
+ *   type: string,
+ *   stream: import('node:stream').Readable,
+ * }} args
+ */
+export async function writeObjectFromWireStream({ dir, gitdir, oid, type, stream }) {
+    const incomingDir = path.join(gitdir, 'objects', 'incoming');
+    await fs.promises.mkdir(incomingDir, { recursive: true });
+    const tmpPath = path.join(incomingDir, crypto.randomBytes(16).toString('hex'));
+
+    let cleanedUp = false;
+    const cleanup = async () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        try { await fs.promises.unlink(tmpPath); } catch { /* best-effort */ }
+    };
+
+    try {
+        await pipeline(stream, fs.createWriteStream(tmpPath));
+        const body = await fs.promises.readFile(tmpPath);
+        const writtenOid = await git.writeObject({
+            fs, dir, gitdir,
+            type,
+            object: body,
+            format: 'content',
+        });
+        if (writtenOid !== oid) {
+            throw new Error(`Object oid mismatch on receive: expected ${oid}, got ${writtenOid}`);
+        }
+    } finally {
+        await cleanup();
     }
 }
 

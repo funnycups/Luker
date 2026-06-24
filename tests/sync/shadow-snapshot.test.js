@@ -271,31 +271,31 @@ describe('snapshotLiveToShadow', () => {
         expect(tracked.sort()).toEqual(['characters/char_a.png', 'chats/char_a/log.jsonl']);
     });
 
-    test('database category id is no longer special-cased', async () => {
-        // After Task 3 the `database` category gets no special path
-        // rewriting in shadow.js: its file-kind path is treated like any
-        // other file. The category entry still exists in categories.js until
-        // Task 5, so we pin that with a live `luker-storage.sqlite` present
-        // the standard file branch reads it and the snapshot tracks it
-        // verbatim. Under the OLD code the special case would have looked for
-        // a pre-placed workdir copy (orchestrator VACUUM step) and silently
-        // dropped the entry when absent — which is the behavior this test
-        // asserts is gone.
+    test('unknown category ids in enabledCategoryIds are silently ignored', async () => {
+        // After Task 5 the `database` category is gone — but the snapshot
+        // walker has always filtered enabled ids against SYNC_CATEGORIES,
+        // so unknown ids just drop out of the iteration. This pins that
+        // contract: passing a stale id alongside a real one still produces
+        // a clean snapshot of the real one, with no commit-time crash and
+        // no surprise tracked entries for the stale id's would-be paths.
         fs.writeFileSync(path.join(liveRoot, 'characters', 'char.png'), 'x');
+        // Place a file at the path the now-removed `database` category used
+        // to resolve to. It must NOT be picked up — categories aren't
+        // implicitly inferred from filenames.
         fs.writeFileSync(path.join(liveRoot, 'luker-storage.sqlite'), 'live-db-bytes');
 
         const result = await snapshotLiveToShadow({
             userRoot, peerId: 'p',
             directories: fakeDirsAt(liveRoot),
-            enabledCategoryIds: ['characters', 'database'],
+            enabledCategoryIds: ['characters', 'database', 'does-not-exist'],
         });
 
         expect(result.committed).toBe(true);
         const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
         const headOid = await git.resolveRef({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: 'HEAD' });
         const tracked = await git.listFiles({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: headOid });
-        expect(tracked.sort()).toEqual(['characters/char.png', 'luker-storage.sqlite']);
-        expect(fs.readFileSync(path.join(paths.workdir, 'luker-storage.sqlite'), 'utf8')).toBe('live-db-bytes');
+        expect(tracked).toEqual(['characters/char.png']);
+        expect(fs.existsSync(path.join(paths.workdir, 'luker-storage.sqlite'))).toBe(false);
     });
 
     test('skips symlinks in the live tree (spec §4.3)', async () => {

@@ -2,9 +2,16 @@ import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import git from 'isomorphic-git';
 import { ensureShadowRepo } from '../../src/sync/shadow.js';
-import { readObjectForWire, writeObjectFromWire, fetchMissingObjects, hasObjectLocally } from '../../src/sync/objects.js';
+import {
+    readObjectForWire,
+    writeObjectFromWire,
+    writeObjectFromWireStream,
+    fetchMissingObjects,
+    hasObjectLocally,
+} from '../../src/sync/objects.js';
 
 describe('object wire transfer', () => {
     let aRoot, bRoot;
@@ -123,5 +130,63 @@ describe('object wire transfer', () => {
             headOid: requestedOid,
             fetchObject: hostileFetch,
         })).rejects.toThrow(/oid mismatch/);
+    });
+
+    test('writeObjectFromWireStream lands a blob from a Readable and the oid is reachable', async () => {
+        // Real shadow repo on B; synthesize an object on A so we have a known
+        // canonical oid to claim. Stream A's body through B's streaming
+        // receiver, then read the just-written object out of B's ODB and
+        // assert byte equality plus correct type — exercises the full
+        // pipe → tmp file → git.writeObject → oid-check happy path that the
+        // HTTP route uses in production.
+        const a = await ensureShadowRepo({ userRoot: aRoot, peerId: 'p' });
+        const b = await ensureShadowRepo({ userRoot: bRoot, peerId: 'p' });
+
+        const payload = Buffer.from('stream-me-without-buffering', 'utf8');
+        const oid = await git.writeObject({
+            fs, dir: a.workdir, gitdir: a.gitDir,
+            type: 'blob', object: payload, format: 'content',
+        });
+
+        await writeObjectFromWireStream({
+            dir: b.workdir,
+            gitdir: b.gitDir,
+            oid,
+            type: 'blob',
+            stream: Readable.from([payload]),
+        });
+
+        const round = await git.readObject({ fs, dir: b.workdir, gitdir: b.gitDir, oid, format: 'content' });
+        expect(round.type).toBe('blob');
+        expect(Buffer.from(round.object).equals(payload)).toBe(true);
+
+        // The tmp file under <gitdir>/objects/incoming/ should be unlinked
+        // on the success path — leaving it would leak after every receive.
+        const incoming = path.join(b.gitDir, 'objects', 'incoming');
+        const leftover = fs.existsSync(incoming) ? fs.readdirSync(incoming) : [];
+        expect(leftover).toEqual([]);
+    });
+
+    test('writeObjectFromWireStream rejects when the streamed bytes hash to a different oid', async () => {
+        // Hostile/buggy sender: claims an oid that the bytes don't compute to.
+        // The receiver's post-write oid comparison must catch this and the
+        // tmp file must still be cleaned up so a failed receive can't fill
+        // <gitdir>/objects/incoming/ with abandoned bodies.
+        const b = await ensureShadowRepo({ userRoot: bRoot, peerId: 'p' });
+
+        const claimedOid = '0'.repeat(40);
+        const payload = Buffer.from('mismatched-payload', 'utf8');
+
+        await expect(writeObjectFromWireStream({
+            dir: b.workdir,
+            gitdir: b.gitDir,
+            oid: claimedOid,
+            type: 'blob',
+            stream: Readable.from([payload]),
+        })).rejects.toThrow(/oid mismatch/);
+
+        const incoming = path.join(b.gitDir, 'objects', 'incoming');
+        const leftover = fs.existsSync(incoming) ? fs.readdirSync(incoming) : [];
+        expect(leftover).toEqual([]);
     });
 });

@@ -1,13 +1,14 @@
 /**
- * Plan Task 12, spec §6.3 — `/session/offer` must refuse with HTTP 412
- * when the configured storage engine is `mysql` or `postgres`.
+ * Storage-mode regression guard for `/session/offer` and `/availability`.
  *
- * Rationale: those modes keep the bulk of user data on an external
- * database the Luker process doesn't own. File-level sync would only
- * round-trip the metadata sidecars and silently miss everything else, so
- * we make the unsupported state explicit at the earliest point (the
- * bootstrap endpoint) rather than letting the user discover it after a
- * long snapshot copy.
+ * Earlier revisions of LAN Sync gated `/session/offer`, `/pull`,
+ * `/pair/start`, `/pair/accept`, `/peers/:peerId/sync` with a 412 when the
+ * storage engine was `mysql` or `postgres`, and reported the same modes as
+ * `available: false` on `/availability`. Once the orchestrator started
+ * routing SQL-engine data through the per-record materializer, those gates
+ * became dead weight. This file pins the new contract — every storage
+ * engine is accepted — so a future regression that re-introduces a
+ * storage-mode gate fails loudly here instead of silently shipping.
  *
  * Test architecture: rather than spinning up a real MySQL/Postgres
  * (`makeEndpointHarness` skips those modes when the corresponding
@@ -16,8 +17,8 @@
  * `jest.unstable_mockModule` and stand up a minimal Express app whose
  * `req.user` is populated by a small inline middleware. The router under
  * test (`src/endpoints/sync.js`) imports `getStorageEngine` from the
- * same `src/storage/index.js` module path the mock replaces, so the gate
- * sees the stubbed `kind` without touching any database.
+ * same `src/storage/index.js` module path the mock replaces, so the
+ * router sees the stubbed `kind` without touching any database.
  *
  * The mock is module-level (top of file, before any imports of the
  * router) because `jest.unstable_mockModule` only intercepts dynamic
@@ -41,11 +42,6 @@ jest.unstable_mockModule('../../../src/storage/index.js', () => ({
         kind: currentEngineKind,
         withTransaction: async (_handle, fn) => fn({}),
     }),
-    // The endpoints under test only ever touch `getStorageEngine` and
-    // `getUserDirectories` (no repos), so we don't need to re-export the
-    // repo getters. The session/offer handler reads exclusively from
-    // `req.user.directories.root`, which the inline middleware below
-    // supplies — no `getUserDirectories(handle)` call path is hit.
 }));
 
 /** @type {import('express').Router} */
@@ -69,89 +65,30 @@ function buildApp({ handle = 'alice', dataRoot = '/tmp/luker-storage-gate-not-re
     return app;
 }
 
-describe('sync /session/offer storage-mode gate', () => {
-    test('returns 412 when storage mode is mysql', async () => {
-        currentEngineKind = 'mysql';
-        const app = buildApp();
+describe('sync /session/offer accepts every storage mode', () => {
+    for (const kind of ['fs', 'sqlite', 'mysql', 'postgres']) {
+        test(`issues a token when storage mode is ${kind}`, async () => {
+            currentEngineKind = kind;
+            const app = buildApp();
 
-        const r = await request(app)
-            .post('/api/sync/v1/session/offer')
-            .send({ peerId: 'alice@phone', label: 'Phone', categories: [] });
+            const r = await request(app)
+                .post('/api/sync/v1/session/offer')
+                .send({ peerId: 'alice@phone', label: 'Phone', categories: [] });
 
-        expect(r.status).toBe(412);
-        expect(r.body.error).toMatch(/storage mode mysql/i);
-        expect(r.body.token).toBeUndefined();
-    });
-
-    test('returns 412 when storage mode is postgres', async () => {
-        currentEngineKind = 'postgres';
-        const app = buildApp();
-
-        const r = await request(app)
-            .post('/api/sync/v1/session/offer')
-            .send({ peerId: 'alice@phone', label: 'Phone', categories: [] });
-
-        expect(r.status).toBe(412);
-        expect(r.body.error).toMatch(/storage mode postgres/i);
-    });
-
-    test('still issues a token when storage mode is fs', async () => {
-        // Sanity that the gate is the only reason mysql/postgres fail —
-        // not, say, a missing `req.user` shape that would also reject fs.
-        currentEngineKind = 'fs';
-        const app = buildApp();
-
-        const r = await request(app)
-            .post('/api/sync/v1/session/offer')
-            .send({ peerId: 'alice@phone', label: 'Phone', categories: [] });
-
-        expect(r.status).toBe(200);
-        expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
-    });
-
-    test('still issues a token when storage mode is sqlite', async () => {
-        currentEngineKind = 'sqlite';
-        const app = buildApp();
-
-        const r = await request(app)
-            .post('/api/sync/v1/session/offer')
-            .send({ peerId: 'alice@phone', label: 'Phone', categories: [] });
-
-        expect(r.status).toBe(200);
-        expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
-    });
+            expect(r.status).toBe(200);
+            expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
+        });
+    }
 });
 
-describe('sync /availability storage-mode gate', () => {
-    test('reports unavailable with reason=storage_mode on mysql', async () => {
-        currentEngineKind = 'mysql';
-        const app = buildApp();
-        const r = await request(app).get('/api/sync/v1/availability');
-        expect(r.status).toBe(200);
-        expect(r.body).toEqual({ available: false, reason: 'storage_mode', mode: 'mysql' });
-    });
-
-    test('reports unavailable with reason=storage_mode on postgres', async () => {
-        currentEngineKind = 'postgres';
-        const app = buildApp();
-        const r = await request(app).get('/api/sync/v1/availability');
-        expect(r.status).toBe(200);
-        expect(r.body).toEqual({ available: false, reason: 'storage_mode', mode: 'postgres' });
-    });
-
-    test('reports available on fs', async () => {
-        currentEngineKind = 'fs';
-        const app = buildApp();
-        const r = await request(app).get('/api/sync/v1/availability');
-        expect(r.status).toBe(200);
-        expect(r.body).toEqual({ available: true });
-    });
-
-    test('reports available on sqlite — sync IS supported in sqlite mode via the whole-DB blob category', async () => {
-        currentEngineKind = 'sqlite';
-        const app = buildApp();
-        const r = await request(app).get('/api/sync/v1/availability');
-        expect(r.status).toBe(200);
-        expect(r.body).toEqual({ available: true });
-    });
+describe('sync /availability is always available', () => {
+    for (const kind of ['fs', 'sqlite', 'mysql', 'postgres']) {
+        test(`reports available on ${kind}`, async () => {
+            currentEngineKind = kind;
+            const app = buildApp();
+            const r = await request(app).get('/api/sync/v1/availability');
+            expect(r.status).toBe(200);
+            expect(r.body).toEqual({ available: true });
+        });
+    }
 });

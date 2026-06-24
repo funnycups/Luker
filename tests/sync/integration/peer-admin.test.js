@@ -99,7 +99,7 @@ describe.each(FS_HARNESSES)('LAN Sync admin endpoints on $name', ({ mode }) => {
                 expect(typeof cat.id).toBe('string');
                 expect(typeof cat.displayKey).toBe('string');
                 expect(typeof cat.descriptionKey).toBe('string');
-                expect(['file', 'whole-db', 'none']).toContain(cat.conflictMode);
+                expect(['file', 'none']).toContain(cat.conflictMode);
                 expect(['on', 'opt-in', 'never']).toContain(cat.syncDefault);
                 // Resolver functions are stripped — paths must not leak.
                 expect(cat.paths).toBeUndefined();

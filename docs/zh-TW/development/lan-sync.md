@@ -30,7 +30,7 @@ data/<handle>/.sync/
 | `POST` | `/session/offer`         | Basic         | 回應方鑄造工作階段 token，並把自身活動資料快照寫入影子工作目錄；回傳 `{ url, token, expiresAt, peerId, label }` |
 | `GET`  | `/session/manifest`      | 工作階段 token | 發起方取得 `{ handle, peerId, expiresAt, headOid }` |
 | `GET`  | `/session/object/:oid`   | 工作階段 token | 發起方取得單個 git 物件；body 是原始內容，`X-Object-Type` 與 `X-Object-Oid` 請求標頭攜帶中繼資料 |
-| `POST` | `/session/object`        | 工作階段 token | 發起方上傳單個 git 物件；`X-Object-Oid` 與 `X-Object-Type` 請求標頭加原始 body |
+| `POST` | `/session/object`        | 工作階段 token | 發起方上傳單個 git 物件；`X-Object-Oid` 與 `X-Object-Type` 請求標頭加原始 body，請求主體直接從請求串流寫入 `<gitdir>/objects/incoming/` 下的暫存檔（不會把整個 body 快取到記憶體） |
 | `POST` | `/session/ref`           | 工作階段 token | 發起方以 compare-and-swap 方式原子更新 ref（不相符時回傳 409，帶 `currentOid`）；當 ref 為 `refs/heads/main` 時，回應方會執行一次尾部反向同步，把變更寫回自己的活動樹 |
 | `POST` | `/session/close`         | 工作階段 token | 立即作廢 token |
 | `POST` | `/pull`                  | Basic         | 發起方入口：驅動針對某個對端 offer 的完整同步流程 |
@@ -47,17 +47,17 @@ data/<handle>/.sync/
 
 ### 線格式約束
 
-- **物件大小上限**：`MAX_OBJECT_BYTES = 1024 * 1024 * 1024`（1 GiB）。兩端都強制——`src/sync/objects.js` 在讀寫時拒絕；`/session/object` 設定 `express.raw({ limit: MAX_OBJECT_BYTES })`，讓 Express 在請求主體到達 handler 之前就丟棄超大酬載。超限會以 `OBJECT_TOO_LARGE` 拋出，對應 HTTP 413。最初是 25 MB（按單個使用者檔案設計，settings.json 大約 4 MB 是最大情形），但 SQLite 模式下整個資料庫 blob 可達數百 MB——1 GiB 足以容納任何合理的 SQLite 快照，同時仍約束接收端記憶體。
-- **物件完整性**：`writeObjectFromWire` 會對 body 重新做雜湊並和傳入的 `oid` 比對，不一致時在物件進入任何 ref 之前拋出；`fetchMissingObjects` 把**請求的** oid（而不是回應方在 `X-Object-Oid` 中宣稱的 oid）傳給寫入函式，這樣即便回應方關於某物件身分撒謊，也無法汙染本地資料庫。
+- **物件大小**：線格式上沒有上限。`POST /session/object` 不掛任何 body parser；`writeObjectFromWireStream` 把請求主體管線寫入 `<gitdir>/objects/incoming/` 下的暫存檔，再把檔案內容交給 `git.writeObject`。傳輸期間回應方的堆積記憶體不會隨 body 大小增長——背壓透過管線傳遞，核心依需求把暫存檔分頁換入換出。暫存檔在成功和失敗路徑上都會被刪除。
+- **物件完整性**：`writeObjectFromWire`（緩衝版本）與 `writeObjectFromWireStream`（串流版本）都會對 body 重新做雜湊並和傳入的 `oid` 比對，不一致時在物件進入任何 ref 之前拋出，串流版本還會在失敗路徑上刪除暫存檔；`fetchMissingObjects` 把**請求的** oid（而不是回應方在 `X-Object-Oid` 中宣稱的 oid）傳給寫入函式，這樣即便回應方關於某物件身分撒謊，也無法汙染本地資料庫。
 - **對端抓取逾時**：協調器發往對端的 `fetch` 都帶 `AbortSignal.timeout(30_000)`。逾時會變成一個型別化的 `PEER_TIMEOUT` 錯誤，`/pull` 將其對應為 HTTP 504。沒有這層防護，對端在同步過程中走出 Wi-Fi 覆蓋時，會因 OS 預設 TCP 逾時（數分鐘）卡住整個 per-key 同步佇列。
 - **`/session/offer` body 上限**：`express.json({ limit: '16kb' })`——offer 酬載只包含 peerId、label 和 categories 陣列，16 KB 足夠寬裕。
 - **`/pull` body 上限**：`express.json({ limit: '1mb' })`——大量檔案衝突時 resolutions 物件會變大，1 MB 留足空間。
 
 ## 分類註冊表
 
-`src/sync/categories.js` 匯出唯一的 `SYNC_CATEGORIES` 陣列。每個條目把一個 id 對應到一組路徑（透過 `UserDirectoryList` 存取器解析），並宣告預設值（`on` / `opt-in` / `never`）與衝突模式（`file` / `whole-db` / `none`）。所有 UI 標籤和警告都是 i18n key，執行時絕不內嵌英文字串。
+`src/sync/categories.js` 匯出唯一的 `SYNC_CATEGORIES` 陣列。每個條目把一個 id 對應到一組路徑（透過 `UserDirectoryList` 存取器解析），並宣告預設值（`on` / `opt-in` / `never`）與衝突模式（`file` / `none`）。所有 UI 標籤和警告都是 i18n key，執行時絕不內嵌英文字串。
 
-目前註冊表涵蓋：`characters`、`chats`、`worlds`、`card-apps`、`skills`、四個預設家族（`openai-presets`、`novelai-presets`、`koboldai-presets`、`textgen-presets`）、四個範本家族（`instruct`、`context`、`sysprompt`、`reasoning`）、`themes`、`movingUI`、`quickreplies`、`assets`、`backgrounds`、`avatars`、`user-files`、`user-images`、`image-metadata`、`vectors`、`stats`、`settings`、`secrets`、`extensions`，以及 `database`（SQLite 模式下的整庫 blob）。
+目前註冊表涵蓋：`characters`、`chats`、`worlds`、`card-apps`、`skills`、四個預設家族（`openai-presets`、`novelai-presets`、`koboldai-presets`、`textgen-presets`）、四個範本家族（`instruct`、`context`、`sysprompt`、`reasoning`）、`themes`、`movingUI`、`quickreplies`、`assets`、`backgrounds`、`avatars`、`user-files`、`user-images`、`image-metadata`、`vectors`、`stats`、`settings`、`secrets`、`extensions`。
 
 新增一個分類：
 
@@ -67,11 +67,12 @@ data/<handle>/.sync/
 
 ## 儲存模式處理
 
-- **`fs`**：把所有啟用分類作為檔案做完整同步。影子工作目錄的佈局與活動樹一一對應（相對於 `<userRoot>`），反向同步的寫入都走 `write-file-atomic`，當機時舊檔案保持完好。
-- **`sqlite`**：活動資料庫（`<userRoot>/luker-storage.sqlite`）在使用中無法被原始複製。在快照步驟之前，協調器呼叫 `snapshotSqliteIntoShadowIfNeeded` 執行 `VACUUM INTO <shadow.workdir>/luker-storage.sqlite`，把一致快照暫存到影子工作目錄；標準的檔案巡訪器隨後透過 `database` 分類提交這個暫存 blob。每次反向同步之後，`closeSqliteEngineHandleIfNeeded` 透過 `engine.closeHandle(handle)` 關掉該 handle 快取的引擎連線——`write-file-atomic` 的 rename 會讓已開啟的 inode 指向(現已被 unlink 的)舊檔案，沒有這次關閉，下一次儲存呼叫會在 POSIX 上悄悄讀到陳舊資料，在 Windows 上則會直接報錯；重新開啟透過 `SqliteEngine._dbFor` 在下次呼叫時惰性完成。
-- **`mysql`** / **`postgres`**：`/session/offer` 和 `/pull` 都回傳 HTTP 412（`Sync is unavailable in storage mode <kind>`）。引擎回報這兩種模式時，UI 必須隱藏同步控制項。
+工作目錄是通用交換格式。已經把每使用者資料落到磁碟的引擎可以略過物化；把資料存到資料庫的引擎會在快照之前把紀錄投影到工作目錄，反向同步之後再讀回。從同步流水線的視角看，每種引擎都只是檔案。
 
-`snapshotSqliteIntoShadowIfNeeded` 與 `closeSqliteEngineHandleIfNeeded` 都從 `src/sync/orchestrator.js` 匯出，供 `src/endpoints/sync.js` 在 `/session/offer` 和 `/session/ref` 回應方反向同步處共用同一套門控。門控條件是「引擎為 sqlite 且 `database` 分類已啟用且相關 DB 檔案存在」，落在這之外兩個函式都是 no-op。
+- **`fs`**：每使用者資料已經位於 `<userRoot>` 下與工作目錄相對路徑一一對應的位置。`snapshotLiveToShadow` 直接走訪活動樹並複製到影子工作目錄；反向同步的寫入都走 `write-file-atomic`，當機時舊檔案保持完好。
+- **`sqlite`** / **`mysql`** / **`postgres`**：每使用者資料（聊天、預設、世界書、命名文件、設定、統計、群組）儲存在引擎內。在快照之前，協調器呼叫 `materializeUserDataIntoWorkdir`（`src/sync/materialize.js`），透過 repo 層讀取每個啟用分類，並把每筆紀錄作為檔案寫入 `<workdir>/<expected-rel-path>`，佈局與 FS 引擎完全一致。`snapshotLiveToShadow` 隨後透過傳入 `liveRoot: shadow.workdir` 把工作目錄當作活動樹來走訪。反向同步之後，`dematerializeWorkdirIntoUserData` 讀回（可能已合併的）工作目錄狀態，並透過 repo 層逐筆儲存。在每種引擎中都落到磁碟的分類（characters、avatars、assets……）會略過物化器，由快照走訪器直接處理。
+
+在所有引擎裡，每個分類的衝突模式都是 `file`——聊天對聊天、世界書對世界書、按紀錄處理——所以合併 UI 與解決語意並不取決於儲存引擎。
 
 ## 衝突解決流程
 
@@ -117,7 +118,7 @@ data/<handle>/.sync/
 
 配對到同一使用者的兩個不同對端（筆電 + 手機）使用不同的 `(userRoot, peerId)` 鍵，因此可以平行對同一使用者的活動樹執行反向同步。`write-file-atomic` 保證單檔案寫一致性；該情境下的跨檔案一致性由使用者自己負責（不要並行跑兩個同步）。按 spec §4.4，一把 per-userRoot 的活動寫鎖才能徹底涵蓋這種情形，但 v1 暫不引入這麼多複雜度。
 
-Spec §4.4 還描述了一個全應用範圍的 `SYNC_IN_PROGRESS` 閘門，在同步視窗期間對使用者主動觸發的寫入端點（`/api/chats/save`、`/api/settings/save`、`/api/presets/save` 等）統一回傳 HTTP 409。這個閘門防止活動資料樹在協調器執行 snapshot → merge → reconcile 期間被使用者寫入移動；否則會出現「同步期間編輯的內容憑空消失」（被 snapshot 擷取，又被 reconcile 覆蓋）和 SQLite 舊 inode 失效（`closeHandle` 換檔案後 engine 控點指向舊的、已 unlink 的檔案）這兩種失敗模式。
+Spec §4.4 還描述了一個全應用範圍的 `SYNC_IN_PROGRESS` 閘門，在同步視窗期間對使用者主動觸發的寫入端點（`/api/chats/save`、`/api/settings/save`、`/api/presets/save` 等）統一回傳 HTTP 409。這個閘門防止活動資料樹在協調器執行 snapshot → merge → reconcile 期間被使用者寫入移動；否則會出現「同步期間編輯的內容憑空消失」（被 snapshot 擷取，又被 reconcile 覆蓋）這種失敗模式，而且在 SQL 引擎模式下，物化與反物化之間若有使用者寫入落地，工作目錄與引擎紀錄集會出現不一致。
 
 閘門位於 `src/sync/in-progress-gate.js`，在 `src/server-main.js` 中掛載於 `requireLoginMiddleware` 之後。它是**按 handle 隔離**的：handle `A` 的同步進行中，不會阻塞 handle `B` 的寫入。協調器在 `queueOnKey` 回呼內部標記 `(handle, peerId)` 進行中（讓佇列中**等待**的拉取不會預先 409 使用者寫入），並在 `try/finally` 中清除（讓拋出的錯誤、對端逾時、待解決衝突的提前回傳都能釋放閘門）。三個協調器入口點參與了這一邏輯：`runPull`、`undoLastSync` 以及對端 `/session/ref` 觸發的回應方 reconcile。
 
@@ -139,11 +140,11 @@ Spec §4.4 還描述了一個全應用範圍的 `SYNC_IN_PROGRESS` 閘門，在�
 - `src/sync/categories.js`——同步資料分類註冊表
 - `src/sync/session.js`——token 快取（沿用 `src/lan-migration.js` 的模式）
 - `src/sync/shadow.js`——影子路徑、`ensureShadowRepo`、`snapshotLiveToShadow`、`reconcileShadowToLive`
-- `src/sync/objects.js`——線格式編解碼（`readObjectForWire`、`writeObjectFromWire`）與物件圖走訪（`fetchMissingObjects`、`hasObjectLocally`）
+- `src/sync/objects.js`——線格式編解碼（`readObjectForWire`、`writeObjectFromWire`、`writeObjectFromWireStream`）與物件圖走訪（`fetchMissingObjects`、`hasObjectLocally`）
 - `src/sync/conflicts.js`——`attemptMerge` 與 `applyResolutions`
-- `src/sync/sqlite-snapshot.js`——`snapshotSqliteToFile`（`VACUUM INTO`）與 `replaceSqliteFile`
+- `src/sync/materialize.js`——`materializeUserDataIntoWorkdir` / `dematerializeWorkdirIntoUserData`，服務於 sqlite/mysql/postgres 引擎（fs 模式下為 no-op）
 - `src/sync/state.js`——`state.json` 讀寫輔助函式
-- `src/sync/orchestrator.js`——`runPull`、`undoLastSync`、`queueOnKey`、`isAncestor`，以及 SQLite 門控輔助函式
+- `src/sync/orchestrator.js`——`runPull`、`undoLastSync`、`queueOnKey`、`isAncestor`
 - `src/sync/in-progress-gate.js`——按 handle 隔離的 `SYNC_IN_PROGRESS` 註冊表與 Express 中介軟體（spec §4.4）
 - `src/endpoints/sync.js`——`/api/sync/v1/*` 的 HTTP 路由
 - `src/middleware/basicAuth.js`——`SYNC_SESSION_PATH_PATTERN`，用於驗證繞過

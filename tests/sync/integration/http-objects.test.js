@@ -144,28 +144,53 @@ describe.each(FS_HARNESSES)('sync HTTP object transfer on $name', ({ mode }) => 
         expect(r.status).toBe(400);
     });
 
-    test('POST /session/object accepts payloads well under the configured limit', async () => {
-        // The previous version of this test allocated a >25 MB buffer
-        // to verify the cap was enforced. The cap is now 1 GiB (SQLite
-        // whole-DB blobs need the room) and allocating 1 GiB just to
-        // verify a 413 wastes test resources. Instead we positively
-        // assert that a comfortably-sized payload (a few MB, larger
-        // than any individual chat or world file) goes through. The
-        // hard-cap enforcement still lives in `express.raw({limit})`
-        // — whose behavior is well-trodden Express territory.
-        const validPayload = Buffer.from('SQLite format 3\0').toString() + 'x'.repeat(4 * 1024 * 1024);
-        const r = await request(harness.app)
+    test('POST /session/object then GET /session/object/:oid round-trips a multi-MB blob', async () => {
+        // Positive end-to-end streaming check. A few-MB blob is larger than
+        // any individual chat or world file (so we're past the territory
+        // where Express's default in-memory body handling would have
+        // sufficed) and small enough to keep CI fast. The body flows
+        // request body → `writeObjectFromWireStream`'s tmp file under
+        // `<gitdir>/objects/incoming/` → isomorphic-git's hash+deflate;
+        // the GET reads it back via `readObjectForWire` and writes the
+        // raw bytes to the response. Asserting byte equality on both
+        // ends proves the wire path actually moves the full payload
+        // without any silent truncation or buffering surprises.
+        const payload = Buffer.alloc(4 * 1024 * 1024, 'a');
+        const payloadOid = await git.writeObject({
+            fs, dir: shadow.workdir, gitdir: shadow.gitDir,
+            type: 'blob', object: payload, format: 'content',
+        });
+
+        const peerBToken = createSyncSession({
+            handle: harness.handle,
+            peerId: 'alice@laptop',
+            userRoot: harness.dirs.root,
+        }).token;
+        await ensureShadowRepo({ userRoot: harness.dirs.root, peerId: 'alice@laptop' });
+
+        const post = await request(harness.app)
             .post('/api/sync/v1/session/object')
-            .set('Authorization', `Bearer ${token}`)
+            .set('Authorization', `Bearer ${peerBToken}`)
             .set('Content-Type', 'application/octet-stream')
             .set('X-Object-Type', 'blob')
-            .set('X-Object-Oid', oid)
-            .send(Buffer.from(validPayload));
-        // The handler will reject with 400 (oid mismatch — the body
-        // does not hash to the supplied oid) but NOT 413 (body fits).
-        // We assert the cap path didn't fire, not that the upload
-        // succeeded semantically.
-        expect(r.status).not.toBe(413);
+            .set('X-Object-Oid', payloadOid)
+            .send(payload);
+        expect(post.status).toBe(200);
+        expect(post.body).toEqual(expect.objectContaining({ oid: payloadOid }));
+
+        const got = await request(harness.app)
+            .get(`/api/sync/v1/session/object/${payloadOid}`)
+            .set('Authorization', `Bearer ${peerBToken}`)
+            .buffer(true)
+            .parse((res, cb) => {
+                const chunks = [];
+                res.on('data', c => chunks.push(c));
+                res.on('end', () => cb(null, Buffer.concat(chunks)));
+            });
+        expect(got.status).toBe(200);
+        expect(got.headers['x-object-type']).toBe('blob');
+        expect(got.headers['x-object-oid']).toBe(payloadOid);
+        expect(got.body.equals(payload)).toBe(true);
     });
 
     test('POST /session/ref CAS-updates the ref when expectedOid matches current', async () => {

@@ -22,7 +22,7 @@ describe('SYNC_CATEGORIES registry', () => {
             expect(typeof cat.descriptionKey).toBe('string');
             expect(Array.isArray(cat.paths)).toBe(true);
             expect(cat.paths.length).toBeGreaterThan(0);
-            expect(['file', 'whole-db', 'none']).toContain(cat.conflictMode);
+            expect(['file', 'none']).toContain(cat.conflictMode);
             expect(['on', 'opt-in', 'never']).toContain(cat.syncDefault);
             expect(Array.isArray(cat.warnings)).toBe(true);
         }

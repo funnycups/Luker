@@ -111,8 +111,11 @@ async function loadPeers() {
 
 /**
  * Probe whether LAN Sync is available on this server. Returns the raw
- * `{available, reason?, mode?}` shape from `/availability` so the caller
- * can render mode-specific messages.
+ * `{available, reason?}` shape from `/availability`; today every storage
+ * mode is supported and the route returns `{available: true}` — the
+ * unreachable branch below covers the "server isn't responding" case so
+ * the caller can render an honest error instead of crashing on a missing
+ * field.
  */
 async function loadAvailability() {
     try {
@@ -342,16 +345,13 @@ async function runSyncNow(template, peerId, peer) {
 export async function openLanSyncPanel() {
     const template = $(await renderTemplateAsync('userLanSync'));
 
-    // Availability check first — sync is unsupported on mysql/postgres
-    // storage modes (the bulk of user data lives outside the file tree
-    // those modes still keep). Render an honest "unavailable" message
-    // instead of letting the user fill out a pair form that the first
-    // backend call would reject with 412.
+    // Availability check first — the route is kept as a stable forward-
+    // compatible surface so the UI can branch on `available: false` if a
+    // future blocker (read-only mount, missing git binary, etc.) needs to
+    // be surfaced. There are no live blockers today.
     const availability = await loadAvailability();
     if (!availability.available) {
-        const message = availability.reason === 'storage_mode'
-            ? t`LAN Sync is unavailable in the ${availability.mode} storage mode — too much of your data lives on an external database the Luker process doesn't own. Coordinate database replication on the database server itself.`
-            : t`LAN Sync is unavailable. The server reported: ${availability.reason || 'unknown reason'}.`;
+        const message = t`LAN Sync is unavailable. The server reported: ${availability.reason || 'unknown reason'}.`;
         template.find('.lanSyncUnavailableMessage').text(message);
         template.find('.lanSyncUnavailable').removeClass('displayNone');
         template.find('.lanSyncMain').addClass('displayNone');

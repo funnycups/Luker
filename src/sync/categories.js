@@ -14,10 +14,6 @@ import path from 'node:path';
  *
  * Conflict modes:
  *   - 'file'     : per-file pick-one-side at conflict time
- *   - 'whole-db' : binary-blob category whose only resolvable unit is the
- *                  whole file (currently used by the SQLite mode storage
- *                  blob; reserved here for symmetry even though no fs-mode
- *                  category uses it).
  *   - 'none'     : informational only; never participates in conflict UI
  *                  because it is never synced.
  *
@@ -56,7 +52,7 @@ import path from 'node:path';
  * @property {string} displayKey
  * @property {string} descriptionKey
  * @property {SyncPath[]} paths
- * @property {'file' | 'whole-db' | 'none'} conflictMode
+ * @property {'file' | 'none'} conflictMode
  * @property {'on' | 'opt-in' | 'never'} syncDefault
  * @property {boolean} [requiresAdmin]
  * @property {string[]} warnings
@@ -379,38 +375,6 @@ export const SYNC_CATEGORIES = [
         conflictMode: 'file',
         syncDefault: 'opt-in',
         warnings: ['sync.warning.extensions_version_drift'],
-    },
-
-    // ── §6.3 SQLite-mode whole-DB blob ────────────────────────────────────
-    {
-        // The SQLite engine's running database lives at
-        // `<root>/luker-storage.sqlite`. Spec §3.3 marks the raw file as
-        // "never synced" because a literal byte-copy of an open WAL'd DB
-        // corrupts the snapshot; this category routes around that by
-        // VACUUM-INTO'ing a consistent copy into the shadow workdir BEFORE
-        // the file walk runs (see `src/sync/orchestrator.js` `runPull`).
-        // `snapshotLiveToShadow` is taught to special-case this id so its
-        // `from` resolver returns the shadow workdir path — the standard
-        // walk then picks up the already-staged snapshot without
-        // re-reading (and corrupting) the live DB.
-        //
-        // Only synced when the storage mode is `sqlite`: the orchestrator
-        // gates the VACUUM step on `engine.kind === 'sqlite'`, and in
-        // `fs` mode the live DB file does not exist, so the snapshot's
-        // existence check (`fs.existsSync` on the source path) is a
-        // self-healing no-op.
-        //
-        // Conflict mode is `whole-db`: there is no row-level merge in
-        // v1. If both peers wrote to their DBs between syncs the user
-        // picks one full database and the other side's writes are
-        // discarded. Surface this loudly in the UI via the warning.
-        id: 'database',
-        displayKey: 'sync.category.database',
-        descriptionKey: 'sync.category.database.desc',
-        paths: [file(rootFile('luker-storage.sqlite'))],
-        conflictMode: 'whole-db',
-        syncDefault: 'on',
-        warnings: ['sync.warning.database_whole_db_replace'],
     },
 ];
 

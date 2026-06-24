@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import git from 'isomorphic-git';
 
-import { readObjectForWire, writeObjectFromWire } from '../sync/objects.js';
+import { readObjectForWire, writeObjectFromWireStream } from '../sync/objects.js';
 import { ensureShadowRepo, snapshotLiveToShadow, reconcileShadowToLive, assertSafePeerId } from '../sync/shadow.js';
 import { createSyncSession, closeSyncSession, consumeSyncSession } from '../sync/session.js';
 import {
@@ -42,19 +42,6 @@ const TOKEN_HEADER_PATTERN = /^Bearer\s+([a-f0-9]{64})$/i;
  * mixed case on input and downstream code lowercases before any comparison.
  */
 const OID_PATTERN = /^[a-f0-9]{40}$/i;
-
-/**
- * Hard cap on the request body size for `POST /session/object`. Matches the
- * read-side limit in `src/sync/objects.js` so an oversized payload is
- * rejected by Express before it ever reaches our handler — otherwise an
- * attacker could exhaust memory just by streaming bytes into the
- * raw-body parser.
- *
- * Set to 1 GiB (not the spec's original 25 MB): the SQLite-mode whole-DB
- * snapshot blob is hundreds of MB for a real `data/default-user`. See
- * `src/sync/objects.js`'s MAX_OBJECT_BYTES comment for full reasoning.
- */
-const MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
 
 const ALLOWED_OBJECT_TYPES = ['blob', 'tree', 'commit', 'tag'];
 
@@ -153,12 +140,12 @@ router.get('/session/manifest', requireSyncToken, async (request, response) => {
  *
  * Body: raw, unwrapped object bytes (`application/octet-stream`). Type and
  * canonical oid travel out-of-band in `X-Object-Type` / `X-Object-Oid` so
- * the receiver can route to `writeObjectFromWire` without re-parsing.
+ * the receiver can route to `writeObjectFromWireStream` without re-parsing.
  *
  * `readObjectForWire` returns `NotFoundError` for missing oids, which we
- * map to 404, and throws `OBJECT_TOO_LARGE` for objects above the wire
- * limit — that's a 413 rather than 500 so the peer's sync loop can
- * surface a meaningful error to the user instead of retrying.
+ * map to 404. There is no size cap on object reads: the responder serves
+ * whatever lives in its ODB and the peer's streaming receive handles
+ * arbitrarily large bodies without buffering them in RAM.
  */
 router.get('/session/object/:oid', requireSyncToken, async (request, response) => {
     const oid = String(request.params.oid).toLowerCase();
@@ -174,7 +161,6 @@ router.get('/session/object/:oid', requireSyncToken, async (request, response) =
         response.send(obj.body);
     } catch (e) {
         if (e.code === 'NotFoundError') return response.status(404).json({ error: 'Not found' });
-        if (e.code === 'OBJECT_TOO_LARGE') return response.status(413).json({ error: e.message });
         console.error('[sync] object read failed', e);
         response.status(500).json({ error: 'Internal error' });
     }
@@ -183,20 +169,23 @@ router.get('/session/object/:oid', requireSyncToken, async (request, response) =
 /**
  * Accept a single git object from the peer and land it in the local shadow.
  *
- * Body: raw object bytes. `X-Object-Type` and `X-Object-Oid` headers carry
- * the metadata; we re-hash on write inside `writeObjectFromWire` so a wrong
- * `X-Object-Oid` (sender bug, transport corruption, hostile peer) is caught
- * before the object is reachable.
+ * Body: raw object bytes streamed directly off the request. No body parser
+ * is mounted on this route — `writeObjectFromWireStream` pipes the request
+ * into a tmp file under the shadow's gitdir, so the responder's heap never
+ * grows by the body's full size even for gigabyte-scale objects. The peer
+ * decides what to send; we decide what to keep, by verifying the resulting
+ * oid against `X-Object-Oid` after `git.writeObject` has computed it from
+ * the wrapped form (type prefix + length + NUL + body). A wrong oid (sender
+ * bug, transport corruption, hostile peer) is caught and the tmp file
+ * cleaned up before the object becomes reachable.
  *
- * `express.raw` is route-scoped rather than mounted at the router level so
- * other routes (`/session/manifest`, `/session/ref`) keep JSON parsing
- * semantics. The `limit` matches `MAX_OBJECT_BYTES` so Express rejects
- * oversize payloads at the parser before our handler runs.
+ * `X-Object-Type` and `X-Object-Oid` headers carry the metadata; the type
+ * is checked against `ALLOWED_OBJECT_TYPES` before we start the pipe so a
+ * malformed header rejects with 400 without touching disk.
  */
 router.post(
     '/session/object',
     requireSyncToken,
-    express.raw({ type: 'application/octet-stream', limit: MAX_OBJECT_BYTES }),
     async (request, response) => {
         const oid = String(request.get('X-Object-Oid') || '').toLowerCase();
         const type = String(request.get('X-Object-Type') || '').toLowerCase();
@@ -208,16 +197,15 @@ router.post(
         }
         try {
             const shadow = await shadowFor(request.syncSession);
-            await writeObjectFromWire({
+            await writeObjectFromWireStream({
                 dir: shadow.workdir,
                 gitdir: shadow.gitDir,
                 oid,
                 type,
-                body: request.body,
+                stream: request,
             });
             response.json({ oid });
         } catch (e) {
-            if (e.code === 'OBJECT_TOO_LARGE') return response.status(413).json({ error: e.message });
             console.error('[sync] object write failed', e);
             response.status(500).json({ error: 'Internal error' });
         }
@@ -385,13 +373,10 @@ router.post('/session/ref', requireSyncToken, express.json(), async (request, re
  * populated. This is what binds the issued token to the authenticated
  * handle: a peer cannot mint a token for someone else's data root.
  *
- * Storage-mode gate (spec §6.3): refuses with 412 when the configured
- * storage engine is `mysql` or `postgres`. Those modes keep the bulk of
- * user data on an external database the Luker process doesn't own;
- * file-level sync would only round-trip the metadata sidecars and silently
- * miss everything else, so we make the unsupported state explicit at the
- * earliest point instead of letting the user discover it after a long
- * snapshot.
+ * Every storage engine (fs / sqlite / mysql / postgres) is supported:
+ * the orchestrator routes SQL-engine data through the per-record
+ * materializer before the file walk runs (spec §6.3), so there is no
+ * "unsupported storage mode" branch here anymore.
  *
  * `userRoot` is captured into the session payload here so token-gated
  * routes can resolve the shadow repo purely from `request.syncSession`,
@@ -415,11 +400,6 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
     }
 
     const engine = getStorageEngine();
-    if (engine.kind === 'mysql' || engine.kind === 'postgres') {
-        return response.status(412).json({
-            error: `Sync is unavailable in storage mode ${engine.kind}`,
-        });
-    }
 
     const { token, expiresAt } = createSyncSession({
         handle,
@@ -512,10 +492,9 @@ router.post('/session/close', requireSyncToken, (request, response) => {
  * obtained from their `/session/offer` and relayed by the user (e.g. as
  * part of a QR-code pairing flow).
  *
- * Storage-mode gate matches `/session/offer` (spec §6.3): mysql/postgres
- * users can't run file-level sync because the bulk of their data lives
- * outside the file tree. Returns 412 with a coded message rather than
- * letting the orchestrator start work it will only abandon.
+ * Every storage engine is supported here; the orchestrator routes
+ * SQL-engine data through the per-record materializer (spec §6.3) so
+ * there is no storage-mode gate at the boundary.
  *
  * Concurrency: a second `/pull` request for the same (userRoot, peerId)
  * does NOT 409 — it waits behind any in-flight sync on the
@@ -536,13 +515,6 @@ router.post('/pull', express.json({ limit: '1mb' }), async (request, response) =
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const engine = getStorageEngine();
-    if (engine.kind === 'mysql' || engine.kind === 'postgres') {
-        return response.status(412).json({
-            error: `Sync is unavailable in storage mode ${engine.kind}`,
-        });
     }
 
     const body = request.body ?? {};
@@ -698,27 +670,16 @@ router.get('/categories', (_request, response) => {
 });
 
 /**
- * Report whether LAN Sync can run on this server. Storage modes
- * `mysql` and `postgres` keep the bulk of user data on an external
- * database the Luker process doesn't own — file-level sync would only
- * round-trip metadata sidecars and silently miss everything else. The
- * UI uses this to render a "sync unavailable" banner instead of letting
- * the user fill out a pair form that will only fail at submit.
+ * Report whether LAN Sync can run on this server. Every storage engine is
+ * supported (the orchestrator routes SQL-engine data through the per-record
+ * materializer); the route is kept as a stable forward-compatible surface
+ * so the UI can branch on `available: false` if a future blocker
+ * (read-only mount, missing git binary, etc.) needs to be surfaced.
  *
  * Shape: `{ available: true }` when sync works; `{ available: false,
- * reason: 'storage_mode', mode: '<kind>' }` when blocked. Future blockers
- * (read-only mounts, etc.) can extend the `reason` enum without breaking
- * existing UI handling.
+ * reason: '<code>', ... }` when blocked. No `false` branch is wired today.
  */
 router.get('/availability', (_request, response) => {
-    const engine = getStorageEngine();
-    if (engine.kind === 'mysql' || engine.kind === 'postgres') {
-        return response.json({
-            available: false,
-            reason: 'storage_mode',
-            mode: engine.kind,
-        });
-    }
     response.json({ available: true });
 });
 
@@ -808,13 +769,6 @@ router.post('/pair/start', express.json({ limit: '4kb' }), async (request, respo
         return response.status(401).json({ error: 'Auth required' });
     }
 
-    const engine = getStorageEngine();
-    if (engine.kind === 'mysql' || engine.kind === 'postgres') {
-        return response.status(412).json({
-            error: `Sync is unavailable in storage mode ${engine.kind}`,
-        });
-    }
-
     const label = String(request.body?.label || '').trim() || 'Unnamed device';
     const categories = Array.isArray(request.body?.categories)
         ? request.body.categories.map(String)
@@ -855,13 +809,6 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const engine = getStorageEngine();
-    if (engine.kind === 'mysql' || engine.kind === 'postgres') {
-        return response.status(412).json({
-            error: `Sync is unavailable in storage mode ${engine.kind}`,
-        });
     }
 
     const peerId = String(request.params.peerId || '').trim();
@@ -990,13 +937,6 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const engine = getStorageEngine();
-    if (engine.kind === 'mysql' || engine.kind === 'postgres') {
-        return response.status(412).json({
-            error: `Sync is unavailable in storage mode ${engine.kind}`,
-        });
     }
 
     const body = request.body ?? {};

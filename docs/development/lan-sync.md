@@ -30,7 +30,7 @@ All endpoints live under `/api/sync/v1/`. Token authentication uses an `Authoriz
 | `POST` | `/session/offer`         | Basic         | Responder mints a session token AND snapshots its live data into the shadow workdir; returns `{ url, token, expiresAt, peerId, label }` |
 | `GET`  | `/session/manifest`      | Session token | Initiator fetches `{ handle, peerId, expiresAt, headOid }` |
 | `GET`  | `/session/object/:oid`   | Session token | Initiator fetches one git object; body is raw content, `X-Object-Type` and `X-Object-Oid` headers carry metadata |
-| `POST` | `/session/object`        | Session token | Initiator uploads one git object; `X-Object-Oid`/`X-Object-Type` headers + raw body |
+| `POST` | `/session/object`        | Session token | Initiator uploads one git object; `X-Object-Oid`/`X-Object-Type` headers, raw body streamed direct from the request into a tmp file under `<gitdir>/objects/incoming/` (no in-memory buffer of the full body) |
 | `POST` | `/session/ref`           | Session token | Initiator atomically updates a ref with compare-and-swap (returns 409 with `currentOid` on mismatch); when the ref is `refs/heads/main`, the responder runs a tail reconcile back into its own live tree |
 | `POST` | `/session/close`         | Session token | Invalidates the token immediately |
 | `POST` | `/pull`                  | Basic         | Initiator endpoint: drives the full sync flow against a peer's offer |
@@ -47,17 +47,17 @@ The session-token paths (`/api/sync/v1/session/*` except `/session/offer`) bypas
 
 ### Wire-format constraints
 
-- **Object size cap**: `MAX_OBJECT_BYTES = 1024 * 1024 * 1024` (1 GiB). Enforced on both ends — `src/sync/objects.js` rejects on read/write, and `/session/object` configures `express.raw({ limit: MAX_OBJECT_BYTES })` so Express drops oversize payloads before they reach the handler. Violations surface as `OBJECT_TOO_LARGE` and map to HTTP 413. The cap was originally 25 MB (sized for individual user files where settings.json at ~4 MB was the largest case), but the SQLite-mode whole-DB blob can be hundreds of MB — 1 GiB fits any plausible SQLite snapshot while still bounding receiver memory.
-- **Object integrity**: `writeObjectFromWire` re-hashes the body and compares against the supplied `oid`; a mismatch throws before the object is reachable from any ref. `fetchMissingObjects` passes the **requested** oid (not the responder's claimed `X-Object-Oid`) into the write, so a responder that lies about an object's identity cannot poison the local database.
+- **Object size**: there is no cap on the wire. `POST /session/object` mounts no body parser; `writeObjectFromWireStream` pipes the request body to a tmp file under `<gitdir>/objects/incoming/`, then hands the file's bytes to `git.writeObject`. The responder's heap never grows by the body's full size during transfer — back-pressure flows through the pipe and the kernel pages the file in and out. The tmp file is unlinked on both success and failure paths.
+- **Object integrity**: both `writeObjectFromWire` (buffer variant) and `writeObjectFromWireStream` (streaming variant) re-hash the body and compare against the supplied `oid`; a mismatch throws before the object is reachable from any ref, and the streaming variant also unlinks its tmp file on the failure path. `fetchMissingObjects` passes the **requested** oid (not the responder's claimed `X-Object-Oid`) into the write, so a responder that lies about an object's identity cannot poison the local database.
 - **Peer fetch timeouts**: outbound `fetch` calls from the orchestrator carry `AbortSignal.timeout(30_000)`. A timeout becomes a typed `PEER_TIMEOUT` error that `/pull` maps to HTTP 504. Without this, a peer that walked off Wi-Fi mid-pull would strand the per-key sync queue for the OS-default TCP timeout (multiple minutes).
 - **`/session/offer` body cap**: `express.json({ limit: '16kb' })` — the offer payload is just peerId, label, and a categories array, so 16 KB is generous.
 - **`/pull` body cap**: `express.json({ limit: '1mb' })` — the resolutions object can grow when many files conflict, so 1 MB leaves headroom.
 
 ## Category registry
 
-`src/sync/categories.js` exports a single array `SYNC_CATEGORIES`. Each entry maps an id to one or more paths (resolved via `UserDirectoryList` accessors) and declares a default (`on` / `opt-in` / `never`) and conflict mode (`file` / `whole-db` / `none`). All UI labels and warnings are i18n keys; the runtime never embeds English strings.
+`src/sync/categories.js` exports a single array `SYNC_CATEGORIES`. Each entry maps an id to one or more paths (resolved via `UserDirectoryList` accessors) and declares a default (`on` / `opt-in` / `never`) and conflict mode (`file` / `none`). All UI labels and warnings are i18n keys; the runtime never embeds English strings.
 
-The registry currently covers: `characters`, `chats`, `worlds`, `card-apps`, `skills`, the four preset families (`openai-presets`, `novelai-presets`, `koboldai-presets`, `textgen-presets`), the four template families (`instruct`, `context`, `sysprompt`, `reasoning`), `themes`, `movingUI`, `quickreplies`, `assets`, `backgrounds`, `avatars`, `user-files`, `user-images`, `image-metadata`, `vectors`, `stats`, `settings`, `secrets`, `extensions`, and `database` (the SQLite-mode blob).
+The registry currently covers: `characters`, `chats`, `worlds`, `card-apps`, `skills`, the four preset families (`openai-presets`, `novelai-presets`, `koboldai-presets`, `textgen-presets`), the four template families (`instruct`, `context`, `sysprompt`, `reasoning`), `themes`, `movingUI`, `quickreplies`, `assets`, `backgrounds`, `avatars`, `user-files`, `user-images`, `image-metadata`, `vectors`, `stats`, `settings`, `secrets`, and `extensions`.
 
 Adding a new category:
 
@@ -67,11 +67,12 @@ Adding a new category:
 
 ## Storage-mode handling
 
-- **`fs`**: full sync of all enabled categories as files. The shadow workdir mirrors the live tree layout one-to-one (relative to `<userRoot>`), and reconcile writes go through `write-file-atomic` so a crashed reconcile leaves the old file intact.
-- **`sqlite`**: the live database (`<userRoot>/luker-storage.sqlite`) cannot be raw-copied while in use. Before the snapshot step, the orchestrator calls `snapshotSqliteIntoShadowIfNeeded` which runs `VACUUM INTO <shadow.workdir>/luker-storage.sqlite` to stage a consistent copy. The standard file walker then commits that staged blob through the `database` category. After every reconcile, `closeSqliteEngineHandleIfNeeded` drops the cached engine connection for that handle via `engine.closeHandle(handle)` — `write-file-atomic`'s rename leaves the open inode pointing at the (now-unlinked) old file, so without the drop the next storage call would silently read stale data on POSIX or fail on Windows. The reopen is lazy via `SqliteEngine._dbFor` on the next call.
-- **`mysql`** / **`postgres`**: `/session/offer` and `/pull` both return HTTP 412 (`Sync is unavailable in storage mode <kind>`). The UI must hide the sync controls when the engine reports either of these modes.
+The workdir is the universal exchange format. Engines that already store per-user data on disk skip materialization; engines that store it in a database project their records into the workdir before snapshot and read them back after reconcile. From the sync pipeline's point of view, every engine is just files.
 
-Both `snapshotSqliteIntoShadowIfNeeded` and `closeSqliteEngineHandleIfNeeded` are exported from `src/sync/orchestrator.js` so `src/endpoints/sync.js` shares the gating with `/session/offer` and the `/session/ref` responder reconcile. The gating is "engine is sqlite AND the `database` category is enabled AND the relevant DB file exists"; outside that envelope both helpers are no-ops.
+- **`fs`**: per-user data already lives at the expected workdir-relative paths under `<userRoot>`. `snapshotLiveToShadow` walks the live tree directly and copies it into the shadow workdir; reconcile writes go through `write-file-atomic` so a crashed reconcile leaves the old file intact.
+- **`sqlite`** / **`mysql`** / **`postgres`**: per-user data (chats, presets, worlds, named-docs, settings, stats, groups) lives in the storage engine. Before snapshot, the orchestrator calls `materializeUserDataIntoWorkdir` (`src/sync/materialize.js`) which reads each enabled category through the repo layer and writes each record as a file under `<workdir>/<expected-rel-path>` matching the FS-engine layout. `snapshotLiveToShadow` then walks the workdir as if it were the live tree by passing `liveRoot: shadow.workdir`. After reconcile, `dematerializeWorkdirIntoUserData` reads the (possibly merged) workdir state back and saves each record through the repo layer. Categories whose payload lives on disk in every engine (characters, avatars, assets, …) bypass the materializer and are handled by the snapshot walker directly.
+
+Conflict mode is `file` for every category in every engine — chat-vs-chat, world-vs-world, per-record — so the merge UI and resolution semantics do not depend on the storage engine.
 
 ## Conflict resolution flow
 
@@ -117,7 +118,7 @@ The canonical queue helpers are `queueOnKey(key, fn)` and `syncQueueKey(userRoot
 
 Two distinct peers (laptop + phone) paired to the same user have separate `(userRoot, peerId)` keys and can run reconciles concurrently against the same user's live tree. `write-file-atomic` keeps per-file writes consistent; cross-file consistency in that scenario is the user's responsibility (don't run two sync flows in parallel). Per spec §4.4, a per-userRoot live-write lock would be required to make this watertight, but is more complexity than v1 warrants.
 
-Spec §4.4 also describes an app-wide `SYNC_IN_PROGRESS` gate that returns HTTP 409 from user-initiated write endpoints (`/api/chats/save`, `/api/settings/save`, `/api/presets/save`, etc.) for the duration of a sync window. The gate prevents the live tree from moving under the orchestrator's feet while it snapshots → merges → reconciles, which would otherwise risk the "edit I made during sync vanished" failure mode (caught in the snapshot but overwritten by the reconcile) and the SQLite stale-inode failure mode (the engine handle pointing at the old, unlinked file after `closeHandle` swaps the DB).
+Spec §4.4 also describes an app-wide `SYNC_IN_PROGRESS` gate that returns HTTP 409 from user-initiated write endpoints (`/api/chats/save`, `/api/settings/save`, `/api/presets/save`, etc.) for the duration of a sync window. The gate prevents the live tree from moving under the orchestrator's feet while it snapshots → merges → reconciles, which would otherwise risk the "edit I made during sync vanished" failure mode (caught in the snapshot but overwritten by the reconcile) and, in SQL-engine modes, leave the materialized workdir and the engine's record set inconsistent after a user write lands between materialize and dematerialize.
 
 The gate lives in `src/sync/in-progress-gate.js` and is mounted in `src/server-main.js` immediately after `requireLoginMiddleware`. It is **per-handle**: a sync in flight for handle `A` does not block writes for handle `B`. The orchestrator marks `(handle, peerId)` in flight inside `queueOnKey`'s body (so a pull WAITING in the queue does not pre-emptively 409 user writes) and clears in `try/finally` (so a thrown error, a peer timeout, or a pending-conflict early return all release the gate). Three orchestrator entry points participate: `runPull`, `undoLastSync`, and the responder reconcile triggered by `/session/ref` on the peer side.
 
@@ -139,11 +140,11 @@ For a typical user (~3000 files, ~100 MB):
 - `src/sync/categories.js` — registry of synced data categories
 - `src/sync/session.js` — token cache (modeled on `src/lan-migration.js`)
 - `src/sync/shadow.js` — shadow paths, `ensureShadowRepo`, `snapshotLiveToShadow`, `reconcileShadowToLive`
-- `src/sync/objects.js` — wire encode/decode (`readObjectForWire`, `writeObjectFromWire`) and object-graph walker (`fetchMissingObjects`, `hasObjectLocally`)
+- `src/sync/objects.js` — wire encode/decode (`readObjectForWire`, `writeObjectFromWire`, `writeObjectFromWireStream`) and object-graph walker (`fetchMissingObjects`, `hasObjectLocally`)
 - `src/sync/conflicts.js` — `attemptMerge` and `applyResolutions`
-- `src/sync/sqlite-snapshot.js` — `snapshotSqliteToFile` (`VACUUM INTO`) and `replaceSqliteFile`
+- `src/sync/materialize.js` — `materializeUserDataIntoWorkdir` / `dematerializeWorkdirIntoUserData` for sqlite/mysql/postgres engines (no-ops in fs mode)
 - `src/sync/state.js` — `state.json` read/write helpers
-- `src/sync/orchestrator.js` — `runPull`, `undoLastSync`, `queueOnKey`, `isAncestor`, SQLite gating helpers
+- `src/sync/orchestrator.js` — `runPull`, `undoLastSync`, `queueOnKey`, `isAncestor`
 - `src/sync/in-progress-gate.js` — per-handle `SYNC_IN_PROGRESS` registry + Express middleware (spec §4.4)
 - `src/endpoints/sync.js` — HTTP router for `/api/sync/v1/*`
 - `src/middleware/basicAuth.js` — `SYNC_SESSION_PATH_PATTERN` for the auth bypass
