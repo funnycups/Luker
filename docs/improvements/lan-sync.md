@@ -13,20 +13,35 @@ Luker has two ways to move data between devices:
 
 ### Pair two devices
 
-1. On the first device (call it A), open **Settings → LAN Sync → Pair new device**.
+1. On the first device (call it A), open **Settings → LAN Sync → Pair new device**. Give the OTHER device a label, pick the categories to sync, and click **Generate pairing link**.
+
+   ![Pair new device form with categories selected](/_screenshots/lan-sync/02-pair-new-form-filled.png)
+
 2. A shows a URL valid for 10 minutes.
-3. On the second device (B), open the same panel and choose **Pair with existing device**. Paste the URL.
-4. B downloads the data A chose to share and writes it locally. When the panel says "Ready", the pair is done.
+
+   ![Generated pairing link ready to share](/_screenshots/lan-sync/03-pair-link-generated.png)
+
+3. On the second device (B), open the same panel and choose **Pair with existing device**. Paste the URL and click **Pair and sync**. If A requires basic-auth, enter A's credentials in the optional fields.
+
+   ![Pair with existing device form with link pasted](/_screenshots/lan-sync/04-pair-existing-pasted.png)
+
+4. B downloads the data A chose to share and writes it locally. When the banner reads **Synced with \<peer\>.**, the pair is done.
+
+   ![Successful pair banner](/_screenshots/lan-sync/05-pair-success-banner.png)
 
 After pairing, A and B remember each other. Future syncs only take one click.
 
 ### Sync after pairing
 
-On either device, open the LAN Sync panel and click **Sync now**. The two sides exchange changes and reconcile. Most syncs are silent; the panel reports "Up to date" when done.
+On either device, open the LAN Sync panel — paired devices appear under **My devices** with **Sync now**, **Undo last sync**, and **Forget** for each. Click **Sync now**; the two sides exchange changes and reconcile. The banner reports **Sync complete.** when done.
+
+![Paired devices list with per-device actions](/_screenshots/lan-sync/06-my-devices-after-pair.png)
 
 ## Resolving conflicts
 
 If both devices edited the **same file** between syncs (for example: both renamed the same character), LAN Sync stops and shows a conflict panel. Each conflict has two cards: **Local version** and **Remote version**. Pick one card per conflict — there's no line-by-line merging.
+
+![Conflict resolution panel](/_screenshots/lan-sync/08-conflict-panel.png)
 
 Conflicts are always per-file. Picking "Local" for one file and "Remote" for another in the same sync is fine.
 
@@ -70,9 +85,11 @@ For a stronger safety net before a risky sync, use Luker's full ZIP backup (Sett
 
 ## Storage modes
 
-- **File storage** (default): full sync as described above; every category is reconciled file-by-file.
-- **SQLite storage**: most data lives in a single database file (`luker-storage.sqlite`). LAN Sync includes this file by default, but conflicts on the database can only be resolved as whole-database pick-one-side — there's no row-level merge. Picking one side discards the other side's database writes since the last sync. Folder-backed categories (character cards on disk, etc.) still reconcile file-by-file.
-- **MySQL / Postgres storage**: LAN Sync is disabled. Coordinate database replication on the database server itself.
+LAN Sync works the same way on every storage backend. Chats, presets, world books, and the other categories that live in the database are projected back to per-record items for the sync, so conflicts always land at file granularity (one chat, one preset, one world book) regardless of where the data is stored.
+
+- **File storage** (default): data already lives as files on disk and is reconciled directly.
+- **SQLite storage**: rows in `luker-storage.sqlite` are read out and written back per record. A chat edited on both devices surfaces as one conflict on that chat, not a conflict on the whole database.
+- **MySQL / Postgres storage**: same per-record flow as SQLite. Both devices must be on the same network so the LAN sync can reach each other; the database server itself does not need to be reachable from the peer.
 
 ## Performance
 
