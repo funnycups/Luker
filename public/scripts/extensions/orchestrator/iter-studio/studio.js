@@ -97,6 +97,7 @@ import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profi
 import { lorebookWrite } from '../../../iteration-library/proposal-bus/kinds/lorebook-write.js';
 import { skillAuthor } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
 import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
+import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
     renderSkillBody,
     skillLabel as skillBodyLabel,
@@ -1308,7 +1309,7 @@ export async function openOrchestratorIterationStudio(deps) {
                     state.session.messages.push({
                         id: makeMessageId(),
                         role: 'system',
-                        content: tf('Error: ${0}', String(err?.message || err)),
+                        content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                         at: Date.now(),
                     });
                 }
@@ -2758,6 +2759,13 @@ export async function openOrchestratorIterationStudio(deps) {
         const rejectedResetCalls = [];
         for (const { call, reason } of rejectedResets) {
             const callId = String(call?.id || `reset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+            // `reason` is a localized prose sentence built from `t(...)`
+            // above — visible to BOTH the user (system bubble, markdown-
+            // rendered) and the model (via persistedToolResults below,
+            // raw text). Keep translations free of markdown sigils
+            // (`_`, `*`, backticks) so the bubble doesn't reinterpret
+            // them; wrapping in inline code here would turn the whole
+            // rationale into etymological-mode code font for the user.
             state.session.messages.push({
                 id: makeMessageId(),
                 role: 'system',
@@ -3009,7 +3017,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 state.session.messages.push({
                     id: makeMessageId(),
                     role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
+                    content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                     at: Date.now(),
                 });
             }

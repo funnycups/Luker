@@ -74,6 +74,7 @@ import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profi
 import { skillAuthor } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
 import { presetClone } from '../../../iteration-library/proposal-bus/kinds/preset-clone.js';
 import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
+import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
     renderSkillBody,
     skillLabel as skillBodyLabel,
@@ -760,7 +761,7 @@ export async function openCpaIterationStudio(deps) {
                     state.session.messages.push({
                         id: makeMessageId(),
                         role: 'system',
-                        content: tf('Error: ${0}', String(err?.message || err)),
+                        content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                         at: Date.now(),
                     });
                 }
@@ -2309,7 +2310,7 @@ export async function openCpaIterationStudio(deps) {
                 state.session.messages.push({
                     id: makeMessageId(),
                     role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
+                    content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                     at: Date.now(),
                 });
             }

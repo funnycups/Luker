@@ -70,6 +70,7 @@ import {
 import { registerTarget, resolveTarget } from '../../../iteration-library/storage/target-registry.js';
 import { decodeBackward } from '../../../iteration-library/storage/patch-codec.js';
 import { safeClone } from '../../../iteration-library/storage/safe-clone.js';
+import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
     commitCharacterEditorOperations,
     commitLorebookOperations,
@@ -1221,7 +1222,7 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
             state.session.messages.push({
                 id: makeMessageId(),
                 role: 'system',
-                content: tf('Apply failed (${0}): ${1}', target, String(err?.message || err)),
+                content: tf('Apply failed (${0}): ${1}', mdLiteral(target), mdLiteral(err?.message || err)),
                 at: Date.now(),
             });
         }
@@ -1450,7 +1451,7 @@ async function rollbackBatch(state, messageId, opts = {}) {
             state.session.messages.push({
                 id: makeMessageId(),
                 role: 'system',
-                content: tf('Rollback failed (${0}): ${1}', target, String(err?.message || err)),
+                content: tf('Rollback failed (${0}): ${1}', mdLiteral(target), mdLiteral(err?.message || err)),
                 at: Date.now(),
             });
         }
@@ -1928,7 +1929,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     state.session.messages.push({
                         id: makeMessageId(),
                         role: 'system',
-                        content: tf('Error: ${0}', String(err?.message || err)),
+                        content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                         at: Date.now(),
                     });
                 }
@@ -2554,7 +2555,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 state.session.messages.push({
                     id: makeMessageId(),
                     role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
+                    content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                     at: Date.now(),
                 });
             }
@@ -2726,7 +2727,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 state.session.messages.push({
                     id: makeMessageId(),
                     role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
+                    content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                     at: Date.now(),
                 });
             }
@@ -2811,7 +2812,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     state.session.messages.push({
                         id: makeMessageId(),
                         role: 'system',
-                        content: tf('Error: ${0}', String(err?.message || err)),
+                        content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                         at: Date.now(),
                     });
                 }
@@ -3019,7 +3020,7 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     state.session.messages.push({
                         id: makeMessageId(),
                         role: 'system',
-                        content: tf('Error: ${0}', String(err?.message || err)),
+                        content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                         at: Date.now(),
                     });
                 }

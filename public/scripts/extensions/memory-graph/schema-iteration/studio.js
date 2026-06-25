@@ -71,6 +71,7 @@ import {
 } from '../../../iteration-library/index.js';
 import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
 import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
+import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
     TOOL_DEFS,
     buildToolCatalog,
@@ -911,7 +912,7 @@ export async function openSchemaIterationStudio(deps) {
                     state.session.messages.push({
                         id: makeMessageId(),
                         role: 'system',
-                        content: tf('Error: ${0}', String(err?.message || err)),
+                        content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                         at: Date.now(),
                     });
                 }
@@ -2163,7 +2164,7 @@ export async function openSchemaIterationStudio(deps) {
                 state.session.messages.push({
                     id: makeMessageId(),
                     role: 'system',
-                    content: tf('Error: ${0}', String(err?.message || err)),
+                    content: tf('Error: ${0}', mdLiteral(err?.message || err)),
                     at: Date.now(),
                 });
             }

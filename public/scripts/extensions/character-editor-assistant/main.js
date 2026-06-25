@@ -13,6 +13,7 @@ import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from './editor-iteration/studio.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT } from './studio/ai-chat.js';
 import { applyEdits } from '../../iteration-library/index.js';
+import { mdLiteral } from '../../iteration-library/markdown-escape.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
 import { extractWorldInfoHitsFromRuntime } from '../../iteration-library/simulation-review/wi-hits.js';
@@ -3383,22 +3384,6 @@ const CHARACTER_DIFF_TOP_FIELDS = Object.freeze(['name', 'description', 'persona
 const CHARACTER_DIFF_DATA_FIELDS = Object.freeze(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions']);
 const LOREBOOK_ENTRY_DIFF_FIELDS = Object.freeze(['comment', 'content', 'key', 'keysecondary', 'order', 'position', 'depth', 'disable', 'constant', 'selective', 'selectiveLogic', 'probability', 'useProbability', 'excludeRecursion', 'preventRecursion', 'delayUntilRecursion']);
 const CHARACTER_DIFF_EXCERPT_LIMIT = 240;
-
-// Wrap a literal value in markdown inline code so the chat-bubble renderer
-// doesn't reinterpret `_foo_` as italic or `__BAR__` as bold and silently
-// strip the surrounding characters. Picks a backtick fence longer than any
-// backtick run already in the text so internal backticks survive.
-function mdLiteral(text) {
-    const s = String(text ?? '');
-    if (!s) return '`(empty)`';
-    let max = 0, cur = 0;
-    for (const c of s) {
-        if (c === '`') { cur++; if (cur > max) max = cur; } else cur = 0;
-    }
-    const fence = '`'.repeat(max + 1);
-    const needsPad = s.startsWith('`') || s.endsWith('`');
-    return needsPad ? `${fence} ${s} ${fence}` : `${fence}${s}${fence}`;
-}
 
 function diffExcerpt(value) {
     const text = String(value ?? '').replace(/\s+/g, ' ').trim();
