@@ -13,6 +13,7 @@ import { write } from '../character-card-parser.js';
 import { serverDirectory } from '../server-directory.js';
 import { Jimp, JimpMime } from '../jimp.js';
 import { DEFAULT_AVATAR_PATH } from '../constants.js';
+import { getWorldInfoRepo, getPresetRepo, getNamedDocRepo, getSettingsRepo } from '../storage/index.js';
 
 const contentDirectory = path.join(serverDirectory, 'default/content');
 const scaffoldDirectory = path.join(serverDirectory, 'default/scaffold');
@@ -125,14 +126,153 @@ export function getDefaultPresetFile(filename) {
 }
 
 /**
- * Seeds content from a content index into a target location.
+ * @typedef {Object} FsSink Filesystem sink: copy file into `target`.
+ * @property {'fs'} kind
+ * @property {string} target Target directory.
+ *
+ * @typedef {Object} RepoSink Repo sink: parse the file as JSON and hand off to `save`.
+ * @property {'repo'} kind
+ * @property {string} label Repo descriptor used in log messages (e.g. "WorldInfoRepo").
+ * @property {() => Promise<boolean>} exists True when a doc with the same basename already lives in the Repo.
+ * @property {(json: object, basename: string) => Promise<void>} save Persists the parsed JSON under `basename`.
+ *
+ * @typedef {Object} UnknownSink Sentinel: type has no defined target.
+ * @property {'none'} kind
+ *
+ * @typedef {FsSink | RepoSink | UnknownSink} ContentSink
+ */
+
+/**
+ * Resolves a content item to its persistence sink for a single user.
+ * Repo-backed types route through their Repo so db-mode users actually see
+ * the seeded data. Binary / multi-file types (CHARACTER, SPRITES, AVATAR,
+ * BACKGROUND, WORKFLOW) keep the filesystem path because they are not
+ * modeled in the storage engines.
+ *
+ * Repo sinks carry an `exists(basename)` probe so the force-reseed path
+ * (forceCategories) doesn't clobber a user-edited theme/preset/world with
+ * the default version on every server restart.
+ * @param {string} type Content type from CONTENT_TYPES
+ * @param {string} basename Basename of the content file (no extension)
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {string} handle User handle (last path segment of directories.root)
+ * @returns {ContentSink}
+ */
+function resolveContentSink(type, basename, directories, handle) {
+    switch (type) {
+        case CONTENT_TYPES.SETTINGS:
+            return {
+                kind: 'repo',
+                label: 'SettingsRepo',
+                // The settings handler returns null on missing file/row in
+                // every engine (see fs-engine-transaction.js:288-307,
+                // sqlite-engine-transaction.js:210-228, and the equivalent
+                // mysql/postgres handlers), so probing get() is enough; the
+                // engines don't bootstrap an empty settings doc on first read.
+                exists: async () => (await getSettingsRepo().get(handle)) != null,
+                save: async (json) => getSettingsRepo().save(handle, json),
+            };
+        case CONTENT_TYPES.WORLD:
+            return {
+                kind: 'repo',
+                label: 'WorldInfoRepo',
+                exists: async () => (await getWorldInfoRepo().get(handle, basename)) != null,
+                save: async (json, name) => getWorldInfoRepo().save(handle, name, json),
+            };
+        case CONTENT_TYPES.THEME:
+            return {
+                kind: 'repo',
+                label: 'NamedDocRepo[themes]',
+                exists: async () => (await getNamedDocRepo().get(handle, 'themes', basename)) != null,
+                save: async (json, name) => getNamedDocRepo().save(handle, 'themes', name, json),
+            };
+        case CONTENT_TYPES.MOVING_UI:
+            return {
+                kind: 'repo',
+                label: 'NamedDocRepo[movingUI]',
+                exists: async () => (await getNamedDocRepo().get(handle, 'movingUI', basename)) != null,
+                save: async (json, name) => getNamedDocRepo().save(handle, 'movingUI', name, json),
+            };
+        case CONTENT_TYPES.QUICK_REPLIES:
+            return {
+                kind: 'repo',
+                label: 'NamedDocRepo[quickReplies]',
+                exists: async () => (await getNamedDocRepo().get(handle, 'quickReplies', basename)) != null,
+                save: async (json, name) => getNamedDocRepo().save(handle, 'quickReplies', name, json),
+            };
+        case CONTENT_TYPES.KOBOLD_PRESET:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[kobold]',
+                exists: async () => (await getPresetRepo().get(handle, 'kobold', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'kobold', name, json),
+            };
+        case CONTENT_TYPES.OPENAI_PRESET:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[openai]',
+                exists: async () => (await getPresetRepo().get(handle, 'openai', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'openai', name, json),
+            };
+        case CONTENT_TYPES.NOVEL_PRESET:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[novel]',
+                exists: async () => (await getPresetRepo().get(handle, 'novel', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'novel', name, json),
+            };
+        case CONTENT_TYPES.TEXTGEN_PRESET:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[textgenerationwebui]',
+                exists: async () => (await getPresetRepo().get(handle, 'textgenerationwebui', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'textgenerationwebui', name, json),
+            };
+        case CONTENT_TYPES.INSTRUCT:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[instruct]',
+                exists: async () => (await getPresetRepo().get(handle, 'instruct', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'instruct', name, json),
+            };
+        case CONTENT_TYPES.CONTEXT:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[context]',
+                exists: async () => (await getPresetRepo().get(handle, 'context', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'context', name, json),
+            };
+        case CONTENT_TYPES.SYSPROMPT:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[sysprompt]',
+                exists: async () => (await getPresetRepo().get(handle, 'sysprompt', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'sysprompt', name, json),
+            };
+        case CONTENT_TYPES.REASONING:
+            return {
+                kind: 'repo',
+                label: 'PresetRepo[reasoning]',
+                exists: async () => (await getPresetRepo().get(handle, 'reasoning', basename)) != null,
+                save: async (json, name) => getPresetRepo().save(handle, 'reasoning', name, json),
+            };
+        default: {
+            const target = getUserTargetByType(type, directories);
+            if (!target) return { kind: 'none' };
+            return { kind: 'fs', target };
+        }
+    }
+}
+
+/**
+ * Seeds content from a content index into a per-content-item sink.
  * @param {ContentItem[]} contentIndex Content index
  * @param {string} contentLogPath Path to the content log file
- * @param {(type: string) => string | null} resolveTarget Function to resolve the target directory for a content type
+ * @param {(contentItem: ContentItem) => ContentSink} resolveSink Sink resolver
  * @param {string[]} [forceCategories] List of categories to force check (even if content check is skipped)
- * @returns {boolean} Whether any content was added
+ * @returns {Promise<boolean>} Whether any content was added
  */
-function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategories) {
+async function seedContent(contentIndex, contentLogPath, resolveSink, forceCategories) {
     let anyContentAdded = false;
     const contentLog = getContentLog(contentLogPath);
 
@@ -153,13 +293,53 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
             continue;
         }
 
-        const contentTarget = resolveTarget(contentItem.type);
+        const sink = resolveSink(contentItem);
 
-        if (!contentTarget) {
+        if (sink.kind === 'none') {
             console.warn(`Content file ${contentItem.filename} has unknown type ${contentItem.type}`);
             continue;
         }
 
+        if (sink.kind === 'repo') {
+            // Guard the force-reseed path so a user-edited theme/preset/world
+            // stored in the Repo is not silently overwritten with the default.
+            // The contentLog gate above already protects the common case, but
+            // when forceCategories.includes(contentItem.type) is true (e.g.
+            // /api/users/reset-step2) the contentLog gate is bypassed.
+            if (typeof sink.exists === 'function' && await sink.exists()) {
+                console.info(`Content file ${contentItem.filename} already present in ${sink.label}; skipping`);
+                if (!contentLog.includes(contentItem.filename)) {
+                    contentLog.push(contentItem.filename);
+                }
+                continue;
+            }
+            let json;
+            try {
+                const raw = fs.readFileSync(contentPath, 'utf8');
+                json = JSON.parse(raw);
+            } catch (parseErr) {
+                console.warn(`Content file ${contentItem.filename} is not valid JSON; skipping`, parseErr);
+                continue;
+            }
+            const basename = path.parse(contentItem.filename).name;
+            try {
+                await sink.save(json, basename);
+            } catch (saveErr) {
+                // Some Repos validate doc shape (e.g. WorldInfoRepo requires
+                // an entries object). Surface per-file failures and continue
+                // so one bad seed doesn't abort the rest; leave it off the
+                // contentLog so a future run retries it.
+                console.warn(`Failed to seed ${contentItem.filename} via ${sink.label}`, saveErr);
+                continue;
+            }
+            contentLog.push(contentItem.filename);
+            console.info(`Content file ${contentItem.filename} seeded via ${sink.label}`);
+            anyContentAdded = true;
+            continue;
+        }
+
+        // sink.kind === 'fs'
+        const contentTarget = sink.target;
         const basePath = path.parse(contentItem.filename).base;
         const targetPath = path.join(contentTarget, basePath);
         contentLog.push(contentItem.filename);
@@ -181,19 +361,31 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
 }
 
 /**
- * Seeds content for a user.
+ * Seeds content for a user. Repo-backed types route through their Repo so
+ * db-mode users actually see seeded presets / worlds / themes / etc.;
+ * binary types (CHARACTER, SPRITES, AVATAR, BACKGROUND, WORKFLOW) keep
+ * the disk path.
  * @param {ContentItem[]} contentIndex Content index
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {string[]} forceCategories List of categories to force check (even if content check is skipped)
  * @returns {Promise<boolean>} Whether any content was added
  */
-async function seedContentForUser(contentIndex, directories, forceCategories) {
+export async function seedContentForUser(contentIndex, directories, forceCategories) {
     if (!fs.existsSync(directories.root)) {
         fs.mkdirSync(directories.root, { recursive: true });
     }
 
     const contentLogPath = path.join(directories.root, 'content.log');
-    return seedContent(contentIndex, contentLogPath, (type) => getUserTargetByType(type, directories), forceCategories);
+    // Derive the user handle from directories.root. getUserDirectories builds
+    // each directory as path.join(DATA_ROOT, handle, USER_DIRECTORY_TEMPLATE[key])
+    // so the last segment of `root` is the handle.
+    const handle = path.basename(directories.root);
+    return seedContent(
+        contentIndex,
+        contentLogPath,
+        (item) => resolveContentSink(item.type, path.parse(item.filename).name, directories, handle),
+        forceCategories,
+    );
 }
 
 /**
@@ -203,7 +395,15 @@ async function seedContentForUser(contentIndex, directories, forceCategories) {
  */
 async function seedGlobalContent(contentIndex) {
     const contentLogPath = path.join(globalThis.DATA_ROOT, 'content.log');
-    return seedContent(contentIndex, contentLogPath, getGlobalTargetByType);
+    return seedContent(
+        contentIndex,
+        contentLogPath,
+        (item) => {
+            const target = getGlobalTargetByType(item.type);
+            if (!target) return { kind: 'none' };
+            return { kind: 'fs', target };
+        },
+    );
 }
 
 /**

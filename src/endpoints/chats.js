@@ -25,7 +25,7 @@ import {
     isPathUnderParent,
 } from '../util.js';
 import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
-import { getChatRepo, getStorageEngine } from '../storage/index.js';
+import { getChatRepo, getGroupRepo, getStorageEngine } from '../storage/index.js';
 import { ConflictError, NotFoundError } from '../storage/errors.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
@@ -284,6 +284,14 @@ async function buildRecentChatIndexEntries(request) {
             groupId: isGroup ? (descriptor.group || name) : undefined,
         });
         if (!info) continue;
+        // For group chats, resolve the owning Group's id via GroupRepo so the
+        // recent-chat panel can surface the real group identity (in db modes
+        // directories.groups is empty on disk, so the legacy fs sweep returned
+        // nothing). Fall back to descriptor.group (the chat self-id) when the
+        // chat is not registered with any group.
+        const groupTag = isGroup
+            ? (await resolveGroupIdForChatId(handle, name)) || descriptor.group
+            : '';
         const lastMessage = info.lastMessage;
         const last_mes = lastMessage?.send_date || new Date(info.updatedAt).toISOString();
         const value = {
@@ -295,7 +303,7 @@ async function buildRecentChatIndexEntries(request) {
             last_mes,
             sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt),
             ...(descriptor.avatar ? { avatar: descriptor.avatar } : {}),
-            ...(descriptor.group ? { group: descriptor.group } : {}),
+            ...(groupTag ? { group: groupTag } : {}),
         };
         entries.set(path.resolve(descriptor.filePath), value);
     }
@@ -323,29 +331,24 @@ async function ensureRecentChatIndex(request) {
     return await state.buildPromise;
 }
 
-async function resolveGroupIdForChatId(directories, chatId) {
+async function resolveGroupIdForChatId(handle, chatId) {
     const normalizedChatId = String(chatId || '').trim();
     if (!normalizedChatId) {
         return '';
     }
 
-    const groupDirents = await fs.promises.readdir(directories.groups, { withFileTypes: true });
-    const groupFiles = groupDirents.filter(entry => entry.isFile() && path.extname(entry.name) === '.json').map(entry => entry.name);
-
-    for (const groupFileName of groupFiles) {
-        try {
-            const groupPath = path.join(directories.groups, groupFileName);
-            const groupContents = await fs.promises.readFile(groupPath, 'utf8');
-            const groupData = JSON.parse(groupContents);
-            const chats = Array.isArray(groupData?.chats) ? groupData.chats.map(chat => String(chat || '')) : [];
-            if (chats.includes(normalizedChatId) || String(groupData?.chat_id || '') === normalizedChatId) {
-                return String(groupData?.id || '');
-            }
-        } catch {
-            continue;
+    const groupRepo = getGroupRepo();
+    const groupRefs = await groupRepo.list(handle);
+    for (const ref of groupRefs) {
+        const id = ref?.key?.id;
+        if (!id) continue;
+        const groupData = await groupRepo.get(handle, id);
+        if (!groupData) continue;
+        const chats = Array.isArray(groupData?.chats) ? groupData.chats.map(chat => String(chat || '')) : [];
+        if (chats.includes(normalizedChatId) || String(groupData?.chat_id || '') === normalizedChatId) {
+            return String(groupData?.id || id);
         }
     }
-
     return '';
 }
 
@@ -398,32 +401,51 @@ async function buildRecentChatDescriptor(request, filePath, overrides = {}) {
     }
 
     const chatId = path.parse(path.basename(resolvedFilePath)).name;
-    const groupId = await resolveGroupIdForChatId(request.user.directories, chatId);
+    const groupId = await resolveGroupIdForChatId(request.user.profile.handle, chatId);
     return groupId ? { ...descriptor, group: groupId } : descriptor;
 }
 
-async function refreshRecentChatIndexEntry(request, filePath, overrides = {}) {
+export async function refreshRecentChatIndexEntry(request, filePath, overrides = {}) {
     const state = await getReadyRecentChatIndexState(request);
     if (!state?.entries) {
         return;
     }
 
     const descriptor = await buildRecentChatDescriptor(request, filePath, overrides);
-    if (!descriptor?.filePath || !fs.existsSync(descriptor.filePath)) {
+    if (!descriptor?.filePath) {
         state.entries.delete(path.resolve(String(filePath || '')));
         return;
     }
 
-    const entry = await getChatInfo(descriptor.filePath, {
-        ...(descriptor.avatar ? { avatar: descriptor.avatar } : {}),
-        ...(descriptor.group ? { group: descriptor.group } : {}),
+    const handle = request.user.profile.handle;
+    const parsed = path.parse(descriptor.filePath);
+    const isGroup = !!descriptor.group;
+    const charDir = isGroup ? '' : path.basename(parsed.dir);
+    const name = parsed.name;
+    const info = await getChatRepo().getInfo(handle, charDir, name, {
+        isGroup,
+        groupId: isGroup ? (descriptor.group || name) : undefined,
     });
 
-    if (entry?.file_name) {
-        state.entries.set(path.resolve(descriptor.filePath), entry);
-    } else {
+    if (!info) {
         state.entries.delete(path.resolve(descriptor.filePath));
+        return;
     }
+
+    const lastMessage = info.lastMessage;
+    const last_mes = lastMessage?.send_date || new Date(info.updatedAt).toISOString();
+    const entry = {
+        file_id: name,
+        file_name: `${name}.jsonl`,
+        file_size: '0',
+        chat_items: info.messageCount,
+        mes: lastMessage?.mes || '[The chat is empty]',
+        last_mes,
+        sort_time: normalizeRecentChatSortTime(last_mes, info.updatedAt),
+        ...(descriptor.avatar ? { avatar: descriptor.avatar } : {}),
+        ...(descriptor.group ? { group: descriptor.group } : {}),
+    };
+    state.entries.set(path.resolve(descriptor.filePath), entry);
 }
 
 async function deleteRecentChatIndexEntry(request, filePath) {
@@ -498,6 +520,21 @@ process.on('exit', () => {
         func.flush();
     }
 });
+
+/**
+ * Test-only: clear the per-handle chat-backup throttle map so each test
+ * starts with a leading-edge call window. Production code never calls this.
+ * The 10s throttle is module-scoped and survives across tests in the same
+ * worker, which would otherwise hide backup activity behind a deferred
+ * trailing call that fires after the test has already cleaned up its data
+ * dir. Exported for tests in tests/storage/endpoints/.
+ */
+export function _resetChatBackupThrottlesForTests() {
+    for (const func of backupFunctions.values()) {
+        try { func.cancel(); } catch { /* best-effort */ }
+    }
+    backupFunctions.clear();
+}
 
 /**
  * Imports a chat from Ooba's format.
@@ -2035,6 +2072,16 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
             if (incomingId) {
                 writeLastChatGenerationId(chatFilePath, incomingId);
             }
+            try {
+                const headerWithIntegrity = {
+                    ...header,
+                    chat_metadata: applyIntegrityToMetadata(header.chat_metadata, newIntegrity),
+                };
+                const jsonlData = [headerWithIntegrity, ...cleanedMessages].map(m => JSON.stringify(m)).join('\n');
+                getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+            } catch (backupErr) {
+                console.error('Chat backup after append failed', backupErr);
+            }
             await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
             acknowledgeGenerationFromValueOrPersistTarget(request, messages, buildCharacterPersistTargetHint(request));
             return response.send({ ok: true, appended: cleanedMessages.length, created: true, integrity: newIntegrity });
@@ -2086,6 +2133,17 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
         writeChatSyncState(chatFilePath, { integrity: newIntegrity, updated_at: Date.now() });
         if (incomingId) {
             writeLastChatGenerationId(chatFilePath, incomingId);
+        }
+
+        try {
+            const headerWithIntegrity = {
+                ...(existing.header ?? {}),
+                chat_metadata: applyIntegrityToMetadata(existing.header?.chat_metadata, newIntegrity),
+            };
+            const jsonlData = [headerWithIntegrity, ...mergedBody].map(m => JSON.stringify(m)).join('\n');
+            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+        } catch (backupErr) {
+            console.error('Chat backup after append failed', backupErr);
         }
 
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
@@ -2195,6 +2253,17 @@ router.post('/patch', validateAvatarUrlMiddleware, async function (request, resp
         }
         writeChatSyncState(chatFilePath, { integrity: newIntegrity, updated_at: Date.now() });
         if (incomingId) writeLastChatGenerationId(chatFilePath, incomingId);
+
+        try {
+            const headerWithIntegrity = {
+                ...mergedHeader,
+                chat_metadata: applyIntegrityToMetadata(mergedHeader.chat_metadata, newIntegrity),
+            };
+            const jsonlData = [headerWithIntegrity, ...patchedMessages].map(m => JSON.stringify(m)).join('\n');
+            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+        } catch (backupErr) {
+            console.error('Chat backup after patch failed', backupErr);
+        }
 
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
         acknowledgeGenerationFromValueOrPersistTarget(request, operations, buildCharacterPersistTargetHint(request));
@@ -2320,11 +2389,25 @@ router.post('/meta/patch', validateAvatarUrlMiddleware, async function (request,
         if (existing == null) {
             const newHeader = createChatHeader({ chat_metadata: nextMetadata });
             const saved = await repo.save(handle, cardName, fileName, newHeader, [], null);
+            try {
+                const headerWithIntegrity = {
+                    ...newHeader,
+                    chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, saved.integrity),
+                };
+                const jsonlData = [headerWithIntegrity].map(m => JSON.stringify(m)).join('\n');
+                getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+            } catch (backupErr) {
+                console.error('Chat backup after meta/patch failed', backupErr);
+            }
             await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
             return response.send({ ok: true, applied: operations.length, total_messages: 0, created: true, integrity: saved.integrity });
         }
         const expected = force ? null : integritySlug;
         let result;
+        const newHeader = {
+            ...(existing.header ?? {}),
+            chat_metadata: nextMetadata,
+        };
         try {
             // Replace the metadata entirely (we already merged via the JSON
             // Patch). updateChatMetadata shallow-merges; to *replace* we wipe
@@ -2333,16 +2416,22 @@ router.post('/meta/patch', validateAvatarUrlMiddleware, async function (request,
             // For correctness across modes, use a full save with the new
             // header so the metadata exactly matches the patched value
             // including key removals.
-            const newHeader = {
-                ...(existing.header ?? {}),
-                chat_metadata: nextMetadata,
-            };
             result = await repo.save(handle, cardName, fileName, newHeader, existing.body ?? [], expected);
         } catch (err) {
             if (err instanceof ConflictError) {
                 return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
             }
             throw err;
+        }
+        try {
+            const headerWithIntegrity = {
+                ...newHeader,
+                chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, result.integrity),
+            };
+            const jsonlData = [headerWithIntegrity, ...(existing.body ?? [])].map(m => JSON.stringify(m)).join('\n');
+            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+        } catch (backupErr) {
+            console.error('Chat backup after meta/patch failed', backupErr);
         }
         await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: String(request.body.avatar_url || '') });
         return response.send({
@@ -2405,13 +2494,6 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
         const directoryPath = path.join(request.user.directories.chats, dirName);
         if (!isPathUnderParent(request.user.directories.chats, directoryPath)) {
             return response.sendStatus(400);
-        }
-        const chatDirExists = fs.existsSync(directoryPath);
-
-        //if no chat dir for the character is found, make one with the character name
-        if (!chatDirExists) {
-            fs.mkdirSync(directoryPath);
-            return response.send({ new_chat: true });
         }
 
         if (!request.body.file_name) {
@@ -2592,6 +2674,32 @@ router.post('/state/patch', async function (request, response) {
             await tx.putChatState(repoKeyForEngine, namespace, result.state);
             return { applied: result.applied, created: !existed };
         });
+
+        // State-only mutations don't change the chat document itself, but we
+        // still trigger a backup so any state change has a recoverable point
+        // (the backup payload is the current chat doc at the moment of the
+        // state patch). Re-read the chat to serialize. If the parent chat
+        // doesn't exist (legacy permissive sidecar write), skip silently.
+        try {
+            const chatDoc = await getChatRepo().get(
+                repoKey.handle, repoKey.charDir ?? '', repoKey.name,
+                { isGroup: repoKey.isGroup, groupId: repoKey.groupId },
+            );
+            if (chatDoc) {
+                const headerWithIntegrity = {
+                    ...(chatDoc.header ?? {}),
+                    chat_metadata: applyIntegrityToMetadata(chatDoc.header?.chat_metadata, chatDoc.integrity),
+                };
+                const backupName = repoKey.isGroup ? repoKey.groupId : (repoKey.charDir ?? '');
+                if (backupName) {
+                    const jsonlData = [headerWithIntegrity, ...(chatDoc.body ?? [])].map(m => JSON.stringify(m)).join('\n');
+                    getBackupFunction(repoKey.handle)(request.user.directories.backups, backupName, jsonlData);
+                }
+            }
+        } catch (backupErr) {
+            console.error('Chat backup after state/patch failed', backupErr);
+        }
+
         return response.send({ ok: true, applied, created });
     } catch (error) {
         if (isChatStatePatchConflictError(error)) {
@@ -2804,19 +2912,51 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
-router.post('/group/import', function (request, response) {
+router.post('/group/import', async function (request, response) {
     try {
         const filedata = request.file;
+        if (!filedata) return response.sendStatus(400);
 
-        if (!filedata) {
-            return response.sendStatus(400);
+        const pathToUpload = path.join(filedata.destination, filedata.filename);
+        let data;
+        try {
+            data = fs.readFileSync(pathToUpload, 'utf8');
+        } finally {
+            try { fs.unlinkSync(pathToUpload); } catch { /* best-effort multer cleanup */ }
         }
 
+        const lines = data.split('\n').filter(line => line.trim().length > 0);
+        if (lines.length === 0) {
+            return response.send({ error: true });
+        }
+        let parsed;
+        try {
+            parsed = lines.map(line => JSON.parse(line));
+        } catch (parseErr) {
+            console.error('group import: malformed jsonl', parseErr);
+            return response.send({ error: true });
+        }
+
+        const looksLikeHeader = _.isObjectLike(parsed[0]) && (
+            Object.hasOwn(parsed[0], 'chat_metadata') ||
+            Object.hasOwn(parsed[0], 'user_name') ||
+            Object.hasOwn(parsed[0], 'character_name')
+        );
+        // createChatHeader stuffs its argument into chat_metadata, so passing
+        // { is_group_chat: true } here would bury the flag at chat_metadata.is_group_chat.
+        // The chat is identified as a group via the isGroup/groupId options
+        // passed to ChatRepo.save below — header content is engine-irrelevant.
+        const header = looksLikeHeader ? parsed[0] : createChatHeader({});
+        const messages = looksLikeHeader ? parsed.slice(1) : parsed;
+
         const chatname = humanizedDateTime();
-        const pathToUpload = path.join(filedata.destination, filedata.filename);
-        const pathToNewFile = path.join(request.user.directories.groupChats, `${chatname}.jsonl`);
-        fs.copyFileSync(pathToUpload, pathToNewFile);
-        fs.unlinkSync(pathToUpload);
+        const handle = request.user.profile.handle;
+        const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${chatname}.jsonl`));
+
+        await getChatRepo().save(handle, '', chatname, header, messages, null,
+            { isGroup: true, groupId: chatname });
+        await refreshRecentChatIndexEntry(request, chatFilePath, { group: chatname });
+
         return response.send({ res: chatname });
     } catch (error) {
         console.error(error);
@@ -2852,80 +2992,98 @@ router.post('/import', validateAvatarUrlMiddleware, async function (request, res
 
             /** @type {function(string, string, object): string|string[]} */
             let importFunc;
-
-            if (jsonData.savedsettings !== undefined) { // Kobold Lite format
+            if (jsonData.savedsettings !== undefined) {
                 importFunc = importKoboldLiteChat;
-            } else if (jsonData.histories !== undefined) { // CAI Tools format
+            } else if (jsonData.histories !== undefined) {
                 importFunc = importCAIChat;
-            } else if (Array.isArray(jsonData.data_visible)) { // oobabooga's format
+            } else if (Array.isArray(jsonData.data_visible)) {
                 importFunc = importOobaChat;
-            } else if (Array.isArray(jsonData.messages)) { // Agnai's format
+            } else if (Array.isArray(jsonData.messages)) {
                 importFunc = importAgnaiChat;
-            } else if (jsonData.type === 'risuChat') { // RisuAI format
+            } else if (jsonData.type === 'risuChat') {
                 importFunc = importRisuChat;
-            } else { // Unknown format
+            } else {
                 console.error('Incorrect chat format .json');
                 return response.send({ error: true });
             }
 
-            const handleChat = (chat) => {
+            const handle = request.user.profile.handle;
+            const handleChat = async (jsonlText) => {
                 const fileName = `${characterName} - ${humanizedDateTime()} imported.jsonl`;
+                const name = path.parse(fileName).name;
                 const filePath = path.join(directoryPath, fileName);
+                const parsedLines = jsonlText.split('\n').filter(line => line.trim().length > 0).map(line => JSON.parse(line));
+                const looksLikeHeader = _.isObjectLike(parsedLines[0]) && (
+                    Object.hasOwn(parsedLines[0], 'chat_metadata') ||
+                    Object.hasOwn(parsedLines[0], 'user_name') ||
+                    Object.hasOwn(parsedLines[0], 'character_name')
+                );
+                const header = looksLikeHeader ? parsedLines[0] : createChatHeader({});
+                const messages = looksLikeHeader ? parsedLines.slice(1) : parsedLines;
+                await getChatRepo().save(handle, avatarUrl, name, header, messages, null);
                 fileNames.push(fileName);
-                writeFileAtomicSync(filePath, chat, 'utf8');
+                await refreshRecentChatIndexEntry(request, filePath, { avatar: `${avatarUrl}.png` });
             };
 
             const chat = importFunc(userName, characterName, jsonData);
-
             if (Array.isArray(chat)) {
-                chat.forEach(handleChat);
+                for (const c of chat) await handleChat(c);
             } else {
-                handleChat(chat);
+                await handleChat(chat);
             }
-
-            await Promise.all(fileNames.map((fileName) => refreshRecentChatIndexEntry(
-                request,
-                path.join(request.user.directories.chats, avatarUrl, fileName),
-                { avatar: `${avatarUrl}.png` },
-            )));
-
             return response.send({ res: true, fileNames });
         }
 
         if (format === 'jsonl') {
-            let lines = data.split('\n');
-            const header = lines[0];
-
-            const jsonData = JSON.parse(header);
-
-            if (!(jsonData.user_name !== undefined || jsonData.name !== undefined || jsonData.chat_metadata !== undefined)) {
+            const handle = request.user.profile.handle;
+            const lines = data.split('\n').filter(line => line.trim().length > 0);
+            if (lines.length === 0) {
+                fs.unlinkSync(pathToUpload);
+                return response.send({ error: true });
+            }
+            let parsedHeader;
+            try {
+                parsedHeader = JSON.parse(lines[0]);
+            } catch (parseErr) {
+                console.error('Incorrect chat format .jsonl', parseErr);
+                fs.unlinkSync(pathToUpload);
+                return response.send({ error: true });
+            }
+            if (!(parsedHeader.user_name !== undefined || parsedHeader.name !== undefined || parsedHeader.chat_metadata !== undefined)) {
                 console.error('Incorrect chat format .jsonl');
+                fs.unlinkSync(pathToUpload);
                 return response.send({ error: true });
             }
 
-            // Do a tiny bit of work to import Chub Chat data
-            // Processing the entire file is so fast that it's not worth checking if it's a Chub chat first
-            let flattenedChat = data;
+            // Try Chub-Chat flattening on the raw text; flattenChubChat returns
+            // the original text when the input wasn't a Chub chat.
+            let flattenedText = data;
             try {
-                // flattening is unlikely to break, but it's not worth failing to
-                // import normal chats in an attempt to import a Chub chat
-                flattenedChat = flattenChubChat(userName, characterName, lines);
+                flattenedText = flattenChubChat(userName, characterName, lines);
             } catch (error) {
                 console.warn('Failed to flatten Chub Chat data: ', error);
             }
 
+            const linesToParse = (flattenedText !== data)
+                ? flattenedText.split('\n').filter(line => line.trim().length > 0)
+                : lines;
+            const parsedAll = linesToParse.map(line => JSON.parse(line));
+            const header = parsedAll[0];
+            const messages = parsedAll.slice(1);
+
             const fileName = `${characterName} - ${humanizedDateTime()} imported.jsonl`;
+            const name = path.parse(fileName).name;
             const filePath = path.join(directoryPath, fileName);
+            await getChatRepo().save(handle, avatarUrl, name, header, messages, null);
             fileNames.push(fileName);
-            if (flattenedChat !== data) {
-                writeFileAtomicSync(filePath, flattenedChat, 'utf8');
-            } else {
-                fs.copyFileSync(pathToUpload, filePath);
-            }
             fs.unlinkSync(pathToUpload);
             await refreshRecentChatIndexEntry(request, filePath, { avatar: `${avatarUrl}.png` });
-            response.send({ res: true, fileNames });
+            return response.send({ res: true, fileNames });
         }
+
+        // Unknown format
+        try { fs.unlinkSync(pathToUpload); } catch { /* best-effort */ }
+        return response.send({ error: true });
     } catch (error) {
         console.error(error);
         return response.send({ error: true });
@@ -3147,6 +3305,25 @@ router.post('/group/append', async function (request, response) {
             groupId: id,
         });
 
+        // Re-read the chat doc to compose a backup payload; appendMessagesToChatFile
+        // doesn't return the full header+body. Skip when the helper dedup'd
+        // everything (no save happened).
+        if (result?.created || (result?.appended ?? 0) > 0) {
+            try {
+                const chatDoc = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
+                if (chatDoc) {
+                    const headerWithIntegrity = {
+                        ...(chatDoc.header ?? {}),
+                        chat_metadata: applyIntegrityToMetadata(chatDoc.header?.chat_metadata, chatDoc.integrity),
+                    };
+                    const jsonlData = [headerWithIntegrity, ...(chatDoc.body ?? [])].map(m => JSON.stringify(m)).join('\n');
+                    getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+                }
+            } catch (backupErr) {
+                console.error('Chat backup after group/append failed', backupErr);
+            }
+        }
+
         await refreshRecentChatIndexEntry(request, chatFilePath);
         acknowledgeGenerationFromValueOrPersistTarget(request, messages, buildGroupPersistTargetHint(request));
         return response.send({ ok: true, ...result });
@@ -3208,6 +3385,17 @@ router.post('/group/patch', async function (request, response) {
             const patched = applyJsonPatch(docSeed, operations, true, false).newDocument;
             const saved = await repo.save(handle, '', id, patched.header, patched.body, existing.integrity,
                 { isGroup: true, groupId: id });
+
+            try {
+                const headerWithIntegrity = {
+                    ...(patched.header ?? {}),
+                    chat_metadata: applyIntegrityToMetadata(patched.header?.chat_metadata, saved.integrity),
+                };
+                const jsonlData = [headerWithIntegrity, ...(patched.body ?? [])].map(m => JSON.stringify(m)).join('\n');
+                getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+            } catch (backupErr) {
+                console.error('Chat backup after group/patch failed', backupErr);
+            }
 
             await refreshRecentChatIndexEntry(request, chatFilePath);
             acknowledgeGenerationFromValueOrPersistTarget(request, operations, buildGroupPersistTargetHint(request));
@@ -3333,13 +3521,23 @@ router.post('/group/meta/patch', async function (request, response) {
             const newHeader = createChatHeader({ chat_metadata: nextMetadata });
             const saved = await repo.save(handle, '', id, newHeader, [], null,
                 { isGroup: true, groupId: id });
+            try {
+                const headerWithIntegrity = {
+                    ...newHeader,
+                    chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, saved.integrity),
+                };
+                const jsonlData = [headerWithIntegrity].map(m => JSON.stringify(m)).join('\n');
+                getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+            } catch (backupErr) {
+                console.error('Chat backup after group/meta/patch failed', backupErr);
+            }
             await refreshRecentChatIndexEntry(request, chatFilePath);
             return response.send({ ok: true, applied: operations.length, total_messages: 0, created: true, integrity: saved.integrity });
         }
         const expected = force ? null : integritySlug;
         let result;
+        const newHeader = { ...(existing.header ?? {}), chat_metadata: nextMetadata };
         try {
-            const newHeader = { ...(existing.header ?? {}), chat_metadata: nextMetadata };
             result = await repo.save(handle, '', id, newHeader, existing.body ?? [], expected,
                 { isGroup: true, groupId: id });
         } catch (err) {
@@ -3347,6 +3545,17 @@ router.post('/group/meta/patch', async function (request, response) {
                 return sendIntegrityConflict(response, createIntegrityMismatchError(chatFilePath, integritySlug));
             }
             throw err;
+        }
+
+        try {
+            const headerWithIntegrity = {
+                ...newHeader,
+                chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, result.integrity),
+            };
+            const jsonlData = [headerWithIntegrity, ...(existing.body ?? [])].map(m => JSON.stringify(m)).join('\n');
+            getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+        } catch (backupErr) {
+            console.error('Chat backup after group/meta/patch failed', backupErr);
         }
 
         await refreshRecentChatIndexEntry(request, chatFilePath);

@@ -25,7 +25,7 @@ import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 import { extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from './card-app.js';
-import { deleteRecentChatIndexEntriesUnderDirectory, invalidateRecentChatIndex } from './chats.js';
+import { deleteRecentChatIndexEntriesUnderDirectory, invalidateRecentChatIndex, refreshRecentChatIndexEntry } from './chats.js';
 import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 import { getChatRepo, getWorldInfoRepo } from '../storage/index.js';
 
@@ -1122,12 +1122,19 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
         /**
          * @param {Partial<ByafScenario>} scenario
         */
-        const createChatAsCurrentPersona = (scenario) => {
+        const createChatAsCurrentPersona = async (scenario) => {
             const chatName = sanitize(`${scenario.title || cardName} - ${humanizedDateTime()} imported.jsonl`, { replacement: sanitizeSafeCharacterReplacements });
-            const filePath = path.join(request.user.directories.chats, path.basename(fileName), chatName);
-            const dir = path.dirname(filePath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            writeFileAtomicSync(filePath, ByafParser.getChatFromScenario(scenario, request.body.user_name, cardName, byafData.chatBackgrounds), 'utf8');
+            const charDir = path.basename(fileName);
+            const baseName = path.parse(chatName).name;
+            const jsonlText = ByafParser.getChatFromScenario(scenario, request.body.user_name, cardName, byafData.chatBackgrounds);
+            const parsedLines = jsonlText.split('\n').filter(line => line.trim().length > 0).map(line => JSON.parse(line));
+            const header = parsedLines[0];
+            const messages = parsedLines.slice(1);
+            await getChatRepo().save(request.user.profile.handle, charDir, baseName, header, messages, null);
+            // Keep recent-chat-index in sync with every chat write — mirrors the
+            // pattern used by every /api/chats/* endpoint that mutates chats.
+            const chatFilePath = path.join(request.user.directories.chats, charDir, chatName);
+            await refreshRecentChatIndexEntry(request, chatFilePath, { avatar: `${charDir}.png` });
             console.log(`Created ${chatName} chat from BYAF import`);
             return chatName;
         };
@@ -1151,7 +1158,7 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
         // Create chats for each scenario
         if (Array.isArray(byafData.scenarios)) {
             for (const scenario of byafData.scenarios) {
-                chats.push(createChatAsCurrentPersona(scenario));
+                chats.push(await createChatAsCurrentPersona(scenario));
             }
         }
 
