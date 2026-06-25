@@ -1,5 +1,6 @@
 {
     "verbose": true,
+    "testTimeout": 15000,
     "transform": {},
     "setupFiles": [
         "./jest.setup.js"

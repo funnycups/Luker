@@ -11,15 +11,33 @@ globalExtensionsPath: ./public/scripts/extensions/third-party
 # - 'sqlite': per-user SQLite database at <dataRoot>/<handle>/luker-storage.sqlite
 # - 'mysql': shared MySQL 8.0+ database; all users live in one schema, keyed by handle column.
 # - 'postgres': shared PostgreSQL 14+ database; all users live in one schema, keyed by handle column.
-# WARNING: switching modes on a populated install requires running the migration tool.
-# The migration tool currently supports fs <-> sqlite only; mysql/postgres targets require
-# a fresh dataRoot or an external dump+load. Switching modes on populated data without
-# migration will make existing data invisible.
+#
+# Notes:
+# - Switching modes on a populated install: use scripts/storage-migrate.js or the admin
+#   "Storage Backend" panel. Migration is supported between any pair, but per-user binary
+#   assets (avatars, character cards, backgrounds, attachments, vectors, extensions) ALWAYS
+#   live on disk and are not affected by the mode setting. See src/storage/README.md.
+# - mysql / postgres modes share one database across all users; isolation is enforced via
+#   the `handle` column on every row.
 storage:
   mode: fs
+  # Pool acquire timeout in ms. Applies to mysql / postgres only (fs / sqlite ignore).
+  # When pool is exhausted or DB is unreachable, requests fail after this many ms instead
+  # of hanging indefinitely. Default 30s is a balanced production value; lower to 5000-10000
+  # for snappier failure visibility, raise to 60000+ if your DB has very long-tail latency.
+  acquireTimeoutMs: 30000
+  # If true, ping the storage engine once at startup; exit(1) on failure. Recommended for
+  # production deployments to catch misconfigured connection strings / unreachable DB early.
+  # Default false preserves current lazy-connect behavior.
+  failFast: false
+  # Transient-error retry counts. Applies to mysql / postgres only.
+  retries:
+    # Number of retries on deadlock / connection-reset / serialization failures. Each retry
+    # uses exponential backoff (50ms * 2^attempt). Set to 0 to disable.
+    # Note: worst-case latency on a wedged DB ~ (transient + 1) * acquireTimeoutMs;
+    # the per-attempt timeout dominates the backoff.
+    transient: 3
   # The mysql / postgres sub-blocks are only consulted when `mode` matches.
-  # Both expect a single connection-string URL; pool size caps concurrent
-  # connections (raise for high-concurrency multi-user installs).
   mysql:
     url: mysql://user:pass@host:3306/luker
     poolSize: 10

@@ -95,7 +95,8 @@ import {
     migratePublicOverrides,
     isRequestAdmin,
 } from './users.js';
-import { initStorage } from './storage/index.js';
+import { initStorage, getStorageEngine } from './storage/index.js';
+import { maybeFailFast } from './storage/fail-fast.js';
 
 import getWebpackServeMiddleware from './middleware/webpack-serve.js';
 import basicAuthMiddleware from './middleware/basicAuth.js';
@@ -134,6 +135,7 @@ import {
 import { router as usersPublicRouter } from './endpoints/users-public.js';
 import { router as syncRouter } from './endpoints/sync.js';
 import { syncInProgressMiddleware } from './sync/in-progress-gate.js';
+import { router as storageHealthRouter } from './endpoints/storage-health.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
 import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
@@ -499,6 +501,10 @@ app.get('/tokenizers-remote/:file', async (req, res) => {
 
 // Public API
 app.use('/api/users', usersPublicRouter);
+// Public storage probe: mounted BEFORE requireLoginMiddleware so external
+// monitors (k8s, load balancers, uptime checks) can poll without
+// credentials. Returns engine kind + latency on success, 503 on ping failure.
+app.use('/api/storage', storageHealthRouter);
 
 // LAN-sync protocol. Mounted alongside the public router so peer-to-peer
 // session traffic (`/session/*`, bearer-token auth) is reachable without a
@@ -910,7 +916,13 @@ initUserStorage(globalThis.DATA_ROOT)
         directoriesByHandle: getUserDirectories,
         mysql: getConfigValue('storage.mysql', null),
         postgres: getConfigValue('storage.postgres', null),
+        acquireTimeoutMs: getConfigValue('storage.acquireTimeoutMs', 30000),
+        retries: { transient: getConfigValue('storage.retries.transient', 3) },
     }))
+    // Optional crash-on-boot: when storage.failFast=true, ping the engine
+    // once and exit(1) on failure so the server doesn't accept traffic on a
+    // broken storage stack. Default is false (lazy connect).
+    .then(() => maybeFailFast(getStorageEngine(), getConfigValue('storage.failFast', false)))
     .then(preSetupTasks)
     .then(apply404Middleware)
     .then(() => new ServerStartup(app, cliArgs).start())

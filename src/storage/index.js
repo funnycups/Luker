@@ -21,7 +21,14 @@ let _namedDocRepo = null;
 let _groupRepo = null;
 let _statsRepo = null;
 
-export function initStorage({ mode = 'fs', directoriesByHandle, mysql, postgres } = {}) {
+export function initStorage({
+    mode = 'fs',
+    directoriesByHandle,
+    mysql,
+    postgres,
+    acquireTimeoutMs,
+    retries,
+} = {}) {
     if (mode === 'fs') {
         _engine = new FsEngine({ directoriesByHandle });
     } else if (mode === 'sqlite') {
@@ -30,12 +37,22 @@ export function initStorage({ mode = 'fs', directoriesByHandle, mysql, postgres 
         if (!mysql || typeof mysql.url !== 'string' || !mysql.url) {
             throw new Error('initStorage: mode=mysql requires storage.mysql.url in config');
         }
-        _engine = new MysqlEngine({ url: mysql.url, poolSize: mysql.poolSize });
+        _engine = new MysqlEngine({
+            url: mysql.url,
+            poolSize: mysql.poolSize,
+            acquireTimeoutMs,
+            retries,
+        });
     } else if (mode === 'postgres') {
         if (!postgres || typeof postgres.url !== 'string' || !postgres.url) {
             throw new Error('initStorage: mode=postgres requires storage.postgres.url in config');
         }
-        _engine = new PgEngine({ url: postgres.url, poolSize: postgres.poolSize });
+        _engine = new PgEngine({
+            url: postgres.url,
+            poolSize: postgres.poolSize,
+            acquireTimeoutMs,
+            retries,
+        });
     } else {
         throw new Error(`initStorage: unknown storage mode "${mode}" (expected 'fs', 'sqlite', 'mysql', or 'postgres')`);
     }

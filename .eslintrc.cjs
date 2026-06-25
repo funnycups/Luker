@@ -5,6 +5,7 @@ module.exports = {
     ],
     plugins: [
         'jsdoc',
+        'luker',
     ],
     env: {
         es6: true,
@@ -70,6 +71,14 @@ module.exports = {
             files: ['public/scripts/workers/**/*.js'],
             env: {
                 worker: true,
+            },
+        },
+        {
+            // Endpoint handlers must go through storage Repos, not raw fs on
+            // request.user.directories.*. See eslint-rules/no-raw-fs-in-endpoint.cjs.
+            files: ['src/endpoints/**/*.js'],
+            rules: {
+                'luker/no-raw-fs-in-endpoint': 'error',
             },
         },
     ],

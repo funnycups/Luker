@@ -1,0 +1,22 @@
+{
+    "allowedFiles": [
+        "src/endpoints/assets.js",
+        "src/endpoints/avatars.js",
+        "src/endpoints/backgrounds.js",
+        "src/endpoints/backups.js",
+        "src/endpoints/card-app.js",
+        "src/endpoints/characters.js",
+        "src/endpoints/chats.js",
+        "src/endpoints/data-maid.js",
+        "src/endpoints/extensions.js",
+        "src/endpoints/files.js",
+        "src/endpoints/image-metadata.js",
+        "src/endpoints/images.js",
+        "src/endpoints/settings.js",
+        "src/endpoints/stable-diffusion.js",
+        "src/endpoints/stats.js",
+        "src/endpoints/users-private.js",
+        "src/endpoints/vectors.js"
+    ],
+    "_note": "Files in this list are allowed to use raw fs.* with request.user.directories.*. As later Stages land, files transition off this list. The intended steady-state allowlist (resources that REMAIN on disk by design) is documented in src/storage/README.md."
+}

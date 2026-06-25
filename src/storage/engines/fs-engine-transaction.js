@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import _ from 'lodash';
 import sanitizeFilename from 'sanitize-filename';
+import { sync as writeFileAtomic } from 'write-file-atomic';
 
 import { SIDECAR_INFIX, buildSidecarFilename, parseSidecarFilename } from './sidecar-naming.js';
 import { PRESET_FOLDER_BY_API_ID } from '../repositories/preset-repo.js';
@@ -87,12 +88,6 @@ export class FsTransaction {
     async listPresetStateNamespaces(presetKey) {
         return this._h(presetKey.kind, 'listPresetStateNamespaces').listPresetSidecarNamespaces(presetKey);
     }
-}
-
-function writeFileAtomic(filePath, contents) {
-    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmp, contents);
-    fs.renameSync(tmp, filePath);
 }
 
 function registerChatHandler(tx) {

@@ -55,6 +55,18 @@ Release model:
 - Every commit/push builds debug APK artifacts.
 - Tag pushes build signed release APK and publish/update a GitHub Release for that tag.
 
+## Storage backends
+
+Luker supports four storage backends, selectable in `config.yaml`:
+
+- **`fs`** (default): every resource lives in per-user files on disk. Simplest for single-user installs; matches upstream SillyTavern.
+- **`sqlite`**: each user gets a per-user `luker-storage.sqlite` file (WAL mode, online-backup-friendly). Same single-user shape as `fs` but with stronger consistency guarantees.
+- **`mysql`** / **`postgres`**: shared-DB backends keyed by `handle` column. Designed for multi-user servers.
+
+In db modes, **structured resources** (chats, settings, presets, world info, themes, groups, stats) live in the engine. **Binary resources** (character cards, avatars, backgrounds, user uploads, plugin extension trees, vector databases) stay on disk under `<dataRoot>/<handle>/` even in db mode — they're a poor fit for SQL columns. See `src/storage/README.md` for the full resource-vs-storage table.
+
+Backup ZIPs in db mode include an `_engine_dump.bin` engine-side dump alongside the on-disk file tree. Restore works in-engine; switching engines requires `scripts/storage-migrate.js`.
+
 ## Upstream Resources (SillyTavern)
 
 - GitHub: <https://github.com/SillyTavern/SillyTavern>

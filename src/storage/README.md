@@ -307,3 +307,38 @@ mv <dataRoot>/_storage-migrations/<timestamp>-<handle>/<handle>/ <dataRoot>/<han
 ### Switching modes without migration
 
 Switching `storage.mode` on a populated install **does not delete data** — the other engine's data files (the JSONL/JSON tree, or the `luker-storage.sqlite` file) are left untouched. However, the running engine only sees its own backing store, so the other engine's data becomes **invisible** until you switch back. For first installs or empty users, switching is safe.
+
+## Where user data lives
+
+In db modes (sqlite / mysql / postgres), the resources below live in the engine. In fs mode, the same resources live on disk under `<dataRoot>/<handle>/` per the per-Repo paths in the "Repos shipped" table above.
+
+| Resource | Engine tables (mysql / pg / sqlite) | On disk (every mode) |
+|---|---|---|
+| Chat content (header + messages) | `chats` | — |
+| Per-chat sidecar state (plugin namespaces) | `chat_states` | — |
+| User settings (UI prefs, persona, etc.) | `settings` | — |
+| Presets (Kobold/OpenAI/NovelAI/textgen, instruct, context, sysprompt, reasoning) | `presets` | — |
+| Per-preset sidecar state | `preset_states` | — |
+| World info books | `worlds` | — |
+| Named docs (themes, moving UI, quick replies) | `named_docs` | — |
+| Group definitions | `groups_table` | — |
+| User-level chat stats | `stats` | — |
+| Character cards (PNG with embedded JSON) | — | `<root>/<handle>/characters/*.png` |
+| User avatars | — | `<root>/<handle>/User Avatars/*.png` |
+| Backgrounds | — | `<root>/<handle>/backgrounds/*` |
+| User-uploaded files / images / workflows | — | `<root>/<handle>/user/{files,images,workflows}/` |
+| Character emotion sprites | — | `<root>/<handle>/characters/<name>/*.png` |
+| Plugin/extension trees | — | `<root>/<handle>/extensions/` |
+| Vector index databases | — | `<root>/<handle>/vectors/` |
+| Login secrets | — | `<root>/<handle>/secrets.json` |
+| Settings snapshots | — | `<root>/<handle>/backups/settings_*.json` |
+| Chat backups (incremental snapshots) | — | `<root>/<handle>/backups/chat_*.jsonl` |
+
+### Why some resources stay on disk
+
+- **Binary blobs** (character cards, avatars, backgrounds, sprites, user uploads): a `BLOB` column is awkward to stream, expensive to seek, and a poor fit for the SQL drivers' default fetch semantics. Filesystem reads handle these efficiently.
+- **Git-cloned trees** (extensions): the plugin lifecycle expects directory semantics (subdirectories, recursive reads). Storing as engine rows would require re-implementing tree traversal.
+- **Third-party formats** (vectors): vector databases have their own on-disk format that the engine layer can't usefully wrap.
+- **Single-file scoped artifacts** (secrets, settings snapshots, chat backups): live on disk because their lifecycle (rotation, backup, admin-visible) is naturally per-file, and they don't benefit from cross-user querying.
+
+A backup ZIP in db mode includes `_engine_dump.bin` + `_engine_meta.json` for the engine rows, plus the on-disk files above. A restore in matching engine kind round-trips both halves. Cross-engine restore must go through `scripts/storage-migrate.js` first to convert.

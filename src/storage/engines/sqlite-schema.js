@@ -1,98 +1,39 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runMigrationsSync } from './schema-runner.js';
+
 export const CURRENT_SCHEMA_VERSION = 1;
 
-const SCHEMA_V1 = [
-    `CREATE TABLE IF NOT EXISTS chats (
-        handle TEXT NOT NULL,
-        char_dir TEXT NOT NULL,
-        name TEXT NOT NULL,
-        is_group INTEGER NOT NULL DEFAULT 0,
-        group_id TEXT NOT NULL DEFAULT '',
-        doc TEXT NOT NULL,
-        integrity TEXT GENERATED ALWAYS AS (json_extract(doc, '$.header.chat_metadata.integrity')) STORED,
-        updated_at INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (handle, char_dir, name, is_group, group_id)
-    )`,
-    `CREATE INDEX IF NOT EXISTS chats_updated ON chats(handle, updated_at DESC)`,
-    `CREATE TABLE IF NOT EXISTS chat_states (
-        handle TEXT NOT NULL,
-        char_dir TEXT NOT NULL,
-        name TEXT NOT NULL,
-        is_group INTEGER NOT NULL DEFAULT 0,
-        group_id TEXT NOT NULL DEFAULT '',
-        namespace TEXT NOT NULL,
-        doc TEXT NOT NULL,
-        PRIMARY KEY (handle, char_dir, name, is_group, group_id, namespace),
-        FOREIGN KEY (handle, char_dir, name, is_group, group_id)
-            REFERENCES chats(handle, char_dir, name, is_group, group_id) ON DELETE CASCADE
-    )`,
-    `CREATE TABLE IF NOT EXISTS settings (
-        handle TEXT PRIMARY KEY,
-        doc TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-    )`,
-    `CREATE TABLE IF NOT EXISTS presets (
-        handle TEXT NOT NULL,
-        dir_key TEXT NOT NULL,
-        name TEXT NOT NULL,
-        doc TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (handle, dir_key, name)
-    )`,
-    // No FK to presets — legacy preset state behavior is permissive about orphan
-    // sidecars; an FK would enforce parent-exists and break that contract.
-    `CREATE TABLE IF NOT EXISTS preset_states (
-        handle TEXT NOT NULL,
-        dir_key TEXT NOT NULL,
-        name TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        doc TEXT NOT NULL,
-        PRIMARY KEY (handle, dir_key, name, namespace)
-    )`,
-    `CREATE TABLE IF NOT EXISTS worlds (
-        handle TEXT NOT NULL,
-        name TEXT NOT NULL,
-        doc TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (handle, name)
-    )`,
-    `CREATE TABLE IF NOT EXISTS named_docs (
-        handle TEXT NOT NULL,
-        bucket TEXT NOT NULL,
-        name TEXT NOT NULL,
-        doc TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (handle, bucket, name)
-    )`,
-    // `groups` is a reserved word in SQL (window functions); avoid it.
-    `CREATE TABLE IF NOT EXISTS groups_table (
-        handle TEXT NOT NULL,
-        id TEXT NOT NULL,
-        doc TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (handle, id)
-    )`,
-    `CREATE TABLE IF NOT EXISTS stats (
-        handle TEXT PRIMARY KEY,
-        doc TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-    )`,
-];
+// SQLite schema mirroring mysql/postgres counterparts. Statements live in
+// ./migrations/sqlite/0001-initial.sql; this module bootstraps nothing — sqlite
+// uses the built-in `user_version` pragma instead of a `_storage_meta` table.
+// We delegate to the sync variant of the migration runner because better-sqlite3
+// is sync end-to-end and the engine's `_dbFor(handle)` relies on `initSchema`
+// returning without a Promise boundary.
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 
 export function initSchema(db) {
-    const current = db.pragma('user_version', { simple: true });
-    if (current === 0) {
-        db.exec('BEGIN');
-        try {
-            for (const stmt of SCHEMA_V1) db.exec(stmt);
-            db.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
-            db.exec('COMMIT');
-        } catch (err) {
-            db.exec('ROLLBACK');
-            throw err;
-        }
-    } else if (current > CURRENT_SCHEMA_VERSION) {
-        throw new Error(`SqliteEngine: db schema version ${current} is newer than supported ${CURRENT_SCHEMA_VERSION}`);
+    // Wrap the whole migration sweep in a transaction so a mid-DDL failure
+    // rolls back cleanly and leaves user_version untouched (the runner only
+    // calls writeVersion after a successful executor call, but ROLLBACK gives
+    // us belt-and-suspenders against partial CREATE TABLE state).
+    db.exec('BEGIN');
+    try {
+        runMigrationsSync({
+            kind: 'sqlite',
+            executor: (sql) => db.exec(sql),
+            migrationsDir: MIGRATIONS_DIR,
+            readVersion: () => db.pragma('user_version', { simple: true }),
+            // PRAGMA does not accept bound parameters, so inline the integer.
+            // The value comes from the migration filename (parsed to Number),
+            // never from user input.
+            writeVersion: (n) => db.pragma(`user_version = ${n}`),
+        });
+        db.exec('COMMIT');
+    } catch (err) {
+        try { db.exec('ROLLBACK'); } catch { /* engine may already have rolled back */ }
+        throw err;
     }
 }

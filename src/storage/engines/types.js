@@ -3,6 +3,9 @@
  * @property {'fs' | 'sqlite' | 'mysql' | 'postgres'} kind
  * @property {<T>(fn: (tx: StorageTransaction) => Promise<T>) => Promise<T>} withTransaction
  * @property {() => Promise<void>} ping
+ * @property {(handle: string) => Promise<void>} deleteUser
+ * @property {(handle: string) => Promise<import('node:stream').Readable | null>} dumpUser
+ * @property {(handle: string, stream: import('node:stream').Readable) => Promise<void>} restoreUser
  * @property {() => Promise<void>} close
  */
 
