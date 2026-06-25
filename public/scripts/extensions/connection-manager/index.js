@@ -1183,6 +1183,8 @@ export async function init() {
     const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
     const claudeExtendedTtlToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_extended_ttl'));
     const claudeCachingAtDepthInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_caching_at_depth'));
+    const claudeCacheWarningSingle = document.getElementById('connection_profile_claude_cache_warning_single');
+    const claudeCacheWarningStrict = document.getElementById('connection_profile_claude_cache_warning_strict');
     const geminiEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_enable_system_prompt_cache'));
     renderConnectionProfiles(profiles);
     initActionableSingleSelect(profiles, {
@@ -1292,6 +1294,19 @@ export async function init() {
                 : null;
             geminiEnableSystemPromptCacheToggle.disabled = !ccGate;
             geminiEnableSystemPromptCacheToggle.checked = fromProfile ?? Boolean(oai_settings.gemini_enable_system_prompt_cache);
+        }
+        if (claudeCacheWarningSingle && claudeCacheWarningStrict) {
+            const isClaudeSource = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE;
+            const depthValue = parseCachingAtDepth(oai_settings.claude_caching_at_depth) ?? -1;
+            const cacheActive = isClaudeSource && (
+                Boolean(oai_settings.claude_enable_system_prompt_cache)
+                || depthValue >= 0
+            );
+            const effectivePost = String(oai_settings.custom_prompt_post_processing || '');
+            const showSingle = cacheActive && effectivePost === 'single';
+            const showStrict = cacheActive && (effectivePost === 'strict' || effectivePost === 'semi');
+            claudeCacheWarningSingle.classList.toggle('displayNone', !showSingle);
+            claudeCacheWarningStrict.classList.toggle('displayNone', !showStrict);
         }
     }
 
@@ -1514,6 +1529,8 @@ export async function init() {
     };
     applyCacheBlockVisibility();
     $('#chat_completion_source').on('change', applyCacheBlockVisibility);
+    $('#chat_completion_source').on('change', syncProfileEditorControls);
+    $('#custom_prompt_post_processing').on('change', syncProfileEditorControls);
 
     $(profiles).on('change', async function () {
         const profileId = String(profiles.value || '');

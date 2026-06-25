@@ -5699,4 +5699,6 @@
     ,"in flight": "進行中"
     ,"starting": "啟動中"
     ,"so far:": "目前進度："
+    ,"Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.": "「提示詞後處理」目前為「單一使用者訊息」，此模式會把所有輪次塞進同一則訊息。在此模式下提示詞快取無法跨請求重用任何前綴，每次請求都只寫不讀。請切換為「無」或「合併連續角色」以使快取生效。"
+    ,"Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.": "「提示詞後處理」目前為「嚴格」或「半嚴格」，此模式會把首則之後的所有系統訊息併入使用者輪次。提示詞快取仍能命中首則使用者訊息的尾部，但無法單獨快取系統提示。改用「無」或「合併連續角色」可獲得最佳快取覆蓋。"
 }

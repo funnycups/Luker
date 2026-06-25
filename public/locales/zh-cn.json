@@ -5860,4 +5860,6 @@
     ,"in flight": "进行中"
     ,"starting": "启动中"
     ,"so far:": "目前进度："
+    ,"Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.": "「提示词后处理」当前为「单一用户消息」，该模式会把所有轮次塞进同一条消息。在此模式下提示词缓存无法跨请求复用任何前缀，每次请求都只写不读。请切换到「未选择」或「合并相同角色连续的发言」以使缓存生效。"
+    ,"Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.": "「提示词后处理」当前为「严格」或「半严格」，该模式会把首条之后的所有系统消息并入用户轮次。提示词缓存仍能命中首条用户消息的尾部，但无法单独缓存系统提示。改用「未选择」或「合并相同角色连续的发言」可获得最佳缓存覆盖。"
 }
