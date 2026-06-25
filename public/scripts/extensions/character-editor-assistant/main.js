@@ -104,7 +104,23 @@ function registerLocaleData() {
         'Character Editor Assistant': '角色卡编辑助手',
         'Open Editor': '打开编辑器',
         'Character Editor': '角色编辑器',
-        'Enable lorebook sync popup after Replace/Update': '替换/更新角色卡后启用世界书同步弹窗',
+        'Enable lorebook sync popup after Replace/Update': '替换/更新角色卡后询问是否打开编辑器',
+        'Open the character editor?': '打开角色编辑器？',
+        'You just replaced or updated a character card. Open the editor to iterate on the card and its world book with the AI, or skip and keep the imported card as-is.': '你刚替换或更新了一张角色卡。打开编辑器可以与 AI 多轮对话,逐步修改角色卡和世界书;跳过则保留刚导入的内容不动。',
+        'Open editor': '打开编辑器',
+        'Skip': '跳过',
+        'Just imported this card — review the baseline and suggest tweaks.': '刚导入了这张角色卡。请先审视卡片当前的基础设定与世界书条目,然后与我多轮对话、逐步给出改进建议或直接动手编辑。',
+        'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '刚更新了这张角色卡。下方是与上一版的差异——请审阅这些变化,然后给出后续调整建议或直接动手编辑。',
+        'Character card diff (previous → current):': '角色卡差异(旧 → 新):',
+        'World book diff (previous → current):': '世界书差异(旧 → 新):',
+        'Primary world book: ${0} → ${1}': '主世界书:${0} → ${1}',
+        'Field changed: ${0}': '字段变更:${0}',
+        'Field added: ${0}': '新增字段:${0}',
+        'Field removed: ${0}': '移除字段:${0}',
+        'Entry added (uid ${0}): ${1}': '新增条目(uid ${0}):${1}',
+        'Entry removed (uid ${0}): ${1}': '移除条目(uid ${0}):${1}',
+        'Entry changed (uid ${0}, ${1}): ${2}': '条目变更(uid ${0},${1}):${2}',
+        '(no human-readable changes detected)': '(未检测到可读差异)',
         'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示词预设（参数+提示词）',
         'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 预设（连接配置）',
         'Plain-text function-call mode': '纯文本函数调用模式',
@@ -333,7 +349,23 @@ function registerLocaleData() {
  'Character Editor Assistant': '角色卡編輯助手',
         'Open Editor': '開啟編輯器',
         'Character Editor': '角色編輯器',
-        'Enable lorebook sync popup after Replace/Update': '替換/更新角色卡後啟用世界書同步彈窗',
+        'Enable lorebook sync popup after Replace/Update': '替換/更新角色卡後詢問是否開啟編輯器',
+        'Open the character editor?': '開啟角色編輯器？',
+        'You just replaced or updated a character card. Open the editor to iterate on the card and its world book with the AI, or skip and keep the imported card as-is.': '你剛替換或更新了一張角色卡。開啟編輯器可以與 AI 多輪對話,逐步修改角色卡與世界書;跳過則保留剛匯入的內容不動。',
+        'Open editor': '開啟編輯器',
+        'Skip': '跳過',
+        'Just imported this card — review the baseline and suggest tweaks.': '剛匯入了這張角色卡。請先審視卡片目前的基礎設定與世界書條目,然後與我多輪對話、逐步給出改進建議或直接動手編輯。',
+        'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '剛更新了這張角色卡。下方是與上一版的差異——請審閱這些變化,然後給出後續調整建議或直接動手編輯。',
+        'Character card diff (previous → current):': '角色卡差異(舊 → 新):',
+        'World book diff (previous → current):': '世界書差異(舊 → 新):',
+        'Primary world book: ${0} → ${1}': '主世界書:${0} → ${1}',
+        'Field changed: ${0}': '欄位變更:${0}',
+        'Field added: ${0}': '新增欄位:${0}',
+        'Field removed: ${0}': '移除欄位:${0}',
+        'Entry added (uid ${0}): ${1}': '新增條目(uid ${0}):${1}',
+        'Entry removed (uid ${0}): ${1}': '移除條目(uid ${0}):${1}',
+        'Entry changed (uid ${0}, ${1}): ${2}': '條目變更(uid ${0},${1}):${2}',
+        '(no human-readable changes detected)': '(未偵測到可讀差異)',
         'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示詞預設（參數+提示詞）',
         'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 預設（連線設定）',
         'Plain-text function-call mode': '純文本函數調用模式',
@@ -3347,6 +3379,201 @@ function buildCharacterEditorOperationKey(operation) {
     return `${kind}:${JSON.stringify(operation?.args || {})}`;
 }
 
+const CHARACTER_DIFF_TOP_FIELDS = Object.freeze(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions']);
+const CHARACTER_DIFF_DATA_FIELDS = Object.freeze(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions']);
+const LOREBOOK_ENTRY_DIFF_FIELDS = Object.freeze(['comment', 'content', 'key', 'keysecondary', 'order', 'position', 'depth', 'disable', 'constant', 'selective', 'selectiveLogic', 'probability', 'useProbability', 'excludeRecursion', 'preventRecursion', 'delayUntilRecursion']);
+const CHARACTER_DIFF_EXCERPT_LIMIT = 240;
+
+// Wrap a literal value in markdown inline code so the chat-bubble renderer
+// doesn't reinterpret `_foo_` as italic or `__BAR__` as bold and silently
+// strip the surrounding characters. Picks a backtick fence longer than any
+// backtick run already in the text so internal backticks survive.
+function mdLiteral(text) {
+    const s = String(text ?? '');
+    if (!s) return '`(empty)`';
+    let max = 0, cur = 0;
+    for (const c of s) {
+        if (c === '`') { cur++; if (cur > max) max = cur; } else cur = 0;
+    }
+    const fence = '`'.repeat(max + 1);
+    const needsPad = s.startsWith('`') || s.endsWith('`');
+    return needsPad ? `${fence} ${s} ${fence}` : `${fence}${s}${fence}`;
+}
+
+function diffExcerpt(value) {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!text) return '(empty)';
+    if (text.length <= CHARACTER_DIFF_EXCERPT_LIMIT) return text;
+    return `${text.slice(0, CHARACTER_DIFF_EXCERPT_LIMIT)}…`;
+}
+
+function fieldsEqualForDiff(a, b) {
+    if (a === b) return true;
+    if (Array.isArray(a) && Array.isArray(b)) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+            if (String(a[i] ?? '') !== String(b[i] ?? '')) return false;
+        }
+        return true;
+    }
+    return String(a ?? '') === String(b ?? '');
+}
+
+function pickCharacterDiffFields(character) {
+    if (!character || typeof character !== 'object') return {};
+    const out = {};
+    for (const key of CHARACTER_DIFF_TOP_FIELDS) {
+        const value = character[key];
+        if (value !== undefined && value !== null && value !== '') {
+            out[key] = value;
+        }
+    }
+    const data = character.data && typeof character.data === 'object' ? character.data : {};
+    for (const key of CHARACTER_DIFF_DATA_FIELDS) {
+        const value = data[key];
+        if (value !== undefined && value !== null && value !== '') {
+            out[`data.${key}`] = value;
+        }
+    }
+    return out;
+}
+
+export function summarizeCharacterDiff(prevCharacter, nextCharacter) {
+    const prev = pickCharacterDiffFields(prevCharacter);
+    const next = pickCharacterDiffFields(nextCharacter);
+    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+    const lines = [];
+    for (const key of [...keys].sort()) {
+        const hadPrev = Object.prototype.hasOwnProperty.call(prev, key);
+        const hadNext = Object.prototype.hasOwnProperty.call(next, key);
+        if (hadPrev && hadNext) {
+            if (!fieldsEqualForDiff(prev[key], next[key])) {
+                lines.push(`- ${i18nFormat('Field changed: ${0}', mdLiteral(key))}`);
+                lines.push(`    - prev: ${mdLiteral(diffExcerpt(prev[key]))}`);
+                lines.push(`    - next: ${mdLiteral(diffExcerpt(next[key]))}`);
+            }
+        } else if (hadNext) {
+            lines.push(`- ${i18nFormat('Field added: ${0}', mdLiteral(key))}`);
+            lines.push(`    - next: ${mdLiteral(diffExcerpt(next[key]))}`);
+        } else {
+            lines.push(`- ${i18nFormat('Field removed: ${0}', mdLiteral(key))}`);
+            lines.push(`    - prev: ${mdLiteral(diffExcerpt(prev[key]))}`);
+        }
+    }
+    return lines;
+}
+
+function summarizeLorebookEntryDiff(prevEntry, nextEntry) {
+    const prevNorm = normalizeLorebookEntryForSync(prevEntry, prevEntry?.uid);
+    const nextNorm = normalizeLorebookEntryForSync(nextEntry, nextEntry?.uid);
+    const changed = [];
+    for (const key of LOREBOOK_ENTRY_DIFF_FIELDS) {
+        if (!fieldsEqualForDiff(prevNorm[key], nextNorm[key])) {
+            changed.push(key);
+        }
+    }
+    return changed;
+}
+
+function entryLabel(entry) {
+    const comment = String(entry?.comment ?? '').trim();
+    if (comment) return diffExcerpt(comment);
+    const keys = Array.isArray(entry?.key) ? entry.key.filter(Boolean).join(', ') : '';
+    if (keys) return diffExcerpt(keys);
+    return '(no label)';
+}
+
+export function summarizeLorebookDiff(prevSnapshot, nextLorebookData, prevBookName, nextBookName) {
+    const lines = [];
+    const prevName = String(prevBookName || '').trim();
+    const nextName = String(nextBookName || '').trim();
+    const prevLabel = prevName ? mdLiteral(prevName) : '`(none)`';
+    const nextLabel = nextName ? mdLiteral(nextName) : '`(none)`';
+    if (prevName !== nextName) {
+        lines.push(`- ${i18nFormat('Primary world book: ${0} → ${1}', prevLabel, nextLabel)}`);
+    }
+    const prevEntries = prevSnapshot && typeof prevSnapshot === 'object' && prevSnapshot.entries && typeof prevSnapshot.entries === 'object'
+        ? prevSnapshot.entries
+        : {};
+    const nextEntries = nextLorebookData && typeof nextLorebookData === 'object' && nextLorebookData.entries && typeof nextLorebookData.entries === 'object'
+        ? nextLorebookData.entries
+        : {};
+    // When primary book changed, every entry in either side is added/removed; treating that as the per-entry diff
+    // would flood the seed message. The book-rename line above is enough; per-entry diff only when the book is the same.
+    if (prevName === nextName) {
+        const uids = new Set([...Object.keys(prevEntries), ...Object.keys(nextEntries)]);
+        for (const uid of [...uids].sort((a, b) => Number(a) - Number(b))) {
+            const prevEntry = prevEntries[uid];
+            const nextEntry = nextEntries[uid];
+            if (prevEntry && !nextEntry) {
+                lines.push(`- ${i18nFormat('Entry removed (uid ${0}): ${1}', uid, mdLiteral(entryLabel(prevEntry)))}`);
+            } else if (!prevEntry && nextEntry) {
+                lines.push(`- ${i18nFormat('Entry added (uid ${0}): ${1}', uid, mdLiteral(entryLabel(nextEntry)))}`);
+            } else if (prevEntry && nextEntry) {
+                const changedFields = summarizeLorebookEntryDiff(prevEntry, nextEntry);
+                if (changedFields.length) {
+                    lines.push(`- ${i18nFormat('Entry changed (uid ${0}, ${1}): ${2}', uid, mdLiteral(changedFields.join(', ')), mdLiteral(entryLabel(nextEntry)))}`);
+                }
+            }
+        }
+    }
+    return lines;
+}
+
+export async function buildPostReplaceSeedMessage(context, detail) {
+    const previousCharacter = detail?.previousCharacter && typeof detail.previousCharacter === 'object'
+        ? detail.previousCharacter
+        : null;
+    const previousLorebookSnapshot = detail?.previousLorebookSnapshot && typeof detail.previousLorebookSnapshot === 'object'
+        ? detail.previousLorebookSnapshot
+        : null;
+    const nextCharacter = detail?.character && typeof detail.character === 'object' ? detail.character : null;
+    if (!previousCharacter) {
+        // First-time import or the upload path didn't capture a prev snapshot — no diff to show.
+        return i18n('Just imported this card — review the baseline and suggest tweaks.');
+    }
+    const nextBookName = String(nextCharacter?.data?.extensions?.world || '').trim();
+    const prevBookName = String(previousLorebookSnapshot?.bookName || previousCharacter?.data?.extensions?.world || '').trim();
+    let nextLorebookData = { entries: {} };
+    if (nextBookName) {
+        try {
+            nextLorebookData = await loadLorebookData(context, nextBookName);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] failed to load post-replace lorebook for diff`, error);
+        }
+    }
+    const cardLines = summarizeCharacterDiff(previousCharacter, nextCharacter);
+    const bookLines = summarizeLorebookDiff(previousLorebookSnapshot, nextLorebookData, prevBookName, nextBookName);
+    const sections = [i18n('Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.')];
+    if (cardLines.length) {
+        sections.push('');
+        sections.push(i18n('Character card diff (previous → current):'));
+        sections.push(...cardLines);
+    }
+    if (bookLines.length) {
+        sections.push('');
+        sections.push(i18n('World book diff (previous → current):'));
+        sections.push(...bookLines);
+    }
+    if (!cardLines.length && !bookLines.length) {
+        sections.push('');
+        sections.push(i18n('(no human-readable changes detected)'));
+    }
+    return sections.join('\n');
+}
+
+async function confirmOpenCharacterEditorAfterReplace() {
+    const result = await Popup.show.confirm(
+        i18n('Open the character editor?'),
+        i18n('You just replaced or updated a character card. Open the editor to iterate on the card and its world book with the AI, or skip and keep the imported card as-is.'),
+        {
+            okButton: i18n('Open editor'),
+            cancelButton: i18n('Skip'),
+        },
+    );
+    return result === __ctx.POPUP_RESULT.AFFIRMATIVE;
+}
+
 async function openCharacterEditorPopup(context = getContext(), opts = {}) {
     const character = context?.characters?.[context?.characterId] || null;
     const avatarFromCtx = String(character?.avatar || '').trim();
@@ -4218,11 +4445,13 @@ jQuery(async () => {
     const characterReplacedEvent = eventTypes?.CHARACTER_REPLACED || 'character_replaced';
     eventSource.on(characterReplacedEvent, async (event) => {
         const settings = getSettings();
-        // Note: this gate also controls auto-open of the editor popup on
-        // import. The setting name is historically about lorebook sync;
-        // the editor auto-trigger was bolted on without a dedicated flag.
-        // Renaming the field now would orphan any user who already toggled
-        // it on, so the conflation lives on under the original key.
+        // This gate also controls whether the post-replace confirm popup
+        // appears at all — historically the only behavior here was an
+        // auto-opening "lorebook sync" popup, so the field name still
+        // says "sync popup". The setting now gates the confirm + editor
+        // flow; renaming the key would orphan any user who already
+        // toggled it on. Disable it to suppress the whole post-replace
+        // prompt.
         if (!settings.replaceLorebookSyncEnabled) {
             return;
         }
@@ -4232,9 +4461,14 @@ jQuery(async () => {
             return;
         }
         try {
+            const shouldOpen = await confirmOpenCharacterEditorAfterReplace();
+            if (!shouldOpen) {
+                return;
+            }
+            const seedSystemMessage = await buildPostReplaceSeedMessage(getContext(), detail);
             await openCharacterEditorPopup(getContext(), {
                 avatar,
-                seedSystemMessage: i18n('Just imported this card — review the baseline and suggest tweaks.'),
+                seedSystemMessage,
                 autoSend: true,
             });
         } catch (error) {

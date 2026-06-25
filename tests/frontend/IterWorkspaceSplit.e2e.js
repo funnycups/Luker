@@ -288,6 +288,18 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         return avatar;
     }
 
+    // After CHARACTER_REPLACED, the handler shows a confirm popup ("Open the
+    // character editor?") before mounting the iter-studio. We click its OK
+    // button to proceed; the cancel button maps to "Skip" and would suppress
+    // the studio entirely. Targets `.popup-button-ok` (the CONFIRM popup's
+    // affirmative class) so the locale-specific button label doesn't have to
+    // be threaded through.
+    async function acknowledgePostReplaceConfirmPopup(page) {
+        const okButton = page.locator('dialog.popup[open] .popup-button-ok').first();
+        await expect(okButton).toBeVisible({ timeout: 10000 });
+        await okButton.click();
+    }
+
     test('CEA Char: workspace mounts with split layout + preview + auto-apply control', async ({ page }) => {
         await awaitMainUI(page);
         const avatar = await ensureActiveCharacter(page);
@@ -308,13 +320,16 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
             // handler reads via event.detail.character — the CustomEvent shape
             // is the canonical wire format used by ST internals.
             const evt = new CustomEvent(evtName, { detail: { character } });
-            await ctx?.eventSource?.emit?.(evtName, evt);
+            // Fire-and-forget: the handler is async and blocks on the confirm
+            // popup; awaiting here would deadlock because the page test step
+            // never returns control to Playwright to click the popup.
+            try { ctx?.eventSource?.emit?.(evtName, evt); } catch (e) { console.warn('emit threw', e); }
         }, avatar);
 
-        // Unified editor popup container: `.cea_editor_studio.luker-iter-workspace`.
-        // The historical `.cea_charit_popup` class never existed on this surface;
-        // the per-field action attributes follow `data-cea-editor-*` (not the
-        // older `data-cea-charit-*`).
+        await acknowledgePostReplaceConfirmPopup(page);
+
+        // Unified editor popup — `.cea_editor_studio.luker-iter-workspace`.
+        // The older `.cea_charit_popup` class never existed for this surface.
         const popup = page.locator('.cea_editor_studio.luker-iter-workspace').first();
         await expect(popup).toBeVisible({ timeout: 15000 });
 
@@ -362,8 +377,10 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
             const evtName = eventTypes.CHARACTER_REPLACED || 'character_replaced';
             const character = ctx?.characters?.find(c => String(c?.avatar) === avatarId) || { avatar: avatarId };
             const evt = new CustomEvent(evtName, { detail: { character } });
-            await ctx?.eventSource?.emit?.(evtName, evt);
+            try { ctx?.eventSource?.emit?.(evtName, evt); } catch (e) { console.warn('emit threw', e); }
         }, avatar);
+
+        await acknowledgePostReplaceConfirmPopup(page);
 
         const popup = page.locator('.cea_editor_studio.luker-iter-workspace').first();
         await expect(popup).toBeVisible({ timeout: 15000 });
@@ -371,12 +388,11 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         await popup.locator('[data-cea-editor-input]').fill('Add to the character description that she has bright green eyes.');
         await popup.locator('[data-cea-editor-action="send"]').click();
 
-        // Wait for pending edits to surface — the unified editor emits
-        // fine-grained `card.<field>` edits, so the preview's per-field
-        // change detection runs against applyEdits directly (no empty-path
-        // fallback needed). The pending banner uses the `hidden` attribute
-        // (not display:none), so we wait on `:not([hidden])` rather than
-        // visibility.
+        // Wait for pending edits to surface — CEA editor emits fine-grained
+        // `card.<field>` edits, so the preview's per-field change detection
+        // runs against applyEdits directly (no empty-path fallback needed).
+        // The pending banner uses the `hidden` attribute (not display:none),
+        // so we wait on `:not([hidden])` rather than visibility.
         await expect(popup.locator('.cea_editor_pending:not([hidden])')).toBeVisible({ timeout: 60000 });
         await expect(popup.locator('[data-iter-preview-pane] .pending-change')).toBeVisible({ timeout: 5000 });
 
