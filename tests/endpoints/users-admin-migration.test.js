@@ -1,7 +1,10 @@
 /* global globalThis */
-import { describe, test, expect, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // ----- Mocks -----
 // Mock modules BEFORE importing users-admin.js. unstable_mockModule defers
@@ -20,6 +23,13 @@ jest.unstable_mockModule('../../src/storage/index.js', () => ({
     initStorage: () => { mockState.initStorageCalled = true; },
     isReadOnly: () => false,
     setReadOnly: () => {},
+    // Stubs for names destructured by content-manager.js (transitively imported
+    // via users-admin.js). The /storage/* routes under test never invoke
+    // seedContent, but ESM link fails if any named import resolves to undefined.
+    getWorldInfoRepo: () => ({}),
+    getPresetRepo: () => ({}),
+    getNamedDocRepo: () => ({}),
+    getSettingsRepo: () => ({}),
 }));
 
 jest.unstable_mockModule('../../src/users.js', () => ({
@@ -118,17 +128,31 @@ const DEFAULT_MOCK_STATE = {
 // fields. Runs before each describe's own beforeEach, so per-test setup
 // always starts from a clean slate. The reset endpoint is itself exercised
 // by cases 5/6.
+//
+// Also gives each test its own on-disk dataRoot. The cross-process migration
+// lock writes `<dataRoot>/_migration.lock`, so a shared sentinel path like
+// `/tmp/data` (which doesn't exist on every host) would fail at acquire time
+// or leak a lockfile between tests. A real mkdtemp dir avoids both.
 let _appForReset;
+let _activeDataRoot = null;
 beforeEach(async () => {
     if (!_appForReset) _appForReset = makeApp();
     Object.assign(mockState, DEFAULT_MOCK_STATE);
     await request(_appForReset).post('/storage/migrate/reset').send({ confirm: true });
+    _activeDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-migrate-route-'));
+    globalThis.DATA_ROOT = _activeDataRoot;
+});
+
+afterEach(() => {
+    if (_activeDataRoot) {
+        fs.rmSync(_activeDataRoot, { recursive: true, force: true });
+        _activeDataRoot = null;
+    }
 });
 
 describe('POST /storage/migrate — fresh run', () => {
     beforeEach(() => {
         mockState.handles = ['a', 'b', 'c'];
-        globalThis.DATA_ROOT = '/tmp/data';
     });
 
     test('all 3 users succeed -> 200 ok + swap + state cleared', async () => {
@@ -155,7 +179,6 @@ describe('POST /storage/migrate — fresh run', () => {
 describe('POST /storage/migrate — partial failure', () => {
     beforeEach(() => {
         mockState.handles = ['a', 'b', 'c'];
-        globalThis.DATA_ROOT = '/tmp/data';
     });
 
     test('user b throws -> 500 + state preserved + a/c done + b failed', async () => {
@@ -185,7 +208,6 @@ describe('POST /storage/migrate — partial failure', () => {
 describe('POST /storage/migrate — resume', () => {
     beforeEach(() => {
         mockState.handles = ['a', 'b', 'c'];
-        globalThis.DATA_ROOT = '/tmp/data';
     });
 
     test('second POST with same target only retries failed user', async () => {
@@ -220,7 +242,6 @@ describe('POST /storage/migrate — resume', () => {
 describe('POST /storage/migrate — fingerprint mismatch', () => {
     beforeEach(() => {
         mockState.handles = ['a'];
-        globalThis.DATA_ROOT = '/tmp/data';
     });
 
     test('different target while migration in progress -> 409', async () => {
@@ -244,7 +265,6 @@ describe('POST /storage/migrate — fingerprint mismatch', () => {
 describe('POST /storage/migrate/reset', () => {
     beforeEach(() => {
         mockState.handles = ['a'];
-        globalThis.DATA_ROOT = '/tmp/data';
     });
 
     test('without confirm -> 400', async () => {
@@ -279,10 +299,83 @@ describe('POST /storage/migrate/reset', () => {
     });
 });
 
+describe('POST /storage/migrate — lock contention', () => {
+    // These cases lean on the top-level beforeEach to mint a real on-disk
+    // dataRoot via mkdtempSync — the contention path hinges on a real
+    // `_migration.lock` file at `<dataRoot>/_migration.lock`, and a shared
+    // sentinel path would either falsely contend with a sibling test or get
+    // wiped by it.
+
+    beforeEach(() => {
+        mockState.handles = ['a'];
+    });
+
+    test('pre-existing lock from a different holder -> 409 migration_locked', async () => {
+        // Pre-write a live lock from "another process". The admin route's
+        // own acquire call must see it, refuse, and bubble the contention
+        // back to the operator as a 409 — not as a 500 (which would imply
+        // server bug) and not as a silent overwrite (which is the bug the
+        // lock exists to prevent).
+        const dataRoot = globalThis.DATA_ROOT;
+        const expiresAt = new Date(Date.now() + 60_000).toISOString();
+        fs.writeFileSync(
+            path.join(dataRoot, '_migration.lock'),
+            JSON.stringify({
+                holderId: 'other-host:9999:deadbeef',
+                host: 'other-host',
+                pid: 9999,
+                acquiredAt: new Date().toISOString(),
+                expiresAt,
+            }, null, 2),
+        );
+
+        const app = makeApp();
+        const res = await request(app)
+            .post('/storage/migrate')
+            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
+
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('migration_locked');
+        expect(res.body.message).toMatch(/other-host:9999:deadbeef/);
+        // No migration ran — initStorage MUST NOT have fired.
+        expect(mockState.initStorageCalled).toBe(false);
+        // Lock file is untouched (still owned by the other holder).
+        const lockAfter = JSON.parse(
+            fs.readFileSync(path.join(dataRoot, '_migration.lock'), 'utf8'),
+        );
+        expect(lockAfter.holderId).toBe('other-host:9999:deadbeef');
+    });
+
+    test('successful migration releases the lock so the next call can run', async () => {
+        // Round-trip: an admin migration must clean up its own lock file so
+        // a follow-up admin call (or the CLI) isn't blocked.
+        const dataRoot = globalThis.DATA_ROOT;
+        const app = makeApp();
+        const first = await request(app)
+            .post('/storage/migrate')
+            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
+        expect(first.status).toBe(200);
+        expect(fs.existsSync(path.join(dataRoot, '_migration.lock'))).toBe(false);
+    });
+
+    test('migration failure also releases the lock (finally semantics)', async () => {
+        // If the per-user copy throws, the route's finally must still drop
+        // the lock — otherwise operators have to manually delete the file
+        // before retrying after every transient DB hiccup.
+        const dataRoot = globalThis.DATA_ROOT;
+        mockState.migrateUserBehavior = async () => { throw new Error('boom'); };
+        const app = makeApp();
+        const res = await request(app)
+            .post('/storage/migrate')
+            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
+        expect(res.status).toBe(500);
+        expect(fs.existsSync(path.join(dataRoot, '_migration.lock'))).toBe(false);
+    });
+});
+
 describe('POST /storage/status — staleSeconds', () => {
     beforeEach(() => {
         mockState.handles = ['a'];
-        globalThis.DATA_ROOT = '/tmp/data';
     });
 
     test('staleSeconds reflects time since last progress', async () => {

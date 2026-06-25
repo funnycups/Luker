@@ -164,6 +164,13 @@ describe('MigrationRunner: FS to SQLite', () => {
                 backupRoot,
                 getUserRoot: () => src.userDir,
             },
+            // Snapshot GC defaults to ON after a successful migration
+            // (Stage 5 Task 4). This test specifically asserts that the
+            // snapshot dir exists post-run and contains source contents, so
+            // it opts in to keepSnapshot to preserve the snapshot for
+            // inspection. The default-GC behaviour is exercised by
+            // `tests/storage/migration/snapshot-gc.test.js`.
+            keepSnapshot: true,
         });
 
         const result = await runner.migrateUser(src.handle);
@@ -361,6 +368,88 @@ describe('MigrationRunner: FS to SQLite', () => {
         });
         await expect(runner.migrateUser(src.handle))
             .rejects.toThrow(/settings verify mismatch|verification failed/);
+    });
+
+    test('REGRESSION: inline verify reports the first divergent key and short-circuits', async () => {
+        // Seed two per-character chats. Fault-inject the dest chat repo so the
+        // FIRST chat.save() commits the wrong body — the second chat must
+        // never be written under inline-verify (the runner short-circuits the
+        // copy loop). Under the legacy standalone-verify model, BOTH chats
+        // get written first and verify catches the divergence afterward.
+        await src.repos.chat.save(
+            src.handle, 'TestChar', 'c1',
+            { chat_metadata: {}, user_name: 'U' },
+            [{ name: 'U', mes: 'one' }],
+            null,
+        );
+        await src.repos.chat.save(
+            src.handle, 'TestChar', 'c2',
+            { chat_metadata: {}, user_name: 'U' },
+            [{ name: 'U', mes: 'two' }],
+            null,
+        );
+
+        const origSave = dst.repos.chat.save.bind(dst.repos.chat);
+        let writeCount = 0;
+        const writtenNames = [];
+        let firstWrittenName = null;
+        const tamperedDest = {
+            ...dst.repos,
+            chat: {
+                ...dst.repos.chat,
+                save: async (handle, charDir, name, header, body, attachments, opts) => {
+                    writeCount++;
+                    writtenNames.push(name);
+                    if (writeCount === 1) {
+                        // Commit the WRONG body on the first chat write so
+                        // inline verify trips immediately. The runner must
+                        // not proceed to the second chat.
+                        firstWrittenName = name;
+                        return origSave(
+                            handle, charDir, name, header,
+                            [{ name: 'U', mes: 'WRONG' }], attachments, opts,
+                        );
+                    }
+                    return origSave(handle, charDir, name, header, body, attachments, opts);
+                },
+                get: dst.repos.chat.get.bind(dst.repos.chat),
+                getState: dst.repos.chat.getState.bind(dst.repos.chat),
+                setState: dst.repos.chat.setState.bind(dst.repos.chat),
+                listStateNamespaces: dst.repos.chat.listStateNamespaces.bind(dst.repos.chat),
+                listRecent: dst.repos.chat.listRecent.bind(dst.repos.chat),
+            },
+        };
+
+        const backupRoot = path.join(tmpRoot, '_storage-migrations');
+        const runner = new MigrationRunner({
+            sourceRepos: src.repos,
+            destRepos: tamperedDest,
+            snapshotPaths: {
+                dataRoot: tmpRoot, backupRoot, getUserRoot: () => src.userDir,
+            },
+        });
+
+        let caught;
+        try {
+            await runner.migrateUser(src.handle);
+        } catch (err) {
+            caught = err;
+        }
+
+        // Error must name the SPECIFIC diverged chat (first-divergent-key
+        // contract from spec §4.3). The runner's outer wrap is permitted
+        // (it tags as copy-stage for auto-rollback), so we accept either
+        // the bare inline message or the wrapped form.
+        expect(caught).toBeDefined();
+        expect(caught.message).toMatch(
+            new RegExp(`chat verify mismatch for TestChar.*${firstWrittenName}`),
+        );
+
+        // Inline verify must short-circuit: exactly ONE chat write happened
+        // before the abort. Under the legacy standalone-verify model this is
+        // 2 (both chats written, then verify pass starts and trips).
+        expect(writeCount).toBe(1);
+        expect(writtenNames).toEqual([firstWrittenName]);
     });
 });
 

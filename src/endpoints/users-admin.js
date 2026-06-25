@@ -65,6 +65,7 @@ import { NamedDocRepo } from '../storage/repositories/named-doc-repo.js';
 import { GroupRepo } from '../storage/repositories/group-repo.js';
 import { StatsRepo } from '../storage/repositories/stats-repo.js';
 import { MigrationRunner } from '../storage/migration/runner.js';
+import { acquireMigrationLock, releaseMigrationLock, makeHolderId, startHeartbeat, stopHeartbeat } from '../storage/migration/lock.js';
 import { persistStorageBackendToConfig, resolveStorageDbConfig } from '../storage/config-persistence.js';
 import {
     computeFingerprint,
@@ -883,6 +884,18 @@ router.post('/delete', requireAdminMiddleware, async (request, response) => {
 
         await storage.removeItem(toKey(request.body.handle));
 
+        // Order: keyv first (admin can no longer log in even if a later step
+        // throws), then engine rows, then the optional fs.rm dir wipe. If
+        // engine.deleteUser throws after the keyv removal, the user is
+        // half-deleted (auth gone, engine rows survive). engine.deleteUser
+        // is idempotent on every engine (fs/sqlite are no-ops per design
+        // spec §4.1 / §5.3; mysql/postgres run a transactional sweep and
+        // already have ECONNRESET/deadlock retry baked in), so an admin
+        // can simply re-POST /delete to complete the cleanup. The engine
+        // call runs BEFORE the optional fs.rm so sqlite can close+evict
+        // its cached Database handle without racing the directory rm.
+        await getStorageEngine().deleteUser(request.body.handle);
+
         if (request.body.purge) {
             const directories = getUserDirectories(request.body.handle);
             console.info('Deleting data directories for', request.body.handle);
@@ -1111,6 +1124,30 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
     }
     const backupRoot = path.join(dataRoot, '_storage-migrations');
 
+    // Cross-process lock (spec §C item 6): refuse the request if another
+    // process (a parallel admin call, or the CLI in `scripts/storage-migrate.js`)
+    // is already migrating against the same dataRoot. Without this guard the
+    // two would race on the source→dest copy and the engine swap. Acquired
+    // here — after dataRoot is known but before any per-user work — so a
+    // contended request never touches user state.
+    const lockHolderId = makeHolderId();
+    try {
+        await acquireMigrationLock({ dataRoot, holderId: lockHolderId });
+    } catch (lockErr) {
+        return response.status(409).send({
+            error: 'migration_locked',
+            message: lockErr?.message || String(lockErr),
+        });
+    }
+
+    // Heartbeat (spec §4.5): a real migration can run well past the 60s
+    // default TTL — a multi-user dataRoot with large worldbooks routinely
+    // does. Without a refresh loop the lock would expire mid-migration and
+    // a competing acquirer could evict us between per-user steps. Started
+    // here (after acquire succeeded, so we never arm a timer that races a
+    // 409 return) and stopped in the matching `finally` below.
+    const heartbeat = startHeartbeat({ dataRoot, holderId: lockHolderId });
+
     let destEngine;
     try {
         const handles = await getAllUserHandles();
@@ -1145,6 +1182,7 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
 
         const runner = new MigrationRunner({
             sourceRepos: buildRepos(sourceEngine),
+            sourceEngine,
             destRepos: buildRepos(destEngine),
             snapshotPaths: {
                 dataRoot,
@@ -1249,6 +1287,19 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
             error: 'migration_error',
             message: err?.message || String(err),
         });
+    } finally {
+        // Always release the lock, whether the migration ran to completion,
+        // returned a 500 partial-failure, threw, or short-circuited via an
+        // early `return response.status(...)` from inside the try. Release
+        // is conditional on holder match so it's safe even in the
+        // pathological case of a TTL-eviction overlap.
+        //
+        // Stop the heartbeat first — clearing the interval before release
+        // means we can't race ourselves (a tick already fired but mid-acquire
+        // would re-write the lockfile after release rms it). `stopHeartbeat`
+        // is null-safe so this is fine even if we never got that far.
+        stopHeartbeat(heartbeat);
+        await releaseMigrationLock({ dataRoot, holderId: lockHolderId });
     }
 });
 

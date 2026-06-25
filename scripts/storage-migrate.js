@@ -16,6 +16,7 @@
 
 import process from 'node:process';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // Argument parsing — kept import-free + side-effect-free so `--help`, missing
@@ -271,9 +272,11 @@ async function main() {
     });
 
     const { MigrationRunner } = await import('../src/storage/migration/runner.js');
+    const { acquireMigrationLock, releaseMigrationLock, makeHolderId, startHeartbeat, stopHeartbeat } = await import('../src/storage/migration/lock.js');
     const backupRoot = path.join(dataRoot, '_storage-migrations');
     const runner = new MigrationRunner({
         sourceRepos,
+        sourceEngine,
         destRepos,
         snapshotPaths: {
             dataRoot,
@@ -283,39 +286,56 @@ async function main() {
         dryRun: args.dryRun,
     });
 
+    // Cross-process lock (spec §C item 6): refuse to run if the admin route
+    // (or another CLI invocation) is already migrating this dataRoot. Mirrors
+    // the admin route's acquire/finally pattern so the two entry points
+    // genuinely interlock — without this the CLI could happily race a live
+    // admin migration on the same data root.
+    const lockHolderId = makeHolderId();
+    try {
+        await acquireMigrationLock({ dataRoot, holderId: lockHolderId });
+    } catch (lockErr) {
+        console.error(`Cannot acquire migration lock: ${lockErr?.message || String(lockErr)}`);
+        console.error('');
+        console.error('Another migration is already running against this dataRoot. Wait for it to finish,');
+        console.error(`or if you believe the lock is stale, inspect/remove ${path.join(dataRoot, '_migration.lock')}.`);
+        // Best-effort close so we don't leak DB pool sockets on the exit.
+        if (sourceEngine.close) { try { await sourceEngine.close(); } catch { /* best-effort */ } }
+        if (destEngine.close) { try { await destEngine.close(); } catch { /* best-effort */ } }
+        process.exit(2);
+    }
+
     console.log(`Migration: ${args.from} -> ${args.to}${args.dryRun ? ' (dry run)' : ''}`);
     console.log(`Users: ${handles.join(', ')}`);
     console.log(`Backup root: ${backupRoot}`);
     console.log('');
 
+    // Heartbeat (spec §4.5): the CLI is the long-running entry point — a
+    // multi-user dataRoot migration will routinely exceed the 60s default
+    // TTL. Without a refresh loop the lock would expire mid-run and an
+    // admin route invocation could evict us. Armed after a successful
+    // acquire so we never start a timer for a 409-path; torn down in the
+    // matching `finally` below before release.
+    const heartbeat = startHeartbeat({ dataRoot, holderId: lockHolderId });
+
     let okCount = 0;
     let failCount = 0;
-    for (const [i, handle] of handles.entries()) {
-        console.log(`[${i + 1}/${handles.length}] migrating ${handle}...`);
-        try {
-            const stats = await runner.migrateUser(handle, {
-                onProgress: ({ stage, ...extra }) => {
-                    if (stage === 'starting') return;
-                    const detail = Object.keys(extra).length > 0 ? ` ${JSON.stringify(extra)}` : '';
-                    console.log(`  ${stage}${detail}`);
-                },
-            });
-            okCount++;
-            console.log(
-                `  done: settings=${stats.settings} presets=${stats.presets} preset_states=${stats.preset_states}`
-                + ` worlds=${stats.worlds} chats=${stats.chats} chat_states=${stats.chat_states}`
-                + ` named_docs=${stats.named_docs} groups=${stats.groups} stats=${stats.stats}`,
-            );
-            if (stats.backupPath) console.log(`  backup: ${stats.backupPath}`);
-            if (stats.errors.length > 0) {
-                console.log(`  warnings: ${stats.errors.length}`);
-                for (const e of stats.errors) console.log(`    - ${e.stage}: ${e.message}`);
-            }
-        } catch (err) {
-            failCount++;
-            console.error(`  FAILED: ${err.message}`);
-        }
-        console.log('');
+    try {
+        const result = await runMigration({
+            runner,
+            handles,
+        });
+        okCount = result.okCount;
+        failCount = result.failCount;
+    } finally {
+        // Release the lock before the NEXT STEPS message so a follow-up
+        // `storage-migrate` invocation (e.g. operator re-runs to mop up a
+        // failed user) isn't blocked while we're still printing.
+        //
+        // Stop the heartbeat first so a pending tick can't write to the
+        // lockfile after release rms it. `stopHeartbeat` is null-safe.
+        stopHeartbeat(heartbeat);
+        await releaseMigrationLock({ dataRoot, holderId: lockHolderId });
     }
 
     // Close engines before reporting summary so any teardown errors surface.
@@ -340,7 +360,104 @@ async function main() {
     process.exit(failCount > 0 ? 1 : 0);
 }
 
-main().catch((err) => {
-    console.error('Fatal:', err?.stack || err?.message || String(err));
-    process.exit(1);
-});
+/**
+ * Drive a built `MigrationRunner` over `handles` via `migrateAllUsers`, which
+ * is the entry point that flips `setReadOnly(true)` for the duration of the
+ * batch (spec §C item 5). The per-user for-loop the CLI used previously
+ * skipped that read-only enforcement and is no longer used.
+ *
+ * Console logging is owned by this function so the CLI keeps its existing
+ * per-handle progress lines and per-user summary block; callers under test
+ * can pass a `logger` to silence or capture output without screen-scraping
+ * stdout. The returned `{okCount, failCount, results}` shape feeds the CLI's
+ * exit-code + NEXT STEPS rendering.
+ *
+ * Exported so the CLI smoke test can drive it directly without spawning a
+ * child node process — the test asserts read-only enforcement was active
+ * mid-run via the same `onProgress` channel the runner uses.
+ *
+ * @param {object} opts
+ * @param {import('../src/storage/migration/runner.js').MigrationRunner} opts.runner
+ * @param {string[]} opts.handles
+ * @param {{log: (...args: any[]) => void, error: (...args: any[]) => void}} [opts.logger]
+ * @returns {Promise<{okCount: number, failCount: number, results: object}>}
+ */
+export async function runMigration({ runner, handles, logger = console }) {
+    const log = logger.log.bind(logger);
+    const error = logger.error.bind(logger);
+
+    const total = handles.length;
+    // Print the "[i/N] migrating <handle>..." header the first time we see a
+    // progress event for a given handle. The runner emits `snapshotted` first
+    // on real runs and `settings-copied` first on dry-runs (no snapshot stage),
+    // so keying off the first event per handle is the only portable signal.
+    let order = 0;
+    const handleOrder = new Map();
+
+    const results = await runner.migrateAllUsers(handles, {
+        onProgress: ({ handle, stage, ...extra }) => {
+            if (!handleOrder.has(handle)) {
+                handleOrder.set(handle, ++order);
+                log(`[${handleOrder.get(handle)}/${total}] migrating ${handle}...`);
+            }
+            if (stage === 'done') {
+                const stats = extra.stats;
+                log(
+                    `  done: settings=${stats.settings} presets=${stats.presets} preset_states=${stats.preset_states}`
+                    + ` worlds=${stats.worlds} chats=${stats.chats} chat_states=${stats.chat_states}`
+                    + ` named_docs=${stats.named_docs} groups=${stats.groups} stats=${stats.stats}`,
+                );
+                // NOTE: do NOT print `stats.backupPath` here. The `done` event
+                // fires inside the runner's success path BEFORE its outer
+                // `finally` runs the snapshot GC (Stage 5 Task 4 default).
+                // The path is still set on `stats` at this instant but the
+                // directory is gone by the time the operator reads the log,
+                // so "backup: <path>" sends them to a "No such file" hunt.
+                // Failure paths take a different log line (`user-failed`)
+                // and preserve the snapshot via the same GC condition.
+                if (stats.errors.length > 0) {
+                    log(`  warnings: ${stats.errors.length}`);
+                    for (const e of stats.errors) log(`    - ${e.stage}: ${e.message}`);
+                }
+                log('');
+                return;
+            }
+            if (stage === 'user-failed') {
+                error(`  FAILED: ${extra.error}`);
+                log('');
+                return;
+            }
+            // Suppress `starting` for parity with the previous CLI output;
+            // every other stage is informational and worth echoing.
+            if (stage === 'starting') return;
+            const detail = Object.keys(extra).length > 0 ? ` ${JSON.stringify(extra)}` : '';
+            log(`  ${stage}${detail}`);
+        },
+    });
+
+    let okCount = 0;
+    let failCount = 0;
+    for (const handle of handles) {
+        const r = results[handle];
+        // migrateAllUsers writes either a full stats object (success — even on
+        // dry-run, where `verified` is intentionally false) or a thin
+        // `{ handle, error, verified: false }` envelope (failure).  The
+        // distinguishing field is `error`, NOT `verified`, since dry-runs
+        // legitimately end with verified=false.
+        if (r && typeof r.error === 'string') failCount++;
+        else okCount++;
+    }
+    return { okCount, failCount, results };
+}
+
+// Only auto-run main() when invoked as a script. Importing this file from a
+// test (the CLI smoke test imports `runMigration` directly) must not trigger
+// the bootstrap path or attempt to call `process.exit`.
+const isMainModule = process.argv[1]
+    && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMainModule) {
+    main().catch((err) => {
+        console.error('Fatal:', err?.stack || err?.message || String(err));
+        process.exit(1);
+    });
+}

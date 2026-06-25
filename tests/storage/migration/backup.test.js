@@ -8,14 +8,14 @@ describe('snapshotUser', () => {
     beforeEach(() => { tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-backup-')); });
     afterEach(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
 
-    test('creates a timestamped backup directory containing source contents', () => {
+    test('creates a timestamped backup directory containing source contents', async () => {
         const userRoot = path.join(tmpRoot, 'u');
         fs.mkdirSync(path.join(userRoot, 'chats', 'TestChar'), { recursive: true });
         fs.writeFileSync(path.join(userRoot, 'chats', 'TestChar', 'chat1.jsonl'), 'line1\nline2\n');
         fs.writeFileSync(path.join(userRoot, 'settings.json'), '{"x":1}');
         const backupRoot = path.join(tmpRoot, '_storage-migrations');
 
-        const dest = snapshotUser({ handle: 'u', userRoot, backupRoot });
+        const dest = await snapshotUser({ handle: 'u', userRoot, backupRoot });
 
         expect(fs.existsSync(dest)).toBe(true);
         expect(path.basename(dest)).toMatch(/-u$/);
@@ -24,26 +24,26 @@ describe('snapshotUser', () => {
             .toBe('line1\nline2\n');
     });
 
-    test('throws when source userRoot missing', () => {
-        expect(() => snapshotUser({
+    test('throws when source userRoot missing', async () => {
+        await expect(snapshotUser({
             handle: 'u',
             userRoot: path.join(tmpRoot, 'nonexistent'),
             backupRoot: path.join(tmpRoot, 'backup'),
-        })).toThrow(/does not exist/);
+        })).rejects.toThrow(/does not exist/);
     });
 
-    test('throws when required arg missing', () => {
-        expect(() => snapshotUser({ handle: 'u', userRoot: tmpRoot })).toThrow(/backupRoot/);
-        expect(() => snapshotUser({ handle: 'u', backupRoot: tmpRoot })).toThrow(/userRoot/);
-        expect(() => snapshotUser({ userRoot: tmpRoot, backupRoot: tmpRoot })).toThrow(/handle/);
+    test('throws when required arg missing', async () => {
+        await expect(snapshotUser({ handle: 'u', userRoot: tmpRoot })).rejects.toThrow(/backupRoot/);
+        await expect(snapshotUser({ handle: 'u', backupRoot: tmpRoot })).rejects.toThrow(/userRoot/);
+        await expect(snapshotUser({ userRoot: tmpRoot, backupRoot: tmpRoot })).rejects.toThrow(/handle/);
     });
 
-    test('creates backupRoot recursively if missing', () => {
+    test('creates backupRoot recursively if missing', async () => {
         const userRoot = path.join(tmpRoot, 'u');
         fs.mkdirSync(userRoot, { recursive: true });
         const backupRoot = path.join(tmpRoot, 'deep', 'nested', 'backup');
 
-        const dest = snapshotUser({ handle: 'u', userRoot, backupRoot });
+        const dest = await snapshotUser({ handle: 'u', userRoot, backupRoot });
         expect(fs.existsSync(backupRoot)).toBe(true);
         expect(fs.existsSync(dest)).toBe(true);
     });
@@ -53,20 +53,20 @@ describe('snapshotUser', () => {
         fs.mkdirSync(userRoot, { recursive: true });
         const backupRoot = path.join(tmpRoot, 'backup');
 
-        const first = snapshotUser({ handle: 'u', userRoot, backupRoot });
+        const first = await snapshotUser({ handle: 'u', userRoot, backupRoot });
         await new Promise((r) => setTimeout(r, 5));
-        const second = snapshotUser({ handle: 'u', userRoot, backupRoot });
+        const second = await snapshotUser({ handle: 'u', userRoot, backupRoot });
         expect(first).not.toBe(second);
         expect(fs.existsSync(first)).toBe(true);
         expect(fs.existsSync(second)).toBe(true);
     });
 
-    test('preserves binary content (e.g. a sqlite-like blob)', () => {
+    test('preserves binary content (e.g. a sqlite-like blob)', async () => {
         const userRoot = path.join(tmpRoot, 'u');
         fs.mkdirSync(userRoot, { recursive: true });
         const blob = Buffer.from([0x00, 0x01, 0xFF, 0xAB, 0xCD]);
         fs.writeFileSync(path.join(userRoot, 'luker-storage.sqlite'), blob);
-        const dest = snapshotUser({
+        const dest = await snapshotUser({
             handle: 'u',
             userRoot,
             backupRoot: path.join(tmpRoot, 'backup'),
@@ -75,10 +75,10 @@ describe('snapshotUser', () => {
         expect(restored.equals(blob)).toBe(true);
     });
 
-    test('timestamp is filename-safe (no colons or dots)', () => {
+    test('timestamp is filename-safe (no colons or dots)', async () => {
         const userRoot = path.join(tmpRoot, 'u');
         fs.mkdirSync(userRoot, { recursive: true });
-        const dest = snapshotUser({
+        const dest = await snapshotUser({
             handle: 'u',
             userRoot,
             backupRoot: path.join(tmpRoot, 'backup'),

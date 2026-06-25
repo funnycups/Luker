@@ -16,7 +16,7 @@ import _ from 'lodash';
  * What remains — `header` (minus the embedded integrity) and `body` — is what
  * must round-trip identically.
  *
- * Shared between `round-trip.test.js` and `MigrationRunner._verify`.
+ * Shared between `round-trip.test.js` and `MigrationRunner._copyAll`'s inline verify.
  */
 export function stripChatEngineMeta(record) {
     if (record == null) return record;

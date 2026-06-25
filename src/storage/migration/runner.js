@@ -1,7 +1,7 @@
 import { setReadOnly, withReadOnlyBypass } from '../read-only-mode.js';
 import { PRESET_FOLDER_BY_API_ID } from '../repositories/preset-repo.js';
 import { BUCKET_TO_DIR } from '../repositories/named-doc-repo.js';
-import { snapshotUser } from './backup.js';
+import { snapshotUser, restoreFromSnapshot, removeSnapshot } from './backup.js';
 import { recordsEqual } from './equality.js';
 
 // Subset of the per-user stats accumulator that callers care about for
@@ -34,16 +34,24 @@ function snapshotCounts(stats) {
 
 /**
  * MigrationRunner copies a user's entire per-handle payload from one Engine
- * (via `sourceRepos`) to another (via `destRepos`), then verifies by reading
- * the destination back and comparing with `recordsEqual` (which tolerates the
- * engine-rotated integrity / timestamp fields on chat records).
+ * (via `sourceRepos`) to another (via `destRepos`), verifying each record
+ * INLINE — after every per-record destination write the runner re-reads the
+ * dest and compares with `recordsEqual` (which tolerates the engine-rotated
+ * integrity / timestamp fields on chat records). The first divergence aborts
+ * the copy loop with `<kind> verify mismatch for <key>` so the failed key is
+ * named explicitly (spec §4.3 "first divergent key", no full-record dump).
+ *
+ * Inline verification replaces the legacy two-pass model (copy-all then a
+ * standalone verify pass over an in-memory `sourceData` accumulator). The
+ * memory footprint is now ~1 record per kind in scope at any time, which
+ * makes the runner usable for users with tens of GB of chats.
  *
  * Before any destination writes happen, a permanent on-disk backup of the
- * source user's data directory is taken. If anything blows up — or the
- * verification step trips — the operator restores by removing the new dest
- * data and copying the backup back in place; no in-runner rollback is
- * attempted because the migration is meant to be done with the source frozen
- * via setReadOnly(), so there is nothing on the source to roll back.
+ * source user's data directory is taken — and, when `sourceEngine` is passed
+ * AND it isn't fs-kind, an engine-side dump is captured alongside the fs tree
+ * (spec §4.4: mysql/pg rows don't live in the user dir, so cpSync alone would
+ * miss them on rollback). On any post-snapshot failure the runner restores
+ * the source from that backup automatically (`_rollback`).
  *
  * The runner is constructor-injected with already-built per-engine Repo sets
  * so test harnesses (and the eventual CLI/admin endpoint) can decide how to
@@ -61,9 +69,22 @@ export class MigrationRunner {
      * @param {RepoSet} opts.sourceRepos
      * @param {RepoSet} opts.destRepos
      * @param {{ dataRoot?: string, backupRoot: string, getUserRoot: (handle: string) => string }} opts.snapshotPaths
+     * @param {object|null} [opts.sourceEngine] — engine driving sourceRepos. When
+     *     present and not fs-kind, the per-user snapshot also captures an
+     *     engine-side dump (and the rollback replays it). Optional — fs↔fs and
+     *     fs↔sqlite paths where the engine state lives inside userRoot work
+     *     without it. The auto-rollback test deliberately omits it; the
+     *     migration suite's fs↔sqlite tests do the same.
      * @param {boolean} [opts.dryRun=false]
+     * @param {boolean} [opts.keepSnapshot=false] — when false (default) a
+     *     successful migrateUser deletes the per-user snapshot dir created at
+     *     step 1 (spec §4.4 finally clause). Set true to keep the snapshot
+     *     around — useful for admins who want a manual restore point after a
+     *     known-good migration, or for forensic comparison of source vs dest
+     *     after the fact. Failed migrations always preserve their snapshot
+     *     regardless of this flag, so a rollback can always be redone manually.
      */
-    constructor({ sourceRepos, destRepos, snapshotPaths, dryRun = false }) {
+    constructor({ sourceRepos, sourceEngine = null, destRepos, snapshotPaths, dryRun = false, keepSnapshot = false }) {
         if (!sourceRepos) throw new Error('MigrationRunner: sourceRepos required');
         if (!destRepos) throw new Error('MigrationRunner: destRepos required');
         if (!snapshotPaths || typeof snapshotPaths.getUserRoot !== 'function') {
@@ -73,15 +94,22 @@ export class MigrationRunner {
             throw new Error('MigrationRunner: snapshotPaths.backupRoot required');
         }
         this._src = sourceRepos;
+        this._srcEngine = sourceEngine;
         this._dst = destRepos;
         this._snapshotPaths = snapshotPaths;
         this._dryRun = !!dryRun;
+        this._keepSnapshot = !!keepSnapshot;
     }
 
     /**
      * Copy + verify one user. Throws on first error (after recording it in
      * `stats.errors`). Caller is responsible for setReadOnly() — migrateAllUsers
      * does it; if you call migrateUser solo, do it yourself.
+     *
+     * Verification happens INLINE inside `_copyAll` (each dest write is
+     * immediately read back and compared with the source record). The
+     * `verifying` / `verified` progress markers are still emitted post-copy as
+     * terminal signals so existing progress consumers don't need to change.
      */
     async migrateUser(handle, { onProgress = () => {} } = {}) {
         const stats = {
@@ -100,13 +128,18 @@ export class MigrationRunner {
             verified: false,
         };
 
-        // 1. Snapshot the source state first (skipped on dry-run).
+        // 1. Snapshot the source state first (skipped on dry-run). When
+        //    sourceEngine is non-fs, the snapshot ALSO captures an engine
+        //    dump so rollback can replay rows (mysql/pg) or the .sqlite file
+        //    (sqlite). When sourceEngine is null or fs-kind, only the fs
+        //    tree is captured — same as Stage 4 Tasks 1+2.
         if (!this._dryRun) {
             try {
-                stats.backupPath = snapshotUser({
+                stats.backupPath = await snapshotUser({
                     handle,
                     userRoot: this._snapshotPaths.getUserRoot(handle),
                     backupRoot: this._snapshotPaths.backupRoot,
+                    engine: this._srcEngine,
                 });
                 onProgress({ stage: 'snapshotted', handle, backupPath: stats.backupPath, counts: snapshotCounts(stats) });
             } catch (err) {
@@ -115,44 +148,88 @@ export class MigrationRunner {
             }
         }
 
-        // 2. Read each kind off source, write to dest, accumulate sourceData for verify.
-        const sourceData = {
-            settings: null,
-            presets: [],         // [{ apiId, name, doc }]
-            presetStates: [],    // [{ apiId, name, namespace, doc }]
-            worlds: [],          // [{ name, doc }]
-            chats: [],           // [{ key, record }] — key carries charDir/name/isGroup/groupId
-            chatStates: [],      // [{ key, namespace, doc }]
-            namedDocs: [],       // [{ bucket, name, doc }]
-            groups: [],          // [{ id, doc }]
-            stats: null,
-        };
-
+        // 2. Copy + inline-verify in one pass, with snapshot GC tied to
+        //    success via the outer finally. Any post-snapshot failure leaves
+        //    the snapshot on disk for forensic inspection (spec §4.4: "if
+        //    success and !keepSnapshot: removeSnapshot(snapshot)"). The inner
+        //    catch around _copyAll still fires _rollback before re-throwing —
+        //    that path uses stats.backupPath, which is why GC has to wait
+        //    until everything else has settled.
         try {
-            // Wrap copy in a bypass scope so destination writes work even if
-            // the caller has flipped READ_ONLY to freeze the source's HTTP
-            // surface (migrateAllUsers does exactly that).
-            await withReadOnlyBypass(() => this._copyAll(handle, sourceData, stats, onProgress));
-        } catch (err) {
-            stats.errors.push({ stage: 'copy', message: err.message });
-            throw new Error(`migration failed during copy for ${handle}: ${err.message}`);
-        }
-
-        // 3. Verify (skipped on dry-run since nothing was written).
-        if (!this._dryRun) {
-            onProgress({ stage: 'verifying', handle, counts: snapshotCounts(stats) });
+            // The per-record verify lives inside _copyAll; any mismatch
+            // surfaces as `<kind> verify mismatch for <key>`, gets caught
+            // here, recorded as a copy-stage failure (rollback fires the
+            // same way for write failures and verify failures), and re-
+            // thrown wrapped.
             try {
-                await this._verify(handle, sourceData);
-                stats.verified = true;
-                onProgress({ stage: 'verified', handle, counts: snapshotCounts(stats) });
+                await withReadOnlyBypass(() => this._copyAll(handle, stats, onProgress));
             } catch (err) {
-                stats.errors.push({ stage: 'verify', message: err.message });
-                throw new Error(`migration verification failed for ${handle}: ${err.message}`);
+                stats.errors.push({ stage: 'copy', message: err.message });
+                await this._rollback(handle, stats);
+                throw new Error(`migration failed during copy for ${handle}: ${err.message}`);
+            }
+
+            // 3. Verification already happened per-record during copy. On
+            //    non-dry runs we still emit `verifying`/`verified` as terminal
+            //    markers (with the total record count) so existing
+            //    onProgress consumers keep working without a contract change.
+            if (!this._dryRun) {
+                const totalRecords = stats.settings
+                    + stats.presets + stats.preset_states
+                    + stats.worlds
+                    + stats.chats + stats.chat_states
+                    + stats.named_docs
+                    + stats.groups
+                    + stats.stats;
+                onProgress({ stage: 'verifying', handle, totalRecords, counts: snapshotCounts(stats) });
+                stats.verified = true;
+                onProgress({ stage: 'verified', handle, totalRecords, counts: snapshotCounts(stats) });
+            }
+
+            onProgress({ stage: 'done', handle, stats, counts: snapshotCounts(stats) });
+            return stats;
+        } finally {
+            // GC the snapshot ONLY on a clean run. `stats.errors.length === 0`
+            // covers both copy failures (pushed { stage: 'copy', ... }) and
+            // rollback markers (pushed by `_rollback`), so any failed
+            // migration keeps the snapshot for forensics — exactly as the
+            // brief promises. Dry-run never took a snapshot so backupPath
+            // stays null and the guard is a no-op.
+            if (!this._keepSnapshot && stats.backupPath && stats.errors.length === 0) {
+                removeSnapshot(stats.backupPath);
+                stats.backupPath = null;
             }
         }
+    }
 
-        onProgress({ stage: 'done', handle, stats, counts: snapshotCounts(stats) });
-        return stats;
+    /**
+     * Auto-rollback per spec §4.4: on any post-snapshot failure, restore the
+     * user's on-disk dir from the snapshot taken at the start of migrateUser.
+     * Pushes a marker entry into `stats.errors` so callers can see rollback
+     * was attempted. Failures inside rollback itself are also recorded but
+     * never thrown — the outer code is already re-throwing the original cause.
+     *
+     * In db-mode runs (sourceEngine && kind !== 'fs') restoreFromSnapshot also
+     * replays the captured `_engine_dump.bin` through `engine.restoreUser` so
+     * mysql/pg rows mutated during the failed copy are reverted to the
+     * pre-migration state — fs-only restore would leave the engine state
+     * stuck in whatever half-state the failure produced.
+     *
+     * No-op on dry-run (no snapshot was taken).
+     */
+    async _rollback(handle, stats) {
+        if (this._dryRun || !stats.backupPath) return;
+        try {
+            await restoreFromSnapshot({
+                handle,
+                userRoot: this._snapshotPaths.getUserRoot(handle),
+                backupPath: stats.backupPath,
+                engine: this._srcEngine,
+            });
+            stats.errors.push({ stage: 'rollback', message: 'restored from snapshot', rolledBack: true });
+        } catch (rollbackErr) {
+            stats.errors.push({ stage: 'rollback', message: rollbackErr.message, rolledBack: false });
+        }
     }
 
     /**
@@ -187,12 +264,17 @@ export class MigrationRunner {
     // Internal helpers
     // --------------------------------------------------------------------
 
-    async _copyAll(handle, sourceData, stats, onProgress) {
+    async _copyAll(handle, stats, onProgress) {
         // Settings
         const settings = await this._src.settings.get(handle);
         if (settings != null) {
-            sourceData.settings = settings;
-            if (!this._dryRun) await this._dst.settings.save(handle, settings);
+            if (!this._dryRun) {
+                await this._dst.settings.save(handle, settings);
+                const dstSettings = await this._dst.settings.get(handle);
+                if (!recordsEqual('settings', settings, dstSettings)) {
+                    throw new Error('settings verify mismatch');
+                }
+            }
             stats.settings = 1;
         }
         onProgress({ stage: 'settings-copied', handle, counts: snapshotCounts(stats) });
@@ -210,15 +292,25 @@ export class MigrationRunner {
                 const name = item.key.name;
                 const doc = await this._src.preset.get(handle, apiId, name);
                 if (doc == null) continue;
-                sourceData.presets.push({ apiId, name, doc });
-                if (!this._dryRun) await this._dst.preset.save(handle, apiId, name, doc);
+                if (!this._dryRun) {
+                    await this._dst.preset.save(handle, apiId, name, doc);
+                    const dstDoc = await this._dst.preset.get(handle, apiId, name);
+                    if (!recordsEqual('preset', doc, dstDoc)) {
+                        throw new Error(`preset verify mismatch for ${apiId}/${name}`);
+                    }
+                }
                 stats.presets++;
                 const namespaces = await this._src.preset.listStateNamespaces(handle, apiId, name);
                 for (const ns of namespaces) {
                     const stateDoc = await this._src.preset.getState(handle, apiId, name, ns);
                     if (stateDoc == null) continue;
-                    sourceData.presetStates.push({ apiId, name, namespace: ns, doc: stateDoc });
-                    if (!this._dryRun) await this._dst.preset.setState(handle, apiId, name, ns, stateDoc);
+                    if (!this._dryRun) {
+                        await this._dst.preset.setState(handle, apiId, name, ns, stateDoc);
+                        const dstState = await this._dst.preset.getState(handle, apiId, name, ns);
+                        if (!recordsEqual('preset-state', stateDoc, dstState)) {
+                            throw new Error(`preset state verify mismatch for ${apiId}/${name}/${ns}`);
+                        }
+                    }
                     stats.preset_states++;
                 }
             }
@@ -231,8 +323,13 @@ export class MigrationRunner {
             const name = item.key.name;
             const doc = await this._src.worldInfo.get(handle, name);
             if (doc == null) continue;
-            sourceData.worlds.push({ name, doc });
-            if (!this._dryRun) await this._dst.worldInfo.save(handle, name, doc);
+            if (!this._dryRun) {
+                await this._dst.worldInfo.save(handle, name, doc);
+                const dstDoc = await this._dst.worldInfo.get(handle, name);
+                if (!recordsEqual('world', doc, dstDoc)) {
+                    throw new Error(`world verify mismatch for ${name}`);
+                }
+            }
             stats.worlds++;
         }
         onProgress({ stage: 'worlds-copied', handle, counts: snapshotCounts(stats) });
@@ -253,26 +350,32 @@ export class MigrationRunner {
             const key = item.key;
             const chat = await this._src.chat.get(handle, key.charDir, key.name);
             if (chat == null) continue;
-            sourceData.chats.push({ key: { ...key, isGroup: false, groupId: undefined }, record: chat });
             if (!this._dryRun) {
-                // ChatRepo.save rotates integrity on the dest — that's the
-                // whole point of the verify step using stripChatEngineMeta.
+                // ChatRepo.save rotates integrity on the dest — that's why
+                // the inline verify uses `recordsEqual('chat', ...)` which
+                // calls stripChatEngineMeta to ignore those engine fields.
                 await this._dst.chat.save(
                     handle, key.charDir, key.name,
                     chat.header, chat.body, null,
                 );
+                const dstChat = await this._dst.chat.get(handle, key.charDir, key.name);
+                if (!recordsEqual('chat', chat, dstChat)) {
+                    throw new Error(`chat verify mismatch for ${key.charDir || '(group)'}::${key.name}`);
+                }
             }
             stats.chats++;
             const namespaces = await this._src.chat.listStateNamespaces(handle, key.charDir, key.name);
             for (const ns of namespaces) {
                 const stateDoc = await this._src.chat.getState(handle, key.charDir, key.name, ns);
                 if (stateDoc == null) continue;
-                sourceData.chatStates.push({
-                    key: { ...key, isGroup: false, groupId: undefined },
-                    namespace: ns, doc: stateDoc,
-                });
                 if (!this._dryRun) {
                     await this._dst.chat.setState(handle, key.charDir, key.name, ns, stateDoc);
+                    const dstState = await this._dst.chat.getState(handle, key.charDir, key.name, ns);
+                    if (!recordsEqual('chat-state', stateDoc, dstState)) {
+                        throw new Error(
+                            `chat state verify mismatch for ${key.charDir || '(group)'}::${key.name}::${ns}`,
+                        );
+                    }
                 }
                 stats.chat_states++;
             }
@@ -288,14 +391,19 @@ export class MigrationRunner {
                     { isGroup: true, groupId: chatId },
                 );
                 if (chat == null) continue;
-                const key = { kind: 'chat', handle, charDir: undefined, name: chatId, isGroup: true, groupId: chatId };
-                sourceData.chats.push({ key, record: chat });
                 if (!this._dryRun) {
                     await this._dst.chat.save(
                         handle, null, chatId,
                         chat.header, chat.body, null,
                         { isGroup: true, groupId: chatId },
                     );
+                    const dstChat = await this._dst.chat.get(
+                        handle, null, chatId,
+                        { isGroup: true, groupId: chatId },
+                    );
+                    if (!recordsEqual('chat', chat, dstChat)) {
+                        throw new Error(`chat verify mismatch for (group)::${chatId} (groupId=${chatId})`);
+                    }
                 }
                 stats.chats++;
                 const namespaces = await this._src.chat.listStateNamespaces(
@@ -307,12 +415,18 @@ export class MigrationRunner {
                         { isGroup: true, groupId: chatId },
                     );
                     if (stateDoc == null) continue;
-                    sourceData.chatStates.push({ key, namespace: ns, doc: stateDoc });
                     if (!this._dryRun) {
                         await this._dst.chat.setState(
                             handle, null, chatId, ns, stateDoc,
                             { isGroup: true, groupId: chatId },
                         );
+                        const dstState = await this._dst.chat.getState(
+                            handle, null, chatId, ns,
+                            { isGroup: true, groupId: chatId },
+                        );
+                        if (!recordsEqual('chat-state', stateDoc, dstState)) {
+                            throw new Error(`chat state verify mismatch for (group)::${chatId}::${ns}`);
+                        }
                     }
                     stats.chat_states++;
                 }
@@ -327,8 +441,13 @@ export class MigrationRunner {
                 const name = item.key.name;
                 const doc = await this._src.namedDoc.get(handle, bucket, name);
                 if (doc == null) continue;
-                sourceData.namedDocs.push({ bucket, name, doc });
-                if (!this._dryRun) await this._dst.namedDoc.save(handle, bucket, name, doc);
+                if (!this._dryRun) {
+                    await this._dst.namedDoc.save(handle, bucket, name, doc);
+                    const dstDoc = await this._dst.namedDoc.get(handle, bucket, name);
+                    if (!recordsEqual('named-doc', doc, dstDoc)) {
+                        throw new Error(`named-doc verify mismatch for ${bucket}/${name}`);
+                    }
+                }
                 stats.named_docs++;
             }
         }
@@ -340,8 +459,13 @@ export class MigrationRunner {
             const id = item.key.id;
             const doc = await this._src.group.get(handle, id);
             if (doc == null) continue;
-            sourceData.groups.push({ id, doc });
-            if (!this._dryRun) await this._dst.group.save(handle, id, doc);
+            if (!this._dryRun) {
+                await this._dst.group.save(handle, id, doc);
+                const dstDoc = await this._dst.group.get(handle, id);
+                if (!recordsEqual('group', doc, dstDoc)) {
+                    throw new Error(`group verify mismatch for ${id}`);
+                }
+            }
             stats.groups++;
         }
         onProgress({ stage: 'groups-copied', handle, counts: snapshotCounts(stats) });
@@ -349,78 +473,15 @@ export class MigrationRunner {
         // Stats
         const statsDoc = await this._src.stats.get(handle);
         if (statsDoc != null) {
-            sourceData.stats = statsDoc;
-            if (!this._dryRun) await this._dst.stats.save(handle, statsDoc);
+            if (!this._dryRun) {
+                await this._dst.stats.save(handle, statsDoc);
+                const dstStats = await this._dst.stats.get(handle);
+                if (!recordsEqual('stats', statsDoc, dstStats)) {
+                    throw new Error('stats verify mismatch');
+                }
+            }
             stats.stats = 1;
         }
         onProgress({ stage: 'stats-copied', handle, counts: snapshotCounts(stats) });
-    }
-
-    async _verify(handle, sourceData) {
-        if (sourceData.settings != null) {
-            const dst = await this._dst.settings.get(handle);
-            if (!recordsEqual('settings', sourceData.settings, dst)) {
-                throw new Error('settings verify mismatch');
-            }
-        }
-        for (const { apiId, name, doc } of sourceData.presets) {
-            const dst = await this._dst.preset.get(handle, apiId, name);
-            if (!recordsEqual('preset', doc, dst)) {
-                throw new Error(`preset verify mismatch for ${apiId}/${name}`);
-            }
-        }
-        for (const { apiId, name, namespace, doc } of sourceData.presetStates) {
-            const dst = await this._dst.preset.getState(handle, apiId, name, namespace);
-            if (!recordsEqual('preset-state', doc, dst)) {
-                throw new Error(`preset state verify mismatch for ${apiId}/${name}/${namespace}`);
-            }
-        }
-        for (const { name, doc } of sourceData.worlds) {
-            const dst = await this._dst.worldInfo.get(handle, name);
-            if (!recordsEqual('world', doc, dst)) {
-                throw new Error(`world verify mismatch for ${name}`);
-            }
-        }
-        for (const { key, record } of sourceData.chats) {
-            const dst = await this._dst.chat.get(handle, key.charDir, key.name, {
-                isGroup: !!key.isGroup,
-                groupId: key.groupId,
-            });
-            if (!recordsEqual('chat', record, dst)) {
-                throw new Error(
-                    `chat verify mismatch for ${key.charDir || '(group)'}::${key.name}`
-                    + (key.isGroup ? ` (groupId=${key.groupId})` : ''),
-                );
-            }
-        }
-        for (const { key, namespace, doc } of sourceData.chatStates) {
-            const dst = await this._dst.chat.getState(handle, key.charDir, key.name, namespace, {
-                isGroup: !!key.isGroup,
-                groupId: key.groupId,
-            });
-            if (!recordsEqual('chat-state', doc, dst)) {
-                throw new Error(
-                    `chat state verify mismatch for ${key.charDir || '(group)'}::${key.name}::${namespace}`,
-                );
-            }
-        }
-        for (const { bucket, name, doc } of sourceData.namedDocs) {
-            const dst = await this._dst.namedDoc.get(handle, bucket, name);
-            if (!recordsEqual('named-doc', doc, dst)) {
-                throw new Error(`named-doc verify mismatch for ${bucket}/${name}`);
-            }
-        }
-        for (const { id, doc } of sourceData.groups) {
-            const dst = await this._dst.group.get(handle, id);
-            if (!recordsEqual('group', doc, dst)) {
-                throw new Error(`group verify mismatch for ${id}`);
-            }
-        }
-        if (sourceData.stats != null) {
-            const dst = await this._dst.stats.get(handle);
-            if (!recordsEqual('stats', sourceData.stats, dst)) {
-                throw new Error('stats verify mismatch');
-            }
-        }
     }
 }

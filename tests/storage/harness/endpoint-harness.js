@@ -109,16 +109,25 @@ function precreateCommonDirs(dirs) {
 const MYSQL_ROOT_URL = process.env.LUKER_TEST_MYSQL_ROOT_URL || 'mysql://root:root@127.0.0.1:53306';
 const PG_ROOT_URL = process.env.LUKER_TEST_POSTGRES_URL || 'postgresql://luker:postgres@127.0.0.1:55432/luker_test';
 
-function makeEngineFactory({ mode, dataRoot, handle, dbName, pgSchemaUrl }) {
+function makeEngineFactory({ mode, dataRoot, handle, extraHandles, dbName, pgSchemaUrl }) {
     const userDir = path.join(dataRoot, handle);
     const dirs = buildDirs(userDir);
+    // Extra handles share the same `dataRoot` (so the same sqlite/mysql/pg
+    // database/schema serves them) but each gets its own sibling user dir,
+    // so fs-mode keeps the per-user filesystem layout the real server uses.
+    const extraDirs = {};
+    for (const h of extraHandles || []) {
+        extraDirs[h] = buildDirs(path.join(dataRoot, h));
+    }
     const directoriesByHandle = (h) => {
-        if (h !== handle) throw new Error(`unknown handle ${h}`);
-        return dirs;
+        if (h === handle) return dirs;
+        if (extraDirs[h]) return extraDirs[h];
+        throw new Error(`unknown handle ${h}`);
     };
 
     return {
         dirs,
+        extraDirs,
         directoriesByHandle,
         get mysqlUrl() { return mode === 'mysql' ? `${MYSQL_ROOT_URL}/${dbName}` : null; },
         get pgUrl() { return mode === 'postgres' ? pgSchemaUrl : null; },
@@ -167,9 +176,16 @@ function pgSchemaConnUrl(schema) {
  *        Callback that mounts routers onto the app. Runs AFTER initStorage so
  *        routers that capture getXxxRepo() at module load time work.
  * @param {object} [opts.profile]  Override request.user.profile (default: {handle, admin: true}).
- * @returns {Promise<{app, dataRoot, handle, dirs, mode, engine, reopenEngine, cleanup}>}
+ * @param {string[]} [opts.extraHandles]
+ *        Additional handles the engine should know about. Each gets a sibling
+ *        user directory under `dataRoot`, pre-created with the same shape as
+ *        the primary handle's, and is registered in `directoriesByHandle`.
+ *        Multi-user routes (admin delete, backup/restore, migration) need
+ *        this because the primary `handle` is the request issuer and cannot
+ *        be the deletion target.
+ * @returns {Promise<{app, dataRoot, handle, dirs, extraDirs, mode, engine, reopenEngine, cleanup}>}
  */
-export async function makeEndpointHarness({ mode, mount, profile }) {
+export async function makeEndpointHarness({ mode, mount, profile, extraHandles }) {
     const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), `luker-ep-${mode}-`));
     const handle = 'u';
     const dbName = (mode === 'mysql' || mode === 'postgres')
@@ -179,10 +195,13 @@ export async function makeEndpointHarness({ mode, mount, profile }) {
     if (mode === 'postgres') await createPgSchema(dbName);
 
     const factory = makeEngineFactory({
-        mode, dataRoot, handle, dbName,
+        mode, dataRoot, handle, extraHandles, dbName,
         pgSchemaUrl: mode === 'postgres' ? pgSchemaConnUrl(dbName) : null,
     });
     precreateCommonDirs(factory.dirs);
+    for (const h of extraHandles || []) {
+        precreateCommonDirs(factory.extraDirs[h]);
+    }
 
     initStorage({
         mode,
@@ -249,6 +268,7 @@ export async function makeEndpointHarness({ mode, mount, profile }) {
         dataRoot,
         handle,
         dirs: factory.dirs,
+        extraDirs: factory.extraDirs,
         mode,
         get engine() { return getStorageEngine(); },
         reopenEngine,
