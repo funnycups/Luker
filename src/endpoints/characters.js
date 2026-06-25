@@ -622,7 +622,11 @@ function convertToV2(char, directories) {
         depth_prompt_role: _.get(char, 'data.extensions.depth_prompt.role', char.depth_prompt_role),
     }, directories);
 
-    result.chat = char.chat ?? `${_.get(result, 'data.name', _.get(char, 'data.name', char.name) || 'Unnamed')} - ${humanizedDateTime()}`;
+    // See projectRuntimeCharacterFields for why we don't mint a stamp
+    // here — a missing .chat must surface as '' so callers take the
+    // explicit "no active chat" path instead of writing first_message
+    // under a server-minted timestamp.
+    result.chat = char.chat ?? '';
     result.create_date = char.create_date;
 
     return result;
@@ -682,7 +686,20 @@ function projectRuntimeCharacterFields(char) {
     });
 
     const runtimeName = _.get(char, 'data.name', char.name) || 'Unnamed';
-    char.chat = char.chat ?? `${runtimeName} - ${humanizedDateTime()}`;
+    // Do NOT mint a placeholder `<name> - <NOW>` here. Upstream did,
+    // and it bit users: a PNG with no embedded `.chat` field would
+    // return a freshly-stamped string on every request, never persisted
+    // to disk. Callers that handed that string to /api/chats/get got
+    // back `new_chat: true`, then wrote first_message under that
+    // stamp — a phantom chat file the user never created. Returning
+    // '' lets the client take the explicit "no active chat" branch
+    // (welcome screen, "Start new chat" button) and reach a deliberate
+    // `doNewChat` / `openCharacterChat(realName)` instead of an
+    // accidental save under a server-minted timestamp.
+    void runtimeName;
+    if (char.chat == null) {
+        char.chat = '';
+    }
 
     return char;
 }

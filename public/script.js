@@ -2550,11 +2550,23 @@ export async function getOneCharacter(avatarUrl) {
     if (response.ok) {
         const getData = await response.json();
         getData.name = DOMPurify.sanitize(getData.name);
-        getData.chat = String(getData.chat);
+        getData.chat = String(getData.chat ?? '');
 
         const indexOf = characters.findIndex(x => x.avatar === avatarUrl);
 
         if (indexOf !== -1) {
+            // Preserve any non-empty .chat the client already has for
+            // this character. The server returns '' when the PNG has
+            // no embedded chat field (it deliberately stopped minting
+            // a placeholder timestamp — cf. characters.js
+            // projectRuntimeCharacterFields), but we don't want that
+            // empty string to overwrite a real chat name the client
+            // mint-fallback set in getCharacters (script.js initial
+            // load) or that an active session already wrote.
+            const existingChat = characters[indexOf]?.chat;
+            if (!getData.chat && existingChat) {
+                getData.chat = existingChat;
+            }
             characters[indexOf] = getData;
         } else {
             console.warn(`Character ${avatarUrl} not found in the list; skip in-place refresh.`);

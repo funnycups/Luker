@@ -555,6 +555,24 @@ async function openRecentCharacterChat(avatarId, fileName) {
     }
 
     try {
+        // Pin the target chat onto the character record BEFORE the
+        // selection runs. selectCharacterById internally awaits
+        // getChat(), which fetches by `characters[i].chat` — if we
+        // leave that pointing at the card's stale "last active chat"
+        // (or worse, an empty value that the server used to mint into
+        // a fresh `<name> - <NOW>` stamp), getChat receives `new_chat`
+        // and getChatResult writes a phantom first_message under that
+        // stale/minted name, then openCharacterChat opens the file
+        // the user actually clicked. The result is "I opened my chat
+        // and a new empty one appeared in the list."
+        //
+        // Pinning fileName first makes the internal getChat fetch
+        // the file the user actually clicked, in one shot, with no
+        // intermediate phantom save.
+        if (characters[characterId]) {
+            characters[characterId].chat = fileName;
+        }
+
         await selectCharacterById(characterId);
         setActiveCharacter(avatarId);
         saveSettingsDebounced();
