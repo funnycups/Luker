@@ -870,7 +870,7 @@ async function getRecentChats() {
         chat.char_name = character ? getCharacterName(character) : (group?.name || '');
         chat.date_short = chatTimestamp.format('l');
         chat.date_long = chatTimestamp.format('LL LT');
-        chat.chat_name = chat.file_name.replace('.jsonl', '');
+        chat.chat_name = chat.file_name.replace(/\.jsonl$/i, '');
         chat.char_thumbnail = character ? getThumbnailUrl('avatar', character.avatar) : system_avatar;
         chat.is_group = !!group;
         chat.hidden = index >= settings.collapsedDisplayed;

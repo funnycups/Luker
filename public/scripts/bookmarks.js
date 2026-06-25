@@ -117,7 +117,7 @@ async function getExistingChatNames() {
 
     if (response.ok) {
         const data = await response.json();
-        const chats = Object.values(data).map(x => x.file_name.replace('.jsonl', ''));
+        const chats = Object.values(data).map(x => x.file_name.replace(/\.jsonl$/i, ''));
         return [...chats];
     }
 

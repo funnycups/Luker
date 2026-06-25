@@ -2675,7 +2675,7 @@ async function getReplacementCharacterChatName(character) {
     const chats = Object.values(await chatsResponse.json());
     chats.sort((a, b) => sortMoments(timestampToMoment(a.last_mes), timestampToMoment(b.last_mes)));
     return chats.length && typeof chats[0] === 'object'
-        ? chats[0].file_name.replace('.jsonl', '')
+        ? chats[0].file_name.replace(/\.jsonl$/i, '')
         : `${getCharacterName(character)} - ${humanizedDateTime()}`;
 }
 
@@ -3079,7 +3079,7 @@ export async function replaceCurrentChat() {
 
         if (chats.length && typeof chats[0] === 'object') {
             // pick existing chat
-            characters[this_chid].chat = chats[0].file_name.replace('.jsonl', '');
+            characters[this_chid].chat = chats[0].file_name.replace(/\.jsonl$/i, '');
             $('#selected_chat_pole').val(characters[this_chid].chat);
             await updateRemoteChatName(this_chid, characters[this_chid].chat);
             await getChat();
@@ -11008,7 +11008,7 @@ async function renamePastChats(oldAvatar, newAvatar, newName) {
 
     for (const { file_name } of pastChats) {
         try {
-            const fileNameWithoutExtension = file_name.replace('.jsonl', '');
+            const fileNameWithoutExtension = file_name.replace(/\.jsonl$/i, '');
             const getChatResponse = await fetch('/api/chats/get', {
                 method: 'POST',
                 headers: getRequestHeaders(),
@@ -15288,7 +15288,7 @@ export async function getChatsFromFiles(data, isGroupChat) {
                     ? JSON.stringify({ id: file_name })
                     : JSON.stringify({
                         ch_name: getCharacterName(characters[context.characterId]),
-                        file_name: file_name.replace('.jsonl', ''),
+                        file_name: file_name.replace(/\.jsonl$/i, ''),
                         avatar_url: characters[context.characterId].avatar,
                     });
 
@@ -18235,7 +18235,7 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
             } else {
                 if (deleteChats) {
                     for (const chat of pastChats) {
-                        const name = chat.file_name.replace('.jsonl', '');
+                        const name = chat.file_name.replace(/\.jsonl$/i, '');
                         await eventSource.emit(event_types.CHAT_DELETED, name);
                     }
                 }
