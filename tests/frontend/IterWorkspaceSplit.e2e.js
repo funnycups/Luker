@@ -297,7 +297,7 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         // `event.detail.character.avatar`).
         await page.evaluate(async (avatarId) => {
             const ctx = window.Luker?.getContext?.();
-            const settings = ctx?.extensionSettings?.['character-editor-assistant'];
+            const settings = ctx?.extensionSettings?.['character_editor_assistant'];
             if (settings && typeof settings === 'object') {
                 settings.replaceLorebookSyncEnabled = true;
             }
@@ -311,7 +311,11 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
             await ctx?.eventSource?.emit?.(evtName, evt);
         }, avatar);
 
-        const popup = page.locator('.cea_charit_popup.luker-iter-workspace').first();
+        // Unified editor popup container: `.cea_editor_studio.luker-iter-workspace`.
+        // The historical `.cea_charit_popup` class never existed on this surface;
+        // the per-field action attributes follow `data-cea-editor-*` (not the
+        // older `data-cea-charit-*`).
+        const popup = page.locator('.cea_editor_studio.luker-iter-workspace').first();
         await expect(popup).toBeVisible({ timeout: 15000 });
 
         // Structural assertions: split grid + chat pane + preview pane + resizer.
@@ -321,7 +325,7 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
 
         // Auto-apply control is mounted in the composer row, unchecked by default.
-        const autoApply = popup.locator('[data-cea-charit-action="toggle-auto-apply"]');
+        const autoApply = popup.locator('[data-cea-editor-action="toggle-auto-apply"]');
         await expect(autoApply).toHaveCount(1);
         await expect(autoApply).not.toBeChecked();
 
@@ -350,7 +354,7 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
 
         await page.evaluate(async (avatarId) => {
             const ctx = window.Luker?.getContext?.();
-            const settings = ctx?.extensionSettings?.['character-editor-assistant'];
+            const settings = ctx?.extensionSettings?.['character_editor_assistant'];
             if (settings && typeof settings === 'object') {
                 settings.replaceLorebookSyncEnabled = true;
             }
@@ -361,16 +365,19 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
             await ctx?.eventSource?.emit?.(evtName, evt);
         }, avatar);
 
-        const popup = page.locator('.cea_charit_popup.luker-iter-workspace').first();
+        const popup = page.locator('.cea_editor_studio.luker-iter-workspace').first();
         await expect(popup).toBeVisible({ timeout: 15000 });
 
-        await popup.locator('[data-cea-charit-input]').fill('Add to the character description that she has bright green eyes.');
-        await popup.locator('[data-cea-charit-action="send"]').click();
+        await popup.locator('[data-cea-editor-input]').fill('Add to the character description that she has bright green eyes.');
+        await popup.locator('[data-cea-editor-action="send"]').click();
 
-        // Wait for pending edits to surface — CEA char emits fine-grained
-        // `card.<field>` edits, so the preview's per-field change detection
-        // runs against applyEdits directly (no empty-path fallback needed).
-        await expect(popup.locator('.cea_charit_pending')).toBeVisible({ timeout: 60000 });
+        // Wait for pending edits to surface — the unified editor emits
+        // fine-grained `card.<field>` edits, so the preview's per-field
+        // change detection runs against applyEdits directly (no empty-path
+        // fallback needed). The pending banner uses the `hidden` attribute
+        // (not display:none), so we wait on `:not([hidden])` rather than
+        // visibility.
+        await expect(popup.locator('.cea_editor_pending:not([hidden])')).toBeVisible({ timeout: 60000 });
         await expect(popup.locator('[data-iter-preview-pane] .pending-change')).toBeVisible({ timeout: 5000 });
 
         await page.keyboard.press('Escape');
