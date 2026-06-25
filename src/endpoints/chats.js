@@ -1044,6 +1044,20 @@ function normalizeJsonlFileName(fileName) {
 }
 
 /**
+ * Storage key form of a chat file name: no .jsonl extension.
+ * ChatRepo's storage layer pins .jsonl on writes via the storage key's `name`
+ * field, so endpoints that receive a `file_name` from the frontend must
+ * strip the extension before forwarding — otherwise a caller that includes
+ * .jsonl produces X.jsonl.jsonl on disk, and the same chat gets two
+ * disconnected sidecar tracks (one under base `X`, one under base `X.jsonl`).
+ * @param {string} fileName Raw file name from request body.
+ * @returns {string} Trimmed name without trailing .jsonl.
+ */
+function stripJsonlExt(fileName) {
+    return String(fileName ?? '').trim().replace(/\.jsonl$/i, '');
+}
+
+/**
  * Resolves avatar directory name from avatar url.
  * @param {string} avatarUrl Avatar url.
  * @returns {string} Sanitized avatar directory name.
@@ -1922,7 +1936,8 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
         const chatData = request.body.chat;
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
+        const fileNameKey = stripJsonlExt(request.body.file_name);
+        const chatFileName = `${fileNameKey}.jsonl`;
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
         if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
             return response.sendStatus(400);
@@ -1947,11 +1962,11 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
 
         let integrity;
         try {
-            ({ integrity } = await getChatRepo().save(handle, cardName, String(request.body.file_name), headerInput, body, expectedIntegrity));
+            ({ integrity } = await getChatRepo().save(handle, cardName, fileNameKey, headerInput, body, expectedIntegrity));
         } catch (err) {
             if (err instanceof NotFoundError && expectedIntegrity !== null) {
                 // Existing semantic: missing file means no current integrity to mismatch — write succeeds.
-                ({ integrity } = await getChatRepo().save(handle, cardName, String(request.body.file_name), headerInput, body, null));
+                ({ integrity } = await getChatRepo().save(handle, cardName, fileNameKey, headerInput, body, null));
             } else if (err instanceof ConflictError) {
                 return sendRepoIntegrityConflict(response, err);
             } else {
@@ -1987,7 +2002,7 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
     try {
         const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const fileNameRaw = String(request.body.file_name);
+        const fileNameRaw = stripJsonlExt(request.body.file_name);
         const chatFileName = `${fileNameRaw}.jsonl`;
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
@@ -2096,7 +2111,7 @@ router.post('/patch', validateAvatarUrlMiddleware, async function (request, resp
     try {
         const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const fileNameRaw = String(request.body.file_name);
+        const fileNameRaw = stripJsonlExt(request.body.file_name);
         const chatFileName = `${fileNameRaw}.jsonl`;
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
@@ -2209,7 +2224,7 @@ router.post('/meta', validateAvatarUrlMiddleware, async function (request, respo
 
         const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const fileName = String(request.body.file_name);
+        const fileName = stripJsonlExt(request.body.file_name);
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(`${fileName}.jsonl`));
         const chatMetadata = request.body.chat_metadata;
         const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : null;
@@ -2273,7 +2288,7 @@ router.post('/meta/patch', validateAvatarUrlMiddleware, async function (request,
 
         const handle = request.user.profile.handle;
         const cardName = String(request.body.avatar_url).replace('.png', '');
-        const fileName = String(request.body.file_name);
+        const fileName = stripJsonlExt(request.body.file_name);
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(`${fileName}.jsonl`));
         // Some legacy frontends send body.integrity, others body.expected_integrity — accept both.
         const integritySlug = typeof request.body.integrity === 'string'
@@ -2404,9 +2419,10 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
         }
 
         const handle = request.user.profile.handle;
-        const fetched = await getChatRepo().get(handle, dirName, String(request.body.file_name));
+        const fileNameKey = stripJsonlExt(request.body.file_name);
+        const fetched = await getChatRepo().get(handle, dirName, fileNameKey);
         if (!fetched) {
-            const chatFilePath = path.join(directoryPath, sanitize(`${String(request.body.file_name)}.jsonl`));
+            const chatFilePath = path.join(directoryPath, sanitize(`${fileNameKey}.jsonl`));
             if (fs.existsSync(chatFilePath)) {
                 console.warn(`Chat file is empty or has no valid JSON lines (corrupted): ${chatFilePath}`);
                 return response.send({ corrupted: true });
@@ -2444,7 +2460,7 @@ router.post('/get-delta', validateAvatarUrlMiddleware, async function (request, 
         const fromIndex = Number(request.body.from_index) || 0;
         const limit = Number(request.body.limit) || 0;
         const handle = request.user.profile.handle;
-        const chat = await getChatRepo().get(handle, dirName, String(request.body.file_name));
+        const chat = await getChatRepo().get(handle, dirName, stripJsonlExt(request.body.file_name));
         if (chat == null) {
             return response.send({
                 chat: [],
