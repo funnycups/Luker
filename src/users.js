@@ -23,6 +23,8 @@ import { serverDirectory } from './server-directory.js';
 import { getAdminSettings, getEffectiveUserQuotaBytes, getDirectorySizeBytes } from './admin-settings.js';
 import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
 import { extensionsEnabledFeatureGuard } from './endpoints/extensions.js';
+import { getStorageEngine } from './storage/index.js';
+import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from './storage/engine-backup-entries.js';
 
 export const KEY_PREFIX = 'user:';
 const AVATAR_PREFIX = 'avatar:';
@@ -1499,6 +1501,31 @@ export async function createBackupArchive(handle, response, selectionInput = und
     };
 
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+
+    // Spec §5.1 (lines 333-343): when the storage engine is anything other
+    // than `fs`, the on-disk file tree is NOT the full backup — repo data
+    // lives in a database the user can't ship as files. Capture it as an
+    // opaque dump alongside a meta descriptor so the restore side can
+    // validate engine kind before consuming. fs mode early-returns null from
+    // dumpUser and we skip both entries entirely, leaving the legacy ZIP
+    // shape unchanged.
+    const engine = getStorageEngine();
+    if (engine.kind !== 'fs') {
+        const dumpStream = await engine.dumpUser(handle);
+        if (dumpStream != null) {
+            const engineMeta = {
+                engineKind: engine.kind,
+                schemaVersion: 1,
+                createdAt: new Date().toISOString(),
+                handle,
+            };
+            // _engine_meta.json MUST be appended before _engine_dump.bin so
+            // restoreUserBackupArchive's analyze pass observes the meta entry
+            // first when walking the central directory in order.
+            archive.append(JSON.stringify(engineMeta, null, 2), { name: ENGINE_META_ENTRY });
+            archive.append(dumpStream, { name: ENGINE_DUMP_ENTRY });
+        }
+    }
 
     for (const filePath of targets.files) {
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {

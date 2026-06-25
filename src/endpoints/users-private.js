@@ -19,6 +19,49 @@ import { invalidateRecentChatIndex } from './chats.js';
 import { color, Cache, getConfigValue, ensureDirectory, isValidUrl, normalizeZipEntryPath, trimTrailingSlash } from '../util.js';
 import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
 import { listForUser, mergeReadIds } from '../announcements.js';
+import { getStorageEngine } from '../storage/index.js';
+import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from '../storage/engine-backup-entries.js';
+
+// Two sentinel filenames the backup ZIP carries when the storage engine isn't
+// fs (spec §5.1/§5.2). The meta entry is captured during the analyze pass for
+// engine-kind validation; the dump entry is consumed during extract by
+// `engine.restoreUser(handle, stream)` instead of being written to disk.
+// Defined in src/storage/engine-backup-entries.js so the writer side
+// (createBackupArchive, snapshotUser) and the reader side here cannot drift.
+
+/**
+ * Thrown when an uploaded backup's engine kind does not match the engine the
+ * server is currently running. The route handler converts this into a 400 so
+ * the operator sees an actionable message instead of an opaque 500. Migrating
+ * a backup across engines requires the explicit storage-migrate tool, not
+ * silent restore.
+ */
+class RestoreEngineKindMismatchError extends Error {
+    constructor(backupKind, currentKind) {
+        super(`Backup engine kind ${backupKind} does not match current engine ${currentKind}. Run storage-migrate to convert the backup first.`);
+        this.name = 'RestoreEngineKindMismatchError';
+        this.backupKind = backupKind;
+        this.currentKind = currentKind;
+    }
+}
+
+/**
+ * Thrown when an uploaded backup lacks `_engine_meta.json` (a legacy fs-only
+ * archive, produced before Stage 3 added engine-dump injection) but the server
+ * is currently running on a db engine (sqlite/mysql/postgres). Silently
+ * extracting such a ZIP would unpack the disk tree but leave the engine slot
+ * empty — every Repo read returns null, every chat appears deleted. Per spec
+ * §5.2, missing engineMeta on a non-fs server is a 400 with an actionable
+ * message: the operator must run `storage-migrate` to convert the legacy
+ * backup before restore can proceed.
+ */
+class RestoreLegacyFsOnDbModeError extends Error {
+    constructor(currentKind) {
+        super(`Legacy fs-only backup uploaded to ${currentKind}-mode server. Run storage-migrate to convert the backup first.`);
+        this.name = 'RestoreLegacyFsOnDbModeError';
+        this.currentKind = currentKind;
+    }
+}
 
 const RESET_CACHE = new Cache(5 * 60 * 1000);
 const FULL_IMPORT_SELECTION = Object.freeze({
@@ -339,9 +382,12 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
         targetableEntries: 0,
         skippedEntries: 0,
         rejectedEntries: 0,
+        engineDumpEntries: 0, // _engine_dump.bin entries — consumed by engine.restoreUser, not written to disk.
         categoryStats,
         sampleSkippedEntries: [],
     };
+    /** @type {object|null} Parsed contents of `_engine_meta.json`, or null if the archive has no engine dump. */
+    let engineMeta = null;
     const directoryAliases = buildRestoreDirectoryAliases(targetRoot, targetDirectories);
     const reportAnalyzeProgress = typeof onProgress === 'function'
         ? (entryCount) => {
@@ -378,6 +424,43 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
             zipfile.on('entry', (entry) => {
                 try {
                     report.totalEntries += 1;
+
+                    // Engine sentinel entries (spec §5.1) — case-sensitive
+                    // match on the raw name. They live at the archive root,
+                    // bypass the per-category target classifier, and are
+                    // accounted for as their own bookkeeping kind so the
+                    // operator-facing "X targetable / Y skipped" totals stay
+                    // honest. _engine_meta.json is read into a buffer now so
+                    // the engine-kind check can happen before any snapshot
+                    // is taken; _engine_dump.bin is left for the extract
+                    // pass to pipe into engine.restoreUser.
+                    if (entry.fileName === ENGINE_META_ENTRY) {
+                        zipfile.openReadStream(entry, (streamErr, readStream) => {
+                            if (streamErr) {
+                                finish(streamErr);
+                                return;
+                            }
+                            const chunks = [];
+                            readStream.on('data', (chunk) => chunks.push(chunk));
+                            readStream.on('error', finish);
+                            readStream.on('end', () => {
+                                try {
+                                    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                                    engineMeta = parsed;
+                                    zipfile.readEntry();
+                                } catch (parseErr) {
+                                    finish(new Error(`Invalid ${ENGINE_META_ENTRY} in backup: ${parseErr.message}`));
+                                }
+                            });
+                        });
+                        return;
+                    }
+                    if (entry.fileName === ENGINE_DUMP_ENTRY) {
+                        report.engineDumpEntries += 1;
+                        zipfile.readEntry();
+                        return;
+                    }
+
                     const normalized = normalizeRestoreArchiveEntryPath(entry.fileName);
                     if (!normalized) {
                         report.rejectedEntries += 1;
@@ -435,7 +518,7 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
         });
     });
 
-    return { targetByNormalizedEntry, report };
+    return { targetByNormalizedEntry, report, engineMeta };
 }
 
 async function discardRestoreSnapshots(snapshots) {
@@ -491,7 +574,13 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     try {
         uploadSize = (await fsPromises.stat(uploadPath)).size;
     } catch { /* stat is informational; ignore */ }
-    console.info(`[user-backup] Restore start: handle=${path.basename(directories.root)} mode=${mode} uploadSize=${uploadSize}B`);
+    // Derive the engine handle from directories.root once — engine.restoreUser
+    // needs it to pick the right per-user DB / schema when consuming the
+    // _engine_dump.bin entry. Matches the path the route handler uses to
+    // resolve the same directories (see /restore-backup at the bottom of
+    // this file).
+    const handle = path.basename(directories.root);
+    console.info(`[user-backup] Restore start: handle=${handle} mode=${mode} uploadSize=${uploadSize}B`);
 
     const backupTargets = getUserBackupTargets(directories, selection, options);
     const targetRoot = path.resolve(directories.root);
@@ -507,7 +596,29 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     const analysis = await analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets, reportProgress);
     const analyzeMs = Date.now() - tAnalyze;
 
-    if (mode === 'overwrite' && analysis.report.targetableEntries === 0) {
+    // Spec §5.2: when the archive carries an engine dump, validate that the
+    // recorded engineKind matches the server's current engine BEFORE any
+    // destructive snapshot or extract work begins. A mismatch is a
+    // user-facing 400 (route handler converts the typed error); silent
+    // success across engines would corrupt the user's data.
+    //
+    // The absent-engineMeta branch covers legacy fs-only backups (produced
+    // before Stage 3 added engine-dump injection). On an fs server those
+    // unpack cleanly via the directory tree. On a db server they would
+    // unpack the disk tree but leave the engine slot empty, so every Repo
+    // read returns null and chats appear deleted — the same silent
+    // corruption the kind-mismatch guard prevents. Make it loud: 400 with
+    // the same "run storage-migrate" guidance the operator already sees
+    // for kind mismatches.
+    const currentEngine = getStorageEngine();
+    if (analysis.engineMeta && analysis.engineMeta.engineKind !== currentEngine.kind) {
+        throw new RestoreEngineKindMismatchError(analysis.engineMeta.engineKind, currentEngine.kind);
+    }
+    if (!analysis.engineMeta && currentEngine.kind !== 'fs') {
+        throw new RestoreLegacyFsOnDbModeError(currentEngine.kind);
+    }
+
+    if (mode === 'overwrite' && analysis.report.targetableEntries === 0 && !analysis.engineMeta) {
         throw new Error('Archive does not match selected restore categories. Overwrite was cancelled to protect existing data.');
     }
 
@@ -604,6 +715,39 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
 
                 zipfile.on('entry', (entry) => {
                     (async () => {
+                        // Engine sentinel entries (spec §5.2). _engine_meta.json
+                        // was already consumed during analyze for kind
+                        // validation, so skip it on disk. _engine_dump.bin is
+                        // routed to engine.restoreUser(handle, stream) and
+                        // never lands as a file under the user's data root —
+                        // it's the opaque payload the engine ingests itself.
+                        if (entry.fileName === ENGINE_META_ENTRY) {
+                            zipfile.readEntry();
+                            return;
+                        }
+                        if (entry.fileName === ENGINE_DUMP_ENTRY) {
+                            if (!analysis.engineMeta) {
+                                // Defensive: dump without meta is a malformed
+                                // archive — discard the bytes and move on
+                                // rather than risk a half-restore.
+                                zipfile.readEntry();
+                                return;
+                            }
+                            zipfile.openReadStream(entry, async (streamError, readStream) => {
+                                if (streamError) {
+                                    finish(streamError);
+                                    return;
+                                }
+                                try {
+                                    await currentEngine.restoreUser(handle, readStream);
+                                    zipfile.readEntry();
+                                } catch (error) {
+                                    finish(error);
+                                }
+                            });
+                            return;
+                        }
+
                         const normalized = normalizeRestoreArchiveEntryPath(entry.fileName);
                         if (!normalized) {
                             zipfile.readEntry();
@@ -1003,7 +1147,14 @@ router.post('/restore-backup', async (request, response) => {
             stream.sendError(message);
             return;
         }
-        const statusCode = message.includes('Archive does not match selected restore categories') ? 400 : 500;
+        // Engine-kind mismatch and legacy-fs-on-db (both spec §5.2) plus
+        // the legacy "Archive does not match selected restore categories"
+        // preflight all surface as 400 — operator-correctable mistakes, not
+        // server faults. Everything else is a 500.
+        const isValidationError = error instanceof RestoreEngineKindMismatchError
+            || error instanceof RestoreLegacyFsOnDbModeError
+            || message.includes('Archive does not match selected restore categories');
+        const statusCode = isValidationError ? 400 : 500;
         return response.status(statusCode).json({ error: message });
     } finally {
         if (uploadPath) {
@@ -1078,7 +1229,9 @@ router.post('/lan-migration/import', async (request, response) => {
             stream.sendError(message);
             return;
         }
-        const isValidationError = message.includes('Migration link')
+        const isValidationError = error instanceof RestoreEngineKindMismatchError
+            || error instanceof RestoreLegacyFsOnDbModeError
+            || message.includes('Migration link')
             || message.includes('No migration link provided')
             || message.includes('At least one restore category')
             || message.includes('Archive does not match selected restore categories')
@@ -1117,7 +1270,13 @@ router.post('/import/data-zip', async (request, response) => {
     } catch (error) {
         console.error('Data ZIP import failed', error);
         const message = error?.message || 'Data ZIP import failed';
-        const statusCode = message.includes('Archive does not match selected restore categories') ? 400 : 500;
+        // Mirror /restore-backup and /lan-migration/import: typed errors for
+        // engine-kind mismatch and legacy-fs-on-db (spec §5.2) plus the
+        // legacy preflight string surface as 400 — operator-correctable.
+        const isValidationError = error instanceof RestoreEngineKindMismatchError
+            || error instanceof RestoreLegacyFsOnDbModeError
+            || message.includes('Archive does not match selected restore categories');
+        const statusCode = isValidationError ? 400 : 500;
         return response.status(statusCode).json({ error: message });
     } finally {
         if (uploadPath) {
