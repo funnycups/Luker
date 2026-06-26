@@ -14,6 +14,12 @@ import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFil
 import { applyEdits } from '../../../lib/edits/index.js';
 import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
+import {
+ listCtxKeys,
+ describeCtxPath,
+ listLukerDocs,
+ readLukerDoc,
+} from '../../../iteration-library/tools/ctx-and-docs-discovery.js';
 
 const __ctx = Luker.getContext();
 const characters = __ctx.characters;
@@ -1433,107 +1439,19 @@ async function executeTool(charId, toolName, args, options = {}) {
  };
  }
  case TOOL_NAMES.LUKER_CTX_LIST_KEYS: {
- const filter = String(args?.filter || '').toLowerCase();
- let lukerCtx;
- try { lukerCtx = getContext(); } catch (e) { return { ok: false, error: `getContext() failed: ${e?.message || e}` }; }
- const result = [];
- for (const key of Object.keys(lukerCtx).sort()) {
- if (filter && !key.toLowerCase().includes(filter)) continue;
- const v = lukerCtx[key];
- let type = typeof v;
- if (v === null) type = 'null';
- else if (Array.isArray(v)) type = 'array';
- result.push({ key, type });
- }
- return { ok: true, count: result.length, keys: result };
+ return await listCtxKeys({ filter: String(args?.filter || '') });
  }
  case TOOL_NAMES.LUKER_CTX_DESCRIBE: {
- const path = String(args?.path || '').trim();
- if (!path) return { ok: false, error: 'path is required' };
- const segments = path.split('.').map(s => s.trim()).filter(Boolean);
- let value;
- try { value = getContext(); } catch (e) { return { ok: false, error: `getContext() failed: ${e?.message || e}` }; }
- let walked = '';
- for (const seg of segments) {
- if (value == null) {
- return { ok: false, error: `Path "${walked}" is null/undefined; cannot descend into "${seg}"` };
- }
- if (!(seg in value)) {
- return { ok: false, error: `Property "${seg}" not found at path "${walked || 'root'}"` };
- }
- value = value[seg];
- walked = walked ? `${walked}.${seg}` : seg;
- }
- const out = { ok: true, path };
- if (value === null) {
- out.type = 'null';
- } else if (Array.isArray(value)) {
- out.type = 'array';
- out.length = value.length;
- } else if (typeof value === 'function') {
- out.type = 'function';
- out.parameterCount = value.length;
- out.functionName = value.name || '';
- try {
- const src = String(value).replace(/\s+/g, ' ');
- out.sourcePreview = src.length > 280 ? src.slice(0, 277) + '...' : src;
- } catch { out.sourcePreview = ''; }
- } else if (typeof value === 'object') {
- out.type = 'object';
- const subKeys = Object.keys(value);
- out.subKeyCount = subKeys.length;
- out.subKeys = subKeys.slice(0, 60).map(k => {
- const v = value[k];
- let t = typeof v;
- if (v === null) t = 'null';
- else if (Array.isArray(v)) t = 'array';
- return { key: k, type: t };
- });
- if (subKeys.length > 60) out.note = `${subKeys.length - 60} more keys not shown; descend further with a more specific path`;
- } else {
- out.type = typeof value;
- try { out.value = JSON.stringify(value); } catch { out.value = String(value); }
- }
- return out;
+ return await describeCtxPath({ path: String(args?.path || '') });
  }
  case TOOL_NAMES.DOCS_LIST: {
- const filter = String(args?.filter || '').toLowerCase();
- const includeTranslations = !!args?.includeTranslations;
- try {
- const resp = await fetch('/api/docs/list', { headers: getRequestHeaders() });
- if (!resp.ok) return { ok: false, error: `Doc list endpoint returned ${resp.status}` };
- const data = await resp.json();
- const all = Array.isArray(data?.files) ? data.files : [];
- const isTranslation = (p) => /^(zh-CN|zh-TW)\//i.test(String(p || ''));
- const baseSet = includeTranslations ? all : all.filter(f => !isTranslation(f.path));
- const files = filter ? baseSet.filter(f => String(f.path || '').toLowerCase().includes(filter)) : baseSet;
- return {
- ok: true,
- count: files.length,
- totalCount: all.length,
- hiddenTranslations: includeTranslations ? 0 : all.filter(f => isTranslation(f.path)).length,
- files,
- };
- } catch (e) {
- return { ok: false, error: `Failed to list docs: ${e?.message || e}` };
- }
+ return await listLukerDocs({
+ filter: String(args?.filter || ''),
+ includeTranslations: !!args?.includeTranslations,
+ });
  }
  case TOOL_NAMES.DOCS_READ: {
- const docPath = String(args?.path || '').trim();
- if (!docPath) return { ok: false, error: 'path is required' };
- try {
- const url = `/api/docs/file?path=${encodeURIComponent(docPath)}`;
- const resp = await fetch(url, { headers: getRequestHeaders() });
- if (!resp.ok) {
- let detail = '';
- try { detail = (await resp.json())?.error || ''; } catch { /* ignore */ }
- return { ok: false, error: `Doc fetch failed (${resp.status})${detail ? ': ' + detail : ''}` };
- }
- const data = await resp.json();
- return { ok: true, path: data?.path || docPath, size: data?.size || 0, content: String(data?.content || '') };
- } catch (e) {
- return { ok: false, error: `Failed to read doc: ${e?.message || e}` };
- }
+ return await readLukerDoc({ path: String(args?.path || '') });
  }
  case TOOL_NAMES.CARDAPP_SET_ENABLED: {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
