@@ -576,6 +576,18 @@ async function openRecentCharacterChat(avatarId, fileName) {
         await selectCharacterById(characterId);
         setActiveCharacter(avatarId);
         saveSettingsDebounced();
+
+        // If a concurrent flow (e.g. doNewChat with delete-current)
+        // rewrote characters[i].chat to a different file — or deleted
+        // fileName from disk — bail. Opening it via openCharacterChat
+        // would push the deleted file through getChat/getChatResult,
+        // which auto-saves first_message and resurrects it on top of
+        // the new chat the user just created.
+        if (characters[characterId]?.chat !== fileName) {
+            console.debug(`Recent chat ${fileName} was superseded during open; bailing.`);
+            return;
+        }
+
         const currentChatId = getCurrentChatId();
         if (currentChatId === fileName) {
             console.debug(`Chat ${fileName} is already open.`);
