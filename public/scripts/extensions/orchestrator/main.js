@@ -56,6 +56,7 @@ import {
     getLegacyDefaultRequestSystemPromptForMigration,
     LOREBOOK_READ_GUIDANCE_LINES,
     RUNTIME_AGENT_CONTEXT_MENTAL_MODEL,
+    CUSTOM_TOOL_AUTHORING_DOCTRINE_LINES,
     SPEC_DEFAULT_GUIDANCE_LINES,
 } from './defaults.js';
 import {
@@ -200,6 +201,14 @@ import { openCustomToolEditor } from './custom-tool-editor.js';
 import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
 import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
 import { reviewIncomingCustomTools } from './character-import-tools-review.js';
+import {
+    CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
+    CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES,
+    isCustomToolIterStudioTool,
+    executeCustomToolIterStudioCall,
+    commitApprovedCustomToolProposal,
+    resanitizeProfileCustomTools,
+} from './custom-tool-iter-studio.js';
 import {
     collectCustomToolsFromCardExtension,
     planImportedCardCustomToolsReview,
@@ -3091,15 +3100,18 @@ function buildAiIterationSystemPrompt(settings, session = null) {
     const withGuidance = [base, '', ...LOREBOOK_READ_GUIDANCE_LINES].join('\n');
     const withMentalModel = [withGuidance, '', ...RUNTIME_AGENT_CONTEXT_MENTAL_MODEL].join('\n');
     const withMacros = [withMentalModel, '', ...ITER_STUDIO_MACRO_CONTRACT_LINES].join('\n');
+    // Custom-tool authoring doctrine — applies to every mode (loop /
+    // director / agenda / spec all carry profile.customTools[]).
+    const withCustomToolDoctrine = [withMacros, '', ...CUSTOM_TOOL_AUTHORING_DOCTRINE_LINES].join('\n');
     let prompt;
     if (isLoopIterationSession(session)) {
-        prompt = `${withMacros}\n\n${settings.iterModePromptLoop || DEFAULT_LOOP_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptLoop || DEFAULT_LOOP_ITERATION_MODE_BLOCK}`;
     } else if (isDirectorIterationSession(session)) {
-        prompt = `${withMacros}\n\n${settings.iterModePromptDirector || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptDirector || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK}`;
     } else if (isAgendaIterationSession(session)) {
-        prompt = `${withMacros}\n\n${settings.iterModePromptAgenda || DEFAULT_AGENDA_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptAgenda || DEFAULT_AGENDA_ITERATION_MODE_BLOCK}`;
     } else {
-        prompt = `${withMacros}\n\n${settings.iterModePromptSpec || DEFAULT_SPEC_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptSpec || DEFAULT_SPEC_ITERATION_MODE_BLOCK}`;
     }
     // Append a read-only intro listing the visible custom tools so the
     // Studio AI knows which enable-flag path it can flip — the path varies
@@ -3632,6 +3644,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
     }
     if (isLoopIterationSession(session)) {
@@ -3736,6 +3749,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
     }
     if (isAgendaIterationSession(session)) {
@@ -3913,6 +3927,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
     }
     return [
@@ -4082,6 +4097,7 @@ function buildAiIterationToolSet(session = null) {
                 },
             },
         },
+        ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
     ];
 }
 
@@ -4628,10 +4644,53 @@ function buildFriendlyIterationExecutionSummary(result) {
     return lines.join('\n').trim() || '已执行。';
 }
 
+/**
+ * Shared dispatch shim for the orchestrator iter-studio's custom-tool
+ * authoring tools (see custom-tool-iter-studio.js). Each per-mode
+ * executor calls this at the top of its loop body. Returns a
+ * `{ handled, pendingCustomToolEdit, actionText, payload }` envelope
+ * the caller folds into its own actions / toolResults / pendingCustomToolEdits
+ * accumulators so the studio popup can park the proposal blob on the
+ * ProposalBus exactly the way it parks skill proposals.
+ *
+ * `profile` must be the executor's live working profile (the same one
+ * the other write tools mutate). Reads inspect it; writes derive their
+ * before/after snapshots against it without mutating — the actual
+ * profile mutation happens later, at Apply time, when the user has
+ * approved the proposal card on the bus.
+ */
+async function dispatchCustomToolIterStudioCall({ call, profile }) {
+    const name = String(call?.name || '').trim();
+    if (!isCustomToolIterStudioTool(name)) {
+        return { handled: false };
+    }
+    const out = await executeCustomToolIterStudioCall(call, { profile });
+    if (out?.ok) {
+        const actionText = out.pendingCustomToolEdit
+            ? `Custom tool "${out.pendingCustomToolEdit.name}" — ${out.pendingCustomToolEdit.kind} staged for review.`
+            : `Custom-tool iter-studio: ${name} ok.`;
+        return {
+            handled: true,
+            payload: out.result,
+            pendingCustomToolEdit: out.pendingCustomToolEdit || null,
+            actionText,
+            changed: !!out.pendingCustomToolEdit,
+        };
+    }
+    return {
+        handled: true,
+        payload: { ok: false, error: String(out?.error || 'custom-tool iter-studio call failed') },
+        pendingCustomToolEdit: null,
+        actionText: `Custom-tool iter-studio: ${name} failed: ${out?.error || 'unknown error'}`,
+        changed: false,
+    };
+}
+
 async function executeAgendaIterationToolCalls(context, session, toolCalls, abortSignal = null) {
     const actions = [];
     const simulations = [];
     const toolResults = [];
+    const pendingCustomToolEdits = [];
     let finalized = false;
     let finalizeSummary = '';
     let continueRequested = false;
@@ -4649,6 +4708,16 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             });
         };
         if (!name) {
+            continue;
+        }
+        const ctOutcome = await dispatchCustomToolIterStudioCall({ call: { name, args, id: callId }, profile: session.workingProfile });
+        if (ctOutcome.handled) {
+            actions.push(ctOutcome.actionText);
+            pushToolResult(ctOutcome.payload);
+            if (ctOutcome.pendingCustomToolEdit) {
+                pendingCustomToolEdits.push({ sourceCallId: callId, blob: ctOutcome.pendingCustomToolEdit });
+            }
+            if (ctOutcome.changed) changed = true;
             continue;
         }
         if (name === 'luker_orch_set_agenda_planner' || name === 'luker_orch_set_agenda_planner_prompt') {
@@ -4986,6 +5055,7 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
         finalizeSummary,
         continueRequested,
         changed,
+        pendingCustomToolEdits,
     };
 }
 
@@ -4993,6 +5063,7 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
     const actions = [];
     const simulations = [];
     const toolResults = [];
+    const pendingCustomToolEdits = [];
     let finalized = false;
     let finalizeSummary = '';
     let continueRequested = false;
@@ -5010,6 +5081,16 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
             });
         };
         if (!name) {
+            continue;
+        }
+        const ctOutcome = await dispatchCustomToolIterStudioCall({ call: { name, args, id: callId }, profile: session.workingProfile });
+        if (ctOutcome.handled) {
+            actions.push(ctOutcome.actionText);
+            pushToolResult(ctOutcome.payload);
+            if (ctOutcome.pendingCustomToolEdit) {
+                pendingCustomToolEdits.push({ sourceCallId: callId, blob: ctOutcome.pendingCustomToolEdit });
+            }
+            if (ctOutcome.changed) changed = true;
             continue;
         }
         if (name === 'luker_orch_set_loop_profile') {
@@ -5123,6 +5204,7 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
         finalizeSummary,
         continueRequested,
         changed,
+        pendingCustomToolEdits,
     };
 }
 
@@ -5130,6 +5212,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
     const actions = [];
     const simulations = [];
     const toolResults = [];
+    const pendingCustomToolEdits = [];
     let finalized = false;
     let finalizeSummary = '';
     let continueRequested = false;
@@ -5153,6 +5236,16 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         };
         if (!name) continue;
 
+        const ctOutcome = await dispatchCustomToolIterStudioCall({ call: { name, args, id: callId }, profile: session.workingProfile });
+        if (ctOutcome.handled) {
+            actions.push(ctOutcome.actionText);
+            pushToolResult(ctOutcome.payload);
+            if (ctOutcome.pendingCustomToolEdit) {
+                pendingCustomToolEdits.push({ sourceCallId: callId, blob: ctOutcome.pendingCustomToolEdit });
+            }
+            if (ctOutcome.changed) changed = true;
+            continue;
+        }
         if (name === 'luker_orch_set_director_main_agent') {
             if (!director.mainAgent || typeof director.mainAgent !== 'object') {
                 director.mainAgent = {};
@@ -5546,6 +5639,7 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         finalizeSummary,
         continueRequested,
         changed,
+        pendingCustomToolEdits,
     };
 }
 
@@ -5562,6 +5656,7 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
     const actions = [];
     const simulations = [];
     const toolResults = [];
+    const pendingCustomToolEdits = [];
     let finalized = false;
     let finalizeSummary = '';
     let continueRequested = false;
@@ -5579,6 +5674,16 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
             });
         };
         if (!name) {
+            continue;
+        }
+        const ctOutcome = await dispatchCustomToolIterStudioCall({ call: { name, args, id: callId }, profile: session.workingProfile });
+        if (ctOutcome.handled) {
+            actions.push(ctOutcome.actionText);
+            pushToolResult(ctOutcome.payload);
+            if (ctOutcome.pendingCustomToolEdit) {
+                pendingCustomToolEdits.push({ sourceCallId: callId, blob: ctOutcome.pendingCustomToolEdit });
+            }
+            if (ctOutcome.changed) changed = true;
             continue;
         }
         if (name === 'luker_orch_set_stage') {
@@ -5963,6 +6068,7 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
         finalizeSummary,
         continueRequested,
         changed,
+        pendingCustomToolEdits,
     };
 }
 

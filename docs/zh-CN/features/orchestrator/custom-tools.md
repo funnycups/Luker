@@ -86,11 +86,24 @@ if (ctx.__lukerRun?.abortSignal?.aborted) {
 
 ## 迭代工作台
 
-AI 迭代工作台对自定义工具能做三件事：
+AI 迭代工作台直接在工作 profile 上读写自定义工具的 Layer-3 定义。它有完整的读 / 写 / 检查表面，外加沙箱 dry-run 和发现工具，这样它能在请你确认前先用真实的 `ctx` 把代码校验过。
 
-- **新写一个。** 用一句话告诉工作台你要什么（比如「写一个工具，检查每次回复尾部都有 `<overall>` 块」），它会调 `luker_orch_set_custom_tool` 在 `customTools[]` 里加一条；新工具的启用开关会自动打开，下一轮 agent 就看得到。每次造工具都走正常的变更审阅流程，你能在落地前先看 diff。
-- **改或者删。** 同一对工具调用（`luker_orch_set_custom_tool` 覆盖、`luker_orch_remove_custom_tool` 删除），同样的审阅流程。
-- **开关切换。** 按模式的启用开关，不需要审阅。
+读工具（结果直接回传，无需审阅）：
+
+- `luker_orch_list_custom_tools` —— 列出 profile 上的工具，带模式 / 描述 / 是否有模拟体 / 一行参数 schema 摘要。
+- `luker_orch_get_custom_tool` —— 按名字返回某个工具的完整内容（含函数体）。
+- `luker_orch_dry_run_custom_tool` —— 在沙箱里编译 + 执行函数体（可传入实参），返回 `{ok, result, error, logs, durationMs}`；硬墙时长 3 秒；`console.log/warn/error` 会被捕获。`name`（跑 profile 上现存工具）或 `body`（编译内联函数体）二选一。
+- `luker_ctx_list_keys` / `luker_ctx_describe` —— 枚举 / 钻入运行时 `ctx`（就是 SillyTavern/Luker 扩展通过 `getContext()` 拿到的那个对象）。返回类型 / 函数 arity / 源码预览 / 子键。
+- `luker_docs_list` / `luker_docs_read` —— 列出和读取 `docs/` 下的 markdown 文档（默认隐藏 zh-CN / zh-TW 翻译）。推荐起步：`features/orchestrator/custom-tools.md`、`development/extension-api/chat-and-state.md`、`development/extension-api/generation.md`、`development/extension-api/world-info.md`、`development/extension-api/orchestrator-tools.md`。
+
+写工具（在迭代工作台的 ProposalBus 上挂一张待审 card；你不点同意就什么都不会落到 profile）：
+
+- `luker_orch_set_custom_tool` —— 新建或整体覆盖一条工具。挂卡前函数体会做一次编译校验；语法错的话立刻被拒绝、不挂卡。
+- `luker_orch_patch_custom_tool_body` —— 对现有函数体做 find/replace 局部补丁（默认要求 `oldString` 命中唯一一处；`replaceAll: true` 才允许多处替换）。补丁后的函数体也会被再次编译校验。微调时优先用它，可避免重新提交大段函数体。
+- `luker_orch_patch_custom_tool_schema` —— 只替换参数 JSON-Schema，函数体保持不变。
+- `luker_orch_remove_custom_tool` —— 按名字删除一条工具。审阅 card 会把即将被删的函数体显示出来，方便你确认。
+
+每次 `set` 提案被你接受后，迭代工作台会同时把模式对应的启用开关（loop / director 是 `tools.custom.<name>`，agenda 是 `defaultTools.custom.<name>`，spec 是 `spec.defaultTools.custom.<name>`）切到 `true`，这样新工具立刻就会喂给运行时 agent。
 
 来自其他扩展（Layer-2）的工具定义不能在工作台里改——那些定义在注册它们的扩展里，工作台只能切它们的启用开关。
 

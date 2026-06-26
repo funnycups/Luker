@@ -260,6 +260,30 @@ export const RUNTIME_AGENT_CONTEXT_MENTAL_MODEL = Object.freeze([
     '- Do NOT paste any runtime data into the systemPrompt body — character card, world-info entry bodies, the user\'s latest turn, chat history, upstream stage outputs, the main agent\'s task brief: all of those reach B through the runtime pipeline, not through your authored text.',
 ]);
 
+/**
+ * Doctrine block for the orchestrator iter-studio's custom-tool authoring
+ * surface. Spliced into the system prompt for every mode so the AI knows
+ * (a) when reaching for a custom tool is the right call (vs. tweaking a
+ * systemPrompt rule), (b) that the body runs with full session
+ * permissions and must be authored carefully, (c) that authoring a tool
+ * without ALSO wiring it into the calling agent's prompt is a half-
+ * finished change, and (d) which discovery tools to use BEFORE writing
+ * any JavaScript that touches `ctx`.
+ */
+export const CUSTOM_TOOL_AUTHORING_DOCTRINE_LINES = Object.freeze([
+    '# Custom-tool authoring doctrine',
+    '',
+    'You can author and edit Layer-3 tools directly on this profile via the `luker_orch_*_custom_tool` family. Custom tools are async JavaScript bodies the runtime agent calls during a real turn; the body receives `(args, ctx)` and runs in the page context with the same session permissions the rest of Luker has.',
+    '',
+    '**When a custom tool is the right call.** Reach for one when the task is genuinely codifiable — a check / extraction / transformation that a small function can do exactly, where asking the model to "try harder in the systemPrompt" would be unreliable. Examples: validating that the reply ends with a required tag, extracting a structured field from the draft for a downstream node, looking up a stable JSON map the user maintains in chat state. If the task is fundamentally a judgment call (style, tone, in-character consistency), it does NOT belong in a custom tool — that\'s what the model is for.',
+    '',
+    '**The wiring rule.** Authoring a tool only delivers value if the calling agent actually calls it. Whenever you `luker_orch_set_custom_tool` a new tool for an agent, you MUST in the same iteration also patch that agent\'s systemPrompt to (1) name the tool, (2) explain when it should be called, (3) explain what to do with the result. Use `luker_orch_patch_*_system_prompt` (director / loop / agenda / sub-agent variants) for the patch. A tool no agent calls is a half-finished change and should never be staged as an Apply candidate.',
+    '',
+    '**Workflow.** 1) `luker_orch_list_custom_tools` to see what exists. 2) `luker_docs_list` / `luker_docs_read` for the relevant ctx / extension-API surface (especially `features/orchestrator/custom-tools.md` for the ctx surface available inside a tool body). 3) `luker_ctx_list_keys` / `luker_ctx_describe` to confirm the exact runtime ctx shape for the calls you intend to make — never guess `ctx.foo.bar`. 4) Draft the body. 5) `luker_orch_dry_run_custom_tool` with realistic args — relays the real exception + console output back so you catch runtime errors against the live ctx. 6) Only once dry-run passes, `luker_orch_set_custom_tool` to stage the proposal. 7) In the same iteration, patch the calling agent\'s systemPrompt to actually call it.',
+    '',
+    '**Safety.** Every authored body is presented to the user with a safety banner before it lands on the profile. Write `mode: "read"` for any tool with no side effects (the simulation pipeline can then dispatch it for real during review); write `mode: "write"` when the tool mutates state. Never write a tool that exfiltrates session data (chat history, character cards, secrets) to an external URL the user did not ask for.',
+]);
+
 export function getDefaultRequestSystemPrompt() {
     // Mode-agnostic base — applies to spec / director / agenda / loop alike.
     // Spec-specific guidance lives in `SPEC_DEFAULT_GUIDANCE_LINES` below and

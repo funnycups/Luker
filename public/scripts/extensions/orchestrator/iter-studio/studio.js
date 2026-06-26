@@ -96,6 +96,7 @@ import {
 import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profile-edit.js';
 import { lorebookWrite } from '../../../iteration-library/proposal-bus/kinds/lorebook-write.js';
 import { skillAuthor } from '../../../iteration-library/proposal-bus/kinds/skill-author.js';
+import { customToolAuthor } from '../../../iteration-library/proposal-bus/kinds/custom-tool-author.js';
 import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
 import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
@@ -110,6 +111,12 @@ import {
     lorebookIcon as lorebookBodyIcon,
     lorebookTarget as lorebookBodyTarget,
 } from '../../../iteration-library/proposal-bus/diff-bodies/lorebook-write.js';
+import {
+    renderCustomToolBody,
+    customToolLabel as customToolBodyLabel,
+    customToolIcon as customToolBodyIcon,
+    customToolTarget as customToolBodyTarget,
+} from '../../../iteration-library/proposal-bus/diff-bodies/custom-tool-author.js';
 import {
     createOrchestratorIterationSessionStore,
     makeMessageId,
@@ -149,6 +156,11 @@ import {
     runSkillIterStudioTool,
     commitApprovedSkillProposal,
 } from '../../../iteration-library/tools/skill-iter-studio.js';
+import {
+    isCustomToolIterStudioTool,
+    commitApprovedCustomToolProposal,
+    resanitizeProfileCustomTools,
+} from '../custom-tool-iter-studio.js';
 import { augmentIterStudioPromptWithSkills } from '../skill-iter-studio-prompt.js';
 import { buildSkillRuntimeContext } from '../skill-resolution.js';
 import { getActivePreset } from '../preset-library.js';
@@ -157,6 +169,34 @@ import { getCurrentAvatar } from '../snapshot-cache.js';
 const MODULE = 'orch-iteration';
 const STYLESHEET_ID = 'orch_it_studio_stylesheet';
 const STYLESHEET_HREF = '/scripts/extensions/orchestrator/iter-studio/studio.css';
+
+/**
+ * Return the mode-appropriate enable-flag bucket on a working profile.
+ * Mirrors the mapping `getCustomToolEditorBinding` in main.js uses:
+ *   loop / director → profile.tools.custom
+ *   agenda          → profile.defaultTools.custom
+ *   spec            → profile.spec.defaultTools.custom
+ * The bucket is created in place if missing so callers can mutate it
+ * verbatim.
+ */
+function getCustomToolFlagBucket(profile, mode) {
+    if (!profile || typeof profile !== 'object') return {};
+    if (mode === 'agenda') {
+        if (!profile.defaultTools || typeof profile.defaultTools !== 'object') profile.defaultTools = {};
+        if (!profile.defaultTools.custom || typeof profile.defaultTools.custom !== 'object') profile.defaultTools.custom = {};
+        return profile.defaultTools.custom;
+    }
+    if (mode === 'spec') {
+        if (!profile.spec || typeof profile.spec !== 'object') profile.spec = {};
+        if (!profile.spec.defaultTools || typeof profile.spec.defaultTools !== 'object') profile.spec.defaultTools = {};
+        if (!profile.spec.defaultTools.custom || typeof profile.spec.defaultTools.custom !== 'object') profile.spec.defaultTools.custom = {};
+        return profile.spec.defaultTools.custom;
+    }
+    // loop + director
+    if (!profile.tools || typeof profile.tools !== 'object') profile.tools = {};
+    if (!profile.tools.custom || typeof profile.tools.custom !== 'object') profile.tools.custom = {};
+    return profile.tools.custom;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Lorebook read tools (borrowed from the unified CEA editor's surface).
@@ -208,11 +248,16 @@ function isSimulateTool(name) {
 // tools (3 policy bindings + skill_replace_in_systemprompt) emit a
 // sandbox-diff pending edit, and 8 authoring tools (7 spec + extract)
 // emit a `pendingSkillEdit` blob parked on state.pendingSkillEdits.
+// Custom-tool iter-studio tools (11 total: 7 reads + 4 writes that emit
+// `pendingCustomToolEdit` blobs) also dispatch inline so writes can
+// stage proposals on the bus and reads return verbatim without ever
+// hitting the sandbox-diff path.
 function isInlineExecutedTool(name) {
     return isLorebookReadTool(name)
         || isLorebookWriteTool(name)
         || isSimulateTool(name)
-        || isSkillIterStudioTool(name);
+        || isSkillIterStudioTool(name)
+        || isCustomToolIterStudioTool(name);
 }
 
 /**
@@ -1190,6 +1235,30 @@ export async function openOrchestratorIterationStudio(deps) {
         },
         describe: (target) => String(target?.name || 'skill'),
     });
+    // Orchestrator custom-tool authoring target. On commit, applies the
+    // captured op against the LIVE working profile via the shared
+    // committer (which re-reads current state so concurrent drift surfaces
+    // as a fresh error rather than a stale clobber), flips the mode-
+    // appropriate enable flag, and re-sanitizes customTools[]. After
+    // commit the popup's normal Apply pipeline persists the mutated
+    // profile to global / character scope on user-clicked Apply.
+    registerTarget('orch-custom-tool', {
+        read: async (target) => {
+            const tools = Array.isArray(state.live?.customTools) ? state.live.customTools : [];
+            return { name: target?.name || '', tool: tools.find(t => String(t?.name || '') === String(target?.name || '')) || null };
+        },
+        write: async (target, _next) => {
+            if (!target?._op) return;
+            const profile = state.live;
+            const flagBucket = getCustomToolFlagBucket(profile, mode);
+            commitApprovedCustomToolProposal(profile, flagBucket, target._op);
+            resanitizeProfileCustomTools(profile);
+            const scope = getIterationDefaultScope(context);
+            if (scope === 'character') await commitLiveToCharacter();
+            else await commitLiveToGlobal();
+        },
+        describe: (target) => `custom-tool:${target?.name || ''}`,
+    });
 
     bus.registerKind('profile-edit', {
         ...profileEdit,
@@ -1244,6 +1313,25 @@ export async function openOrchestratorIterationStudio(deps) {
         target: (entry) => {
             const adapted = { ...entry, op: entry?.meta?.op || null };
             return skillBodyTarget(adapted, { i18n: tf });
+        },
+    });
+    bus.registerKind('custom-tool-author', {
+        ...customToolAuthor,
+        renderDiffCard: (entry, _helpers) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return renderCustomToolBody(adapted, { i18n: tf });
+        },
+        label: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return customToolBodyLabel(adapted, { i18n: tf });
+        },
+        icon: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return customToolBodyIcon(adapted);
+        },
+        target: (entry) => {
+            const adapted = { ...entry, op: entry?.meta?.op || null };
+            return customToolBodyTarget(adapted);
         },
     });
     bus.setMessageResolver((messageId) => {
@@ -2589,6 +2677,70 @@ export async function openOrchestratorIterationStudio(deps) {
                         resultPayload = out.result;
                     } else {
                         resultPayload = { error: String(out?.error || 'unknown error') };
+                        statusLabel = 'fail';
+                    }
+                } else if (isCustomToolIterStudioTool(call?.name)) {
+                    // Custom-tool iter-studio dispatch. 7 reads return verbatim
+                    // (list / get / dry_run / ctx_list_keys / ctx_describe /
+                    // docs_list / docs_read); 4 writes (set / patch_body /
+                    // patch_schema / remove) emit `pendingCustomToolEdit`
+                    // proposals parked on the bus. Reads are dispatched
+                    // through the same `executeAiIterationToolCalls` the
+                    // edit-tool path uses below, but against a sandbox
+                    // session so a buggy dry_run cannot poison state.live.
+                    // The bus.propose mirrors skill-author: target._op
+                    // carries the captured op; on user-approved commit the
+                    // orch-custom-tool target handler replays through the
+                    // shared committer so concurrent drift surfaces as an
+                    // error rather than a stale clobber.
+                    const sandbox = state.live != null ? structuredClone(state.live) : state.live;
+                    const fakeSession = buildHelperSession(sandbox);
+                    const execCall = {
+                        id: callId,
+                        name: call?.name,
+                        args: call?.args && typeof call.args === 'object' ? call.args : {},
+                    };
+                    try {
+                        const execResult = await executeAiIterationToolCalls(null, fakeSession, [execCall], ac.signal);
+                        const results = Array.isArray(execResult?.toolResults) ? execResult.toolResults : [];
+                        const match = results.find(r => String(r?.tool_call_id || '') === callId) || results[0];
+                        let parsed = match?.content;
+                        try { if (typeof parsed === 'string') parsed = JSON.parse(parsed); } catch { /* leave as-is */ }
+                        resultPayload = parsed != null ? parsed : { ok: false, error: 'custom-tool iter-studio executor returned no result' };
+                        statusLabel = (resultPayload && resultPayload.ok === false) ? 'fail' : 'ok';
+                        // Harvest pending blobs the executor staged and
+                        // park each on the bus.
+                        const pendingBlobs = Array.isArray(execResult?.pendingCustomToolEdits) ? execResult.pendingCustomToolEdits : [];
+                        for (const entry of pendingBlobs) {
+                            const blob = entry?.blob;
+                            if (!blob || typeof blob !== 'object') continue;
+                            const stableShape = {
+                                name: String(blob.name || ''),
+                                kind: String(blob.kind || ''),
+                            };
+                            await bus.propose({
+                                kind: 'custom-tool-author',
+                                target: {
+                                    type: 'orch-custom-tool',
+                                    name: stableShape.name,
+                                    _op: blob.op,
+                                },
+                                before: stableShape,
+                                after: stableShape,
+                                sourceCallId: callId,
+                                meta: {
+                                    op: blob.op,
+                                    kind: blob.kind,
+                                    name: blob.name,
+                                    before: blob.before,
+                                    after: blob.after,
+                                },
+                            });
+                        }
+                    } catch (err) {
+                        // eslint-disable-next-line no-console
+                        console.warn(`[${MODULE}:${mode}] custom-tool iter-studio dispatch failed`, err);
+                        resultPayload = { ok: false, error: String(err?.message || err) };
                         statusLabel = 'fail';
                     }
                 } else if (isLorebookWriteTool(call?.name)) {

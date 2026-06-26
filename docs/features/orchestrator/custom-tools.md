@@ -86,11 +86,24 @@ Custom tools participate in the simulation pipeline that the [AI Iteration Studi
 
 ## Iteration Studio
 
-The AI iterator can do three things with custom tools:
+The AI iterator authors and maintains Layer-3 custom tools directly on the working profile. It has the full read / write / inspect surface plus a sandbox dry-run + discovery tools so it can validate code against the live `ctx` before asking you to approve it.
 
-- **Author them.** Tell the Studio in plain language what you need ("write a tool that checks every reply has an `<overall>` block"), and it calls `luker_orch_set_custom_tool` to add a new entry to `customTools[]`. The new tool's enable flag is auto-set to `true` so the agent sees it immediately. Each authoring call still goes through the normal review pipeline — you see the diff before it lands.
-- **Edit or delete them.** Same calls (`luker_orch_set_custom_tool` to overwrite, `luker_orch_remove_custom_tool` to drop), same review flow.
-- **Toggle enable/disable.** Per-mode flag flips, no review needed.
+Read tools (results returned immediately, no review):
+
+- `luker_orch_list_custom_tools` — list profile-owned entries with mode / description / hasSimulate / a one-line parameter-schema summary.
+- `luker_orch_get_custom_tool` — read one entry verbatim, including the full body.
+- `luker_orch_dry_run_custom_tool` — compile + execute a body in a sandbox with caller-supplied args. Returns `{ok, result, error, logs, durationMs}`; wall-clock cap is 3 seconds; `console.log/warn/error` are captured. Either `name` (run the live profile entry) or `body` (compile inline) is required.
+- `luker_ctx_list_keys` / `luker_ctx_describe` — enumerate / walk into the runtime `ctx` surface (the same object SillyTavern/Luker extensions get via `getContext()`). Returns type, function arity, source preview, sub-keys.
+- `luker_docs_list` / `luker_docs_read` — list and read authoritative markdown under `docs/` (default-hides zh-CN / zh-TW translations). Useful starting points: `features/orchestrator/custom-tools.md`, `development/extension-api/chat-and-state.md`, `development/extension-api/generation.md`, `development/extension-api/world-info.md`, `development/extension-api/orchestrator-tools.md`.
+
+Write tools (stage a proposal on the iter-studio's ProposalBus; nothing reaches the profile until you approve the card):
+
+- `luker_orch_set_custom_tool` — create or fully overwrite one entry. Body is compile-validated before staging; a syntax error rejects the call immediately with no proposal.
+- `luker_orch_patch_custom_tool_body` — find/replace patch on an existing body (default unique-or-fail; `replaceAll: true` opts into multi-match). Patched body is re-validated for syntax. Avoids re-sending long bodies on small tweaks.
+- `luker_orch_patch_custom_tool_schema` — replace only the parameters JSON-Schema. Body unchanged.
+- `luker_orch_remove_custom_tool` — delete one entry by name. The card shows the body that will be deleted so you can confirm.
+
+For every accepted `set` proposal, the iter-studio also flips the mode-appropriate enable flag (`tools.custom.<name>` for loop / director, `defaultTools.custom.<name>` for agenda, `spec.defaultTools.custom.<name>` for spec) to `true` so the new tool is immediately offered to the runtime agent.
 
 Layer-2 tools registered by other extensions cannot be authored from the Studio — their definitions live in the registering extension. Only their enable flags are reachable here.
 

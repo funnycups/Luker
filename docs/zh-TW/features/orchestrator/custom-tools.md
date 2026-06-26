@@ -86,11 +86,24 @@ if (ctx.__lukerRun?.abortSignal?.aborted) {
 
 ## 迭代工作台
 
-AI 迭代工作台對自訂工具能做三件事：
+AI 迭代工作台直接在工作 profile 上讀寫自訂工具的 Layer-3 定義。它有完整的讀 / 寫 / 檢查表面，外加沙箱 dry-run 和發現工具，這樣它能在請你確認前先用真實的 `ctx` 把程式碼校驗過。
 
-- **新寫一個。** 用一句話告訴工作台你要什麼（比如「寫一個工具，檢查每次回覆尾部都有 `<overall>` 區塊」），它會呼叫 `luker_orch_set_custom_tool` 在 `customTools[]` 裡加一條；新工具的啟用開關會自動打開，下一輪 agent 就看得到。每次造工具都走正常的變更審閱流程，你能在落地前先看 diff。
-- **改或者刪。** 同一對工具呼叫（`luker_orch_set_custom_tool` 覆蓋、`luker_orch_remove_custom_tool` 刪除），同樣的審閱流程。
-- **開關切換。** 按模式的啟用開關，不需要審閱。
+讀工具（結果直接回傳，無需審閱）：
+
+- `luker_orch_list_custom_tools` —— 列出 profile 上的工具，帶模式 / 描述 / 是否有模擬本體 / 一行參數 schema 摘要。
+- `luker_orch_get_custom_tool` —— 按名稱回傳某個工具的完整內容（含函式本體）。
+- `luker_orch_dry_run_custom_tool` —— 在沙箱裡編譯 + 執行函式本體（可傳入實參），回傳 `{ok, result, error, logs, durationMs}`；硬牆時長 3 秒；`console.log/warn/error` 會被捕獲。`name`（跑 profile 上現存工具）或 `body`（編譯內聯函式本體）二選一。
+- `luker_ctx_list_keys` / `luker_ctx_describe` —— 列舉 / 鑽入執行時 `ctx`（就是 SillyTavern/Luker 擴充透過 `getContext()` 拿到的那個物件）。回傳型別 / 函式 arity / 原始碼預覽 / 子鍵。
+- `luker_docs_list` / `luker_docs_read` —— 列出和讀取 `docs/` 下的 markdown 文件（預設隱藏 zh-CN / zh-TW 翻譯）。推薦起步：`features/orchestrator/custom-tools.md`、`development/extension-api/chat-and-state.md`、`development/extension-api/generation.md`、`development/extension-api/world-info.md`、`development/extension-api/orchestrator-tools.md`。
+
+寫工具（在迭代工作台的 ProposalBus 上掛一張待審 card；你不點同意就什麼都不會落到 profile）：
+
+- `luker_orch_set_custom_tool` —— 新建或整體覆蓋一條工具。掛卡前函式本體會做一次編譯校驗；語法錯的話立刻被拒絕、不掛卡。
+- `luker_orch_patch_custom_tool_body` —— 對現有函式本體做 find/replace 局部補丁（預設要求 `oldString` 命中唯一一處；`replaceAll: true` 才允許多處替換）。補丁後的函式本體也會被再次編譯校驗。微調時優先用它，可避免重新提交大段函式本體。
+- `luker_orch_patch_custom_tool_schema` —— 只替換參數 JSON-Schema，函式本體保持不變。
+- `luker_orch_remove_custom_tool` —— 按名稱刪除一條工具。審閱 card 會把即將被刪的函式本體顯示出來，方便你確認。
+
+每次 `set` 提案被你接受後，迭代工作台會同時把模式對應的啟用開關（loop / director 是 `tools.custom.<name>`，agenda 是 `defaultTools.custom.<name>`，spec 是 `spec.defaultTools.custom.<name>`）切到 `true`，這樣新工具立刻就會餵給執行時 agent。
 
 來自其他擴展（Layer-2）的工具定義不能在工作台裡改——那些定義在註冊它們的擴展裡，工作台只能切它們的啟用開關。
 

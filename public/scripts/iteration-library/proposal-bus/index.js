@@ -20,6 +20,7 @@ export { createProfileEditHandler, profileEdit } from './kinds/profile-edit.js';
 export { createLorebookWriteHandler, lorebookWrite } from './kinds/lorebook-write.js';
 export { createSkillAuthorHandler, skillAuthor } from './kinds/skill-author.js';
 export { createPresetCloneHandler, presetClone } from './kinds/preset-clone.js';
+export { createCustomToolAuthorHandler, customToolAuthor } from './kinds/custom-tool-author.js';
 
 export function createProposalBus(opts) {
     return createBus(opts);
