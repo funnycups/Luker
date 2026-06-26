@@ -178,8 +178,12 @@ describe('sanitizeLoopProfile customTools field', () => {
         expect(out.customTools[0].name).toBe('weather');
     });
 
-    test('missing customTools defaults to empty array', () => {
-        const out = sanitizeLoopProfile({});
+    test('missing customTools + already-seeded flag defaults to empty array', () => {
+        // Without the seeded flag, sanitizeLoopProfile auto-injects
+        // DEFAULT_CUSTOM_TOOLS. Pass seededDefaultCustomTools: true to
+        // simulate a previously-seeded profile where the user deleted
+        // every entry — that state should round-trip as empty.
+        const out = sanitizeLoopProfile({ seededDefaultCustomTools: true });
         expect(out.customTools).toEqual([]);
     });
 });
@@ -197,8 +201,8 @@ describe('sanitizeSpec customTools field', () => {
         expect(out.customTools[0].name).toBe('foo');
     });
 
-    test('defaults to empty when missing', () => {
-        const out = sanitizeSpec({ spec: { stages: [] }, presets: {} });
+    test('defaults to empty when missing + already-seeded flag set', () => {
+        const out = sanitizeSpec({ spec: { stages: [] }, presets: {}, seededDefaultCustomTools: true });
         expect(out.customTools).toEqual([]);
     });
 });
@@ -213,8 +217,8 @@ describe('sanitizeAgendaWorkingProfile customTools field', () => {
         expect(out.customTools).toHaveLength(1);
     });
 
-    test('defaults to empty', () => {
-        const out = sanitizeAgendaWorkingProfile({});
+    test('defaults to empty + already-seeded flag set', () => {
+        const out = sanitizeAgendaWorkingProfile({ seededDefaultCustomTools: true });
         expect(out.customTools).toEqual([]);
     });
 });

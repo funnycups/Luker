@@ -1066,7 +1066,18 @@ async function onWorldInfoFinalized(payload) {
             activatedEntryKeys.add(`${world}.${uid}`);
         }
     }
-    const runMeta = { activatedEntryKeys };
+    const runMeta = {
+        activatedEntryKeys,
+        // Reference to the in-flight wiFinalizedPayload so loop's
+        // `lorebook_force_activate` (and any future force-injection tool)
+        // can mutate the same payload `script.js` is about to
+        // `joinWorldInfoEntries` on. The push must happen inside the
+        // synchronous emit() frame — i.e. inside the loop's tool-call
+        // loop, which runs to completion before this `onWorldInfoFinalized`
+        // handler returns. Push after emit returns has no effect because
+        // join has already materialized worldInfoBefore/After strings.
+        wiFinalizedPayload: payload,
+    };
     const orchestrationPayload = linkedAbort.signal && linkedAbort.signal !== payload?.signal
         ? {
             ...payload,
@@ -3421,6 +3432,7 @@ function buildAiIterationToolSet(session = null) {
                     list: { type: 'boolean' },
                     search: { type: 'boolean' },
                     get: { type: 'boolean' },
+                    force_activate: { type: 'boolean' },
                 },
                 additionalProperties: false,
             },
@@ -3688,6 +3700,7 @@ function buildAiIterationToolSet(session = null) {
                                             list: { type: 'boolean' },
                                             search: { type: 'boolean' },
                                             get: { type: 'boolean' },
+                                            force_activate: { type: 'boolean' },
                                         },
                                         additionalProperties: false,
                                     },
@@ -6754,6 +6767,52 @@ function bindUi() {
         });
         if (!entry) return;
         tools.push(entry);
+        refreshOrchestrationEditorPopup(context, settings);
+    });
+
+    // "Import defaults" button — re-add the orchestrator's shipped default
+    // customTools (from default-custom-tools.js). Confirms with the user
+    // first so an accidental click on a profile with many handwritten
+    // tools doesn't silently rewrite anything. Default behavior is
+    // skip-on-collision so existing handwritten tools are never lost;
+    // a follow-up confirm offers overwrite for any name collision.
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="import-default-custom-tools"], .luker_orch_editor_popup [data-orch-action="import-default-custom-tools"]`, async function () {
+        const host = resolveCustomToolsHost(this);
+        if (!host) return;
+        const { importDefaultCustomTools } = await import('./seed-default-custom-tools.js');
+        const { DEFAULT_CUSTOM_TOOLS } = await import('./default-custom-tools.js');
+        const existingNames = new Set(host.tools.map(t => String(t?.name || '')));
+        const willCollide = DEFAULT_CUSTOM_TOOLS
+            .map(t => String(t.name))
+            .filter(n => existingNames.has(n));
+        let overwrite = false;
+        if (willCollide.length > 0) {
+            const choice = await context.Popup.show.confirm(
+                i18n('Import default custom tools'),
+                i18nFormat(
+                    'These default tools have the same name as tools already on this profile: ${0}. Overwrite them with the shipped defaults? Choose No to skip just those (your other defaults still import).',
+                    willCollide.join(', '),
+                ),
+            );
+            overwrite = (choice === context.POPUP_RESULT.AFFIRMATIVE);
+        }
+        // The profile-shaped object whose `customTools` is the live array
+        // is `host.editor` for loop/director/agenda, and `host.editor.spec`
+        // for spec mode (see resolveCustomToolsHost). importDefaultCustomTools
+        // mutates the array in place AND flips seededDefaultCustomTools on
+        // the same draft so future sanitizes don't re-seed.
+        const profileDraft = (host.mode === 'spec') ? host.editor.spec : host.editor;
+        const result = importDefaultCustomTools(profileDraft, { overwrite });
+        // sanitizeCustomTools rebuilds the array; rebind the host view if
+        // the reference changed.
+        host.tools.length = 0;
+        for (const t of profileDraft.customTools) host.tools.push(t);
+        const summary = [
+            result.added.length ? i18nFormat('added: ${0}', result.added.join(', ')) : '',
+            result.overwritten.length ? i18nFormat('overwritten: ${0}', result.overwritten.join(', ')) : '',
+            result.skipped.length ? i18nFormat('skipped (already present): ${0}', result.skipped.join(', ')) : '',
+        ].filter(Boolean).join(' · ');
+        toastr.success(summary || i18n('No default custom tools to import.'), i18n('Default custom tools'));
         refreshOrchestrationEditorPopup(context, settings);
     });
 

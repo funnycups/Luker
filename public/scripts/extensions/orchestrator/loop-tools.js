@@ -38,6 +38,7 @@ import { FINALIZE_TOOL_SCHEMA, ToolError } from './loop-runtime.js';
 import { getExtensionRegistry } from './register-custom-tool.js';
 import { execChatReadRange, execChatSearch } from './loop-tools/chat.js';
 import { execLorebookSearch, execLorebookGet, execWorldBookList, execLorebookList } from './loop-tools/lorebook.js';
+import { execLorebookForceActivate } from './loop-tools/lorebook-force-activate.js';
 import { execNoteOpen, execNoteClose } from './loop-tools/note.js';
 
 /**
@@ -256,6 +257,30 @@ registerTool('lorebook_list', execLorebookList, {
         },
     },
 }, { mode: 'read' });
+
+registerTool('lorebook_force_activate', execLorebookForceActivate, {
+    type: 'function',
+    function: {
+        name: 'lorebook_force_activate',
+        description: 'Force one or more dormant lorebook entries into the main model\'s <world_info> channel for THIS turn. The entries land in the same channel as naturally-activated entries — the model cannot tell them apart. Use sparingly: forced entries BYPASS the World Info token budget, so pushing too much will silently evict chat history. They also do NOT trigger recursive key scanning. Use lorebook_list to discover dormant uids first; constant:true entries do not need forcing. Works in loop / spec / agenda — those modes share the GENERATION_WORLD_INFO_FINALIZED frame with the WI payload. Returns LOREBOOK_FORCE_NO_PAYLOAD in director mode (director\'s main agent runs after WI is baked into the prompt; force-activation is too late). In spec, sibling nodes that already ran in the same turn will NOT see your forced entries — only the final main-model generation does. Returns {ok, book, activated:[{uid, comment, route, chars}], skipped:[{uid, reason}]}.',
+        parameters: {
+            type: 'object',
+            properties: {
+                book_name: {
+                    type: 'string',
+                    description: 'Required. Target world book name (entry.world). Get from world_book_list / lorebook_list output.',
+                },
+                uids: {
+                    type: 'array',
+                    items: { type: 'integer' },
+                    description: 'Required. Non-empty array of uids to force-activate. Stable handles from lorebook_list output.',
+                },
+            },
+            required: ['book_name', 'uids'],
+            additionalProperties: false,
+        },
+    },
+}, { mode: 'write' });
 
 // ---- note namespace -----------------------------------------------------
 

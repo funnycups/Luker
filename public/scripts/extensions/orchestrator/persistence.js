@@ -40,6 +40,7 @@ import {
 } from './anchors.js';
 import { DEFAULT_LOOP_SYSTEM_PROMPT } from './loop-default-prompt.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
+import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
 
 const STATE_NAMESPACE = 'luker_orchestrator_anchors';
 const SCHEMA_NAMESPACE = `${STATE_NAMESPACE}__schema`;
@@ -222,7 +223,7 @@ const LOOP_PROFILE_DEFAULTS = Object.freeze({
     tools: Object.freeze({
         note: Object.freeze({ open: true, close: true }),
         chat: Object.freeze({ read_range: true, search: true }),
-        lorebook: Object.freeze({ world_book_list: true, list: true, search: true, get: true }),
+        lorebook: Object.freeze({ world_book_list: true, list: true, search: true, get: true, force_activate: true }),
         custom: { ...DEFAULT_LAYER2_CUSTOMS },
         finalize: true,
     }),
@@ -381,6 +382,11 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
             list: readBooleanFlag(lorebookIn.list, def),
             search: readBooleanFlag(lorebookIn.search, def),
             get: readBooleanFlag(lorebookIn.get, def),
+            // force_activate is a write-mode tool but it is one of the
+            // primary value-adds of loop/spec/agenda over a static WI
+            // pass — defaults to on for new profiles. Users who don't
+            // want it can flip it off in the editor or via iter-studio.
+            force_activate: readBooleanFlag(lorebookIn.force_activate, def),
         },
         custom: customOut,
         // Director-only collaboration verbs. Sub-agents never see these
@@ -543,7 +549,13 @@ export function sanitizeLoopProfile(input) {
             return Math.max(LOOP_WALL_CLOCK_FLOOR_MS, Math.floor(n));
         })(),
         capsule_inject: sanitizeLoopCapsuleInject(source.capsule_inject),
-        customTools: sanitizeCustomTools(source.customTools),
+        ...(() => {
+            const seeded = seedDefaultCustomToolsIfNeeded(source, sanitizeCustomTools(source.customTools));
+            return {
+                customTools: seeded.customTools,
+                seededDefaultCustomTools: seeded.seededDefaultCustomTools,
+            };
+        })(),
     };
     // Loop is a single-agent mode, so the mode-level `skills` field is the
     // only place a visibility profile can live. Same inline normalizer the

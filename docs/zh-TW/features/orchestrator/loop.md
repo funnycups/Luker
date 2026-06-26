@@ -95,7 +95,7 @@ loop.finalize -> out
 
 ## 內建工具
 
-工具走 OpenAI function-calling 協議，結果以 `role: tool` 訊息形式回到 Agent 的下一輪上下文。共 23 個可選工具 + 1 個強制 `finalize`:
+工具走 OpenAI function-calling 協議，結果以 `role: tool` 訊息形式回到 Agent 的下一輪上下文。共 24 個可選工具 + 1 個強制 `finalize`:
 
 | 工具 | 作用 | 簡單範例（RP 場景） |
 |---|---|---|
@@ -105,6 +105,7 @@ loop.finalize -> out
 | `chat_search(pattern, flags?)` | 對所有樓層做正規表達式搜尋。回傳 grep `-n` 風格的命中行，每行一條結果：`floor_N [role]:lineno: line`。`flags` 預設 `gm`，`g` 缺省時會自動補上。配合 `chat_read_range` 拉回完整樓層內容。 | `chat_search({ pattern: '宴會\|慶典', flags: 'gm' })` 翻出所有提到「宴會」或「慶典」的樓層。 |
 | `lorebook_search(pattern, flags?, book?)` | 在所有啟用的世界書條目裡做正規表達式搜尋。回傳 grep `-n` 風格的命中行：`[book] entry_name:lineno: line`。**預設排除本回合已啟用的條目**——那些已經被注入主上下文，再返回會浪費 token。傳入 `book` 可按世界書名收窄到單本。 | `lorebook_search({ pattern: '李府', book: 'main' })` 在 `main` 世界書裡找出所有提到「李府」的設定行。 |
 | `lorebook_get(entry_key)` | 按 key 拉取條目全文。**不去重**——允許 agent 精確引用某條已啟用條目以保持術語一致。 | `lorebook_get('落雁城-主城')` 把這一條全文調出來引用。 |
+| `lorebook_force_activate(book_name, uids)` | **寫工具，預設關閉。** 把一條或多條本回合未啟用的世界書條目強行塞進主模型的 `<world_info>` 通道；主模型分不出強行注入和自然啟用的差別。**繞過世界書 token 預算**——塞太多會悄悄擠掉聊天歷史，只塞這一輪真正需要的。也不會觸發遞迴 key 掃描。適合讓 agent 按場景動態決定主模型這一輪看到哪些設定（例如「聊到這個 NPC 時把對應人物檔案拉出來」）。Loop / Spec / Agenda 都能用；Director 用不了（時序——Director 主代理跑的時候 WI 已經焊死在 prompt 裡）。 | 聊到議會時 `lorebook_force_activate({ book_name: 'main', uids: [42, 87] })` 把長老會檔案 + 貿易路線註釋頂上去。 |
 | `memory_list_candidates(seq_window?, types?, exclude_recent_messages?)` | 列舉可見的記憶圖候選池——與記憶圖自身召回 LLM 看到的同一組。回傳 `{ candidates: [{ id, type, level, title, seqTo, semanticDepth }] }`，按時間倒序。**召回流水線的第一步**。 | `memory_list_candidates({ types: ['event'] })` 回傳召回 LLM 會考慮的最近事件節點。 |
 | `memory_keyword_search(query, types?, k?)` | 按 token 比對 title + 欄位值，無需 profile。回傳 `{ results: [{ id, type, title, seqTo, score, scoreMode: 'keyword' }] }`，按 score 降序。按關鍵字或短語查時用。 | `memory_keyword_search({ query: 'family secret', k: 8 })` |
 | `memory_vector_search(query, types?, k?)` | 按設定的 embedding profile 做語義相似度搜尋。未設定 embedding profile 時直接拋 `NO_EMBEDDING_PROFILE`，不靜默 fallback；需要時手動回落到 `memory_keyword_search`。 | `memory_vector_search({ query: 'the moment she chose forgiveness', k: 5 })` |

@@ -617,7 +617,7 @@ describe('runLoopOrchestration propagates payload.__lukerRun into tool context (
 });
 
 describe('sanitizeAgentToolFlags lorebook shape', () => {
-    test('defaultAllOn=true seeds all 4 lorebook flags on', async () => {
+    test('defaultAllOn=true seeds all 5 lorebook flags on', async () => {
         const { sanitizeAgentToolFlags } = await import(
             '../../public/scripts/extensions/orchestrator/persistence.js'
         );
@@ -627,10 +627,11 @@ describe('sanitizeAgentToolFlags lorebook shape', () => {
             list: true,
             search: true,
             get: true,
+            force_activate: true,
         });
     });
 
-    test('defaultAllOn=false seeds all 4 lorebook flags off', async () => {
+    test('defaultAllOn=false seeds all 5 lorebook flags off', async () => {
         const { sanitizeAgentToolFlags } = await import(
             '../../public/scripts/extensions/orchestrator/persistence.js'
         );
@@ -640,6 +641,7 @@ describe('sanitizeAgentToolFlags lorebook shape', () => {
             list: false,
             search: false,
             get: false,
+            force_activate: false,
         });
     });
 
@@ -656,10 +658,22 @@ describe('sanitizeAgentToolFlags lorebook shape', () => {
             list: false,
             search: true,
             get: true,
+            force_activate: true,
         });
     });
 
-    test('sanitizeLoopProfile round-trips the 4 lorebook flags', async () => {
+    test('explicit false on force_activate overrides the default-on seed', async () => {
+        const { sanitizeAgentToolFlags } = await import(
+            '../../public/scripts/extensions/orchestrator/persistence.js'
+        );
+        const result = sanitizeAgentToolFlags(
+            { lorebook: { force_activate: false } },
+            { defaultAllOn: true },
+        );
+        expect(result.lorebook.force_activate).toBe(false);
+    });
+
+    test('sanitizeLoopProfile round-trips all 5 lorebook flags on', async () => {
         const { sanitizeLoopProfile } = await import(
             '../../public/scripts/extensions/orchestrator/persistence.js'
         );
@@ -669,15 +683,16 @@ describe('sanitizeAgentToolFlags lorebook shape', () => {
             list: true,
             search: true,
             get: true,
+            force_activate: true,
         });
     });
 
-    test('sanitizer accepts explicit toggles on all 4 lorebook flags (iter-studio AI patch path)', async () => {
+    test('sanitizer accepts explicit toggles on all 5 lorebook flags (iter-studio AI patch path)', async () => {
         const { sanitizeAgentToolFlags } = await import(
             '../../public/scripts/extensions/orchestrator/persistence.js'
         );
         const result = sanitizeAgentToolFlags(
-            { lorebook: { world_book_list: false, list: false, search: false, get: false } },
+            { lorebook: { world_book_list: false, list: false, search: false, get: false, force_activate: false } },
             { defaultAllOn: true },
         );
         expect(result.lorebook).toEqual({
@@ -685,6 +700,7 @@ describe('sanitizeAgentToolFlags lorebook shape', () => {
             list: false,
             search: false,
             get: false,
+            force_activate: false,
         });
     });
 });
@@ -706,6 +722,7 @@ describe('applyLoopProfilePatchArgs lorebook merge', () => {
             list: false,
             search: true,
             get: true,
+            force_activate: true,
         });
     });
 
@@ -727,6 +744,7 @@ describe('applyLoopProfilePatchArgs lorebook merge', () => {
             list: false,
             search: true,
             get: false,
+            force_activate: true,
         });
     });
 });

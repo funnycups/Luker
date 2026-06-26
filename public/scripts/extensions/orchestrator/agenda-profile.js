@@ -44,6 +44,7 @@ import {
 import { sanitizeAgentToolFlags, seedDefaultLayer2Customs } from './persistence.js';
 import { toReadableYamlText } from './output-formatting.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
+import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -122,7 +123,13 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
         // the box. Explicit null is preserved as-is so callers that
         // really want a no-tools default keep that option.
         defaultTools: sanitizeAgendaProfileDefaultTools(source),
-        customTools: sanitizeCustomTools(source?.customTools),
+        ...(() => {
+            const seeded = seedDefaultCustomToolsIfNeeded(source, sanitizeCustomTools(source?.customTools));
+            return {
+                customTools: seeded.customTools,
+                seededDefaultCustomTools: seeded.seededDefaultCustomTools,
+            };
+        })(),
         // Mode-level skills. Defaults to wildcard so all installed skills
         // are visible to every agent until the user narrows. Inline shape
         // normalizer; see director-defaults.js for rationale on not

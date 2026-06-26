@@ -781,6 +781,12 @@ export function sanitizeDirectorProfile(profile) {
         maxTotalSubagentRuns: clampInt(directorFields.maxTotalSubagentRuns, bounds.maxTotalSubagentRuns),
         tools: sanitizedTools,
         discardOnAbort: Boolean(directorFields.discardOnAbort),
+        // Director skips default-customTool seeding because the only
+        // current default (`select_lore_for_turn`) wraps
+        // lorebook_force_activate, which cannot work in director (the
+        // main agent runs in GENERATE_TAKEOVER_DISPATCH after WI is
+        // baked into the prompt). User can still manually import via
+        // the "Import default custom tools" button.
         customTools: sanitizeCustomTools(directorFields.customTools),
     };
 

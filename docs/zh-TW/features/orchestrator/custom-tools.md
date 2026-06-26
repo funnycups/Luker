@@ -42,7 +42,10 @@
 
 編排執行時掛的(只在編排過程中存在):
 
-- `ctx.__lukerRun` —— 本次 run 的執行時狀態。值得一提的是 `ctx.__lukerRun.activatedEntryKeys` 是一個 `Set`,裡面是本輪已經被注入的 World Info 條目 key(你的工具若要再呈現 lorebook 內容可據此去重)。
+- `ctx.__lukerRun` —— 本次 run 的執行時狀態。子欄位：
+    - `ctx.__lukerRun.activatedEntryKeys` 是一個 `Set`，鍵的形式是 `${world}.${uid}`，標記本輪已經被注入主上下文的 World Info 條目（你的工具若要再呈現 lorebook 內容可據此去重）。
+    - `ctx.__lukerRun.wiFinalizedPayload` 是**可變引用**，指向 `script.js` 即將拼成 `<world_info>` 通道字串的那一份 `wiFinalizedPayload`。**在你的工具呼叫執行期間** push 到 `wiFinalizedPayload.worldInfoBeforeEntries` / `.worldInfoAfterEntries` / `.worldInfoDepth[i].entries` 裡的內容，會被當作本輪 `<world_info>` 通道的一部分一同送進主模型，跟自然啟用的條目完全沒法區分。繞過世界書 token 預算，也不會觸發遞迴 key 掃描。Loop / Spec / Agenda 可用（它們都在 `GENERATION_WORLD_INFO_FINALIZED` 同一幀內跑）；**Director 下為 undefined**（主代理跑的時候 WI 已經焊死在 prompt 裡）。Layer-1 的 `lorebook_force_activate` builtin 是這個機制的官方包裝——優先用它，不要自己手寫 push。
+    - `ctx.__lukerRun.abortSignal` 是本次 run 的協作式取消訊號——長耗時工具裡要定期檢查 `.aborted`。
 - `ctx.__floorStateForNotes` —— `note_open` / `note_close` 工具底層用的 floor-state 實例。想跟便箋系統協作的工具可以讀它。
 - `ctx.__customToolRegistry` —— 你的工具被編譯進的那個 per-run Layer-3 註冊表。大多數工具用不到,留給少數進階情境(例如反向列舉本編排裡的其他手寫工具)。
 - `ctx.__memoryGraphSession` —— 由第一次 `memory_*` 工具呼叫 lazy 開啟;本輪跑過至少一次 memory 工具之後才會出現。

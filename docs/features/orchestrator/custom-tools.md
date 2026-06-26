@@ -42,7 +42,10 @@ From SillyTavern (use the same way you'd use `getContext()`):
 
 Mounted by the orchestrator runtime (only inside an orchestration call):
 
-- `ctx.__lukerRun` — per-run state. Notably `ctx.__lukerRun.activatedEntryKeys` is a `Set` of World Info entry keys already injected this turn (so your tool can dedup if it surfaces lorebook content).
+- `ctx.__lukerRun` — per-run state. Subfields:
+    - `ctx.__lukerRun.activatedEntryKeys` is a `Set` of `${world}.${uid}` keys for World Info entries already injected this turn (so your tool can dedup if it surfaces lorebook content).
+    - `ctx.__lukerRun.wiFinalizedPayload` is a **mutable reference** to the in-flight `wiFinalizedPayload` object that `script.js` is about to join into the main model's `<world_info>` channel. Push into `wiFinalizedPayload.worldInfoBeforeEntries` / `.worldInfoAfterEntries` / `.worldInfoDepth[i].entries` *during your tool call* and your content lands in the channel for THIS turn, indistinguishable from a naturally-activated entry. Bypasses the WI token budget and does not trigger recursive key scanning. Available in loop / spec / agenda (which run inside the `GENERATION_WORLD_INFO_FINALIZED` frame); **undefined in director** (its main agent runs in the takeover handler, which fires after WI is baked into the prompt). The Layer-1 `lorebook_force_activate` builtin is the supported wrapper around this — prefer it over hand-rolling the push.
+    - `ctx.__lukerRun.abortSignal` is the run's cooperative cancellation signal — check `.aborted` periodically in long tools.
 - `ctx.__floorStateForNotes` — the floor-state instance the `note_open` / `note_close` tools use. Read it if your tool wants to coexist with the notes system.
 - `ctx.__customToolRegistry` — the per-run Layer-3 registry your own tool was compiled into. Most tools never need this; it's exposed for advanced cases (e.g. introspecting other handwritten tools).
 - `ctx.__memoryGraphSession` — opened lazily by the first `memory_*` tool call. Available after at least one memory call this run.

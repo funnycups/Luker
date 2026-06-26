@@ -36,6 +36,7 @@ import {
 import { ORCH_EXECUTION_MODE_DIRECTOR, sanitizeDirectorProfile } from './director-defaults.js';
 import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags, seedDefaultLayer2Customs } from './persistence.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
+import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -162,7 +163,13 @@ export function sanitizeSpec(spec) {
         // customs seed so memory + search ship enabled out of the box.
         // Explicit null is preserved as-is.
         defaultTools: sanitizeSpecProfileDefaultTools(spec),
-        customTools: sanitizeCustomTools(spec.customTools),
+        ...(() => {
+            const seeded = seedDefaultCustomToolsIfNeeded(spec, sanitizeCustomTools(spec.customTools));
+            return {
+                customTools: seeded.customTools,
+                seededDefaultCustomTools: seeded.seededDefaultCustomTools,
+            };
+        })(),
     };
     // Mode-level skills: ensure the runtime always reads a canonical
     // `{ visible, deny }` shape. Inline normalizer (see director-defaults.js

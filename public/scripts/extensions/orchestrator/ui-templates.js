@@ -226,6 +226,7 @@ function renderCustomToolsSection(deps, safeScope, mode, customTools, flagBucket
     <summary>${escapeHtml(i18n('Custom Tools'))}</summary>
     <div class="luker_orch_ct_actions">
         <button class="menu_button menu_button_small" type="button" data-orch-action="add-custom-tool" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Add custom tool'))}</button>
+        <button class="menu_button menu_button_small" type="button" data-orch-action="import-default-custom-tools" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}" title="${escapeHtml(i18n('Re-add the default custom tools shipped with the orchestrator. Existing tools with the same name are skipped unless you confirm overwrite.'))}">${escapeHtml(i18n('Import defaults'))}</button>
         <button class="menu_button menu_button_small" type="button" data-orch-action="open-bridge-st-tools" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Bridge SillyTavern tools...'))}</button>
     </div>
     <div class="luker_orch_ct_subgroup">
@@ -750,6 +751,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
                 ${checkbox('lorebook.list', lorebook.list, 'lorebook_list')}
                 ${checkbox('lorebook.search', lorebook.search, 'lorebook_search')}
                 ${checkbox('lorebook.get', lorebook.get, 'lorebook_get')}
+                ${checkbox('lorebook.force_activate', lorebook.force_activate, 'lorebook_force_activate')}
             </fieldset>
             <fieldset class="luker_orch_loop_tools_group">
                 <legend>${escapeHtml(i18n('terminator'))}</legend>

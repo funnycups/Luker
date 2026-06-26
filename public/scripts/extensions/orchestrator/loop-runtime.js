@@ -739,6 +739,17 @@ export async function attachToolContext(context, payload) {
         toolContext.__lukerRun.abortSignal = sig;
     }
 
+    // Expose a tool-invocation seam for Layer-3 customTools that need to
+    // compose Layer-1 builtins (e.g. a customTool wrapper around
+    // `lorebook_force_activate`). Bound to this toolContext so the
+    // composed tool sees the same __lukerRun (activatedEntryKeys, etc.)
+    // and __customToolRegistry. Returns whatever the underlying tool
+    // returns; throws the same ToolError shape on failure.
+    toolContext.__invokeLoopTool = async (toolName, toolArgs) => {
+        const { executeLoopTool } = await import('./loop-tools.js');
+        return executeLoopTool(toolName, toolArgs, toolContext);
+    };
+
     if (toolContext.__floorStateForNotes === undefined && toolContext.__openNotes === undefined) {
         await attachNotesFloorState(toolContext);
     }
