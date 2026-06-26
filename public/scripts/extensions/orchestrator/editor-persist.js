@@ -48,9 +48,6 @@ import {
     getCharacterIndexByAvatar,
 } from './character-overrides.js';
 import {
-    createAgendaPlannerDraft,
-    sanitizeIdentifierToken,
-    sanitizePresetMap,
     serializeEditorPresetMap,
     serializeEditorSpec,
 } from './editable-spec.js';
@@ -75,16 +72,11 @@ export async function persistGlobalEditorFrom(settings, editor) {
 
 export async function persistGlobalAgendaEditorFrom(settings, editor) {
     ensureAgendaEditorIntegrity(editor);
-    writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global', {
-        planner: createAgendaPlannerDraft(editor.planner),
-        agents: sanitizePresetMap(editor.agents),
-        finalAgentId: sanitizeIdentifierToken(editor.finalAgentId, 'finalizer'),
-        limits: {
-            plannerMaxRounds: Math.max(1, Math.floor(Number(editor?.limits?.plannerMaxRounds) || 6)),
-            maxConcurrentAgents: Math.max(1, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3)),
-            maxTotalRuns: Math.max(1, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24)),
-        },
-    });
+    // Funnel the whole editor draft through the canonical sanitizer (same
+    // pattern as loop/director). Listing payload fields by hand here used
+    // to silently drop tools/customTools/skills on every save.
+    writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global',
+        sanitizeAgendaWorkingProfile(editor));
     await saveSettings();
 }
 
@@ -223,16 +215,8 @@ export async function persistCharacterAgendaEditor(context, settings, avatar, {
     const { libraries, activeIds } = clonePreviousLibrariesAndIds(previous);
     const overrideEnabled = clonePreviousEnabledFlags(previous);
 
-    writeModeLibrarySlot(libraries, activeIds, ORCH_EXECUTION_MODE_AGENDA, {
-        planner: createAgendaPlannerDraft(editor.planner),
-        agents: sanitizePresetMap(editor.agents),
-        finalAgentId: sanitizeIdentifierToken(editor.finalAgentId, 'finalizer'),
-        limits: {
-            plannerMaxRounds: Math.max(1, Math.floor(Number(editor?.limits?.plannerMaxRounds) || 6)),
-            maxConcurrentAgents: Math.max(1, Math.floor(Number(editor?.limits?.maxConcurrentAgents) || 3)),
-            maxTotalRuns: Math.max(1, Math.floor(Number(editor?.limits?.maxTotalRuns) || 24)),
-        },
-    });
+    writeModeLibrarySlot(libraries, activeIds, ORCH_EXECUTION_MODE_AGENDA,
+        sanitizeAgendaWorkingProfile(editor));
     overrideEnabled[ORCH_EXECUTION_MODE_AGENDA] = enabledFlag;
 
     const nextPayload = {
