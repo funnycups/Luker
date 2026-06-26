@@ -51,6 +51,14 @@ import {
 } from './spec-schema.js';
 import { sanitizeOptionalAgentToolFlags } from './persistence.js';
 
+function cloneSkillsField(skills) {
+    if (!skills || typeof skills !== 'object') return undefined;
+    return {
+        visible: Array.isArray(skills.visible) ? skills.visible.slice() : [],
+        deny: Array.isArray(skills.deny) ? skills.deny.slice() : [],
+    };
+}
+
 export function sanitizeIdentifierToken(value, fallback = '') {
     const normalized = String(value || '')
         .trim()
@@ -164,12 +172,17 @@ export function toEditableSpec(spec, presets) {
                 if (!presets[preset]) {
                     presets[preset] = createPresetDraft();
                 }
-                return {
+                const editableNode = {
                     id: sanitizeIdentifierToken(normalizedNode.id || preset, `node_${nodeIndex + 1}`),
                     preset,
                     type: normalizeNodeType(normalizedNode.type),
                     userPromptTemplate: String(normalizedNode.userPromptTemplate || ''),
+                    // null = inherit profile defaultTools; object = explicit override.
+                    tools: sanitizeOptionalAgentToolFlags(normalizedNode.tools),
                 };
+                const skills = cloneSkillsField(normalizedNode.skills);
+                if (skills) editableNode.skills = skills;
+                return editableNode;
             });
             return {
                 id: stageId,
@@ -181,16 +194,27 @@ export function toEditableSpec(spec, presets) {
                         preset: defaultPreset,
                         type: ORCH_NODE_TYPE_WORKER,
                         userPromptTemplate: '',
+                        tools: null,
                     }],
             };
         })
         .filter(stage => stage.nodes.length > 0);
 
+    const rootExtras = {
+        // sanitizeSpec already canonicalized these — pass through verbatim
+        // so the editor renders the persisted state, including explicit
+        // null (no profile default) and the full custom-tool list.
+        defaultTools: sanitized.defaultTools === undefined ? null : sanitized.defaultTools,
+        customTools: Array.isArray(sanitized.customTools) ? sanitized.customTools : [],
+        skills: cloneSkillsField(sanitized.skills) || { visible: ['*'], deny: [] },
+    };
+
     if (stages.length > 0) {
-        return { stages };
+        return { ...rootExtras, stages };
     }
 
     return {
+        ...rootExtras,
         stages: [{
             id: 'distill',
             mode: 'serial',
@@ -199,6 +223,7 @@ export function toEditableSpec(spec, presets) {
                 preset: defaultPreset,
                 type: ORCH_NODE_TYPE_WORKER,
                 userPromptTemplate: '',
+                tools: null,
             }],
         }],
     };
@@ -206,7 +231,13 @@ export function toEditableSpec(spec, presets) {
 
 export function serializeEditorSpec(editorSpec) {
     const stages = Array.isArray(editorSpec?.stages) ? editorSpec.stages : [];
-    return sanitizeSpec({
+    // defaultTools: explicit null = "no profile default" — preserve.
+    // Undefined / missing key = unset; pass through so sanitizeSpec's
+    // fresh-profile seeder reseeds Layer-2 customs once. Object = user
+    // edit; pass through for sanitization.
+    const hasDefaultToolsKey = editorSpec
+        && Object.prototype.hasOwnProperty.call(editorSpec, 'defaultTools');
+    const payload = {
         stages: stages
             .map((stage, stageIndex) => ({
                 id: sanitizeIdentifierToken(stage?.id, `stage_${stageIndex + 1}`),
@@ -221,12 +252,27 @@ export function serializeEditorSpec(editorSpec) {
                         if (userPromptTemplate) {
                             serialized.userPromptTemplate = userPromptTemplate;
                         }
+                        // Per-node tool override: null = inherit (omit so
+                        // sanitizer carries null through); object = explicit
+                        // override (let sanitizer canonicalize the shape).
+                        if (node?.tools !== undefined) {
+                            serialized.tools = node.tools;
+                        }
+                        const skills = cloneSkillsField(node?.skills);
+                        if (skills) serialized.skills = skills;
                         return serialized;
                     })
                     .filter(Boolean),
             }))
             .filter(stage => Array.isArray(stage.nodes) && stage.nodes.length > 0),
-    });
+        customTools: Array.isArray(editorSpec?.customTools) ? editorSpec.customTools : [],
+    };
+    if (hasDefaultToolsKey) {
+        payload.defaultTools = editorSpec.defaultTools;
+    }
+    const skills = cloneSkillsField(editorSpec?.skills);
+    if (skills) payload.skills = skills;
+    return sanitizeSpec(payload);
 }
 
 export function serializeEditorPresetMap(editorPresets) {
