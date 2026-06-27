@@ -951,6 +951,32 @@ function charaFormatData(data, directories) {
 }
 
 /**
+ * If `data.extensions.world` only resolves via tolerant matching (e.g. due to
+ * stray double spaces, NFC drift, emoji variation selectors), rewrite it to the
+ * canonical filename so future lookups land on exact match and the next export
+ * embeds the world book without a surprise miss. No-op when there's no binding
+ * or the binding already names the file exactly.
+ * @param {object} char Character payload
+ * @param {string} handle User handle
+ * @returns {Promise<void>}
+ */
+async function healCharacterWorldBinding(char, handle) {
+    const bound = String(_.get(char, 'data.extensions.world', '') || '').trim();
+    if (!bound) return;
+    try {
+        const canonicalFile = await getWorldInfoRepo().resolveName(handle, bound);
+        if (!canonicalFile) return;
+        const canonicalName = path.parse(canonicalFile).name;
+        if (canonicalName && canonicalName !== bound) {
+            console.info(`Healing extensions.world: "${bound}" -> "${canonicalName}"`);
+            _.set(char, 'data.extensions.world', canonicalName);
+        }
+    } catch (err) {
+        console.warn('healCharacterWorldBinding failed', err);
+    }
+}
+
+/**
  * Refreshes the embedded character book from the currently linked world info.
  * Current world info entries are authoritative. Preserve originalData only as a fallback
  * for malformed/legacy files that no longer expose an entries object.
@@ -1371,7 +1397,9 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
 
         request.body.ch_name = sanitize(request.body.ch_name);
 
-        const char = JSON.stringify(charaFormatData(request.body, request.user.directories));
+        const charObject = charaFormatData(request.body, request.user.directories);
+        await healCharacterWorldBinding(charObject, request.user.profile.handle);
+        const char = JSON.stringify(charObject);
         const internalName = request.body.file_name || getPngName(request.body.ch_name, request.user.directories);
         const avatarName = `${internalName}.png`;
         const chatsPath = path.join(request.user.directories.chats, internalName);
@@ -1471,6 +1499,12 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
     const avatarPath = path.join(request.user.directories.characters, request.body.avatar_url);
     let char = charaFormatData(request.body, request.user.directories);
     let targetFile = (request.body.avatar_url).replace('.png', '');
+
+    // Self-heal extensions.world if it drifted (e.g. stray double spaces, NFC
+    // form mismatch, emoji variation selectors): resolve to the canonical disk
+    // name once so future tolerant lookups become exact matches and the next
+    // export embeds the world book without surprises.
+    await healCharacterWorldBinding(char, request.user.profile.handle);
 
     try {
         // Preserve unknown/extended fields (e.g. data.extensions.luker.dedicated_personas)
