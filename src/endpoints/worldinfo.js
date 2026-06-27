@@ -231,7 +231,7 @@ router.post('/delete', async (request, response) => {
 
     const deleted = await getWorldInfoRepo().delete(request.user.profile.handle, request.body.name);
     if (!deleted) {
-        throw new Error(`World info file ${request.body.name} doesn't exist.`);
+        return response.sendStatus(404);
     }
 
     return response.sendStatus(200);
