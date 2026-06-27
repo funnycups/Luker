@@ -765,6 +765,14 @@ function formatRestorePhaseMessage(event, archiveLabel) {
             return total > 0
                 ? t`Restoring files: ${current} / ${total} (${pct}%)`
                 : t`Restoring files...`;
+        case 'convert': {
+            const stage = String(event.stage || '');
+            const counts = event.counts;
+            const numbers = counts
+                ? ` (settings:${counts.settings ?? 0}, presets:${counts.presets ?? 0}, worlds:${counts.worlds ?? 0}, chats:${counts.chats ?? 0})`
+                : '';
+            return t`Converting backup: ${stage}${numbers}`;
+        }
         case 'finalize':
             return t`Finalizing restore...`;
         default:
@@ -772,12 +780,16 @@ function formatRestorePhaseMessage(event, archiveLabel) {
     }
 }
 
-async function restoreUserData(handle, file, selection, mode, callback, { onProgress = null, onPhaseProgress = null } = {}) {
+async function restoreUserData(handle, file, selection, mode, callback, { onProgress = null, onPhaseProgress = null, scratchCreds = null } = {}) {
     const formData = new FormData();
     formData.append('avatar', file);
     formData.append('handle', handle);
     formData.append('mode', mode);
     formData.append('selection', JSON.stringify(selection));
+    if (scratchCreds?.mysqlUrl) formData.append('scratchMysqlUrl', scratchCreds.mysqlUrl);
+    if (scratchCreds?.postgresUrl) formData.append('scratchPostgresUrl', scratchCreds.postgresUrl);
+    if (scratchCreds?.mysqlPoolSize != null) formData.append('scratchMysqlPoolSize', String(scratchCreds.mysqlPoolSize));
+    if (scratchCreds?.postgresPoolSize != null) formData.append('scratchPostgresPoolSize', String(scratchCreds.postgresPoolSize));
 
     const stream = createRestoreProgressStream(onPhaseProgress);
     const response = await uploadWithProgress('/api/users/restore-backup', formData, {
@@ -789,7 +801,11 @@ async function restoreUserData(handle, file, selection, mode, callback, { onProg
 
     if (stream.streamed) {
         if (stream.error) {
-            throw new Error(stream.error);
+            const err = new Error(stream.error);
+            // NDJSON stream cannot carry the structured crossModeScratchRequired payload, so a
+            // creds-missing error in streaming mode surfaces as a plain message. Callers wanting
+            // the structured prompt rely on the non-streaming path (or the probe endpoint).
+            throw err;
         }
         if (!stream.result) {
             throw new Error('Restore stream ended without a result.');
@@ -800,11 +816,91 @@ async function restoreUserData(handle, file, selection, mode, callback, { onProg
 
     const data = response.json();
     if (!response.ok) {
-        throw new Error(data?.error || 'Failed to restore backup');
+        const err = new Error(data?.error || 'Failed to restore backup');
+        // Forward the structured cross-mode payloads on the error so the UI
+        // can drive the scratch-creds prompt without parsing the message.
+        if (data?.crossModeScratchRequired) err.crossModeScratchRequired = data.crossModeScratchRequired;
+        if (data?.crossModeScratchConnection) err.crossModeScratchConnection = data.crossModeScratchConnection;
+        if (data?.crossModeFailure) err.crossModeFailure = data.crossModeFailure;
+        throw err;
     }
 
     callback?.(data);
     return data;
+}
+
+/**
+ * Peek at a backup ZIP to find out whether the current server can restore it
+ * directly (same-mode) or needs the cross-mode conversion pipeline — and, if
+ * the source engine is mysql/postgres, whether the UI must prompt the user
+ * for a scratch DB connection string before submitting.
+ *
+ * Returns `{ engineKind, schemaVersion, sourceHandle, crossModeRequired,
+ * scratchCredsNeeded }` from POST /api/users/restore-backup/probe.
+ */
+async function probeBackupArchive(file) {
+    const formData = new FormData();
+    formData.append('avatar', file);
+    const response = await fetch('/api/users/restore-backup/probe', {
+        method: 'POST',
+        headers: { ...getRequestHeaders({ omitContentType: true }) },
+        body: formData,
+    });
+    if (!response.ok) {
+        const txt = await response.text().catch(() => '');
+        throw new Error(`Probe failed (${response.status}): ${txt}`);
+    }
+    return await response.json();
+}
+
+/**
+ * Reveal the cross-mode scratch creds block in the Backup Manager template
+ * and wait for the user to either fill it in (+ click "Use Connection") or
+ * cancel. Returns `{ ok: false }` on cancel or `{ ok: true, creds }` on
+ * confirm. The block is hidden on resolution.
+ */
+async function revealCrossModeScratchPrompt(template, kind, { focus = true } = {}) {
+    const credsBlock = template.find('.crossModeScratchCreds');
+    credsBlock.attr('hidden', null);
+    credsBlock.removeAttr('hidden');
+    template.find('.crossModeScratchFields').attr('hidden', '').addClass('displayNone');
+    const activeFields = template.find(`.crossModeScratchFields[data-scratch-kind="${kind}"]`);
+    activeFields.attr('hidden', null);
+    activeFields.removeAttr('hidden');
+    activeFields.removeClass('displayNone');
+    const input = activeFields.find('input').first();
+    if (focus) input.trigger('focus');
+    const labelText = kind === 'mysql'
+        ? t`Scratch MySQL connection URL`
+        : t`Scratch PostgreSQL connection URL`;
+    const promptHtml = `<div>
+            <p>${t`The backup is from a ${kind} engine. Provide a scratch ${labelText.toLowerCase()} so the conversion can ingest the backup before applying it to your current data.`}</p>
+            <p><small>${t`A temporary handle is created on the scratch database and removed when the restore completes.`}</small></p>
+        </div>`;
+    const result = await callGenericPopup(promptHtml, POPUP_TYPE.CONFIRM, '', {
+        okButton: t`Use Connection`,
+        cancelButton: t`Cancel`,
+        wide: false,
+        large: false,
+    });
+    if (result !== POPUP_RESULT.AFFIRMATIVE) {
+        hideCrossModeScratchPrompt(template);
+        return { ok: false };
+    }
+    const url = String(input.val() || '').trim();
+    if (!url) {
+        hideCrossModeScratchPrompt(template);
+        toastr.warning(t`No connection URL entered; cancel and retry.`, t`Cross-Mode Restore`);
+        return { ok: false };
+    }
+    const creds = kind === 'mysql' ? { mysqlUrl: url } : { postgresUrl: url };
+    return { ok: true, creds };
+}
+
+function hideCrossModeScratchPrompt(template) {
+    const credsBlock = template.find('.crossModeScratchCreds');
+    credsBlock.attr('hidden', '').addClass('displayNone');
+    template.find('.crossModeScratchFields').attr('hidden', '').addClass('displayNone');
 }
 
 /**
@@ -1160,6 +1256,37 @@ async function openBackupManager(handle, callback) {
             return;
         }
 
+        // Probe the ZIP first to detect whether cross-mode conversion is
+        // needed and (if mysql/pg source) whether the user must supply a
+        // scratch DB URL before the actual upload starts. The probe is a
+        // separate POST that only reads the ZIP's _engine_meta.json — it
+        // doesn't kick off the snapshot/extract pipeline.
+        let scratchCreds = null;
+        try {
+            setActionBusy(true);
+            const probe = await probeBackupArchive(file);
+            if (probe?.crossModeRequired) {
+                if (probe.scratchCredsNeeded) {
+                    const reveal = await revealCrossModeScratchPrompt(template, probe.scratchCredsNeeded);
+                    if (!reveal.ok) {
+                        toastr.info(t`Restore cancelled — scratch DB connection not provided.`, t`Cross-Mode Restore`);
+                        setActionBusy(false);
+                        return;
+                    }
+                    scratchCreds = reveal.creds;
+                } else {
+                    // fs-source on db server — no creds needed; just notify.
+                    toastr.info(t`Cross-mode restore: converting backup into current storage engine.`, t`Cross-Mode Restore`);
+                }
+            }
+        } catch (err) {
+            console.warn('Probe failed (continuing with direct restore):', err);
+            // Probe failures are non-fatal — fall through to the real restore;
+            // it'll surface a definitive error if the ZIP is truly invalid.
+        } finally {
+            setActionBusy(false);
+        }
+
         let progressToast;
         const updateProgressMessage = (text) => {
             if (progressToast && typeof progressToast.find === 'function') {
@@ -1192,13 +1319,17 @@ async function openBackupManager(handle, callback) {
                         updateProgressMessage(message);
                     }
                 },
+                scratchCreds,
             });
             toastr.clear(progressToast);
             progressToast = null;
             const diagnosticReport = buildRestoreDiagnosticReport({ handle, file, mode, selection, result });
             console.info('BACKUP_RESTORE_REPORT', diagnosticReport);
+            const crossNote = result?.crossMode
+                ? t` (cross-mode ${result.crossMode.sourceKind} → ${result.crossMode.destKind})`
+                : '';
             toastr.success(
-                t`Restored ${result.restoredCount} files. Skipped ${result.skippedCount}, rejected ${result.rejectedCount}.`,
+                t`Restored ${result.restoredCount ?? 0} files. Skipped ${result.skippedCount ?? 0}, rejected ${result.rejectedCount ?? 0}.${crossNote}`,
                 t`Backup Restored`,
             );
             if (hasRestoreWarnings(result)) {
@@ -1208,6 +1339,12 @@ async function openBackupManager(handle, callback) {
             callback?.(result);
         } catch (error) {
             console.error('Error restoring user data:', error);
+            // If the server told us we still need scratch creds (e.g. probe
+            // race or operator skipped it), reveal the prompt so they can
+            // retry from a clean state.
+            if (error?.crossModeScratchRequired?.kind) {
+                revealCrossModeScratchPrompt(template, error.crossModeScratchRequired.kind, { focus: true });
+            }
             toastr.error(String(error.message || error), t`Failed to restore backup`);
         } finally {
             if (progressToast) {
@@ -1216,6 +1353,7 @@ async function openBackupManager(handle, callback) {
             fileInput.val('');
             selectedFileText.text(t`No ZIP selected.`);
             setActionBusy(false);
+            hideCrossModeScratchPrompt(template);
         }
     };
 

@@ -37,6 +37,8 @@ function parseArgs(argv) {
         mysqlPoolSize: null,
         postgresUrl: null,
         postgresPoolSize: null,
+        fromZip: null,
+        mode: null,
     };
     for (let i = 2; i < argv.length; i++) {
         const arg = argv[i];
@@ -49,6 +51,8 @@ function parseArgs(argv) {
         else if (arg === '--mysql-pool-size') args.mysqlPoolSize = Number(argv[++i]);
         else if (arg === '--postgres-url') args.postgresUrl = argv[++i];
         else if (arg === '--postgres-pool-size') args.postgresPoolSize = Number(argv[++i]);
+        else if (arg === '--from-zip') args.fromZip = argv[++i];
+        else if (arg === '--mode') args.mode = argv[++i];
         else throw new Error(`Unknown argument: ${arg}`);
     }
     return args;
@@ -76,12 +80,22 @@ Options:
   --mysql-pool-size <n>  MySQL pool size (default: storage.mysql.poolSize or 10)
   --postgres-url <url>   PostgreSQL connection string (same rule as --mysql-url)
   --postgres-pool-size <n> PostgreSQL pool size (default: storage.postgres.poolSize or 10)
+  --from-zip <path>      Cross-mode restore: ingest a backup ZIP into the live storage
+                         engine (declared in config.yaml). Source engine is read from
+                         the ZIP's _engine_meta.json. When the source is mysql/postgres,
+                         also pass --mysql-url / --postgres-url for the scratch DB.
+  --mode <merge|overwrite> Restore mode for --from-zip (default: overwrite, which takes
+                         a snapshot before restore so a failure can roll back).
+  --handle <handle>      Target handle for --from-zip (default: source handle from ZIP)
   --help, -h             Show this message
 
 Examples:
   node scripts/storage-migrate.js --from fs --to sqlite
   node scripts/storage-migrate.js --from sqlite --to fs --handle alice --dry-run
   node scripts/storage-migrate.js --from fs --to mysql --mysql-url mysql://luker:pw@db:3306/luker
+  node scripts/storage-migrate.js --from-zip ./backup.zip --handle alice
+  node scripts/storage-migrate.js --from-zip ./mysql-backup.zip --handle alice \\
+      --mysql-url mysql://luker:pw@scratch:3306/luker_scratch
 
 Behavior:
   Backup of each user's source state is written to <dataRoot>/_storage-migrations/<timestamp>-<handle>/
@@ -98,8 +112,25 @@ function validateArgs(args) {
     // Validation order matters: --help short-circuits everything else (already
     // handled by the caller); after that we surface the most operator-useful
     // hint per call rather than dumping every problem at once.
+
+    // --from-zip is a separate mode: ingest a ZIP into the live engine
+    // (declared in config.yaml). It does NOT require --from/--to but does
+    // require either --handle or the ZIP to carry a source handle in meta.
+    if (args.fromZip) {
+        if (args.from || args.to) {
+            return { ok: false, message: '--from-zip is mutually exclusive with --from / --to.' };
+        }
+        if (args.dryRun) {
+            return { ok: false, message: '--dry-run is not supported for --from-zip.' };
+        }
+        if (args.mode && args.mode !== 'merge' && args.mode !== 'overwrite') {
+            return { ok: false, message: '--mode must be merge or overwrite.' };
+        }
+        return { ok: true };
+    }
+
     if (!args.from || !args.to) {
-        return { ok: false, message: 'Both --from and --to are required.' };
+        return { ok: false, message: 'Both --from and --to are required (or use --from-zip).' };
     }
     if (!VALID_MODES.includes(args.from) || !VALID_MODES.includes(args.to)) {
         return {
@@ -219,6 +250,15 @@ async function main() {
 
     // From here on we need a real config + data root + node-persist.
     const { dataRoot, getAllUserHandles, getUserDirectories, getConfigValue } = await bootstrap();
+
+    // Branch: --from-zip uses the cross-mode-restore orchestrator instead of
+    // the live-engine MigrationRunner path. The destination engine is the
+    // live one (from config.yaml's storage.mode); the source engine kind is
+    // read from the ZIP's _engine_meta.json.
+    if (args.fromZip) {
+        await runFromZip({ args, dataRoot, getAllUserHandles, getUserDirectories });
+        return;
+    }
 
     // Resolve mysql/postgres credentials: CLI flag wins, fall back to config.yaml.
     function resolveDbConfig(mode, urlFlag, poolSizeFlag) {
@@ -448,6 +488,172 @@ export async function runMigration({ runner, handles, logger = console }) {
         else okCount++;
     }
     return { okCount, failCount, results };
+}
+
+/**
+ * CLI handler for `--from-zip <path>`: ingest a backup ZIP into the live
+ * engine via the cross-mode-restore orchestrator. Exits the process with a
+ * status code matching the outcome (0 success, 1 conversion failure,
+ * 2 argument / pre-flight error).
+ *
+ * @param {object} ctx
+ * @param {object} ctx.args
+ * @param {string} ctx.dataRoot
+ * @param {() => Promise<string[]>} ctx.getAllUserHandles
+ * @param {(handle: string) => object} ctx.getUserDirectories
+ */
+export async function runFromZip({ args, dataRoot, getAllUserHandles, getUserDirectories }) {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const yauzl = (await import('yauzl')).default;
+    const { initStorage, getStorageEngine } = await import('../src/storage/index.js');
+    const { initUserStorage } = await import('../src/users.js');
+    const { ENGINE_META_ENTRY } = await import('../src/storage/engine-backup-entries.js');
+    const { crossModeRestore } = await import('../src/storage/migration/cross-mode-restore.js');
+    const { getConfigValue } = await import('../src/util.js');
+
+    const zipPath = path.default ? path.default.resolve(args.fromZip) : path.resolve(args.fromZip);
+    if (!fs.existsSync(zipPath)) {
+        console.error(`--from-zip: file not found at ${zipPath}`);
+        process.exit(2);
+    }
+
+    // Peek at the ZIP to find the source engine kind.
+    const engineMeta = await readEngineMetaFromZipCli(zipPath, yauzl, ENGINE_META_ENTRY);
+    if (!engineMeta) {
+        console.error('--from-zip: backup ZIP has no _engine_meta.json. Legacy fs-only backups cannot be ingested via --from-zip; restore from the web UI on an fs-mode server instead.');
+        process.exit(2);
+    }
+    console.log(`Cross-mode restore from ZIP:`);
+    console.log(`  source engine: ${engineMeta.engineKind} (handle=${engineMeta.handle || '(unknown)'})`);
+
+    // Initialize the LIVE engine from config.yaml.
+    await initUserStorage(dataRoot);
+    initStorage({
+        mode: getConfigValue('storage.mode', 'fs'),
+        directoriesByHandle: getUserDirectories,
+        mysql: getConfigValue('storage.mysql', null),
+        postgres: getConfigValue('storage.postgres', null),
+        acquireTimeoutMs: getConfigValue('storage.acquireTimeoutMs', 30000),
+        retries: { transient: getConfigValue('storage.retries.transient', 3) },
+    });
+    const currentEngine = getStorageEngine();
+    console.log(`  dest engine: ${currentEngine.kind}`);
+
+    if (engineMeta.engineKind === currentEngine.kind) {
+        console.error(`Source engine (${engineMeta.engineKind}) matches live engine. Use the standard restore UI instead — --from-zip is for cross-mode restores only.`);
+        process.exit(2);
+    }
+
+    // Resolve the destination handle: --handle wins; else use the meta's
+    // source handle; else error.
+    const allHandles = await getAllUserHandles();
+    const targetHandle = args.handle || engineMeta.handle;
+    if (!targetHandle) {
+        console.error('--from-zip: provide --handle (the ZIP does not declare a source handle in its meta).');
+        process.exit(2);
+    }
+    if (!allHandles.includes(targetHandle)) {
+        console.error(`--from-zip: handle "${targetHandle}" does not exist on this server. Existing handles: ${allHandles.join(', ') || '(none)'}`);
+        process.exit(2);
+    }
+    console.log(`  target handle: ${targetHandle}`);
+
+    // Resolve scratch creds if needed.
+    let scratchCreds = null;
+    if (engineMeta.engineKind === 'mysql') {
+        if (!args.mysqlUrl) {
+            console.error('--from-zip: source engine is mysql; pass --mysql-url for the scratch DB.');
+            process.exit(2);
+        }
+        scratchCreds = { mysqlUrl: args.mysqlUrl, mysqlPoolSize: args.mysqlPoolSize ?? undefined };
+    }
+    if (engineMeta.engineKind === 'postgres') {
+        if (!args.postgresUrl) {
+            console.error('--from-zip: source engine is postgres; pass --postgres-url for the scratch DB.');
+            process.exit(2);
+        }
+        scratchCreds = { postgresUrl: args.postgresUrl, postgresPoolSize: args.postgresPoolSize ?? undefined };
+    }
+
+    const mode = args.mode === 'merge' ? 'merge' : 'overwrite';
+    const dirs = getUserDirectories(targetHandle);
+    // Restore all categories — same as web UI's "select all".
+    const selection = {
+        settings: true, secrets: true, characters: true, chats: true,
+        lorebooks: true, presets: true, assets: true, extensions: true,
+        globalExtensions: true, vectors: true,
+    };
+
+    console.log(`  mode: ${mode}`);
+    console.log('');
+    console.log('Starting cross-mode restore...');
+
+    try {
+        const result = await crossModeRestore(
+            zipPath,
+            engineMeta,
+            dirs,
+            selection,
+            mode,
+            {
+                dataRoot,
+                currentEngine,
+                onProgress: (event) => {
+                    if (event?.phase === 'convert' && event.stage) { // banned-words-allow
+                        console.log(`  convert: ${event.stage}`);
+                    }
+                },
+                scratchCreds,
+                includeGlobalExtensions: true,
+            },
+        );
+        console.log('');
+        console.log(`Done. Restored ${result.restoredCount} fs-tree files; cross-mode duration ${result.crossMode.durationMs}ms.`);
+        const c = result.crossMode.converted;
+        console.log(`  settings=${c.settings} presets=${c.presets} (states=${c.preset_states}) worlds=${c.worlds} chats=${c.chats} (states=${c.chat_states}) named_docs=${c.named_docs} groups=${c.groups} stats=${c.stats}`);
+        if (currentEngine.close) try { await currentEngine.close(); } catch {}
+        process.exit(0);
+    } catch (err) {
+        console.error(`Cross-mode restore failed: ${err?.message || err}`);
+        if (err?.snapshotPath) {
+            console.error(`Snapshot preserved at: ${err.snapshotPath}`);
+            console.error(`Run restoreFromSnapshot manually if rollback was incomplete.`);
+        }
+        if (currentEngine.close) try { await currentEngine.close(); } catch {}
+        process.exit(1);
+    }
+}
+
+function readEngineMetaFromZipCli(zipPath, yauzl, ENGINE_META_ENTRY) {
+    return new Promise((resolve, reject) => {
+        yauzl.open(zipPath, { lazyEntries: true, decodeStrings: true }, (openErr, zipfile) => {
+            if (openErr) return reject(openErr);
+            let settled = false;
+            zipfile.readEntry();
+            zipfile.on('entry', (entry) => {
+                if (entry.fileName !== ENGINE_META_ENTRY) {
+                    zipfile.readEntry();
+                    return;
+                }
+                zipfile.openReadStream(entry, (streamErr, readStream) => {
+                    if (settled) return;
+                    if (streamErr) { settled = true; try { zipfile.close(); } catch {} return reject(streamErr); }
+                    const chunks = [];
+                    readStream.on('data', (c) => chunks.push(c));
+                    readStream.on('error', (e) => { if (!settled) { settled = true; try { zipfile.close(); } catch {} reject(e); } });
+                    readStream.on('end', () => {
+                        if (settled) return;
+                        settled = true;
+                        try { zipfile.close(); } catch {}
+                        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (e) { reject(e); }
+                    });
+                });
+            });
+            zipfile.on('end', () => { if (!settled) { settled = true; resolve(null); } });
+            zipfile.on('error', (err) => { if (!settled) { settled = true; reject(err); } });
+        });
+    });
 }
 
 // Only auto-run main() when invoked as a script. Importing this file from a

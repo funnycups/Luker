@@ -898,6 +898,25 @@ initUserStorage(globalThis.DATA_ROOT)
     // once and exit(1) on failure so the server doesn't accept traffic on a
     // broken storage stack. Default is false (lazy connect).
     .then(() => maybeFailFast(getStorageEngine(), getConfigValue('storage.failFast', false)))
+    // Cross-mode restore scratch sweep — best-effort, runs in the background
+    // so a slow disk doesn't block server start. Removes _xrestore_<id>
+    // dirs under <dataRoot>/_storage-migrations/ older than 24h (left over
+    // when a previous cross-mode restore was SIGKILL'd mid-run).
+    .then(() => {
+        import('./storage/migration/gc-scratch.js')
+            .then(({ gcScratch }) => gcScratch({
+                dataRoot: globalThis.DATA_ROOT,
+                maxAgeMs: 24 * 3600 * 1000,
+            }))
+            .then((counts) => {
+                if (counts.scanned > 0) {
+                    console.info(`[gc-scratch] swept ${counts.removed}/${counts.scanned} stale scratch dirs (kept ${counts.kept}, errors ${counts.errors})`);
+                }
+            })
+            .catch((err) => {
+                console.warn('[gc-scratch] sweep failed (non-fatal):', err?.message || err);
+            });
+    })
     .then(preSetupTasks)
     .then(apply404Middleware)
     .then(() => new ServerStartup(app, cliArgs).start())

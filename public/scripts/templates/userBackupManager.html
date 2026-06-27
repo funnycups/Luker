@@ -97,6 +97,28 @@
         </div>
     </div>
     <div class="backupSelectedFileName marginBot5" data-i18n="No ZIP selected.">No ZIP selected.</div>
+    <div class="crossModeScratchCreds marginTop5 marginBot5" hidden>
+        <div class="menu_button_note marginBot5">
+            <i class="fa-fw fa-solid fa-arrow-right-arrow-left"></i>
+            <span class="crossModeScratchBanner" data-i18n="Cross-mode restore detected. The backup is from a different storage engine than this server.">Cross-mode restore detected. The backup is from a different storage engine than this server.</span>
+        </div>
+        <div class="crossModeScratchFields" data-scratch-kind="mysql" hidden>
+            <label class="marginBot5" data-i18n="Scratch MySQL connection URL">Scratch MySQL connection URL</label>
+            <input type="text" class="text_pole crossModeScratchMysqlUrl marginBot5" name="scratchMysqlUrl"
+                placeholder="mysql://user:pass@host:3306/db">
+            <div class="menu_button_note" data-i18n="A temporary handle is created on this DB and removed when the restore completes.">
+                A temporary handle is created on this DB and removed when the restore completes.
+            </div>
+        </div>
+        <div class="crossModeScratchFields" data-scratch-kind="postgres" hidden>
+            <label class="marginBot5" data-i18n="Scratch PostgreSQL connection URL">Scratch PostgreSQL connection URL</label>
+            <input type="text" class="text_pole crossModeScratchPostgresUrl marginBot5" name="scratchPostgresUrl"
+                placeholder="postgresql://user:pass@host:5432/db">
+            <div class="menu_button_note" data-i18n="A temporary handle is created on this DB and removed when the restore completes.">
+                A temporary handle is created on this DB and removed when the restore completes.
+            </div>
+        </div>
+    </div>
     <div class="menu_button_note">
         <span data-i18n="Incremental Update writes files from backup and keeps other files.">Incremental Update writes files from backup and keeps other files.</span><br>
         <span data-i18n="Overwrite Update clears selected categories first, then restores backup files.">Overwrite Update clears selected categories first, then restores backup files.</span>

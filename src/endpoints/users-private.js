@@ -21,6 +21,12 @@ import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migra
 import { listForUser, mergeReadIds } from '../announcements.js';
 import { getStorageEngine } from '../storage/index.js';
 import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from '../storage/engine-backup-entries.js';
+import { crossModeRestore } from '../storage/migration/cross-mode-restore.js';
+import {
+    CrossModeScratchCredsRequiredError,
+    CrossModeScratchConnectionError,
+    CrossModeConversionFailedError,
+} from '../storage/migration/cross-mode-errors.js';
 
 // Two sentinel filenames the backup ZIP carries when the storage engine isn't
 // fs (spec §5.1/§5.2). The meta entry is captured during the analyze pass for
@@ -88,6 +94,26 @@ function parseBackupSelectionPayload(payload) {
         }
     }
     return payload;
+}
+
+/**
+ * Pull scratch DB connection fields out of a multipart restore request body.
+ * Returns null when neither mysqlUrl nor postgresUrl is present, so the
+ * cross-mode orchestrator's "creds required" check fires for db-source ZIPs.
+ */
+function parseScratchCreds(body) {
+    if (!body || typeof body !== 'object') return null;
+    const mysqlUrl = typeof body.scratchMysqlUrl === 'string' ? body.scratchMysqlUrl.trim() : '';
+    const postgresUrl = typeof body.scratchPostgresUrl === 'string' ? body.scratchPostgresUrl.trim() : '';
+    const mysqlPoolSize = body.scratchMysqlPoolSize != null && Number.isFinite(Number(body.scratchMysqlPoolSize))
+        ? Number(body.scratchMysqlPoolSize) : undefined;
+    const postgresPoolSize = body.scratchPostgresPoolSize != null && Number.isFinite(Number(body.scratchPostgresPoolSize))
+        ? Number(body.scratchPostgresPoolSize) : undefined;
+    if (!mysqlUrl && !postgresUrl) return null;
+    const out = {};
+    if (mysqlUrl) { out.mysqlUrl = mysqlUrl; if (mysqlPoolSize !== undefined) out.mysqlPoolSize = mysqlPoolSize; }
+    if (postgresUrl) { out.postgresUrl = postgresUrl; if (postgresPoolSize !== undefined) out.postgresPoolSize = postgresPoolSize; }
+    return out;
 }
 
 function getRequestBaseUrl(request) {
@@ -597,26 +623,48 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     const analyzeMs = Date.now() - tAnalyze;
 
     // Spec §5.2: when the archive carries an engine dump, validate that the
-    // recorded engineKind matches the server's current engine BEFORE any
-    // destructive snapshot or extract work begins. A mismatch is a
-    // user-facing 400 (route handler converts the typed error); silent
-    // success across engines would corrupt the user's data.
+    // recorded engineKind matches the server's current engine. If kinds
+    // differ AND the operator supplied enough context, delegate to the
+    // cross-mode-restore orchestrator instead of refusing.
     //
-    // The absent-engineMeta branch covers legacy fs-only backups (produced
-    // before Stage 3 added engine-dump injection). On an fs server those
-    // unpack cleanly via the directory tree. On a db server they would
-    // unpack the disk tree but leave the engine slot empty, so every Repo
-    // read returns null and chats appear deleted — the same silent
-    // corruption the kind-mismatch guard prevents. Make it loud: 400 with
-    // the same "run storage-migrate" guidance the operator already sees
-    // for kind mismatches.
+    // For a ZIP that lacks `_engine_meta.json` (legacy fs-only backup), the
+    // contents are an on-disk fs tree. On an fs server those unpack cleanly
+    // via the directory tree (original same-mode path). On a db server we
+    // delegate to crossModeRestore as well — synthesizing an
+    // `engineMeta = { engineKind: 'fs' }` — so the orchestrator can build a
+    // transient FsEngine from the ZIP and run MigrationRunner into the live
+    // db engine. This subsumes the legacy 400 "run storage-migrate" error.
     const currentEngine = getStorageEngine();
-    if (analysis.engineMeta && analysis.engineMeta.engineKind !== currentEngine.kind) {
-        throw new RestoreEngineKindMismatchError(analysis.engineMeta.engineKind, currentEngine.kind);
+    const effectiveMeta = analysis.engineMeta || (currentEngine.kind !== 'fs' ? { engineKind: 'fs' } : null);
+    if (effectiveMeta && effectiveMeta.engineKind !== currentEngine.kind) {
+        // Cross-mode restore delegation. Returns a normalized
+        // `{ restoredCount, failedCount, crossMode: {...} }` shape that the
+        // caller can echo straight back.
+        const crossResult = await crossModeRestore(
+            uploadPath,
+            effectiveMeta,
+            directories,
+            selection,
+            mode,
+            {
+                dataRoot: globalThis.DATA_ROOT,
+                currentEngine,
+                onProgress: reportProgress,
+                scratchCreds: options.scratchCreds || null,
+                includeGlobalExtensions: !!options.includeGlobalExtensions,
+            },
+        );
+        const totalMs = Date.now() - restoreStart;
+        console.info(`[user-backup] Cross-mode restore done: source=${effectiveMeta.engineKind} dest=${currentEngine.kind} entries=${crossResult.restoredCount} failed=${crossResult.failedCount} total=${totalMs}ms`);
+        return {
+            ...crossResult,
+            preflight: analysis.report,
+        };
     }
-    if (!analysis.engineMeta && currentEngine.kind !== 'fs') {
-        throw new RestoreLegacyFsOnDbModeError(currentEngine.kind);
-    }
+    // Note: the legacy-fs-on-db-server path now goes through crossModeRestore
+    // above (synthesized engineMeta = fs). The `RestoreLegacyFsOnDbModeError`
+    // type is kept exported for defensive backward compat with consumers that
+    // still match on it, but the throw site has been removed.
 
     if (mode === 'overwrite' && analysis.report.targetableEntries === 0 && !analysis.engineMeta) {
         throw new Error('Archive does not match selected restore categories. Overwrite was cancelled to protect existing data.');
@@ -1075,6 +1123,105 @@ router.post('/lan-migration/offer', async (request, response) => {
     }
 });
 
+/**
+ * Pull out only the `_engine_meta.json` payload from a backup ZIP. Returns
+ * null when the ZIP has no engine meta (legacy fs-only backup). Used by the
+ * `/restore-backup/probe` endpoint to tell the client whether a cross-mode
+ * restore is needed and whether scratch DB credentials are required, all
+ * without committing to the full restore pipeline.
+ */
+function readEngineMetaFromZip(zipPath) {
+    return new Promise((resolve, reject) => {
+        yauzl.open(zipPath, { lazyEntries: true, decodeStrings: true }, (openErr, zipfile) => {
+            if (openErr) return reject(openErr);
+            let settled = false;
+            zipfile.readEntry();
+            zipfile.on('entry', (entry) => {
+                if (entry.fileName !== ENGINE_META_ENTRY) {
+                    zipfile.readEntry();
+                    return;
+                }
+                zipfile.openReadStream(entry, (streamErr, readStream) => {
+                    if (settled) return;
+                    if (streamErr) {
+                        settled = true;
+                        try { zipfile.close(); } catch {}
+                        return reject(streamErr);
+                    }
+                    const chunks = [];
+                    readStream.on('data', (c) => chunks.push(c));
+                    readStream.on('error', (e) => {
+                        if (settled) return;
+                        settled = true;
+                        try { zipfile.close(); } catch {}
+                        reject(e);
+                    });
+                    readStream.on('end', () => {
+                        if (settled) return;
+                        settled = true;
+                        try { zipfile.close(); } catch {}
+                        try {
+                            resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                        } catch (parseErr) {
+                            reject(parseErr);
+                        }
+                    });
+                });
+            });
+            zipfile.on('end', () => {
+                if (settled) return;
+                settled = true;
+                resolve(null);
+            });
+            zipfile.on('error', (err) => {
+                if (settled) return;
+                settled = true;
+                reject(err);
+            });
+        });
+    });
+}
+
+router.post('/restore-backup/probe', async (request, response) => {
+    let uploadPath = '';
+    try {
+        if (!request.file) {
+            return response.status(400).json({ error: 'No backup file uploaded' });
+        }
+        uploadPath = request.file.path;
+        const meta = await readEngineMetaFromZip(uploadPath);
+        const currentEngine = getStorageEngine();
+        if (!meta) {
+            // Legacy fs-only ZIP — only restorable on fs servers.
+            return response.json({
+                engineKind: 'fs',
+                schemaVersion: null,
+                crossModeRequired: currentEngine.kind !== 'fs',
+                scratchCredsNeeded: null,
+            });
+        }
+        const crossModeRequired = meta.engineKind !== currentEngine.kind;
+        const scratchCredsNeeded = crossModeRequired
+            && (meta.engineKind === 'mysql' || meta.engineKind === 'postgres')
+            ? meta.engineKind
+            : null;
+        return response.json({
+            engineKind: meta.engineKind,
+            schemaVersion: meta.schemaVersion || 1,
+            sourceHandle: meta.handle || null,
+            crossModeRequired,
+            scratchCredsNeeded,
+        });
+    } catch (err) {
+        console.error('Restore backup probe failed:', err);
+        return response.status(500).json({ error: err?.message || 'Probe failed' });
+    } finally {
+        if (uploadPath) {
+            await fsPromises.rm(uploadPath, { force: true }).catch(() => {});
+        }
+    }
+});
+
 router.post('/restore-backup', async (request, response) => {
     let uploadPath = '';
     const streaming = wantsRestoreProgressStream(request);
@@ -1121,6 +1268,14 @@ router.post('/restore-backup', async (request, response) => {
 
         const directories = handle === request.user.profile.handle ? request.user.directories : getUserDirectories(handle);
 
+        // Cross-mode restore optionally needs scratch DB connection strings
+        // when the backup's source engine is mysql or postgres. These are
+        // multipart fields the UI fills in after a probe-endpoint call
+        // returns `crossModeScratchRequired`. Absent fields stay null and
+        // cross-mode-restore raises CrossModeScratchCredsRequiredError →
+        // 400, which the UI translates into the creds prompt.
+        const scratchCreds = parseScratchCreds(request.body);
+
         if (streaming) {
             stream = beginRestoreProgressStream(response);
         }
@@ -1130,7 +1285,11 @@ router.post('/restore-backup', async (request, response) => {
             directories,
             selection,
             mode,
-            { includeGlobalExtensions: isAdminUser, onProgress: stream?.onProgress },
+            {
+                includeGlobalExtensions: isAdminUser,
+                onProgress: stream?.onProgress,
+                scratchCreds,
+            },
         );
         await invalidateRecentChatIndex(request);
 
@@ -1151,6 +1310,30 @@ router.post('/restore-backup', async (request, response) => {
         // the legacy "Archive does not match selected restore categories"
         // preflight all surface as 400 — operator-correctable mistakes, not
         // server faults. Everything else is a 500.
+        if (error instanceof CrossModeScratchCredsRequiredError) {
+            return response.status(400).json({
+                error: error.message,
+                crossModeScratchRequired: { kind: error.kind },
+            });
+        }
+        if (error instanceof CrossModeScratchConnectionError) {
+            return response.status(400).json({
+                error: error.message,
+                crossModeScratchConnection: { kind: error.kind },
+            });
+        }
+        if (error?.code === 'MIGRATION_LOCKED') {
+            return response.status(409).json({ error: message });
+        }
+        if (error instanceof CrossModeConversionFailedError) {
+            return response.status(500).json({
+                error: error.message,
+                crossModeFailure: {
+                    rollback: error.rollback,
+                    snapshotPath: error.snapshotPath,
+                },
+            });
+        }
         const isValidationError = error instanceof RestoreEngineKindMismatchError
             || error instanceof RestoreLegacyFsOnDbModeError
             || message.includes('Archive does not match selected restore categories');
@@ -1203,12 +1386,13 @@ router.post('/lan-migration/import', async (request, response) => {
         await downloadLanMigrationArchive(sourceUrl.toString(), downloadPath);
 
         const directories = handle === request.user.profile.handle ? request.user.directories : getUserDirectories(handle);
+        const scratchCreds = parseScratchCreds(request.body);
         const restoreResult = await restoreUserBackupArchive(
             downloadPath,
             directories,
             selection,
             mode,
-            { includeGlobalExtensions: isAdminUser, onProgress: stream?.onProgress },
+            { includeGlobalExtensions: isAdminUser, onProgress: stream?.onProgress, scratchCreds },
         );
         await invalidateRecentChatIndex(request);
 
@@ -1228,6 +1412,27 @@ router.post('/lan-migration/import', async (request, response) => {
         if (stream) {
             stream.sendError(message);
             return;
+        }
+        if (error instanceof CrossModeScratchCredsRequiredError) {
+            return response.status(400).json({
+                error: error.message,
+                crossModeScratchRequired: { kind: error.kind },
+            });
+        }
+        if (error instanceof CrossModeScratchConnectionError) {
+            return response.status(400).json({
+                error: error.message,
+                crossModeScratchConnection: { kind: error.kind },
+            });
+        }
+        if (error?.code === 'MIGRATION_LOCKED') {
+            return response.status(409).json({ error: message });
+        }
+        if (error instanceof CrossModeConversionFailedError) {
+            return response.status(500).json({
+                error: error.message,
+                crossModeFailure: { rollback: error.rollback, snapshotPath: error.snapshotPath },
+            });
         }
         const isValidationError = error instanceof RestoreEngineKindMismatchError
             || error instanceof RestoreLegacyFsOnDbModeError
@@ -1260,7 +1465,11 @@ router.post('/import/data-zip', async (request, response) => {
 
         uploadPath = request.file.path;
         const mode = String(request.body.mode || 'merge').toLowerCase() === 'overwrite' ? 'overwrite' : 'merge';
-        const restoreResult = await restoreUserBackupArchive(uploadPath, request.user.directories, FULL_IMPORT_SELECTION, mode, { includeGlobalExtensions: false });
+        const scratchCreds = parseScratchCreds(request.body);
+        const restoreResult = await restoreUserBackupArchive(
+            uploadPath, request.user.directories, FULL_IMPORT_SELECTION, mode,
+            { includeGlobalExtensions: false, scratchCreds },
+        );
         await invalidateRecentChatIndex(request);
 
         return response.json({
@@ -1270,6 +1479,21 @@ router.post('/import/data-zip', async (request, response) => {
     } catch (error) {
         console.error('Data ZIP import failed', error);
         const message = error?.message || 'Data ZIP import failed';
+        if (error instanceof CrossModeScratchCredsRequiredError) {
+            return response.status(400).json({ error: message, crossModeScratchRequired: { kind: error.kind } });
+        }
+        if (error instanceof CrossModeScratchConnectionError) {
+            return response.status(400).json({ error: message, crossModeScratchConnection: { kind: error.kind } });
+        }
+        if (error?.code === 'MIGRATION_LOCKED') {
+            return response.status(409).json({ error: message });
+        }
+        if (error instanceof CrossModeConversionFailedError) {
+            return response.status(500).json({
+                error: message,
+                crossModeFailure: { rollback: error.rollback, snapshotPath: error.snapshotPath },
+            });
+        }
         // Mirror /restore-backup and /lan-migration/import: typed errors for
         // engine-kind mismatch and legacy-fs-on-db (spec §5.2) plus the
         // legacy preflight string surface as 400 — operator-correctable.

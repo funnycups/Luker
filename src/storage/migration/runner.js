@@ -4,6 +4,23 @@ import { BUCKET_TO_DIR } from '../repositories/named-doc-repo.js';
 import { snapshotUser, restoreFromSnapshot, removeSnapshot } from './backup.js';
 import { recordsEqual } from './equality.js';
 
+// Canonical category shape — every section the runner can copy. Callers
+// supplying `categories` opt in/out of sections via this set of keys; unknown
+// keys are silently dropped (see constructor). Exported as
+// DEFAULT_MIGRATION_CATEGORIES so cross-mode-restore can reference the same
+// shape when translating UI selections into runner-level toggles.
+const DEFAULT_CATEGORIES = Object.freeze({
+    settings: true,
+    presets: true,
+    namedDocs: true,
+    worlds: true,
+    chats: true,
+    groups: true,
+    stats: true,
+});
+
+export const DEFAULT_MIGRATION_CATEGORIES = DEFAULT_CATEGORIES;
+
 // Subset of the per-user stats accumulator that callers care about for
 // in-flight progress. `errors` / `backupPath` / `verified` are only meaningful
 // at the end of migrateUser, so they're excluded.
@@ -84,7 +101,7 @@ export class MigrationRunner {
      *     after the fact. Failed migrations always preserve their snapshot
      *     regardless of this flag, so a rollback can always be redone manually.
      */
-    constructor({ sourceRepos, sourceEngine = null, destRepos, snapshotPaths, dryRun = false, keepSnapshot = false }) {
+    constructor({ sourceRepos, sourceEngine = null, destRepos, snapshotPaths, dryRun = false, keepSnapshot = false, categories = null, skipInternalSnapshot = false }) {
         if (!sourceRepos) throw new Error('MigrationRunner: sourceRepos required');
         if (!destRepos) throw new Error('MigrationRunner: destRepos required');
         if (!snapshotPaths || typeof snapshotPaths.getUserRoot !== 'function') {
@@ -99,6 +116,29 @@ export class MigrationRunner {
         this._snapshotPaths = snapshotPaths;
         this._dryRun = !!dryRun;
         this._keepSnapshot = !!keepSnapshot;
+        // When true, migrateUser skips its internal source-side snapshot AND
+        // the corresponding _rollback. Used by the cross-mode restore
+        // orchestrator: it takes its OWN snapshot of the live destination
+        // (which is what needs protecting; source is a throwaway scratch
+        // engine) and handles rollback itself. Without this flag the runner
+        // would also snapshot the scratch source dir — wasted disk + time
+        // since the scratch is rm'd on cleanup anyway.
+        this._skipInternalSnapshot = !!skipInternalSnapshot;
+        // Merge caller-supplied categories on top of all-true defaults. Unknown
+        // keys are silently dropped (defensive against typos that would
+        // otherwise enable a non-existent section). Missing keys keep default
+        // (true), so `{ chats: true }` does NOT mean "chats only" — that's a
+        // surprising API. Callers wanting "chats only" must pass an explicit
+        // all-false-then-chats-true object. See cross-mode-restore for the
+        // pattern (selectionToRunnerCategories returns a full 7-key shape).
+        this._categories = { ...DEFAULT_CATEGORIES };
+        if (categories) {
+            for (const key of Object.keys(DEFAULT_CATEGORIES)) {
+                if (Object.prototype.hasOwnProperty.call(categories, key)) {
+                    this._categories[key] = !!categories[key];
+                }
+            }
+        }
     }
 
     /**
@@ -110,10 +150,25 @@ export class MigrationRunner {
      * immediately read back and compared with the source record). The
      * `verifying` / `verified` progress markers are still emitted post-copy as
      * terminal signals so existing progress consumers don't need to change.
+     *
+     * `destHandle` defaults to `srcHandle` (back-compat for every existing
+     * caller — admin `/storage/migrate`, CLI `storage-migrate`, tests). Cross-
+     * mode-restore (Stage 4 Task 4.x) passes a distinct dst handle so a scratch
+     * source like `_xrestore_xxx` can be copied INTO a real user handle. The
+     * snapshot + rollback path stays bound to `srcHandle` regardless — the
+     * runner snapshots and (on failure) restores the SOURCE side; the dst is
+     * just a write target.
+     *
+     * `stats.handle` keeps `srcHandle` so existing progress consumers see the
+     * same identifier they saw before — they don't care about destHandle (it's
+     * an orchestrator concern); cross-mode callers in Task 4 will observe the
+     * scratch source handle, which is correct because the runner is operating
+     * ON the source.
      */
-    async migrateUser(handle, { onProgress = () => {} } = {}) {
+    async migrateUser(srcHandle, { onProgress = () => {}, destHandle = null } = {}) {
+        const effectiveDestHandle = destHandle != null ? destHandle : srcHandle;
         const stats = {
-            handle,
+            handle: srcHandle,
             settings: 0,
             presets: 0,
             preset_states: 0,
@@ -128,23 +183,23 @@ export class MigrationRunner {
             verified: false,
         };
 
-        // 1. Snapshot the source state first (skipped on dry-run). When
-        //    sourceEngine is non-fs, the snapshot ALSO captures an engine
-        //    dump so rollback can replay rows (mysql/pg) or the .sqlite file
-        //    (sqlite). When sourceEngine is null or fs-kind, only the fs
-        //    tree is captured — same as Stage 4 Tasks 1+2.
-        if (!this._dryRun) {
+        // 1. Snapshot the source state first (skipped on dry-run AND when
+        //    skipInternalSnapshot is set — cross-mode-restore passes the
+        //    latter because the orchestrator has already snapshotted the
+        //    live destination, and the runner's source side is a throwaway
+        //    scratch dir that doesn't need protection).
+        if (!this._dryRun && !this._skipInternalSnapshot) {
             try {
                 stats.backupPath = await snapshotUser({
-                    handle,
-                    userRoot: this._snapshotPaths.getUserRoot(handle),
+                    handle: srcHandle,
+                    userRoot: this._snapshotPaths.getUserRoot(srcHandle),
                     backupRoot: this._snapshotPaths.backupRoot,
                     engine: this._srcEngine,
                 });
-                onProgress({ stage: 'snapshotted', handle, backupPath: stats.backupPath, counts: snapshotCounts(stats) });
+                onProgress({ stage: 'snapshotted', handle: srcHandle, backupPath: stats.backupPath, counts: snapshotCounts(stats) });
             } catch (err) {
                 stats.errors.push({ stage: 'snapshot', message: err.message });
-                throw new Error(`migration failed at snapshot for ${handle}: ${err.message}`);
+                throw new Error(`migration failed at snapshot for ${srcHandle}: ${err.message}`);
             }
         }
 
@@ -162,11 +217,11 @@ export class MigrationRunner {
             // same way for write failures and verify failures), and re-
             // thrown wrapped.
             try {
-                await withReadOnlyBypass(() => this._copyAll(handle, stats, onProgress));
+                await withReadOnlyBypass(() => this._copyAll(srcHandle, effectiveDestHandle, stats, onProgress));
             } catch (err) {
                 stats.errors.push({ stage: 'copy', message: err.message });
-                await this._rollback(handle, stats);
-                throw new Error(`migration failed during copy for ${handle}: ${err.message}`);
+                await this._rollback(srcHandle, stats);
+                throw new Error(`migration failed during copy for ${srcHandle}: ${err.message}`);
             }
 
             // 3. Verification already happened per-record during copy. On
@@ -181,12 +236,12 @@ export class MigrationRunner {
                     + stats.named_docs
                     + stats.groups
                     + stats.stats;
-                onProgress({ stage: 'verifying', handle, totalRecords, counts: snapshotCounts(stats) });
+                onProgress({ stage: 'verifying', handle: srcHandle, totalRecords, counts: snapshotCounts(stats) });
                 stats.verified = true;
-                onProgress({ stage: 'verified', handle, totalRecords, counts: snapshotCounts(stats) });
+                onProgress({ stage: 'verified', handle: srcHandle, totalRecords, counts: snapshotCounts(stats) });
             }
 
-            onProgress({ stage: 'done', handle, stats, counts: snapshotCounts(stats) });
+            onProgress({ stage: 'done', handle: srcHandle, stats, counts: snapshotCounts(stats) });
             return stats;
         } finally {
             // GC the snapshot ONLY on a clean run. `stats.errors.length === 0`
@@ -264,75 +319,83 @@ export class MigrationRunner {
     // Internal helpers
     // --------------------------------------------------------------------
 
-    async _copyAll(handle, stats, onProgress) {
+    async _copyAll(srcHandle, dstHandle, stats, onProgress) {
         // Settings
-        const settings = await this._src.settings.get(handle);
-        if (settings != null) {
-            if (!this._dryRun) {
-                await this._dst.settings.save(handle, settings);
-                const dstSettings = await this._dst.settings.get(handle);
-                if (!recordsEqual('settings', settings, dstSettings)) {
-                    throw new Error('settings verify mismatch');
+        if (this._categories.settings) {
+            const settings = await this._src.settings.get(srcHandle);
+            if (settings != null) {
+                if (!this._dryRun) {
+                    await this._dst.settings.save(dstHandle, settings);
+                    const dstSettings = await this._dst.settings.get(dstHandle);
+                    if (!recordsEqual('settings', settings, dstSettings)) {
+                        throw new Error('settings verify mismatch');
+                    }
                 }
+                stats.settings = 1;
             }
-            stats.settings = 1;
+            onProgress({ stage: 'settings-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
-        onProgress({ stage: 'settings-copied', handle, counts: snapshotCounts(stats) });
 
         // Presets — iterate unique dirKeys; each dirKey may map from multiple
         // apiIds (kobold + koboldhorde share koboldAI_Settings). Use a Map from
         // dirKey to the first apiId encountered for that dirKey.
-        const dirKeyToApiId = new Map();
-        for (const [apiId, dirKey] of Object.entries(PRESET_FOLDER_BY_API_ID)) {
-            if (!dirKeyToApiId.has(dirKey)) dirKeyToApiId.set(dirKey, apiId);
-        }
-        for (const apiId of dirKeyToApiId.values()) {
-            const presetList = await this._src.preset.list(handle, apiId);
-            for (const item of presetList) {
-                const name = item.key.name;
-                const doc = await this._src.preset.get(handle, apiId, name);
-                if (doc == null) continue;
-                if (!this._dryRun) {
-                    await this._dst.preset.save(handle, apiId, name, doc);
-                    const dstDoc = await this._dst.preset.get(handle, apiId, name);
-                    if (!recordsEqual('preset', doc, dstDoc)) {
-                        throw new Error(`preset verify mismatch for ${apiId}/${name}`);
-                    }
-                }
-                stats.presets++;
-                const namespaces = await this._src.preset.listStateNamespaces(handle, apiId, name);
-                for (const ns of namespaces) {
-                    const stateDoc = await this._src.preset.getState(handle, apiId, name, ns);
-                    if (stateDoc == null) continue;
+        // Also skip preset_states when presets is off (states are meaningless
+        // without their parent preset).
+        if (this._categories.presets) {
+            const dirKeyToApiId = new Map();
+            for (const [apiId, dirKey] of Object.entries(PRESET_FOLDER_BY_API_ID)) {
+                if (!dirKeyToApiId.has(dirKey)) dirKeyToApiId.set(dirKey, apiId);
+            }
+            for (const apiId of dirKeyToApiId.values()) {
+                const presetList = await this._src.preset.list(srcHandle, apiId);
+                for (const item of presetList) {
+                    const name = item.key.name;
+                    const doc = await this._src.preset.get(srcHandle, apiId, name);
+                    if (doc == null) continue;
                     if (!this._dryRun) {
-                        await this._dst.preset.setState(handle, apiId, name, ns, stateDoc);
-                        const dstState = await this._dst.preset.getState(handle, apiId, name, ns);
-                        if (!recordsEqual('preset-state', stateDoc, dstState)) {
-                            throw new Error(`preset state verify mismatch for ${apiId}/${name}/${ns}`);
+                        await this._dst.preset.save(dstHandle, apiId, name, doc);
+                        const dstDoc = await this._dst.preset.get(dstHandle, apiId, name);
+                        if (!recordsEqual('preset', doc, dstDoc)) {
+                            throw new Error(`preset verify mismatch for ${apiId}/${name}`);
                         }
                     }
-                    stats.preset_states++;
+                    stats.presets++;
+                    const namespaces = await this._src.preset.listStateNamespaces(srcHandle, apiId, name);
+                    for (const ns of namespaces) {
+                        const stateDoc = await this._src.preset.getState(srcHandle, apiId, name, ns);
+                        if (stateDoc == null) continue;
+                        if (!this._dryRun) {
+                            await this._dst.preset.setState(dstHandle, apiId, name, ns, stateDoc);
+                            const dstState = await this._dst.preset.getState(dstHandle, apiId, name, ns);
+                            if (!recordsEqual('preset-state', stateDoc, dstState)) {
+                                throw new Error(`preset state verify mismatch for ${apiId}/${name}/${ns}`);
+                            }
+                        }
+                        stats.preset_states++;
+                    }
                 }
             }
+            onProgress({ stage: 'presets-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
-        onProgress({ stage: 'presets-copied', handle, counts: snapshotCounts(stats) });
 
         // Worlds
-        const worldList = await this._src.worldInfo.list(handle);
-        for (const item of worldList) {
-            const name = item.key.name;
-            const doc = await this._src.worldInfo.get(handle, name);
-            if (doc == null) continue;
-            if (!this._dryRun) {
-                await this._dst.worldInfo.save(handle, name, doc);
-                const dstDoc = await this._dst.worldInfo.get(handle, name);
-                if (!recordsEqual('world', doc, dstDoc)) {
-                    throw new Error(`world verify mismatch for ${name}`);
+        if (this._categories.worlds) {
+            const worldList = await this._src.worldInfo.list(srcHandle);
+            for (const item of worldList) {
+                const name = item.key.name;
+                const doc = await this._src.worldInfo.get(srcHandle, name);
+                if (doc == null) continue;
+                if (!this._dryRun) {
+                    await this._dst.worldInfo.save(dstHandle, name, doc);
+                    const dstDoc = await this._dst.worldInfo.get(dstHandle, name);
+                    if (!recordsEqual('world', doc, dstDoc)) {
+                        throw new Error(`world verify mismatch for ${name}`);
+                    }
                 }
+                stats.worlds++;
             }
-            stats.worlds++;
+            onProgress({ stage: 'worlds-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
-        onProgress({ stage: 'worlds-copied', handle, counts: snapshotCounts(stats) });
 
         // Chats — split into "per-character" and "group" tracks because the FS
         // engine's chat list only walks `chats/<charDir>/*.jsonl` and never the
@@ -344,144 +407,153 @@ export class MigrationRunner {
         //   - Group chats: enumerate via the source's group docs (each group's
         //     `chats` array names its member chat ids) — same source-of-truth
         //     for both engines.
-        const allListed = await this._src.chat.listRecent(handle, { limit: 1_000_000 });
-        const perCharList = allListed.filter((item) => !item.key.isGroup);
-        for (const item of perCharList) {
-            const key = item.key;
-            const chat = await this._src.chat.get(handle, key.charDir, key.name);
-            if (chat == null) continue;
-            if (!this._dryRun) {
-                // ChatRepo.save rotates integrity on the dest — that's why
-                // the inline verify uses `recordsEqual('chat', ...)` which
-                // calls stripChatEngineMeta to ignore those engine fields.
-                await this._dst.chat.save(
-                    handle, key.charDir, key.name,
-                    chat.header, chat.body, null,
-                );
-                const dstChat = await this._dst.chat.get(handle, key.charDir, key.name);
-                if (!recordsEqual('chat', chat, dstChat)) {
-                    throw new Error(`chat verify mismatch for ${key.charDir || '(group)'}::${key.name}`);
-                }
-            }
-            stats.chats++;
-            const namespaces = await this._src.chat.listStateNamespaces(handle, key.charDir, key.name);
-            for (const ns of namespaces) {
-                const stateDoc = await this._src.chat.getState(handle, key.charDir, key.name, ns);
-                if (stateDoc == null) continue;
-                if (!this._dryRun) {
-                    await this._dst.chat.setState(handle, key.charDir, key.name, ns, stateDoc);
-                    const dstState = await this._dst.chat.getState(handle, key.charDir, key.name, ns);
-                    if (!recordsEqual('chat-state', stateDoc, dstState)) {
-                        throw new Error(
-                            `chat state verify mismatch for ${key.charDir || '(group)'}::${key.name}::${ns}`,
-                        );
-                    }
-                }
-                stats.chat_states++;
-            }
-        }
-        // Group chats — enumerate via group docs, then read each group chat.
-        const groupListForChats = await this._src.group.list(handle);
-        for (const groupItem of groupListForChats) {
-            const groupDoc = await this._src.group.get(handle, groupItem.key.id);
-            if (groupDoc == null || !Array.isArray(groupDoc.chats)) continue;
-            for (const chatId of groupDoc.chats) {
-                const chat = await this._src.chat.get(
-                    handle, null, chatId,
-                    { isGroup: true, groupId: chatId },
-                );
+        // Group chats are also gated by `chats` (group chats are chats).
+        if (this._categories.chats) {
+            const allListed = await this._src.chat.listRecent(srcHandle, { limit: 1_000_000 });
+            const perCharList = allListed.filter((item) => !item.key.isGroup);
+            for (const item of perCharList) {
+                const key = item.key;
+                const chat = await this._src.chat.get(srcHandle, key.charDir, key.name);
                 if (chat == null) continue;
                 if (!this._dryRun) {
+                    // ChatRepo.save rotates integrity on the dest — that's why
+                    // the inline verify uses `recordsEqual('chat', ...)` which
+                    // calls stripChatEngineMeta to ignore those engine fields.
                     await this._dst.chat.save(
-                        handle, null, chatId,
+                        dstHandle, key.charDir, key.name,
                         chat.header, chat.body, null,
-                        { isGroup: true, groupId: chatId },
                     );
-                    const dstChat = await this._dst.chat.get(
-                        handle, null, chatId,
-                        { isGroup: true, groupId: chatId },
-                    );
+                    const dstChat = await this._dst.chat.get(dstHandle, key.charDir, key.name);
                     if (!recordsEqual('chat', chat, dstChat)) {
-                        throw new Error(`chat verify mismatch for (group)::${chatId} (groupId=${chatId})`);
+                        throw new Error(`chat verify mismatch for ${key.charDir || '(group)'}::${key.name}`);
                     }
                 }
                 stats.chats++;
-                const namespaces = await this._src.chat.listStateNamespaces(
-                    handle, null, chatId, { isGroup: true, groupId: chatId },
-                );
+                const namespaces = await this._src.chat.listStateNamespaces(srcHandle, key.charDir, key.name);
                 for (const ns of namespaces) {
-                    const stateDoc = await this._src.chat.getState(
-                        handle, null, chatId, ns,
-                        { isGroup: true, groupId: chatId },
-                    );
+                    const stateDoc = await this._src.chat.getState(srcHandle, key.charDir, key.name, ns);
                     if (stateDoc == null) continue;
                     if (!this._dryRun) {
-                        await this._dst.chat.setState(
-                            handle, null, chatId, ns, stateDoc,
-                            { isGroup: true, groupId: chatId },
-                        );
-                        const dstState = await this._dst.chat.getState(
-                            handle, null, chatId, ns,
-                            { isGroup: true, groupId: chatId },
-                        );
+                        await this._dst.chat.setState(dstHandle, key.charDir, key.name, ns, stateDoc);
+                        const dstState = await this._dst.chat.getState(dstHandle, key.charDir, key.name, ns);
                         if (!recordsEqual('chat-state', stateDoc, dstState)) {
-                            throw new Error(`chat state verify mismatch for (group)::${chatId}::${ns}`);
+                            throw new Error(
+                                `chat state verify mismatch for ${key.charDir || '(group)'}::${key.name}::${ns}`,
+                            );
                         }
                     }
                     stats.chat_states++;
                 }
             }
-        }
-        onProgress({ stage: 'chats-copied', handle, counts: snapshotCounts(stats) });
-
-        // Named-docs — iterate all known buckets.
-        for (const bucket of Object.keys(BUCKET_TO_DIR)) {
-            const list = await this._src.namedDoc.list(handle, bucket);
-            for (const item of list) {
-                const name = item.key.name;
-                const doc = await this._src.namedDoc.get(handle, bucket, name);
-                if (doc == null) continue;
-                if (!this._dryRun) {
-                    await this._dst.namedDoc.save(handle, bucket, name, doc);
-                    const dstDoc = await this._dst.namedDoc.get(handle, bucket, name);
-                    if (!recordsEqual('named-doc', doc, dstDoc)) {
-                        throw new Error(`named-doc verify mismatch for ${bucket}/${name}`);
+            // Group chats — enumerate via group docs, then read each group chat.
+            const groupListForChats = await this._src.group.list(srcHandle);
+            for (const groupItem of groupListForChats) {
+                const groupDoc = await this._src.group.get(srcHandle, groupItem.key.id);
+                if (groupDoc == null || !Array.isArray(groupDoc.chats)) continue;
+                for (const chatId of groupDoc.chats) {
+                    const chat = await this._src.chat.get(
+                        srcHandle, null, chatId,
+                        { isGroup: true, groupId: chatId },
+                    );
+                    if (chat == null) continue;
+                    if (!this._dryRun) {
+                        await this._dst.chat.save(
+                            dstHandle, null, chatId,
+                            chat.header, chat.body, null,
+                            { isGroup: true, groupId: chatId },
+                        );
+                        const dstChat = await this._dst.chat.get(
+                            dstHandle, null, chatId,
+                            { isGroup: true, groupId: chatId },
+                        );
+                        if (!recordsEqual('chat', chat, dstChat)) {
+                            throw new Error(`chat verify mismatch for (group)::${chatId} (groupId=${chatId})`);
+                        }
+                    }
+                    stats.chats++;
+                    const namespaces = await this._src.chat.listStateNamespaces(
+                        srcHandle, null, chatId, { isGroup: true, groupId: chatId },
+                    );
+                    for (const ns of namespaces) {
+                        const stateDoc = await this._src.chat.getState(
+                            srcHandle, null, chatId, ns,
+                            { isGroup: true, groupId: chatId },
+                        );
+                        if (stateDoc == null) continue;
+                        if (!this._dryRun) {
+                            await this._dst.chat.setState(
+                                dstHandle, null, chatId, ns, stateDoc,
+                                { isGroup: true, groupId: chatId },
+                            );
+                            const dstState = await this._dst.chat.getState(
+                                dstHandle, null, chatId, ns,
+                                { isGroup: true, groupId: chatId },
+                            );
+                            if (!recordsEqual('chat-state', stateDoc, dstState)) {
+                                throw new Error(`chat state verify mismatch for (group)::${chatId}::${ns}`);
+                            }
+                        }
+                        stats.chat_states++;
                     }
                 }
-                stats.named_docs++;
             }
+            onProgress({ stage: 'chats-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
-        onProgress({ stage: 'named-docs-copied', handle, counts: snapshotCounts(stats) });
 
-        // Groups
-        const groupList = await this._src.group.list(handle);
-        for (const item of groupList) {
-            const id = item.key.id;
-            const doc = await this._src.group.get(handle, id);
-            if (doc == null) continue;
-            if (!this._dryRun) {
-                await this._dst.group.save(handle, id, doc);
-                const dstDoc = await this._dst.group.get(handle, id);
-                if (!recordsEqual('group', doc, dstDoc)) {
-                    throw new Error(`group verify mismatch for ${id}`);
+        // Named-docs — iterate all known buckets.
+        if (this._categories.namedDocs) {
+            for (const bucket of Object.keys(BUCKET_TO_DIR)) {
+                const list = await this._src.namedDoc.list(srcHandle, bucket);
+                for (const item of list) {
+                    const name = item.key.name;
+                    const doc = await this._src.namedDoc.get(srcHandle, bucket, name);
+                    if (doc == null) continue;
+                    if (!this._dryRun) {
+                        await this._dst.namedDoc.save(dstHandle, bucket, name, doc);
+                        const dstDoc = await this._dst.namedDoc.get(dstHandle, bucket, name);
+                        if (!recordsEqual('named-doc', doc, dstDoc)) {
+                            throw new Error(`named-doc verify mismatch for ${bucket}/${name}`);
+                        }
+                    }
+                    stats.named_docs++;
                 }
             }
-            stats.groups++;
+            onProgress({ stage: 'named-docs-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
-        onProgress({ stage: 'groups-copied', handle, counts: snapshotCounts(stats) });
+
+        // Groups (the group docs themselves, not the chats inside them)
+        if (this._categories.groups) {
+            const groupList = await this._src.group.list(srcHandle);
+            for (const item of groupList) {
+                const id = item.key.id;
+                const doc = await this._src.group.get(srcHandle, id);
+                if (doc == null) continue;
+                if (!this._dryRun) {
+                    await this._dst.group.save(dstHandle, id, doc);
+                    const dstDoc = await this._dst.group.get(dstHandle, id);
+                    if (!recordsEqual('group', doc, dstDoc)) {
+                        throw new Error(`group verify mismatch for ${id}`);
+                    }
+                }
+                stats.groups++;
+            }
+            onProgress({ stage: 'groups-copied', handle: srcHandle, counts: snapshotCounts(stats) });
+        }
 
         // Stats
-        const statsDoc = await this._src.stats.get(handle);
-        if (statsDoc != null) {
-            if (!this._dryRun) {
-                await this._dst.stats.save(handle, statsDoc);
-                const dstStats = await this._dst.stats.get(handle);
-                if (!recordsEqual('stats', statsDoc, dstStats)) {
-                    throw new Error('stats verify mismatch');
+        if (this._categories.stats) {
+            const statsDoc = await this._src.stats.get(srcHandle);
+            if (statsDoc != null) {
+                if (!this._dryRun) {
+                    await this._dst.stats.save(dstHandle, statsDoc);
+                    const dstStats = await this._dst.stats.get(dstHandle);
+                    if (!recordsEqual('stats', statsDoc, dstStats)) {
+                        throw new Error('stats verify mismatch');
+                    }
                 }
+                stats.stats = 1;
             }
-            stats.stats = 1;
+            onProgress({ stage: 'stats-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
-        onProgress({ stage: 'stats-copied', handle, counts: snapshotCounts(stats) });
     }
 }
