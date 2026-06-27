@@ -11,10 +11,12 @@
     <string name="runtime_error_dialog_title">启动失败诊断</string>
     <string name="runtime_error_dialog_intro">请复制下方诊断信息并反馈给开发者。</string>
     <string name="runtime_error_copy">复制报告</string>
-    <string name="runtime_error_share">分享报告</string>
     <string name="runtime_error_copy_done">诊断信息已复制</string>
     <string name="runtime_error_report_saved">诊断报告已保存到：%1$s</string>
     <string name="runtime_error_share_subject">Luker 运行时启动报告</string>
+    <string name="diagnostics_export_bundle">导出诊断包</string>
+    <string name="diagnostics_export_saved">诊断压缩包已保存到：%1$s</string>
+    <string name="diagnostics_export_failed">诊断包导出失败：%1$s</string>
     <string name="crash_report_dialog_title">检测到上次异常退出</string>
     <string name="crash_report_dialog_intro">应用在上次运行时异常退出。以下诊断信息由系统记录，请复制并反馈给开发者。</string>
     <string name="crash_report_share_subject">Luker 上次崩溃报告</string>

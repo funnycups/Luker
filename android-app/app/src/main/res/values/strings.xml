@@ -11,10 +11,12 @@
     <string name="runtime_error_dialog_title">Startup Failure Diagnostics</string>
     <string name="runtime_error_dialog_intro">Please copy the diagnostics below and send them to the developer.</string>
     <string name="runtime_error_copy">Copy Report</string>
-    <string name="runtime_error_share">Share Report</string>
     <string name="runtime_error_copy_done">Diagnostics copied</string>
     <string name="runtime_error_report_saved">Diagnostic report saved to: %1$s</string>
     <string name="runtime_error_share_subject">Luker runtime startup report</string>
+    <string name="diagnostics_export_bundle">Export Diagnostics Bundle</string>
+    <string name="diagnostics_export_saved">Diagnostics zip saved to: %1$s</string>
+    <string name="diagnostics_export_failed">Failed to export diagnostics: %1$s</string>
     <string name="crash_report_dialog_title">Previous Crash Detected</string>
     <string name="crash_report_dialog_intro">The app exited unexpectedly during the previous session. The diagnostics below were captured by the system; copy them and send to the developer.</string>
     <string name="crash_report_share_subject">Luker previous crash report</string>

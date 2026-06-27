@@ -579,6 +579,16 @@ object LukerRuntimeManager {
                 sb.append("marker=").append(marker.readText()).append('\n')
             }
         }
+        val nodeArtifacts = listNodeDiagnosticArtifacts(context)
+        if (nodeArtifacts.isNotEmpty()) {
+            sb.append("node diagnostic artifacts (newest first):\n")
+            for (file in nodeArtifacts) {
+                sb.append("  ").append(file.name)
+                    .append(" (").append(file.length()).append(" bytes)")
+                    .append(" @ ").append(file.absolutePath)
+                    .append('\n')
+            }
+        }
         if (logFile.exists()) {
             sb.append("bootstrap.log tail:\n")
             sb.append(readTail(logFile, maxTailChars))
@@ -586,6 +596,36 @@ object LukerRuntimeManager {
             sb.append("bootstrap.log tail: <missing>")
         }
         return sb.toString()
+    }
+
+    /**
+     * Returns Node-side diagnostic artifacts that landed in the runtime root:
+     * `report.*.json` written by `--report-on-fatalerror` (V8 OOM, fatal
+     * errors, uncaught exceptions) and `*.heapsnapshot` written by
+     * `--heapsnapshot-near-heap-limit`. Newest mtime first, so callers can
+     * surface the most recent crash first without rescanning.
+     */
+    fun listNodeDiagnosticArtifacts(context: Context): List<File> {
+        val dir = runtimeDir ?: File(context.filesDir, RUNTIME_DIR_NAME)
+        if (!dir.isDirectory) {
+            return emptyList()
+        }
+        return runCatching {
+            dir.listFiles { f ->
+                if (!f.isFile) return@listFiles false
+                val n = f.name
+                (n.startsWith("report.") && n.endsWith(".json")) || n.endsWith(".heapsnapshot")
+            }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        }.getOrElse { emptyList() }
+    }
+
+    fun bootstrapLogFile(context: Context): File {
+        val dir = runtimeDir ?: File(context.filesDir, RUNTIME_DIR_NAME)
+        return File(dir, BOOTSTRAP_LOG_FILE)
+    }
+
+    fun dataRootFor(context: Context): File {
+        return dataRootDir ?: getPreferredDataRoot(context)
     }
 
     private fun readTail(file: File, maxChars: Int): String {

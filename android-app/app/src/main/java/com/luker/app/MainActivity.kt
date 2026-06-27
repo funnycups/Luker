@@ -2390,19 +2390,34 @@ class MainActivity : AppCompatActivity() {
                 clipboard?.setPrimaryClip(ClipData.newPlainText("luker-runtime-error", report))
                 Toast.makeText(this, getString(R.string.runtime_error_copy_done), Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton(R.string.runtime_error_share) { _, _ ->
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, getString(shareSubjectRes))
-                    putExtra(Intent.EXTRA_TEXT, report)
-                }
-                runCatching {
-                    startActivity(Intent.createChooser(shareIntent, getString(R.string.runtime_error_share)))
-                }
+            .setNegativeButton(R.string.diagnostics_export_bundle) { _, _ ->
+                exportAndShareDiagnosticsBundle(shareSubjectRes)
             }
             .setOnDismissListener { onDismiss?.invoke() }
             .setCancelable(false)
             .show()
+    }
+
+    private fun exportAndShareDiagnosticsBundle(shareSubjectRes: Int) {
+        runCatching {
+            val export = LukerDiagnosticsExporter.exportTo(applicationContext)
+            val intent = Intent(export.intent).apply {
+                putExtra(Intent.EXTRA_SUBJECT, getString(shareSubjectRes))
+            }
+            startActivity(Intent.createChooser(intent, getString(R.string.diagnostics_export_bundle)))
+            Toast.makeText(
+                this,
+                getString(R.string.diagnostics_export_saved, export.zip.absolutePath),
+                Toast.LENGTH_LONG,
+            ).show()
+        }.onFailure { t ->
+            Log.w(tag, "Failed to export diagnostics bundle", t)
+            Toast.makeText(
+                this,
+                getString(R.string.diagnostics_export_failed, t.message ?: t.javaClass.simpleName),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     override fun onDestroy() {
