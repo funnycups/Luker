@@ -1091,7 +1091,11 @@ function normalizeJsonlFileName(fileName) {
  * @returns {string} Trimmed name without trailing .jsonl.
  */
 function stripJsonlExt(fileName) {
-    return String(fileName ?? '').trim().replace(/\.jsonl$/i, '');
+    let out = String(fileName ?? '').trim();
+    while (/\.jsonl$/i.test(out)) {
+        out = out.slice(0, -'.jsonl'.length);
+    }
+    return out;
 }
 
 /**
@@ -2855,8 +2859,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
     const dirName = isGroup
         ? ''
         : String(request.body.avatar_url).replace('.png', '');
-    const fileBase = String(request.body.file);
-    const name = fileBase.replace(/\.jsonl$/i, '');
+    const name = stripJsonlExt(request.body.file);
     const exportfilename = request.body.exportfilename;
 
     try {
