@@ -331,6 +331,27 @@ describe('lookup name normalization', () => {
         expect(findNameMatch(names, '❤World')).toBe('❤World');
         expect(findNameMatch(names, '❤️World')).toBe('❤️World');
     });
+
+    test('should collapse runs of any whitespace to a single space', () => {
+        expect(normalizeLookupText('a  b')).toBe('a b');
+        expect(normalizeLookupText('a\tb')).toBe('a b');
+        expect(normalizeLookupText('a b')).toBe('a b');
+        expect(normalizeLookupText('a　b')).toBe('a b');
+        expect(normalizeLookupText('a  　 b')).toBe('a b');
+        expect(normalizeLookupText('  a b  ')).toBe('a b');
+    });
+
+    test('should not merge unspaced and spaced names', () => {
+        expect(normalizeLookupText('ab')).toBe('ab');
+        expect(normalizeLookupText('a b')).toBe('a b');
+        expect(normalizeLookupText('ab')).not.toBe(normalizeLookupText('a b'));
+    });
+
+    test('should match a card binding with stray double spaces to its single-space file', () => {
+        const filesOnDisk = ['崩坏 星穹铁道 银河球棒侠传说'];
+        expect(findNameMatch(filesOnDisk, '崩坏 星穹铁道  银河球棒侠传说'))
+            .toBe('崩坏 星穹铁道 银河球棒侠传说');
+    });
 });
 
 describe('deepMerge', () => {

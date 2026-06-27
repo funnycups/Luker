@@ -460,10 +460,16 @@ export function normalizeZipEntryPath(entryName) {
 }
 
 const LOOKUP_VARIATION_SELECTORS_RE = /[\uFE0E\uFE0F\u{E0100}-\u{E01EF}]/gu;
+const LOOKUP_WHITESPACE_RE = /\s+/g;
 
 /**
  * Normalizes a human-readable name for tolerant lookup.
- * Keeps the visible text intact except for emoji/text presentation selectors.
+ * Folds invisible differences (emoji/text presentation selectors, runs of
+ * any whitespace including NBSP/full-width space/tabs) so a card whose
+ * `extensions.world` drifted to "name  with  doubles" still finds the
+ * "name with doubles.json" on disk. Exact matches always win over tolerant
+ * ones at the callsite, so distinct files with intentionally different
+ * spacing keep their own identity.
  * @param {string} value
  * @returns {string}
  */
@@ -473,7 +479,9 @@ export function normalizeLookupText(value) {
         return '';
     }
 
-    return text.normalize('NFC').replace(LOOKUP_VARIATION_SELECTORS_RE, '');
+    return text.normalize('NFC')
+        .replace(LOOKUP_VARIATION_SELECTORS_RE, '')
+        .replace(LOOKUP_WHITESPACE_RE, ' ');
 }
 
 /**
