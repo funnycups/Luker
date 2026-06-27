@@ -1633,22 +1633,10 @@ function applyToastrPosition() {
 }
 
 function shouldForceAndroidFullWidthChatLayout() {
-    if (!(typeof window !== 'undefined' && typeof window.LukerAndroid === 'object')) {
-        return false;
-    }
-
-    const viewportWidth = Number(window.innerWidth) || 0;
-    const screenWidth = Number(window.screen?.width) || 0;
-    const screenHeight = Number(window.screen?.height) || 0;
-    const hasScreenSize = screenWidth > 0 && screenHeight > 0;
-    const minScreenDimension = hasScreenSize ? Math.min(screenWidth, screenHeight) : 0;
-    const isLikelyPhoneByScreen = hasScreenSize && minScreenDimension <= 600;
-    // Android phone UAs include "Mobile"; tablet UAs do not. Avoid catching tablets here.
-    const isLikelyPhoneByUA = typeof navigator !== 'undefined' && /Android.*Mobile/i.test(String(navigator.userAgent || ''));
-
-    // Some Android WebView builds occasionally report a desktop-sized viewport on phones.
-    // In that case, force full-width layout to avoid rendering the app in a narrow desktop column.
-    return viewportWidth > 1000 && (isLikelyPhoneByScreen || isLikelyPhoneByUA);
+    // The LukerAndroid bridge is authoritative: when we're inside the app shell,
+    // collapse sheld to full width so it doesn't render as a narrow desktop column
+    // on WebView builds that mis-report viewport size.
+    return typeof window !== 'undefined' && typeof window.LukerAndroid === 'object';
 }
 
 function getAppliedChatWidthValue() {
