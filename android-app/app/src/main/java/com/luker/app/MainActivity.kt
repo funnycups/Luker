@@ -2081,6 +2081,27 @@ class MainActivity : AppCompatActivity() {
 
         loadingText.setText(R.string.loading_runtime)
 
+        val watchdogResult = LukerBootWatchdog.detectAndArm(
+            applicationContext,
+            LukerRuntimeManager.dataRootFor(applicationContext),
+        )
+        if (watchdogResult.tripped) {
+            Log.w(
+                tag,
+                "Boot watchdog tripped (streak=${watchdogResult.failedStreak}, sentinel=${watchdogResult.sentinelPath}). " +
+                    "Safe mode will be applied on this launch.",
+            )
+            runOnUiThread {
+                if (isBootstrapCurrent(bootstrapToken) && !isFinishing && !isDestroyed) {
+                    Toast.makeText(
+                        this,
+                        getString(R.string.safe_mode_tripped_toast),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+
         Thread {
             try {
                 if (!isBootstrapCurrent(bootstrapToken)) {
@@ -2128,6 +2149,7 @@ class MainActivity : AppCompatActivity() {
         val deadline = System.currentTimeMillis() + totalBudgetMs
         while (isBootstrapCurrent(bootstrapToken)) {
             if (LukerRuntimeManager.isServerReady()) {
+                LukerBootWatchdog.markBootSucceeded(applicationContext)
                 runOnUiThread {
                     if (isBootstrapCurrent(bootstrapToken)) {
                         webView.loadUrl(LukerRuntimeManager.SERVER_URL)

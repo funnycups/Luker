@@ -145,6 +145,7 @@ import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
 import { initializeAllUserMetadata } from './endpoints/image-metadata.js';
+import { applyPendingSafeMode } from './safe-mode.js';
 
 // Work around a node v20.0.0, v20.1.0, and v20.2.0 bug. The issue was fixed in v20.3.0.
 // https://github.com/nodejs/node/issues/47822#issuecomment-1564708870
@@ -676,6 +677,17 @@ async function preSetupTasks() {
         statsInit(),
         initializeAllUserMetadata(directories),
     ]);
+
+    // If the native launcher's boot watchdog left a sentinel (i.e. the
+    // previous launch never produced a successful /api/ping), expand each
+    // user's `disabledExtensions` to cover every third-party extension on
+    // disk before any client connects. Re-enabling happens one-by-one from
+    // the regular extensions UI.
+    try {
+        await applyPendingSafeMode(globalThis.DATA_ROOT);
+    } catch (err) {
+        console.warn('safe-mode: failed to apply pending sentinel', err?.message || err);
+    }
 
     const cleanupPlugins = await loadPlugins(app, SERVER_PLUGINS_DIRECTORY);
     const consoleTitle = process.title;

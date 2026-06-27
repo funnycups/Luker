@@ -81,4 +81,5 @@
     <string name="runtime_start_error_node_exit_code">Node process exited with code %1$d</string>
     <string name="runtime_start_error_no_available_port">No available port in range %1$d..%2$d</string>
     <string name="press_back_again_to_exit">Press back again to exit</string>
+    <string name="safe_mode_tripped_toast">The previous launch failed before the service became ready. All third-party extensions have been disabled for this launch — re-enable them one by one in Extensions to find the offender.</string>
 </resources>

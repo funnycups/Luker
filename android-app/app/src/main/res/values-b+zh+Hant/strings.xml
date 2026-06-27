@@ -81,4 +81,5 @@
     <string name="runtime_start_error_node_exit_code">Node 行程退出，返回碼 %1$d</string>
     <string name="runtime_start_error_no_available_port">在連接埠範圍 %1$d..%2$d 內沒有可用連接埠</string>
     <string name="press_back_again_to_exit">再按一次返回鍵退出</string>
+    <string name="safe_mode_tripped_toast">上次啟動在服務就緒前已失敗。本次啟動已停用所有第三方擴充功能——請到擴充功能頁面逐個啟用，定位問題擴充功能。</string>
 </resources>
