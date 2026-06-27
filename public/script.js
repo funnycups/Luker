@@ -17038,7 +17038,8 @@ export async function createOrEditCharacter(e) {
             });
 
             if (!fetchResult.ok) {
-                throw new Error('Fetch result is not ok');
+                const detail = await fetchResult.text().catch(() => '');
+                throw new Error(detail ? `${fetchResult.status} ${detail}` : `${fetchResult.status}`);
             }
 
             const avatarId = await fetchResult.text();
@@ -17104,7 +17105,10 @@ export async function createOrEditCharacter(e) {
             crop_data = undefined;
         } catch (error) {
             console.error('Error creating character', error);
-            toastr.error(t`Failed to create character`);
+            toastr.error(t`Failed to create character: ${error?.message || error}`);
+            // Rethrow so callers awaiting createOrEditCharacter (e.g. the export
+            // handler) can abort instead of carrying on as if the save succeeded.
+            throw error;
         }
     } else {
         try {
@@ -17135,7 +17139,8 @@ export async function createOrEditCharacter(e) {
             });
 
             if (!fetchResult.ok) {
-                throw new Error('Fetch result is not ok');
+                const detail = await fetchResult.text().catch(() => '');
+                throw new Error(detail ? `${fetchResult.status} ${detail}` : `${fetchResult.status}`);
             }
 
             await getOneCharacter(formData.get('avatar_url'));
@@ -17150,8 +17155,11 @@ export async function createOrEditCharacter(e) {
 
             await regenerateFirstCharacterMessageIfNeeded({ isNewChat });
         } catch (error) {
-            console.log(error);
-            toastr.error(t`Something went wrong while saving the character, or the image file provided was in an invalid format. Double check that the image is not a webp.`);
+            console.error('Failed to save character', error);
+            toastr.error(t`Failed to save character: ${error?.message || error}`, t`Save failed`);
+            // Rethrow so callers awaiting createOrEditCharacter (e.g. the export
+            // handler) can abort instead of carrying on as if the save succeeded.
+            throw error;
         }
     }
 }
@@ -20353,8 +20361,13 @@ jQuery(async function () {
         isExportPopupOpen = false;
         exportPopper.update();
 
-        // Save before exporting
-        await createOrEditCharacter();
+        // Save before exporting. If save throws, createOrEditCharacter has
+        // already toasted the cause — bail so we don't ship a stale snapshot.
+        try {
+            await createOrEditCharacter();
+        } catch {
+            return;
+        }
         const body = { format, avatar_url: characters[this_chid].avatar };
 
         const response = await fetch('/api/characters/export', {

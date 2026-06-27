@@ -295,6 +295,12 @@ async function writeCharacterData(inputFile, data, outputFile, request, crop = u
         return true;
     } catch (err) {
         console.error(err);
+        // Stash the failure on the request so the caller route can include the
+        // real message in its response body — the legacy `return false` swallowed
+        // the cause and left the browser with a bare 500.
+        if (request && typeof request === 'object') {
+            try { request.lastWriteCharacterDataError = String(err?.message || err); } catch { /* request frozen */ }
+        }
         return false;
     }
 }
@@ -1493,14 +1499,19 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
                 { allowMissingInputFallback: false, requireExistingOutput: true },
             );
             if (!writeOk) {
-                return response.status(500).send('Error: failed to persist character data');
+                const cause = request.lastWriteCharacterDataError || 'unknown write error';
+                return response.status(500).send(`Failed to persist character data: ${cause}`);
             }
         } else {
             const crop = tryParse(request.query.crop);
             const newAvatarPath = path.join(request.file.destination, request.file.filename);
             invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
-            await writeCharacterData(newAvatarPath, serialized, targetFile, request, crop);
+            const writeOk = await writeCharacterData(newAvatarPath, serialized, targetFile, request, crop);
             fs.unlinkSync(newAvatarPath);
+            if (!writeOk) {
+                const cause = request.lastWriteCharacterDataError || 'unknown write error';
+                return response.status(500).send(`Failed to persist character data: ${cause}`);
+            }
 
             // Bust cache to reload the new avatar
             cacheBuster.bust(request, response);
@@ -1509,7 +1520,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
         return response.sendStatus(200);
     } catch (err) {
         console.error('An error occurred, character edit invalidated.', err);
-        return response.sendStatus(500);
+        return response.status(500).send(`Character edit failed: ${String(err?.message || err)}`);
     }
 });
 
