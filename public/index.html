@@ -8587,14 +8587,17 @@
     <script type="module" src="scripts/request-inspector.js"></script>
     <script type="module" src="init.js"></script>
     <script>
-        window.addEventListener('load', (event) => {
+        (() => {
             const documentHeight = () => {
                 const doc = document.documentElement;
                 doc.style.setProperty('--doc-height', `${window.innerHeight}px`);
-            }
+            };
             window.addEventListener('resize', documentHeight);
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', documentHeight);
+            }
             documentHeight();
-        });
+        })();
     </script>
 </body>
 

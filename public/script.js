@@ -927,11 +927,9 @@ function applyImmersiveLayoutOverrides(enabled) {
     const shouldEnable = Boolean(enabled);
     if (shouldEnable) {
         setElementStylePriority(sheld, 'top', '0', 'important');
-        // In Android WebView immersive mode, 100dvh can lag during IME transitions.
-        // Use container-relative height so layout follows native insets immediately.
-        setElementStylePriority(sheld, 'height', 'calc(100% - 1px)', 'important');
-        setElementStylePriority(sheld, 'max-height', 'calc(100% - 1px)', 'important');
-        setElementStylePriority(chatContainer, 'max-height', 'calc(100% - var(--bottomFormBlockSize))', 'important');
+        setElementStylePriority(sheld, 'height', 'calc(var(--doc-height) - 1px)', 'important');
+        setElementStylePriority(sheld, 'max-height', 'calc(var(--doc-height) - 1px)', 'important');
+        setElementStylePriority(chatContainer, 'max-height', 'calc(var(--doc-height) - var(--bottomFormBlockSize))', 'important');
         return;
     }
     setElementStylePriority(sheld, 'top', '');

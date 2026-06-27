@@ -19,7 +19,7 @@
 
 :root {
     interpolate-size: allow-keywords;
-    --doc-height: 100%;
+    --doc-height: 100dvh;
     --transparent: rgba(0, 0, 0, 0);
 
     --black30a: rgba(0, 0, 0, 0.3);
@@ -151,11 +151,11 @@ body {
     margin: 0;
     padding: 0;
     width: 100%;
-    /*fallback for JS load*/
+    /* Fallback chain before --doc-height is overwritten by JS in pixels (index.html load handler).
+       Some Android WebViews mis-report 100dvh after a reflow; the JS-measured value is authoritative. */
     height: 100vh;
     height: 100dvh;
-    /*defaults as 100%, then reassigned via JS as pixels, will work on PC and Android*/
-    /*height: calc(var(--doc-height) - 1px);*/
+    height: var(--doc-height);
     background-color: var(--SmartThemeBlurTintColor);
     background-repeat: no-repeat;
     background-attachment: fixed;
@@ -770,10 +770,11 @@ hr {
 #sheld {
     display: flex;
     flex-direction: column;
-    /* -1px to give sheld some wiggle room to bounce off tobar when moving*/
-    height: calc(100vh - var(--topBarBlockSize) - 1px);
-    height: calc(100dvh - var(--topBarBlockSize) - 1px);
-    max-height: calc(100dvh - var(--topBarBlockSize) - 1px);
+    /* -1px to give sheld some wiggle room to bounce off tobar when moving.
+       --doc-height is JS-measured from window.innerHeight; Android WebView's 100dvh
+       is unreliable after reflow, so we route layout through the bridge variable. */
+    height: calc(var(--doc-height) - var(--topBarBlockSize) - 1px);
+    max-height: calc(var(--doc-height) - var(--topBarBlockSize) - 1px);
     overflow-x: hidden;
     /* max-width: 50vw; */
     position: absolute;
@@ -857,7 +858,7 @@ body .panelControlBar {
 }
 
 #chat {
-    max-height: calc(100vh - calc(var(--topBarBlockSize) + var(--bottomFormBlockSize)));
+    max-height: calc(var(--doc-height) - calc(var(--topBarBlockSize) + var(--bottomFormBlockSize)));
     overflow-x: hidden;
     padding-bottom: 0;
     overflow-y: scroll;
@@ -5666,19 +5667,17 @@ body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #top-settings-holde
 
 body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #sheld {
     top: 0;
-    height: calc(100vh - 1px);
-    height: calc(100dvh - 1px);
-    max-height: calc(100dvh - 1px);
+    height: calc(var(--doc-height) - 1px);
+    max-height: calc(var(--doc-height) - 1px);
 }
 
 body.luker-immersive-mode.luker-immersive-keep-top-bar #sheld {
-    height: calc(100dvh - var(--topBarBlockSize) - 1px);
-    max-height: calc(100dvh - var(--topBarBlockSize) - 1px);
+    height: calc(var(--doc-height) - var(--topBarBlockSize) - 1px);
+    max-height: calc(var(--doc-height) - var(--topBarBlockSize) - 1px);
 }
 
 body.luker-immersive-mode #chat {
-    max-height: calc(100vh - var(--bottomFormBlockSize));
-    max-height: calc(100dvh - var(--bottomFormBlockSize));
+    max-height: calc(var(--doc-height) - var(--bottomFormBlockSize));
 }
 
 #immersiveExitButton {
