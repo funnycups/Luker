@@ -113,6 +113,70 @@ await mg.removeCharacterAdvancedOverride(ctx, avatar);
 
 These accessors only touch the character card (`character.data.extensions.memory_graph.{schemaOverride,advancedOverride}`); they never mutate the global memory-graph settings.
 
+## Lookup API
+
+Alongside `openSession` and the override accessors, the `'memory-graph'` extension api publishes a set of lookup methods for read-only, frozen access to nodes / edges of the active chat's store. The intended consumers are external frontends (e.g. inline message UIs, sidebar viewers) and any extension that wants targeted node/edge access without opening a full session.
+
+All returns follow the same `NodeView` / `EdgeView` freeze contract as `openSession`'s read surface — caller never sees a mutable store reference.
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+if (!mg) { /* memory-graph not installed */ return; }
+
+const node = await mg.getNodeById(ctx, 'n_42');
+const nodes = await mg.getNodesByIds(ctx, ['n_42', 'n_43']);
+
+const event = await mg.findEventBySeq(ctx, 17);
+const bundle = await mg.findEventBundleBySeq(ctx, 17);
+// bundle = { event, location: NodeView|null, characters: NodeView[] }
+
+const seq = mg.getAssistantSeqForMessageIndex(ctx, messageIndex);
+const injection = mg.getCurrentInjection(ctx);
+```
+
+| Method | Returns | Purpose |
+| --- | --- | --- |
+| `getNodeById(ctx, id)` | `Promise<NodeView \| null>` | Resolve a single node by id. |
+| `getNodesByIds(ctx, ids)` | `Promise<Array<NodeView \| null>>` | Batch resolve; result is aligned to input order, `null` entries mark missing / invalid ids. |
+| `findEventBySeq(ctx, seq)` | `Promise<NodeView \| null>` | Find the non-archived `event` node whose `floorRange` covers `seq`. Highest `seqTo` wins on overlap. |
+| `findEventBundleBySeq(ctx, seq)` | `Promise<{ event: NodeView, location: NodeView \| null, characters: NodeView[] } \| null>` | Same lookup as `findEventBySeq`, plus the `location_state` linked via `occurred_at` and the `character_sheet` nodes linked via `involved_in`. |
+| `getAssistantSeqForMessageIndex(ctx, messageIndex)` | `number \| null` | Translate a chat message index into the 1-based count of extractable assistant messages up to and including that index. `null` when no extractable assistant message exists at/before `messageIndex`. |
+| `getCurrentInjection(ctx)` | `InjectionState \| null` | Defensive copy of the current main-flow injection state. See [InjectionState](#injectionstate). |
+
+Each lookup opens a short-lived read-api factory against the active store. Callers that issue many lookups in a row should batch through `openSession()` instead — it lets one factory serve every read.
+
+## Change subscriptions
+
+The `'memory-graph'` extension api also publishes two observer hooks for callers that want to react to store / injection changes without polling.
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+if (!mg) return;
+
+const offCommit = mg.onStoreCommit(({ chatKey }) => {
+    // Store committed — re-query through the Lookup API for fresh data.
+    // Note: the raw store reference is not exposed.
+});
+
+const offInjection = mg.onInjectionChanged(state => {
+    console.log('injection settled', state.alwaysInjectIds.size, state.recallSelectedIds.size);
+});
+
+// Later:
+offCommit();
+offInjection();
+// Or use the symmetric remover:
+mg.offStoreCommit(callback);
+```
+
+| Method | Callback payload | Purpose |
+| --- | --- | --- |
+| `onStoreCommit(cb)` | `{ chatKey: string }` | Fires after a session-write or recall replay commit lands. Returns an idempotent unsubscribe. |
+| `offStoreCommit(cb)` | — | Symmetric remove for `onStoreCommit`. Returns `boolean`. |
+| `onInjectionChanged(cb)` | [`InjectionState`](#injectionstate) | Fires when the main-flow recall pipeline settles on a new injection decision. Returns an idempotent unsubscribe. |
+
+Listener errors are caught and logged; one bad subscriber cannot block the others.
+
 
 ## Overview
 

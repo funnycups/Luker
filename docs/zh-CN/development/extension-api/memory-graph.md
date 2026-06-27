@@ -113,6 +113,70 @@ await mg.removeCharacterAdvancedOverride(ctx, avatar);
 
 这些访问器只动角色卡（`character.data.extensions.memory_graph.{schemaOverride,advancedOverride}`），从来不修改全局记忆图设置。
 
+## 查询 API
+
+除了 `openSession` 和 override 访问器，`'memory-graph'` extension api 还发布了一组查询方法，供外部前端（例如内联消息 UI、侧栏查看器）和任何想做定向节点 / 边访问、又不想开整套 session 的扩展使用，提供对当前聊天 store 的只读、冻结访问。
+
+所有返回值都遵守 `openSession` 读面同一套 `NodeView` / `EdgeView` 冻结契约 —— 调用方永远拿不到可变的 store 引用。
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+if (!mg) { /* 记忆图未安装 */ return; }
+
+const node = await mg.getNodeById(ctx, 'n_42');
+const nodes = await mg.getNodesByIds(ctx, ['n_42', 'n_43']);
+
+const event = await mg.findEventBySeq(ctx, 17);
+const bundle = await mg.findEventBundleBySeq(ctx, 17);
+// bundle = { event, location: NodeView|null, characters: NodeView[] }
+
+const seq = mg.getAssistantSeqForMessageIndex(ctx, messageIndex);
+const injection = mg.getCurrentInjection(ctx);
+```
+
+| 方法 | 返回 | 用途 |
+| --- | --- | --- |
+| `getNodeById(ctx, id)` | `Promise<NodeView \| null>` | 按 id 解析单个节点。 |
+| `getNodesByIds(ctx, ids)` | `Promise<Array<NodeView \| null>>` | 批量解析；返回数组与输入顺序对齐，`null` 表示该 id 缺失或非法。 |
+| `findEventBySeq(ctx, seq)` | `Promise<NodeView \| null>` | 找到 `floorRange` 覆盖 `seq` 的非归档 `event` 节点；多个范围在 `seq` 上重叠时，取 `seqTo` 最大者。 |
+| `findEventBundleBySeq(ctx, seq)` | `Promise<{ event: NodeView, location: NodeView \| null, characters: NodeView[] } \| null>` | 与 `findEventBySeq` 同一次查找，并把通过 `occurred_at` 关联的 `location_state` 与通过 `involved_in` 关联的 `character_sheet` 一起取回。 |
+| `getAssistantSeqForMessageIndex(ctx, messageIndex)` | `number \| null` | 把聊天消息索引翻译为"到 `messageIndex` 为止可抽取 assistant 消息的 1-based 计数"；`messageIndex` 之前没有可抽取的 assistant 消息时返回 `null`。 |
+| `getCurrentInjection(ctx)` | `InjectionState \| null` | 当前主流注入状态的防御性拷贝；见 [InjectionState](#injectionstate)。 |
+
+每次查询都会针对活动 store 打开一个短生命周期的 read-api 工厂。一次性发起多次查询的调用方应改走 `openSession()` —— 一个工厂可以服务所有读取。
+
+## 变更订阅
+
+`'memory-graph'` extension api 还发布了两个观察者钩子，供想响应 store / 注入变化、又不想轮询的调用方使用。
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+if (!mg) return;
+
+const offCommit = mg.onStoreCommit(({ chatKey }) => {
+    // store 已提交 —— 通过查询 API 重新查询最新数据。
+    // 注意：原始 store 引用不会被暴露。
+});
+
+const offInjection = mg.onInjectionChanged(state => {
+    console.log('injection settled', state.alwaysInjectIds.size, state.recallSelectedIds.size);
+});
+
+// 之后：
+offCommit();
+offInjection();
+// 或者用对称的 remover：
+mg.offStoreCommit(callback);
+```
+
+| 方法 | 回调入参 | 用途 |
+| --- | --- | --- |
+| `onStoreCommit(cb)` | `{ chatKey: string }` | 在 session 写入或召回回放提交落地之后触发；返回幂等的退订函数。 |
+| `offStoreCommit(cb)` | — | `onStoreCommit` 的对称移除；返回 `boolean`。 |
+| `onInjectionChanged(cb)` | [`InjectionState`](#injectionstate) | 主流召回流水线确定新的注入决策时触发；返回幂等的退订函数。 |
+
+监听器抛错会被捕获并日志化；一个坏订阅者无法阻塞其他订阅者。
+
 
 ## 概览
 
