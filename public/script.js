@@ -18709,7 +18709,7 @@ jQuery(async function () {
             if (group) {
                 await deleteGroupChat(group, chatFile);
             } else {
-                await delChat(`${chatFile}.jsonl`);
+                await delChat(`${String(chatFile).replace(/\.jsonl$/i, '')}.jsonl`);
             }
         } catch (error) {
             loaderHandle.hide();
@@ -18927,7 +18927,7 @@ jQuery(async function () {
 
     $(document).on('click', '.renameChatButton', async function (e) {
         e.stopPropagation();
-        const oldFileName = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text();
+        const oldFileName = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text().replace(/\.jsonl$/i, '');
 
         const popupText = await renderTemplateAsync('chatRename');
         const newName = await callGenericPopup(popupText, POPUP_TYPE.INPUT, oldFileName);
