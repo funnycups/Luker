@@ -24,7 +24,7 @@ permissions:
   contents: write
 
 env:
-  NODEJS_MOBILE_ASSET_URL: https://github.com/funnycups/nodejs-mobile/releases/download/v1.0.1/nodejs-mobile-android.zip
+  NODEJS_MOBILE_ASSET_URL: https://github.com/funnycups/nodejs-mobile/releases/latest/download/nodejs-mobile-android.zip
   NODEJS_MOBILE_ASSET_NAME: nodejs-mobile-android.zip
   NODEJS_MOBILE_RUNTIME_MAJOR: "24"
   NODEJS_MOBILE_MIN_MAJOR: "24"
