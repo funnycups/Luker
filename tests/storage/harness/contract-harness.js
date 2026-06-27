@@ -67,10 +67,16 @@ export async function makeTempFsEngineHarness() {
         },
     });
 
+    // Per-data-root backups directory matching the live server layout. Tests
+    // building a MigrationRunner against this harness can pass
+    // snapshotPaths.backupRoot directly without composing it themselves.
+    const backupRoot = path.join(dataRoot, '_storage-migrations');
+
     return {
         engine,
         kind: 'fs',
         dataRoot,
+        backupRoot,
         handle,
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
@@ -98,10 +104,13 @@ export async function makeTempSqliteEngineHarness() {
         },
     });
 
+    const backupRoot = path.join(dataRoot, '_storage-migrations');
+
     return {
         engine,
         kind: 'sqlite',
         dataRoot,
+        backupRoot,
         handle,
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
@@ -111,6 +120,39 @@ export async function makeTempSqliteEngineHarness() {
             fs.rmSync(dataRoot, { recursive: true, force: true });
         },
     };
+}
+
+/**
+ * Build a `FsEngine` whose `directoriesByHandle` lazily creates a separate
+ * per-handle directory tree on demand — useful for tests that need to write
+ * data under multiple handles in the same engine (e.g. the cross-mode
+ * destHandle path, where source handle and destination handle must not alias
+ * to the same physical dir). Each handle gets `<root>/<handle>/...` mirroring
+ * the production layout. Returns `{ engine, dirsForHandle, root }`.
+ *
+ * @param {object} opts
+ * @param {string} opts.root      Filesystem root under which per-handle dirs live.
+ * @returns {{ engine: FsEngine, dirsForHandle: (handle: string) => object, root: string }}
+ */
+export function makeMultiHandleFsEngine({ root }) {
+    if (!root) throw new Error('makeMultiHandleFsEngine: root required');
+    const cache = new Map();
+    function dirsForHandle(handle) {
+        if (cache.has(handle)) return cache.get(handle);
+        const userDir = path.join(root, handle);
+        const dirs = buildDirs(userDir);
+        for (const d of [dirs.root, dirs.chats, dirs.characters, dirs.worlds, dirs.groups,
+            dirs.groupChats, dirs.themes, dirs.movingUI, dirs.quickreplies,
+            dirs.openAI_Settings, dirs.novelAI_Settings, dirs.koboldAI_Settings,
+            dirs.textGen_Settings, dirs.instruct, dirs.context, dirs.sysprompt,
+            dirs.reasoning]) {
+            fs.mkdirSync(d, { recursive: true });
+        }
+        cache.set(handle, dirs);
+        return dirs;
+    }
+    const engine = new FsEngine({ directoriesByHandle: dirsForHandle });
+    return { engine, dirsForHandle, root };
 }
 
 // Parameterize Repo contract tests via `describe.each(CONTRACT_HARNESSES)`.

@@ -12,6 +12,21 @@ import { NamedDocRepo } from '../../../src/storage/repositories/named-doc-repo.j
 import { GroupRepo } from '../../../src/storage/repositories/group-repo.js';
 import { StatsRepo } from '../../../src/storage/repositories/stats-repo.js';
 import { isReadOnly, setReadOnly } from '../../../src/storage/read-only-mode.js';
+import { CONTRACT_HARNESSES, makeMultiHandleFsEngine } from '../harness/contract-harness.js';
+
+// Bind a full RepoSet to the given engine — used by tests that only need a
+// MigrationRunner instance to inspect constructor wiring (no Repo I/O).
+function buildReposForTest(engine) {
+    return {
+        chat: new ChatRepo({ engine }),
+        settings: new SettingsRepo({ engine }),
+        preset: new PresetRepo({ engine }),
+        worldInfo: new WorldInfoRepo({ engine }),
+        namedDoc: new NamedDocRepo({ engine }),
+        group: new GroupRepo({ engine }),
+        stats: new StatsRepo({ engine }),
+    };
+}
 
 // Mirror src/constants.js USER_DIRECTORY_TEMPLATE so any Repo that targets a
 // directory can find it. Kept in lockstep with tests/storage/harness/contract-harness.js.
@@ -518,5 +533,269 @@ describe('MigrationRunner: constructor validation', () => {
             sourceRepos: {}, destRepos: {},
             snapshotPaths: { getUserRoot: () => '/tmp' },
         })).toThrow(/backupRoot/);
+    });
+
+    test('constructor accepts categories option with all-true default', async () => {
+        const harness = await CONTRACT_HARNESSES[0].make(); // fs harness
+        try {
+            const repos = buildReposForTest(harness.engine);
+            const runner = new MigrationRunner({
+                sourceRepos: repos,
+                destRepos: repos,
+                snapshotPaths: { backupRoot: harness.backupRoot, getUserRoot: () => harness.dirs.root },
+            });
+            expect(runner._categories).toEqual({
+                settings: true, presets: true, namedDocs: true,
+                worlds: true, chats: true, groups: true, stats: true,
+            });
+        } finally {
+            await harness.cleanup();
+        }
+    });
+
+    test('constructor accepts categories option with explicit values', async () => {
+        const harness = await CONTRACT_HARNESSES[0].make();
+        try {
+            const repos = buildReposForTest(harness.engine);
+            const runner = new MigrationRunner({
+                sourceRepos: repos,
+                destRepos: repos,
+                snapshotPaths: { backupRoot: harness.backupRoot, getUserRoot: () => harness.dirs.root },
+                categories: { chats: true, settings: false, presets: false, namedDocs: false, worlds: false, groups: false, stats: false },
+            });
+            expect(runner._categories.chats).toBe(true);
+            expect(runner._categories.settings).toBe(false);
+            expect(runner._categories.worlds).toBe(false);
+        } finally {
+            await harness.cleanup();
+        }
+    });
+
+    test('constructor silently drops unknown categories keys', async () => {
+        // Defensive branch in runner.js: caller-supplied keys are filtered
+        // against the canonical DEFAULT_CATEGORIES shape, so a typo like
+        // `chts: true` is dropped rather than enabling a non-existent
+        // section. Without this guard a typo silently turns a section off.
+        const harness = await CONTRACT_HARNESSES[0].make();
+        try {
+            const repos = buildReposForTest(harness.engine);
+            const runner = new MigrationRunner({
+                sourceRepos: repos,
+                destRepos: repos,
+                snapshotPaths: { backupRoot: harness.backupRoot, getUserRoot: () => harness.dirs.root },
+                categories: { chats: true, typo: true, fakeCategory: false },
+            });
+            // Unknown keys must not appear on the merged shape.
+            expect(runner._categories).not.toHaveProperty('typo');
+            expect(runner._categories).not.toHaveProperty('fakeCategory');
+            // Known keys default to true; explicit chats:true preserved.
+            expect(runner._categories.chats).toBe(true);
+            expect(runner._categories.settings).toBe(true);
+            expect(runner._categories.worlds).toBe(true);
+        } finally {
+            await harness.cleanup();
+        }
+    });
+});
+
+describe('MigrationRunner: categories filter', () => {
+    test('chats:true only copies chats, skips others', async () => {
+        const srcHarness = await CONTRACT_HARNESSES[0].make();
+        const dstHarness = await CONTRACT_HARNESSES[0].make();
+        try {
+            const srcRepos = buildReposForTest(srcHarness.engine);
+            const dstRepos = buildReposForTest(dstHarness.engine);
+
+            // Seed everything on src
+            await srcRepos.chat.save(srcHarness.handle, 'A', 'c1', { user_name: 'u' }, [{ name: 'x', is_user: true, mes: 'hi' }], null);
+            await srcRepos.settings.save(srcHarness.handle, { foo: 'bar' });
+            await srcRepos.worldInfo.save(srcHarness.handle, 'w', { entries: {} });
+            await srcRepos.preset.save(srcHarness.handle, 'openai', 'p', { temperature: 0.5 });
+            await srcRepos.group.save(srcHarness.handle, 'g', { id: 'g', chats: [] });
+            await srcRepos.namedDoc.save(srcHarness.handle, 'themes', 't', { accent: '#abc' });
+            await srcRepos.stats.save(srcHarness.handle, { totalChats: 1 });
+
+            const runner = new MigrationRunner({
+                sourceRepos: srcRepos,
+                destRepos: dstRepos,
+                snapshotPaths: { backupRoot: srcHarness.backupRoot, getUserRoot: () => srcHarness.dirs.root },
+                categories: { chats: true, settings: false, presets: false, namedDocs: false, worlds: false, groups: false, stats: false },
+            });
+
+            const stats = await runner.migrateUser(srcHarness.handle);
+
+            expect(stats.chats).toBe(1);
+            expect(stats.settings).toBe(0);
+            expect(stats.worlds).toBe(0);
+            expect(stats.presets).toBe(0);
+            expect(stats.named_docs).toBe(0);
+            expect(stats.groups).toBe(0);
+            expect(stats.stats).toBe(0);
+
+            // Verify on dst: only chats present, others null
+            expect(await dstRepos.chat.get(srcHarness.handle, 'A', 'c1')).not.toBeNull();
+            expect(await dstRepos.settings.get(srcHarness.handle)).toBeNull();
+            expect(await dstRepos.worldInfo.get(srcHarness.handle, 'w')).toBeNull();
+            expect(await dstRepos.preset.get(srcHarness.handle, 'openai', 'p')).toBeNull();
+            expect(await dstRepos.namedDoc.get(srcHarness.handle, 'themes', 't')).toBeNull();
+            expect(await dstRepos.group.get(srcHarness.handle, 'g')).toBeNull();
+            expect(await dstRepos.stats.get(srcHarness.handle)).toBeNull();
+        } finally {
+            await srcHarness.cleanup();
+            await dstHarness.cleanup();
+        }
+    });
+
+    test('presets:false ALSO skips preset_states', async () => {
+        const srcHarness = await CONTRACT_HARNESSES[0].make();
+        const dstHarness = await CONTRACT_HARNESSES[0].make();
+        try {
+            const srcRepos = buildReposForTest(srcHarness.engine);
+            const dstRepos = buildReposForTest(dstHarness.engine);
+            await srcRepos.preset.save(srcHarness.handle, 'openai', 'p', { temperature: 0.5 });
+            await srcRepos.preset.setState(srcHarness.handle, 'openai', 'p', 'default', { lastUsed: 123 });
+
+            const runner = new MigrationRunner({
+                sourceRepos: srcRepos,
+                destRepos: dstRepos,
+                snapshotPaths: { backupRoot: srcHarness.backupRoot, getUserRoot: () => srcHarness.dirs.root },
+                categories: { presets: false, namedDocs: true, settings: true, worlds: true, chats: true, groups: true, stats: true },
+            });
+            const stats = await runner.migrateUser(srcHarness.handle);
+            expect(stats.presets).toBe(0);
+            expect(stats.preset_states).toBe(0);
+        } finally {
+            await srcHarness.cleanup();
+            await dstHarness.cleanup();
+        }
+    });
+});
+
+describe('MigrationRunner: destHandle', () => {
+    test('src and dst handles can differ; dest writes use destHandle', async () => {
+        // Per-handle dir routing so the same physical engine instance can host
+        // multiple handles. The CONTRACT_HARNESS default rejects anything but
+        // 'u'; this test needs three distinct handles ('_xrestore_abc' src,
+        // 'realUser' + '_xrestore_abc' on dst — the latter to assert it stays
+        // empty) each with their own directory tree so reads don't alias.
+        const srcRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-desthandle-src-'));
+        const dstRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-desthandle-dst-'));
+        const backupRoot = path.join(dstRoot, '_backups');
+        const { engine: srcEngine } = makeMultiHandleFsEngine({ root: srcRoot });
+        const { engine: dstEngine, dirsForHandle: dstDirsForHandle } = makeMultiHandleFsEngine({ root: dstRoot });
+        try {
+            const srcRepos = buildReposForTest(srcEngine);
+            const dstRepos = buildReposForTest(dstEngine);
+
+            await srcRepos.chat.save('_xrestore_abc', 'A', 'c1',
+                { user_name: 'src' }, [{ name: 'x', is_user: true, mes: 'hi' }], null);
+            await srcRepos.settings.save('_xrestore_abc', { foo: 'bar' });
+
+            // Pre-create the dst realUser dir tree so the snapshot step
+            // (taken against the destination side per orchestrator semantics)
+            // finds an existing userRoot.
+            dstDirsForHandle('realUser');
+
+            const runner = new MigrationRunner({
+                sourceRepos: srcRepos,
+                destRepos: dstRepos,
+                snapshotPaths: { backupRoot, getUserRoot: () => path.join(dstRoot, 'realUser') },
+            });
+
+            const stats = await runner.migrateUser('_xrestore_abc', { destHandle: 'realUser' });
+
+            expect(stats.chats).toBe(1);
+            expect(stats.settings).toBe(1);
+            // Source handle untouched on dst
+            expect(await dstRepos.chat.get('_xrestore_abc', 'A', 'c1')).toBeNull();
+            expect(await dstRepos.settings.get('_xrestore_abc')).toBeNull();
+            // Real handle populated on dst
+            expect(await dstRepos.chat.get('realUser', 'A', 'c1')).not.toBeNull();
+            expect((await dstRepos.settings.get('realUser')).foo).toBe('bar');
+        } finally {
+            fs.rmSync(srcRoot, { recursive: true, force: true });
+            fs.rmSync(dstRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('omitted destHandle defaults to srcHandle (backward compat)', async () => {
+        const srcHarness = await CONTRACT_HARNESSES[0].make();
+        const dstHarness = await CONTRACT_HARNESSES[0].make();
+        try {
+            const srcRepos = buildReposForTest(srcHarness.engine);
+            const dstRepos = buildReposForTest(dstHarness.engine);
+            await srcRepos.settings.save(srcHarness.handle, { x: 1 });
+            const runner = new MigrationRunner({
+                sourceRepos: srcRepos,
+                destRepos: dstRepos,
+                snapshotPaths: { backupRoot: dstHarness.backupRoot, getUserRoot: () => dstHarness.dirs.root },
+            });
+            await runner.migrateUser(srcHarness.handle);
+            expect((await dstRepos.settings.get(srcHarness.handle)).x).toBe(1);
+        } finally {
+            await srcHarness.cleanup();
+            await dstHarness.cleanup();
+        }
+    });
+
+    test('rollback on copy failure uses srcHandle (not destHandle)', async () => {
+        // Force _copyAll to throw mid-run when destHandle != srcHandle, then
+        // verify _rollback was driven from srcHandle: snapshot is taken against
+        // the dst side (getUserRoot returns dst), but the snapshotted DUMP and
+        // its rollback restore are SOURCE-handle keyed. We assert by intercepting
+        // restoreFromSnapshot at the storage/migration/backup module boundary,
+        // capturing the `handle` arg passed by _rollback.
+        const srcRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-rb-src-'));
+        const dstRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-rb-dst-'));
+        const backupRoot = path.join(dstRoot, '_backups');
+        const { engine: srcEngine } = makeMultiHandleFsEngine({ root: srcRoot });
+        const { engine: dstEngine, dirsForHandle: dstDirsForHandle } = makeMultiHandleFsEngine({ root: dstRoot });
+        dstDirsForHandle('realUser'); // snapshot needs an existing userRoot
+
+        try {
+            const srcRepos = buildReposForTest(srcEngine);
+            const dstRepos = buildReposForTest(dstEngine);
+            await srcRepos.settings.save('_xrestore_abc', { foo: 'bar' });
+
+            // Wrap dst.settings.save to throw — forces _copyAll to fail at the
+            // first section, which triggers _rollback.
+            const tamperedDst = {
+                ...dstRepos,
+                settings: {
+                    ...dstRepos.settings,
+                    save: async () => { throw new Error('intentional dst write failure'); },
+                    get: dstRepos.settings.get.bind(dstRepos.settings),
+                },
+            };
+
+            const runner = new MigrationRunner({
+                sourceRepos: srcRepos,
+                sourceEngine: srcEngine,
+                destRepos: tamperedDst,
+                snapshotPaths: { backupRoot, getUserRoot: () => path.join(dstRoot, 'realUser') },
+            });
+
+            let caught = null;
+            try {
+                await runner.migrateUser('_xrestore_abc', { destHandle: 'realUser' });
+            } catch (err) {
+                caught = err;
+            }
+
+            expect(caught).not.toBeNull();
+            // Error message wraps the inner cause; the inner cause must
+            // reference the srcHandle (per stats.handle semantics) so an
+            // operator looking at logs sees which source record failed.
+            expect(caught.message).toMatch(/_xrestore_abc/);
+            // Snapshot was taken in the backupRoot — directory name encodes
+            // src handle (srcHandle, NOT destHandle).
+            const snapEntries = fs.readdirSync(backupRoot);
+            expect(snapEntries.length).toBeGreaterThan(0);
+            expect(snapEntries.some(e => e.endsWith('-_xrestore_abc'))).toBe(true);
+            expect(snapEntries.some(e => e.endsWith('-realUser'))).toBe(false);
+        } finally {
+            fs.rmSync(srcRoot, { recursive: true, force: true });
+            fs.rmSync(dstRoot, { recursive: true, force: true });
+        }
     });
 });

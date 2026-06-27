@@ -59,12 +59,14 @@ export async function makeTempPgEngineHarness() {
     const engine = new PgEngine({ url: urlWithSchema });
     const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-contract-pg-'));
     const dirs = buildStubDirs(stubRoot);
+    const backupRoot = path.join(stubRoot, '_storage-migrations');
     return {
         engine,
         kind: 'postgres',
         handle: 'u',
         schemaName,
         dataRoot: stubRoot,
+        backupRoot,
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
         dirs,

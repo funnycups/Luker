@@ -47,12 +47,14 @@ export async function makeTempMysqlEngineHarness() {
     const engine = new MysqlEngine({ url });
     const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-contract-mysql-'));
     const dirs = buildStubDirs(stubRoot);
+    const backupRoot = path.join(stubRoot, '_storage-migrations');
     return {
         engine,
         kind: 'mysql',
         handle: 'u',
         dbName,
         dataRoot: stubRoot,
+        backupRoot,
         charsDir: dirs.characters,
         chatsDir: dirs.chats,
         dirs,

@@ -26,6 +26,7 @@ export const PORT_RANGES = {
     regression:     { base: 8571, count: 4 },
     storage:        { base: 8581, count: 6 },
     sync:           { base: 8591, count: 4 },
+    xmode:          { base: 8601, count: 8 }, // cross-mode-recovery specs need 2 servers per pair
 };
 
 /**

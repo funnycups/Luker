@@ -278,11 +278,17 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         expect(afterProbe.stats?.totalChats).toBe(7);
     });
 
-    test('REGRESSION: restore rejects backup whose engine kind does not match current engine', async () => {
+    test('REGRESSION: restore demands scratch creds when backup engine is foreign db', async () => {
         if (mode === 'fs') return; // fs has no engine_meta-driven validation path
 
-        // Hand-craft a minimal ZIP with engine_meta declaring a foreign kind.
-        const otherKind = mode === 'sqlite' ? 'postgres' : 'sqlite';
+        // Hand-craft a minimal ZIP with engine_meta declaring a foreign db kind
+        // (mysql or postgres — both require operator scratch DB conn). The
+        // sqlite-source-on-foreign-db case CAN succeed when the engine dump is
+        // a valid .sqlite file, so we deliberately use a foreign DB kind here
+        // for the "creds missing" assertion. The cross-mode delegation
+        // detects mysql/postgres source without creds and returns 400 with
+        // crossModeScratchRequired payload.
+        const otherKind = 'postgres';
         const meta = {
             engineKind: otherKind,
             schemaVersion: 1,
@@ -311,21 +317,21 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
             .field('selection', JSON.stringify(ALL_SELECTION))
             .attach('avatar', zipBytes, 'backup.zip');
         expect(restoreRes.status).toBe(400);
-        expect(String(restoreRes.body?.error || '')).toMatch(/engine kind/i);
-        expect(String(restoreRes.body?.error || '')).toMatch(new RegExp(otherKind, 'i'));
+        // The body must signal cross-mode-scratch-required so the UI knows
+        // to prompt for a scratch DB URL and re-submit.
+        expect(restoreRes.body?.crossModeScratchRequired?.kind).toBe(otherKind);
+        expect(String(restoreRes.body?.error || '')).toMatch(/scratch postgres/i);
     });
 
-    test('REGRESSION: restore rejects legacy fs-only backup on db-mode servers (no engine_meta)', async () => {
-        // Spec §5.2: a backup that omits `_engine_meta.json` (produced by
-        // pre-Stage-3 fs servers) MUST 400 on sqlite/mysql/postgres, with
-        // an actionable "run storage-migrate" message. Silent extract would
-        // unpack the disk tree but leave the engine slot empty, so every
-        // Repo read returns null and the user's chats appear deleted.
+    test('REGRESSION: legacy fs-only backup on db-mode server is now cross-mode-restored', async () => {
+        // Previously a legacy fs-only ZIP on a db-mode server returned 400 with
+        // "Run storage-migrate to convert the backup first." After cross-mode
+        // recovery, the orchestrator synthesizes an `engineMeta = {engineKind:'fs'}`
+        // and ingests the fs tree from the ZIP into a transient FsEngine, then
+        // copies it through MigrationRunner into the live db engine. The
+        // operator no longer has to drop to the CLI for the most common case.
         if (mode === 'fs') return; // fs is the legacy format's native home — extracts cleanly.
 
-        // Hand-craft a minimal legacy-style ZIP: only manifest.json + a
-        // single chats file in the on-disk layout. No engine_meta, no
-        // engine_dump.
         const zipPath = path.join(harness.dataRoot, `bk-legacy-${randomBytes(4).toString('hex')}.zip`);
         await new Promise((resolve, reject) => {
             const out = fs.createWriteStream(zipPath);
@@ -347,21 +353,22 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
             .field('mode', 'merge')
             .field('selection', JSON.stringify(ALL_SELECTION))
             .attach('avatar', zipBytes, 'backup.zip');
-        expect(restoreRes.status).toBe(400);
-        expect(String(restoreRes.body?.error || '')).toMatch(/storage-migrate/i);
-        expect(String(restoreRes.body?.error || '')).toMatch(new RegExp(mode, 'i'));
+        // Cross-mode delegation succeeds — the orchestrator built a transient
+        // FsEngine, ingested the chats/Alice/c1.jsonl tree, and copied it
+        // into the live db engine. The response carries the crossMode envelope
+        // so the client can render the conversion-specific UI.
+        expect(restoreRes.status).toBe(200);
+        expect(restoreRes.body?.crossMode?.sourceKind).toBe('fs');
+        expect(restoreRes.body?.crossMode?.destKind).toBe(mode);
     });
 
-    test('REGRESSION: /import/data-zip returns 400 (not 500) on engine-kind mismatch', async () => {
-        // Parallel of the /restore-backup mismatch test: the import handler
-        // shares the same restoreUserBackupArchive code path and must surface
-        // RestoreEngineKindMismatchError as a 400 — not the opaque 500 it
-        // returned before Stage 3's fix bundle. Same defense applies to
-        // RestoreLegacyFsOnDbModeError; covered for /restore-backup above
-        // and the catch block is shared.
+    test('REGRESSION: /import/data-zip demands scratch creds on db-engine mismatch', async () => {
+        // Parallel of the /restore-backup mismatch test under the new
+        // cross-mode semantics: a foreign-db ZIP without scratch creds
+        // returns 400 with crossModeScratchRequired payload.
         if (mode === 'fs') return; // fs has no engine_meta-driven validation path
 
-        const otherKind = mode === 'sqlite' ? 'postgres' : 'sqlite';
+        const otherKind = 'postgres';
         const meta = {
             engineKind: otherKind,
             schemaVersion: 1,
@@ -388,7 +395,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
             .field('mode', 'merge')
             .attach('avatar', zipBytes, 'backup.zip');
         expect(importRes.status).toBe(400);
-        expect(String(importRes.body?.error || '')).toMatch(/engine kind/i);
-        expect(String(importRes.body?.error || '')).toMatch(new RegExp(otherKind, 'i'));
+        expect(importRes.body?.crossModeScratchRequired?.kind).toBe(otherKind);
+        expect(String(importRes.body?.error || '')).toMatch(/scratch postgres/i);
     });
 });

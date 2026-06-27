@@ -248,9 +248,13 @@ async function probeReady(port, timeoutMs = READY_TIMEOUT_MS) {
  *   overrides for this scenario (e.g. `{ enableUserAccounts: true, listen: false }`).
  *   When provided, a per-scenario config.yaml is written next to the
  *   cloned dataRoot and passed via `--configPath`.
+ * @param {string} [opts.useExistingDataRoot]  Absolute path to a pre-populated
+ *   dataRoot that the caller built up itself (e.g. a real-data clone). When
+ *   set, the seed `data/` is NOT copied — the server boots straight against
+ *   this dir. The caller is responsible for any scrub/sanitization.
  * @returns {Promise<ServerHandle>}
  */
-export async function startServer({ batchKey, scenarioId = 'default', extraEnv = {}, extraConfig = null } = {}) {
+export async function startServer({ batchKey, scenarioId = 'default', extraEnv = {}, extraConfig = null, useExistingDataRoot = null } = {}) {
     if (!batchKey) throw new Error('startServer: batchKey is required');
     // Up to 3 attempts to acquire a port that the OS will let us rebind.
     // The transient `net.Server.listen({port:0})` in ports.js gives us a
@@ -261,7 +265,7 @@ export async function startServer({ batchKey, scenarioId = 'default', extraEnv =
     for (let attempt = 0; attempt < 3; attempt++) {
         const port = await reservePort(batchKey);
         try {
-            return await spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig);
+            return await spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExistingDataRoot);
         } catch (err) {
             lastErr = err;
             // Only retry on bind-collision style errors.
@@ -272,9 +276,13 @@ export async function startServer({ batchKey, scenarioId = 'default', extraEnv =
     throw lastErr;
 }
 
-async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig) {
-    const dataRoot = resolve(SCRATCH_ROOT, `${batchKey}-${scenarioId}-${port}`);
-    cloneDataDir(dataRoot);
+async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExistingDataRoot) {
+    const dataRoot = useExistingDataRoot
+        ? resolve(useExistingDataRoot)
+        : resolve(SCRATCH_ROOT, `${batchKey}-${scenarioId}-${port}`);
+    if (!useExistingDataRoot) {
+        cloneDataDir(dataRoot);
+    }
 
     // The seed `data/` doesn't include a populated `_storage/` for the
     // sqlite backend (settings:default-user row is missing), so default
