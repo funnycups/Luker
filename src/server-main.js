@@ -474,31 +474,6 @@ app.get('/lib/tokenizers/sentencepiece-js-bundle.js', (_req, res) => {
     }
 });
 
-// Same-origin proxy for tokenizer data files hosted on GitHub raw. Browsers
-// can't fetch those URLs directly (CORS); we proxy through. Server cached via
-// HTTP cache headers + getPathToTokenizer's disk cache.
-const REMOTE_TOKENIZERS = {
-    'qwen2.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/qwen2.json.gz',
-    'command-r.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/command-r.json.gz',
-    'command-a.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/command-a.json.gz',
-    'nemo.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/nemo.json.gz',
-    'deepseek.json.gz': 'https://raw.githubusercontent.com/SillyTavern/SillyTavern-Tokenizers/main/deepseek.json.gz',
-};
-app.get('/tokenizers-remote/:file', async (req, res) => {
-    const url = REMOTE_TOKENIZERS[req.params.file];
-    if (!url) return res.status(404).end();
-    try {
-        const upstream = await fetch(url);
-        if (!upstream.ok) return res.status(502).type('text/plain').send(`upstream ${upstream.status}`);
-        const buf = Buffer.from(await upstream.arrayBuffer());
-        res.type('application/octet-stream')
-            .set('Cache-Control', 'public, max-age=604800, immutable')
-            .send(buf);
-    } catch (err) {
-        res.status(502).type('text/plain').send(err.message);
-    }
-});
-
 // Public API
 app.use('/api/users', usersPublicRouter);
 // Public storage probe: mounted BEFORE requireLoginMiddleware so external

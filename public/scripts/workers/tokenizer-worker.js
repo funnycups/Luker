@@ -22,11 +22,11 @@ const TOKENIZER_URLS = {
     claude: '/tokenizers/claude.json',
     llama3: '/tokenizers/llama3.json',
     'llama-3': '/tokenizers/llama3.json',
-    qwen2: '/tokenizers-remote/qwen2.json.gz',
-    'command-r': '/tokenizers-remote/command-r.json.gz',
-    'command-a': '/tokenizers-remote/command-a.json.gz',
-    nemo: '/tokenizers-remote/nemo.json.gz',
-    deepseek: '/tokenizers-remote/deepseek.json.gz',
+    qwen2: '/tokenizers/qwen2.json',
+    'command-r': '/tokenizers/command-r.json',
+    'command-a': '/tokenizers/command-a.json',
+    nemo: '/tokenizers/nemo.json',
+    deepseek: '/tokenizers/deepseek.json',
 };
 
 const instanceCache = new Map();
@@ -34,12 +34,6 @@ const instanceCache = new Map();
 async function fetchTokenizerJson(url) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Tokenizer fetch failed: ${url} -> ${res.status}`);
-    if (url.endsWith('.gz')) {
-        const buf = await res.arrayBuffer();
-        const ds = new DecompressionStream('gzip');
-        const decompressed = await new Response(new Blob([buf]).stream().pipeThrough(ds)).arrayBuffer();
-        return new Uint8Array(decompressed);
-    }
     return new Uint8Array(await res.arrayBuffer());
 }
 
