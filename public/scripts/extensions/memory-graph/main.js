@@ -2278,6 +2278,25 @@ export function resolveChatKeyForSession(context) {
  *   5. Best-effort UI refresh — `refreshUiStats` early-returns when the
  *      popup isn't mounted, so this is safe in headless contexts.
  */
+const storeCommitListeners = new Set();
+
+/**
+ * Registers a store-commit listener. The callback receives a frozen
+ * `{ chatKey }` signal — re-query through the api.js Lookup API for fresh
+ * data; the cached runtime store is not exposed. Returns an idempotent
+ * unsubscribe function; non-function inputs return a no-op unsubscribe.
+ */
+export function addStoreCommitListener(cb) {
+    if (typeof cb !== 'function') return () => { /* no-op for invalid input */ };
+    storeCommitListeners.add(cb);
+    return () => { storeCommitListeners.delete(cb); };
+}
+
+/** Matches the add/remove pair shape used by external-api.js. */
+export function removeStoreCommitListener(cb) {
+    return storeCommitListeners.delete(cb);
+}
+
 export async function commitSessionMutation(context, chatKey, beforeStore, afterStore) {
     const key = String(chatKey || '').trim();
     const store = afterStore;
@@ -2311,6 +2330,21 @@ export async function commitSessionMutation(context, chatKey, beforeStore, after
         await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: false });
     }
     try { refreshUiStats(); } catch (_) { /* UI optional in headless / test env */ }
+    if (storeCommitListeners.size > 0) {
+        // Frozen signal — re-query through the Lookup API for fresh data; the
+        // cached runtime store is not exposed. Each listener is wrapped
+        // individually so one throw doesn't abort iteration over the rest.
+        const snapshot = Object.freeze({ chatKey: key });
+        for (const cb of storeCommitListeners) {
+            try {
+                cb(snapshot);
+            } catch (err) {
+                try {
+                    console.warn(`[${MODULE_NAME}] store-commit listener threw:`, err);
+                } catch (_) { /* logger itself failed; ignore */ }
+            }
+        }
+    }
 }
 
 /**
@@ -2872,7 +2906,7 @@ function findAssistantSeqFromPlayableSeq(context, playableSeqFrom) {
     return null;
 }
 
-function findAffectedAssistantSeqFromMessageIndex(context, messageIndex) {
+export function findAffectedAssistantSeqFromMessageIndex(context, messageIndex) {
     const targetIndex = Math.max(0, Math.floor(Number(messageIndex || 0)));
     if (!Number.isFinite(targetIndex) || targetIndex < 0) {
         return null;
