@@ -509,16 +509,30 @@ function makeNotesAdapter(fs) {
         return { entries: out, dirty };
     };
 
+    // fs.update returns false when the underlying chat-state patch is rejected
+    // (target unresolvable, HTTP failure, replay conflict, etc.). Surface that
+    // as a thrown ToolError so execNoteOpen / execNoteClose can report the
+    // failure to the agent instead of returning a fake-success id the panel
+    // and the agent both believe — see Task 7.
+    const throwOnWriteFailure = (op) => {
+        throw new ToolError(
+            `${op}: notes write rejected by floor-state.`,
+            'NOTE_WRITE_FAILED',
+            'The chat-state patch did not land (typical causes: chat not yet persisted, target chat unresolved, or a replay conflict). The note was NOT saved. Retry once; if it still fails, drop the note for this turn.',
+        );
+    };
+
     return {
         async appendForFloor(floor, text) {
             const targetFloor = Math.max(0, Math.floor(Number(floor) || 0));
             const id = mintId();
-            await lock(() => fs.update((current) => {
+            const ok = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 entries.push({ id, text: String(text), status: 'open' });
                 return { ...safe, entries };
             }, { floor: targetFloor }));
+            if (ok === false) throwOnWriteFailure('note_open');
             emitNotesChanged();
             return id;
         },
@@ -552,7 +566,7 @@ function makeNotesAdapter(fs) {
             if (!targetId) return { ok: false, error: 'not_found' };
             const nextStatus = String(status || '');
             let outcome = { ok: false, error: 'not_found' };
-            await lock(() => fs.update((current) => {
+            const writeOk = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 const idx = entries.findIndex(e => e.id === targetId);
@@ -574,6 +588,12 @@ function makeNotesAdapter(fs) {
                 outcome = { ok: true };
                 return { ...safe, entries };
             }));
+            // Distinguish a no-op reducer (writeOk === true with outcome.ok === false
+            // means the reducer found a logical reason like not_found / already_*) from
+            // a real write rejection (writeOk === false means the patch itself failed).
+            // Only the latter must throw — the reducer's no-op outcomes are legitimate
+            // tool results the agent should react to.
+            if (writeOk === false && outcome.ok) throwOnWriteFailure('note_close');
             if (outcome.ok) emitNotesChanged();
             return outcome;
         },
@@ -582,7 +602,7 @@ function makeNotesAdapter(fs) {
             if (!targetId) return { ok: false, error: 'not_found' };
             const nextText = String(text ?? '');
             let outcome = { ok: false, error: 'not_found' };
-            await lock(() => fs.update((current) => {
+            const writeOk = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 const idx = entries.findIndex(e => e.id === targetId);
@@ -594,6 +614,7 @@ function makeNotesAdapter(fs) {
                 outcome = { ok: true };
                 return { ...safe, entries };
             }));
+            if (writeOk === false && outcome.ok) throwOnWriteFailure('note_edit');
             if (outcome.ok) emitNotesChanged();
             return outcome;
         },
@@ -610,7 +631,7 @@ function makeNotesAdapter(fs) {
             // we can compute `missing` (= requested - seen) after the write.
             const removed = [];
             const seen = new Set();
-            await lock(() => fs.update((current) => {
+            const writeOk = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 const kept = [];
@@ -625,6 +646,12 @@ function makeNotesAdapter(fs) {
                 }
                 return { ...safe, entries: kept };
             }));
+            // Same shape as updateStatusById: only treat writeOk === false as a real
+            // failure when something was actually meant to be deleted. If `removed`
+            // is empty, the reducer was a no-op (all ids missing) and writeOk may
+            // legitimately be true with nothing changed — there is no rejection to
+            // surface.
+            if (writeOk === false && removed.length > 0) throwOnWriteFailure('note_delete');
             const missing = [];
             for (const id of requested) {
                 if (!seen.has(id)) missing.push(id);

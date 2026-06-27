@@ -139,11 +139,24 @@ export async function mountNotesPanel(host, context) {
     // Re-attach floor state on chat change so the panel always reflects
     // the active chat. Without this, the panel keeps reading from the
     // floor-state captured at mount time.
-    if (typeof context?.eventSource?.on === 'function' && context?.eventTypes?.CHAT_CHANGED) {
-        context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
+    //
+    // Beyond CHAT_CHANGED, also rerender on MESSAGE_SWIPED / MESSAGE_DELETED /
+    // MESSAGE_EDITED: floor-state's `settle*` hooks already invalidate the
+    // shared adapter cache before these events fan out, so the next
+    // listAcrossFloors() will read the freshly-valid commit set — but the
+    // panel only knows to call it if we hear the event. Without these,
+    // swiping the active assistant turn leaves the panel showing
+    // swipe-bound notes that no longer apply to the current view (and the
+    // mismatch only resolves when the user touches a tab or switches chats).
+    if (typeof context?.eventSource?.on === 'function') {
+        const refresh = async () => {
             await reattachFloorState();
             await rerender();
-        });
+        };
+        const evt = context.eventTypes || {};
+        for (const name of ['CHAT_CHANGED', 'MESSAGE_SWIPED', 'MESSAGE_DELETED', 'MESSAGE_EDITED']) {
+            if (evt[name]) context.eventSource.on(evt[name], refresh);
+        }
     }
 
     // Subscribe to adapter-level write events so an LLM-driven note_open /

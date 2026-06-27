@@ -406,3 +406,111 @@ describe('buildInitialMessages renders ## Open Notes', () => {
         expect(messages).toEqual([]);
     });
 });
+
+// Direct coverage of the production adapter built by `makeNotesAdapter` inside
+// `attachNotesFloorState`. The other adapter-shape tests above use hand-rolled
+// fakes that bypass the real builder; this block exercises the real builder
+// against a fake floor-state whose update() returns false, the production-side
+// signal that a chat-state patch was rejected.
+describe('makeNotesAdapter surfaces write failures', () => {
+    // Helper: build a fake floor-state instance shaped like the real one and
+    // mount it via attachNotesFloorState. updateOk controls what every
+    // fs.update returns; everything else is enough to satisfy the
+    // attach guard.
+    async function mountAdapterWith(updateOk) {
+        const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
+            await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
+        resetNotesFloorStateInstanceForTesting();
+        const fakeFs = {
+            ready: async () => undefined,
+            get: async () => ({}),
+            update: async () => updateOk,
+        };
+        const ctx = { createFloorState: async () => fakeFs };
+        await attachNotesFloorState(ctx);
+        return ctx.__floorStateForNotes;
+    }
+
+    test('appendForFloor throws NOTE_WRITE_FAILED when fs.update returns false', async () => {
+        const adapter = await mountAdapterWith(false);
+        await expect(adapter.appendForFloor(0, 'lost')).rejects.toMatchObject({
+            name: 'ToolError',
+            code: 'NOTE_WRITE_FAILED',
+        });
+    });
+
+    test('appendForFloor still returns the id when fs.update returns true', async () => {
+        const adapter = await mountAdapterWith(true);
+        const id = await adapter.appendForFloor(0, 'kept');
+        expect(typeof id).toBe('string');
+        expect(id.length).toBeGreaterThan(0);
+    });
+
+    test('updateStatusById throws NOTE_WRITE_FAILED on patch rejection of a real flip', async () => {
+        // Seed an entry the reducer can find, then make fs.update return false
+        // for the next call by toggling through a stateful fake.
+        const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
+            await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
+        resetNotesFloorStateInstanceForTesting();
+        let returnFromUpdate = true;
+        let stored = { entries: [{ id: 'x', text: 't', status: 'open' }] };
+        const fakeFs = {
+            ready: async () => undefined,
+            get: async () => stored,
+            update: async (reducer) => {
+                const next = await reducer(stored);
+                if (returnFromUpdate && next && typeof next === 'object') stored = next;
+                return returnFromUpdate;
+            },
+        };
+        const ctx = { createFloorState: async () => fakeFs };
+        await attachNotesFloorState(ctx);
+        const adapter = ctx.__floorStateForNotes;
+
+        returnFromUpdate = false;
+        await expect(adapter.updateStatusById('x', 'closed', 'r')).rejects.toMatchObject({
+            name: 'ToolError',
+            code: 'NOTE_WRITE_FAILED',
+        });
+    });
+
+    test('updateStatusById passes through no-op outcomes (not_found) without throwing', async () => {
+        // The reducer's "no row matches" case is a legitimate result, not a
+        // write rejection. We must not turn it into NOTE_WRITE_FAILED.
+        const adapter = await mountAdapterWith(true);
+        const r = await adapter.updateStatusById('missing', 'closed');
+        expect(r).toEqual({ ok: false, error: 'not_found' });
+    });
+
+    test('deleteByIds throws NOTE_WRITE_FAILED only when an actual delete is rejected', async () => {
+        const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
+            await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
+        resetNotesFloorStateInstanceForTesting();
+        let returnFromUpdate = true;
+        let stored = { entries: [{ id: 'a', text: 't', status: 'open' }] };
+        const fakeFs = {
+            ready: async () => undefined,
+            get: async () => stored,
+            update: async (reducer) => {
+                const next = await reducer(stored);
+                if (returnFromUpdate && next && typeof next === 'object') stored = next;
+                return returnFromUpdate;
+            },
+        };
+        const ctx = { createFloorState: async () => fakeFs };
+        await attachNotesFloorState(ctx);
+        const adapter = ctx.__floorStateForNotes;
+
+        // Case 1: requested ids don't exist → no real delete attempted → no throw
+        returnFromUpdate = false;
+        const r1 = await adapter.deleteByIds(['ghost']);
+        expect(r1).toEqual({ removed: [], missing: ['ghost'] });
+
+        // Case 2: requested id exists, write rejected → throw
+        returnFromUpdate = false;
+        await expect(adapter.deleteByIds(['a'])).rejects.toMatchObject({
+            name: 'ToolError',
+            code: 'NOTE_WRITE_FAILED',
+        });
+    });
+});
