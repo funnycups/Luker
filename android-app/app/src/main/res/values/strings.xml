@@ -17,6 +17,9 @@
     <string name="diagnostics_export_bundle">Export Diagnostics Bundle</string>
     <string name="diagnostics_export_saved">Diagnostics zip saved to: %1$s</string>
     <string name="diagnostics_export_failed">Failed to export diagnostics: %1$s</string>
+    <string name="diagnostics_open_link">Open diagnostics…</string>
+    <string name="diagnostics_dialog_title">Luker Diagnostics</string>
+    <string name="diagnostics_dialog_intro">Data root: %1$s\n\nSnapshot of the local runtime state below; copy or export the bundle if you need to share it.</string>
     <string name="crash_report_dialog_title">Previous Crash Detected</string>
     <string name="crash_report_dialog_intro">The app exited unexpectedly during the previous session. The diagnostics below were captured by the system; copy them and send to the developer.</string>
     <string name="crash_report_share_subject">Luker previous crash report</string>

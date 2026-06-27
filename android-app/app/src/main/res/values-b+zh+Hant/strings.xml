@@ -17,6 +17,9 @@
     <string name="diagnostics_export_bundle">匯出診斷壓縮包</string>
     <string name="diagnostics_export_saved">診斷壓縮包已儲存到：%1$s</string>
     <string name="diagnostics_export_failed">診斷包匯出失敗：%1$s</string>
+    <string name="diagnostics_open_link">開啟診斷資訊…</string>
+    <string name="diagnostics_dialog_title">Luker 診斷</string>
+    <string name="diagnostics_dialog_intro">資料目錄：%1$s\n\n下方是本地服務的目前狀態快照，如需回報可複製或匯出診斷壓縮包。</string>
     <string name="crash_report_dialog_title">偵測到上次異常退出</string>
     <string name="crash_report_dialog_intro">應用程式在上次執行時異常退出。以下診斷資訊由系統記錄，請複製並回報給開發者。</string>
     <string name="crash_report_share_subject">Luker 上次崩潰報告</string>

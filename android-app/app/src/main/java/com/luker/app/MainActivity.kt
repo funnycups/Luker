@@ -2245,6 +2245,14 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
+        val diagnosticsLink = TextView(this).apply {
+            text = getString(R.string.diagnostics_open_link)
+            setTextColor(android.graphics.Color.parseColor("#1976D2"))
+            paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+            setPadding(0, padding / 2, 0, 0)
+            setOnClickListener { showDiagnosticsDialog() }
+        }
+        container.addView(diagnosticsLink)
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.endpoint_dialog_title)
@@ -2375,6 +2383,39 @@ class MainActivity : AppCompatActivity() {
                 }
             },
         )
+    }
+
+    private fun showDiagnosticsDialog() {
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        val diagnostics = collectRuntimeDiagnosticsSafe()
+        val dataRoot = LukerRuntimeManager.dataRootFor(applicationContext)
+        val intro = getString(R.string.diagnostics_dialog_intro, dataRoot.absolutePath)
+        val reportView = TextView(this).apply {
+            text = diagnostics
+            setTextIsSelectable(true)
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(32, 24, 32, 24)
+        }
+        val scrollView = ScrollView(this).apply {
+            addView(reportView)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.diagnostics_dialog_title)
+            .setMessage(intro)
+            .setView(scrollView)
+            .setPositiveButton(android.R.string.ok, null)
+            .setNeutralButton(R.string.runtime_error_copy) { _, _ ->
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(ClipData.newPlainText("luker-diagnostics", diagnostics))
+                Toast.makeText(this, getString(R.string.runtime_error_copy_done), Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.diagnostics_export_bundle) { _, _ ->
+                exportAndShareDiagnosticsBundle(R.string.runtime_error_share_subject)
+            }
+            .show()
     }
 
     private fun showReportDialog(
