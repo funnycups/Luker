@@ -687,6 +687,16 @@ export function registerLocaleData() {
         'View raw record': '查看原始记录',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '会话「${0}」无法迁移到新格式，已跳过，该会话不可用。',
+        'Director will switch to a synthetic preset for prompt composition. The active preset "${0}" has unsaved changes.':
+            'Director 需要临时切换到一个合成预设来组装提示词。当前预设「${0}」有未保存的改动。',
+        'Save and continue':
+            '保存并继续',
+        'Discard and continue':
+            '丢弃并继续',
+        'Cancel director run':
+            '取消本次 Director',
+        'Director cancelled: resolve unsaved preset changes first.':
+            'Director 已取消：请先处理预设的未保存改动。',
     });
     _addLocaleData('zh-tw', {
         'Orchestrator': '多智能體編排',
@@ -1332,5 +1342,15 @@ export function registerLocaleData() {
         'View raw record': '檢視原始記錄',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '會話「${0}」無法遷移到新格式，已跳過，該會話不可用。',
+        'Director will switch to a synthetic preset for prompt composition. The active preset "${0}" has unsaved changes.':
+            'Director 需要臨時切換到一個合成預設來組裝提示詞。當前預設「${0}」有未儲存的改動。',
+        'Save and continue':
+            '儲存並繼續',
+        'Discard and continue':
+            '丟棄並繼續',
+        'Cancel director run':
+            '取消本次 Director',
+        'Director cancelled: resolve unsaved preset changes first.':
+            'Director 已取消：請先處理預設的未儲存改動。',
     });
 }

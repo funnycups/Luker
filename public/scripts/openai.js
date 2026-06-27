@@ -130,6 +130,8 @@ export {
     getLastOpenAIGenerationId,
     bindCurrentChatCompletionPresetToCharacter,
     clearCharacterBoundChatCompletionPreset,
+    saveOpenAIPreset,
+    hasUnsavedOpenAIPresetChanges,
     TokenHandler,
     IdentifierNotFoundError,
     Message,

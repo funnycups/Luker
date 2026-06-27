@@ -132,7 +132,7 @@ import { addLocaleData, getCurrentLocale, t, translate } from './i18n.js';
 import { hideLoader, showLoader } from './loader.js';
 import { loader } from './action-loader.js';
 import { MacrosParser } from './macros.js';
-import { getChatCompletionModel, oai_settings, openai_settings, openai_setting_names, sendOpenAIRequest, proxies, ZAI_ENDPOINT, stripOpenAIConnectionFieldsFromPreset } from './openai.js';
+import { getChatCompletionModel, oai_settings, openai_settings, openai_setting_names, sendOpenAIRequest, proxies, ZAI_ENDPOINT, stripOpenAIConnectionFieldsFromPreset, saveOpenAIPreset, hasUnsavedOpenAIPresetChanges, promptManager } from './openai.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { power_user, registerDebugFunction, performFuzzySearch } from './power-user.js';
 import { getPresetManager } from './preset-manager.js';
@@ -2619,6 +2619,11 @@ export function getContext() {
             get proxies() { return proxies; },
             ZAI_ENDPOINT,
             stripPresetConnectionFields: stripOpenAIConnectionFieldsFromPreset,
+            savePreset: saveOpenAIPreset,
+            hasUnsavedChanges: hasUnsavedOpenAIPresetChanges,
+            get settings() { return openai_settings; },
+            get settingNames() { return openai_setting_names; },
+            get promptManager() { return promptManager; },
         },
         textCompletion: {
             types: textgen_types,

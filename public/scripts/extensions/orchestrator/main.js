@@ -9,7 +9,6 @@ const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
-const oai_settings = __ctx.chatCompletionSettings;
 const world_info_position = __ctx.constants.wiPosition;
 import {
     buildOrchestrationEditorPopupPanelHtml,
@@ -91,7 +90,11 @@ import {
     migrateLegacyCapsuleInjectPosition,
     normalizeCapsuleInjectPosition,
 } from './capsule-injection.js';
-import { DIRECTOR_PURE_PRESET_BODY } from './pure-preset-body.js';
+import {
+    ensureDirectorPureSyntheticPreset,
+    applyDirectorPresetSwap,
+    restoreDirectorPresetSwap,
+} from './director-preset-swap.js';
 import {
     clearCurrentRun,
     finishRun,
@@ -349,85 +352,7 @@ registerExtensionApi(MODULE_NAME, {
 // session. See `director-content-payload.js`.
 const directorContentCache = createContentPayloadCache();
 
-// ── Pure-preset override (director-mode only) ──
-//
-// Director takes over the assistant message body itself; the messages
-// ST composes for what would have been the main-LLM call become the
-// `directorContentCache` story-context payload that all director agents
-// build their taskMessages on top of. If those captured messages were
-// composed using the user's main-chat preset, every preset-level prompt
-// item (Main Prompt, jailbreak, NSFW, anti-cliche, char-card prompts,
-// etc.) ends up embedded inside the orchestrator agents' context as
-// dead weight that competes with their own system prompts.
-//
-// To get a clean composition we temporarily override `oai_settings`
-// with the bundled "pure" Chat Completion preset before
-// `prepareOpenAIMessages` runs (subscribe to GENERATION_STARTED, which
-// fires at script.js:6868, well before message composition at :8144),
-// and restore it the moment `GENERATE_TAKEOVER_DISPATCH` fires
-// (script.js:8260, immediately after composition is complete). The
-// override is plugin-side only — no save to disk, no preset_settings_openai
-// rotation, no UI notification — so the user's persisted selection is
-// untouched.
-//
-// Snapshot/apply/restore follows the same shape as
-// LittleWhiteBox `_withTemporaryPreset` in
-// `extensions/third-party/LittleWhiteBox/bridges/call-generate-service.js`:
-//   - snapshot via structuredClone (JSON fallback for non-cloneable values)
-//   - apply by copying the preset body's own keys onto oai_settings
-//   - restore by deleting keys not in snapshot, then Object.assign
-//
-// `pendingPresetSnapshot` is the across-events handle. Pairing is:
-//   GENERATION_STARTED  → applyPureSyntheticPresetOverride()
-//   GENERATE_TAKEOVER_DISPATCH (top of handler) → restorePureSyntheticPresetOverride()
-//   GENERATION_ENDED / GENERATION_STOPPED → restorePureSyntheticPresetOverride() (safety net)
-//
-// The restore is idempotent (no-op when snapshot is null) so the safety
-// nets can fire freely after the primary restore on takeover dispatch.
-//
-// Agent preset resolution (director-runtime.js / director-tools.js) is
-// NOT involved here. Each director agent's chat-completion preset is
-// resolved by name through ST's normal preset lookup at agent call time,
-// completely independent of the temporary oai_settings override that
-// only governs the user-send composition.
 const DIRECTOR_TAKEOVER_GEN_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
-let pendingPresetSnapshot = null;
-
-function cloneForSettings(value) {
-    try {
-        return structuredClone(value);
-    } catch (_) {
-        return JSON.parse(JSON.stringify(value));
-    }
-}
-
-function applyPureSyntheticPresetOverride() {
-    if (pendingPresetSnapshot !== null) {
-        // Defensive: a previous override is still pending. Restore it
-        // before re-applying so we don't lose the original snapshot.
-        // This should only happen if a prior generation skipped both
-        // the primary and safety-net restore paths.
-        restorePureSyntheticPresetOverride();
-    }
-    const snapshot = cloneForSettings(oai_settings);
-    const bodyClone = cloneForSettings(DIRECTOR_PURE_PRESET_BODY);
-    for (const key of Object.keys(bodyClone)) {
-        oai_settings[key] = bodyClone[key];
-    }
-    pendingPresetSnapshot = snapshot;
-}
-
-function restorePureSyntheticPresetOverride() {
-    if (pendingPresetSnapshot === null) return;
-    const snapshot = pendingPresetSnapshot;
-    pendingPresetSnapshot = null;
-    for (const key of Object.keys(oai_settings)) {
-        if (!Object.prototype.hasOwnProperty.call(snapshot, key)) {
-            try { delete oai_settings[key]; } catch (_) { /* best-effort */ }
-        }
-    }
-    Object.assign(oai_settings, snapshot);
-}
 let orchInFlight = false;
 let activeRunInfoToast = null;
 let activeOrchRunAbortController = null;
@@ -4199,19 +4124,19 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     const lastUserMsg = simulationMessages.slice().reverse().find(m => m.role === 'user' || m.is_user);
     const quietPromptText = String(lastUserMsg?.content || lastUserMsg?.mes || '');
     // Swap to the pure preset around the capture, restore in finally. The
-    // GENERATION_STARTED listener bails on dryRun, so without this the
-    // captured prompt array would carry the user's preset NSFW prompt,
-    // jailbreak, prompt_order and custom prompts.
+    // GENERATION_AFTER_COMMANDS listener bails on dryRun, so without
+    // this the captured prompt array would carry the user's preset
+    // NSFW prompt, jailbreak, prompt_order and custom prompts.
     let capturedPromptPayload = null;
     try {
-        applyPureSyntheticPresetOverride();
+        await applyDirectorPresetSwap(context);
         capturedPromptPayload = await captureDryRunPayload(
             context,
             context?.eventTypes?.CHAT_COMPLETION_PROMPT_READY ?? 'chat_completion_prompt_ready',
             { quietPrompt: quietPromptText },
         );
     } finally {
-        try { restorePureSyntheticPresetOverride(); } catch (_) { /* best-effort */ }
+        try { restoreDirectorPresetSwap(context); } catch (_) { /* best-effort */ }
     }
     const capturedPromptArray = Array.isArray(capturedPromptPayload)
         ? capturedPromptPayload
@@ -8195,6 +8120,7 @@ jQuery(() => {
     initRunPanel();
     ensureSettings();
     saveSettingsDebounced();
+    ensureDirectorPureSyntheticPreset(context);
     wirePresetLibraryMigrationPersist();
     void rehydrateBridgedSillyTavernTools(extension_settings[MODULE_NAME]);
     // Register skill_list / skill_read / skill_search on the orchestrator's
@@ -8234,24 +8160,25 @@ jQuery(() => {
     if (context.eventTypes.GENERATION_WORLD_INFO_FINALIZED) {
         context.eventSource.on(context.eventTypes.GENERATION_WORLD_INFO_FINALIZED, onWorldInfoFinalized);
     }
-    // Pre-composition hook for director-mode pure-preset override. Fires
-    // at script.js:6868, well before prepareOpenAIMessages at :8144.
-    // Applies only for the four generation types director takes over —
-    // quiet/impersonate must not be touched, otherwise script tools
-    // running silent generations would have their composition replaced
-    // with the pure preset too.
-    if (context.eventTypes.GENERATION_STARTED) {
-        context.eventSource.on(context.eventTypes.GENERATION_STARTED, (type, _params, dryRun) => {
-            try {
-                if (dryRun) return;
-                if (!extension_settings[MODULE_NAME]?.enabled) return;
-                if (!DIRECTOR_TAKEOVER_GEN_TYPES.has(String(type || ''))) return;
-                const profile = getEffectiveProfile(getContext());
-                if (!profile || String(profile.mode || '') !== ORCH_EXECUTION_MODE_DIRECTOR) return;
-                applyPureSyntheticPresetOverride();
-            } catch (err) {
-                console.warn(`[${MODULE_NAME}] GENERATION_STARTED preset-swap handler failed:`, err);
-            }
+    // Pre-composition hook for director-mode synthetic preset swap.
+    // Fires at script.js:7146 (await emit), so an async handler that
+    // shows a user-confirm popup is awaited end-to-end before compose
+    // runs. Applies only for the four generation types director takes
+    // over — quiet / impersonate / dryRun must not be touched.
+    //
+    // The swap routes through a registered synthetic preset
+    // (`orchestrator:director-pure`), not in-place key replacement on
+    // oai_settings. If the apply throws (user cancelled at the
+    // unsaved-changes prompt), the throw bubbles out of `await emit`
+    // and stops Generate.
+    if (context.eventTypes.GENERATION_AFTER_COMMANDS) {
+        context.eventSource.on(context.eventTypes.GENERATION_AFTER_COMMANDS, async (type, _params, dryRun) => {
+            if (dryRun) return;
+            if (!extension_settings[MODULE_NAME]?.enabled) return;
+            if (!DIRECTOR_TAKEOVER_GEN_TYPES.has(String(type || ''))) return;
+            const profile = getEffectiveProfile(getContext());
+            if (!profile || String(profile.mode || '') !== ORCH_EXECUTION_MODE_DIRECTOR) return;
+            await applyDirectorPresetSwap(getContext());
         });
     }
     // Safety-net restores. Primary restore happens at the top of the
@@ -8262,12 +8189,12 @@ jQuery(() => {
     // restore function is idempotent so duplicate fires are safe.
     if (context.eventTypes.GENERATION_ENDED) {
         context.eventSource.on(context.eventTypes.GENERATION_ENDED, () => {
-            try { restorePureSyntheticPresetOverride(); } catch (_) { /* best-effort */ }
+            try { restoreDirectorPresetSwap(getContext()); } catch (_) { /* best-effort */ }
         });
     }
     if (context.eventTypes.GENERATION_STOPPED) {
         context.eventSource.on(context.eventTypes.GENERATION_STOPPED, () => {
-            try { restorePureSyntheticPresetOverride(); } catch (_) { /* best-effort */ }
+            try { restoreDirectorPresetSwap(getContext()); } catch (_) { /* best-effort */ }
         });
     }
     // Director-mode subscriber: when the active profile runs in director
@@ -8288,15 +8215,17 @@ jQuery(() => {
             const context = getContext();
             try {
                 // Restore oai_settings before doing anything else.
-                // The pure-preset override was applied at GENERATION_STARTED
-                // so that the messages now sitting on eventData.generateData.prompt
-                // (composed at script.js:8144) are free of preset-level
-                // prompt items. Composition is complete by the time this
-                // event fires, so the override has done its job and the
+                // The synthetic preset swap was applied at
+                // GENERATION_AFTER_COMMANDS so that the messages now
+                // sitting on eventData.generateData.prompt (composed
+                // at script.js:8144) are free of preset-level prompt
+                // items. Composition is complete by the time this
+                // event fires, so the swap has done its job and the
                 // user's settings must be back in place before the
-                // director loop spins up its agents (whose preset lookup
-                // happens by name and is unrelated to oai_settings).
-                restorePureSyntheticPresetOverride();
+                // director loop spins up its agents (whose preset
+                // lookup happens by name and is unrelated to
+                // oai_settings).
+                restoreDirectorPresetSwap(context);
 
                 if (!extension_settings[MODULE_NAME]?.enabled) return;
 
