@@ -3428,23 +3428,16 @@ async function getChatBoundLorebookName(chatFile, groupId = null, { avatarUrl = 
     }
 }
 
-async function hasWorldInfoFile(lorebookName) {
+function hasWorldInfoFile(lorebookName) {
     const safeName = String(lorebookName || '').trim();
     if (!safeName) {
         return false;
     }
-    try {
-        const response = await fetch('/api/worldinfo/get', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ name: safeName }),
-            cache: 'no-cache',
-        });
-        return response.ok;
-    } catch (error) {
-        console.warn('Failed to verify lorebook existence', error);
-        return false;
-    }
+    // /api/worldinfo/get synthesises `{entries:{}}` + 200 for missing files,
+    // so a network probe can't tell "missing" from "empty but present". Use
+    // the in-memory `world_names` (kept in sync via updateWorldInfoList) and
+    // match through the canonical resolver to handle case/whitespace quirks.
+    return Boolean(findCanonicalNameInList(Array.isArray(world_names) ? world_names : [], safeName));
 }
 
 async function maybeDeleteChatBoundLorebook(chatFile, groupId = null, { avatarUrl = '', characterName = '' } = {}) {
@@ -3482,7 +3475,15 @@ function getCharacterBoundImportedLorebookName(character) {
     if (!boundLorebook || !embeddedBook || !Array.isArray(embeddedBook?.entries)) {
         return '';
     }
-    return boundLorebook;
+    // The bound name only means the card *points at* a world; the embedded
+    // `character_book` is IO-only and not automatically released into a real
+    // world file on import. Only treat the binding as "an imported lorebook
+    // exists on disk" when the name actually resolves in `world_names`.
+    const canonical = findCanonicalNameInList(Array.isArray(world_names) ? world_names : [], boundLorebook);
+    if (!canonical) {
+        return '';
+    }
+    return canonical;
 }
 
 async function maybeDeleteCharacterBoundImportedLorebook(character, { alreadyPromptedLorebooks = new Set() } = {}) {
