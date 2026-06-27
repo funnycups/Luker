@@ -949,13 +949,16 @@ function charaFormatData(data, directories) {
  * Current world info entries are authoritative. Preserve originalData only as a fallback
  * for malformed/legacy files that no longer expose an entries object.
  * @param {object} char Character payload being saved
- * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {string} handle User handle
  * @param {string} worldInfoName Linked world info name
+ * @returns {Promise<{ok: true} | {ok: false, reason: 'world_not_found' | 'world_unreadable' | 'world_read_error', name: string, error?: string}>}
+ *   Structured outcome so callers (the export route) can surface failures to the user.
+ *   A missing/empty `worldInfoName` is `{ok: true}` because there is nothing to embed.
  */
 async function syncCharacterBookFromWorldInfo(char, handle, worldInfoName) {
     const normalizedWorldInfoName = String(worldInfoName || '').trim();
     if (!normalizedWorldInfoName) {
-        return;
+        return { ok: true };
     }
 
     try {
@@ -963,22 +966,29 @@ async function syncCharacterBookFromWorldInfo(char, handle, worldInfoName) {
         // The legacy fs path missed db-mode worlds entirely, and the export
         // silently shipped without a character_book.
         const canonicalName = await getWorldInfoRepo().resolveName(handle, normalizedWorldInfoName);
-        if (!canonicalName) return;
+        if (!canonicalName) {
+            return { ok: false, reason: 'world_not_found', name: normalizedWorldInfoName };
+        }
         const file = await getWorldInfoRepo().get(handle, canonicalName);
-        if (!file) return;
+        if (!file) {
+            return { ok: false, reason: 'world_unreadable', name: normalizedWorldInfoName };
+        }
 
         if (_.isObjectLike(file.entries) && !Array.isArray(file.entries)) {
             _.set(char, 'data.character_book', convertWorldInfoToCharacterBook(normalizedWorldInfoName, file.entries));
-            return;
+            return { ok: true };
         }
 
         if (file?.originalData && Array.isArray(file.originalData.entries)) {
             const fallbackCharacterBook = JSON.parse(JSON.stringify(file.originalData));
             fallbackCharacterBook.name = String(fallbackCharacterBook.name || normalizedWorldInfoName);
             _.set(char, 'data.character_book', fallbackCharacterBook);
+            return { ok: true };
         }
-    } catch {
-        console.warn(`Failed to read world info: ${normalizedWorldInfoName}. Character book will not be available.`);
+
+        return { ok: false, reason: 'world_unreadable', name: normalizedWorldInfoName };
+    } catch (err) {
+        return { ok: false, reason: 'world_read_error', name: normalizedWorldInfoName, error: String(err?.message || err) };
     }
 }
 
@@ -2515,12 +2525,28 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
             return response.sendStatus(404);
         }
 
+        // Surface a failed world info embed to the browser via a custom header so
+        // the user sees a toast instead of silently downloading a card without
+        // its lorebook. CORS-safelisted, and Access-Control-Expose-Headers is
+        // emitted by the same-origin server so fetch() can read it.
+        const applyEmbedWarning = (syncResult) => {
+            if (!syncResult || syncResult.ok) return;
+            const payload = JSON.stringify({
+                reason: syncResult.reason,
+                name: syncResult.name,
+                ...(syncResult.error ? { error: syncResult.error } : {}),
+            });
+            response.setHeader('X-Luker-Export-Warning', Buffer.from(payload, 'utf8').toString('base64'));
+            response.setHeader('Access-Control-Expose-Headers', 'X-Luker-Export-Warning');
+        };
+
         switch (request.body.format) {
             case 'png': {
                 const rawBuffer = await fsPromises.readFile(filename);
                 const rawData = read(rawBuffer);
                 const jsonObject = getStoredCharaCardV2(JSON.parse(rawData), request.user.directories);
-                await syncCharacterBookFromWorldInfo(jsonObject, request.user.profile.handle, _.get(jsonObject, 'data.extensions.world'));
+                const syncResult = await syncCharacterBookFromWorldInfo(jsonObject, request.user.profile.handle, _.get(jsonObject, 'data.extensions.world'));
+                applyEmbedWarning(syncResult);
                 unsetPrivateFields(jsonObject);
                 // Pack CardApp files into export data
                 const exportCharId = sanitize(request.body.avatar_url).replace('.png', '');
@@ -2536,7 +2562,8 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                     const json = await readCharacterData(filename);
                     if (json === undefined) return response.sendStatus(400);
                     const jsonObject = getStoredCharaCardV2(JSON.parse(json), request.user.directories);
-                    await syncCharacterBookFromWorldInfo(jsonObject, request.user.profile.handle, _.get(jsonObject, 'data.extensions.world'));
+                    const syncResult = await syncCharacterBookFromWorldInfo(jsonObject, request.user.profile.handle, _.get(jsonObject, 'data.extensions.world'));
+                    applyEmbedWarning(syncResult);
                     unsetPrivateFields(jsonObject);
                     // Pack CardApp files into export data
                     const exportCharIdJson = sanitize(request.body.avatar_url).replace('.png', '');

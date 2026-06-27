@@ -5861,4 +5861,8 @@
     ,"Cross-mode restore: converting backup into current storage engine.": "跨模式還原：正在將備份轉換為目前儲存引擎的格式。"
     ,"Restore cancelled — scratch DB connection not provided.": "已取消還原——未提供暫存資料庫連線。"
     ,"No connection URL entered; cancel and retry.": "未填寫連線 URL，請取消後再試。"
+    ,"Export warning": "匯出提示"
+    ,"Linked world book \"${0}\" was not found. The card was exported without an embedded world book.": "找不到綁定的世界書「${0}」。匯出的角色卡未攜帶內嵌世界書。"
+    ,"Linked world book \"${0}\" could not be read. The card was exported without an embedded world book.": "無法讀取綁定的世界書「${0}」。匯出的角色卡未攜帶內嵌世界書。"
+    ,"Failed to embed world book \"${0}\". The card was exported without it.": "嵌入世界書「${0}」失敗。匯出的角色卡未攜帶它。"
 }

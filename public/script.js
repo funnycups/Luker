@@ -20364,6 +20364,22 @@ jQuery(async function () {
         });
 
         if (response.ok) {
+            const warningHeader = response.headers.get('X-Luker-Export-Warning');
+            if (warningHeader) {
+                try {
+                    const decoded = JSON.parse(atob(warningHeader));
+                    const worldName = decoded?.name || '';
+                    const reason = decoded?.reason || '';
+                    const message = reason === 'world_not_found'
+                        ? t`Linked world book "${worldName}" was not found. The card was exported without an embedded world book.`
+                        : reason === 'world_unreadable'
+                            ? t`Linked world book "${worldName}" could not be read. The card was exported without an embedded world book.`
+                            : t`Failed to embed world book "${worldName}". The card was exported without it.`;
+                    toastr.warning(message, t`Export warning`, { timeOut: 8000, extendedTimeOut: 12000 });
+                } catch (err) {
+                    console.warn('Failed to parse export warning header', err);
+                }
+            }
             const filename = characters[this_chid].avatar.replace('.png', `.${format}`);
             const blob = await response.blob();
             const a = document.createElement('a');
