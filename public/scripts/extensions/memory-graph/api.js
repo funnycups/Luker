@@ -23,9 +23,18 @@
 
 const registerExtensionApi = Luker.getContext().registerExtensionApi;
 import {
+    getCurrentlyInjectedNodeIds,
+    addInjectionChangedListener,
+} from './external-api.js';
+import {
     ensureMemoryStoreLoaded,
     resolveChatKeyForSession,
     commitSessionMutation,
+    getMemoryStore,
+    findEventNodeForSeq,
+    resolveEventCardData,
+    addStoreCommitListener,
+    findAffectedAssistantSeqFromMessageIndex,
 } from './main.js';
 import { getMemoryGraphReadApi } from './read-api.js';
 import { getMemoryGraphWriteApi } from './write-api.js';
@@ -91,16 +100,36 @@ export async function openSession(context) {
 
 registerExtensionApi('memory-graph', {
     openSession,
-    // Per-character override accessors (character-overrides.js). Sibling
-    // plugins that surface per-character memory-graph config (CardApp's
-    // ctx.getMemoryGraphSchema / setMemoryGraphSchema, CEA Studio's
-    // character_get_memory_graph tool) consume these. Direct ES-module
-    // import from another plugin is forbidden by the plugin↔plugin
-    // boundary rule.
+    // Per-character override accessors (character-overrides.js).
     getSchemaScopeInfo,
     getAdvancedScopeInfo,
     persistCharacterSchemaOverride,
     removeCharacterSchemaOverride,
     persistCharacterAdvancedOverride,
     removeCharacterAdvancedOverride,
+    // Inline card / event data API — consumed by 酒馆助手 and third-party frontends.
+    onStoreCommit: (cb) => addStoreCommitListener(cb),
+    getCardDataForSeq: (context, seq) => {
+        const store = getMemoryStore(context);
+        if (!store) return null;
+        const eventNode = findEventNodeForSeq(store, Number(seq));
+        return eventNode ? resolveEventCardData(store, eventNode) : null;
+    },
+    // Injection observation — fires when recall pipeline settles on injected nodes.
+    // Callback receives { alwaysInjectIds: Set, recallSelectedIds: Set, visibleIds: Set }.
+    // Returns an unsubscribe function.
+    onInjectionChanged: (cb) => addInjectionChangedListener(cb),
+    // Snapshot of what's currently injected for a given context.
+    getCurrentInjection: (context) => getCurrentlyInjectedNodeIds(context),
+    // Resolve node objects from the store by their ids. Returns an array in
+    // the same order as the input ids (null entries for missing nodes).
+    getNodesByIds: (context, ids) => {
+        const store = getMemoryStore(context);
+        if (!store || !Array.isArray(ids)) return [];
+        return ids.map(id => store.nodes[String(id)] ?? null);
+    },
+    // Resolve the assistant seq number for a given chat message index.
+    // seq is 1-based count of extractable assistant messages up to and including msgIndex.
+    getSeqForMessageIndex: (context, messageIndex) =>
+        findAffectedAssistantSeqFromMessageIndex(context, messageIndex),
 });

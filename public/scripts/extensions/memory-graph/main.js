@@ -2277,6 +2277,14 @@ export function resolveChatKeyForSession(context) {
  *   5. Best-effort UI refresh — `refreshUiStats` early-returns when the
  *      popup isn't mounted, so this is safe in headless contexts.
  */
+const storeCommitListeners = new Set();
+
+/** Returns an unsubscribe function. */
+export function addStoreCommitListener(cb) {
+    storeCommitListeners.add(cb);
+    return () => storeCommitListeners.delete(cb);
+}
+
 export async function commitSessionMutation(context, chatKey, beforeStore, afterStore) {
     const key = String(chatKey || '').trim();
     const store = afterStore;
@@ -2310,6 +2318,7 @@ export async function commitSessionMutation(context, chatKey, beforeStore, after
         await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: false });
     }
     try { refreshUiStats(); } catch (_) { /* UI optional in headless / test env */ }
+    try { storeCommitListeners.forEach(cb => cb({ chatKey: key, store })); } catch (_) { /* listener errors are non-fatal */ }
 }
 
 /**
@@ -2871,7 +2880,7 @@ function findAssistantSeqFromPlayableSeq(context, playableSeqFrom) {
     return null;
 }
 
-function findAffectedAssistantSeqFromMessageIndex(context, messageIndex) {
+export function findAffectedAssistantSeqFromMessageIndex(context, messageIndex) {
     const targetIndex = Math.max(0, Math.floor(Number(messageIndex || 0)));
     if (!Number.isFinite(targetIndex) || targetIndex < 0) {
         return null;
@@ -13281,6 +13290,116 @@ function ensureStyles() {
         padding: 2px 7px;
     }
 }
+
+/* ── MEMORY GRAPH INLINE CARD ── */
+.mg-card {
+  --mg-amber:     #d4a853;
+  --mg-amber-dim: rgba(212,168,83,0.22);
+  --mg-amber-mid: rgba(212,168,83,0.55);
+  --mg-amber-full:rgba(212,168,83,0.88);
+  --mg-danger:    #e07a5f;
+  margin-top: 13px;
+  border-top: 1px solid var(--mg-amber-dim);
+  padding-top: 9px;
+  font-size: 13.5px;
+}
+.mg-header {
+  display: flex; align-items: stretch;
+  cursor: pointer; user-select: none;
+}
+.mg-badge {
+  display: flex; align-items: center; justify-content: center;
+  padding: 5px 8px;
+  border: 1px solid var(--mg-amber-dim); border-right: none;
+  border-radius: 2px 0 0 2px;
+  background: var(--mg-amber-dim);
+}
+.mg-badge-text {
+  font-size: 7.5px; font-weight: 700; letter-spacing: 0.15em;
+  color: var(--mg-amber-mid);
+  writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
+}
+.mg-header-main {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--mg-amber-dim);
+  border-radius: 0 2px 2px 0;
+  background: rgba(212,168,83,0.04);
+  transition: background 0.2s;
+}
+.mg-header:hover .mg-header-main { background: rgba(212,168,83,0.08); }
+.mg-header-time {
+  flex: 1; min-width: 0;
+  font-size: 13px; color: var(--mg-amber-full);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  letter-spacing: 0.02em;
+}
+.mg-toggle {
+  font-size: 11px; font-weight: 700;
+  color: var(--mg-amber-mid); flex-shrink: 0;
+  transition: color 0.2s;
+}
+.mg-header:hover .mg-toggle { color: var(--mg-amber-full); }
+.mg-body {
+  overflow: hidden; max-height: 0; opacity: 0;
+  transition: max-height 0.38s cubic-bezier(0.4,0,0.2,1), opacity 0.28s ease;
+}
+.mg-card[data-open] .mg-body { max-height: 900px; opacity: 1; }
+.mg-grid {
+  border: 1px solid var(--mg-amber-dim);
+  border-top: none;
+  border-radius: 0 0 2px 2px;
+}
+.mg-row {
+  border-top: 1px solid var(--mg-amber-dim);
+  padding: 8px 11px;
+}
+.mg-row.two-col {
+  display: grid; grid-template-columns: 1fr 1fr;
+}
+.mg-row.two-col .mg-cell + .mg-cell {
+  border-left: 1px solid var(--mg-amber-dim); padding-left: 11px;
+}
+.mg-cell { display: flex; flex-direction: column; gap: 4px; }
+.mg-label {
+  font-size: 8px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--mg-amber-mid);
+}
+.mg-label::after { content: '::'; opacity: 0.5; }
+.mg-val { line-height: 1.6; color: var(--SmartThemeBodyColor, #c8c5c5); opacity: 0.9; }
+.mg-loc-sep { color: var(--mg-amber-mid); margin: 0 1px; font-size: 11px; }
+.mg-danger-inner { display: flex; align-items: center; gap: 7px; }
+.mg-danger-pip {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--mg-danger);
+}
+.mg-danger-text { color: var(--SmartThemeBodyColor, #c8c5c5); opacity: 0.85; }
+.mg-agents { display: flex; flex-direction: column; gap: 8px; }
+.mg-agent { display: flex; flex-direction: column; gap: 3px; }
+.mg-agent-name {
+  font-size: 13.5px; font-weight: 600;
+  color: var(--mg-amber-full); letter-spacing: 0.04em;
+}
+.mg-agent-name::before { content: '▸ '; font-size: 10px; opacity: 0.6; }
+.mg-agent-goal {
+  font-size: 13px;
+  color: var(--SmartThemeBodyColor, #c8c5c5); opacity: 0.58;
+  padding-left: 14px;
+  border-left: 1px solid var(--mg-amber-dim);
+}
+.mg-summary {
+  line-height: 1.82;
+  color: var(--SmartThemeBodyColor, #c8c5c5); opacity: 0.85;
+  border-left: 2px solid var(--mg-amber-dim);
+  padding-left: 10px;
+}
+.mg-footer {
+  padding: 5px 11px;
+  border-top: 1px solid var(--mg-amber-dim);
+  font-size: 8.5px; color: var(--mg-amber-mid); opacity: 0.45;
+  letter-spacing: 0.08em; text-align: right;
+}
 </style>`);
 }
 
@@ -15526,13 +15645,103 @@ jQuery(() => {
         const runtimeContext = getContext();
         const newChatKey = getChatKey(runtimeContext);
         if (newChatKey && newChatKey !== 'invalid_target') {
+            let refreshedStore = null;
             try {
-                await refreshMemoryStoreCacheFromFloorState(runtimeContext, newChatKey);
+                refreshedStore = await refreshMemoryStoreCacheFromFloorState(runtimeContext, newChatKey);
             } catch (error) {
                 console.warn(`[${MODULE_NAME}] Failed to refresh memory store cache on CHAT_CHANGED`, error);
             }
             refreshUiStats();
+            if (refreshedStore) {
+                // Inline UI rendering is handled by memory-graph-ui extension via API.
+            }
         }
         void syncPersistentProjectionForCurrentChat();
     });
+
+    setupInlineUiHooks(getContext());
 });
+
+// ============================================================================
+// INLINE UI: hooks delegated to memory-graph-ui extension via API
+// ============================================================================
+
+function setupInlineUiHooks(_context) {
+    // Rendering is handled by the memory-graph-ui extension.
+    // This stub keeps the call site below intact.
+}
+
+/** Returns the first non-archived event node whose floor/seq range covers `seq`, or null. */
+export function findEventNodeForSeq(store, seq) {
+    if (!store || typeof store.nodes !== 'object') return null;
+    return Object.values(store.nodes).find(n => {
+        if (n.type !== 'event' || n.archived) return false;
+        if (n.floorRange && typeof n.floorRange === 'object') {
+            return seq >= n.floorRange.start && seq <= n.floorRange.end;
+        }
+        return n.seqTo ? seq === Number(n.seqTo) : false;
+    }) ?? null;
+}
+
+/**
+ * Extracts all display data for a given event node.
+ * Walks occurred_at / involved_in edges; falls back to regex on summary text.
+ * Returns { time, summaryText, location, danger, characters }.
+ * Any field may be null/empty — callers should omit those rows.
+ */
+export function resolveEventCardData(store, eventNode) {
+    const rawSummary = getNodeSummary(eventNode) || '';
+
+    let time = null;
+    let summaryText = rawSummary;
+    const timeMatch = rawSummary.match(/^时间[：:]\s*(.+?)[；;]\s*/);
+    if (timeMatch) {
+        time = timeMatch[1].trim();
+        summaryText = rawSummary.slice(timeMatch[0].length).trim();
+    }
+
+    let location = null;
+    let danger = null;
+    const characters = [];
+    const seenCharIds = new Set();
+
+    if (store && Array.isArray(store.edges)) {
+        for (const edge of store.edges) {
+            if (edge.type === 'occurred_at' && edge.from === eventNode.id) {
+                const locNode = store.nodes[edge.to];
+                if (locNode && locNode.type === 'location_state') {
+                    const f = locNode.fields || {};
+                    location = f.title || locNode.title || null;
+                    danger = f.danger || f.danger_level || null;
+                }
+            }
+            if (edge.type === 'involved_in') {
+                const charId = edge.from === eventNode.id ? edge.to
+                    : edge.to === eventNode.id ? edge.from
+                    : null;
+                if (charId && !seenCharIds.has(charId)) {
+                    seenCharIds.add(charId);
+                    const charNode = store.nodes[charId];
+                    if (charNode && charNode.type === 'character_sheet') {
+                        const f = charNode.fields || {};
+                        const name = f.title || charNode.title || null;
+                        const goal = f.goal || null;
+                        if (name) characters.push({ name, goal });
+                    }
+                }
+            }
+        }
+    }
+
+    if (!location) {
+        const m = rawSummary.match(/地点[：:]\s*(.+?)[；;\n]/);
+        if (m) location = m[1].trim();
+    }
+
+    return { time, summaryText, location, danger, characters };
+}
+
+// mgIsColorLight / mgApplyTheme / setupMgThemeObserver / mgEscHtml / mgRenderLocation
+// / injectInlineUiForSeq / refreshInlineUis — all moved to memory-graph-ui extension.
+// The functions below (findEventNodeForSeq, resolveEventCardData) remain here because
+// they are part of the memory-graph public API surface (consumed via api.js).
