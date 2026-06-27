@@ -24,7 +24,7 @@ function sleep(ms) {
 /**
  * Retry `fn` on transient errors with exponential backoff (baseMs * 2^attempt).
  *
- * Logging contract (deliberate Stage 0 choice):
+ * Logging contract (deliberate choice):
  * - On eventual success, the intermediate transient errors are SWALLOWED:
  *   no log line is emitted for any of the failed-then-recovered attempts.
  *   Log noise from successful retries vastly outweighs the debugging value

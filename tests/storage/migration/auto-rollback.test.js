@@ -212,7 +212,7 @@ describe('MigrationRunner: auto-rollback on copy failure', () => {
         // Edge case: a partial in-place migration could rm-rf the user dir as
         // part of switching engines, then fail before the new dir is built.
         // restoreFromSnapshot must handle a missing userRoot by re-creating
-        // it from the backup — the spec calls this out as idempotent.
+        // it from the backup — by contract this path is idempotent.
         await src.repos.settings.save(src.handle, { user_avatar: 'a.png' });
         const preState = snapshotTree(src.dirs.root);
 

@@ -121,7 +121,7 @@ export class MysqlEngine {
             connectTimeout: acquireTimeoutMs,
             charset: 'utf8mb4',
             // Allow multiple PK fields without auto-string casts; the
-            // composite-key handlers in Task 3 rely on raw 0/1 for is_group.
+            // composite-key handlers rely on raw 0/1 for is_group.
             namedPlaceholders: false,
             enableKeepAlive: true,
             keepAliveInitialDelay: 10_000,
@@ -236,7 +236,7 @@ export class MysqlEngine {
     }
 
     /**
-     * Per spec §4.1: mysql dumps to a text stream of newline-separated JSON-
+     * mysql dumps to a text stream of newline-separated JSON-
      * encoded `{sql, params}` records — one INSERT per row. The dump is
      * dialect-specific (mysql uses `?` placeholders); the matching engine
      * kind is recorded in `_engine_meta.json` outside this stream so a
@@ -286,7 +286,7 @@ export class MysqlEngine {
     }
 
     /**
-     * Per spec §4.1: mysql restore wipes the handle (idempotent — calls
+     * mysql restore wipes the handle (idempotent — calls
      * `deleteUser` which is itself retry-wrapped) then replays the incoming
      * `{sql, params}` lines inside ONE transaction. A failed line rolls back
      * the whole restore so the user's slot is either fully restored or
@@ -294,7 +294,7 @@ export class MysqlEngine {
      *
      * The wipe runs in its own transaction BEFORE the restore transaction
      * begins; if the restore later fails, the user is left wiped (not
-     * mid-restored). This matches the spec's "idempotent" contract: re-
+     * mid-restored). The restore is idempotent: re-
      * issuing the same restore from a good dump converges.
      *
      * Stream parsing buffers across chunk boundaries — `for await` chunks

@@ -5,7 +5,7 @@
  * snapshotUser) emits them.
  *
  * Hoisted so the writer side and the reader side cannot drift on a rename —
- * before Stage 5 Task 5 the meta/dump names lived as bare string literals in
+ * the meta/dump names previously lived as bare string literals in
  * users.js + backup.js while users-private.js declared them as local
  * constants, and changing one without the other would silently break restore.
  */

@@ -449,7 +449,7 @@ export async function runMigration({ runner, handles, logger = console }) {
                 );
                 // NOTE: do NOT print `stats.backupPath` here. The `done` event
                 // fires inside the runner's success path BEFORE its outer
-                // `finally` runs the snapshot GC (Stage 5 Task 4 default).
+                // `finally` runs the snapshot GC (the default).
                 // The path is still set on `stats` at this instant but the
                 // directory is gone by the time the operator reads the log,
                 // so "backup: <path>" sends them to a "No such file" hunt.

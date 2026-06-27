@@ -1,5 +1,5 @@
 /**
- * Skill embed lifecycle (Plan 2 Unit 5).
+ * Skill embed lifecycle.
  *
  * Wires `extensions.luker.embedded_skills_source` import/export + scope-skill
  * cleanup to the existing Luker character + preset lifecycle events. Follows

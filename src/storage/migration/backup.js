@@ -16,7 +16,7 @@ import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from '../engine-backup-entries.j
  * The timestamp uses ISO-8601 with `:` and `.` replaced by `-` so it's both
  * filename-safe and lexicographically sortable.
  *
- * Engine-dump capture (Stage 4 Task 3, spec §4.4):
+ * Engine-dump capture:
  *  - For mysql/postgres engines (and sqlite, for parity) the on-disk user dir
  *    holds only secrets/binaries — the actual user state lives in db rows.
  *    When `engine` is passed and its `kind !== 'fs'`, this also captures
@@ -24,9 +24,9 @@ import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from '../engine-backup-entries.j
  *    `<dest>/_engine_meta.json` sidecar so `restoreFromSnapshot` can replay it.
  *  - When `engine` is null/undefined OR `engine.kind === 'fs'`, the dump step
  *    is skipped — fs users have no engine-side state and the cpSync alone is
- *    a faithful snapshot. This makes the parameter strictly opt-in: every
- *    pre-Task-3 caller (auto-rollback test, runner.test.js fs↔sqlite paths)
- *    keeps working without modification.
+ *    a faithful snapshot. This makes the parameter strictly opt-in: callers
+ *    that pre-date engine-dump capture (auto-rollback test, runner.test.js
+ *    fs↔sqlite paths) keep working without modification.
  *
  * The dump is streamed straight to disk via `fs.createWriteStream` so very
  * large user payloads (multi-GB chat archives) don't have to materialize in
@@ -51,7 +51,7 @@ export async function snapshotUser({ handle, userRoot, backupRoot, engine = null
     const dest = path.join(backupRoot, `${timestamp}-${handle}`);
     fs.cpSync(userRoot, dest, { recursive: true });
 
-    // Per spec §4.4: in non-fs modes also capture an engine dump so the
+    // In non-fs modes also capture an engine dump so the
     // engine-side state (mysql/pg rows; sqlite .sqlite file) survives a
     // restore even if the on-disk user dir contained none of it.
     if (engine && engine.kind !== 'fs') {
@@ -61,7 +61,7 @@ export async function snapshotUser({ handle, userRoot, backupRoot, engine = null
             const metaPath = path.join(dest, ENGINE_META_ENTRY);
             const meta = {
                 engineKind: engine.kind,
-                // schemaVersion is fixed at 1 for Stage 4. Stage 5 will route
+                // schemaVersion is fixed at 1 today. A future change will route
                 // this through a CURRENT_SCHEMA_VERSION constant so dumps and
                 // restores can refuse mismatched schema generations.
                 schemaVersion: 1,
@@ -87,7 +87,7 @@ export async function snapshotUser({ handle, userRoot, backupRoot, engine = null
  * `snapshotUser`. The inverse of `snapshotUser` for the fs/sqlite path: a
  * verbatim recursive copy back from `backupPath` to `userRoot`.
  *
- * Engine-dump replay (Stage 4 Task 3, spec §4.4):
+ * Engine-dump replay:
  *  - When `engine` is passed and `engine.kind !== 'fs'`, after restoring the
  *    fs tree this reads `<backupPath>/_engine_dump.bin` and pipes it through
  *    `engine.restoreUser(handle, stream)`. The `_engine_meta.json` is checked
@@ -141,10 +141,10 @@ export async function restoreFromSnapshot({ handle, userRoot, backupPath, engine
     });
 
     // In db modes, replay the engine dump if the snapshot captured one. We
-    // gate on both the meta file AND the bin file being present — a snapshot
-    // taken pre-Task-3 (or for an fs engine) has neither, and there's nothing
-    // to replay. The meta file's engineKind is the source of truth for what
-    // engine wrote the dump.
+    // gate on both the meta file AND the bin file being present — older
+    // snapshots taken before engine-dump capture existed (or for an fs
+    // engine) have neither, and there's nothing to replay. The meta file's
+    // engineKind is the source of truth for what engine wrote the dump.
     if (engine && engine.kind !== 'fs') {
         const dumpPath = path.join(backupPath, ENGINE_DUMP_ENTRY);
         const metaPath = path.join(backupPath, ENGINE_META_ENTRY);
@@ -165,7 +165,7 @@ export async function restoreFromSnapshot({ handle, userRoot, backupPath, engine
 /**
  * Delete a snapshot directory created by `snapshotUser`. Used by
  * `MigrationRunner.migrateUser` to drop the snapshot once a migration has
- * succeeded (spec §4.4 finally clause: "if success and !keepSnapshot:
+ * succeeded (the migrate `finally` clause: "if success and !keepSnapshot:
  * removeSnapshot(snapshot)").
  *
  * Tolerant by design:
@@ -173,8 +173,8 @@ export async function restoreFromSnapshot({ handle, userRoot, backupPath, engine
  *  - `backupPath` already gone → no-op (a previous gc pass, manual cleanup,
  *    or a concurrent admin action could remove it; we still want migration to
  *    treat the post-condition "snapshot is gone" as satisfied).
- *  - `recursive: true, force: true` so the engine-dump sidecars from
- *    Stage 4 Task 3 (`_engine_dump.bin` + `_engine_meta.json`) are swept up
+ *  - `recursive: true, force: true` so the engine-dump sidecars
+ *    (`_engine_dump.bin` + `_engine_meta.json`) are swept up
  *    alongside the fs tree without a dedicated branch.
  *
  * Callers should null out their reference to `backupPath` afterwards so the

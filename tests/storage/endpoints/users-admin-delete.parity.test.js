@@ -1,12 +1,12 @@
-// Endpoint-level parity for POST /api/users/delete. Pre-Stage-2 the handler
+// Endpoint-level parity for POST /api/users/delete. Previously the handler
 // removed the keyv user record (and optionally fs-rm'd the user root when
 // `purge`), but never told the storage engine to drop the user's rows. In
 // db modes (mysql/postgres) that meant chats, presets, settings, world-info,
-// etc. lingered as orphans keyed on the deleted handle. After Stage 2 the
-// handler invokes `engine.deleteUser(handle)` so engine rows vanish in
+// etc. lingered as orphans keyed on the deleted handle. The handler now
+// invokes `engine.deleteUser(handle)` so engine rows vanish in
 // lockstep with the user record for db engines.
 //
-// Per spec §4.1 / §5.3, the row-sweep contract is asymmetric by mode:
+// The row-sweep contract is asymmetric by mode:
 //   mysql / postgres  : engine.deleteUser performs a transactional DELETE
 //                       sweep across every Repo-backed table — runs
 //                       UNCONDITIONALLY (purge=false still wipes rows,
@@ -184,7 +184,7 @@ describe.each(ENDPOINT_HARNESSES)('users-admin /delete on $name', ({ mode }) => 
         }
 
         // The keyv user record must also be gone — this part of the
-        // contract pre-dates Stage 2 and would already pass, but assert
+        // contract pre-dates the row-sweep change and would already pass, but assert
         // it so a future regression that removes the keyv branch is
         // caught by this same test.
         const keyvAfter = await storage.getItem(`${KEYV_PREFIX}${targetHandle}`);
@@ -192,10 +192,10 @@ describe.each(ENDPOINT_HARNESSES)('users-admin /delete on $name', ({ mode }) => 
     });
 
     test('BC: purge=false leaves fs/sqlite data intact, wipes mysql/pg engine rows', async () => {
-        // Pre-Stage-2 contract that MUST survive the Stage-2 redesign:
+        // Long-standing contract that MUST survive the row-sweep redesign:
         // an admin choosing purge=false expected the user's on-disk files
         // to stay (so a typo on the handle field doesn't nuke avatars,
-        // exports, extension state, etc.). Per spec §4.1 / §5.3:
+        // exports, extension state, etc.). Asymmetric by mode:
         //   * fs/sqlite      → engine.deleteUser is a no-op; the user dir
         //                       (and every file under it, including the
         //                       sqlite db) survives.
@@ -245,7 +245,7 @@ describe.each(ENDPOINT_HARNESSES)('users-admin /delete on $name', ({ mode }) => 
         } else {
             // mysql/postgres: engine.deleteUser runs unconditionally and
             // wipes every Repo-backed table for the handle. This is the
-            // orphan-row fix from Stage 2 Tasks 4-5.
+            // orphan-row fix.
             for (const [k, v] of Object.entries(probes)) {
                 expect({ [k]: v }).toEqual({ [k]: null });
             }

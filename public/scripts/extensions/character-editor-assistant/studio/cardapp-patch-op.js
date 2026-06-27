@@ -1,9 +1,9 @@
 // Custom edits-lib op for CardApp's 3-tier fuzzy patch semantics.
 //
-// Path 2 surface — registered at CardApp boot via direct import of
+// File-op surface — registered at CardApp boot via direct import of
 // edits-lib's registerOp. The op is a thin wrapper around the existing
-// applyPatch helper from studio.js so pre-SP-2 patch behavior is
-// preserved bit-for-bit (exact → trim trailing whitespace → tab/space
+// applyPatch helper from studio.js so patch behavior is preserved
+// bit-for-bit (exact → trim trailing whitespace → tab/space
 // indent normalization).
 
 /**

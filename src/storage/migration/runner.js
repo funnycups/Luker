@@ -153,7 +153,7 @@ export class MigrationRunner {
      *
      * `destHandle` defaults to `srcHandle` (back-compat for every existing
      * caller — admin `/storage/migrate`, CLI `storage-migrate`, tests). Cross-
-     * mode-restore (Stage 4 Task 4.x) passes a distinct dst handle so a scratch
+     * mode-restore passes a distinct dst handle so a scratch
      * source like `_xrestore_xxx` can be copied INTO a real user handle. The
      * snapshot + rollback path stays bound to `srcHandle` regardless — the
      * runner snapshots and (on failure) restores the SOURCE side; the dst is
@@ -161,7 +161,7 @@ export class MigrationRunner {
      *
      * `stats.handle` keeps `srcHandle` so existing progress consumers see the
      * same identifier they saw before — they don't care about destHandle (it's
-     * an orchestrator concern); cross-mode callers in Task 4 will observe the
+     * an orchestrator concern); cross-mode callers will observe the
      * scratch source handle, which is correct because the runner is operating
      * ON the source.
      */

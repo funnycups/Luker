@@ -1,5 +1,5 @@
 /**
- * Plan Task 10 — HTTP router skeleton for `/api/sync/v1/`.
+ * HTTP router skeleton for `/api/sync/v1/`.
  *
  * Verifies:
  *   - `GET /health` is reachable through the mounted router.
@@ -9,12 +9,12 @@
  *
  * The basic-auth bypass that `isBasicAuthExemptRequest` performs for
  * `/session/*` paths is covered by `tests/basicAuth.test.js`. The full
- * authed-app integration (where `/health` itself is challenged) is a
- * Task 13 concern.
+ * authed-app integration (where `/health` itself is challenged) is exercised
+ * in `full-flow.test.js`.
  *
- * Storage mode is irrelevant for this task — no repo calls happen — so
+ * Storage mode is irrelevant for this skeleton — no repo calls happen — so
  * the test only runs against `fs` to keep the inner loop fast. Storage
- * gating becomes Task 12's responsibility.
+ * gating is enforced by the session-lifecycle layer.
  */
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import request from 'supertest';
@@ -58,7 +58,7 @@ describe.each(FS_HARNESSES)('sync router skeleton on $name', ({ mode }) => {
 
         expect(r.status).toBe(200);
         // headOid is null on a freshly-initialized shadow (no commit yet);
-        // Task 13 extended the manifest with this field so the puller's
+        // the manifest exposes this so the puller's
         // orchestrator can learn the peer's HEAD in a single call.
         expect(r.body).toEqual({ handle: 'alice', peerId: 'alice@phone', expiresAt, headOid: null });
     });

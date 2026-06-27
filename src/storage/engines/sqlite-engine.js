@@ -73,7 +73,7 @@ export class SqliteEngine {
     }
 
     /**
-     * Per spec §4.1: sqlite returns a binary stream of the per-user .sqlite
+     * sqlite returns a binary stream of the per-user .sqlite
      * file. Uses better-sqlite3's online backup API for crash-consistency
      * under concurrent writes (`db.backup(tmpPath)` is preferable to a raw
      * `fs.createReadStream` on the live file, which could capture a half-baked
@@ -97,7 +97,7 @@ export class SqliteEngine {
     }
 
     /**
-     * Per spec §4.1: sqlite restore writes the incoming bytes into
+     * sqlite restore writes the incoming bytes into
      * `dirs.root/luker-storage.sqlite`. Closes + evicts the cached `Database`
      * handle first so the rename doesn't race an open handle (Windows refuses
      * to replace open files; *nix would leave readers on a dangling inode).

@@ -148,7 +148,7 @@ describe.each(CONTRACT_HARNESSES)('engine.deleteUser on $name', ({ make }) => {
         await h.engine.deleteUser(handle);
 
         // Probe every Repo-backed resource type after deleteUser. The
-        // expected post-state is mode-dependent per the spec.
+        // expected post-state is mode-dependent.
         const probes = await h.engine.withTransaction(handle, async (tx) => {
             const out = {};
             out.chat = await tx.getResource({ kind: 'chat', handle, charDir: 'Alice', name: 'c1' });

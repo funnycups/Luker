@@ -4,8 +4,8 @@
 /**
  * CPA — plugin-owned system-prompt builders + session-mode constants.
  *
- * Ported verbatim from cpa-iteration-adapter.js (the shell-driven adapter
- * that Stage 3 retires). This module exposes only the static, side-effect-
+ * Ported verbatim from cpa-iteration-adapter.js (the previous
+ * shell-driven adapter). This module exposes only the static, side-effect-
  * free pieces that build text strings for the LLM:
  *
  *   - SESSION_MODES / SESSION_MODE_DEFAULT / sanitizeSessionMode

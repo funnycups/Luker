@@ -1031,8 +1031,8 @@ export async function readLegacyCeaEditorSessions(context, avatar) {
  * Read the raw legacy character-iteration popup session bucket for an avatar.
  *
  * The deleted CHARACTER_REPLACED auto-popup persisted sessions to
- * `extension_settings.character_editor_assistant.popupSessionsV2[char_<avatar>]`
- * (Stage 2 spec). After M3 removed that popup, those sessions became orphans
+ * `extension_settings.character_editor_assistant.popupSessionsV2[char_<avatar>]`.
+ * After that popup was removed, those sessions became orphans
  * the new unified-popup migration ignored. This reader gives the migrator a
  * second source so that history is recovered on first open.
  *

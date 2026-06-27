@@ -1,5 +1,5 @@
 /**
- * Plan Task 12 — `/session/offer` and `/session/close` endpoints.
+ * `/session/offer` and `/session/close` endpoints.
  *
  * Exercises the session-bootstrap flow that turns the authenticated user's
  * basic-auth identity into a multi-use bearer token for the rest of
@@ -88,7 +88,7 @@ describe.each(FS_HARNESSES)('sync session lifecycle on $name', ({ mode }) => {
         // or leave it out; non-array input falls back to empty rather than
         // throwing or being stored as a wrong-shape payload. The session
         // payload itself is not externally readable, but the downstream
-        // orchestrator (Task 13) trusts `categories` to be an array.
+        // orchestrator trusts `categories` to be an array.
         const r = await request(harness.app)
             .post('/api/sync/v1/session/offer')
             .send({ peerId: `${harness.handle}@phone`, categories: 'not-an-array' });

@@ -12,7 +12,7 @@
  *   - render   (Markdown rendering for assistant messages)
  *   - edits    (`applyEdits` from `lib/edits/`)
  *
- * Layout per sub-spec §4 (Q10 N/A for MG — no reference picker, no mode):
+ * Layout (Q10 N/A for MG — no reference picker, no mode):
  *
  *   ┌────────────────────────────────────────────┐
  *   │ <details> History … New, Clear </details>  │
@@ -157,10 +157,9 @@ function isAbortError(err, signal) {
 // These run at module scope (not inside `openSchemaIterationStudio`) so unit
 // tests can import `_testOnly_renderMgSchemaPreviewPane` directly without
 // instantiating the popup. The renderer is pure: given `live` (schema array)
-// + pending edits, return preview HTML. Snippets B + C from the
-// implementation plan; duplicated rather than extracted per spec §B because
-// the other 4 popups (CPA / Orchestrator / CEA char / CEA editor) each get
-// their own copy.
+// + pending edits, return preview HTML. Duplicated rather than extracted
+// because the other 4 popups (CPA / Orchestrator / CEA char / CEA editor)
+// each get their own copy.
 //
 // MG sandbox-diff caveat: a single tool call produces one coarse
 // `set('', newSchema)` edit. `computeChangedPathSet` therefore returns
@@ -2019,8 +2018,8 @@ export async function openSchemaIterationStudio(deps) {
 
     // ──────────────────────────────────────────────────────────────────
     // Apply pending edits. `applyEdits(edits, live)` returns
-    // `{ newLive, clean, conflicts, alreadyDone }`. Per sub-spec §6 / §9
-    // we do NOT surface a conflict UI: just commit `newLive` and silently
+    // `{ newLive, clean, conflicts, alreadyDone }`. We do NOT surface a
+    // conflict UI: just commit `newLive` and silently
     // drop any conflicting / already-done edits.
     //
     // `state.pendingEdits` is cleared only after `commitLiveToSchema`

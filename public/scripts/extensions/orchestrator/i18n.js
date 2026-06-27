@@ -446,7 +446,7 @@ export function registerLocaleData() {
         'Apply without tools': '导入但不应用工具',
         'View body...': '查看代码……',
         'No custom tools yet': '尚未添加自定义工具',
-        // Skills feature (Plan 1 + Plan 2) — skill manager subpanel,
+        // Skills feature — skill manager subpanel,
         // per-agent skill chips, inline editor, embed dialogs, bundled
         // browser tab, and skill block headers in ui-templates.js.
         'Skills': 'Skills',
@@ -1098,7 +1098,7 @@ export function registerLocaleData() {
         'Apply without tools': '匯入但不套用工具',
         'View body...': '檢視程式碼……',
         'No custom tools yet': '尚未新增自訂工具',
-        // Skills feature (Plan 1 + Plan 2) — see zh-cn block above for context.
+        // Skills feature — see zh-cn block above for context.
         'Skills': 'Skills',
         'Loading skills...': '正在載入 Skills……',
         'Skill': 'Skill',

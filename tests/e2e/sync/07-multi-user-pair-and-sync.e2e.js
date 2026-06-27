@@ -1,18 +1,18 @@
 // Multi-user LAN Sync e2e — paired alice@A and alice@B with basic-auth
 // across the wire.
 //
-// This is the load-bearing spec that proves the multi-user workaround is
+// This is the load-bearing test that proves the multi-user workaround is
 // dead. With `enableUserAccounts: true` the responder's /session/offer
-// route demands a basic-auth header (Task 6's shim); the requester's
+// route demands a basic-auth header; the requester's
 // /pair/accept route persists the offered peerAuth so subsequent Sync
-// now calls don't need it supplied again (Task 8). Both pieces have
-// dedicated in-process tests; this spec drives the full UI loop and
+// now calls don't need it supplied again. Both pieces have
+// dedicated in-process tests; this e2e drives the full UI loop and
 // confirms the pair, the live-data reconcile, and the stored-credential
 // affordance all land on a real browser pair.
 //
 // Server-side bootstrap user is `default-user` (admin, no password) on
 // both servers; both admins then create `alice` with the same password
-// so the cross-handle gate (Task 7) never fires.
+// so the cross-handle gate never fires.
 
 import { test, expect, request as pwRequest } from '@playwright/test';
 import fs from 'node:fs';
@@ -136,7 +136,7 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
         await loginAs(pageB, B.baseURL, { handle: 'alice', password: ALICE_PASSWORD });
 
         // A generates the link. peerId prefix will be 'alice' because the
-        // session belongs to alice — that's the spec contract the Task 7
+        // session belongs to alice — that's the contract the
         // gate checks against.
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
@@ -146,8 +146,8 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
         expect(link).toMatch(/^luker-sync:.*peer=alice%40/);
 
         // B accepts WITH basic-auth credentials. Without this, A's
-        // /session/offer 401s in multi-user mode (Task 6 only allows
-        // the shim when the caller passes valid Basic creds; it never
+        // /session/offer 401s in multi-user mode (the multi-user shim only allows
+        // a sync session when the caller passes valid Basic creds; it never
         // grants anonymous cross-handle access).
         await openLanSyncPanel(pageB);
         const acceptOutcome = await acceptPairingLink(pageB, link, {
@@ -168,7 +168,7 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
         }
 
         // The reconcile step writes A's seeded world into B's live data
-        // UNDER ALICE'S HANDLE — not default-user. If the Task 6 shim
+        // UNDER ALICE'S HANDLE — not default-user. If the multi-user shim
         // had degenerated to "treat all callers as default-user", the
         // file would land in B's `default-user/worlds/` instead.
         const expectedPath = path.join(B.dataRoot, 'alice', 'worlds', `${SEED_WORLD}.json`);
@@ -182,8 +182,8 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
 
         // Stored-credentials affordance: the peer row's "Clear
         // credentials" button only renders when /peers reported
-        // hasStoredCredentials === true for this peer. The Task 8 spec
-        // pins the server side; here we prove the UI consumed it.
+        // hasStoredCredentials === true for this peer. The server side
+        // is pinned by in-process tests; here we prove the UI consumed it.
         await pageB.locator('.lanSyncTabPeers').click();
         const peerRow = pageB.locator('.lanSyncPeerRow', { hasText: 'A device' });
         await expect(peerRow.locator('.lanSyncPeerClearAuthButton')).toBeVisible({ timeout: 5_000 });

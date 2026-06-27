@@ -4,7 +4,7 @@
 /**
  * Orchestrator — AI iteration popup (plugin-owned).
  *
- * Stage 5 replacement for the iter-studio shell-driven adapter
+ * Replacement for the legacy iter-studio shell-driven adapter
  * (`iteration-adapter.js`). Single-column chat surface that wires the
  * `iteration-library/*` helpers directly:
  *   - storage  (per-mode, per-scope session bucket via `session-store.js`)
@@ -138,7 +138,7 @@ function getCea() {
     }
     return api;
 }
-// Plan 2 Unit 7: iter-studio skill management catalog. Spliced into the
+// Iter-studio skill management catalog. Spliced into the
 // tool catalog alongside CONTROL_TOOL_DEFS + lorebook reads/writes, routed
 // through the inline-executed path. Three execution shapes:
 //   - 4 inventory tools just return read-only data
@@ -243,7 +243,7 @@ function isSimulateTool(name) {
 // lorebook writes, and simulate all share this path; sandbox-edit tools
 // (luker_orch_set_*) do not — they become diff proposals the user
 // reviews + applies via the popup, never reaching the model directly.
-// Skill iter-studio tools (Plan 2 Unit 7) also use the inline-executed
+// Skill iter-studio tools also use the inline-executed
 // path: 4 inventory tools just return server state, 4 working-profile
 // tools (3 policy bindings + skill_replace_in_systemprompt) emit a
 // sandbox-diff pending edit, and 8 authoring tools (7 spec + extract)
@@ -1838,7 +1838,7 @@ export async function openOrchestratorIterationStudio(deps) {
 
     // ──────────────────────────────────────────────────────────────────
     // Chat-message rendering. Orchestrator delegates to
-    // `iteration-library/ui/message.renderMessageCard` (M1.4) so the
+    // `iteration-library/ui/message.renderMessageCard` so the
     // four iter-library popups (CPA, MG schema, Orch, CEA char) share
     // one visual language for tool-call chips, per-round edit cards,
     // applied/rolled-back stamps, and the Regenerate / Rollback row.
@@ -2063,7 +2063,7 @@ export async function openOrchestratorIterationStudio(deps) {
         // decides commit target via getIterationDefaultScope() so the button
         // can't commit to the wrong scope after a parallel character switch.
         // Delegates to the shared `iteration-library/ui/apply` component
-        // (M1.7) for the row HTML so the four iter-library popups stay
+        // for the row HTML so the four iter-library popups stay
         // visually synchronized; the component emits
         // `${actionAttribute}="apply-batch"` / `discard-batch` and the
         // handlers below match those values. `pendingMessage` is a
@@ -2324,7 +2324,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 return name !== CONTROL_TOOL_NAMES.resetToBlank
                     && name !== CONTROL_TOOL_NAMES.resetToGlobal;
             });
-        // Plan 2 Unit 7: skill-management tools (17 total: 4 inventory + 7
+        // Skill-management tools (17 total: 4 inventory + 7
         // authoring + 3 policy + 3 migration) are always advertised — they're
         // scope-agnostic (server-side scopes are passed in args) and the
         // iter-studio AI uses them to inspect / author / migrate skills
@@ -2347,7 +2347,7 @@ export async function openOrchestratorIterationStudio(deps) {
             buildAiIterationSystemPrompt(settings, helperSession),
             helperSession,
         );
-        // Plan 2 Unit 7: append the skills discipline + visible-catalog
+        // Append the skills discipline + visible-catalog
         // block. The augment helper is a no-op when the working profile
         // has no long systemPrompts AND no visible skills, so the prompt
         // stays clean for sessions that aren't doing skill work.
@@ -2555,7 +2555,7 @@ export async function openOrchestratorIterationStudio(deps) {
         // listing chat-bound and globally-active books only.
         const avatarForReads = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
         const persistedToolResults = [];
-        // Plan 2 Unit 7: skill_bind_to_agent / skill_unbind_from_agent /
+        // skill_bind_to_agent / skill_unbind_from_agent /
         // skill_set_mode_defaults / skill_replace_in_systemprompt mutate the
         // working profile via runSkillIterStudioTool, which returns a coarse
         // `{op:'set', path:'', oldValue, newValue}` pending edit alongside
@@ -2612,7 +2612,7 @@ export async function openOrchestratorIterationStudio(deps) {
                         statusLabel = 'ok';
                     }
                 } else if (isSkillIterStudioTool(call?.name)) {
-                    // Plan 2 Unit 7: dispatch the skill iter-studio tool.
+                    // Dispatch the skill iter-studio tool.
                     // Three result shapes:
                     //   - pendingEdit: policy-binding / systemPrompt-splice
                     //     tools mutate a clone of the working profile and

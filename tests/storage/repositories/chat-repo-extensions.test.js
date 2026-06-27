@@ -1,7 +1,7 @@
 // Contract tests for the ChatRepo filtered-list / info / search / metadata
-// helpers added in db-parity Phase 5. Each describe.each(CONTRACT_HARNESSES)
+// helpers. Each describe.each(CONTRACT_HARNESSES)
 // re-runs against fs, sqlite, mysql, and postgres so the endpoint migrations
-// in later phases can rely on identical semantics.
+// can rely on identical semantics.
 
 import { CONTRACT_HARNESSES } from '../harness/contract-harness.js';
 import { ChatRepo } from '../../../src/storage/repositories/chat-repo.js';

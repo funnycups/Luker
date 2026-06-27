@@ -1,10 +1,10 @@
 /**
- * Inline skill editor (Plan 2 Unit 4).
+ * Inline skill editor.
  *
  * Launched from the Skill Manager panel's "Edit" or "Create new" actions.
  * The popup body is a two-pane layout: a file tree on the left and a
  * <textarea>-based editor on the right. All persistence flows through
- * `context.skills.*` — the JS API from Plan 1 Unit 5.
+ * `context.skills.*`.
  *
  * Save semantics use writeFile + expectedSha256 optimistic locking. The
  * server's writeFile returns the new sha256 on success, which we cache so
@@ -18,7 +18,7 @@
  * studio loads codemirror.bundle.js but only for scripted use; pulling that
  * here would mean async loading for a feature that just needs typing
  * + saving. We leave the upgrade path open (the textarea selector is the
- * only DOM coupling) — Unit 8 / Plan 3 can swap in CodeMirror later.
+ * only DOM coupling) — a richer editor can swap in later.
  *
  * File-delete: a per-file delete REST endpoint exists (DELETE
  * /api/skills/:scope/:name/file?path=...), exposed as
@@ -91,7 +91,7 @@ export function parseFrontmatterShape(content) {
 /**
  * Generate the initial SKILL.md template for a brand-new skill. Server
  * will re-validate via parseSkillFrontmatter on install; this template
- * matches the bundled-skill scaffold style (Plan 1 Unit 7).
+ * matches the bundled-skill scaffold style.
  *
  * @param {string} name
  * @param {string} description

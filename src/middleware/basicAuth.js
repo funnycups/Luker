@@ -26,8 +26,6 @@ const LAN_MIGRATION_TRANSFER_PATH_PATTERN = new RegExp(`^${LAN_MIGRATION_PATH_PR
  * `/api/sync/v1/session/offer` is also excluded: it is the route that
  * ISSUES tokens, so it cannot itself be token-gated. The initiator hits
  * it from their own browser with the standard per-user credentials.
- *
- * See `docs/superpowers/specs/lan-sync.md` §2.4.
  */
 const SYNC_SESSION_PATH_PATTERN = /^\/api\/sync\/v1\/session\//i;
 const SYNC_OFFER_PATH_PATTERN = /^\/api\/sync\/v1\/session\/offer\/?$/i;

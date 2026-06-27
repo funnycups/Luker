@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups
 //
-// Cross-process migration lock — spec §C item 6 / §4.5.
+// Cross-process migration lock.
 //
 // Two entry points (admin route + CLI) can target the same dataRoot at the
 // same time. Without a shared lock they'd race on the source→dest copy and
@@ -72,7 +72,7 @@ function writeLockFileOverwrite(lockPath, payload) {
 }
 
 /**
- * Per spec §4.5: acquire a cross-process migration lock by writing a JSON
+ * Acquire a cross-process migration lock by writing a JSON
  * lockfile at `<dataRoot>/_migration.lock`. Refuses if a valid (non-expired)
  * lock from a different holder exists. Auto-evicts expired locks and corrupt
  * lockfiles (recovery from a crashed prior holder).
@@ -130,7 +130,7 @@ export async function acquireMigrationLock({ dataRoot, holderId, ttlMs = DEFAULT
 }
 
 /**
- * Per spec §4.5: release the lock IFF currently held by us. No-op if the
+ * Release the lock IFF currently held by us. No-op if the
  * file is missing, corrupt, or held by a different holder. Callers wire
  * this into `finally` so a thrown migration error never leaks the lock.
  *
@@ -160,7 +160,7 @@ export async function releaseMigrationLock({ dataRoot, holderId }) {
 }
 
 /**
- * Per spec §4.5 ("调用方持续 heartbeat 续期"): arm a background timer that
+ * Heartbeat-driven TTL refresh: arm a background timer that
  * re-acquires the lock with the same holderId on a fixed interval. Same-holder
  * re-acquire is treated as a TTL refresh by `acquireMigrationLock` (see the
  * `sameHolder` branch), so each tick simply pushes `expiresAt` forward.

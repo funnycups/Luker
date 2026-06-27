@@ -160,8 +160,8 @@ export async function hasObjectLocally({ dir, gitdir, oid }) {
  * into the local ODB, then enqueue its children. Returns the oids written
  * this run (useful for progress reporting and for tests).
  *
- * Implements spec §5.2's pseudocode. `fetchObject` is injected so this module
- * stays transport-agnostic — the HTTP layer (Task 11) will wrap it around
+ * `fetchObject` is injected so this module
+ * stays transport-agnostic — the HTTP layer wraps it around
  * `GET /session/object/<oid>`, but tests just call `readObjectForWire` against
  * a second shadow repo.
  *

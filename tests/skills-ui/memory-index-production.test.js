@@ -8,21 +8,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * Plan 2 Unit 1 — Production memoryIndex wiring.
+ * Production memoryIndex wiring.
  *
- * Plan 1 mounted createSkillsRouter with a single shared `memoryIndex` value;
- * production passed `null`, so REST writes never invalidated any cache. Plan
- * 2 Unit 1 fixes that by lifting the shared instance to a per-request lookup
- * (`getMemoryIndex(req)`) so each user's index is isolated:
+ * createSkillsRouter takes a per-request `getMemoryIndex(req)` resolver so
+ * each user's index is isolated:
  *   - alice writes → only alice's index.invalidate() runs
  *   - bob's index is untouched
  *   - reads never invalidate either user's index
  *
- * The router signature change is also a small backward-compat break for the
- * existing `memoryIndex:` callers — see tests/skills/api-rest.test.js for the
- * updated usage; that file is the only other in-tree caller.
+ * tests/skills/api-rest.test.js is the only other in-tree caller using the
+ * shared-instance shortcut.
  */
-describe('Production memoryIndex wiring (Plan 2 Unit 1)', () => {
+describe('Production memoryIndex wiring', () => {
     let app, tmpRoot1, tmpRoot2, repo1, repo2, idx1, idx2;
 
     beforeEach(async () => {

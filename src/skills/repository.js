@@ -126,7 +126,6 @@ export function createSkillRepository(dataRoot) {
      *
      * Note: if an individual skill's SKILL.md is malformed (bad YAML, name mismatch, etc.),
      * that skill is silently skipped with a console.warn and excluded from results.
-     * Plan 2 will surface skip events via an event channel for UI to display.
      */
     async function list({ scope }) {
         if (scope === 'all') {

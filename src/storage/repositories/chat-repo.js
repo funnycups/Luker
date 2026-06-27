@@ -189,7 +189,7 @@ export class ChatRepo {
         });
     }
 
-    // Filtered list helpers added in db-parity Phase 5. Each one is a thin
+    // Filtered list helpers. Each one is a thin
     // shape around the engine-level filter contract so endpoints can avoid
     // direct fs scans.
 

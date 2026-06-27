@@ -1,4 +1,4 @@
-// Phase 8 endpoint parity: stats.recreateStats must drive aggregates from
+// Endpoint parity for stats.recreateStats: it must drive aggregates from
 // ChatRepo so a db-mode user's stats survive boot-time refresh + /recreate.
 
 import fs from 'node:fs';

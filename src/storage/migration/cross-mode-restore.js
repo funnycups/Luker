@@ -1,6 +1,5 @@
 // Cross-mode restore orchestrator. Called by restoreUserBackupArchive when
-// engineMeta.engineKind !== currentEngine.kind. See
-// docs/superpowers/specs/2026-06-26-cross-mode-backup-recovery-design.md §5.2.
+// engineMeta.engineKind !== currentEngine.kind.
 //
 // Flow:
 //   1. acquireMigrationLock + setReadOnly(true)

@@ -1,7 +1,7 @@
-// Per spec §4.4 finally clause: "if success and !keepSnapshot: removeSnapshot(snapshot)".
+// Snapshot GC after migrateUser: "if success and !keepSnapshot: removeSnapshot(snapshot)".
 //
-// Today's `MigrationRunner.migrateUser` leaves the snapshot dir on disk forever
-// (the Task 1 design intentionally deferred GC: keep the snapshot around so a
+// Earlier versions of `MigrationRunner.migrateUser` left the snapshot dir on disk forever
+// (the original design intentionally deferred GC: keep the snapshot around so a
 // failed migration is forensically inspectable). For routine successful
 // migrations the snapshot is dead weight — admins want it gone.
 //
@@ -13,7 +13,7 @@
 // Modelled on tests/storage/migration/auto-rollback.test.js (same fs harness,
 // same fault-injection style) — kept in this suite rather than folded into
 // auto-rollback.test.js because the gc concern is orthogonal and a separate
-// file is easier to grep for when the feature is referenced from the spec.
+// file is easier to grep for.
 
 import fs from 'node:fs';
 import os from 'node:os';

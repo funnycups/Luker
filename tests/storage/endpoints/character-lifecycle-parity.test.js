@@ -1,4 +1,4 @@
-// Phase 7 endpoint parity: character lifecycle (rename/delete) must keep
+// Endpoint parity for character lifecycle (rename/delete): they must keep
 // chat data in step with the avatar, and /characters/chats now drives
 // chat_size + date_last_chat through ChatRepo so it doesn't report zero in
 // db modes.

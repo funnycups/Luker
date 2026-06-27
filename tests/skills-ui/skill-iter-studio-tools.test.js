@@ -86,14 +86,14 @@ beforeEach(() => {
 
 // ── Tool catalog shape ───────────────────────────────────────────────────
 //
-// Spec §6.1 categories: inventory (4) + authoring (7) + policy binding (3) +
-// migration helpers (2) = 16 tools total. The migration category dropped from
-// 3 to 2 when skill_propose_extraction was deleted — extraction-candidate
-// judgment is the iter-studio AI's job, not a regex heuristic baked into
-// this module.
+// Tool catalog covers four categories: inventory (4) + authoring (7) +
+// policy binding (3) + migration helpers (2) = 16 tools total. The
+// migration category dropped from 3 to 2 when skill_propose_extraction
+// was deleted — extraction-candidate judgment is the iter-studio AI's
+// job, not a regex heuristic baked into this module.
 
 describe('SKILL_ITER_STUDIO_TOOL_DEFS — catalog shape', () => {
-    test('exposes all 16 spec-listed tools (4 inventory + 7 authoring + 3 policy + 2 migration)', () => {
+    test('exposes all 16 catalog-listed tools (4 inventory + 7 authoring + 3 policy + 2 migration)', () => {
         expect(SKILL_ITER_STUDIO_TOOL_DEFS).toHaveLength(16);
         expect(SKILL_ITER_STUDIO_TOOL_NAMES).toHaveLength(16);
     });
@@ -123,7 +123,7 @@ describe('SKILL_ITER_STUDIO_TOOL_DEFS — catalog shape', () => {
         }
     });
 
-    test('catalog covers all four spec categories', () => {
+    test('catalog covers all four categories', () => {
         const names = new Set(SKILL_ITER_STUDIO_TOOL_NAMES);
         // inventory
         for (const n of ['skill_list_visible', 'skill_inspect', 'skill_read_content', 'skill_search_content']) {

@@ -795,13 +795,13 @@ async function handleNewFile() {
 
 // ==================== Studio Lifecycle ====================
 
-// One-shot wipe of brief-era SP-2 session bucket (`cardapp_studio_sessions_v2`).
-// The brief iteration-studio CardApp adapter (May 2026) wrote sessions to a
-// new namespace because it changed the on-disk shape; reverting to the
+// One-shot wipe of the brief-era session bucket (`cardapp_studio_sessions_v2`).
+// The brief iteration-studio CardApp adapter wrote sessions to a new
+// namespace because it changed the on-disk shape; reverting to the
 // standalone studio means those sessions are no longer reachable, so we
 // clear them once to free the sidecar slot. CardApp files on disk are
-// untouched. Pre-SP-2 sessions in `cardapp_studio_sessions` were already
-// wiped by the SP-2 adapter itself and cannot be recovered.
+// untouched. Earlier sessions in `cardapp_studio_sessions` were already
+// wiped by the brief-era adapter itself and cannot be recovered.
 const SP2_WIPE_FLAG_KEY = 'cardapp_studio_sp2_wiped_v1';
 
 async function wipeSp2EraSessionsIfNeeded(avatar) {
@@ -826,7 +826,7 @@ async function wipeSp2EraSessionsIfNeeded(avatar) {
         }
         localStorage.setItem(SP2_WIPE_FLAG_KEY, '1');
     } catch (e) {
-        console.warn('[CardApp Studio] SP-2 session wipe failed', e);
+        console.warn('[CardApp Studio] brief-era session wipe failed', e);
     }
 }
 
@@ -843,7 +843,7 @@ export async function openCardAppStudio(charId) {
  currentAvatar = String(character?.avatar || '').trim();
  isStudioOpen = true;
 
- // SP-2 → Path 2 migration: one-shot wipe of brief-era session bucket.
+ // One-shot wipe of brief-era session bucket.
  await wipeSp2EraSessionsIfNeeded(currentAvatar);
 
  // Ensure skeleton files exist

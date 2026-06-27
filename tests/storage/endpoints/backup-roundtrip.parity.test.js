@@ -1,8 +1,8 @@
 // Round-trip parity: backup → wipe → restore across all 4 storage engines.
 //
-// Pre-Stage-3 the backup ZIP captured only the on-disk file tree, so users
+// Previously the backup ZIP captured only the on-disk file tree, so users
 // running sqlite/mysql/postgres ended up with archives that round-tripped to
-// empty databases. Spec §5.1 / §5.2 say the ZIP must also carry an opaque
+// empty databases. The ZIP must also carry an opaque
 // `_engine_dump.bin` produced by `engine.dumpUser`, accompanied by an
 // `_engine_meta.json` descriptor whose `engineKind` is validated on restore
 // and consumed by `engine.restoreUser` instead of being written to disk.

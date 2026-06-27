@@ -10,7 +10,7 @@
 // './public/img/ai4.png' which is cwd-relative and brittle inside Jest).
 //
 // Test setup is the same multer shim pattern as
-// `chats-import.parity.test.js` Tasks 1+2: place the zip on disk in a temp
+// `chats-import.parity.test.js`: place the zip on disk in a temp
 // folder, synthesize `request.file`, POST through the real
 // `/api/characters/import` route so the production handler runs unchanged.
 

@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Stage 1 — UI-driven full adapter smoke. For each of the four iter-studio
+ * UI-driven full adapter smoke. For each of the four iter-studio
  * consumers (orchestrator, memory-graph, CEA Character, CPA), opens the
  * plugin's iter-studio popup via the host UI, clicks "New session", and
  * verifies the shell renders without shell-side errors.
  *
- * Stage 1 is a library extraction refactor — adapter contracts and popup
- * shell behavior are unchanged. This smoke catches accidental shell or
+ * Adapter contracts and popup shell behavior are unchanged by the
+ * library extraction refactor. This smoke catches accidental shell or
  * adapter wiring breakage that the unit suites might miss.
  *
  * Selector discovery notes (see iteration-studio/template.js + each
@@ -55,8 +55,8 @@ async function awaitMainUI(page) {
 }
 
 // Errors we capture as "shell errors" must be related to the iter-studio
-// shell, the new iteration-library, or behaviours touched by Stage 1
-// (structured-clone failures around adapter open/close). Page-wide
+// shell, the new iteration-library, or behaviours around adapter
+// open/close (structured-clone failures). Page-wide
 // pageerrors from unrelated pre-existing issues (e.g. the known
 // `Duplicate export of 'applyPatch'` in character-editor-assistant/
 // studio/ai-chat.js on `release`) are out of scope for this smoke.
@@ -151,7 +151,7 @@ async function openAdapterAndSmoke(page, { name, openButton, popupRoot, newSessi
     return { skipped: false };
 }
 
-test.describe('Stage 1 — UI-driven iter-studio adapter smoke', () => {
+test.describe('UI-driven iter-studio adapter smoke', () => {
     test('open + new-session smoke for each of 4 adapters', async ({ page }) => {
         const shellErrors = [];
         await captureShellErrors(page, shellErrors);
@@ -163,7 +163,7 @@ test.describe('Stage 1 — UI-driven iter-studio adapter smoke', () => {
                 name: 'cpa',
                 drawerHostId: 'completion_preset_assistant_settings',
                 openButton: '#completion_preset_assistant_open',
-                // Stage 3: CPA migrated off the shared iter-studio shell to a
+                // CPA migrated off the shared iter-studio shell to a
                 // plugin-owned popup (`cpa-iteration/studio.js`). The popup
                 // root no longer carries `.luker-studio` — it's a top-level
                 // `.cpa_it_popup` div mounted inside ST's `Popup` wrapper,
@@ -176,7 +176,7 @@ test.describe('Stage 1 — UI-driven iter-studio adapter smoke', () => {
                 name: 'memory-graph',
                 drawerHostId: 'memory_graph_settings',
                 openButton: '#luker_rpg_memory_open_schema_studio',
-                // Stage 4: MG schema iteration migrated off the shared iter-
+                // MG schema iteration migrated off the shared iter-
                 // studio shell to a plugin-owned popup
                 // (`schema-iteration/studio.js`). The popup root no longer
                 // carries `.luker-studio` — it's a top-level

@@ -1,5 +1,5 @@
 /**
- * Plan 3 Unit 7 — director-defaults refresh e2e (#6).
+ * Director-defaults refresh e2e.
  *
  * Scope:
  *   - Wipe the director profile's mode-level + main + sub-agent `skills.visible`
@@ -12,7 +12,7 @@
  *       mainAgent.skills.visible holds the inherit sentinel + workflow + dispatch,
  *       every sub-agent.skills.visible holds the inherit sentinel + a method skill.
  *
- * Plan 2 Unit 1 wired this default into the profile loader; the test is
+ * The default is wired into the profile loader; the test is
  * the regression contract that says "a future scaffold rename / addition
  * surfaces here, not in user-visible silent breakage". Screenshot the
  * orchestrator board at the after state so the docs reviewer can eyeball
@@ -41,7 +41,7 @@ import {
     ensureDirectorProfileInitialized,
 } from './helpers.js';
 
-// Mode-level baseline expected by the default profile (Plan 1 Unit 7).
+// Mode-level baseline expected by the default profile.
 // Names are pinned: any rename of these scaffolds should surface as a
 // failure here so the doc + assertion tables stay in sync.
 const EXPECTED_MODE_VISIBLE = [

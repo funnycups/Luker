@@ -1,11 +1,11 @@
 // LAN Sync e2e — both servers in MySQL storage mode.
 //
-// Tasks 4+5 made the SQL engines fully syncable via per-record
+// The SQL engines are fully syncable via per-record
 // materialize/dematerialize: instead of shipping a whole-DB blob, each
 // side projects its rows into a shadow workdir as one file per record,
 // commits that, and the responder dematerializes the merged tree back
 // through the engine. The companion in-process test pins the engine
-// contract; this spec drives the full UI pair-and-sync loop against
+// contract; this e2e drives the full UI pair-and-sync loop against
 // real mysql:8 servers spun up via testcontainers so a regression that
 // only shows up in real mysql (driver quirks, transaction isolation,
 // blob encoding) is caught end-to-end.

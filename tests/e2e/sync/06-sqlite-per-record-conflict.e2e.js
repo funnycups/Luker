@@ -5,14 +5,14 @@
 // into a shadow workdir as files (chats → .jsonl, worlds → .json, ...),
 // commits that tree to the shadow git repo, and the receiver
 // dematerializes the merged tree back through the storage engine. This
-// spec covers the SQLite leg of that path end-to-end: same chat path on
+// test covers the SQLite leg of that path end-to-end: same chat path on
 // both sides with different bytes must surface as a single per-file
 // conflict at the file boundary, and applying A's side must land A's
 // chat body in B's SQLite DB through the real /api/chats/get route.
 //
 // The companion in-process test at
 // `tests/sync/integration/sqlite-mode.test.js` pins the engine contract
-// (rows land under the responder's handle); this spec proves the user-
+// (rows land under the responder's handle); this e2e proves the user-
 // visible flow — admin migration UI, conflict panel, chat fetch — all
 // honor the per-record path on a real Playwright browser pair.
 

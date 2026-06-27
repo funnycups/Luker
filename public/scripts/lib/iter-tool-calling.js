@@ -5,8 +5,7 @@
  * window, retry-on-empty-tool-call, and abort propagation.
  *
  * Originally lived in extensions/orchestrator/ as the orchestrator's
- * one-call-per-node driver; hoisted to lib/ in SP-5
- * (docs/superpowers/specs/2026-05-22-iter-shell-contract-surgery.md) so
+ * one-call-per-node driver; later hoisted to lib/ so
  * the iteration-studio shell no longer imports from a plugin.
  *
  * Two related concerns live here:

@@ -1,5 +1,5 @@
 // Endpoint parity coverage for the chat-related read paths affected by the
-// Phase 5 migration. The audit identified these as broken under db mode:
+// db-mode migration. The audit identified these as broken under db mode:
 //   - POST /api/characters/chats           (list chats per character)
 //   - POST /api/chats/get-delta            (paginated chat read)
 //   - POST /api/chats/rename               (existsSync gate)

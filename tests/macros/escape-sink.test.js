@@ -5,8 +5,7 @@ import {
     unescapeMacroBracesInRequestData,
 } from '../../public/scripts/macros/util/escape.js';
 
-// Phase 1 Macro escape lifecycle - sink-stage unescape utilities.
-// Spec: docs/superpowers/specs/cardapp-studio-boundaries.md §5
+// Macro escape lifecycle - sink-stage unescape utilities.
 
 describe('unescapeMacroBraces (I3 sink strip)', () => {
     test('strips backslash before macro opener', () => {

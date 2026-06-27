@@ -5,12 +5,12 @@
  * iter-studio system prompt augmentation: skills catalog + extraction
  * discipline.
  *
- * Plan 2 Unit 7. The iter-studio AI now has 16 skill-management tools. This
+ * The iter-studio AI has 16 skill-management tools. This
  * module appends a fixed "discipline" block plus a dynamic catalog of
  * currently-visible skills to the iter-studio system prompt at the start of
- * each turn. The catalog uses `resolveAgentVisibleSkills` from Plan 1
- * Unit 6 to compute mode-level visibility against the live profile, then
- * lists each skill as `name: description`.
+ * each turn. The catalog uses `resolveAgentVisibleSkills` to compute
+ * mode-level visibility against the live profile, then lists each skill as
+ * `name: description`.
  *
  * The block is appended ONLY when the working profile has at least one
  * agent whose systemPrompt exceeds the length-notification threshold OR

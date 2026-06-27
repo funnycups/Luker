@@ -1,5 +1,5 @@
 // Endpoint parity for /api/chats/group/* — group chat lifecycle through every
-// storage engine. Pre-Phase 6 these were universally fs-only.
+// storage engine. These were previously universally fs-only.
 
 import request from 'supertest';
 

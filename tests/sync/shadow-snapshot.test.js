@@ -229,7 +229,7 @@ describe('snapshotLiveToShadow', () => {
         }
     });
 
-    test('liveRoot === workdir is a no-op copy for already-staged files (Task 4 SQL-mode flow)', async () => {
+    test('liveRoot === workdir is a no-op copy for already-staged files (SQL-mode flow)', async () => {
         // SQL-mode flow: the materializer writes user data INTO the shadow
         // workdir, then snapshotLiveToShadow is called with liveRoot=workdir.
         // For files already at <workdir>/<rel>, src and dst are the same
@@ -272,7 +272,7 @@ describe('snapshotLiveToShadow', () => {
     });
 
     test('unknown category ids in enabledCategoryIds are silently ignored', async () => {
-        // After Task 5 the `database` category is gone — but the snapshot
+        // The `database` category is gone — but the snapshot
         // walker has always filtered enabled ids against SYNC_CATEGORIES,
         // so unknown ids just drop out of the iteration. This pins that
         // contract: passing a stale id alongside a real one still produces
@@ -298,8 +298,8 @@ describe('snapshotLiveToShadow', () => {
         expect(fs.existsSync(path.join(paths.workdir, 'luker-storage.sqlite'))).toBe(false);
     });
 
-    test('skips symlinks in the live tree (spec §4.3)', async () => {
-        // Spec §4.3: symlinks are not part of supported user data. The walker
+    test('skips symlinks in the live tree', async () => {
+        // Symlinks are not part of supported user data. The walker
         // warns and skips them; both the staged index AND the workdir must be
         // free of any symlink to avoid index↔workdir drift on later snapshots.
         fs.writeFileSync(path.join(liveRoot, 'characters', 'real.png'), 'realbytes');

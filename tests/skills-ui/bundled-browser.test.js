@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 6 — "Browse bundled" tab inside the skill manager.
+ * "Browse bundled" tab inside the skill manager.
  *
  * The bundled-browser component lists every skill in `default/skills/global/`
  * (returned by `context.skills.listBundledManifest()`), tags each row with one

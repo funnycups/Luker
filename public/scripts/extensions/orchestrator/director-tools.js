@@ -465,7 +465,7 @@ export function createSubagentDispatcher({
     }
 
     function roundIdFor(handleId, subagentId) {
-        // Spec §4 flat naming: one top-level round per sub-agent dispatch,
+        // Flat naming: one top-level round per sub-agent dispatch,
         // id `sub-<subagentId>-<handleId-tail>` so the panel can show each
         // dispatch as a sibling of the main rounds. The handleId tail (the
         // numeric suffix of `subagent-N`) keeps the round id unique when
@@ -718,10 +718,10 @@ export function createSubagentDispatcher({
 
     async function runDispatchInternal({ handleId, displayId, isInline, systemPrompt, apiPresetName, promptPresetName, task, parentMessages, agentTools, agentMaxRounds, agentConfig = null }) {
         totalRuns++;
-        // Spec §4 flat naming: one top-level round per sub-agent dispatch.
+        // Flat naming: one top-level round per sub-agent dispatch.
         // Inside that round we anchor a `reasoning` section and a `text`
         // section — same shape the main agent uses for its rounds, so the
-        // Stage-4 panel renders both with the same component.
+        // panel renders both with the same component.
         const roundId = panelEnsureRound(handleId, displayId);
         const reasoningSectionId = panelEnsureSection(roundId, 'reasoning', 'reasoning', i18n('Reasoning'), { isInline, task });
         const textSectionId = panelEnsureSection(roundId, 'text', 'text', i18n('Text'), { isInline });

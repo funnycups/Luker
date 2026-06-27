@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 5 — Skill embed export helper.
+ * Skill embed export helper.
  *
  * Tests `packSkillsForExport`, `attachEmbeddedSkillsSource`, and the
  * convenience wrapper `packAndAttachSkillsForExport`.

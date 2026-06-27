@@ -25,7 +25,7 @@ let injectedState = {
 };
 
 // Most-recent visibleIds snapshot recorded alongside the injected id sets.
-// Defaults to an empty Set until callers begin supplying it (Phase 3).
+// Defaults to an empty Set until callers begin supplying it.
 let _lastVisibleIds = new Set();
 
 // Subscribers to injection-changed events. Each entry is a callback that
@@ -56,7 +56,7 @@ function toIdSet(value) {
  *   - alwaysInjectIds: nodes flagged alwaysInject (persistent injection)
  *   - recallSelectedIds: nodes selected by this turn's recall pipeline
  *   - visibleIds: nodes inside the active recall/visibility window (may be
- *     empty until a caller starts supplying them; see Phase 3)
+ *     empty until a caller starts supplying them)
  *
  * Callers union the id sets for dedup against the main-flow injection
  * decision (e.g. so a recall pipeline doesn't re-surface nodes the model
@@ -74,12 +74,12 @@ export function getCurrentlyInjectedNodeIds(_context) {
 }
 
 /**
- * Spec §4.1 InjectionState alias. Returns the same shape as
- * `getCurrentlyInjectedNodeIds` — defensive copies of the three id Sets that
- * describe the current main-flow injection decision.
+ * InjectionState alias. Returns the same shape as `getCurrentlyInjectedNodeIds`
+ * — defensive copies of the three id Sets that describe the current main-flow
+ * injection decision.
  *
  * Kept as a separate export so read-api consumers can program against the
- * spec name without worrying about future divergence between the two.
+ * InjectionState name without worrying about future divergence between the two.
  *
  * @param {object} _context unused at MVP; reserved for chat-scoped state
  * @returns {{alwaysInjectIds: Set<string>, recallSelectedIds: Set<string>, visibleIds: Set<string>}}

@@ -7,9 +7,9 @@
  * shape so future plugin-owned popups can wire storage in three lines
  * instead of forty.
  *
- * Stage 1 does NOT migrate existing adapters — they keep their inline
- * implementations until each plugin's UI redo (Stages 2–5). This factory
- * is here for the new code paths the redos introduce.
+ * Existing adapters are not migrated here — they keep their inline
+ * implementations until each plugin's UI redo. This factory is here for
+ * the new code paths the redos introduce.
  *
  * `getBucket(scope)` is the plugin's accessor that returns the mutable
  * object holding `{ [sessionId]: session }`. It must:

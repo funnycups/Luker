@@ -5,8 +5,6 @@
 // applied outside the popup (e.g. via a regular SillyTavern field edit)
 // would be silently clobbered when the user pressed Apply on a stale
 // session.
-//
-// Backfills spec §8.1 Gap 5: "loadSession reloads state.live".
 
 import { jest } from '@jest/globals';
 

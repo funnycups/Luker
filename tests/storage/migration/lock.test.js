@@ -144,7 +144,7 @@ describe('migration lock', () => {
     });
 
     test('same holder can re-acquire to refresh TTL (heartbeat)', async () => {
-        // Spec §4.5: "调用方持续 heartbeat 续期" — long-running migrations
+        // Heartbeat refresh — long-running migrations
         // call acquire on a schedule to push the expiry forward. Two acquires
         // by the same holder must succeed.
         const holderId = makeHolderId();

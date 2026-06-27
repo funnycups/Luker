@@ -40,7 +40,7 @@ describe('url-import (validation paths)', () => {
 // Real-fetch (HTTPS network) testing is intentionally out of scope here. The
 // HTTPS-only check makes a unit test fixture awkward (would require a local
 // HTTPS server with a self-signed cert), so happy-path coverage is provided
-// by the Unit 7 integration smoke and manual testing.
+// by the integration smoke and manual testing.
 
 describe('url-import (body validation via fetch stub)', () => {
     let tmpRoot, repo, originalFetch;

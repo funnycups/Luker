@@ -56,8 +56,7 @@ export function tryParseValue(raw) {
  * Set `value` at `path` inside `container`, creating intermediate objects
  * or arrays as needed. Arrays are auto-created when the next segment is
  * pure-numeric, otherwise objects. Existing scalar intermediates are
- * overwritten with a fresh container — design choice from the spec
- * ("auto-build, lodash.set semantics").
+ * overwritten with a fresh container ("auto-build, lodash.set semantics").
  *
  * @param {object|array} container
  * @param {string} path

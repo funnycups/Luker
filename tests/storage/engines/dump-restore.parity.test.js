@@ -1,5 +1,5 @@
 // Engine-level parity for dumpUser / restoreUser.
-// Per spec §4.1: fs returns null (no engine-side dump; disk tree IS the backup).
+// fs returns null (no engine-side dump; disk tree IS the backup).
 // sqlite returns a binary stream of the .sqlite file.
 // mysql / postgres return a text stream of newline-separated JSON-encoded INSERTs.
 // restoreUser of the SAME kind round-trips dump+restore to recreate all user rows.
@@ -155,7 +155,7 @@ describe.each(CONTRACT_HARNESSES)('engine.dumpUser/restoreUser on $name', ({ mak
     });
 
     test('restoreUser decodes multi-byte UTF-8 across chunk boundaries', async () => {
-        // Spec §4.1 round-trip is byte-for-byte; mysql/pg restore reads the
+        // The dump/restore round-trip is byte-for-byte; mysql/pg restore reads the
         // dump stream chunk-by-chunk and must reassemble multi-byte UTF-8
         // sequences split at a chunk boundary. Without StringDecoder,
         // `chunk.toString('utf8')` on a partial sequence emits U+FFFD in

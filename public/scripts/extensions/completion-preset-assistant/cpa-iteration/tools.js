@@ -4,8 +4,8 @@
 /**
  * CPA — plugin-owned tool catalog + tool-call normalizer.
  *
- * Ported verbatim from cpa-iteration-adapter.js (the shell-driven adapter
- * that Stage 3 retires). This module exposes only the static, side-effect-
+ * Ported verbatim from cpa-iteration-adapter.js (the previous
+ * shell-driven adapter). This module exposes only the static, side-effect-
  * free pieces:
  *
  *   - TOOL_DISPLAY:         friendly UI labels keyed by tool name

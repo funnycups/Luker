@@ -6,10 +6,10 @@
  * here rather than digging into `lib/iter-tool-calling.js` directly so the
  * public surface has a single stable home.
  *
- * Stage 1 deliberately does NOT extract conversation-state advancement
- * (`session.messages.push`, turn-by-turn state machine) from
- * iteration-studio/runner.js — that logic is UI-layer per spec §12 and
- * stays in the shell until the relevant plugin owns its own popup.
+ * Conversation-state advancement (`session.messages.push`, turn-by-turn
+ * state machine) is intentionally NOT extracted from
+ * iteration-studio/runner.js — that logic is UI-layer and stays in the
+ * shell until the relevant plugin owns its own popup.
  */
 
 export {

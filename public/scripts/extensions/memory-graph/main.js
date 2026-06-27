@@ -6781,9 +6781,9 @@ async function chooseRecallRoute(context, settings, recallState) {
     }
     // Dogfood the read-only API for candidate brief + schema overview so the
     // recall LLM and any plugin that re-implements recall both consume the
-    // same view shape (spec §5). Dynamic import avoids a static circular
-    // dependency with read-api.js (which itself imports helpers from here);
-    // the ESM module cache makes repeat calls effectively free.
+    // same view shape. Dynamic import avoids a static circular dependency
+    // with read-api.js (which itself imports helpers from here); the ESM
+    // module cache makes repeat calls effectively free.
     const { getMemoryGraphReadApi } = await import('./read-api.js');
     const readApi = getMemoryGraphReadApi(recallState.store, context);
 

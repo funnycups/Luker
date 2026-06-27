@@ -5,8 +5,8 @@ import { test, expect } from '@playwright/test';
  *
  * Verifies:
  *   1. getContext().iterationLibrary is exposed with the expected keys.
- *   2. getContext().iterationStudio is no longer present (Stage 6 dropped
- *      the dual-track Proxy + the entire shell).
+ *   2. getContext().iterationStudio is no longer present (the dual-track
+ *      Proxy + the entire shell were dropped).
  *   3. No iter-library errors during boot.
  */
 

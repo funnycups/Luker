@@ -1,6 +1,6 @@
 /**
- * Plan 3 Unit 8 — iter-studio AI uses skill_edit_content to change ONE line
- * of a skill; verify byte-equality of surrounding content (#8).
+ * Iter-studio AI uses skill_edit_content to change ONE line
+ * of a skill; verify byte-equality of surrounding content.
  *
  * LLM cost: ~$0.5 per run.
  * Requires: dev server running + LLM API configured (online_status !=
@@ -30,7 +30,7 @@
  *   prompt augmentation steer the model toward surgical edits, not full-
  *   file rewrites.
  *
- * Failure-mode policy (per Plan 3 Unit 8 directive):
+ * Failure-mode policy:
  *   - If the AI calls skill_update_content (full rewrite) instead of
  *     skill_edit_content, the spec fails — that's a real symptom that the
  *     tool descriptions don't sufficiently distinguish surgical from

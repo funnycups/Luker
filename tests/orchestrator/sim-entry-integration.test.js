@@ -1,11 +1,11 @@
 /**
- * Integration smoke test for sim entry wrap (Task 4).
+ * Integration smoke test for sim entry wrap.
  *
  * Cannot drive runDirectorSimulationLoop end-to-end from jest because it
  * pulls in SillyTavern's full chat completion stack. Instead, verify the
  * import surface is consistent: main.js imports beginSimulation +
  * endSimulation from loop-tools.js so the wrap can compile. The actual
- * runtime wrap behavior is covered by the hand e2e step in the spec.
+ * runtime wrap behavior is covered by hand e2e.
  */
 
 import { describe, test, expect } from '@jest/globals';

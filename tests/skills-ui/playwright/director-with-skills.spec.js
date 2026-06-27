@@ -1,5 +1,5 @@
 /**
- * Plan 3 Unit 8 — director RP turn invokes skill_read mid-turn (#5).
+ * Director RP turn invokes skill_read mid-turn.
  *
  * LLM cost: ~$0.5-1 per run.
  * Requires: dev server running + LLM API configured (online_status !=
@@ -46,7 +46,7 @@
  *
  * Screenshots: docs/public/_screenshots/skills/director-with-skills-*.png.
  *
- * Failure-mode policy (per user directive for Plan 3 Unit 8):
+ * Failure-mode policy:
  *   - If assertion (2) fails repeatedly, that's a real bug in the catalog
  *     injection or system-prompt rendering; the spec must surface it
  *     rather than be relaxed away.

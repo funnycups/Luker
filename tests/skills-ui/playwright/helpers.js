@@ -14,14 +14,14 @@
  *     immediately rather than masking the failure. The smoke spec must
  *     never silently pass when the server is unreachable.
  *   - All screenshots are saved under `docs/public/_screenshots/skills/`
- *     (created on demand) so Plan 3 docs can reference them by stable
+ *     (created on demand) so docs can reference them by stable
  *     paths (`/_screenshots/skills/<name>.png`). The `public/`
  *     subdirectory is Vitepress's static-asset root, so the same files
  *     also resolve under `npm run docs:dev` and the production build.
  *     Use `screenshotPath(scenario, step)` to generate filenames.
  *   - We never invoke real LLMs from these specs — they are pure
- *     UI-state assertions plus screenshot collection. Plan 3 adds the
- *     LLM-driven end-to-end coverage.
+ *     UI-state assertions plus screenshot collection. LLM-driven
+ *     end-to-end coverage lives in companion specs.
  */
 
 import path from 'node:path';

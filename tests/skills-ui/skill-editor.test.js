@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 4 — Inline skill editor.
+ * Inline skill editor.
  *
  * Tests cover:
  *   - Pure helpers (parseFrontmatterShape, defaultSkillTemplate,

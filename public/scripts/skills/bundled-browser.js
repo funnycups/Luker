@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 6 — "Browse bundled" tab.
+ * "Browse bundled" tab.
  *
  * Renders a table of every skill in `default/skills/global/` (returned by
  * `context.skills.listBundledManifest()`), tagged with one of three install

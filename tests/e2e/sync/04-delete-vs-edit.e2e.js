@@ -1,4 +1,4 @@
-// Spec §8.3 scenario 6: A deletes a file, B edits the same file.
+// A deletes a file, B edits the same file.
 // Conflict UI shows the delete-vs-edit shape; user picks Local (B's
 // edit survives); the file remains on both sides.
 

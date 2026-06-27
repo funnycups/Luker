@@ -526,7 +526,7 @@ function buildMinimalDirectorSubAgents() {
  * each sub-agent carries the explicit `maxRounds: null` "inherit default"
  * sentinel rather than `undefined`).
  *
- * Skills pre-fill (Plan 1 Unit 7): out-of-the-box director profiles ship
+ * Skills pre-fill: out-of-the-box director profiles ship
  * with the curated bundled skill set already enabled. The mode-level
  * `skills.visible` carries cross-sub-agent baseline rules (anti-cliche,
  * voice, no-meta, output discipline, zh style); the main agent extends

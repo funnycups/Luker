@@ -1,9 +1,9 @@
-// Coverage for the settings snapshot endpoints. Pre-Phase 4 these read/wrote
+// Coverage for the settings snapshot endpoints. Previously these read/wrote
 // `<root>/settings.json` directly via fs.* — in db mode that file is empty
 // (the data lives in SettingsRepo), so make-snapshot captured nothing and
 // restore-snapshot was a silent no-op.
 //
-// After fix: snapshot operations route through SettingsRepo. Disk backups
+// Snapshot operations now route through SettingsRepo. Disk backups
 // stay on fs (they're admin artifacts and deliberately fs-visible) but their
 // contents reflect the live SettingsRepo state.
 

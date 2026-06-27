@@ -10,7 +10,7 @@
  *
  * Originated in `extensions/orchestrator/line-diff.js`, lifted into the
  * iteration-studio shell as `inline-text-diff.js`, then deleted with the
- * shell in Stage 6 of the library overhaul. Re-introduced here as a
+ * shell in the library overhaul. Re-introduced here as a
  * generic, i18n-injectable building block — no shell coupling, no
  * sibling `i18n.js` dependency. Pairs with `zoom-overlay.js`, which
  * popups call once via `attachZoomOverlay(popupRoot)`.

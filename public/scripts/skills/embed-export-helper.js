@@ -1,5 +1,5 @@
 /**
- * Skill embed export helper (Plan 2 Unit 5).
+ * Skill embed export helper.
  *
  * Pack the relevant scope's skills into an `embedded_skills_source` payload
  * suitable for sticking onto a character card or preset before download.

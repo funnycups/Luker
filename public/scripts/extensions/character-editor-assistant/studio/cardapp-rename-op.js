@@ -1,6 +1,6 @@
 // Custom edits-lib op for CardApp's atomic file rename.
 //
-// Path 2 surface — registered at CardApp boot via direct import of
+// File-op surface — registered at CardApp boot via direct import of
 // edits-lib's registerOp. Uses the server's POST /api/card-app/:charId/rename
 // atomic endpoint at commit time instead of decomposing rename into
 // delete-then-create (which would lose atomicity and risk losing content

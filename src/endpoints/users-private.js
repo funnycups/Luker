@@ -53,11 +53,11 @@ class RestoreEngineKindMismatchError extends Error {
 
 /**
  * Thrown when an uploaded backup lacks `_engine_meta.json` (a legacy fs-only
- * archive, produced before Stage 3 added engine-dump injection) but the server
+ * archive, produced before engine-dump injection existed) but the server
  * is currently running on a db engine (sqlite/mysql/postgres). Silently
  * extracting such a ZIP would unpack the disk tree but leave the engine slot
- * empty — every Repo read returns null, every chat appears deleted. Per spec
- * §5.2, missing engineMeta on a non-fs server is a 400 with an actionable
+ * empty — every Repo read returns null, every chat appears deleted.
+ * Missing engineMeta on a non-fs server is a 400 with an actionable
  * message: the operator must run `storage-migrate` to convert the legacy
  * backup before restore can proceed.
  */
@@ -622,7 +622,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
     const analysis = await analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, targetDirectories, categoryTargets, reportProgress);
     const analyzeMs = Date.now() - tAnalyze;
 
-    // Spec §5.2: when the archive carries an engine dump, validate that the
+    // When the archive carries an engine dump, validate that the
     // recorded engineKind matches the server's current engine. If kinds
     // differ AND the operator supplied enough context, delegate to the
     // cross-mode-restore orchestrator instead of refusing.

@@ -1,5 +1,5 @@
 /**
- * Plan 3 Unit 8 — iter-studio creates an RP-real skill via LLM.
+ * Iter-studio creates an RP-real skill via LLM.
  *
  * LLM cost: ~$0.2-0.5 per run (single iter-studio LLM round).
  * Requires: dev server running + LLM API configured (online_status !=

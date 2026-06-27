@@ -96,7 +96,7 @@ describe('resolveEachContainer', () => {
         expect(resolveEachContainer('npcs', getters)).toEqual({ alice: { hp: 50 } });
     });
 
-    test('dotted variable path resolves through nested data (Phase 1 integration)', () => {
+    test('dotted variable path resolves through nested data', () => {
         const getters = makeGetters({ local: { world: '{"npcs":{"alice":{"hp":50},"bob":{"hp":30}}}' } });
         expect(resolveEachContainer('world.npcs', getters)).toEqual({ alice: { hp: 50 }, bob: { hp: 30 } });
     });

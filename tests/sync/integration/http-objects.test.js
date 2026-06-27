@@ -1,5 +1,5 @@
 /**
- * Plan Task 11 — HTTP object endpoints under `/api/sync/v1/`.
+ * HTTP object endpoints under `/api/sync/v1/`.
  *
  * Verifies the three new routes:
  *   - `GET  /session/object/:oid` — raw bytes + X-Object-Type / X-Object-Oid headers

@@ -5,12 +5,12 @@
 /**
  * Intensity-preservation linter for bundled skill bodies.
  *
- * Plan 3 Unit 3. The original Plan 3 contract is that every bundled
- * `default/skills/global/<name>/SKILL.md` body is a verbatim extraction
- * from director-defaults.js (or another canonical source). A commit that
- * silently shrinks one of those bodies — paraphrasing, compressing, or
- * "tightening" — would erode prompt intensity in a way that ordinary
- * diff review tends to miss. This script gates that.
+ * Every bundled `default/skills/global/<name>/SKILL.md` body is intended
+ * to be a verbatim extraction from director-defaults.js (or another
+ * canonical source). A commit that silently shrinks one of those bodies —
+ * paraphrasing, compressing, or "tightening" — would erode prompt
+ * intensity in a way that ordinary diff review tends to miss. This script
+ * gates that.
  *
  * Mechanism
  * ---------
@@ -35,14 +35,6 @@
  *   node scripts/check-skill-intensity.js
  *   node scripts/check-skill-intensity.js --base-ref=origin/main
  *   node scripts/check-skill-intensity.js --base-ref=HEAD~10
- *
- * Status
- * ------
- * As of Plan 3 Unit 3 (2026-06), all Plan 3 commits on `feat/skills-
- * foundation` either GROW the skill bodies (Unit 1 verbatim extraction
- * from 13-line stubs to full bodies) or only adjust frontmatter / file
- * paths (Unit 2 rename reconciliation). Running this script with
- * `--base-ref=origin/release` should exit 0.
  */
 
 import { execSync } from 'node:child_process';

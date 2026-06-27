@@ -6,8 +6,7 @@
  * gated only by the surrounding basic-auth middleware so a peer can probe
  * reachability without a sync token.
  *
- * See `docs/superpowers/specs/lan-sync.md` §2.2 / §2.4 for the protocol
- * shape and `src/middleware/basicAuth.js` for the matching bypass pattern
+ * See `src/middleware/basicAuth.js` for the matching bypass pattern
  * that lets `/session/*` requests skip basic auth (they carry their own
  * token instead).
  */
@@ -304,7 +303,7 @@ router.post('/session/ref', requireSyncToken, express.json(), async (request, re
             if (directories && Array.isArray(categories)) {
                 try {
                     await queueOnKey(syncQueueKey(userRoot, peerId), async () => {
-                        // Spec §4.4: the responder reconcile rewrites
+                        // The responder reconcile rewrites
                         // this user's live tree (and may swap their
                         // SQLite file), so user-initiated writes on
                         // this side must be gated for the duration.
@@ -403,7 +402,7 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
         return response.status(400).json({ error: 'peerId required' });
     }
 
-    // Spec §3.4 — pairing requires the same sanitized handle on both
+    // Pairing requires the same sanitized handle on both
     // devices. The peerId encodes the issuing user's sanitized handle as
     // its prefix; the local user MUST share that prefix, otherwise we'd
     // be silently overwriting one user's data with another's on the next
@@ -432,7 +431,7 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
         categories,
     });
 
-    // Spec §4.1 "pair init" — the responder's shadow MUST advance to a
+    // Pair init — the responder's shadow MUST advance to a
     // commit that reflects current live data BEFORE the peer pulls.
     // Otherwise the peer fetches a stale (or absent) HEAD and never
     // sees the live state the user just enabled for sync.
@@ -1001,8 +1000,8 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
  *   - `remotePeerId`    — the peerId the OTHER device allocated for us
  *   - `label`           — what to call the OTHER device locally
  *   - `categories`      — what to sync on this first run (may differ from the
- *                          other device's; the spec says per-session selection
- *                          is fine)
+ *                          other device's; per-session selection
+ *                          is supported)
  *   - `peerAuth`        — optional `{ username, password }` if the OTHER
  *                          device has basic-auth enabled. Forwarded as a
  *                          standard `Authorization: Basic` header on our
@@ -1059,7 +1058,7 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
         return response.status(400).json({ error: e.message });
     }
 
-    // Spec §3.4 — same-handle requirement, mirrored from `/session/offer`.
+    // Same-handle requirement, mirrored from `/session/offer`.
     // The remote peerId was minted by the OTHER device using ITS handle
     // (e.g. `alice@deadbeef` on a server where the user is `alice`).
     // The accepting (local) user must ALSO be `alice` for the pairing

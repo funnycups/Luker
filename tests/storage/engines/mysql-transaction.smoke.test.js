@@ -2,10 +2,10 @@ import { makeTempMysqlEngineHarness } from '../harness/mysql-harness.js';
 import { NotFoundError } from '../../../src/storage/errors.js';
 
 // Coarse smoke coverage for every kind handler MysqlTransaction registers. The
-// full Repo contract suite (Task 4) re-runs every existing behavior via
+// full Repo contract suite re-runs every existing behavior via
 // describe.each(CONTRACT_HARNESSES) — these tests are just enough to fail
 // loud and fast on a missing handler or a per-kind regression while iterating
-// on Task 3.
+// on the handler dispatch.
 
 const describeMysql = process.env.LUKER_DISABLE_MYSQL_TESTS ? describe.skip : describe;
 

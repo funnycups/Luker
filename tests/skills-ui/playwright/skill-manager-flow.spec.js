@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 8 — skill manager flow smoke spec.
+ * Skill manager flow smoke spec.
  *
  * Scope:
  *   - Open orchestrator config → Manage skills button → panel renders.
@@ -7,9 +7,10 @@
  *     auto-populate hook ran at server startup.
  *   - "Browse bundled" tab lists every bundled skill (state = installed).
  *   - "Import from URL..." button opens the URL prompt popup (we don't
- *     submit a real URL — Plan 3 covers full end-to-end import flows).
+ *     submit a real URL — full end-to-end import flows are covered
+ *     elsewhere).
  *
- * Each step captures a screenshot for the Plan 3 docs under
+ * Each step captures a screenshot under
  * docs/public/_screenshots/skills/manager-*.png.
  *
  * The spec does NOT exercise any LLM and never depends on an active
@@ -49,7 +50,7 @@ test.describe('Skills: manager panel flow', () => {
         await ensureInlineDrawerOpen(page, 'orchestrator_settings');
 
         // Capture the orchestrator drawer with the "Manage skills..."
-        // button visible — useful for Plan 3 docs to show how a user
+        // button visible — useful for docs to show how a user
         // reaches the panel.
         await page.screenshot({
             path: screenshotPath('manager', 'entry-button'),
@@ -60,7 +61,7 @@ test.describe('Skills: manager panel flow', () => {
 
         // ── 2. Installed tab + 18 bundled skills ─────────────────────
         // The bundled scaffolds auto-populate into global on fresh
-        // install (Plan 1 Unit 7 startup hook). The default ships 18
+        // install (startup hook). The default ships 18
         // entries (see default/skills/global/). If the user previously
         // wiped some, the panel still renders — we assert "at least 1"
         // for resilience but log the actual count so docs stay honest.
@@ -104,7 +105,7 @@ test.describe('Skills: manager panel flow', () => {
         console.log(`[smoke] bundled rows = ${bundledCount}`);
         // 18 bundled skills ship in default/skills/global/. Be defensive
         // and assert ≥ 1 so renaming a scaffold doesn't sink the suite,
-        // but log the count for Plan 3 doc review.
+        // but log the count for doc review.
         expect(bundledCount).toBeGreaterThanOrEqual(1);
 
         await page.screenshot({
@@ -115,8 +116,8 @@ test.describe('Skills: manager panel flow', () => {
         // ── 4. Import from URL... button shows the URL prompt ────────
         // Switch back to Installed (the toolbar lives there) and click
         // Import from URL. We cancel rather than submitting an actual
-        // URL — the smoke spec only verifies the prompt renders. Plan 3
-        // covers full URL-fetch end-to-end with a mock server.
+        // URL — the smoke spec only verifies the prompt renders.
+        // Full URL-fetch end-to-end coverage with a mock server lives elsewhere.
         await popup.locator('[data-skill-tab="installed"]').first().click();
         const importUrlBtn = popup.locator('[data-skill-toolbar="import-url"]').first();
         await expect(importUrlBtn).toBeVisible();

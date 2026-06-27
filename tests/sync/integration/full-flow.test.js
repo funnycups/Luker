@@ -1,5 +1,5 @@
 /**
- * Plan Task 13 — end-to-end sync flow across two real Luker server
+ * End-to-end sync flow across two real Luker server
  * instances.
  *
  * Two `makeEndpointHarness` instances (A and B) each get their own
@@ -113,7 +113,7 @@ describe.each(FS_HARNESSES)('end-to-end sync flow on $name', ({ mode }) => {
             '{"name":"u","mes":"hi"}',
         );
 
-        // A issues an offer. Per spec §4.1 the peerId names the LINK
+        // A issues an offer. The peerId names the LINK
         // between A and B and is shared by both sides — A stores its
         // shadow at `<userRoot>/.sync/<peerId>/`, B stores its mirror
         // shadow at the same path under B's userRoot. The test reuses

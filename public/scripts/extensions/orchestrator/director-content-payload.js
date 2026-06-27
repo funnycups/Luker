@@ -18,8 +18,6 @@
  * with `inject_loader_enabled` splices @INJECT entries into a fresh array).
  * Lazy resolution makes the cache always return the latest array reference,
  * including any post-dispatch hook substitutions.
- *
- * See docs/superpowers/specs/2026-05-17-director-content-instruction-decoupling-design.md
  */
 
 /**

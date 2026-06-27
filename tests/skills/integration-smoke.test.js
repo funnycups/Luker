@@ -19,7 +19,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_DEFAULT_ROOT = join(__dirname, '../../default');
 
 /**
- * Plan 1 integration smoke test.
+ * Skills integration smoke test.
  *
  * Exercises the real default/skills/global/ → user/skills/global/ pipeline
  * end-to-end: fresh-install populate, REST list/read, embed pack → extract
@@ -29,7 +29,7 @@ const REPO_DEFAULT_ROOT = join(__dirname, '../../default');
  * /api/skills for the first time, the bundled scaffolds show up and
  * round-trip cleanly through the embed pipeline."
  */
-describe('Plan 1 integration smoke', () => {
+describe('Skills integration smoke', () => {
     let app;
     let tmpUser;
     let repo;
@@ -77,10 +77,10 @@ describe('Plan 1 integration smoke', () => {
     test('reading a populated skill body returns verbatim director-defaults content', async () => {
         const res = await request(app).get('/api/skills/global/director-anti-cliche-zh/file');
         expect(res.status).toBe(200);
-        // Plan 3 Unit 1 replaced placeholder bodies with verbatim extractions
-        // from director-defaults.js. Anchor the assertion on a stable marker
-        // unique to the anti-cliche skill body so a future drift in wording
-        // surfaces here rather than silently passing.
+        // Bundled bodies are verbatim extractions from director-defaults.js.
+        // Anchor the assertion on a stable marker unique to the anti-cliche
+        // skill body so a future drift in wording surfaces here rather than
+        // silently passing.
         expect(res.body.content).toContain('Data-person prose');
         expect(res.body.content).toContain('AI 自造标签');
     });

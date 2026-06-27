@@ -23,7 +23,7 @@ export class NamedDocRepo {
             tx.putResource(this._key(handle, bucket, name), { doc }));
     }
 
-    // Migration needs to enumerate + read named-docs cross-engine. The Phase 1b
+    // Migration needs to enumerate + read named-docs cross-engine. Earlier
     // cleanup removed get/list as speculative API; restoring them now that
     // MigrationRunner is a real caller.
     async get(handle, bucket, name) {

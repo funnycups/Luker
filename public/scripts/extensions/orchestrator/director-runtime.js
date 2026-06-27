@@ -209,10 +209,9 @@ export async function handleDirectorDispatch(eventData, deps) {
             if (!handle.complete._settled) {
                 // Reasoning-fold markers used to be appended here so the user
                 // could see the turn ended unnaturally (vs. a clean finalize),
-                // but Stage 3 of the run-panel refactor moved live progress to
-                // RunStateStore. The chat-message reasoning fold stays
-                // untouched on abort/error so the original seeded reasoning is
-                // preserved.
+                // but live progress now lives in RunStateStore. The
+                // chat-message reasoning fold stays untouched on abort/error
+                // so the original seeded reasoning is preserved.
                 try {
                     if (userAborted) {
                         // User stop: preserve partial output but signal
@@ -589,7 +588,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             });
         }
         // Anchor a named section for this round's main-agent output. Live
-        // chunks flow into the run-panel store (Stage 4 panel renders
+        // chunks flow into the run-panel store (the run-panel renders
         // them); the chat message reasoning fold is no longer touched
         // by the director runtime, so chat persistence stays untouched
         // until the final commit writes `mes`.

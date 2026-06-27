@@ -1502,7 +1502,7 @@ export async function createBackupArchive(handle, response, selectionInput = und
 
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
 
-    // Spec §5.1 (lines 333-343): when the storage engine is anything other
+    // When the storage engine is anything other
     // than `fs`, the on-disk file tree is NOT the full backup — repo data
     // lives in a database the user can't ship as files. Capture it as an
     // opaque dump alongside a meta descriptor so the restore side can

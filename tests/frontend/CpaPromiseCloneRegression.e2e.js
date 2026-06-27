@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Stage 0 boot-only smoke: loading SillyTavern + clearing the preloader
- * must not emit the structured-clone error the Stage 0 fix targets.
+ * Boot-only smoke: loading SillyTavern + clearing the preloader
+ * must not emit the structured-clone error the CPA Promise-clone fix targets.
  *
  * Full reproduction (character-bound preset + live LLM iteration commit) is
- * a manual smoke documented in the Stage 0 plan, not automated here — no
- * stable test fixtures for a character with a bound preset exist yet.
+ * a manual smoke, not automated here — no stable test fixtures for a
+ * character with a bound preset exist yet.
  *
  * Note: we don't use testSetup.awaitST from frontent-test-utils because that
  * harness assumes the user-select gate (#userList .userSelect) is always
@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
  * This boot smoke handles both paths.
  */
 
-test.describe('Stage 0 — CPA Promise clone regression', () => {
+test.describe('CPA Promise clone regression', () => {
     test('app load + idle does not log structured-clone failure', async ({ page }) => {
         const cloneErrors = [];
         page.on('console', (msg) => {

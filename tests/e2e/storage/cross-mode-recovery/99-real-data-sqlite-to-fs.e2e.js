@@ -71,7 +71,7 @@ test('cross-mode recovery: real sqlite data round-trips through fs restore with 
             engineMode: SOURCE_MODE,
         });
         const sourceCounts = describeCounts('source', beforeSnap);
-        // Sanity floor: the spec is only meaningful if SOMETHING is there.
+        // Sanity floor: the test is only meaningful if SOMETHING is there.
         // For the developer's real data this is in the hundreds; the gate
         // below catches a corrupt or empty clone before we waste 5 minutes
         // on a no-op round trip.

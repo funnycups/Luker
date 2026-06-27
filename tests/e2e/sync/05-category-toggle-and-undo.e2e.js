@@ -1,4 +1,4 @@
-// Spec §8.3 scenarios 7-8: a sync with a narrow category selection
+// A sync with a narrow category selection
 // (only `worlds`) does NOT propagate changes outside that category;
 // and "Undo last sync" rewinds the most recent sync on that side.
 
@@ -111,8 +111,8 @@ test.describe('LAN Sync — category toggle and undo', () => {
             { timeout: 10_000 },
         ).toBe(false);
 
-        // A is unaffected by B's undo — the spec calls this out
-        // explicitly ("undo is strictly local").
+        // A is unaffected by B's undo — by design
+        // undo is strictly local.
         expect(fs.existsSync(path.join(A.dataRoot, 'default-user', 'worlds', 'will-cross.json'))).toBe(true);
 
         await ctxA.close();

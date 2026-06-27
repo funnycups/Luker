@@ -1,6 +1,6 @@
 // Cross-engine round-trip tests: prove that data written via one engine can
 // be read back via the other engine without loss. These are the foundation
-// for the Phase 3 migration tool — if any of these break, migration will lose
+// for the storage migration tool — if any of these break, migration will lose
 // or corrupt data.
 //
 // Pattern for each Repo:

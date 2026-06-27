@@ -754,7 +754,7 @@ export function ensureStyles(uiBlockId) {
     }
 }
 
-/* Skill chips component (Plan 2 Unit 3) */
+/* Skill chips component */
 .luker_skill_chips_block {
     display: flex;
     flex-direction: column;

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Spec §8.4 manual real-data verification.
+ * Manual real-data verification.
  *
  * Drives two real Luker servers on loopback (real http.Server listeners,
  * real Express stack, real sync router) against a copy of the
  * developer's real `data/default-user` (219 MB / 1004 files) and a
- * fresh empty test data root. Validates every spec §8.4 acceptance
+ * fresh empty test data root. Validates every acceptance
  * criterion:
  *
  *   (a) Initial pair: every sync-default category arrives at the empty
@@ -182,7 +182,7 @@ function listFilesRel(root) {
             if (entry.name === 'content.log' || entry.name === 'access.log' || entry.name === 'cookie-secret.txt' || entry.name === 'luker-storage.sqlite' || entry.name === 'luker-storage.sqlite-wal' || entry.name === 'luker-storage.sqlite-shm') continue;
             if (entry.name === 'extensions' || entry.name === 'secrets.json') continue; // opt-in, off by default
             if (/^settings\.json\.backup-/.test(entry.name)) continue;
-            // Spec §6.4: card-apps/*/.git/ are independent per-CardApp git
+            // card-apps/*/.git/ are independent per-CardApp git
             // repos and are intentionally NOT synced. Skip them in the
             // comparison so the verification doesn't fail on "missing on B"
             // for paths that were never meant to cross.

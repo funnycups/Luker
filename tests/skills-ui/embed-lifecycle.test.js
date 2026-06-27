@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 5 — Skill embed lifecycle (character/preset import + delete).
+ * Skill embed lifecycle (character/preset import + delete).
  *
  * Tests the four lifecycle hooks:
  *   - checkCharEmbeddedSkills (CHAT_CHANGED → import dialog)

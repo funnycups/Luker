@@ -1,4 +1,4 @@
-// Spec §8.3 scenarios 3-4: after pair, disjoint edits on each side
+// After pair, disjoint edits on each side
 // become visible after one sync round-trip.
 //
 // Tests the "Sync now" path against an already-paired peer (using the

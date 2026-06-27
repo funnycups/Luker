@@ -4,7 +4,7 @@
 /**
  * iter-studio-side skill management tool catalog.
  *
- * Plan 2 Unit 7. Exposes the spec §6.1 tools to the iter-studio AI so it
+ * Exposes the skill-management tools to the iter-studio AI so it
  * can manage skills as part of the orchestrator design conversation.
  * Four categories totalling 16 tools — 4 inventory + 7 authoring + 3
  * policy + 2 migration:
@@ -72,7 +72,7 @@
  *   - `commitApprovedSkillProposal` is the disk-write helper studio.js
  *     calls at Apply time per approved entry. It's exported here (not
  *     inlined in studio.js) so the replay-against-disk logic and the
- *     compute-after logic stay in one module, matching the spec for each
+ *     compute-after logic stay in one module, matching the contract for each
  *     authoring tool.
  */
 

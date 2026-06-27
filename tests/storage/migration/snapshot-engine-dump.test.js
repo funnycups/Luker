@@ -1,9 +1,9 @@
-// Per spec §4.4: snapshotUser in mysql/postgres modes must also capture an
+// snapshotUser in mysql/postgres modes must also capture an
 // engine dump alongside the fs tree, and restoreFromSnapshot must replay it.
 // This exercises the round-trip across all 4 engines via CONTRACT_HARNESSES:
 //
 //   fs        -> no engine dump (engine.dumpUser returns null); snapshot is
-//                just the fs tree, exactly as Tasks 1+2 of Stage 4 already did.
+//                just the fs tree.
 //   sqlite    -> engine.dumpUser returns a binary stream of the .sqlite file
 //                (and the .sqlite file ALSO lives under the user dir, so the
 //                cpSync already covers it — but capturing the dump separately
@@ -86,7 +86,7 @@ describe.each(CONTRACT_HARNESSES)('snapshotUser engine dump on $name', ({ make }
     });
 
     test('snapshot works when engine arg is omitted (back-compat: fs-tree only)', async () => {
-        // Tasks 1+2 callers (auto-rollback test, runner.test.js) pass no engine
+        // Existing callers (auto-rollback test, runner.test.js) pass no engine
         // — that path must keep working: just cpSync, no engine dump even on
         // sqlite/mysql/pg. The engine-dump capture is strictly opt-in via the
         // new `engine` argument.
@@ -133,7 +133,7 @@ describe.each(CONTRACT_HARNESSES)('snapshotUser engine dump on $name', ({ make }
         // After restore, the chat body must be back to ORIGINAL_BODY for every
         // engine. fs/sqlite get there via cpSync (the .jsonl / .sqlite file is
         // inside the user dir); mysql/pg only get there via the engine dump
-        // replay — this is the new behaviour Stage 4 Task 3 introduces.
+        // replay.
         const after = await h.engine.withTransaction(h.handle, (tx) =>
             tx.getResource({ kind: 'chat', handle: h.handle, charDir: 'Alice', name: 'c1' }));
         expect(after).not.toBeNull();

@@ -814,7 +814,7 @@ describe('main.js sequencing: CHAT_CHANGED migration handler runs before fs hand
         const chatRef = { value: [assistantMsg(), assistantMsg()] };
         const { store, eventSource, context } = makeContext(chatRef);
 
-        // Phase 1: subscribe migration handler before fs mounts.
+        // Step 1: subscribe migration handler before fs mounts.
         eventSource.on(event_types.CHAT_CHANGED, async () => {
             await migrateLegacyMemoryGraphState(
                 context,
@@ -826,7 +826,7 @@ describe('main.js sequencing: CHAT_CHANGED migration handler runs before fs hand
         const fs = await context.createFloorState({ namespace: adapterConstants.MODULE_NAME });
         await fs.ready();
 
-        // Phase 2: simulate the user switching to a chat that has legacy
+        // Step 2: simulate the user switching to a chat that has legacy
         // data. The chat-state mock conflates "current chat" with "no
         // explicit target", so we just write into the default partition.
         store._raw.set(adapterConstants.MODULE_NAME, {
@@ -869,10 +869,10 @@ describe('main.js sequencing: CHAT_CHANGED migration handler runs before fs hand
         const chatRef = { value: [assistantMsg(), assistantMsg()] };
         const { store, eventSource, context } = makeContext(chatRef);
 
-        // Phase 1: mount fs FIRST (subscribes fs's CHAT_CHANGED handler).
+        // Step 1: mount fs FIRST (subscribes fs's CHAT_CHANGED handler).
         const fs = await context.createFloorState({ namespace: adapterConstants.MODULE_NAME });
         await fs.ready();
-        // Phase 2: subscribe migration handler SECOND.
+        // Step 2: subscribe migration handler SECOND.
         eventSource.on(event_types.CHAT_CHANGED, async () => {
             await migrateLegacyMemoryGraphState(
                 context,
@@ -882,7 +882,7 @@ describe('main.js sequencing: CHAT_CHANGED migration handler runs before fs hand
             );
         });
 
-        // Phase 3: simulate switching to a chat with legacy data.
+        // Step 3: simulate switching to a chat with legacy data.
         store._raw.set(adapterConstants.MODULE_NAME, {
             version: 8,
             opLog: [

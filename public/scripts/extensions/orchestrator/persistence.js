@@ -105,8 +105,7 @@ export const ORCH_EXECUTION_MODE_LOOP = 'loop';
  * `sanitizeLoopProfile` rather than mutating this object — the freeze is
  * a guardrail, not the contract.
  *
- * Field semantics (full design lives in
- * `docs/superpowers/specs/2026-05-06-orchestrator-loop-mode-design.md`):
+ * Field semantics:
  *
  *   - mode                  literal 'loop'; coerced on every sanitize
  *   - apiPresetName         Connection Manager profile (empty = global)

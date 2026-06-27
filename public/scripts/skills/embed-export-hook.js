@@ -1,5 +1,5 @@
 /**
- * Skill embed export hook (Plan 2 Unit 5).
+ * Skill embed export hook.
  *
  * Wires the export-side of the embed flow into Luker's existing preset
  * export event (OAI_PRESET_EXPORT_READY). The event fires from openai.js
@@ -15,7 +15,7 @@
  * Character export goes through Luker's image-card serialization, which
  * doesn't currently emit a similar event. Until a CHARACTER_EXPORT_READY
  * hook lands, character-scope skills export piggybacks on the manual
- * "Pack to embed" path in the skill manager subpanel (Unit 2).
+ * "Pack to embed" path in the skill manager subpanel.
  */
 
 import { packAndAttachSkillsForExport } from './embed-export-helper.js';

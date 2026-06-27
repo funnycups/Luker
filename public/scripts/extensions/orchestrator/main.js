@@ -101,8 +101,8 @@ import {
 import { openRunPanel, initRunPanel } from './run-panel/panel.js';
 
 // Local no-op stubs for the legacy runtime-trace API. The trace module
-// was deleted in Stage 2 of the run-panel refactor; Stage 3 converted
-// each runner to write run progress through RunStateStore directly.
+// was deleted when the run-panel store became the source of truth for
+// run progress, and each runner now writes through RunStateStore directly.
 // These stubs let main.js continue to compile while downstream code
 // paths (reuse-snapshot finalize, simulation review export) still pass
 // the legacy trace shape around. Wholesale removal of the stubs is

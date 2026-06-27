@@ -174,10 +174,10 @@ import { EmbeddingService } from './embedding-service.js';
 import * as LIB_BUNDLE from '../lib.js';
 
 /**
- * Layer 2 / Layer 3 export of the iteration-library surface (spec section 15).
+ * Layer 2 / Layer 3 export of the iteration-library surface.
  * Plugin-owned popups (CEA Character, CPA, MG Schema, Orchestrator) consume
- * this directly. The shell-era `iterationStudio` field was removed in Stage 6
- * of the iter-studio library overhaul.
+ * this directly. The shell-era `iterationStudio` field was removed when the
+ * iter-studio shell was retired.
  */
 const ITERATION_LIBRARY_API = Object.freeze({
     applyEdits: ITERATION_LIBRARY_API_NS.applyEdits,

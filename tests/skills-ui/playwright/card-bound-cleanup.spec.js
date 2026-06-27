@@ -1,11 +1,11 @@
 /**
- * Plan 3 Unit 7 — card-bound preset embedded skills + cleanup (#11).
+ * Card-bound preset embedded skills + cleanup.
  *
  * Scope:
  *   - Simulate a character card whose `extensions.luker.bound_preset` block
- *     carries an `embedded_skills_source` payload. Per spec §3.3, that
- *     payload's skills materialize into the CHARACTER's scope (not preset
- *     scope), because the bound-preset's lifecycle is tied to the character.
+ *     carries an `embedded_skills_source` payload. That payload's skills
+ *     materialize into the CHARACTER's scope (not preset scope), because
+ *     the bound-preset's lifecycle is tied to the character.
  *   - Verify the cascadeDeleteSkillsInScope helper cleans the character
  *     scope when the character is deleted — proving the cleanup hook runs
  *     end to end for card-bound preset skills.

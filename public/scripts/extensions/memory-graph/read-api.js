@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Memory-graph read-only API. Spec:
-//   docs/superpowers/specs/2026-05-18-memory-graph-readonly-api.md
+// Memory-graph read-only API.
 //
 // Exposes the same data + topology + recall primitives that
 // `chooseRecallRoute` (main.js) feeds to the route LLM, but as a frozen,
@@ -12,7 +11,7 @@
 // in `api.js` instead — it handles store loading and is the recommended
 // public entry point.
 //
-// Four layers, mirroring the spec:
+// Four layers:
 //   - Layer A (data access):      listNodes, getNode, listEdges, getSchema
 //   - Layer B (topology):         getNeighbors, getAncestor, getDescendants,
 //                                  getNearestVisibleAncestor, projectEdges
@@ -198,8 +197,8 @@ function freezeEdgeView(edge, { includeWeight = false } = {}) {
         to: String(edge.to || ''),
         type: String(edge.type || ''),
     };
-    // Raw edges (listEdges) must NOT include `weight` per spec §4.2.
-    // Projected edges (projectEdges) include `weight` per spec §4.3.
+    // Raw edges (listEdges) must NOT include `weight`; only projected edges
+    // (projectEdges) carry it.
     if (includeWeight && typeof edge.weight === 'number' && Number.isFinite(edge.weight)) {
         out.weight = Number(edge.weight);
     }
@@ -236,7 +235,7 @@ function freezeSchemaSpecView(spec) {
     const compressionMode = String(spec?.compression?.mode || spec?.compressionMode || 'none');
     return Object.freeze({
         // Schema items use `id` as the type identifier (e.g. 'event',
-        // 'character_sheet'); the spec calls it `type` on the view side.
+        // 'character_sheet'); view-side field name is `type`.
         type: String(spec?.id || spec?.type || ''),
         tableName: String(spec?.tableName || ''),
         tableColumns: Object.freeze((Array.isArray(spec?.tableColumns) ? spec.tableColumns : [])
@@ -268,7 +267,7 @@ function freezeInjectionState({ alwaysInjectIds, recallSelectedIds, visibleIds }
     const v = visibleIds instanceof Set ? visibleIds : toIdSet(visibleIds);
     return Object.freeze({
         // Set contents are not enforced read-only by Object.freeze; consumers
-        // are documented to treat these as immutable. See spec §7.
+        // are contractually required to treat these as immutable.
         alwaysInjectIds: Object.freeze(a),
         recallSelectedIds: Object.freeze(r),
         visibleIds: Object.freeze(v),
@@ -277,9 +276,9 @@ function freezeInjectionState({ alwaysInjectIds, recallSelectedIds, visibleIds }
 
 function freezeNodeBriefView(brief) {
     if (!brief || typeof brief !== 'object') return null;
-    // formatNodeBrief returns snake_case; spec §4.1 NodeBriefView is camelCase.
+    // formatNodeBrief returns snake_case; the view shape we return is camelCase.
     // We map both directions so the contract is forgiving if either shape is
-    // supplied (dogfood-side test will assert structural equivalence).
+    // supplied.
     const keyValues = (brief.keyValues && typeof brief.keyValues === 'object')
         ? brief.keyValues
         : (brief.key_values && typeof brief.key_values === 'object' ? brief.key_values : {});
@@ -624,8 +623,9 @@ export function getMemoryGraphReadApi(store, context = null) {
         if (!store) return Object.freeze([]);
         const visibleSet = toIdSet(options?.visibleNodeIds);
         const relationTypes = normalizeStringArray(options.edgeTypes);
-        // Spec §4.3: projectEdges defaults `excludeInternal: true` (unlike
-        // expandFromSeeds, which defaults false to mirror expandRouteCandidates).
+        // projectEdges defaults `excludeInternal: true` (unlike expandFromSeeds,
+        // which defaults false to mirror expandRouteCandidates) so callers don't
+        // see contains/semantic_contains noise.
         const excludeInternal = options.excludeInternal === false ? false : true;
         const projected = buildProjectedEdges(store, {
             visibleNodeIds: visibleSet,
@@ -676,7 +676,7 @@ export function getMemoryGraphReadApi(store, context = null) {
             if (seqTo !== null && nodeSeq > seqTo) continue;
             filtered.push(node);
         }
-        // Spec §4.4 contract: re-sort by compareNodesByRecency. Native
+        // Contract: re-sort by compareNodesByRecency. Native
         // collectRootCandidates already sorts this way, so this is a stable
         // no-op in the common case but enforced for filter-induced reorder.
         filtered.sort(compareNodesByRecency);
@@ -839,16 +839,16 @@ export function getMemoryGraphReadApi(store, context = null) {
         // internally for its projectedEdges call. The API surface advertises
         // `excludeInternal` (default false) — when set to true, post-filter
         // the result by stripping any node whose only inbound path uses an
-        // internal edge. The pragmatic interpretation (matching the spec
-        // bullet that "set to true aligns with §4.3 projectEdges default") is
-        // to drop nodes that were reached *only* through internal edges. We
-        // cannot recover the exact reachability map from the post-hoc node
-        // list, so we approximate: when excludeInternal is true, drop nodes
-        // whose level transition is purely a contains/semantic_contains step
-        // away from a seed — i.e. children of seeds that are not also linked
-        // via a non-internal projected edge. In practice that is
-        // implementation overkill; the dogfood spec only tests the default
-        // (false), so we keep the simple behavior: pass through.
+        // internal edge. The pragmatic interpretation (aligning with
+        // projectEdges' default) is to drop nodes that were reached *only*
+        // through internal edges. We cannot recover the exact reachability
+        // map from the post-hoc node list, so we approximate: when
+        // excludeInternal is true, drop nodes whose level transition is
+        // purely a contains/semantic_contains step away from a seed — i.e.
+        // children of seeds that are not also linked via a non-internal
+        // projected edge. In practice that is implementation overkill; only
+        // the default (false) is exercised, so we keep the simple behavior:
+        // pass through.
         if (excludeInternal) {
             const seedSet = new Set(ids);
             const internalChildIds = new Set();
@@ -1156,7 +1156,7 @@ export function getMemoryGraphReadApi(store, context = null) {
     });
 }
 
-// Spec §6 compatibility: re-export the existing alias so callers that imported
-// it from `external-api.js` can switch to `read-api.js` without changing
-// import paths beyond the factory.
+// Re-export the existing alias so callers that imported it from
+// `external-api.js` can switch to `read-api.js` without changing import paths
+// beyond the factory.
 export { getMemoryGraphInjectionState } from './external-api.js';

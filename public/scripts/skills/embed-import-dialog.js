@@ -1,5 +1,5 @@
 /**
- * Skill embed import dialog (Plan 2 Unit 5).
+ * Skill embed import dialog.
  *
  * Surfaces `extensions.luker.embedded_skills_source` payloads embedded in
  * character cards or presets as a per-skill conflict-resolution table:
@@ -11,7 +11,7 @@
  *   - Card-app character import (after the card lands but before commit)
  *   - Preset-manager import (after the JSON parses but before save)
  *   - Card-bound preset materialize (skills from a character-bound preset
- *     are pinned to character scope per spec §3.3)
+ *     are pinned to character scope)
  *
  * Flow:
  *   1. Detect `extensions.luker.embedded_skills_source` on the imported asset.

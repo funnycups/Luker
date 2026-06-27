@@ -21,13 +21,12 @@ export class FsEngine {
     async ping(handle) { /* nothing to do */ }
 
     /**
-     * No-op per design spec §4.1 / §5.3: the fs engine has no engine-internal
-     * rows to wipe — every byte of a user's data lives in the on-disk
-     * directory tree. The admin `/delete` handler's `purge=true` branch is the
-     * single, explicit owner of removing that directory; `deleteUser` here
-     * runs unconditionally and must therefore preserve the dir when the admin
-     * chose `purge=false`. Idempotent (it does nothing). See
-     * `docs/superpowers/specs/2026-06-24-db-mode-fix-design.md` §4.1 / §5.3.
+     * No-op by design: the fs engine has no engine-internal rows to wipe —
+     * every byte of a user's data lives in the on-disk directory tree. The
+     * admin `/delete` handler's `purge=true` branch is the single, explicit
+     * owner of removing that directory; `deleteUser` here runs unconditionally
+     * and must therefore preserve the dir when the admin chose `purge=false`.
+     * Idempotent (it does nothing).
      * @param {string} _handle
      */
     async deleteUser(_handle) {
@@ -35,8 +34,8 @@ export class FsEngine {
     }
 
     /**
-     * Per spec §4.1: fs engine has no engine-internal rows to dump. The
-     * on-disk directory tree (already included by createBackupArchive's
+     * The fs engine has no engine-internal rows to dump. The on-disk
+     * directory tree (already included by createBackupArchive's
      * file/directory loop) IS the backup. createBackupArchive's
      * `kind !== 'fs'` guard ensures this method is never called in
      * production. Returning null is the documented "nothing to dump"
@@ -49,7 +48,7 @@ export class FsEngine {
     }
 
     /**
-     * Per spec §4.1: fs restore is a no-op. Backup files for fs mode are
+     * fs restore is a no-op. Backup files for fs mode are
      * regular files inside the ZIP; restoreUserBackupArchive extracts them
      * via fs writes, not via this method. The engine.kind === 'fs' branch
      * in the restore handler does not call this.

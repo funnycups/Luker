@@ -2,7 +2,7 @@
 /**
  * Regression for: "generateTask sender failed: Promise object could not be cloned."
  *
- * Root cause (spec §11 / 附录 A.0): CPA's commit() path leads to
+ * Root cause: CPA's commit() path leads to
  *   public/scripts/openai.js:syncCharacterBoundPresetJsonData
  * which forwards `boundPreset` into `worker.postMessage(...)`. The Web Worker
  * postMessage uses structuredClone internally, which rejects Promises, Proxies,
@@ -37,7 +37,7 @@ function makeDirtyBoundPreset() {
     };
 }
 
-describe('Stage 0: structured-clone safety for character-bound preset sync', () => {
+describe('structured-clone safety for character-bound preset sync', () => {
     test('raw boundPreset with Promise/Proxy/function fields cannot be structuredCloned', () => {
         const dirty = makeDirtyBoundPreset();
         expect(() => structuredClone(dirty)).toThrow();

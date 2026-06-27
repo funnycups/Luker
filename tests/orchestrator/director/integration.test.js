@@ -54,10 +54,10 @@ describe('director integration — scripted main agent', () => {
     beforeEach(() => { clearCurrentRun(); });
 
     test('main agent text chunks stream into the run-panel text section as they arrive', async () => {
-        // Stage 3 of the run-panel refactor moves live streaming off the
-        // chat-message reasoning fold and into RunStateStore. We prove
-        // here that each text-chunk delta is reflected in the active
-        // run's `text` section the moment onChunk fires.
+        // The run-panel store is the source of truth for live streaming;
+        // the chat-message reasoning fold is no longer touched mid-run.
+        // We prove here that each text-chunk delta is reflected in the
+        // active run's `text` section the moment onChunk fires.
         const { chat, handle } = makeHandle();
         const runId = startRun({ mode: 'director', chatKey: 'test', abortFn: null });
         const ev = {

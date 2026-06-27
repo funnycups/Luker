@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 3 — Per-agent skill chips component.
+ * Per-agent skill chips component.
  *
  * Tests target the pure helpers (renderSkillChipsHtml, chipClasses,
  * computeAddOptions, applyChipToggle, applyChipRemove, applyChipAdd,

@@ -7,7 +7,7 @@ import { Cache } from '../util.js';
  *
  * A token may be consumed multiple times within this window (one logical
  * sync does many object fetches), unlike the one-shot tokens in
- * `src/lan-migration.js`. See `docs/superpowers/specs/lan-sync.md` §2.4.
+ * `src/lan-migration.js`.
  */
 export const SYNC_SESSION_TTL_MS = 10 * 60 * 1000;
 

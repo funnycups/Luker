@@ -42,8 +42,8 @@ describe.each(ENDPOINT_HARNESSES)('GET /api/storage/health on $name', ({ mode })
         expect(typeof res.body.latencyMs).toBe('number');
         expect(res.body.latencyMs).toBeGreaterThanOrEqual(0);
         // schemaVersion is best-effort: engines without getSchemaVersion()
-        // surface 0. All four engines currently return 0 (Stage 0 hasn't
-        // exposed the value publicly yet — that's a future task).
+        // surface 0. All four engines currently return 0 — the value
+        // is not yet publicly exposed (that's a future task).
         expect(typeof res.body.schemaVersion).toBe('number');
     });
 });

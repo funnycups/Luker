@@ -1,5 +1,5 @@
 /**
- * Plan 3 Unit 7 — character export with embedded skills, end-to-end (#9).
+ * Character export with embedded skills, end-to-end.
  *
  * Scope:
  *   - Install a synthetic skill in character scope for the active character.
@@ -15,7 +15,7 @@
  *
  * The end-to-end contract this exercises: a character card carrying
  * `embedded_skills_source` deposits its skills in character scope on
- * reimport (spec §3.3 — character-scope skills follow the character).
+ * reimport — character-scope skills follow the character.
  *
  * The real PNG embedder (script.js's `writePngWithExtras`) is exercised by
  * Luker's existing card-app tests; reusing it from Playwright would require

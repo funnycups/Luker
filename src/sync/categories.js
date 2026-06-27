@@ -7,9 +7,7 @@ import path from 'node:path';
  * presets, ...), the live filesystem paths that belong to it, and the
  * default sync policy plus any user-facing warnings the UI must surface.
  *
- * See `docs/superpowers/specs/lan-sync.md` §3 for the canonical
- * classification table this registry implements, and §7.1 for the
- * field-by-field shape contract. The registry is pure data: it performs no
+ * The registry is pure data: it performs no
  * I/O and depends on nothing outside `node:path`.
  *
  * Conflict modes:
@@ -296,8 +294,8 @@ export const SYNC_CATEGORIES = [
         // (typically 1–5 KB) that name the user's saved Comfy pipelines.
         // Lives under `user/workflows/` per `directories.comfyWorkflows`.
         // Sync-default-on for symmetry with the other small JSON config
-        // categories (themes, presets, quickreplies); the spec §6.5
-        // caveat about "category later added with large binaries"
+        // categories (themes, presets, quickreplies); the
+        // "category later added with large binaries" caveat
         // applies if someone bundles model assets here, which is not
         // the current shape of the data.
         id: 'comfy-workflows',
@@ -318,7 +316,7 @@ export const SYNC_CATEGORIES = [
         warnings: [],
     },
     {
-        // Per spec §3.1: keyed to user/images and must travel together.
+        // Keyed to user/images and must travel together.
         id: 'image-metadata',
         displayKey: 'sync.category.image-metadata',
         descriptionKey: 'sync.category.image-metadata.desc',

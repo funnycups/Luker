@@ -1,6 +1,6 @@
 /**
- * Plan Task 15 — `/undo` rewinds the local replica to the most recent
- * `sync-backup-*` tag without touching the peer (spec §4.6).
+ * `/undo` rewinds the local replica to the most recent
+ * `sync-backup-*` tag without touching the peer.
  *
  * Mirrors `full-flow.test.js`'s two-real-server pattern: A and B each
  * get their own `makeEndpointHarness`, their own data root, and stand

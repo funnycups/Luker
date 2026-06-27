@@ -4,17 +4,17 @@
 /**
  * CPA — plugin-owned per-preset session store.
  *
- * Backed by ctx.presets.state (the Plan 1 sidecar that CPA already uses
+ * Backed by ctx.presets.state (the sidecar that CPA already uses
  * for its in-memory iteration state). This module exposes the
- * { list, load, save, delete, clearObsolete } surface the new Stage 3
+ * { list, load, save, delete, clearObsolete } surface the
  * popup expects, plus the { getCurrentSessionId, setCurrentSessionId }
  * pair the popup uses to remember which session was last open per preset.
  *
- * Ported verbatim from cpa-iteration-adapter.js (the shell-driven adapter
- * that Stage 3 retires):
+ * Ported verbatim from cpa-iteration-adapter.js (the previous
+ * shell-driven adapter):
  *
  *   - SESSION_NAMESPACE      (top-of-file constant)
- *   - migrateLegacySession   (Plan 2 surfaceState shim)
+ *   - migrateLegacySession   (surfaceState shim)
  *   - readStore / writeStore (presets.state get/update wrappers)
  *   - list/load/save/delete  (adapter listSessions/loadSession/...)
  *
@@ -23,9 +23,9 @@
  *     The preset target can change between calls (user clicks another
  *     preset in the dropdown), so the ref is fetched fresh each time
  *     instead of being cached at factory time.
- *   - clearObsolete() is a no-op: Plan 1 already wiped pre-sidecar
- *     journal-era data. Kept as a method so the popup can call the same
- *     lifecycle hook against every backend.
+ *   - clearObsolete() is a no-op: legacy pre-sidecar journal-era data was
+ *     already wiped earlier. Kept as a method so the popup can call the
+ *     same lifecycle hook against every backend.
  *
  * Pure ESM. No DOM, no jQuery, no globals.
  */
@@ -77,7 +77,7 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
 
 /**
  * Lift legacy top-level fields (referencePresetName, mode) into the
- * surfaceState bag introduced in Plan 2. Idempotent: returns the input
+ * surfaceState bag. Idempotent: returns the input
  * unchanged once surfaceState is present, or when no legacy fields are
  * found. Surface modes that fail validation in newer code are still
  * preserved here — the dropdown renders them as 'general' when
@@ -187,7 +187,7 @@ export function createCpaIterationSessionStore({ getContext, getTargetRef }) {
         },
 
         clearObsolete: async () => {
-            // Plan 1 already wiped legacy journal-era data; nothing to do here.
+            // Legacy journal-era data was already wiped earlier; nothing to do here.
         },
 
         getCurrentSessionId: async () => {

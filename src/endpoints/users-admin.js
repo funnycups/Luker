@@ -993,7 +993,7 @@ router.post('/announcements/delete', requireAdminMiddleware, async (request, res
 });
 
 // ----------------------------------------------------------------------------
-// Storage engine status / migration (Phase 3)
+// Storage engine status / migration
 // ----------------------------------------------------------------------------
 //
 // Two admin endpoints back the migration UI / CLI. They live in this file so
@@ -1004,8 +1004,8 @@ router.post('/announcements/delete', requireAdminMiddleware, async (request, res
 // state for the in-flight migration (or null if none is running) and blocks
 // overlapping migrations whose target fingerprint differs. The migration
 // itself is synchronous from the HTTP caller's perspective — we don't return
-// until the per-user copy + verify pass is done. That matches the Phase 3
-// simplification (no SSE / progress stream). The endpoint flips the global
+// until the per-user copy + verify pass is done (no SSE / progress stream).
+// The endpoint flips the global
 // read-only flag via setReadOnly() for the duration; the storage error
 // middleware turns the resulting StorageReadOnlyError from concurrent writers
 // into a 503.

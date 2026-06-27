@@ -1,15 +1,15 @@
 /**
- * Skill manager subpanel (Plan 2 Unit 2).
+ * Skill manager subpanel.
  *
  * A popup launched from the orchestrator config that lists installed skills
  * across all three scopes (global, preset, character), grouped by scope, with
  * per-row actions (View, Edit, Move to, Rename, Delete) plus a top toolbar
  * for import operations (bundled, file, URL) and create-new.
  *
- * All write paths flow through `context.skills.*` — the JS API from Plan 1
- * Unit 5. The panel never touches `fetch` directly; this keeps the CSRF /
- * auth concerns centralized in the JS API and lets the skill-resolution
- * cache invalidate uniformly via the REST layer.
+ * All write paths flow through `context.skills.*` — the JS API. The panel
+ * never touches `fetch` directly; this keeps the CSRF / auth concerns
+ * centralized in the JS API and lets the skill-resolution cache invalidate
+ * uniformly via the REST layer.
  *
  * Inline-tested helpers are exported for use by the test suite without
  * needing a DOM (Luker's Jest config runs in node, not jsdom). The
@@ -17,8 +17,8 @@
  * orchestrator's main.js.
  *
  * Edit + Create-new wire through to `openSkillEditor` / `openCreateNewSkillFlow`
- * from skill-editor.js (Plan 2 Unit 4). Editor's `onChange` callback refreshes
- * the manager so updated descriptions / new skills show up without reload.
+ * from skill-editor.js. Editor's `onChange` callback refreshes the manager
+ * so updated descriptions / new skills show up without reload.
  */
 
 import { openSkillEditor, openCreateNewSkillFlow } from './skill-editor.js';

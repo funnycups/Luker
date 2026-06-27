@@ -189,7 +189,7 @@ export class PgEngine {
     }
 
     /**
-     * Per spec §4.1: postgres dumps to a text stream of newline-separated
+     * postgres dumps to a text stream of newline-separated
      * JSON-encoded `{sql, params}` records — one INSERT per row. The dump
      * is dialect-specific (postgres uses `$1, $2, ...` placeholders); the
      * matching engine kind is recorded in `_engine_meta.json` outside this
@@ -239,7 +239,7 @@ export class PgEngine {
     }
 
     /**
-     * Per spec §4.1: postgres restore wipes the handle (idempotent — calls
+     * postgres restore wipes the handle (idempotent — calls
      * `deleteUser` which is itself retry-wrapped) then replays the incoming
      * `{sql, params}` lines inside ONE transaction. A failed line rolls back
      * the whole restore so the user's slot is either fully restored or
@@ -247,7 +247,7 @@ export class PgEngine {
      *
      * The wipe runs in its own transaction BEFORE the restore transaction
      * begins; if the restore later fails, the user is left wiped (not
-     * mid-restored). This matches the spec's "idempotent" contract: re-
+     * mid-restored). The restore is idempotent: re-
      * issuing the same restore from a good dump converges.
      *
      * Stream parsing buffers across chunk boundaries — `for await` chunks

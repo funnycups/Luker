@@ -179,8 +179,8 @@ describe('MigrationRunner: FS to SQLite', () => {
                 backupRoot,
                 getUserRoot: () => src.userDir,
             },
-            // Snapshot GC defaults to ON after a successful migration
-            // (Stage 5 Task 4). This test specifically asserts that the
+            // Snapshot GC defaults to ON after a successful migration.
+            // This test specifically asserts that the
             // snapshot dir exists post-run and contains source contents, so
             // it opts in to keepSnapshot to preserve the snapshot for
             // inspection. The default-GC behaviour is exercised by

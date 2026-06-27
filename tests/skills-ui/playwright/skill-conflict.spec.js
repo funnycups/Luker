@@ -1,5 +1,5 @@
 /**
- * Plan 3 Unit 7 — skill conflict dialog: Skip vs Replace (#12).
+ * Skill conflict dialog: Skip vs Replace.
  *
  * Scope:
  *   - Install skill A (initial content) into character scope.

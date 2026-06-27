@@ -91,7 +91,7 @@ export async function ensureShadowRepo({ userRoot, peerId }) {
  * The workdir layout mirrors `liveRoot` exactly: a live file at
  * `<liveRoot>/characters/char_001.png` lands at
  * `<workdir>/characters/char_001.png`. This 1:1 correspondence lets the
- * reverse step (`reconcileShadowToLive`, Task 5) compute its writes by simply
+ * reverse step (`reconcileShadowToLive`) compute its writes by simply
  * subtracting the shadow root from each relative path.
  *
  * `liveRoot` defaults to `directories.root`, which preserves fs-mode
@@ -103,10 +103,10 @@ export async function ensureShadowRepo({ userRoot, peerId }) {
  * already-staged files while the commit step still advances `main`.
  *
  * Implementation notes:
- *   - Symlinks are skipped per spec §4.3 — both the live walker and the
+ *   - Symlinks are skipped — both the live walker and the
  *     workdir walker treat them as non-data; the live walker emits a
  *     `console.warn` so a misconfigured user data dir is observable.
- *   - Nested `.git` directories are skipped at every depth per spec §6.4 —
+ *   - Nested `.git` directories are skipped at every depth —
  *     card-apps initialize per-character git repos and we must not pull their
  *     `.git` internals into the shadow's index.
  *   - Change detection avoids `git.statusMatrix` (whose racy-git WORKDIR
@@ -166,9 +166,9 @@ function toPosixRel(liveRoot, absolutePath) {
 
 /**
  * Recursively walk a live directory, populating `desired` with every regular
- * file beneath it. Nested `.git` directories are skipped wholesale per spec
- * §6.4. Symlinks are intentionally not part of supported user data (spec
- * §4.3); we `console.warn` so a misconfigured live tree is observable, and
+ * file beneath it. Nested `.git` directories are skipped wholesale.
+ * Symlinks are intentionally not part of supported user data;
+ * we `console.warn` so a misconfigured live tree is observable, and
  * we never follow them (which would risk chasing into arbitrary filesystem
  * locations).
  *
@@ -202,7 +202,7 @@ async function walkLiveDir(absDir, liveRoot, desired) {
  * defensive guard for any stray `.git` inside the worktree.
  *
  * Copies use `fs.copyFile` rather than atomic-rename — the workdir is
- * private to the sync process under mutex (spec §4.3) so torn writes are
+ * private to the sync process under mutex so torn writes are
  * not a concern, and `git.add` will read whichever bytes we wrote.
  *
  * @param {string} workdir
@@ -400,12 +400,12 @@ async function resolveHeadOidOrNull(dir, gitdir) {
  * is deleted. Files outside the enabled categories are not touched — sync only
  * mutates what the user agreed to sync.
  *
- * Atomicity is mandatory here (spec §4.4): live data is being read by the
+ * Atomicity is mandatory here: live data is being read by the
  * running app, so torn writes are user-visible. `write-file-atomic` writes
  * to a sibling `.tmp` and renames into place, so a crash mid-write leaves the
  * prior live file intact and a stale `.tmp` that the OS process-exit handler
  * cleans up. The shadow workdir itself is private to the sync process under
- * mutex (spec §4.3), so the read side needs no extra synchronization.
+ * mutex, so the read side needs no extra synchronization.
  *
  * Scoping is done by starting each walk at a category's resolved live path
  * rather than at `directories.root` and then filtering. That way an
@@ -417,11 +417,11 @@ async function resolveHeadOidOrNull(dir, gitdir) {
  * Nested `.git` directories are skipped at every depth in both walks: in the
  * shadow walk that's defensive — the shadow's own `.git` is split off into
  * `paths.gitDir`, not inside the workdir — but a stray `.git` would corrupt
- * the desired set. In the live walk it implements spec §6.4 (`card-apps/`
- * already has per-character git repos we must never overwrite).
+ * the desired set. In the live walk it protects `card-apps/`
+ * which already has per-character git repos we must never overwrite.
  *
  * Symlinks and other non-file entries are silently ignored on both sides,
- * matching `snapshotLiveToShadow`'s policy (spec §4.3): they aren't synced
+ * matching `snapshotLiveToShadow`'s policy: they aren't synced
  * data, and we don't want a symlink in live data to silently follow into a
  * deletion sweep.
  *
@@ -531,7 +531,7 @@ async function walkShadowForDesired(absDir, prefix, desired) {
             desired.set(rel, abs);
         }
         // symlinks and other non-file entries silently skipped — same stance
-        // as snapshotLiveToShadow (spec §4.3): non-data on both sides.
+        // as snapshotLiveToShadow: non-data on both sides.
     }
 }
 
@@ -550,7 +550,7 @@ async function walkShadowForDesired(absDir, prefix, desired) {
 async function walkLiveForDeletions(absDir, prefix, desired, deleted) {
     const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
-        // Spec §6.4: card-apps and any other live directory may host
+        // card-apps and any other live directory may host
         // per-content git repos we must never touch.
         if (entry.name === '.git') continue;
         const abs = path.join(absDir, entry.name);

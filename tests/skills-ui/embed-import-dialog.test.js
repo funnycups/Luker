@@ -1,14 +1,14 @@
 /**
- * Plan 2 Unit 5 — Skill embed import dialog.
+ * Skill embed import dialog.
  *
  * Pure-helper unit tests for the dialog builder + decision collector, plus
  * one integration-style scenario per UX path (preview-only / user-replace /
  * user-skip / cancel) that exercises `runEmbedImportFlow` end-to-end.
  *
- * Like the Unit 2-4 tests, runs under `testEnvironment: "node"` with a
- * minimal stub DOM (just enough for the popup's `dlg.querySelectorAll`
- * loop to drive radios). The popup itself is replaced with a stub that
- * lets us drive the onClosing path manually.
+ * Runs under `testEnvironment: "node"` with a minimal stub DOM (just enough
+ * for the popup's `dlg.querySelectorAll` loop to drive radios). The popup
+ * itself is replaced with a stub that lets us drive the onClosing path
+ * manually.
  */
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';

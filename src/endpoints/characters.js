@@ -2220,7 +2220,7 @@ router.post('/chats', validateAvatarUrlMiddleware, async function (request, resp
         const characterDirectory = (request.body.avatar_url).replace('.png', '');
         const handle = request.user.profile.handle;
         // List from ChatRepo so we work the same way in every storage mode.
-        // Pre-Phase 5 this scanned <chats>/<charDir>/ directly with
+        // Previously this scanned <chats>/<charDir>/ directly with
         // fs.readdirSync — empty in db modes, where chats live in the engine.
         const repo = getChatRepo();
         const entries = await repo.listForCharacter(handle, characterDirectory, { orderBy: 'name' });

@@ -2,12 +2,12 @@
 // getBackupFunction(handle), creating a chat_<sanitized_name>_<ts>.jsonl file
 // in request.user.directories.backups (== harness.dirs.backups).
 //
-// Pre-Stage-3 only POST /save invoked the backup throttle — every other
+// Previously only POST /save invoked the backup throttle — every other
 // mutation path (append, patch, meta/patch, state/patch, plus the four group
 // twins) silently bypassed it, so users on db modes who never hit the legacy
 // /save route (e.g. branch-only workflows, state-only sidecar writes) got
-// zero backup history. Spec §6.2 lists all 8 endpoints; we assert one per
-// endpoint per engine.
+// zero backup history. All 8 incremental mutation endpoints must drive
+// `getBackupFunction(handle)`; we assert one per endpoint per engine.
 //
 // Throttle note: getBackupFunction memoizes a 10s `{leading:true, trailing:
 // true}` throttle per handle in a module-scoped Map. Across tests in the

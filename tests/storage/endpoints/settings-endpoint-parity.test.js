@@ -7,8 +7,8 @@
 //   - Tests exercise the real Express router via supertest.
 //
 // The bug demo at the bottom exercises the symptom the user reported:
-// save a preset through the Repo, then ask /api/settings/get for it. Today
-// it returns only the seed "Default" in db mode. After Phase 4 it must
+// save a preset through the Repo, then ask /api/settings/get for it. Previously
+// it returned only the seed "Default" in db mode; it must
 // return the saved preset in every mode.
 
 import request from 'supertest';
@@ -58,7 +58,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
     // For each of the four preset categories rendered in the settings payload,
     // simulate the user's repro: save through PresetRepo (what /api/presets/save
     // does internally), then ask the settings endpoint for the payload.
-    // Before Phase 4 every db-mode case returned the seed-only directory listing.
+    // Previously every db-mode case returned the seed-only directory listing.
 
     const PRESET_CASES = [
         { apiId: 'openai',              namesField: 'openai_setting_names',                  bodiesField: 'openai_settings' },

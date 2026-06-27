@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 8 — embed import dialog smoke spec.
+ * Embed import dialog smoke spec.
  *
  * Scope:
  *   - Invoke `runEmbedImportFlow` against a synthetic inline-files-v1
@@ -26,7 +26,7 @@
  * UI button) — the dialog DOM is the only differentiator and the smoke
  * spec exercises it directly.
  *
- * Each step captures a screenshot for the Plan 3 docs under
+ * Each step captures a screenshot under
  * docs/public/_screenshots/skills/import-*.png.
  */
 

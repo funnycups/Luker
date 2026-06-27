@@ -881,9 +881,6 @@ const RESPONSE_MODES = { TEXT: 'text', TOOL: 'tool', JSON: 'json' };
  * never directly call sendOpenAIRequest / buildPresetAwarePromptMessages /
  * resolveChatCompletionRequestProfile.
  *
- * See `docs/superpowers/specs/2026-05-06-generate-task-design.md` for the
- * full surface description and design rationale.
- *
  * @param {object} params
  * @param {Array}   [params.taskMessages]
  * @param {boolean} [params.includeCharacterCard=true]

@@ -1,9 +1,9 @@
-// Spec §8.3 scenario 5: after pair, both sides edit the SAME file.
+// After pair, both sides edit the SAME file.
 // Sync surfaces a `bothModified` conflict; user picks ours; the
 // resolution lands on both sides.
 //
-// This is the "make a difficult choice" path — the spec's note that
-// conflicts are always per-file with no line merge means we MUST see a
+// This is the "make a difficult choice" path — by design
+// conflicts are always per-file with no line merge, so we MUST see a
 // concrete pick UI, not a silent auto-merge.
 
 import { test, expect } from '@playwright/test';
@@ -81,7 +81,7 @@ test.describe('LAN Sync — bothModified conflict', () => {
         // Trees were identical → auto-merge path returns success.
         // (If the seed had drifted, this would be 'warning' and we'd
         // pick 'theirs' to align the bases. Document both as acceptable
-        // since the seed contents are outside this spec's control.)
+        // since the seed contents are outside this test's control.)
         if (pairOutcome === 'warning') {
             await resolveAllConflictsAs(pageB, 'theirs');
         }

@@ -292,7 +292,7 @@ export function registerPresetHandler(tx) {
 
     tx.putPresetState = (key, namespace, doc) => {
         const p = presetKeyToParams(key);
-        // PERMISSIVE: no parent-exists precheck (matches Phase 1b's FS behavior).
+        // PERMISSIVE: no parent-exists precheck (matches the FS behavior).
         stmt.upsertSidecar.run(p.handle, p.dir_key, p.name, namespace, JSON.stringify(doc));
     };
 

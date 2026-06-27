@@ -1,5 +1,5 @@
-// Contract tests for the listWithDocs / listNames extensions added in
-// Phase 4. These methods exist so endpoints (notably buildSettingsResponse)
+// Contract tests for the listWithDocs / listNames Repo extensions.
+// These methods exist so endpoints (notably buildSettingsResponse)
 // can ship preset/named-doc/world contents without a per-name N+1 round trip
 // through the Repo. The actual endpoint coverage lives in
 // tests/storage/endpoints/*; this file proves the Repo layer behaves

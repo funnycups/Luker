@@ -126,7 +126,7 @@ describe('unified CEA editor tools.js', () => {
     });
 
     it('normalizeToolCallToEdit returns null when args fail to parse / are malformed', async () => {
-        // Per spec: malformed call returns null (distinct from [] which means
+        // Malformed call returns null (distinct from [] which means
         // "valid call but no edits").
         const out = await tools.normalizeToolCallToEdit(
             { id: 'bad', name: 'cea_set_card_field', args: 'not-an-object' },

@@ -1,5 +1,5 @@
 /**
- * Plan 3 Unit 7 — scope migration e2e (#4).
+ * Scope migration e2e.
  *
  * Scope:
  *   - Install a synthetic skill at global scope.
@@ -10,7 +10,7 @@
  *     verbatim (the name reference is scope-agnostic — the resolver walks
  *     character → preset → global priority order to find the body).
  *
- * Spec §5: name-based visibility is independent of scope; only resolution
+ * Name-based visibility is independent of scope; only resolution
  *   precedence changes. This spec is the contract test for that property.
  *
  * Prerequisites:
@@ -145,7 +145,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
         await panel3.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 
         // ── 4. Final resolution check (precedence walk) ──────────────────
-        // Spec §5: when the same name lives in multiple scopes, character
+        // When the same name lives in multiple scopes, character
         // wins. We don't model the multi-scope case here (one skill, three
         // moves), but we verify the resolver still finds it after the
         // character move — proving the walk reached the character row.

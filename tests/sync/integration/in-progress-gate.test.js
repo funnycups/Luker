@@ -2,7 +2,7 @@
  * Integration: SYNC_IN_PROGRESS gate is held while a sync is in flight
  * and released on every exit path (success / error / pending conflict).
  *
- * Spec §4.4. The unit tests in `tests/sync/in-progress-gate.test.js`
+ * The unit tests in `tests/sync/in-progress-gate.test.js`
  * pin the registry + middleware in isolation. THIS suite stands up two
  * real Luker servers (per the `full-flow` test pattern) and proves that
  * the orchestrator actually invokes `markSyncInProgress` around its

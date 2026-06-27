@@ -1,6 +1,6 @@
-// Spec §3.4 — cross-handle pairings must be refused, both by the
-// frontend pre-flight (Task 7's UX guard) and by the server-side gate
-// on /pair/accept (Task 7's safety boundary). Both paths must fire so a
+// Cross-handle pairings must be refused, both by the
+// frontend pre-flight (the UX guard) and by the server-side gate
+// on /pair/accept (the safety boundary). Both paths must fire so a
 // regression in either one is caught: dropping the UI check would let
 // users get a confusing 412 with no explanation; dropping the server
 // check would let a hand-crafted POST through.

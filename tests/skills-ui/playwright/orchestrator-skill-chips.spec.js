@@ -1,21 +1,21 @@
 /**
- * Plan 2 Unit 8 — orchestrator skill chips smoke spec.
+ * Orchestrator skill chips smoke spec.
  *
  * Scope:
  *   - Set execution mode to director, open the orchestration editor popup,
  *     and verify the director mode-level skill chip block renders the
- *     5 default visible skills from the bundled scaffolds (Plan 1 Unit 7).
+ *     5 default visible skills from the bundled scaffolds.
  *   - Sub-agent chip row exists with an "Add" dropdown and (when not yet
  *     overridden) does not show the `+ inherit mode default` button (the
  *     mode-level row never offers inherit; sub-agent rows do).
  *   - The "Add" dropdown lists at least the bundled scaffolds for method
  *     skills, proving the available-skills feed reaches the component.
  *
- * Each step captures a screenshot for the Plan 3 docs under
+ * Each step captures a screenshot under
  * docs/public/_screenshots/skills/chips-*.png.
  *
- * No persistence / save-roundtrip is exercised — Plan 3 covers full
- * profile-save round-trips with deeper test fixtures. We restrict to
+ * No persistence / save-roundtrip is exercised — companion suites cover
+ * full profile-save round-trips with deeper test fixtures. We restrict to
  * visual rendering to keep the spec robust on shared CI envs.
  */
 
@@ -50,7 +50,7 @@ test.describe('Skills: orchestrator skill chips', () => {
 
         // ── 1. Set execution mode to director ─────────────────────────
         // Some envs start in spec mode; the chips render in any mode but
-        // director is where Plan 1 Unit 7's default profile lives. We
+        // director is where the default profile lives. We
         // change the dropdown value, then synthesize the change event so
         // the orchestrator binders pick it up.
         const modeSel = page.locator('#luker_orch_execution_mode');
@@ -97,7 +97,7 @@ test.describe('Skills: orchestrator skill chips', () => {
         // ── 3. Mode-level chip block shows the 5 default visible skills ──
         // The mode-level chip block is the second of the two `level:'mode'`
         // mounts (director mode renders it in the right column). The default
-        // profile from Plan 1 Unit 7 ships 5 names; environments where users
+        // profile ships 5 names; environments where users
         // already edited the profile may have a different count. We assert
         // ≥ 1 chip + log the actual count so doc review can verify
         // expectations match the shipped default profile.

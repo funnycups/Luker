@@ -3,7 +3,7 @@
 // auto-rollback.test.js already covers the fs→fs path: it proves that when the
 // destination copy throws partway through, the on-disk source tree is restored
 // from the snapshot. But that test passes NO sourceEngine to the runner, so it
-// can't catch the spec §4.4 bug where mysql/pg row mutations stick around
+// can't catch the bug where mysql/pg row mutations stick around
 // after rollback (the fs cpSync alone has nothing to roll back — the engine
 // owns the rows).
 //
@@ -20,7 +20,7 @@
 //   6. Probe the source engine: the row must be back to its pre-migration
 //      value. Without the engine-dump replay (or without sourceEngine wired
 //      into the constructor) the mutation persists and this assertion fails —
-//      which is exactly the bug Stage 4 Task 3's headline feature closes.
+//      which is exactly the bug engine-dump capture closes.
 //
 // Why source = non-fs only:
 //   - The fs engine has no engine-side state; auto-rollback.test.js already

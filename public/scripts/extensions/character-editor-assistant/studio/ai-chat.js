@@ -709,7 +709,7 @@ export function applyPatch(content, oldText, newText) {
  return null;
 }
 
-// ==================== Path 2 helpers (edits-lib batch integration) ====================
+// ==================== edits-lib helpers ====================
 
 /**
  * Parse a CardApp file-op path like `files["index.js"]` back into the bare

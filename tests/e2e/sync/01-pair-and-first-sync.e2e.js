@@ -1,4 +1,4 @@
-// Spec §8.3 scenarios 1-2: pair new device, B accepts, success after
+// Pair new device, B accepts, success after
 // resolving the seed-data no-common-ancestor conflict.
 //
 // Per `feedback_e2e_real_user_flow`: two real `startServer` instances

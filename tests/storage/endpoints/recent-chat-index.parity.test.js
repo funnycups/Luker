@@ -1,6 +1,6 @@
-// Recent-chat index parity. Pre-Stage 1, the recent-chat cache rebuild
+// Recent-chat index parity. The recent-chat cache rebuild previously
 // looked up group display names by raw fs.readdir on directories.groups —
-// invisible in db modes. After this fix, group resolution goes through
+// invisible in db modes. Group resolution now goes through
 // GroupRepo so the recent-chat cache shows group chats in db modes too.
 
 import request from 'supertest';

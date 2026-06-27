@@ -49,7 +49,7 @@ import { importFromUrl } from '../skills/url-import.js';
  *        write handler so each user's index can be looked up from the
  *        authenticated request rather than sharing one global instance —
  *        without this indirection a write by user A would either invalidate
- *        nothing (the Plan 1 default) or invalidate every user's cache.
+ *        nothing or invalidate every user's cache.
  * @returns {import('express').Router}
  */
 // Factory export (not `export const router = ...`) because each request needs

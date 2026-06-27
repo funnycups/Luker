@@ -193,7 +193,7 @@ test.describe('LAN Sync — walkthrough screenshots and banner UX', () => {
 
         // --- Step 07: divergent edit on both sides so the next sync
         // surfaces a real conflict. Modify the same file with different
-        // bodies — this is the spec 03 "bothModified" path, the most
+        // bodies — this is the "bothModified" path, the most
         // user-visible conflict scenario.
         fs.writeFileSync(
             path.join(A.dataRoot, 'default-user', 'worlds', 'Cascade Lore.json'),
@@ -239,7 +239,7 @@ test.describe('LAN Sync — walkthrough screenshots and banner UX', () => {
 
 /**
  * Inline mirror of sync.js's waitForTerminalBannerState — kept private
- * to this spec so the helper module's public surface doesn't grow a
+ * to this test so the helper module's public surface doesn't grow a
  * new export just for this walkthrough. (sync.js's version isn't
  * exported.) Resolves to 'success' | 'warning' | 'error'.
  */

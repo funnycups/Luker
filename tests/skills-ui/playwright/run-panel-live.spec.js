@@ -1,5 +1,5 @@
 /**
- * Live-LLM Run Panel e2e — Stage 6 of the orchestrator Run Panel refactor.
+ * Live-LLM Run Panel e2e — orchestrator Run Panel.
  *
  * Drives a real director-mode dispatch through the production send button
  * with a real LLM and watches the Run Panel as it streams. Verifies:

@@ -4,7 +4,7 @@
 /**
  * CPA Completion Preset Assistant — AI iteration popup (plugin-owned).
  *
- * Stage 3 replacement for the legacy iteration-studio adapter
+ * Replacement for the legacy iteration-studio adapter
  * (`cpa-iteration-adapter.js`). Single-column chat surface that wires
  * `iteration-library/*` helpers directly:
  *   - storage  (per-preset session bucket via `session-store.js`)
@@ -12,7 +12,7 @@
  *   - render   (Markdown rendering for assistant messages)
  *   - edits    (`applyEdits` from `lib/edits/`)
  *
- * Layout per sub-spec §4 (Q10 redesigned — single reference picker):
+ * Layout (Q10 redesigned — single reference picker):
  *
  *   ┌────────────────────────────────────────────┐
  *   │ <details> History … New, Clear  </details> │
@@ -166,7 +166,7 @@ function isAbortError(err, signal) {
 // `computeChangedPathSet`, `walkDiff`, `truncateForPreview`,
 // `fmtPendingChangeInline` are intentionally file-local. The other 4
 // popups (MG schema / Orchestrator / CEA char / CEA editor) duplicate
-// them rather than extract to iteration-library, per spec §B.
+// them rather than extract to iteration-library.
 // ──────────────────────────────────────────────────────────────────────────
 
 function computeChangedPathSet(live, pendingEdits) {
@@ -1462,7 +1462,7 @@ export async function openCpaIterationStudio(deps) {
     // `{ name, args, raw }`. `tools.js#normalizeToolCallToEdit` expects
     // OpenAI shape (`call.function.name`, `call.function.arguments` as
     // JSON string), so we wrap each call before normalizing. Same bridge
-    // pattern as Stage 2 (CEA Character).
+    // pattern as CEA Character.
     // ──────────────────────────────────────────────────────────────────
     function wrapToolCallForNormalize(call) {
         return {
@@ -2083,8 +2083,8 @@ export async function openCpaIterationStudio(deps) {
 
     // ──────────────────────────────────────────────────────────────────
     // Apply pending edits. `applyEdits(edits, live)` returns
-    // `{ newLive, clean, conflicts, alreadyDone }`. Per sub-spec §6 / §9
-    // we do NOT surface a conflict UI: just commit `newLive` and silently
+    // `{ newLive, clean, conflicts, alreadyDone }`. We do NOT surface a
+    // conflict UI: just commit `newLive` and silently
     // drop any conflicting / already-done edits.
     //
     // `state.pendingEdits` is cleared only after `commitLiveToPreset`

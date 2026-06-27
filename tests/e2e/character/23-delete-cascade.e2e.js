@@ -84,7 +84,7 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
         }, { scope: charScope });
 
         // Install must succeed; the skills API is part of the public
-        // ctx surface that this spec depends on. If install fails, that's
+        // ctx surface that this test depends on. If install fails, that's
         // a real product/setup bug — fail loud instead of skipping.
         expect(installSummary.ok, `skills install failed: ${installSummary.reason}`).toBe(true);
 

@@ -1,5 +1,5 @@
 /**
- * Skill chips component (Plan 2 Unit 3).
+ * Skill chips component.
  *
  * Reusable per-agent + mode-level skill visibility editor. Renders the
  * `skills: { visible: [], deny: [] }` profile field as a row of colored

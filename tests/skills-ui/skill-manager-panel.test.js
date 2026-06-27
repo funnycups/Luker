@@ -1,5 +1,5 @@
 /**
- * Plan 2 Unit 2 — Skill manager subpanel.
+ * Skill manager subpanel.
  *
  * Tests target the pure helpers (groupSkillsByScope, filterGroups,
  * inferImportFormat, hasRenameCollision, hasMoveScopeCollision,
@@ -704,7 +704,7 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         expect(global.toastr.success).toHaveBeenCalled();
     });
 
-    test('Create new triggers the create-new-skill flow (no Unit-4 stub toast)', async () => {
+    test('Create new triggers the create-new-skill flow (no placeholder stub toast)', async () => {
         const { ctx, mount } = await bootstrap({ skills: [] });
         const btn = mount.querySelector('[data-skill-toolbar="create"]');
         expect(btn).toBeTruthy();
@@ -712,16 +712,16 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         // Multiple microtask drains so the create flow opens its first INPUT popup.
         for (let i = 0; i < 6; i++) await Promise.resolve();
         // Either an INPUT prompt for the new-skill name was opened or the
-        // editor flow short-circuited; in both cases the Unit-2 placeholder
-        // toast should NOT fire.
-        const stubToast = global.toastr.info.mock.calls.find(c => /Unit 4/.test(String(c[0])));
+        // editor flow short-circuited; in both cases the historical "open
+        // editor" placeholder toast should NOT fire.
+        const stubToast = global.toastr.info.mock.calls.find(c => /open editor/i.test(String(c[0])));
         expect(stubToast).toBeFalsy();
         // The create flow opens an INPUT-type popup as its first step.
         const inputCalls = ctx.__popupCalls.filter(c => c.type === ctx.POPUP_TYPE.INPUT);
         expect(inputCalls.length).toBeGreaterThan(0);
     });
 
-    test('Edit on a skill opens the editor popup (no Unit-4 stub toast)', async () => {
+    test('Edit on a skill opens the editor popup (no placeholder stub toast)', async () => {
         const skills = [
             { name: 'demo', scope: { kind: 'global' }, description: 'd', fileCount: 1 },
         ];
@@ -733,8 +733,8 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         expect(editBtn).toBeTruthy();
         editBtn.click();
         for (let i = 0; i < 6; i++) await Promise.resolve();
-        // No Unit-2 placeholder toast
-        const stubToast = global.toastr.info.mock.calls.find(c => /Unit 4/.test(String(c[0])));
+        // No "open editor" placeholder toast.
+        const stubToast = global.toastr.info.mock.calls.find(c => /open editor/i.test(String(c[0])));
         expect(stubToast).toBeFalsy();
         // The editor opens a TEXT-type popup as its container.
         const textCalls = ctx.__popupCalls.filter(c => c.type === ctx.POPUP_TYPE.TEXT);

@@ -1,7 +1,5 @@
 /**
- * memory_scout IoU framework + content contract tests (spec 2).
- *
- * Spec: docs/superpowers/specs/2026-05-18-memory-scout-uses-readonly-api.md
+ * memory_scout IoU framework + content contract tests.
  *
  * This file holds two categories of tests:
  *
@@ -9,9 +7,9 @@
  *    end-to-end test that compares memory_scout's cited-id set against
  *    native `runLLMDrivenRecall` output. Tested standalone here so the
  *    math is locked.
- * 2. **memory_scout content contract** (spec §8.3) — asserts the
- *    description + systemPrompt content. Overlap with
- *    `director-fields.test.js` is deliberate: this file is the spec-2
+ * 2. **memory_scout content contract** — asserts the description +
+ *    systemPrompt content. Overlap with
+ *    `director-fields.test.js` is deliberate: this file is the content
  *    acceptance gate, that file is the schema gate.
  * 3. **Cited-id extraction** — pure regex utility tested standalone so
  *    any future IoU runner has a known-good parser for memory_scout

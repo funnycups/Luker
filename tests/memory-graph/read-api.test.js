@@ -1,12 +1,11 @@
 /**
  * Tests for memory-graph read-only API (read-api.js).
  *
- * Covers spec docs/superpowers/specs/2026-05-18-memory-graph-readonly-api.md
- * §8 acceptance:
+ * Acceptance coverage:
  *   #1 type-freeze
  *   #2 per-API behavior (Layers A/B/C/D)
  *
- * Dogfood tests (§5) live in a sibling file (Phase 5).
+ * Dogfood tests live in a sibling file.
  *
  * Uses the shared `_mocks/main-module-stack.js` shim so the real `main.js`
  * loads under jest. vector-index and character-overrides keep small in-file

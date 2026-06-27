@@ -1,12 +1,12 @@
-// Helpers for the real-data cross-mode recovery e2e specs.
+// Helpers for the real-data cross-mode recovery e2e tests.
 //
-// The 12 parameterized cross-mode specs (01-..12-..) use a programmatically
+// The 12 parameterized cross-mode tests (01-..12-..) use a programmatically
 // fabricated seed: ST's shipped default Seraphina + a single Chinese-emoji
 // chat turn. They prove the wiring works end-to-end at the category level
 // but tell us nothing about the developer's actual data shape (custom
 // presets, lorebooks, extensions, embedded chats, etc).
 //
-// This module backs the `99-real-data-*.e2e.js` specs:
+// This module backs the `99-real-data-*.e2e.js` tests:
 //   1. APFS-clone the developer's live `data/` into a private scratch dir
 //      so the test never mutates the developer's real data.
 //   2. Scrub secrets.json (real API keys/tokens) and any dev-only prompt
@@ -18,7 +18,7 @@
 //
 // The companion `parity-verify.js` builds a category-level fingerprint of
 // the cloned source BEFORE backup + the dest dataRoot AFTER restore, then
-// returns a diff so the spec can assert that every backed-up category
+// returns a diff so the test can assert that every backed-up category
 // round-tripped exactly.
 
 import { execSync } from 'node:child_process';
@@ -81,7 +81,7 @@ export function resolveRealDataRoot() {
  *
  * The scratch dir lives under `tests/.e2e-scratch/realdata-<specId>/` so
  * tearDownServer's `rmSync` (which only deletes inside SCRATCH_ROOT) still
- * cleans up correctly when the spec finishes.
+ * cleans up correctly when the test finishes.
  *
  * @param {object} opts
  * @param {string} opts.sourceDataRoot  Absolute path to the real dataRoot.
@@ -169,7 +169,7 @@ function scrubDevPromptPollution(settingsPath) {
 
 /**
  * Quick boolean: does the real dataRoot at the resolved path actually
- * carry user data (not just a placeholder)?  Used by the spec to bail
+ * carry user data (not just a placeholder)?  Used by the test to bail
  * with a clear skip reason when the env is blank.
  */
 export function realDataLooksPopulated(dataRoot) {

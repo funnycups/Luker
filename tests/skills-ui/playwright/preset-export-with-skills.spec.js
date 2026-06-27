@@ -1,5 +1,5 @@
 /**
- * Plan 3 Unit 7 — preset export with embedded skills, end-to-end (#10).
+ * Preset export with embedded skills, end-to-end.
  *
  * Scope:
  *   - Install a synthetic skill into a synthetic preset scope.

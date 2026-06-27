@@ -1,6 +1,6 @@
 // #44 — Live LLM 3-backend smoke (Anthropic / OpenAI / Gemini).
 //
-// Opt-in: set LIVE=1 plus the relevant API keys to enable the spec.
+// Opt-in: set LIVE=1 plus the relevant API keys to enable the test.
 // When LIVE is not set, the describe block is suppressed entirely —
 // no skipped-test noise, no false sense of coverage. Each per-backend
 // test inside still fails loud if its own API key is missing.

@@ -75,7 +75,7 @@ const IN_FLIGHT = new Map();
  * runs at the root, so `req.path` is `/api/chats/save` etc.
  *
  * `/api/users/me/settings/save` is the admin self-settings update —
- * not in the spec's explicit list but its target is `settings.json`
+ * not in the explicit gated list but its target is `settings.json`
  * by way of `getSettingsRepo().save`, so gating it keeps the same
  * file from being clobbered.
  */

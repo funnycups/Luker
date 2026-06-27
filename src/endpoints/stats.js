@@ -268,7 +268,7 @@ function countWordsInString(str) {
 /**
  * calculateStats - Calculate statistics for a given character chat directory.
  *
- * Pre-Phase 8 this read jsonl files directly off disk. That path returned
+ * Previously this read jsonl files directly off disk. That path returned
  * empty stats in db modes (the engine holds the chats, the directory is
  * empty), so the boot-time recreate-on-empty-stats path silently overwrote
  * the user's saved stats with zeros.
