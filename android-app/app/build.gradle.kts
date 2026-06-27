@@ -155,6 +155,12 @@ android {
         debug {
             isMinifyEnabled = false
             isDebuggable = true
+            // Share the release signature when CI provides it so a debug APK
+            // is install-as-upgrade compatible with a previously installed
+            // release APK. Falls back to AGP's default debug.keystore locally.
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         release {
             isMinifyEnabled = false
