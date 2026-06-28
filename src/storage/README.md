@@ -182,6 +182,7 @@ One table per resource kind (`chats`, `chat_states`, `settings`, `presets`, `pre
   - FS reads `fs.statSync(...).mtimeMs` (real OS flush timestamp; reflects when the file system wrote the bytes).
   - SQLite stores `Date.now()` at save time (reflects when the Repo called `save`).
   - Both are millisecond-resolution numbers, but they answer slightly different questions. Don't compare timestamps across engines.
+- **PostgreSQL collation** — `worlds.name`, `presets.name`, `named_docs.name`, and `chats.name`/`char_dir`/`group_id` rely on byte-exact equality for primary-key lookups. Postgres' default collation is "deterministic" (`=` compares byte-for-byte regardless of locale), so this works out of the box. If the operator deploys the database with an ICU non-deterministic collation declared at the database, schema, or column level, equality on these columns starts honoring locale rules (e.g. case-insensitive or accent-insensitive), and `WorldInfoRepo.resolveName` may map two visually distinct names to the same row. Keep the cluster on its default collation (or explicitly `COLLATE "C"` / `"POSIX"` on these tables) for Luker installs.
 
 ## Dependencies and install gotchas
 
