@@ -435,8 +435,6 @@ export function normalizeStoreForRuntime(store) {
         if (!rawNode || typeof rawNode !== 'object') continue;
         const nodeId = String(id || '').trim();
         if (!nodeId) continue;
-        const nodeType = String(rawNode.type || 'semantic').trim().toLowerCase();
-        if (nodeType === 'thread') continue;
         const level = String(rawNode.level || LEVEL.SEMANTIC).trim();
         if (level !== LEVEL.SEMANTIC) continue;
         const seqTo = Number.isFinite(Number(rawNode.seqTo))

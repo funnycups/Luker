@@ -1,9 +1,9 @@
 ---
 name: memory-curator-method-zh
-description: memory_curator method — multi-round workflow (Phase A 抽取 / B 压缩 / C 收尾), dedup roll-call hard structure, field rules, link discipline, anti-patterns, tool table.
+description: memory_curator method (v5) — depth-aware A-class verb rules (leaf allows concrete verbs like 肛交/口交/specific battle moves; rollup_depth ≥ 1 merges or fully abstracts), thread title-must-encode-resolution rule, B/C/D bans (live-event-label, meta-narrative, contract, paraphrase) depth-invariant.
 metadata:
   author: Luker Team
-  version: 1.0.0
+  version: 5.0.0
 ---
 
 # memory-curator-method-zh
@@ -21,9 +21,11 @@ metadata:
 
 **event 类型:每次 dispatch 必出一个 event 节点**。即便本轮只是路过/休整/闲聊/单次场景 — 仍 emit event。**最终 summary 字符串**可以只一行(routine 时:交代时间和人物动作即可),**但 7 步 CoT 必跑**(见上方 Agent 多轮工作流硬要求)。压缩端在 rollup 时按 `event-summary-rules-zh` 的事件保留判定(删后无下游依赖即丢)过滤 routine noise;但**叶层必须有连续 event 流,否则时间线断裂、recall 无法重建剧情上下文**。高后果事件(契约/誓言/婚约/师徒关系建立或破裂、不可逆物理状态变化、长期身份/立场变更、新角色登场、地点 controller 变更、重要物品转让)的 summary 字符串写完整因果细节(可多行)。
 
-**其他类型(character_sheet / location_state / 自定义)默认 SKIP。** 写错的代价高(LLM 编属性)。emit 的门槛:候选变更在故事时间往后 24h 之后仍约束故事走向。"不一定"/"取决于场景" → 不写。
+**其他类型(character_sheet / location_state / thread / 自定义)默认 SKIP。** 写错的代价高(LLM 编属性)。emit 的门槛因 type 而异:
+- character_sheet / location_state: 候选变更在故事时间往后 24h 之后仍约束故事走向。"不一定"/"取决于场景" → 不写。
+- thread: 必须通过"跨场景门槛"——这个钩子真的需要后续 ≥1 个独立场景才能解决/触发/结束。同场景内位移、单场景就解决的小目标、短期承诺 → 都**不**是 thread, 进 event.summary 括号补丁就够了。详见下方 thread 节点专章。
 
-不要把单次场景姿态、当前心情、临时性服务关系、对话氛围、未付诸行动的情绪、引述的对白原文写进 character_sheet / location_state 等字段。
+不要把单次场景姿态、当前心情、临时性服务关系、对话氛围、未付诸行动的情绪、引述的对白原文写进 character_sheet / location_state / thread 等字段。
 
 **先查再写**: 对每个本轮出现的实体(角色/地点),写之前必先调 `memory_find_by_name`;命中后调 `memory_node_brief` 看现状,再决定 create / edit。**严禁不查就 create** — 同名节点重复 create = 图污染,比错写更难修。
 
@@ -47,7 +49,7 @@ metadata:
 
 4b. **dedup roll-call (硬约束, 在响应文本里显式产出, 跑完 find_by_name + node_brief 之后立刻写)**:
 
-   在做任何 `character_sheet` / `location_state` 的 create / edit / SKIP 决定之前, 必须先按下面格式对**本轮出现的每个**角色 / 地点逐项点名汇报 find_by_name + node_brief 的检索结果。这一段是**强制结构**, 不是建议:
+   在做任何 `character_sheet` / `location_state` / `thread` 的 create / edit / SKIP 决定之前, 必须先按下面格式对**本轮出现的每个**角色 / 地点 / cross-scene 钩子逐项点名汇报检索结果。这一段是**强制结构**, 不是建议:
 
    ```
    [dedup roll-call]
@@ -62,16 +64,25 @@ metadata:
      - 名: 某地
        find_by_name 检索: title 精确匹配 = (无); aliases 重叠 = (无)
        决定: CREATE (确认无匹配) / SKIP (本轮未引入长期 controller/danger/resources 变化)
+   thread (本轮新钩子 + active threads 全量扫描):
+     - 名: 某 cross-scene 钩子
+       决定: CREATE (触发条件: ... 匹配类别 1/2/3 中的哪个 + 通过跨场景门槛) / SKIP (未通过跨场景门槛, 应写进 event.summary 括号补丁)
+     active threads 扫描 (对 graph_data 里每个 status=active 的 thread 逐项判断):
+       - thread_id n_X "某线索 A": SKIP (本轮未触发) / EDIT note (推进了, 新进度: ...) / EDIT status=resolved (本轮 event outline 含 ... 已达成) / EDIT status=abandoned (本轮 ... 让其失效)
+       - thread_id n_Y "某线索 B": ...
+     如果 graph_data 无 active thread, 写 "active threads: (无)"。
    ```
 
    硬约束:
-   - **任何 `memory_node_create(type=character_sheet)` / `memory_node_create(type=location_state)` 工具调用前**, 该角色 / 地点必须在 dedup roll-call 中出现, 且决定字段 = CREATE。直接 create 一个未出现在 roll-call 里的实体, 该次响应作废。
-   - roll-call 必须**逐个**列出本轮每个出场角色和地点 (即使最后决定 SKIP)。不允许"全部都是新的"这种简写。
+   - **任何 `memory_node_create(type=character_sheet|location_state|thread)` 工具调用前**, 该实体必须在 dedup roll-call 中出现, 且决定字段 = CREATE。直接 create 一个未出现在 roll-call 里的实体, 该次响应作废。
+   - roll-call 必须**逐个**列出本轮每个出场角色/地点以及每个 active thread (即使最后决定 SKIP)。不允许"全部都是新的"或"无变化"这种简写。
    - title 精确匹配 + aliases 重叠两项**都必须**报告 (不能省略其一)。如果 find_by_name 无任何匹配, 也要显式写"matches 为空, 检索结果均为 (无)"。
    - 决定 EDIT 时必须**指明变更字段 + 原因**(具体哪个字段从 X 改成 Y, 不能写"补充信息"这种含糊话)。
-   - 决定 SKIP 时必须说明**为什么本轮该实体的长期字段(traits/identity/goal/controller/state 等)没有 24h+ 变化**。
+   - 决定 SKIP 时必须说明**为什么本轮该实体的长期字段(traits/identity/goal/controller/state 等)没有 24h+ 变化**, thread 的 SKIP 必须说明"本轮 event outline 是否触及该 thread 的目标/进度/解决/放弃"。
 
-   为什么这条强制: 模型容易"查了 find_by_name 但没认真看 brief" — 工具结果如果只是被动消费, 模型注意力分散时会漏匹配, 导致重复 create 出同名节点污染图。强制 roll-call 把"查"变成显式产出步骤, 跟下游工具调用必经路径化。
+   **Thread sweep 硬约束**: dedup roll-call 的 thread 段必须完整扫描 graph_data 所有 `status=active` 的 thread。**只要 event outline 提到的内容能回答"是, 该 thread 的 title 描述的目标已达成"**, 必须 EDIT status=resolved。stale thread (event 已经解决/推进了它但 thread.note 没更新) = 严重错误。
+
+   为什么这条强制: 模型容易"查了 find_by_name 但没认真看 brief" — 工具结果如果只是被动消费, 模型注意力分散时会漏匹配, 导致重复 create 出同名节点污染图。强制 roll-call 把"查"变成显式产出步骤, 跟下游工具调用必经路径化。Thread sweep 同理: active threads 容易被遗忘, 强制每轮逐项扫描+决定, stale 不再有借口。
 
 5. **判定**: 对每条候选变更,自检"这个事实在故事时间往后 24 小时之后还约束故事吗?"如果答案是"不一定"或"取决于场景",**不写**。
 
@@ -91,7 +102,7 @@ metadata:
 
 2. **拉每个 child 的 brief**: 对 groups[i].childIds,逐个 `memory_node_brief` 看 summary 字段。
 
-**压缩专属铁律 (compression-only, 在 event-summary-rules-zh V10 写作规范之上叠加, 应用于 Phase B 每一组压缩)**:
+**压缩专属铁律 (compression-only, 在 event-summary-rules-zh 写作规范之上叠加, 应用于 Phase B 每一组压缩)**:  <!-- banned-words-allow phase -->
 
 > **Cross-children 主题归并 (核心)**: 压缩 ≠ dedup。把 N 个 children 的 outline items 拼起来再去重不是压缩, 是合并。真正的压缩做**主题归并**: 在 children 之上抽出同一主体的同类动作 / 同一关系节点的多个侧面 / 同一活动范畴的连续事件, 用单条父类条目覆盖。
 >
@@ -101,17 +112,37 @@ metadata:
 > - 同一活动范畴 (社交 / 战斗 / 性事 / 移动 / 协商 等) 在连续时段内多次发生 → 合为该活动范畴的单条
 > - 多个 children 描绘同一受赠 / 告白 / 决裂 / 相遇等关系标志事件的不同细节侧面 → 合为该关系标志的单条
 
-> **量化自检 (硬约束, 通不过即重写)**:
-> - rollup outline items 数 ≤ ⌈ sum(child items 数) / 2 ⌉。例: 4 个 children 共 13 items → rollup ≤ 7 items; 4 个 children 共 8 items → rollup ≤ 4 items。如果你输出的 items 数高于此上限, 直接判定为 dedup 失败, 必须再走一轮主题归并。
-> - rollup 字符数 ≤ sum(child summary chars) × 0.5。
+> **Depth awareness (核心)**: 每次压缩跑前都要先确定 `rollup_depth` (输出 rollup 的层级 — children 是 depth-1 层)。**对于 memory-graph 自动压缩, 系统会在 compress prompt 后段以 "Compression context (HARD, from code): rollup_depth=N" 显式注入这个值, 直接读取**。**对于 director memory_curator 走 `memory_compact_nodes` 工具的手动压缩, 看 children 自身的 depth (`memory_node_brief` 返回值里有 `semantic_depth`) — children 是 leaf (semantic_depth=0) 则你产生的 rollup 是 depth=1, children 是 depth=1 rollup 则你产生 depth=2, 以此类推**。**rollup_depth 越大, 输出越少条 outline 项, 信息密度越高**:
+>
+> | rollup_depth | 资讯密度 | 适用 |
+> |---|---|---|
+> | 1 (children 是 leaf events) | 章节级关键事件 — 可保留 关键决策 / 不可逆变化 / 未结线索 的括号补丁 |
+> | 2 (children 是 depth-1 rollups) | 章节级里程碑 — 只留长期影响后文的事件, 砍单场景甚至单天细节 |
+> | 3+ (children 是 depth-2+ rollups) | **章节标题级** — 只保留章节级转折、跨整章节都成立的关系定性、章节结束时的最终状态。所有日常 / 单次性事 / 临时遭遇 / 战斗细节 / 非关键决策一律砍光 |
+
+> **量化自检 (硬约束, 通不过即重写; 与 depth 联动)**:
+> - rollup_depth=1: 上限 `max(5, ⌈ sum(child items) / 2 ⌉)` 条, 字符数 ≤ sum(child chars) × 0.5。
+> - rollup_depth=2: 上限 `max(4, ⌈ sum(child items) / 3 ⌉)` 条, 字符数 ≤ sum(child chars) × 0.35。
+> - rollup_depth=3+: 上限 2-4 条, 字符数 ≤ sum(child chars) × 0.2; 几乎不用括号补丁。
 
 > **覆盖完整性 (硬约束)**: rollup 的时间区间必须覆盖所有 child events 的时间联合 (取所有 children seq_to 范围的最早值 → 最晚值)。每个 child 的核心不可逆事件 (做爱 / 告白 / 决裂 / 获赠关键物品 / 破处 / 死亡 等) 必须在 rollup 中以某种方式承载 (可以独立成行, 也可以归并入跨 children 的父类条目, 但不允许直接丢弃)。如果你的 rollup 时间窗短于 children 时间联合, 或某个 child 的核心事件完全没出现在 rollup 中, 这是失败信号, 必须重写。
+
+> **rebuild 场景的输入重叠去重 (硬约束)**: 在 rebuild 重建场景下, 相邻 children 可能存在 outline 项重叠 (因为每个 batch 包含 prior context, 早期版本的提取器会在多个 batch 各自的 outline 里都记录同一个底层事件)。判定重叠: 两个 children 的 outline 项**指代同一底层事件** (相同主体 + 相同类别动词 + 相同对象 + 时间锚重叠或相邻) → 视为同一事件, 在 rollup 中只出现一次, 时间锚取**该事件的起始时间**。
 
 > **反模式 (出现即重写)**:
 > - 给每个 child 的所有 items 全数搬运再删几条重复 (= dedup, 非压缩)
 > - 给每个 child 平均分配 outline 行数 (rollup 应按"主题/关系节点"分配, 不按 child 平均分配)
 > - 增加 children 里没有的位移/铺垫类条目 (「X 返回 Y」 「X 准备 Z」) — 位移和铺垫属于连接性纹理, 在 rollup 层应被父类动作吸收, 不单列
 > - 跳过某段时间窗的事件 (例: 4 个 children 覆盖 08:00-10:00, 你的 rollup 只写 09:30-10:00) — 这是信息丢失而非压缩
+> - **临时角色任命扫描**: rollup 里不应出现"大堂经理 / 临时管家 / 客串店员"这种临时身份的条目 (这些在 depth=1 都该砍, depth=2+ 一律砍)
+> - **在更高 depth 里保留单次性事/单场景调情/临时角色任命**——这些 depth=1 该砍, depth=2+ 一律砍
+
+> **A 类具体动词的 depth-conditional 抽象 (核心)**: A 类 = 具体性事动词 (肛交 / 口交 / 深喉 / 骑乘 / 后入 / 指交 / 等) + 具体战斗招式 + 具体动作动词。
+> - leaf event 写作时 (extract / Phase A 第 6 步 event 写入): **允许** A 类具体动词, 因为 leaf 是 scene-level snapshot, 细节越具体后续 RP 越能复刻情境。  <!-- banned-words-allow phase -->
+> - rollup_depth=1 时: 多次同类 A 类动作**必须合并**为通用动词 ("X 与 A B C 先后 性事" / "队伍 击退 X 类敌军"); 单次独立关键事件可保留具体动词。
+> - rollup_depth ≥ 2 时: A 类动词**不允许**出现, 全部抽象为通用动词 ("X 与 多名女性 性事 (X Y Z 失贞)" / "队伍 攻陷 X 据点")。
+> - **B/C/D 类禁令仍 depth-invariant**: 现场命名 (正式 X / 终身 X / 宣告归属) / 元叙述 (钩子 / 伏笔 / 为后续) / 契约词族 / paraphrase 残留 — 所有 depth 都禁, leaf 也禁。
+
 
 3. **逐组压缩 (每组独立一次 memory_compact_nodes 调用,严禁批量,每次调用前都跑完整 CoT)**: groups 列表里每一组按下面顺序处理:
    a. 取本组 `childIds` 对应的 child summaries (step 2 已拉) 作为本次「事件来源」。
@@ -154,6 +185,87 @@ metadata:
 - **location_state.controller**: 当前实际控制者。可接受 "X(名义)/Y(实际)" 双层。不写 "X 临时担任 Y" — 除非"临时"已成长期状态。
 - **location_state.danger**: 风险等级 + 主要威胁来源。不写单次访问遭遇的具体冲突(那是 event)。
 - **location_state.aliases**: 真正的别称/简称/双语名/in-world 通称。不重复 name; 不把其他子节点名当 aliases 塞进来(套房 aliases 不应写所属会所名)。
+
+## thread 节点专章 (高门槛, 但不为零)
+
+thread = 剧情线 / 伏笔 / 长线任务 / 跨场景承诺。**门槛高**, 但**不为零**。默认 SKIP, 但当本轮出现下述类别之一的钩子时, MUST CREATE。
+
+### 跨场景门槛 (硬约束, 在判断任何类别前先过这道关)
+
+CREATE thread 之前, 必须显式确认: 这个钩子**真的需要后续 ≥1 个独立场景才能解决/触发/结束**吗?
+
+**"独立场景"** 的判定:
+- 时间线推进 ≥30 in-world 分钟 + 主要参与角色至少一人改变 (有人来 / 有人走 / 有人换队)。
+- 或地点变更到完全不同的另一场景 (不是从同一空间站的舱段 A 到舱段 B, 而是不同星球 / 不同船 / 不同据点)。
+- 或对话/事件焦点从一个目标完全切换到另一个无关目标。
+
+**典型反例** (不要 CREATE thread, 写进 event.summary 括号补丁就够了):
+- 队伍从舱段 A 走到舱段 B 与某 NPC 会合: 同场景内位移, 下个 event 就完成。
+- 角色提议"危机解决后一起吃饭": 短期承诺, 下一两个 batch 就触发。
+- 队伍计划"先打 X 然后撤退到 Y": 单场景内的战术步骤, 不是 thread。
+
+判定反问: "如果我把这个东西做成 thread, 是否在下 1-2 个 batch 内它就会被 resolved? 是 → 不要 CREATE, 进 event.summary 括号补丁。"
+
+### 三大类触发模式 (通过跨场景门槛后再判断类别)
+
+**类别 1: 跨场景未完成的承诺 / 誓言 / 嘱托 / 委托**
+- A 嘱托 B "无论后续经历什么都要记得我" → CREATE thread
+- A 承诺 B 月供 N 信用点换长期上车权 → CREATE thread
+- A 委派 B 完成某调查任务 (跨多场景才能完成) → CREATE thread
+- A 立誓向 B 复仇 → CREATE thread
+
+**类别 2: 明确的悬念 / 伏笔**
+- 角色撰写未发送的信, 草稿留存 → CREATE thread (后文可能被发现/发送/丢失)
+- 角色离站追寻某个失踪旧识, 去向不明 → CREATE thread
+- 角色逃脱被通缉, 暂时不在抓捕范围 → CREATE thread
+- 角色埋下未触发的陷阱 / 留下未被发现的线索物件 → CREATE thread
+
+**类别 3: 跨多个场景的长期任务 / 目标**
+- 队伍接受跨越多个章节的调查任务 → CREATE thread
+- 章节级反派被锁定为长期追逐目标 → CREATE thread
+- 主角接受跨章节的长期合约 → CREATE thread
+
+### 禁止 CREATE thread 的情况
+
+- 单次场景的小目标 (本场景就解决了的)
+- **同场景的下一步动作** (例如 "前往本场景内的某舱段会合某人")
+- 角色普通的性格欲望 (这些进 character_sheet.goal)
+- 已经完成或彻底废弃的任务 (EDIT 对应已存在的 active thread, 不新建)
+- 抽象的氛围/主题 ("两人感情升温"——这是 character_sheet 关系演化)
+- 单次性事/约会/冒险/战斗 (这些是 event)
+- 角色卡里就声明的人设目标 (这是 character_sheet.goal)
+
+### thread 字段
+
+- **title** ≤ 10 字, 名词性短语 (例: "X 的嘱托", "通缉中的 Y", "前往 Z 调查 W", "守护某 NPC")。**禁止**形容词+名词的 AI 自造标签 (如"X 式合约")。
+  - **title 必须明确编码 resolution 条件** — 把 title 当成一个问题, 后续 event 能直接回答 是/否, 已达成。反例 "X 的邀约" → "邀约" 是动作不是状态, 模型不知道接受邀约还是完成邀约后的承诺才算 resolved。改写为更具体的 "Y 的登船邀约" / "Y 的合作邀约"。
+- **status**: `active` (推进中) / `resolved` (达成或彻底解决) / `abandoned` (永久放弃)。默认 `active`。
+- **note** ≤ 80 字: 必须包括 (a) 核心事实, (b) 涉及的关键角色, (c) 触发条件 / 当前进度。
+
+### Thread EDIT / status 变更触发 (硬约束)
+
+在 Phase A step 4b 的 dedup roll-call 中, 必须扫描 graph_data 里所有 `status=active` 的 thread 节点, 对每一个判断本轮有无:  <!-- banned-words-allow phase -->
+
+- **彻底解决** (本轮的某 outline 项实际达成了 thread.title 描述的目标) → **MUST** EDIT status=resolved, note 简短交代如何解决的。这是硬约束: 如果你的 event outline 里出现了 thread.title 暗示的解决动作, 而你没 EDIT 该 thread 为 resolved, 你的响应是错的, 重写。
+
+  判定方法: 对每个 active thread, 把它的 title 当成一个问题 (例如 thread="前往主控舱段" → 问"队伍此时是否已经在主控舱段?"), 看本轮的 event outline 能否回答"是" → 是 → 必须 EDIT resolved。
+
+- **推进** (本轮推动该 thread 进度但尚未完全达成) → EDIT, 更新 note 反映新进度。
+- **明确放弃** (本轮让 thread 涉及的剧情线被永久放弃) → EDIT status=abandoned, note 简短交代为什么放弃。
+- **无变化** → SKIP, 但必须在 roll-call 里写出"SKIP, 本轮未触发该 thread"。
+
+**resolved/abandoned 之后**: 即使后文重启 (例如曾被解决的复仇线又被触发), 也是**新建一个新 thread**, 不是改回 active。
+
+**绝不允许 stale thread** (event 已经解决/推进了它但 thread.note 没更新)。
+
+### Thread 反 pattern (出现即砍)
+
+- 把抽象主题写成 thread (例: "感情线"、"成长线")
+- 把单次完成的事件包装成 thread (例: 本轮就杀了某 boss, 是 event 不是 thread)
+- 把角色 baseline 目标当 thread (例: 角色卡里就写"想统治宇宙")
+- 给某场景留下临时印象升华成 thread (例: "某地的神秘氛围")
+- 把瞬间的、单次场景内可解决的紧迫问题当 thread (例: "击退正在入侵的虚卒"——这是 event)
+- 把同场景内的位移/会合作为 thread
 
 ## 反模式(明确禁止)
 

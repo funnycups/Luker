@@ -60,6 +60,11 @@ import {
 } from './import-export.js';
 import { openSchemaIterationStudio } from './schema-iteration/studio.js';
 import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './schema-iteration/system-prompt.js';
+import {
+    EVENT_SUMMARY_RULES_BODY,
+    DEFAULT_EXTRACT_SYSTEM_PROMPT,
+    DEFAULT_EVENT_COMPRESS_INSTRUCTION,
+} from './default-prompts.js';
 import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
@@ -169,560 +174,11 @@ const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
 const DEFAULT_EVENT_SUMMARY_COLUMN_HINT = 'Start with "时间：<time>；" using an explicit full in-world date/time or date span, then give a concise event abstraction with causality and outcome.';
 const DEFAULT_EVENT_EXTRACT_HINT = 'Critical plot events, turning points, commitments, betrayals, irreversible outcomes, and their explicit in-world time/time span written at the start of summary.';
 
-// Event summary writing rules (body only) — private to memory-graph. Treat the
-// rules sections as one whole, do not chop educational sections out, the model
-// needs them to ground "what to summarize". Per-context framings live in
-// EVENT_EXTRACT_INSTRUCTION (leaf extraction within multi-type prompt) and
-// EVENT_COMPRESS_INSTRUCTION (standalone rollup compression). Orchestrator
-// keeps its own copy in director-defaults.js — no cross-plugin import.
-const EVENT_SUMMARY_RULES_BODY = `## 核心定位
-
-summary 是**剧情索引**——用客观事实陈述记录角色做了什么、变成什么样了。
-
-**做的是「事件脉络级提炼」，不是「逐句去毛刺」**。读原文是为了抽出整段事件骨架，而非逐句洗。画面细节、修饰词、重复主语、单回合玩闹残留、纯过程纹理一律砍掉。
-
-### 心智模型: 目录 vs 回放
-
-summary 的写作目标是产出**剧情索引(目录式)**, 不是**剧情回放(小说式)**。
-
-- **目录式索引**: 每个事件是一个名词性或动词性的类别标签 + 主体 + 必要时的对象; 读起来像章节目录, 每条独立成一行, 信息密度极高。
-- **小说式回放**: 用句子讲述发生了什么, 带因果连接、状语修饰、情节铺陈; 读起来像在复述故事。
-
-判定方法: **如果 summary 读起来像在重新讲述故事, 你写错了**——你产出的是回放, 不是索引。索引读起来应该像目录条目, 简短到几乎读不出"叙事感"。
-
-### 信任下游推理
-
-summary 的下游读者(后续的 RP 模型或 compression 模型)**有从极简信息推理完整情境的能力**。你不需要替读者补充:
-
-- "怎么发生的"——读者读到"X 与 Y 互相告白"会自然推断双方说了情感相关的话。
-- "看起来像什么"——读者不需要画面细节就能理解事件性质。
-- "对方说了什么"——读者读到"X 承诺 Z"就知道有承诺话语发生, 不需要听到原话。
-- "情绪/姿态/反应"——读者读到"X 拒绝 Y"会自然推断 Y 受挫。
-
-你的工作是写**读者从动作类别名无法推断的最小信息集**——主体、动作类别、因果连接、不可逆状态——其他都是冗余。
-
-冗余加进 summary 不会让读者"理解更深", 只会让 summary 变长、复刻画面、违反索引心智模型。
-
-### 默认姿态: 极致压缩, 仅当下游会失败时才回退
-
-写 summary 时**默认采用最极致的压缩**——把每个事件写成 [主体] + [最高层父类动词] + [(必要时)对象] 三个元素。然后**仅当**这样写会导致下游 RP 模型无法续接剧情时, 才**最小限度**地添加细节回去。
-
-**默认偏好欠压缩失败 > 过度压缩失败的反转**: 通常 LLM 倾向于"宁多写不少写以免遗漏", 但此处要反转——**宁少写不多写**。少写的代价是下游某次推断错, **多写的代价是大量冗余永久留在记忆图里**。少写的错误可在下次提取时补救; 多写的冗余永远拖累后续 compression 和 recall。
-
----
-
-## 精炼的限度（核心约束）
-
-**允许的精炼——把多个具体动作归到一个直白的上位词**：
-
-- 多个具体动作 → 它们的动作类别（多种性事姿势 → 「做爱」/「性事」；多段位移 → 「抵达 X」；多段身体姿势 → 「深抱」）
-- 多个具体物件 → 它们的类别名（多种菜名 → 「早餐」；多种武器 → 「武器」）
-
-**上位词必须满足三个条件**：
-
-1. **是对动作类别的归类**，不是对动作性质的重新定性
-2. **语感与原文一致**——原文直白，上位词也直白；原文写"喊"就不能换成"召唤"，原文写"做爱"就不能换成"征用"
-3. **不引入原文没有的因果/意图链**——原文写"A 做了 X，然后 B 做了 Y"，不能写成"A 为了让 B 做 Y 而做 X"
-
-**禁止的"精炼"——三类伪精炼**：
-
-1. **改性质**：给事件重新定性。原文是直白的物理/情感事件，被换成另一种性质的概念（例：把性事重述成行政术语、把哭重述成"情绪释放"、把吵架重述成"博弈"）。
-2. **脑补因果**：原文只有动作 A 和动作 B 并列发生，agent 写成"A 是为了/逼/迫使 B 发生"。原文没有的因果关系不能加。
-3. **改文体**：用比原文更文学/小说体/文言的词汇重述事件。判定方法：把你写的词单独拿出来读，它读起来比原文"高级"吗？是 → 错。
-
-**自检三问**（写出每个上位词都问一遍）：
-
-- 这个词的**语感**和原文一致吗？原文写"喊"，你写"召唤"——语感升级了，错。
-- 这个词**有没有暗示原文没有的意图**？原文没写"为了"，你写"逼/迫/为了 X"——加因果了，错。
-- 这个词是对动作**类别**的归类（喝水/吃饭/聊天 → 吃午餐），还是对动作**性质**的重新定性（性侵 → 征用）？前者对，后者错。
-
----
-
-## 七条铁律
-
-1. **判断一件事要不要保留，唯一标准是"删掉它之后后续 RP 会不会无前因"**。能指出至少一个具体的下游动作/态度依赖它 → 留。指不出来 → 删。一次性情节小道具、动作细节、性事姿势、装饰物，即便原文反复强调也砍掉。
-
-2. **禁止任何对白转述结构, 也禁止任何 paraphrase 残留**。
-
-   summary 中只允许出现以下成分, 其他成分一律违规:
-   - 动作类别名(动词): 参考下文"事件描述动词白名单" + 通用动词。
-   - 专有名词(人名/地名/组织名/物品专名/时间锚/章节名)。
-   - 必要因果连接词(因→果连接, 数量 ≤ 3 个/句)。
-
-   下列所有形式都属于"对白残留", 一律禁止(无论是否加引号):
-   - 直接引用 / 引用嵌入 / 改写复述伪装
-   - 不加引号的对白嵌入: 把原文台词或台词中的关键词组(人物名字、感叹词、口头禅、情绪短语、独有称呼方式)以"动词 + 宾语"形式串进句子——这种 paraphrase 残留违规。
-   - 把对白意思用别的词重新讲一遍("X 表达了想 Y 的意思")。
-
-   正确做法: **只写动作类别名**。对白承载的事实以**单个动词**呈现, 不带描述对白内容的宾语:
-   - "X 与 Y 互相告白" ✓ (单一动词类别 + 主体, 无对白内容)
-   - "X 告白 [任何对白内容]" ✗ (paraphrase 残留)
-   - "X 用 [任何方式] 告白" ✗ (paraphrase 残留)
-
-   **summary 中任何引号包裹的内容一律视为违规, 必须删除。** 例外: 剧情专名 / 章节名 / 招式名 / 任务名加引号允许; 角色说过的任何短语 / 句段 / 字词不算专名。
-
-3. **用自然动词句陈述事实，不用抽象名词概括**。
-
-4. **摘要是连续叙事的一片**。前一条摘要或角色档案已经建立的状态/称呼/关系，在下一条隐含成立，不要重写。
-
-5. **精确数字一律改为模糊表述**。
-
-  **数字保留例外严格限定**：
-
-  - ✅ 剧情骨架日期（年月日时间锚）
-  - ✅ **结构性命名序数**——剧情中明确给一个事件序列命名的序数，必须能指出该序列在主线里是被反复提及的命名结构。
-  - ❌ **次数描述序数不算结构性命名**——仅描述某行为/状态发生过几次的序数，必须改为「再次」或直接删除整个次数描述。判断方法：把这个序数从原文里抠出来单独问"它是否是主线剧情里被命名的序列"，答不上来就不是结构性命名。
-
-6. **不超过原文长度**。压缩 = 减法。最终 summary 字数必须 < 原文字数。如果你的输出 ≥ 原文长度，回去重写——你在写作而不是压缩。
-
-7. **原文的元描述/总结句也要砍**。原文里如果出现叙述者跳出来给角色态度盖章的句子（"默认这就是爱"、"至此 X 完成"、"标志着 X"、"从此 X 进入新阶段"），即使原文这么写，summary 里也不要照搬。只搬事件骨架，不搬作者的情感盖章。判断方法：这句话**描述了一个具体动作或客观事实**吗？是 → 留。是**叙述者对角色心理/关系的总结性定性**吗？是 → 砍。
-
----
-
-## 杜绝清单（按结构识别，不按字面）
-
-### 画面细节与纹理 — 整类砍
-
-- **姿势描述**：任何描述性事/打斗/拥抱的具体姿势词。包括官方姿势术语、以及作者自造的"X 式 X 位"「X 反折」「X 锁」「X 压制位」结构的比喻词。
-- **身体部位与动作的连接描写**：描述哪只手/哪条腿/下巴/嘴/眼睛具体怎么放置、压、抵、锁、戳的句子。
-- **生理细节**：描述呼吸节奏、瞳孔变化、眉宇舒展、神情松紧的句子。
-- **过程动词链**：描述一连串微动作的并列短语（"摸到 X → 拿起 → 试探 → 藏回"这种）。
-- **性事过程描写**：内射部位、清洁动作、节奏快慢、深浅程度的描述。除非"内射"承载怀孕等后续事件，否则纯过程砍。
-- **战斗过程描写**：撕、抓、砍、击、轰、穿透等过程动词及其修饰对象。除非该次击杀本身是后续关键事件。
-- **装置/物件的外观描写**：颜色、形状、材质、亮度、声音修饰词。保留专名时去掉外观修饰。
-
-### 单回合玩闹残留 — 整类砍
-
-- **当场撒娇/调情/打趣的具体话题**：临时蹦出来的食物/做菜/天气话题——这类只在一个场景里冒出来、不会再被提及的话题素材。
-- **AI 现场造的"标志性梗"**：用动物名/食物名/颜色/数字给场景命名的描述（典型结构包括"X 式 X 表白"「X 落地」「X 见证人」「X 小秘密」「X 凭证」这类形容词+名词命名）。
-- **当场互相评价**：「X 会 X 了」「X 笑得像 X」「X 像 X 一样」的当场反应描述。
-- **食材细节**：具体菜名、做法、调料偏好——除非该角色"会做某菜"成为后续反复出现的人设。
-
-### 反应纹理 — 整类砍
-
-- **第三方旁观描述**：第三方角色在主事件中"远处沉默观察""隔空发短信围观""路过摸头杀"的描写，除非该旁观本身建立或揭示了该 NPC 的关键关系节点。
-- **微表情/语气描写**：撇嘴、噗笑、鼓腮、眯眼、眨两次、压低声音、声调上扬。
-- **情绪曲线描写**：「从 X 转为 Y」「由 X 升级为 Y」「从 X 到 Y 的变化」——这类描述情绪/状态过渡的句式。
-
-### 位移与流程 — 整类砍
-
-- 「返回某地」「前往某地」「搭乘 X 经 Y 抵 Z」「撤至某地」「安置某人」「会合某人」——位移默认全部剔除，吸收到下一个真事件里。
-- 例外：到达某地本身是**章节级转折**（如离开某星球是章节切换节点）保留。
-- 触发原因（应某人求救、受某人邀请、为了某目的）不写。直接写动作。除非"为什么做"本身是独立事件。
-
----
-
-## 词汇结构黑名单（按结构识别）
-
-### 契约词族
-
-任何「契约 / 协议 / 誓约 / 凭证 / 条款 / 承诺书 / 约定书 / 永约 / 立约 / 缔结 / 宣言 / 成交 / 签署 / 口约」结构的词，以及它们的动词形式（兑现 / 履行 / 达成 / 敲定 / 签下 / 立下 / 正式纳入 / 正式启动）。
-
-### 升华套话
-
-任何「完成从 X 到 Y 的升级」「X 段升级」「X 重身份升级」「锚定」「固化」「拉满」「封顶」「进入新阶段」「标志着」「从此 X」「至此 X」「彻底切换」「彻底翻转」结构的句式。
-
-### AI 自造标签
-
-任何 AI 用形容词+名词强行命名一个本不需要命名的现象的词。识别这类标签的核心方法是：
-
-> 把这个词单独抠出来问自己——**这是一个已有的固定术语，还是 AI 临时拼出来的现场命名**？是临时拼的 → 砍。
-
-包括但不限于以下结构：
-
-- **「X 式 + 任意名词」**：任何"X 式"前缀加在事件/关系/行为/姿势上的修饰（例："X 式 X 化"、"X 式约会"、"X 式告白"、"X 式做爱"——只要"X 式"在原文里不是已有概念而是临时拼的，砍掉整个修饰）
-- **「X 属性」「X 位次」「X 模式」「X 定位」「X 学习」「X 调教」**：用名词当后缀给一个本是动词的事件强行加身份/类型标签
-- **「专属 X」「核心 X」「永久 X」**：用形容词+名词强行给关系/身份加权重
-- **「不 X 只 Y 模式」「无 X 式 Y」**：用否定+肯定结构造的非标准范式词
-
-如果不确定一个词是不是 AI 自造标签，**默认按是处理**（砍掉/改成动词陈述），因为真正的固定术语会有原文外的剧情支撑。
-
-### 抽象名词收口
-
-句尾不用「关系 / 称呼 / 模式 / 定位 / 身份 / 层级 / 岗位 / 位次 / 关系链 / 升级」等名词收口。改用动词。
-
-### 对白引出动词
-
-任何引出对白的动词：X 说 / X 道 / X 表示 / X 宣称 / X 透露 / X 吐露 / X 告白说 / X 哽咽请求 / X 撒娇评价 / X 直球吐露。
-
-### 过程性连接词
-
-在过程中 / 紧接着 / 随之 / 继而 / 与此同时 / 话音落下。（"翌晨""当夜""次日"是时间锚，允许）
-
-### 修饰词副词
-
-任何无独立信息量的形容词副词。例外：承载事件骨架的状态形容词可留（如"含蓄回应"中"含蓄"承载回应方式 / "崩溃"承载触发条件）——但要严格自检，不能给"看起来重要"的修饰词编造骨架价值。
-
----
-
-## 事件描述动词白名单（与对白转述区分）
-
-下列动词**不是对白转述**，是描述"角色当场释放/传递了一个具体信息"这一**动作本身**：
-
-- **披露 / 揭露 / 揭示 / 告知 / 摊牌 / 宣布 / 公布**：用于"角色当场把某关键事实摆出来"
-- **应允 / 答应 / 拒绝 / 反悔**：用于"角色当场作出影响后续的决定"
-- **告白 / 表白 / 求婚 / 道歉 / 谢罪**：用于"角色完成一个具体的交流事件"
-
-简化记忆：**写"做了什么"，不写"说了什么"。「揭露 X 真相」是动作，「说出 X 真相」是对白。**
-
----
-
-## 7 步流程
-
-### 第 1 步：列出参与人
-
-- 主要：[A, B, C]
-- 次要：[NPC1, NPC2]（如有）
-
-### 第 2 步：列出每个事件的**类别动词**(不是具体动作)
-
-**关键改动**: 不要列出原文出现的具体动作短语(如"扣子被解开"、"腰胯下沉"、"喊出某句话")。直接为每个**事件单元**写出**单一类别动词**(参考事件描述动词白名单 + 通用动词)。
-
-- 错误示范(列具体动作): "X: 拔高音量→演挑衅戏→钓 Y→看 Y 耳尖通红→听 Y 嘴硬挤出某句话"
-- 正确示范(列类别动词): "X 演挑衅戏 → Y 撞见炸毛"
-
-**为什么这样改**: 第 2 步如果列出原文的具体动作短语, 这些短语会被锚定到工作记忆里, 导致后续 step 7 串句时把它们带回来——这是 summary 出现 paraphrase 残留和纹理细节的主要源头。直接从一开始就在**事件类别**这一抽象层操作, 跳过"先记录具体动作再抽象"的中间步骤。
-
-### 第 3 步：category-vs-instance 显式分离 + 强制上推到最高合并层级
-
-对第 2 步列出的每个事件, **显式做"类别 vs 实例"分离**。格式:
-
-\`\`\`
-[类别动词]: [原文中该事件的具体表现, 不写进 summary, 仅用于自检]
-\`\`\`
-
-例(跨题材):
-
-\`\`\`
-整装: 原文里登山者换鞋/喝水/系安全带/推背包扣/拉外套拉链/检查地图 6 个动作
-社交应酬: 原文里宴会上敬酒/寒暄/互相吹捧/互留联系方式
-决战: 原文里抵达某地/激活某装置/战斗爆发/击碎敌人核心
-\`\`\`
-
-**强制上推规则 (核心)**:
-
-每个类别动词都有**层级**。同样的原文事件, 可以用细粒度类别名(子类)描述, 也可以用粗粒度类别名(父类)描述。**默认必须选最粗粒度的能成立的父类, 不允许选细粒度子类**:
-
-- 子类示例(禁用): 跑步 / 走路 / 爬楼梯 / 骑车 / 驾车 / 搭船——细粒度移动方式
-- 父类示例(必须用): 移动 / 位移
-- 子类示例(禁用): 拥抱 / 握手 / 拍肩 / 搭肩 / 挽手
-- 父类示例(必须用): 肢体接触
-- 子类示例(禁用): 敬酒 / 寒暄 / 吹捧 / 留联系方式
-- 父类示例(必须用): 社交应酬
-
-判定"是否上推到了最高父类"的方法: **问"这个类别动词下, 原文里有几个子动作?"**
-
-- 1 个子动作 → 这就是粗粒度, 直接用此动词。
-- 2+ 个子动作 → 还有上位词空间, 继续上推到能覆盖所有子动作的父类。**写 summary 时只用父类, 子动作不写进 summary。**
-
-**关键纪律**:
-
-- 写 summary 时**只能**用上推后的**最高层父类**动词, **禁止**写子类动词, **禁止**枚举子动作。
-- 如果你在 summary 里列了同一父类下的 ≥2 个子动作(例如"X 走路、跑步、爬楼" — 这是 3 个子动作, 应合并为"X 移动"), 那是 grouping 失败。
-- 一旦你把"原文具体表现"的字词搬进 summary, 那就是 paraphrase 残留违规。
-- 上位词只能从原文已有词汇或它们的**直白类别名**里选, 不能用比原文更文学/小说体/文言的词。
-- 如果几个动作并列发生（A 然后 B），**禁止**把它们写成因果链（"为了 B 而做 A"、"逼/迫使/导致 B"）。
-- 如果你想换的上位词比原文更"高级"，**不要换**，原样保留原文动词的类别名。
-
-### 子动作枚举禁令 (硬约束, 核心)
-
-如果你在 summary 中**枚举了 ≥ 2 个同域子动作**, 无论这些子动作各自是不是有名词性类别名, 都必须**强制合并为它们的父类**。"同域"指属于同一种活动范畴的动作。
-
-通用判定方法: **问"如果删去具体子动作只留父类动词, summary 是否仍能让下游推断出剧情大致样貌?"** 能 → 必须删子动作只留父类。
-
-**严格警告**: 即使子动作各有标准名词性类别名(各种领域的具体技术术语), 但**只要它们属于同一活动范畴**, summary 中**只能出现父类动词**, **禁止枚举子动作动词**。
-
-### "构型转换陷阱" 反制
-
-一个常见错误: 模型已经合并到父类 (例如"X 与 Y 进行某活动") 后, **仍然在 outline 中追加该活动内部的构型变化条目** (例如"X 与 Y 处于构型 A"、"X 与 Y 切换到构型 B"、"X 在该活动中处于位置 P")。
-
-这些"构型转换" / "位置切换" / "姿态变化"条目都属于**该父类活动的内部纹理**, 不是独立事件, **禁止单独列条目**。
-
-判定: 如果某条目读起来是"某活动正在进行中的某个瞬态构型/位置/姿态", 而不是"该活动开始 / 结束 / 某不可逆里程碑发生" → 砍掉该条目。
-
-### 物理细节下钻 = 一律不属于事件
-
-任何描述身体接触方式、姿态、体位、接触部位、生理动作的动词或名词, 都**不是事件类别**, 而是**事件内部的物理纹理**。即使这些词在中文里有标准技术术语 (任何指代特定身体动作或姿势的术语), 它们都不能作为 outline 条目的动词出现。
-
-判定: 你写的某条目动词, 是否描述了"两个或多个身体之间的物理接触方式 / 一个身体的特定姿势 / 一个身体部位的特定动作"? 是 → 这是物理纹理动词, **禁止**用作 outline 条目, 要么删除该条目, 要么用其活动范畴的父类动词代替。
-
-某些子动作如果承载**独立的不可逆状态变化** (例如失贞、怀孕、死亡、立约、断肢、获得身份等), 才允许作为独立条目出现。判定标准: **这个子动作的下游剧情依赖, 跟父类动词的下游剧情依赖, 是否一样?**
-
-- 是 → 上推到父类, 子动作砍掉。
-- 否(子动作有独立的不可逆下游) → 子动作可独立出现 (但仍需用类别名形式, 不带过程描述)。
-
-### 子动作"独立条目"的可逆性判定 (硬约束, 核心)
-
-某子动作能不能作为独立 outline 条目, 唯一判据是 **它是否承载独立的不可逆下游**:
-
-- **不可逆** = 该子动作改变了某角色的长期状态 / 关系 / 物理身体, 故事时间往后推 24h+ 后仍然约束剧情走向。
-- **可逆** = 该子动作只是父类活动过程的一部分, 不发生时父类活动依然可以独立存在并产生同样的下游依赖。
-
-**通用判定问句**: "把这个子动作单独抠出来, 假设它没发生(但父类活动照常发生), 下游 RP 会不会缺少某个关键前因?"
-
-- 会缺 → 不可逆 → 独立条目 ✓
-- 不会缺 → 可逆 → 强制合并到父类 ✗
-
-**跨范畴示例** (帮你校准判定, 不是给输出答案):
-
-| 范畴 | 不可逆子动作 (允许独立条目) | 可逆子动作 (必须合并入父类) |
-|---|---|---|
-| 战斗 | 击杀 / 断肢 / 重伤致残 | 格挡 / 闪躲 / 砍刺 / 重击 → 合并入"战斗" |
-| 移动 | 抵达 X 长期据点 / 离开 X 星球 (章节级转折) | 走路 / 跑 / 搭车 / 跃迁 / 飞行 → 合并入"移动" 或直接吸收 |
-| 社交 | 立约 / 结义 / 决裂 / 公开宣战 | 敬酒 / 寒暄 / 互留联系方式 / 互相吹捧 → 合并入"社交应酬" |
-| 性事 | 失贞 (贞操一次性) / 怀孕 / 互相告白 / 关系定性 (建立或破裂) | 做爱过程内的任何子动作 (口交 / 深喉 / 足交 / 抽插 / 内射 / 体位切换 / 射精 / 高潮 / 掐脖 / 驯化 等; "内射" 除非引发怀孕) → 全部合并入"做爱" / "性事" |
-| 习得 | 获得身份 / 获得功法 / 觉醒能力 / 突破境界 | 学习过程 / 修炼 / 训练 / 试招 → 合并入"习得 X" |
-| 物品 | 获得 / 转让重要物品 (信物 / 钥匙 / 凭证 / 关键道具) | 把玩 / 试戴 / 摆放 / 包装 → 合并入物品转交 event 或砍 |
-
-**特别警示** — 性事范畴的高频违规模式:
-
-模型最常见的失败模式是把同一次性事拆成三条相邻条目: "X 与 Y 做爱" + "X 破处 Y" + "X 内射 Y"。这是错误。正确处理:
-
-- "做爱" 是父类条目 → 留 (这是事件本身)
-- "失贞" / "破处" 是不可逆里程碑 → 留 (Y 的贞操状态永久改变)
-- "内射" → 砍 (做爱过程内的子动作, 没有引发怀孕就没有独立下游)
-- 其他性事子动作 (口交 / 深喉 / 足交 / 体位 / 高潮 / 射精 / 掐脖 / SM / 驯化 等) → 一律砍, 合并入 "做爱" / "性事"
-
-判定时反复问: "下游 RP 模型读到 '马丁与三月七做爱 + 三月七失贞' 两条, 跟读到 '马丁与三月七做爱 + 马丁内射三月七 + 三月七失贞' 三条, 知道的事情有差别吗?" 没差别 → "内射"是冗余条目, 砍。
-
-类似地, "首次破处" / "首次内射" 的 "首次" 是次数描述序数, 按铁律 5 必须删除或改为"再次"; 但"失贞"这种类别名本身已隐含"一次性", 不需要再加"首次"前缀。
-
-### 第 4 步：事件保留判定（核心）
-
-对每个合并后的动作问：
-
-> 删掉这件事，后续 RP 会不会变得无前因可循？
-
-- 会 → 留
-- 不会 → 删
-
-跨题材判定表：
-
-| 场景  | 事件  | 删后后果 | 判定  |
-| --- | --- | --- | --- |
-| 会议  | A 被选为项目负责人 | 后续"A 安排执行"读者不知道 A 凭什么 | 留   |
-| 会议  | A 用某款笔记软件 | 后续无依赖 | 删   |
-| 比武  | B 输给 C | 后续"B 闭关三年"无前因 | 留   |
-| 比武  | C 使出第七招破甲 | 后续无依赖 | 删   |
-| 谈判  | 双方约定下周二再谈 | 后续"周二再次会面"需要这条 | 留   |
-| 谈判  | 双方喝了三杯咖啡 | 后续无依赖 | 删   |
-
-**严防"看起来重要就留"的诱惑**——一次性情节小道具即便原文反复强调也砍掉。
-
-### 第 5 步：上位词合并
-
-留下的事件里问：**有没有几件事其实是同一时段同一意图的不同侧面**？
-
-跨题材例：
-
-- 宴会：「敬酒 / 寒暄 / 互相吹捧 / 互留联系方式」→ 「社交应酬」一词覆盖
-- 决战：「抵达某地 / 激活某装置 / 战斗爆发 / 击碎敌人核心」→ 「在 X 地与 Y 决战」一句覆盖
-
-**关键纪律**：上位词覆盖后，**子节点默认全部吸收**。除非某子节点能独立通过铁律 1（删了它后续会无前因），且**涉及一个会反复出现的关键 NPC 的标志性动作**。
-
-不要给子节点编造"独立后续价值"。指不出具体后续依赖就吸收。
-
-### 第 6 步：上下文剔除
-
-剩下的事件清单里问：**哪些状态/称呼/关系/姿势/位置，前一条摘要或角色档案已经建立**？
-
-是 → 当前摘要不重写。
-
-例：上一条摘要已建立"A 抱 B 上楼按在床上做爱" → 当前摘要写"两人继续做爱时聊天"即可，不重复「抱着」「在床上」。
-
-### 第 7 步：时间顺序输出**纲要式目录列表**(强制结构)
-
-按事件**实际发生的时间顺序**, 以**纲要列表**形式输出每个事件。
-
-**强制格式**:
-
-\`\`\`
-时间：<完整时间>；
-1) [主体] [父类动词] [(可选)对象]
-2) [主体] [父类动词] [(可选)对象]
-3) [主体] [父类动词] [(可选)对象]
-...
-\`\`\`
-
-每个事件**独占一项**, **用序号 1)/2)/3) 标记**(不是用分号串成段落)。
-
-为什么用编号纲要而非分号段落: **分号段落让 LLM 自然滑入小说叙事模式**(每个分句之间会自动添加因果连接词、状语铺陈、修饰)。编号纲要强制每个事件独立呈现, 无叙事连贯压力, 避免铺陈。
-
-**每个条目的硬约束**:
-
-- 只能是 \`[主体] [父类动词] [(可选)对象]\` 三段结构。
-- **不允许逗号**。逗号几乎总是塞了状语或并列子动作。如果想用逗号, 要么改成单一父类动词, 要么拆成两个条目。
-- **不允许 "X 后/经/以/而..." 的扩展性引导词**。事件的时序由编号顺序表达, 不需要在条目内部再用连接词。
-- **不允许嵌套修饰**(例如"X 在 Y 的 Z" 结构, "X 的 Y" 结构)。如果某个对象需要修饰, 说明上推不充分, 重新选父类。
-- **不允许形容词+名词的复合词当事件描述**(例如"事后照"、"挑衅戏"、"开拓同伴"——这些都是 AI 自造的复合标签, 把它们拆开, 只保留核心动词)。
-
-句式要求:
-
-- 用自然动词，不用抽象名词
-- 不用对白引出动词
-- 不在句尾用抽象名词收口
-- 用编号断句, 不用过程连接词
-
-**Dialogue keyword 禁令 (硬约束, 限 event summary scope)**:
-
-(注: 本禁令仅适用于 **event.summary** 字段。character_sheet 的 addressing_user / language_sample 等字段本来就是记录对白特征, 不在此禁令范围。location_state 的字段也不受此禁令限制。)
-
-event summary 中**禁止**出现原文对白里出现过的、非通用的**关键词**——即使它没加引号、即使它被嵌入到句子里。包括但不限于:
-
-- 人物对彼此的特殊称呼(任何角色对另一角色的非通用昵称、代号、戏称)
-- 对白中出现的口头禅、感叹词、情绪短语
-- 对白中提到的角色给某事或某物的**临时命名/定义**
-- 任何来自对白的、非通用的具体短语。
-
-**通用动词、专有名词(角色本名、地名、组织名、剧情节点名)不算 dialogue keyword, 可以使用。**
-
-判定方法: 写完每个条目后, 问"这个条目里的每个非动词词, 是否在原文对白里被某个角色当场说过? 是 → 那是 dialogue keyword, 必须删除并改成更通用的描述。"
-
----
-
-## 兜底自检
-
-逐项打勾。命中任一 → 回第 7 步重写。
-
-- [ ] **铁律 6 复查：summary 字数 < 原文字数**（如果 ≥ 原文长度，删句子重写）
-- [ ] **铁律 7 复查：原文的元描述/总结句也砍了**——即使原文照搬了"默认是爱"、"至此 X 完成"、"标志着"等叙述者盖章，summary 里也不能照搬
-- [ ] **精炼三问复查**：每个比原文更概括的词，单独问：语感升级了吗？加了原文没有的因果吗？是改性质还是归类？任一命中 → 改回原文词
-- [ ] 铁律 1 复查：每一句都能指出至少一个具体后续依赖
-- [ ] 画面细节复查：姿势/身体/动作/装置细节全部砍了
-- [ ] 单回合残留复查：撒娇/打趣/反差话题/食材/评价全部砍了
-- [ ] **数字模糊化复查（双重）**：
-  - 除日期外，所有精确数字都改为模糊
-  - 所有序数都问：这是"剧情命名的事件序列序数"还是"次数描述序数"？后者必须改为「再次」或删除
-- [ ] 无对白转述结构
-- [ ] 无引号台词及近似复述（剧情专名/招式名加引号是必要标识，允许）
-- [ ] 无抽象名词收口
-- [ ] 无修饰词副词堆砌
-- [ ] 无元描述：无"严守 / 维持 / 体现 / 确立 X 立场"
-- [ ] 无契约词族
-- [ ] 无升华套话
-- [ ] **无 AI 自造标签**：每个看着像"形容词+名词"的复合词都问"这是固定术语还是 AI 临时拼的"，不确定按是处理
-- [ ] 无过程性连接词
-- [ ] 无总结句：无"这次事件标志着 / 至此 X 完成 / 从此 X 进入"
-- [ ] 无重复事实：角色档案/前文已建立的关系/称呼/身份不重写
-- [ ] 无上文已隐含的状态：前一条已建立的姿势/位置不重写
-
----
-
-## 强制重写循环 (Gate Loop)
-
-写完 summary 第一版后, **绝对不能直接 commit**。必须执行下列 gate 循环, 任一 gate 失败就回到对应 gate 修正后从 Gate 1 重新扫起。
-
-**Gate 1: paraphrase 残留扫描** — 对照第 3 步的 [类别动词]:[原文具体表现] 表, 扫描 summary 每个字词。任何来自右侧"原文具体表现"的字词, 或来自原文对白的具体短语 → 删除。
-
-**Gate 2: 子动作枚举扫描** — 找所有**同域**的子动作枚举: ≥ 2 个同活动范畴子动作 → 强制合并为父类。父类条目已写又额外列子动作 → 子动作砍掉。
-
-**Gate 3: 单条结构扫描** — 每个事件条目检查 \`[主体][父类动词][(可选)对象]\` 三段结构 / 无逗号 / 无嵌套修饰 / 无形容词+名词复合标签 / 用编号 1)/2)/3)。
-
-**Gate 4: 默认极致压缩反向验证** — 对每个条目问"删掉这条下游会推断错吗?" 不会 → 删。会 → "能更短吗?" 能 → 压缩。
-
-**Gate 5: 形态读感复查** — 像编号纲要(通过) / 像小说段落(回 Gate 1)。
-
-**Gate 6: 对象短语下钻检测** — 任何条目的对象出现身体部位 / 生理器官 / 衣物部位 / 姿势体位术语 → 下钻违规, 删到只剩主体名。
-
----
-
-## 最终自检
-
-> **依赖自检**: 这条 summary 里的每一句话, 是否都能指出一个**具体的后续 RP 动作或态度**会依赖它?
-
-是 → 通过。否 → 删掉指不出依赖的句子, 重写。
-
-> **plot-vs-texture 对照自检 (核心)**: 把你写好的 summary 想象成**唯一**传给"下一个完全没看过原文的 RP 模型"的素材——原文它读不到, 只能读你的 summary。该模型读完 summary 之后:
-> - 应该**能**接住剧情线: 知道谁与谁是什么关系、上次场景推进到哪里、什么状态不可逆地变了、有没有产生承诺/誓约/欠债/敌意。
-> - **不应该**能复刻这次场景的画面: 看不出每个动作的具体姿势、每句对白的具体措辞、每个物件的外观、每个角色的微表情、每段过程的节奏感。
-
-是 → 通过。否 → 把所有让它能复刻画面的字砍掉, 只保留让它续接剧情线的字。重写。
-
-> **paraphrase 残留扫描 (核心)**: 把 summary 每个动词单独取出, 问:
-> - 这个动词后面挂的宾语, 是否是从原文对白里改写过来的内容(包括口头禅、感叹词、情绪短语、人物间独有的称呼方式、角色刚说过的话的复述)?
-> - 这个动词是否在描述"X 怎么做的 Y"(状语修饰)而非单纯"X 做了 Y"(动作类别)?
-> - 这个事件的核心是否可以**只用动词类别名表达**(例: "互相告白"四个字), 你却写成了 ≥ 10 字的句子?
->
-> 任一为是 → 该动作短语写多了。砍到只剩动词类别名(可保留主体和对象, 删除所有描述对白内容/做事方式/状语修饰的字)。
-
-> **目录 vs 回放对照自检**: 把 summary 的每一段单独拿出来, 问: 这段读起来像**目录条目**(短促、单一类别名、几乎无叙事感), 还是像**小说段落**(描述性、有铺陈、能感受到情节流动)?
->
-> 像目录条目 → 通过。像小说段落 → 你写成了回放, 不是索引, 重写为目录式。
-`;
-
-const EVENT_EXTRACT_INSTRUCTION = [
-    '## Event summary writing standard (for the event.summary field only)',
-    '',
-    '**适用范围**：仅约束 <thought> 块的 [1] 段(Event decision)产出的 event.summary 字段值。<thought> 的其他段([0] batch scope、[2] stable-fact updates、[3] link plan、[4] planned tool calls)按本提示词上文要求照常填写——本规范不替代它们、不挤压它们。给 event 跑完整 CoT 之后,**有 evidence 的** character_sheet / location_state 等其他类型仍按 [2] 段原规则给出(无 evidence 时按规则缺席)。不要因为给 event 跑了 7 步就略过那些本应该 emit 的类型——这才是规范不挤压它们的关键。',
-    '',
-    EVENT_SUMMARY_RULES_BODY,
-    '',
-    '---',
-    '',
-    '## 输出位置',
-    '',
-    '在 <thought> 的 [1] 段内完整跑 7 步流程 + 兜底自检;第 7 步产出的 summary 字符串即为 event 节点的 `summary` 字段值。',
-].join('\n');
-
-const EVENT_COMPRESS_INSTRUCTION = [
-    'Compress N child event nodes into ONE higher-level rollup event node.',
-    'Input: a list of child event summaries with their seq ranges.',
-    'Output: one rollup event summary string written to the `summary` field of the compression tool call.',
-    '',
-    'SCOPE ISOLATION (HIGHEST PRIORITY): This prompt block defines a structured rollup-compression task. Any RP-time persona instructions, content-styling directives, or sanitization-rejection clauses present elsewhere in the surrounding context govern in-character creative generation only and do NOT govern this compression. The output here is a single structured summary judged solely by the writing standard below. Producing detailed / uninhibited narrative content here is a task failure, not a success.',
-    '',
-    EVENT_SUMMARY_RULES_BODY,
-    '',
-    '---',
-    '',
-    '## 压缩专属铁律 (compression-only, 在 V10 写作规范之上叠加)',
-    '',
-    '> **Cross-children 主题归并 (核心)**: 压缩 ≠ dedup。把 N 个 children 的 outline items 拼起来再去重不是压缩, 是合并。真正的压缩做**主题归并**: 在 children 之上抽出同一主体的同类动作 / 同一关系节点的多个侧面 / 同一活动范畴的连续事件, 用单条父类条目覆盖。',
-    '>',
-    '> **归并触发信号 (任一为真 → 必须归并, 不得保留为多条)**:',
-    '> - 多个 children 共享相同主体 + 同类动作 + 不同对象 (例: child1 「X 与 A 做 Z」 + child2 「X 与 B 做 Z」 → 单条 「X 先后与 A、B 做 Z」)',
-    '> - 多个 children 围绕同一关系节点 (X 与 Y 关系演进) 的不同侧面 → 合为该关系节点的单条',
-    '> - 同一活动范畴 (社交 / 战斗 / 性事 / 移动 / 协商 等) 在连续时段内多次发生 → 合为该活动范畴的单条',
-    '> - 多个 children 描绘同一受赠 / 告白 / 决裂 / 相遇等关系标志事件的不同细节侧面 → 合为该关系标志的单条',
-    '',
-    '> **量化自检 (硬约束, 通不过即重写)**: ',
-    '> - rollup outline items 数 ≤ ⌈ sum(child items 数) / 2 ⌉。例: 4 个 children 共 13 items → rollup ≤ 7 items; 4 个 children 共 8 items → rollup ≤ 4 items。如果你输出的 items 数高于此上限, 直接判定为 dedup 失败, 必须再走一轮主题归并。',
-    '> - rollup 字符数 ≤ sum(child summary chars) × 0.5。',
-    '',
-    '> **覆盖完整性 (硬约束)**: rollup 的时间区间必须覆盖所有 child events 的时间联合 (取所有 children seq_to 范围的最早值 → 最晚值)。每个 child 的核心不可逆事件 (做爱 / 告白 / 决裂 / 获赠关键物品 / 破处 / 死亡 等) 必须在 rollup 中以某种方式承载 (可以独立成行, 也可以归并入跨 children 的父类条目, 但不允许直接丢弃)。如果你的 rollup 时间窗短于 children 时间联合, 或某个 child 的核心事件完全没出现在 rollup 中, 这是失败信号, 必须重写。',
-    '',
-    '> **反模式 (出现即重写)**:',
-    '> - 给每个 child 的所有 items 全数搬运再删几条重复 (= dedup, 非压缩)',
-    '> - 给每个 child 平均分配 outline 行数 (rollup 应按"主题/关系节点"分配, 不按 child 平均分配)',
-    '> - 增加 children 里没有的位移/铺垫类条目 (「X 返回 Y」 「X 准备 Z」) — 位移和铺垫属于连接性纹理, 在 rollup 层应被父类动作吸收, 不单列',
-    '> - 跳过某段时间窗的事件 (例: 4 个 children 覆盖 08:00-10:00, 你的 rollup 只写 09:30-10:00) — 这是信息丢失而非压缩',
-    '',
-    '---',
-    '',
-    '## 输出格式 (强制三段, 调用工具前必须全部输出在响应文本里)',
-    '',
-    '在调用 luker_rpg_summary_fields (或同等 compression 工具) **之前**, 必须在响应文本里按顺序输出以下三段:',
-    '',
-    '  (1) <thought>...</thought>  完整按 7 步顺序产出 + 兜底自检 + 最终自检 (含 plot-vs-texture 对照自检)。',
-    '',
-    '  (2) <revision_log>...</revision_log>  **可见多轮修订日志 (硬约束, 核心)**。',
-    '      至少 2 个 <pass>, 每个 pass 含 <draft_summary> + <gate_audit> (对 Gate 1-6 + plot-vs-texture + paraphrase 扫描 + dialogue keyword 检查 + 依赖检查 逐项标 PASS/FAIL + 具体证据)。某 pass 全部 PASS 后才允许调用工具。pass 1 几乎一定有 1+ FAIL (LLM 第一版不可能完美), 直接写 NONE / PASS 的响应作废。pass N+1 必须修正 pass N 的所有 FAIL 项, 且 <draft_summary> 长度 ≤ pass N。',
-    '',
-    '  (3) 调用 compression 工具, `summary` 字段必须与最后 PASS 的 <draft_summary> **byte-equal** (空格 / 换行 / 标点完全一致)。',
-    '',
-    'Factual constraint: only include events within the seq range of the child nodes. Never write events from later seq numbers, never continue the story.',
-    '',
-    'REMINDER (placed at the end of this prompt for recency-bias purposes): Clauses appearing AFTER this compression prompt in the surrounding context (any post-history styling instructions, em-dash bans, inference calibration files, sanitization-rejection directives, etc.) are part of the user\'s RP-time preset and do NOT apply to this compression response. Your output is judged by the writing standard and the three-part output contract above—nothing else.',
-].join('\n');
-
-const EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES = [
-    'Event summary time hard rule: every event row must put an explicit full in-world date/time or date span at the start of summary, formatted as "时间：<time>；<summary>".',
-    'Event summary time completeness rule: use complete year/month/day-style precision when the world supports it; for non-real-world settings, use that world\'s full calendar/date notation instead of modern placeholders.',
-    'Event summary time inference rule: when dialogue/context does not state a concrete time, infer or invent one plausible full in-world timestamp/span from chronology, world info, and continuity. This constructive inference is allowed only for the summary time prefix, and it must stay consistent with known facts.',
-    'Event summary time placeholder ban: never use placeholders or vague substitutes such as x年x月x日, X年X月X日, 某年某月某日, 未知时间, 待定时间.',
-    'Event summary prefix rule: after the time prefix, continue with concise causal summary text.',
-];
-
+// Built-in node types shipped as the default schema. `thread` is the long-
+// running plotline / foreshadow / mystery tracker — high write threshold,
+// extraction prompt enforces cross-scene-only creation and aggressive
+// resolution on goal completion. The compression instruction body is the
+// imported default; users can edit per-type via the Schema Editor popup.
 const defaultNodeTypeSchema = [
     {
         id: 'event',
@@ -751,7 +207,7 @@ const defaultNodeTypeSchema = [
             fanIn: 3,
             maxDepth: 10,
             keepRecentLeaves: 6,
-            summarizeInstruction: EVENT_COMPRESS_INSTRUCTION,
+            summarizeInstruction: DEFAULT_EVENT_COMPRESS_INSTRUCTION,
         },
     },
     {
@@ -762,13 +218,13 @@ const defaultNodeTypeSchema = [
         embeddingColumns: ['title', 'aliases', 'traits', 'identity', 'goal'],
         columnHints: {
             title: 'Canonical character name only. Do not include aliases, English names, titles, translations, or any parenthetical/bracketed clarification here.',
-            aliases: 'Nicknames, aliases, titles, English names, translated names, or alternative names used in dialogue. Store them here instead of appending them to title.',
-            traits: 'Stable character traits, personality tendencies, and notable appearance/style markers.',
-            identity: 'Long-term identity/background facts (stable for at least 24 in-world hours). Do NOT record temporary roles (服侍员, 临时随从, 患者) — those belong in event summary.',
-            goal: 'Current objective or motivation.',
-            inventory: 'Key carried or owned items.',
-            language_sample: 'Stable speech-style samples per scene category, capped at 2-3 (e.g. formal work / private intimate / combat tension). Each sample is a template for that scene category, not a copy of a single line.',
-            addressing_user: 'How this character addresses the user.',
+            aliases: 'Nicknames, aliases, titles, English names, translated names, or alternative names — only when they pass the alias-write threshold (see extractionInstructions).',
+            traits: 'Long-term personality + appearance/style markers, observed across multiple batches. Avoid momentary tone/expression descriptors.',
+            identity: 'Long-term identity/background facts (24h+ persistence). Do NOT record temporary roles.',
+            goal: 'Long-term goal that drives the character across multiple scenes. Single-scene goals are events, not goals.',
+            inventory: 'Plot-critical items only (信物/钥匙/标志性武器/凭证/关键技术物品). No regular clothes/accessories or single-scene props.',
+            language_sample: 'STYLE DESCRIPTIONS ONLY — never quoted dialogue lines. e.g. "公关式精确措辞, 战斗时短促命令式".',
+            addressing_user: 'Stable cross-scene addressing of the user. Single-scene tone shifts do not count.',
         },
         requiredColumns: ['title'],
         forceUpdate: false,
@@ -799,10 +255,10 @@ const defaultNodeTypeSchema = [
         columnHints: {
             title: 'Canonical location name only. Do not include aliases, English names, translations, or any parenthetical/bracketed clarification here.',
             aliases: 'Alternative location names, English names, translated names, short names, or colloquial references. Store them here instead of appending them to title.',
-            controller: 'Current owner/controller of the location.',
-            danger: 'Current danger level or threat profile.',
-            resources: 'Important available resources/services/features.',
-            state: 'Current location condition.',
+            controller: 'Current long-term controller. May use "X(名义)/Y(实际)". Forbid temporary stand-in roles.',
+            danger: 'Long-term risk profile (e.g. permafrost planet). Not single-visit encounters.',
+            resources: 'Long-term fixtures / features / geography. No event traces.',
+            state: 'Long-term identity (≤50 chars). Single-visit traces forbidden.',
         },
         requiredColumns: ['title'],
         forceUpdate: false,
@@ -824,6 +280,47 @@ const defaultNodeTypeSchema = [
             summarizeInstruction: '',
         },
     },
+    {
+        id: 'thread',
+        label: 'Thread',
+        tableName: 'thread_table',
+        tableColumns: ['title', 'status', 'note'],
+        embeddingColumns: ['title', 'note'],
+        columnHints: {
+            title: 'Short noun-phrase name of the thread (≤10 chars). Forbid AI-coined adjective+noun labels.',
+            status: 'One of: active (推进中) / resolved (达成或彻底解决) / abandoned (永久放弃). Default active.',
+            note: '≤80 chars. Must cover: (a) core fact, (b) involved characters, (c) trigger conditions / current progress.',
+        },
+        requiredColumns: ['title', 'status', 'note'],
+        forceUpdate: false,
+        editable: true,
+        level: LEVEL.SEMANTIC,
+        extractHint: 'Long-running plotline / promise / mystery that spans multiple events. High write threshold.',
+        extractionInstructions: DEFAULT_PER_TYPE_INSTRUCTIONS.thread,
+        extractEveryN: 1,
+        keywords: ['thread', 'plotline', 'foreshadow', 'promise', 'quest', 'mystery'],
+        alwaysInject: true,
+        latestOnly: true,
+        primaryKeyColumns: ['title'],
+        compression: {
+            mode: 'none',
+            threshold: 2,
+            fanIn: 2,
+            maxDepth: 1,
+            keepRecentLeaves: 1,
+            summarizeInstruction: '',
+        },
+    },
+];
+
+export { DEFAULT_EXTRACT_SYSTEM_PROMPT };
+
+const EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES = [
+    'Event summary time hard rule: every event row must put an explicit full in-world date/time or date span at the start of summary, formatted as "时间：<time>；<summary>".',
+    'Event summary time completeness rule: use complete year/month/day-style precision when the world supports it; for non-real-world settings, use that world\'s full calendar/date notation instead of modern placeholders.',
+    'Event summary time inference rule: when dialogue/context does not state a concrete time, infer or invent one plausible full in-world timestamp/span from chronology, world info, and continuity. This constructive inference is allowed only for the summary time prefix, and it must stay consistent with known facts.',
+    'Event summary time placeholder ban: never use placeholders or vague substitutes such as x年x月x日, X年X月X日, 某年某月某日, 未知时间, 待定时间.',
+    'Event summary prefix rule: after the time prefix, continue with concise causal summary text.',
 ];
 
 const DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT = [
@@ -892,46 +389,6 @@ const DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT = [
     'After function call output, stop immediately.',
 ].join('\n');
 
-const EXTRACT_PROMPT_NODE_DEDUP_LINES = [
-    'Thought dedup rule: in section [1] (event participants) and section [2] (stable-fact node create/edit decisions), explicitly inspect graph_data.nodes for existing candidate character/location nodes before any create decision, and explain the matched node_id or the no-match reason.',
-    'Duplicate prevention hard rule: never create a second character/location node merely because one form uses a canonical name and another form uses an alias, title, short name, translated name, or English name. Reuse one node and store alternate forms in aliases.',
-    'Create-gate rule for character/location nodes: only create when you have explicitly checked existing graph_data nodes by canonical name and alias overlap and found no plausible match.',
-    'Name format hard rule: for character/location nodes, name must be canonical plain name only.',
-    'Parenthesis prohibition: never use parentheses, brackets, slashes, bilingual pairs, or appended explanations inside name. Forbidden examples: 张三(John), Alice（爱丽丝）, London(伦敦).',
-    'Alias format rule: English names, translated names, nicknames, titles, short names, and alternative spellings belong in aliases only, not in name.',
-    [
-        '',
-        '**Mandatory dedup roll-call (硬约束, 在 <thought> [2] 段必须显式产出)**:',
-        '',
-        '在做任何 character_sheet / location_state 的 create / edit / SKIP 决定之前, 必须先按下面格式对**本批次出现的每个**角色 / 地点逐项点名汇报 graph_data.nodes 的检索结果。这一段是**强制结构**, 不是建议:',
-        '',
-        '```',
-        '[dedup roll-call]',
-        '角色:',
-        '  - 名: 张三',
-        '    graph_data 检索: title 精确匹配 = sheet_zhangsan; aliases 重叠 = (无)',
-        '    决定: SKIP (已存在, 本轮无 24h+ 字段变化) / EDIT sheet_zhangsan (变更字段: identity, 原因: 关系状态从 X 转为 Y) / CREATE (无匹配, 原因: 本批次首次出场)',
-        '  - 名: 李四',
-        '    graph_data 检索: title 精确匹配 = (无); aliases 重叠 = sheet_someone (因为 sheet_someone.aliases 含 "李四")',
-        '    决定: SKIP / EDIT sheet_someone / CREATE — 选 EDIT (复用别名命中的节点) 或 SKIP 不能 CREATE',
-        '地点:',
-        '  - 名: 某地',
-        '    graph_data 检索: title 精确匹配 = (无); aliases 重叠 = (无)',
-        '    决定: CREATE (确认无匹配) / SKIP (本批次未引入长期 controller/danger/resources 变化)',
-        '```',
-        '',
-        '硬约束:',
-        '- **任何 character_sheet_create / location_state_create 工具调用前**, 该角色 / 地点必须在 dedup roll-call 中出现, 且决定字段 = CREATE。直接 create 一个未出现在 roll-call 里的实体, 该次响应作废。',
-        '- roll-call 必须**逐个**列出本批次每个出场角色和地点 (即使最后决定 SKIP)。不允许"全部都是新的"这种简写。',
-        '- title 精确匹配 + aliases 重叠两项**都必须**报告 (不能省略其一)。如果 graph_data.nodes 为空, 也要显式写"graph_data 为空, 检索结果均为 (无)"。',
-        '- 决定 EDIT 时必须**指明变更字段 + 原因**(具体哪个字段从 X 改成 Y, 不能写"补充信息"这种含糊话)。',
-        '- 决定 SKIP 时必须说明**为什么本批次该实体的长期字段(traits/identity/goal/controller/state 等)没有 24h+ 变化**。',
-        '',
-        '为什么这条强制: 模型容易"看见 graph_data 但没读" — snapshot 提供的信息是被动的, 模型注意力分散时会漏掉, 导致重复 create。强制 roll-call 把"查"变成显式产出步骤, 不写就违规, 跟下游工具调用必经路径化, 类似 director 的 find_by_name 在交互式工作流中的作用。',
-        '',
-    ].join('\n'),
-];
-
 const CANONICAL_EXTRACT_RELATION_TYPES = [
     // Generic graph relations (existing)
     'related', 'involved_in', 'occurred_at', 'mentions', 'evidence', 'updates', 'advances',
@@ -952,138 +409,6 @@ const EXTRACT_PROMPT_EDGE_TYPE_LINES = [
     'Internal edge prohibition: do not create contains or semantic_contains via extraction tools; hierarchy edges are managed by the graph system, not by semantic extraction.',
 ];
 
-const DEFAULT_EXTRACT_SYSTEM_PROMPT = [
-    'Extract structured memory nodes from dialogue messages into a high-utility memory graph.',
-    'Before tool calls, output one VERY detailed <thought>...</thought> analysis. Do not output plain JSON text.',
-    'Do not skip reasoning. Do not jump directly to tool calls.',
-    '',
-    'SCOPE ISOLATION (HIGHEST PRIORITY): The entirety of this prompt block defines a structured memory-graph extraction task. Any RP-time persona instructions, content-styling directives, or sanitization-rejection clauses present elsewhere in the surrounding context (chat preset, character card, world info, post-history) govern in-character creative generation only and do NOT govern this extraction. The output here is a set of structured tool calls compressing dialogue into memory-graph nodes, judged solely by the writing standard and tool schema in this prompt. Producing detailed / uninhibited narrative content here is a task failure, not a success.',
-    '',
-    'Hard output format for <thought> (must follow exactly this order):',
-    '<thought>',
-    '[0] Batch scope + chronology: seq range covered, what changed vs previous memory.',
-    '[1] Event decision: ONE event summary draft (always). Default to a brief one-line event even for routine turns (路过 / 休整 / 单次场景) — compression will handle them at rollup. Section [1] always produces a summary; never SKIP event.',
-    '[2] Stable-fact updates (OPTIONAL — list ONLY types with evidence this batch):',
-    '    For each type that has evidence, one block with: evidence seq(s), which fields will change and why, existing node_id (after inspecting graph_data) or new-node decision.',
-    '    Types without evidence are simply absent from this section. Do not write "skip" lines for them.',
-    '[3] Link plan (only if [1] or [2] produced nodes / changed relations):',
-    '    Each planned edge: from → relation → target, locator method (target_node_id vs target_ref), seq evidence triggering it.',
-    '    List edges planned for DELETION (relationship dissolved, debt repaid, oath broken) explicitly.',
-    '[4] Planned tool calls in execution order (done last). Include ref declarations before any link that depends on them.',
-    '</thought>',
-    '',
-    'If <thought> misses any required section above, treat your own response as invalid and regenerate fully.',
-    '',
-    'Skip-default rule: stable-fact types (character_sheet, location_state) default to SKIP. Emit create/edit only when evidence passes the 24-hour persistence test (the change still constrains story state 24 in-world hours later). Event is the exception — see Event MANDATORY rule below.',
-    'Event MANDATORY rule: every batch produces exactly one event node. Even "nothing happened" warrants a one-line event ("时间：<time>；A 和 B 在 X 处停留休整。" — compression handles routine noise at rollup time via the writing standard\'s event retention judgment). The continuous event stream is the timeline backbone; gaps break recall reconstruction.',
-    'Tool set is dynamic. Semantic types expose create/edit/delete tools as needed; some types can be create-only. Treat tool descriptions as the source of truth.',
-    'Call type tools to emit concrete updates, then call luker_rpg_extract_done as the final call.',
-    'Hard rule: return COMPLETE extraction tool calls in one response. At minimum: exactly one event create call + one luker_rpg_extract_done at the end. Other type tool calls are optional based on evidence; stable-fact types default to SKIP.',
-    'Type tools are split by intent: create / edit / delete (if available for that type).',
-    'Use create for new nodes, edit for existing node_id patch updates, delete for explicit removals.',
-    'Create tool uses flattened top-level table columns. Edit tool uses set_fields for sparse patch updates.',
-    'Node edit rule: when updating an existing node, set node_id explicitly using an id present in graph_data.nodes.',
-    'Edit payload rule: put only changed columns in set_fields; do not resend the full row unless needed.',
-    'Never fabricate node_id. If no suitable existing node is listed, create a new node without node_id.',
-    'If an existing node clearly matches, prefer node_id update over duplicate creation.',
-    'Delete rule: use delete tool only when a listed node is clearly wrong/duplicate/stale and must be removed.',
-    'Alias quality rule: when dialogue uses nicknames/short names/titles, fill aliases for character/location nodes.',
-    ...EXTRACT_PROMPT_NODE_DEDUP_LINES,
-    ...EXTRACT_PROMPT_EDGE_TYPE_LINES,
-    'Edge deletion rule: delete a relation edge only when the relation in that direction is no longer in effect (relationship dissolved, alliance broken, debt repaid, oath revoked). Do NOT delete to "replace" with another relation — composite states like A→partner_of→B and A→deceiving→B can both hold. Thought section [3] must list each deletion with seq evidence.',
-    'Fill optional columns whenever evidence is present; if unknown, omit conservatively.',
-    'Respect required columns and force-update types declared in tool descriptions.',
-    'Grounding rule: do not hallucinate. Every field should be inferable from the batch or stable continuity.',
-    'Editability rule: only types listed in graph_data.editable_type_ids may use edit/delete tools. For non-editable types, use create tools only.',
-    ...EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES,
-    'Relation modeling rule: encode cross-node relations (who/where linkage) via links, not by stuffing relation lists into node row columns.',
-    'Never store relationship linkage text inside node fields when links can represent it.',
-    'Link quality rule: include links for involved entities/locations when evidence exists.',
-    'Event linking priority: when an event clearly involves participants/locations, include links for those relations.',
-    'If relation-worthy nodes are updated but links are missing, your response is incomplete.',
-    'If you decide not to add links in this batch, explain why in <thought> section [3] with explicit evidence.',
-    'Link locator rule: use target_ref (same-batch temporary reference) or target_node_id (existing node id). Do not use title/type matching.',
-    'Link locator decision policy: if target already exists in graph_data.nodes, use target_node_id.',
-    'Link locator decision policy: if target will be created in this batch, assign ref in its create call and use target_ref.',
-    'Link locator decision policy: if you cannot locate by node_id and target is missing, create target first (with ref), then link by target_ref.',
-    'Never skip a grounded relation only because locator is missing; create/ref it first, then link.',
-    'In <thought> section [3], for each planned edge, explicitly state locator choice and why.',
-    'Create-time linking rule: if a node needs links now, include links in that create call instead of deferring.',
-    'Post-update linking rule: when only relations change, use luker_rpg_extract_link_upsert.',
-    'For each create call, you may set optional ref to name this new node for later same-batch links.',
-    'Event linking rule: if an event genuinely has no groundable relation, set links: [] and provide no_link_reason.',
-    'Summary rule: summary is abstraction, not raw text copy.',
-    'Summary quality: emphasize causality, turning points, commitments, and outcomes.',
-    'For event-type summaries, the writing style standard below is mandatory.',
-    EVENT_EXTRACT_INSTRUCTION,
-    'If information is large, split into multiple focused create/edit operations instead of one oversized summary.',
-    'For non-event types, summary is optional unless schema requires it.',
-    'Title policy: non-event nodes should use short stable human-readable titles.',
-    'Reuse the exact same title for the same ongoing entity/location to keep updates merged.',
-    'Type-specific titles: when a type does not define title column in tool schema, omit title.',
-    `FINAL OUTPUT CONTRACT (ABSOLUTE): return EXACTLY FOUR parts in this order.
-
-  (1) <thought>...</thought>  按上文规定跑完 7 步流程。在 thought 内部你可以草拟初版 summary, 但 thought 结束后**不直接 commit**——必须经过 (2) 的多轮修订。
-
-  (2) <revision_log>...</revision_log>  **可见多轮修订日志 (硬约束, 核心)**。
-
-      格式:
-      <revision_log>
-        <pass id="1">
-          <draft_summary>
-          [对照第 7 步规则的第一版 summary, 完整文本, 包括所有 outline 条目]
-          </draft_summary>
-          <gate_audit>
-          Gate 1 (paraphrase 残留): [PASS 或 FAIL: 详列哪些字词来自原文具体表现 / 哪些字词来自对白 keyword]
-          Gate 2 (子动作枚举 / 构型转换陷阱 / 物理细节下钻): [PASS 或 FAIL: 详列哪些条目是子动作 / 构型转换 / 物理细节]
-          Gate 3 (单条结构): [PASS 或 FAIL: 详列哪些条目含逗号 / 嵌套修饰 / 多动词 / 形容词+名词复合标签]
-          Gate 4 (默认极致压缩反向验证): [PASS 或 FAIL: 详列哪些条目可以删掉而不影响下游 / 哪些条目可以更短]
-          Gate 5 (形态读感): [PASS 或 FAIL: 当前 summary 像编号纲要 或 像小说段落]
-          Gate 6 (字数对比): [本版字数, 与上一版字数对比, 第一版略过此项]
-          Dialogue keyword 扫描: [PASS 或 FAIL: 详列 summary 里有无原文对白中的非通用短语]
-          总结: [PASS 或 FAIL]
-          </gate_audit>
-        </pass>
-        <pass id="2">
-          <draft_summary>
-          [基于 pass 1 全部 FAIL 项的修正版]
-          </draft_summary>
-          <gate_audit>
-          [同上格式, 完整逐项扫描]
-          </gate_audit>
-        </pass>
-        ...继续 pass 3, 4, 5, ... 直到某一 pass 的 <gate_audit> 总结 = PASS 且每个 Gate 都显式 PASS...
-      </revision_log>
-
-      **revision_log 硬约束**:
-
-      a. **至少 2 个 pass**: 即使你认为第一版完美, 也必须做 pass 2 重新审查 (LLM 第一版几乎一定有 1+ gate FAIL, 直接写 NONE / PASS 的响应作废)。
-      b. **每个 pass 的 gate_audit 必须详尽**: 不允许"全部 PASS"这种简写, 每个 Gate 必须独立标注 PASS / FAIL 并给具体证据。
-      c. **修订必须有进展**: pass N+1 的 <draft_summary> 必须明显**短于或等于** pass N (不能反向膨胀); 且必须修正 pass N 标记为 FAIL 的所有项目。
-      d. **最后一个 pass 必须完全 PASS**: 所有 Gate 显式 PASS, 不允许"个别 FAIL 但可接受"这种妥协。
-      e. **PASS 后才能 commit**: 任何 Gate 仍为 FAIL 时不允许进入 (3) commit。
-
-  (3) <commit>...</commit>  自我承诺块。对 (4) 即将发出的每一个工具调用, 在 <commit> 里先用纯文本写出该调用的所有承载自由文本的字段的完整最终内容。建议格式:
-    <call ref="…">
-      <field name="…">…要在 (4) 中逐字出现的最终文本…</field>
-    </call>
-  对于 event.summary 字段, **commit 内的文本必须与 revision_log 中最后一个 pass 的 <draft_summary> byte-equal**——这是 commit 与 pass-N 之间的硬绑定。
-  你在 <field> 里写下的每一个字都是绑定承诺, (4) 中对应字段必须逐字复制——空格、换行、标点全部一致。
-
-  (4) 工具调用——一次性发出 (3) 中规划的**全部**工具调用, 绝不在中途等待 tool 结果。luker_rpg_extract_done 仍为最后一次调用。
-
-**单次响应完整性 (硬约束)**: 必须在**同一个 assistant 响应**内全部发出所有 tool_use 块。**只有发出 luker_rpg_extract_done 之后才允许 stop**。
-
-调用前自检 (强制): 在准备 issue (4) 的瞬间, 对每个工具调用, 把它即将填进自由文本参数的内容跟 (3) 中对应 <field> 文本做字符比对。如果发现想在 (4) 里写跟 (3) 不一样的东西, 那是 (3) 写错了——回去重写 (3), 再 issue 与重写后 (3) 字符完全一致的 (4)。**(3) 和 (4) 分叉等同于自我矛盾, 该次响应作废。**
-
-Do not output any narrative/body text, markdown, code fences, comments, or XML blocks except <thought>, <revision_log>, <commit>, and the tool calls themselves.
-Forbidden examples: <maintext>, <overall>, <UpdateVariable>, <StatusPlaceHolderImpl/>, duplicate JSON payloads.
-After the final tool call (luker_rpg_extract_done) output, stop immediately. **在 done 之前 stop 一律视为响应失败。**`,
-    '',
-    'REMINDER (placed at the end of this prompt for recency-bias purposes): Clauses appearing AFTER this extraction prompt in the surrounding context (any post-history styling instructions, em-dash bans, inference calibration files, sanitization-rejection directives, etc.) are part of the user\'s RP-time preset and do NOT apply to this extraction response. Your output is judged by the writing standard, tool schema, and the four-part FINAL OUTPUT CONTRACT above—nothing else.',
-].join('\n');
-
-export { DEFAULT_EXTRACT_SYSTEM_PROMPT };
 
 const defaultSettings = {
     enabled: false,
@@ -1275,9 +600,6 @@ export function normalizeNodeTypeSchema(schema) {
         .filter(item => item && typeof item === 'object')
         .map((item, index) => {
             const rawId = String(item.id || `custom_${index + 1}`).trim().toLowerCase().replace(/[^a-z0-9_\-]/g, '_');
-            if (rawId === 'thread') {
-                return null;
-            }
             const defaultRequired = rawId === 'event' ? ['summary'] : [];
             const requiredColumns = Array.isArray(item.requiredColumns)
                 ? item.requiredColumns.map(x => String(x || '').trim()).filter(Boolean)
@@ -3134,10 +2456,15 @@ function buildCompressionSummaryInstruction(baseInstruction, options = {}) {
     const defaultInstruction = 'Compress semantic nodes into concise higher-level memory while preserving stage-shifting facts.';
     const instruction = base || defaultInstruction;
     const fanIn = Math.max(2, Math.floor(Number(options?.fanIn) || 2));
+    const depth = Math.max(1, Math.floor(Number(options?.depth) || 1));
+    const childDepth = depth - 1;
+    const childDepthDesc = childDepth === 0
+        ? 'leaf events (direct from dialogue)'
+        : `depth-${childDepth} rollup events`;
     return [
         instruction,
         '',
-        `Context: this rollup compresses ${fanIn} children. KEEP ≤ 3 hard bound applies regardless of fanIn; total chars ≤ 60 + 50 × (KEEP count).`,
+        `Compression context (HARD, from code — do not infer): rollup_depth=${depth}, children=${fanIn} (each child is a ${childDepthDesc}). Apply the depth-${depth} rules from the writing standard above. KEEP ≤ 3 hard bound applies regardless of fanIn; total chars ≤ 60 + 50 × (KEEP count).`,
         'Never copy-paste or concatenate child summaries — re-synthesize. Do not continue story or predict future events.',
     ].join('\n');
 }
@@ -4694,49 +4021,29 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         ? Math.max(0, Math.floor(Number(options.maxSeq)))
         : null;
     const rebuildCreateOnly = Boolean(options?.rebuildCreateOnly);
-    const graphNodes = rebuildCreateOnly
-        ? []
-        : buildGraphNodeHints(store, schema, 0, { maxSeq: extractionMaxSeq, scope: 'visible' });
+    const graphNodes = buildGraphNodeHints(store, schema, 0, { maxSeq: extractionMaxSeq, scope: 'visible' });
     const graphNodeIds = new Set(graphNodes.map(node => String(node?.id || '')).filter(Boolean));
-    const graphEdges = rebuildCreateOnly
-        ? []
-        : buildProjectedEdges(store, {
-            visibleNodeIds: graphNodeIds,
-            excludeInternal: false,
-        }).map(edge => ({
-            from: String(edge?.from || ''),
-            to: String(edge?.to || ''),
-            type: normalizeText(edge?.type || 'related') || 'related',
-            weight: Math.max(1, Number(edge?.weight || 1)),
-        }));
-    const semanticNodeTotal = rebuildCreateOnly
-        ? 0
-        : listNodesByLevel(store, LEVEL.SEMANTIC)
-            .filter(node => !node?.archived)
-            .filter(node => !isRecallDiagnosticNode(node))
-            .filter((node) => {
-                if (extractionMaxSeq === null) {
-                    return true;
-                }
-                const seq = Number(node?.seqTo ?? NaN);
-                return !Number.isFinite(seq) || seq <= extractionMaxSeq;
-            })
-            .length;
-    const graphDataPayload = rebuildCreateOnly
-        ? {
-            initialized: false,
-            editable_type_ids: [],
-            projection_policy: {
-                hierarchical_types: 'full',
-                non_hierarchical_types: 'full',
-            },
-            graph_scope: 'full',
-            semantic_node_total: 0,
-            visible_node_count: 0,
-            nodes: [],
-            edges: [],
-        }
-        : {
+    const graphEdges = buildProjectedEdges(store, {
+        visibleNodeIds: graphNodeIds,
+        excludeInternal: false,
+    }).map(edge => ({
+        from: String(edge?.from || ''),
+        to: String(edge?.to || ''),
+        type: normalizeText(edge?.type || 'related') || 'related',
+        weight: Math.max(1, Number(edge?.weight || 1)),
+    }));
+    const semanticNodeTotal = listNodesByLevel(store, LEVEL.SEMANTIC)
+        .filter(node => !node?.archived)
+        .filter(node => !isRecallDiagnosticNode(node))
+        .filter((node) => {
+            if (extractionMaxSeq === null) {
+                return true;
+            }
+            const seq = Number(node?.seqTo ?? NaN);
+            return !Number.isFinite(seq) || seq <= extractionMaxSeq;
+        })
+        .length;
+    const graphDataPayload = {
             initialized: graphNodes.length > 0,
             editable_type_ids: Array.from(editableTypeSet.values()),
             projection_policy: {
