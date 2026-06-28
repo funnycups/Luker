@@ -379,11 +379,8 @@ export function registerWorldInfoHandler(tx) {
         },
     });
 
-    // Returns the canonical filename (e.g. "MyWorld.json") to mirror FsTransaction.resolveWorldName.
-    tx.resolveWorldName = (key) => {
-        const canonical = resolveCanonical(key.handle, key.name);
-        return canonical ? `${canonical}.json` : null;
-    };
+    // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
+    tx.resolveWorldName = (key) => resolveCanonical(key.handle, key.name);
 }
 
 export function registerNamedDocHandler(tx) {

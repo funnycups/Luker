@@ -253,10 +253,10 @@ describeMysql('MysqlTransaction handlers (smoke)', () => {
             tx.getResource(worldKey(lookupVariant)));
         expect(tolerant?.name).toBe(storedName);
 
-        // resolveWorldName returns '<name>.json' or null
+        // resolveWorldName returns the canonical world name (no extension) or null
         const resolved = await harness.engine.withTransaction(harness.handle, async (tx) =>
             tx.resolveWorldName(worldKey(lookupVariant)));
-        expect(resolved).toBe(`${storedName}.json`);
+        expect(resolved).toBe(storedName);
 
         const missing = await harness.engine.withTransaction(harness.handle, async (tx) =>
             tx.resolveWorldName(worldKey('NoSuchWorld')));

@@ -96,7 +96,7 @@ router.post('/something', async function (req, res) {
 |---|---|
 | `SettingsRepo` | `get(handle)`, `save(handle, doc)`, `patch(handle, ops)` — `patch` throws `NotFoundError` when settings file missing |
 | `PresetRepo` | `get/save/delete/exists/patch(handle, apiId, name, ...)`, `getState/setState/deleteState/deleteAllStates/listStateNamespaces(... , namespace)`, `renameStates(... , oldName, newName)` |
-| `WorldInfoRepo` | `get/save/delete/exists/patch/list/resolveName(handle, name, ...)` — `save` and `patch` enforce `{entries: object}` invariant; `resolveName` exposes tolerant filename lookup |
+| `WorldInfoRepo` | `get/save/delete/exists/patch/list/resolveName(handle, name, ...)` — `save` and `patch` enforce `{entries: object}` invariant; `resolveName` performs tolerant lookup and returns the canonical name (without extension) for direct re-use with `get/save` |
 | `NamedDocRepo` | `save/delete(handle, bucket, name, {strict?})` — buckets: `themes`, `movingUI`, `quickReplies` |
 | `GroupRepo` | `get/save/delete/list/listWithChatStats(handle, ...)` — `delete` returns `{deleted, chatsDeleted}` and cascades member chat JSONLs (and their sidecars) via the chat handler |
 | `StatsRepo` | `get(handle)`, `save(handle, doc)` |

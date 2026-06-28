@@ -487,7 +487,10 @@ function registerWorldInfoHandler(tx) {
         },
     });
 
-    tx.resolveWorldName = async (key) => resolveCanonicalFilename(key);
+    tx.resolveWorldName = async (key) => {
+        const filename = resolveCanonicalFilename(key);
+        return filename ? path.parse(filename).name : null;
+    };
 }
 
 function registerNamedDocHandler(tx) {

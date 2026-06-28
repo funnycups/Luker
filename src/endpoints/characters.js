@@ -964,10 +964,9 @@ async function healCharacterWorldBinding(char, handle) {
     const bound = String(_.get(char, 'data.extensions.world', '') || '').trim();
     if (!bound) return;
     try {
-        const canonicalFile = await getWorldInfoRepo().resolveName(handle, bound);
-        if (!canonicalFile) return;
-        const canonicalName = path.parse(canonicalFile).name;
-        if (canonicalName && canonicalName !== bound) {
+        const canonicalName = await getWorldInfoRepo().resolveName(handle, bound);
+        if (!canonicalName) return;
+        if (canonicalName !== bound) {
             console.info(`Healing extensions.world: "${bound}" -> "${canonicalName}"`);
             _.set(char, 'data.extensions.world', canonicalName);
         }

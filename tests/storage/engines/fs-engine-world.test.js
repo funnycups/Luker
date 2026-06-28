@@ -99,13 +99,13 @@ describe('FsEngine world handler', () => {
         expect(fs.existsSync(path.join(h.dirs.worlds, 'X.json'))).toBe(false);
     });
 
-    test('resolveWorldName returns canonical filename via tolerant lookup', async () => {
+    test('resolveWorldName returns canonical name via tolerant lookup', async () => {
         // Pre-existing emoji-variant file
         const filename = '❤️World.json';
         fs.writeFileSync(path.join(h.dirs.worlds, filename), JSON.stringify({ entries: {} }));
         const resolved = await h.engine.withTransaction(h.handle, (tx) =>
             tx.resolveWorldName({ kind: 'world', handle: h.handle, name: '❤World' }));
-        expect(resolved).toBe(filename);
+        expect(resolved).toBe(path.parse(filename).name);
     });
 
     test('resolveWorldName returns null when not found', async () => {

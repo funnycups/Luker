@@ -128,9 +128,9 @@ describe.each(CONTRACT_HARNESSES)('WorldInfoRepo on $name — list and resolveNa
         expect(list).toEqual([]);
     });
 
-    test('resolveName returns canonical filename for exact match', async () => {
+    test('resolveName returns canonical name for exact match', async () => {
         await repo.save(h.handle, 'MyWorld', { entries: {} });
-        expect(await repo.resolveName(h.handle, 'MyWorld')).toBe('MyWorld.json');
+        expect(await repo.resolveName(h.handle, 'MyWorld')).toBe('MyWorld');
     });
 
     test('resolveName returns null for missing world', async () => {
@@ -140,7 +140,15 @@ describe.each(CONTRACT_HARNESSES)('WorldInfoRepo on $name — list and resolveNa
     test('resolveName returns null when file absent, canonical name when present', async () => {
         expect(await repo.resolveName(h.handle, 'Missing')).toBeNull();
         await repo.save(h.handle, 'Present', { entries: {} });
-        expect(await repo.resolveName(h.handle, 'Present')).toBe('Present.json');
+        expect(await repo.resolveName(h.handle, 'Present')).toBe('Present');
+    });
+
+    test('get accepts the value returned by resolveName', async () => {
+        await repo.save(h.handle, 'MyWorld', { entries: { '0': { uid: 0, content: 'x' } } });
+        const canonical = await repo.resolveName(h.handle, 'MyWorld');
+        const file = await repo.get(h.handle, canonical);
+        expect(file).not.toBeNull();
+        expect(file.entries['0'].content).toBe('x');
     });
 });
 

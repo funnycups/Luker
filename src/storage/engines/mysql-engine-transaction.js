@@ -441,12 +441,8 @@ export function registerWorldInfoHandler(tx) {
         },
     });
 
-    // Returns the canonical filename (e.g. "MyWorld.json") to mirror
-    // FsTransaction.resolveWorldName and SqliteTransaction's tx-level method.
-    tx.resolveWorldName = async (key) => {
-        const canonical = await resolveCanonical(key.handle, key.name);
-        return canonical ? `${canonical}.json` : null;
-    };
+    // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
+    tx.resolveWorldName = async (key) => resolveCanonical(key.handle, key.name);
 }
 
 export function registerNamedDocHandler(tx) {

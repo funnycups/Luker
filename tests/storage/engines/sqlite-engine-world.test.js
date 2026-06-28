@@ -73,12 +73,12 @@ describe('SqliteEngine world handler', () => {
         expect(list[0].extensions).toEqual({});
     });
 
-    test('resolveWorldName returns canonical filename for present and null for missing', async () => {
+    test('resolveWorldName returns canonical name for present and null for missing', async () => {
         await engine.withTransaction(handle, async (tx) =>
             tx.putResource(worldKey('MyWorld'), { doc: { entries: {} } }),
         );
         const present = await engine.withTransaction(handle, async (tx) => tx.resolveWorldName(worldKey('MyWorld')));
-        expect(present).toBe('MyWorld.json');
+        expect(present).toBe('MyWorld');
         const missing = await engine.withTransaction(handle, async (tx) => tx.resolveWorldName(worldKey('Nonexistent')));
         expect(missing).toBeNull();
     });
