@@ -151,7 +151,8 @@
         "lint:plugin-imports": "node scripts/check-plugin-imports.js",
         "plugins:update": "node plugins update",
         "plugins:install": "node plugins install",
-        "storage:migrate": "node scripts/storage-migrate.js"
+        "storage:migrate": "node scripts/storage-migrate.js",
+        "storage:audit-names": "node scripts/audit-storage-names.js"
     },
     "bin": {
         "luker": "./src/server-global.js"
