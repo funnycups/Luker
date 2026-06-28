@@ -125,6 +125,7 @@ import {
 import { migrateOrchSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
 import { interpretSandboxOutcome, buildEditCallReply } from './sandbox-result.js';
+import { buildDrainOutcomesMessage } from './drain-outcomes-message.js';
 // auto-continue gate is now `bus.hasOutstanding()` — the standalone
 // gate module + its unit test were retired during the ProposalBus migration.
 // Character-editor-assistant publishes its helper-tool surface via
@@ -1371,26 +1372,19 @@ export async function openOrchestratorIterationStudio(deps) {
         const allOutcomes = __pendingDrainStash.length
             ? [...__pendingDrainStash.splice(0), ...outcomes]
             : outcomes;
-        const committed = allOutcomes.filter((o) => o.status === 'committed');
-        const rejected = allOutcomes.filter((o) => o.status === 'rejected');
-        const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
-        const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
-        if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
-        const lines = [];
-        const total = committed.length + rejected.length + conflicts.length + rolledBack.length;
-        lines.push(`[User reviewed ${total} proposal(s):`);
-        const fmt = (o) => `  - ${o.kind}${o.target ? ` (${o.target})` : ''}${o.error ? ` — ${o.error}` : ''}`;
-        if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
-        if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
-        if (conflicts.length) { lines.push(`Skipped — target had been changed since you captured the diff, so the write was NOT applied (${conflicts.length}). If still needed, re-read the current state and re-issue:`); for (const o of conflicts) lines.push(fmt(o)); }
-        if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        // Pure formatter — pins agent-facing wording (reason-grouped
+        // section headers + hint-over-error preference) under unit
+        // test at tests/orch-iteration/drain-outcomes-message.test.js.
+        // Returns null when every outcome was filtered out so we keep
+        // the original "nothing worth surfacing" early-return shape.
+        const message = buildDrainOutcomesMessage(allOutcomes, { tf });
+        if (message == null) return;
         drainScheduled = true;
         try {
             state.session.messages.push({
                 id: makeMessageId(),
                 role: 'user',
-                content: lines.join('\n'),
+                content: message,
                 at: Date.now(),
                 auto: true,
             });
@@ -2562,10 +2556,11 @@ export async function openOrchestratorIterationStudio(deps) {
         //     own `executeAiIterationToolCalls` against a sandbox profile
         //     so the simulate runtime executes (and its `simulation`
         //     payload lands in toolResults) without mutating state.live.
-        //     If the runtime executor throws or `executeAiIterationToolCalls`
-        //     is unavailable, fall back to a `{simulated: true, message}`
-        //     placeholder so the user still sees a chip with a result
-        //     block — better than the previous silent drop.
+        //     If the runtime executor throws (AbortError / HTTP / runtime)
+        //     or produces no matching result, the chip surfaces a
+        //     `{ok:false, reason, hint}` envelope so the user and the
+        //     next round's role:'tool' replay see the real failure
+        //     instead of a fake "simulation complete" placeholder.
         // Lorebook tools are plugin-agnostic; the avatar scopes
         // `world_book_list` to a card's bindings. In global scope, the
         // avatar is an empty string and `world_book_list` falls back to
@@ -2619,14 +2614,48 @@ export async function openOrchestratorIterationStudio(deps) {
                             execOk = true;
                         }
                     } catch (err) {
-                        // Fall through to placeholder so the chip still
-                        // renders with a result block.
+                        // Don't pretend success — surface the failure to
+                        // the agent. The historical "simulation complete"
+                        // placeholder silently absorbed every executor
+                        // throw (AbortError, network failure, runtime
+                        // bug, …) and faked an ok result, which is an
+                        // active regression of the iter-studio
+                        // noop→error contract (see
+                        // `iter_studio_noop_error_contract`). Map the
+                        // error to a reason from the state-error enum
+                        // and emit an envelope-shaped failure payload so
+                        // the chip renders with an actionable hint and
+                        // the next round's role:'tool' replay carries
+                        // the real cause.
                         // eslint-disable-next-line no-console
                         console.warn(`[${MODULE}:${mode}] simulate executor failed`, err);
+                        const reason = err?.name === 'AbortError'
+                            ? 'TRANSPORT_ERROR'
+                            : (typeof err?.status === 'number' && err.status >= 400)
+                                ? 'HTTP_ERROR'
+                                : 'TRANSPORT_ERROR';
+                        resultPayload = {
+                            ok: false,
+                            reason,
+                            hint: tf('Simulate executor threw: ${0}', String(err?.message || 'unknown').slice(0, 80)),
+                        };
+                        statusLabel = 'fail';
+                        // Mark as handled so the genuine-no-output
+                        // fallback below doesn't overwrite the failure.
+                        execOk = true;
                     }
                     if (!execOk) {
-                        resultPayload = { simulated: true, message: 'simulation complete' };
-                        statusLabel = 'ok';
+                        // Genuine no-output case: executor returned
+                        // without throwing AND without producing any
+                        // matching toolResult. Extremely rare, but
+                        // surface as a transport-level failure rather
+                        // than the historical fake-success placeholder.
+                        resultPayload = {
+                            ok: false,
+                            reason: 'TRANSPORT_ERROR',
+                            hint: tf('Simulate executor produced no result'),
+                        };
+                        statusLabel = 'fail';
                     }
                 } else if (isSkillIterStudioTool(call?.name)) {
                     // Dispatch the skill iter-studio tool.
@@ -3487,6 +3516,36 @@ export async function openOrchestratorIterationStudio(deps) {
         state.isBusy = false;
         state.aborting = false;
         state.abortController = null;
-        try { await persistSession({ flush: true }); } catch { /* ignore */ }
+        // Final teardown flush. saveFlush throws on hard failure (the
+        // session-store wraps the LOG_WRITE_FAILED reason into the Error
+        // message). Detect that prefix and prompt the user before
+        // silently dropping the unsaved turn — historical silent catch
+        // was the canonical lost-write repro for
+        // known_bug_debounced_save_on_unload at this site (close +
+        // refresh inside the settings debounce window). The popup DOM
+        // is already detached by the time we get here so the prompt is
+        // an acknowledgement, not a true "abort close" — but the
+        // console.warn gives the user a chance to copy the unsaved
+        // content out of devtools before navigating away.
+        try {
+            await persistSession({ flush: true });
+        } catch (err) {
+            const message = err instanceof Error ? String(err.message || '') : String(err ?? '');
+            if (message.includes('LOG_WRITE_FAILED')) {
+                // eslint-disable-next-line no-alert
+                const proceed = (typeof globalThis !== 'undefined' && typeof globalThis.confirm === 'function')
+                    ? globalThis.confirm(t('Save failed — close anyway and lose this turn?'))
+                    : true;
+                const verdict = proceed ? 'user acknowledged loss' : 'user chose to keep unsaved turn';
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}:${mode}] teardown flush failed (LOG_WRITE_FAILED): ${verdict}`, err);
+            } else {
+                // Non-LOG_WRITE_FAILED throw — preserve historical
+                // silent behavior so an unrelated bug can't hard-block
+                // popup close, but at least record it.
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}:${mode}] teardown flush threw`, err);
+            }
+        }
     }
 }

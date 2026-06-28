@@ -16,9 +16,10 @@
  *                                          (anchor not_found / invalid_args
  *                                          / multiple_matches / …)
  *   3. before === after AND executor was
- *      silent or reported ok:true        → benign noop (the "target state
- *                                          likely already matches" hint
- *                                          is honest in this branch)
+ *      silent or reported ok:true        → benign noop, emitted as a
+ *                                          VALIDATION_TARGET envelope so
+ *                                          the AI sees `{ok:false, reason,
+ *                                          hint}` for every non-edit path
  *
  * The historical bug was treating case 2 as case 3 — the iter-studio
  * surfaced a misleading "likely already matches" prose to the model
@@ -75,7 +76,7 @@ function findExecutorFailure(executorResult) {
  * @param {{toolResults?: Array<{tool_call_id?: string, content?: any}>}|null|undefined} params.executorResult
  *        whatever `executeAiIterationToolCalls` returned for this single
  *        tool call. May be null/undefined when the executor threw.
- * @returns {{kind: 'edits'} | {kind: 'failure', content: object} | {kind: 'noop'}}
+ * @returns {{kind: 'edits'} | {kind: 'failure', content: object, reason: (string|null)} | {kind: 'noop'}}
  */
 export function interpretSandboxOutcome({ before, after, executorResult }) {
     if (!snapshotsEqual(before, after)) {
@@ -83,7 +84,19 @@ export function interpretSandboxOutcome({ before, after, executorResult }) {
     }
     const failure = findExecutorFailure(executorResult);
     if (failure) {
-        return { kind: 'failure', content: failure };
+        // Surface `reason` from the executor envelope when present so
+        // `buildEditCallReply` (and any downstream classifiers) can route
+        // on the state-error enum rather than re-parsing `failure.error`.
+        // Older executors that emit `{ok:false, error:'...'}` without a
+        // `reason` field land here with `reason: null`, leaving the
+        // payload intact for backwards compat.
+        return {
+            kind: 'failure',
+            content: failure,
+            reason: typeof failure.reason === 'string' && failure.reason
+                ? failure.reason
+                : null,
+        };
     }
     return { kind: 'noop' };
 }
@@ -111,11 +124,18 @@ export function interpretSandboxOutcome({ before, after, executorResult }) {
  *   { kind: 'throw', error: Error }
  *   { kind: 'noop' }
  *
- * The noop message is the only place where "already matches" prose is
- * honest — every other outcome forwards a structured failure so the AI
- * sees the real cause (anchor not_found / multiple_matches / invalid_args
- * / sandbox executor throw) instead of the misleading hint the original
- * code used to push for every non-edit outcome.
+ * The noop / throw / failure branches all emit envelope-shaped
+ * (`{ok:false, reason, hint}`) content so the next round's role:'tool'
+ * reply uses a single shape the model can route on (the failure branch
+ * forwards the executor's payload, which already carries the envelope;
+ * throw becomes `reason: 'TRANSPORT_ERROR'`; noop becomes
+ * `reason: 'VALIDATION_TARGET'` because the target state already matched
+ * the requested value — there was no edit to make). The "already matches"
+ * prose is honest in the noop branch only — every other path forwards a
+ * structured failure so the AI sees the real cause (anchor not_found /
+ * multiple_matches / invalid_args / sandbox executor throw) instead of
+ * the misleading hint the original code used to push for every non-edit
+ * outcome.
  *
  * Tested in tests/orch-iteration/sandbox-result.test.js together with
  * `interpretSandboxOutcome` so the studio.js call site is a pure
@@ -135,22 +155,46 @@ export function buildEditCallReply({ outcome, callId }) {
         };
     }
     if (outcome?.kind === 'failure') {
+        // Forward the executor's envelope verbatim. Executors that emit
+        // a state-error reason (VALIDATION_TARGET / CONFLICT / HTTP_ERROR
+        // / TRANSPORT_ERROR / …) carry it in `content.reason`; older
+        // executors that emit `{ok:false, error, detail}` survive
+        // unchanged because we don't rewrite the payload. When the
+        // payload lacks an explicit `reason`, fall back to the enum
+        // `interpretSandboxOutcome` lifted onto the outcome so the
+        // downstream classifier always sees a routable value.
+        const content = outcome.content || {};
         return {
             edits: [],
             toolResult: {
                 tool_call_id: callId,
-                content: outcome.content,
+                content: {
+                    ...content,
+                    ok: false,
+                    reason: content.reason || outcome.reason || 'VALIDATION_TARGET',
+                    hint: content.hint || content.error || 'Tool call failed.',
+                },
                 status: 'fail',
             },
             chainAdvanceTo: undefined,
         };
     }
     if (outcome?.kind === 'throw') {
+        // Sandbox executor threw — map to a TRANSPORT_ERROR envelope so
+        // the next round's role:'tool' reply uses the same shape the
+        // failure / noop branches use. The pre-envelope shape
+        // (`{error: '...'}`) is preserved for backwards compat with
+        // anything that inspected the message text.
         return {
             edits: [],
             toolResult: {
                 tool_call_id: callId,
-                content: { error: String(outcome.error?.message || outcome.error || 'sandbox executor failed') },
+                content: {
+                    ok: false,
+                    reason: 'TRANSPORT_ERROR',
+                    error: String(outcome.error?.message || outcome.error || 'sandbox executor failed'),
+                    hint: 'Sandbox executor threw before completing the tool call — retry, then check runtime preset and network if persists.',
+                },
                 status: 'fail',
             },
             chainAdvanceTo: undefined,
@@ -158,14 +202,20 @@ export function buildEditCallReply({ outcome, callId }) {
     }
     // Genuine noop: executor accepted the call but the working profile
     // did not change (e.g. set_field overwriting with the same value).
-    // The "already matches" hint is honest in this branch only.
+    // The "already matches" prose is honest in this branch only and is
+    // emitted as a VALIDATION_TARGET envelope so the consumer can route
+    // on `content.reason` like every other failure path. The historical
+    // `{status: 'noop', message: '…likely already matches…'}` shape was
+    // both inconsistent with the envelope and carried weasel-word
+    // wording ("likely") the noop→error contract fix tightened out.
     return {
         edits: [],
         toolResult: {
             tool_call_id: callId,
             content: {
-                status: 'noop',
-                message: 'No edits produced. The target profile state already matches what you requested; an earlier round may have already applied this change. Re-read the live profile before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (path / mode / value).',
+                ok: false,
+                reason: 'VALIDATION_TARGET',
+                hint: 'Target state already matches the requested value. Re-read live profile before retrying — do not re-issue the same call.',
             },
             status: 'fail',
         },

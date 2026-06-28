@@ -165,6 +165,55 @@ describe('interpretSandboxOutcome — orchestrator iter-studio sandbox decision'
         expect(outcome.kind).toBe('failure');
         expect(outcome.content.error).toBe('invalid_args');
     });
+
+    test('exposes the executor envelope reason on failure outcome when present', () => {
+        // Newer executors carry a state-error reason
+        // (VALIDATION_TARGET / CONFLICT / HTTP_ERROR / TRANSPORT_ERROR /…)
+        // alongside the legacy `error` field. The helper surfaces it on
+        // the outcome so downstream classifiers can route on the enum
+        // rather than re-parsing `failure.error`.
+        const before = freshProfile();
+        const after = freshProfile();
+        const executorResult = {
+            toolResults: [{
+                tool_call_id: 'call_reason',
+                content: JSON.stringify({
+                    ok: false,
+                    reason: 'VALIDATION_TARGET',
+                    error: 'not_found',
+                    detail: 'anchor missing',
+                }),
+            }],
+        };
+        const outcome = interpretSandboxOutcome({ before, after, executorResult });
+        expect(outcome.kind).toBe('failure');
+        expect(outcome.reason).toBe('VALIDATION_TARGET');
+        expect(outcome.content.error).toBe('not_found');
+    });
+
+    test('failure outcome reason is null when the executor envelope omits it (backwards compat)', () => {
+        // Older executors that emit only `{ok:false, error, detail}`
+        // must still land on a failure outcome — the helper just leaves
+        // `reason` as null instead of inventing one. The verbatim
+        // payload is forwarded so downstream still sees the legacy
+        // shape unchanged.
+        const before = freshProfile();
+        const after = freshProfile();
+        const executorResult = {
+            toolResults: [{
+                tool_call_id: 'call_legacy',
+                content: JSON.stringify({
+                    ok: false,
+                    error: 'not_found',
+                    detail: 'oldString missing',
+                }),
+            }],
+        };
+        const outcome = interpretSandboxOutcome({ before, after, executorResult });
+        expect(outcome.kind).toBe('failure');
+        expect(outcome.reason).toBeNull();
+        expect(outcome.content.error).toBe('not_found');
+    });
 });
 
 describe('buildEditCallReply — outcome → iter-studio per-call push shape', () => {
@@ -207,11 +256,14 @@ describe('buildEditCallReply — outcome → iter-studio per-call push shape', (
             callId: 'call_anchor_miss',
         });
         expect(reply.edits).toEqual([]);
-        expect(reply.toolResult).toEqual({
-            tool_call_id: 'call_anchor_miss',
-            content: executorEnvelope,
-            status: 'fail',
-        });
+        // The envelope fields are forwarded verbatim; the branch fills in
+        // `reason` / `hint` from the fallback chain so downstream
+        // classifiers always see a routable enum value and an actionable
+        // hint, even when the executor only emitted the legacy
+        // `{ok:false, error, detail}` shape.
+        expect(reply.toolResult.tool_call_id).toBe('call_anchor_miss');
+        expect(reply.toolResult.status).toBe('fail');
+        expect(reply.toolResult.content).toMatchObject(executorEnvelope);
         // The chain does NOT advance: the failed call left the working
         // profile untouched, so subsequent edit tools in this round must
         // still see `chainedBefore` as their baseline.
@@ -222,17 +274,23 @@ describe('buildEditCallReply — outcome → iter-studio per-call push shape', (
         expect(JSON.stringify(reply.toolResult.content)).not.toMatch(/likely/);
     });
 
-    test('throw outcome → toolResult carries the executor exception message', () => {
+    test('throw outcome → toolResult carries the executor exception in a TRANSPORT_ERROR envelope', () => {
+        // Sandbox executor blew up before the call could complete. The
+        // envelope shape (ok:false, reason, hint) matches the failure
+        // and noop branches so the next round's role:'tool' reply is
+        // uniform; the `error` field preserves the exception message for
+        // anything that inspected the raw text.
         const reply = buildEditCallReply({
             outcome: { kind: 'throw', error: new Error('boom') },
             callId: 'call_throw',
         });
         expect(reply.edits).toEqual([]);
-        expect(reply.toolResult).toEqual({
-            tool_call_id: 'call_throw',
-            content: { error: 'boom' },
-            status: 'fail',
-        });
+        expect(reply.toolResult.tool_call_id).toBe('call_throw');
+        expect(reply.toolResult.status).toBe('fail');
+        expect(reply.toolResult.content.ok).toBe(false);
+        expect(reply.toolResult.content.reason).toBe('TRANSPORT_ERROR');
+        expect(reply.toolResult.content.error).toBe('boom');
+        expect(reply.toolResult.content.hint).toBeDefined();
         expect(reply.chainAdvanceTo).toBeUndefined();
     });
 
@@ -241,6 +299,8 @@ describe('buildEditCallReply — outcome → iter-studio per-call push shape', (
             outcome: { kind: 'throw', error: 'string-error' },
             callId: 'call_throw_str',
         });
+        expect(reply.toolResult.content.ok).toBe(false);
+        expect(reply.toolResult.content.reason).toBe('TRANSPORT_ERROR');
         expect(reply.toolResult.content.error).toBe('string-error');
     });
 
@@ -249,13 +309,19 @@ describe('buildEditCallReply — outcome → iter-studio per-call push shape', (
             outcome: { kind: 'throw', error: null },
             callId: 'call_throw_null',
         });
+        expect(reply.toolResult.content.ok).toBe(false);
+        expect(reply.toolResult.content.reason).toBe('TRANSPORT_ERROR');
         expect(reply.toolResult.content.error).toBe('sandbox executor failed');
     });
 
-    test('noop outcome → toolResult uses the tightened "already matches" wording (no "likely")', () => {
-        // The misleading prose only fires when the executor actually
-        // accepted the call with no profile change — the surface where
-        // "already matches" is honest.
+    test('noop outcome → toolResult uses a VALIDATION_TARGET envelope (no "likely", no "status:noop")', () => {
+        // The genuine "already matches" branch — emitted as a
+        // VALIDATION_TARGET envelope so downstream classifiers see the
+        // same `{ok:false, reason, hint}` shape they see for failure and
+        // throw branches. The historical `{status:'noop', message:'…
+        // likely already matches…'}` shape was both inconsistent with
+        // the envelope and carried weasel-word wording the
+        // noop→error contract fix tightened out.
         const reply = buildEditCallReply({
             outcome: { kind: 'noop' },
             callId: 'call_noop',
@@ -263,11 +329,15 @@ describe('buildEditCallReply — outcome → iter-studio per-call push shape', (
         expect(reply.edits).toEqual([]);
         expect(reply.toolResult.tool_call_id).toBe('call_noop');
         expect(reply.toolResult.status).toBe('fail');
-        expect(reply.toolResult.content.status).toBe('noop');
+        expect(reply.toolResult.content.ok).toBe(false);
+        expect(reply.toolResult.content.reason).toBe('VALIDATION_TARGET');
         // The historical "likely already matches" wording was the bug
-        // signature — drift guard so we don't accidentally reintroduce it.
-        expect(reply.toolResult.content.message).not.toMatch(/likely/);
-        expect(reply.toolResult.content.message).toMatch(/already matches/);
+        // signature — drift guard so we don't accidentally reintroduce
+        // it; also guard against the obsolete `status:'noop'` field.
+        expect(reply.toolResult.content.hint).toMatch(/already matches/);
+        expect(reply.toolResult.content.hint).not.toMatch(/likely/);
+        expect(reply.toolResult.content.status).toBeUndefined();
+        expect(reply.toolResult.content.message).toBeUndefined();
         expect(reply.chainAdvanceTo).toBeUndefined();
     });
 
@@ -282,6 +352,7 @@ describe('buildEditCallReply — outcome → iter-studio per-call push shape', (
             callId: 'call_empty_edits',
         });
         expect(reply.edits).toEqual([]);
-        expect(reply.toolResult?.content?.status).toBe('noop');
+        expect(reply.toolResult?.content?.ok).toBe(false);
+        expect(reply.toolResult?.content?.reason).toBe('VALIDATION_TARGET');
     });
 });

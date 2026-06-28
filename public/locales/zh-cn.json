@@ -5696,6 +5696,7 @@
 
     ,"(no effective change)": "（无实际变更）"
     ,"Clear all session history?": "清空所有会话历史？"
+    ,"Save failed — close anyway and lose this turn?": "保存失败——仍要关闭并丢弃本轮内容吗？"
 
     ,"Apply ${0} to \"${1}\"": "将 ${0} 应用到「${1}」"
     ,"Apply ${0} changes (${1})": "应用 ${0} 项变更（${1}）"
@@ -5801,6 +5802,14 @@
     ,"⚠ Write skipped (resource changed)": "⚠ 写入未生效（目标已变更）"
     ,"The resource changed externally since this proposal was captured. Approve to retry against the current state, or reject.": "自提议生成以来，该资源已被外部修改。点击批准将基于当前状态重新尝试；点击拒绝则放弃。"
     ,"The AI called this write tool, but the target had been changed in the meantime — the write was NOT applied. The AI has been notified and can decide whether to retry.": "AI 调用了这个写入工具，但目标在期间已被修改——本次写入未生效。AI 已收到通知，可自行决定是否重试。"
+    ,"Validation errors (${0}):": "校验错误（${0}）："
+    ,"Targets missing (${0}):": "目标不存在（${0}）："
+    ,"Payload rejected (${0}):": "载荷被拒（${0}）："
+    ,"State destroyed (${0}):": "状态已销毁（${0}）："
+    ,"Server errors (${0}):": "服务器错误（${0}）："
+    ,"Network errors (${0}):": "网络错误（${0}）："
+    ,"Persistence errors (${0}):": "持久化错误（${0}）："
+    ,"Other errors (${0}):": "其他错误（${0}）："
     ,"Approve all pending (${0})": "批准全部待审（${0}）"
     ,"Reject all pending (${0})": "拒绝全部待审（${0}）"
     ,"Rollback this turn (${0})": "回退本轮（${0}）"

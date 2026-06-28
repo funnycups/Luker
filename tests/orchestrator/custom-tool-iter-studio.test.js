@@ -18,6 +18,7 @@
  */
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
+import { STATE_ERROR_REASONS } from '../../public/scripts/state-errors.js';
 
 // Minimal Luker shim for the discovery executors that import getContext.
 globalThis.Luker = {
@@ -138,7 +139,8 @@ describe('list / get', () => {
             { name: 'luker_orch_get_custom_tool', args: { name: 'nope' } },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/not found/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_TARGET);
+        expect(out.hint).toMatch(/not found/);
     });
 
     test('get rejects invalid name pattern', async () => {
@@ -146,7 +148,8 @@ describe('list / get', () => {
             { name: 'luker_orch_get_custom_tool', args: { name: 'has space' } },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/invalid name/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(out.hint).toMatch(/invalid name/);
     });
 });
 
@@ -185,7 +188,8 @@ describe('set (luker_orch_set_custom_tool)', () => {
             { name: 'luker_orch_set_custom_tool', args: TOOL({ name: 'chat_search' }) },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/builtin/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(out.hint).toMatch(/builtin/);
     });
 
     test('rejects body with a real syntax error', async () => {
@@ -193,7 +197,8 @@ describe('set (luker_orch_set_custom_tool)', () => {
             { name: 'luker_orch_set_custom_tool', args: TOOL({ body: 'return {;' }) },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/syntax/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_COMMIT);
+        expect(out.hint).toMatch(/syntax/);
     });
 
     test('rejects simulateBody with a syntax error', async () => {
@@ -201,7 +206,8 @@ describe('set (luker_orch_set_custom_tool)', () => {
             { name: 'luker_orch_set_custom_tool', args: TOOL({ simulateBody: 'return {;' }) },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/simulateBody syntax/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_COMMIT);
+        expect(out.hint).toMatch(/simulateBody syntax/);
     });
 
     test('requires description', async () => {
@@ -209,7 +215,8 @@ describe('set (luker_orch_set_custom_tool)', () => {
             { name: 'luker_orch_set_custom_tool', args: TOOL({ description: '   ' }) },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/description is required/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(out.hint).toMatch(/description is required/);
     });
 
     test('requires valid mode', async () => {
@@ -217,7 +224,8 @@ describe('set (luker_orch_set_custom_tool)', () => {
             { name: 'luker_orch_set_custom_tool', args: TOOL({ mode: 'maybe' }) },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/mode must be/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(out.hint).toMatch(/mode must be/);
     });
 
     test('requires object parameters', async () => {
@@ -225,7 +233,8 @@ describe('set (luker_orch_set_custom_tool)', () => {
             { name: 'luker_orch_set_custom_tool', args: TOOL({ parameters: null }) },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/parameters must be/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(out.hint).toMatch(/parameters must be/);
     });
 });
 
@@ -248,7 +257,8 @@ describe('patch_body (luker_orch_patch_custom_tool_body)', () => {
             { name: 'luker_orch_patch_custom_tool_body', args: { name: 't', oldString: 'foo', newString: 'bar' } },
             { profile });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/multiple_matches/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(out.hint).toMatch(/multiple_matches/);
     });
 
     test('replaceAll: true replaces every occurrence', async () => {
@@ -265,7 +275,8 @@ describe('patch_body (luker_orch_patch_custom_tool_body)', () => {
             { name: 'luker_orch_patch_custom_tool_body', args: { name: 't', oldString: '1 + 2;', newString: '1 + {;' } },
             { profile: baseProfile() });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/patched body syntax/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_COMMIT);
+        expect(out.hint).toMatch(/patched body syntax/);
     });
 
     test('rejects missing tool', async () => {
@@ -273,7 +284,8 @@ describe('patch_body (luker_orch_patch_custom_tool_body)', () => {
             { name: 'luker_orch_patch_custom_tool_body', args: { name: 'nope', oldString: 'a', newString: 'b' } },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/not found/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_TARGET);
+        expect(out.hint).toMatch(/not found/);
     });
 
     test('target=simulateBody patches the simulate body', async () => {
@@ -387,7 +399,8 @@ describe('dry_run (luker_orch_dry_run_custom_tool)', () => {
             { name: 'luker_orch_dry_run_custom_tool', args: { name: 'x', body: 'return 1;', args: {} } },
             { profile: { customTools: [TOOL({ name: 'x' })] } });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/mutually exclusive/);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(out.hint).toMatch(/mutually exclusive/);
     });
 
     test('rejects when neither name nor body is supplied', async () => {
@@ -395,6 +408,7 @@ describe('dry_run (luker_orch_dry_run_custom_tool)', () => {
             { name: 'luker_orch_dry_run_custom_tool', args: { args: {} } },
             { profile: { customTools: [] } });
         expect(out.ok).toBe(false);
+        expect(out.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
     });
 });
 
@@ -428,10 +442,13 @@ describe('commitApprovedCustomToolProposal', () => {
         expect(profile.customTools[0].body).toBe('return 42;');
     });
 
-    test('patch_body throws on drift (tool removed since proposal)', () => {
+    test('patch_body throws CustomToolCommitError on drift (tool removed since proposal)', () => {
         const op = { name: 'luker_orch_patch_custom_tool_body', args: { name: 'gone', oldString: 'a', newString: 'b' } };
-        expect(() => mod.commitApprovedCustomToolProposal(profile, flagBucket, op))
-            .toThrow(/no longer present/);
+        let caught = null;
+        try { mod.commitApprovedCustomToolProposal(profile, flagBucket, op); } catch (err) { caught = err; }
+        expect(caught).toBeInstanceOf(mod.CustomToolCommitError);
+        expect(caught.reason).toBe(STATE_ERROR_REASONS.CONFLICT);
+        expect(caught.hint).toMatch(/no longer present/);
     });
 
     test('patch_schema replays', () => {
@@ -456,10 +473,13 @@ describe('commitApprovedCustomToolProposal', () => {
         expect(result.noop).toBe(true);
     });
 
-    test('unknown op throws', () => {
+    test('unknown op throws CustomToolCommitError with VALIDATION_ARGS', () => {
         const op = { name: 'luker_orch_set_director_main_agent', args: {} };
-        expect(() => mod.commitApprovedCustomToolProposal(profile, flagBucket, op))
-            .toThrow(/unknown op/);
+        let caught = null;
+        try { mod.commitApprovedCustomToolProposal(profile, flagBucket, op); } catch (err) { caught = err; }
+        expect(caught).toBeInstanceOf(mod.CustomToolCommitError);
+        expect(caught.reason).toBe(STATE_ERROR_REASONS.VALIDATION_ARGS);
+        expect(caught.hint).toMatch(/unknown op/);
     });
 });
 

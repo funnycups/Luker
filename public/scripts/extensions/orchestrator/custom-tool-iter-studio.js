@@ -40,6 +40,23 @@ import {
     listLukerDocs,
     readLukerDoc,
 } from '../../iteration-library/tools/ctx-and-docs-discovery.js';
+import { STATE_ERROR_REASONS, makeStateError } from '../../state-errors.js';
+
+/**
+ * Structured error thrown by the apply-time commit helper
+ * (`commitApprovedCustomToolProposal`). Carries a `reason` from
+ * `STATE_ERROR_REASONS` plus a short `hint` (capped at 120 chars) so
+ * the popup's Apply pipeline can route the failure without parsing
+ * the message string.
+ */
+export class CustomToolCommitError extends Error {
+    constructor({ reason, hint }) {
+        super(`[custom-tool] ${reason}: ${hint}`);
+        this.name = 'CustomToolCommitError';
+        this.reason = reason;
+        this.hint = String(hint || '').slice(0, 120);
+    }
+}
 
 const AsyncFunction = (async () => {}).constructor;
 const NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
@@ -393,10 +410,13 @@ function defaultCtxFactory({ console: cons }) {
 // Returns one of:
 //   - { ok: true, result }                           (read tool)
 //   - { ok: true, result, pendingCustomToolEdit }    (write tool, staged)
-//   - { ok: false, error: string }                   (validation / lookup failure)
+//   - { ok: false, reason, hint }                    (validation / lookup failure;
+//                                                      reason ∈ STATE_ERROR_REASONS)
 //
 // The studio.js dispatch shim parks `pendingCustomToolEdit` on
 // ProposalBus and returns `result` to the AI as the tool reply.
+// Failure envelopes carry a structured `reason` so the dispatcher
+// can surface the right hint/affordance without parsing the message.
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -412,7 +432,7 @@ export async function executeCustomToolIterStudioCall(call, { profile, ctxFactor
     const name = String(call?.name || '');
     const args = (call?.args && typeof call.args === 'object') ? call.args : {};
     if (!isCustomToolIterStudioTool(name)) {
-        return { ok: false, error: `not a custom-tool iter-studio tool: ${name}` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `not a custom-tool iter-studio tool: ${name}`);
     }
     switch (name) {
         case CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES.LIST: {
@@ -436,11 +456,11 @@ export async function executeCustomToolIterStudioCall(call, { profile, ctxFactor
         case CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES.GET: {
             const targetName = String(args.name || '');
             if (!NAME_PATTERN.test(targetName)) {
-                return { ok: false, error: `invalid name "${targetName}" (must match ^[a-zA-Z][a-zA-Z0-9_]{0,63}$)` };
+                return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${targetName}" (must match ^[a-zA-Z][a-zA-Z0-9_]{0,63}$)`);
             }
             const tool = findToolByName(profile, targetName);
             if (!tool) {
-                return { ok: false, error: `custom tool "${targetName}" not found on this profile` };
+                return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, `custom tool "${targetName}" not found on this profile`);
             }
             return {
                 ok: true,
@@ -472,25 +492,25 @@ export async function executeCustomToolIterStudioCall(call, { profile, ctxFactor
         }
         case CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES.CTX_LIST_KEYS: {
             const result = await listCtxKeys({ filter: String(args?.filter || '') });
-            return result?.ok ? { ok: true, result } : { ok: false, error: String(result?.error || 'ctx list failed') };
+            return result?.ok ? { ok: true, result } : makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, String(result?.error || 'ctx list failed'));
         }
         case CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES.CTX_DESCRIBE: {
             const result = await describeCtxPath({ path: String(args?.path || '') });
-            return result?.ok ? { ok: true, result } : { ok: false, error: String(result?.error || 'ctx describe failed') };
+            return result?.ok ? { ok: true, result } : makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, String(result?.error || 'ctx describe failed'));
         }
         case CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES.DOCS_LIST: {
             const result = await listLukerDocs({
                 filter: String(args?.filter || ''),
                 includeTranslations: !!args?.includeTranslations,
             });
-            return result?.ok ? { ok: true, result } : { ok: false, error: String(result?.error || 'docs list failed') };
+            return result?.ok ? { ok: true, result } : makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, String(result?.error || 'docs list failed'));
         }
         case CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES.DOCS_READ: {
             const result = await readLukerDoc({ path: String(args?.path || '') });
-            return result?.ok ? { ok: true, result } : { ok: false, error: String(result?.error || 'docs read failed') };
+            return result?.ok ? { ok: true, result } : makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, String(result?.error || 'docs read failed'));
         }
         default:
-            return { ok: false, error: `unhandled custom-tool iter-studio tool: ${name}` };
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `unhandled custom-tool iter-studio tool: ${name}`);
     }
 }
 
@@ -511,35 +531,35 @@ function buildProposalAck({ kind, name }) {
 function handleSet(profile, args) {
     const name = String(args.name || '');
     if (!NAME_PATTERN.test(name)) {
-        return { ok: false, error: `invalid name "${name}" (must match ^[a-zA-Z][a-zA-Z0-9_]{0,63}$)` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}" (must match ^[a-zA-Z][a-zA-Z0-9_]{0,63}$)`);
     }
     if (nameConflictsBuiltin(name)) {
-        return { ok: false, error: `name "${name}" conflicts with a Layer-1 builtin tool; pick a different name` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `name "${name}" conflicts with a Layer-1 builtin tool; pick a different name`);
     }
     const mode = args.mode === 'read' ? 'read' : (args.mode === 'write' ? 'write' : null);
     if (mode === null) {
-        return { ok: false, error: 'mode must be "read" or "write"' };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'mode must be "read" or "write"');
     }
     const description = typeof args.description === 'string' ? args.description : '';
     if (!description.trim()) {
-        return { ok: false, error: 'description is required (the runtime agent reads it to decide whether to call this tool)' };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'description is required (the runtime agent reads it to decide whether to call this tool)');
     }
     const parameters = args.parameters && typeof args.parameters === 'object' && !Array.isArray(args.parameters)
         ? args.parameters
         : null;
     if (!parameters) {
-        return { ok: false, error: 'parameters must be a JSON-Schema object (use {"type":"object","properties":{}} for no-args tools)' };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'parameters must be a JSON-Schema object (use {"type":"object","properties":{}} for no-args tools)');
     }
     const body = String(args.body || '');
     const bodyCheck = validateBodyCompiles(body);
     if (!bodyCheck.ok) {
-        return { ok: false, error: `body ${bodyCheck.error}` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT, `body ${bodyCheck.error}`);
     }
     const simulateBody = typeof args.simulateBody === 'string' ? args.simulateBody : '';
     if (simulateBody) {
         const simCheck = validateBodyCompiles(simulateBody);
         if (!simCheck.ok) {
-            return { ok: false, error: `simulateBody ${simCheck.error}` };
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT, `simulateBody ${simCheck.error}`);
         }
     }
     const displayName = typeof args.displayName === 'string' ? args.displayName : '';
@@ -569,11 +589,11 @@ function handleSet(profile, args) {
 function handlePatchBody(profile, args) {
     const name = String(args.name || '');
     if (!NAME_PATTERN.test(name)) {
-        return { ok: false, error: `invalid name "${name}"` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}"`);
     }
     const before = findToolByName(profile, name);
     if (!before) {
-        return { ok: false, error: `custom tool "${name}" not found on this profile` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, `custom tool "${name}" not found on this profile`);
     }
     const target = args.target === 'simulateBody' ? 'simulateBody' : 'body';
     const currentText = String(before?.[target] || '');
@@ -583,12 +603,15 @@ function handlePatchBody(profile, args) {
         replaceAll: !!args.replaceAll,
     });
     if (!patch.ok) {
-        return { ok: false, error: `patch ${patch.error}: ${patch.detail || ''}` };
+        const patchReason = patch.error === 'not_found'
+            ? STATE_ERROR_REASONS.VALIDATION_TARGET
+            : STATE_ERROR_REASONS.VALIDATION_ARGS;
+        return makeStateError(patchReason, `patch ${patch.error}: ${patch.detail || ''}`);
     }
     const nextText = patch.nextText;
     const bodyCheck = validateBodyCompiles(nextText);
     if (!bodyCheck.ok) {
-        return { ok: false, error: `patched ${target} ${bodyCheck.error}` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT, `patched ${target} ${bodyCheck.error}`);
     }
     const after = { ...cloneToolEntry(before), [target]: nextText };
     return {
@@ -607,17 +630,17 @@ function handlePatchBody(profile, args) {
 function handlePatchSchema(profile, args) {
     const name = String(args.name || '');
     if (!NAME_PATTERN.test(name)) {
-        return { ok: false, error: `invalid name "${name}"` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}"`);
     }
     const before = findToolByName(profile, name);
     if (!before) {
-        return { ok: false, error: `custom tool "${name}" not found on this profile` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, `custom tool "${name}" not found on this profile`);
     }
     const parameters = args.parameters && typeof args.parameters === 'object' && !Array.isArray(args.parameters)
         ? args.parameters
         : null;
     if (!parameters) {
-        return { ok: false, error: 'parameters must be a JSON-Schema object' };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'parameters must be a JSON-Schema object');
     }
     const after = { ...cloneToolEntry(before), parameters };
     return {
@@ -636,11 +659,11 @@ function handlePatchSchema(profile, args) {
 function handleRemove(profile, args) {
     const name = String(args.name || '');
     if (!NAME_PATTERN.test(name)) {
-        return { ok: false, error: `invalid name "${name}"` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, `invalid name "${name}"`);
     }
     const before = findToolByName(profile, name);
     if (!before) {
-        return { ok: false, error: `custom tool "${name}" not found on this profile` };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, `custom tool "${name}" not found on this profile`);
     }
     return {
         ok: true,
@@ -659,10 +682,10 @@ async function handleDryRun(profile, args, ctxFactory) {
     const sourceName = typeof args.name === 'string' ? args.name : '';
     const inlineBody = typeof args.body === 'string' ? args.body : '';
     if (!sourceName && !inlineBody) {
-        return { ok: false, error: 'either `name` (existing profile tool) or `body` (inline JS) is required' };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'either `name` (existing profile tool) or `body` (inline JS) is required');
     }
     if (sourceName && inlineBody) {
-        return { ok: false, error: '`name` and `body` are mutually exclusive — pass one' };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, '`name` and `body` are mutually exclusive — pass one');
     }
     const useSimulate = !!args.useSimulateBody;
     let body;
@@ -670,12 +693,12 @@ async function handleDryRun(profile, args, ctxFactory) {
     if (sourceName) {
         const tool = findToolByName(profile, sourceName);
         if (!tool) {
-            return { ok: false, error: `custom tool "${sourceName}" not found on this profile` };
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, `custom tool "${sourceName}" not found on this profile`);
         }
         body = String((useSimulate ? tool.simulateBody : tool.body) || '');
         resolvedName = sourceName;
         if (!body.trim()) {
-            return { ok: false, error: `tool "${sourceName}" has no ${useSimulate ? 'simulate body' : 'body'} to run` };
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, `tool "${sourceName}" has no ${useSimulate ? 'simulate body' : 'body'} to run`);
         }
     } else {
         body = inlineBody;
@@ -724,10 +747,10 @@ function cloneToolEntry(entry) {
 
 export function commitApprovedCustomToolProposal(profile, flagBucket, op) {
     if (!op || typeof op !== 'object' || !op.name) {
-        throw new Error('commitApprovedCustomToolProposal: invalid op');
+        throw new CustomToolCommitError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'commitApprovedCustomToolProposal: invalid op' });
     }
     if (!profile || typeof profile !== 'object') {
-        throw new Error('commitApprovedCustomToolProposal: profile must be an object');
+        throw new CustomToolCommitError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'commitApprovedCustomToolProposal: profile must be an object' });
     }
     if (!Array.isArray(profile.customTools)) {
         profile.customTools = [];
@@ -762,7 +785,7 @@ export function commitApprovedCustomToolProposal(profile, flagBucket, op) {
         case 'luker_orch_patch_custom_tool_body': {
             const idx = profile.customTools.findIndex(t => String(t?.name || '') === name);
             if (idx < 0) {
-                throw new Error(`patch_body commit: tool "${name}" no longer present`);
+                throw new CustomToolCommitError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `patch_body commit: tool "${name}" no longer present` });
             }
             const current = profile.customTools[idx];
             const target = args.target === 'simulateBody' ? 'simulateBody' : 'body';
@@ -772,7 +795,7 @@ export function commitApprovedCustomToolProposal(profile, flagBucket, op) {
                 replaceAll: !!args.replaceAll,
             });
             if (!patch.ok) {
-                throw new Error(`patch_body commit: ${patch.error}: ${patch.detail || ''} (drift?)`);
+                throw new CustomToolCommitError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `patch_body commit: ${patch.error}: ${patch.detail || ''} (drift?)` });
             }
             profile.customTools[idx] = { ...current, [target]: patch.nextText };
             return { kind: 'patch_body', name };
@@ -780,7 +803,7 @@ export function commitApprovedCustomToolProposal(profile, flagBucket, op) {
         case 'luker_orch_patch_custom_tool_schema': {
             const idx = profile.customTools.findIndex(t => String(t?.name || '') === name);
             if (idx < 0) {
-                throw new Error(`patch_schema commit: tool "${name}" no longer present`);
+                throw new CustomToolCommitError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `patch_schema commit: tool "${name}" no longer present` });
             }
             const current = profile.customTools[idx];
             const parameters = args.parameters && typeof args.parameters === 'object' ? args.parameters : { type: 'object' };
@@ -799,7 +822,7 @@ export function commitApprovedCustomToolProposal(profile, flagBucket, op) {
             return { kind: 'remove', name };
         }
         default:
-            throw new Error(`commitApprovedCustomToolProposal: unknown op ${op.name}`);
+            throw new CustomToolCommitError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `commitApprovedCustomToolProposal: unknown op ${op.name}` });
     }
 }
 

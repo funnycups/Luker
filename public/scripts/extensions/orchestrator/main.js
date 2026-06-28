@@ -24,6 +24,7 @@ import {
 } from './anchors.js';
 import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
 import { ensureStyles } from './styles.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 import {
     CAPSULE_INJECT_POSITION_SCHEMA_VERSION,
     DEFAULT_AGENDA_PLANNER_PROMPT,
@@ -4633,11 +4634,13 @@ async function dispatchCustomToolIterStudioCall({ call, profile }) {
             changed: !!out.pendingCustomToolEdit,
         };
     }
+    const failureHint = String(out?.hint || 'custom-tool iter-studio call failed');
+    const failureReason = out?.reason || STATE_ERROR_REASONS.VALIDATION_COMMIT;
     return {
         handled: true,
-        payload: { ok: false, error: String(out?.error || 'custom-tool iter-studio call failed') },
+        payload: { ok: false, reason: failureReason, hint: failureHint },
         pendingCustomToolEdit: null,
-        actionText: `Custom-tool iter-studio: ${name} failed: ${out?.error || 'unknown error'}`,
+        actionText: `Custom-tool iter-studio: ${name} failed (${failureReason}): ${failureHint}`,
         changed: false,
     };
 }
