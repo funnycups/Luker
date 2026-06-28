@@ -51,3 +51,11 @@ export class StorageReadOnlyError extends Error {
         this.code = 'storage_read_only';
     }
 }
+
+export class InvalidArgumentError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'InvalidArgumentError';
+        this.code = 'invalid_argument';
+    }
+}

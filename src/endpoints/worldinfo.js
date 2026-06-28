@@ -6,7 +6,8 @@ import sanitize from 'sanitize-filename';
 import _ from 'lodash';
 import { normalizeLookupText } from '../util.js';
 import { getWorldInfoRepo } from '../storage/index.js';
-import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, StorageReadOnlyError } from '../storage/errors.js';
+import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, StorageReadOnlyError, InvalidArgumentError } from '../storage/errors.js';
+import { assertSafeRepoName } from '../storage/name-validation.js';
 
 /**
  * Coerces a corrupt `entries` array — `[null, null, ..., {uid:66,...}]`, a shape
@@ -267,14 +268,23 @@ router.post('/import', async (request, response) => {
     if (!worldName) {
         return response.status(400).send('World file must have a name');
     }
+    let safeWorldName;
+    try {
+        safeWorldName = assertSafeRepoName(worldName);
+    } catch (err) {
+        if (err instanceof InvalidArgumentError) {
+            return response.status(400).send({ error: err.message });
+        }
+        throw err;
+    }
 
     try {
-        await getWorldInfoRepo().save(request.user.profile.handle, worldName, worldContent);
+        await getWorldInfoRepo().save(request.user.profile.handle, safeWorldName, worldContent);
     } catch (err) {
         console.error('Error importing world info:', err);
         return response.sendStatus(500);
     }
-    return response.send({ name: worldName });
+    return response.send({ name: safeWorldName });
 });
 
 router.post('/edit', async (request, response) => {
@@ -291,8 +301,18 @@ router.post('/edit', async (request, response) => {
         return response.status(400).send('Is not a valid world info file');
     }
 
+    let safeName;
     try {
-        await getWorldInfoRepo().save(request.user.profile.handle, request.body.name, request.body.data);
+        safeName = assertSafeRepoName(request.body.name);
+    } catch (err) {
+        if (err instanceof InvalidArgumentError) {
+            return response.status(400).send({ error: err.message });
+        }
+        throw err;
+    }
+
+    try {
+        await getWorldInfoRepo().save(request.user.profile.handle, safeName, request.body.data);
         return response.send({ ok: true });
     } catch (err) {
         console.error('Error editing world info:', err);

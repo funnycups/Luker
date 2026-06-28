@@ -1,10 +1,11 @@
 import express from 'express';
 import sanitize from 'sanitize-filename';
 
-import { NotFoundError, ConflictError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
+import { NotFoundError, ConflictError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, InvalidArgumentError } from '../storage/errors.js';
 import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { getPresetRepo } from '../storage/index.js';
 import { PRESET_FOLDER_BY_API_ID } from '../storage/repositories/preset-repo.js';
+import { assertSafeRepoName } from '../storage/name-validation.js';
 
 import { getDefaultPresetFile, getDefaultPresets } from './content-manager.js';
 
@@ -57,13 +58,21 @@ function mapStatePatchError(error, response) {
 }
 
 router.post('/save', async function (request, response) {
-    const name = sanitize(String(request.body?.name || ''));
     const apiId = request.body?.apiId;
-    if (!request.body?.preset || !name) {
+    if (!request.body?.preset) {
         return response.sendStatus(400);
     }
     if (!isValidApiId(apiId)) {
         return response.sendStatus(400);
+    }
+    let name;
+    try {
+        name = assertSafeRepoName(request.body?.name);
+    } catch (err) {
+        if (err instanceof InvalidArgumentError) {
+            return response.status(400).send({ error: err.message });
+        }
+        throw err;
     }
 
     try {
@@ -215,9 +224,17 @@ router.post('/state/rename', async function (request, response) {
     try {
         const apiId = request.body?.apiId;
         const oldName = sanitize(String(request.body?.oldName || ''));
-        const newName = sanitize(String(request.body?.newName || ''));
-        if (!isValidApiId(apiId) || !oldName || !newName) {
+        if (!isValidApiId(apiId) || !oldName) {
             return response.status(400).send({ error: 'Invalid preset state rename payload.' });
+        }
+        let newName;
+        try {
+            newName = assertSafeRepoName(request.body?.newName, { field: 'newName' });
+        } catch (err) {
+            if (err instanceof InvalidArgumentError) {
+                return response.status(400).send({ error: err.message });
+            }
+            throw err;
         }
         if (oldName === newName) {
             return response.send({ ok: true, renamed: 0 });
