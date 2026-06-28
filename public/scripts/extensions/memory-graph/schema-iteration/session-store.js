@@ -49,14 +49,15 @@ function extractAvatarFromScope(scope) {
 }
 
 async function readSidecar(ctx, avatar) {
-    try {
-        const raw = await ctx.getCharacterState(avatar, MG_SIDECAR_NAMESPACE);
-        if (raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object') {
-            return raw;
-        }
-    } catch (err) {
+    const result = await ctx.getCharacterState(avatar, MG_SIDECAR_NAMESPACE);
+    if (!result.ok) {
         // eslint-disable-next-line no-console
-        console.warn(`[memory-graph schema-iteration] sidecar read failed for ${avatar}, treating as empty:`, err?.message || err);
+        console.warn(`[memory-graph schema-iteration] sidecar read failed for ${avatar} (reason=${result.reason}, hint=${result.hint})`);
+        return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+    }
+    const raw = result.state;
+    if (raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object') {
+        return raw;
     }
     return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
 }
@@ -120,16 +121,11 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
             if (!stored) return null;
             const cloned = structuredClone(stored);
             if (cloned.version === 3) return cloned;
+            let migrated;
             try {
-                const migrated = migrateToV3(cloned, {
+                migrated = migrateToV3(cloned, {
                     defaultTargetForKind: () => ({ type: 'schema' }),
                 });
-                await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
-                    buildNextSidecar(current, (sessions) => {
-                        sessions[String(id)] = structuredClone(migrated);
-                    }),
-                );
-                return migrated;
             } catch (err) {
                 if (err instanceof MigrationFailedError) {
                     notifyMigrationFailed(ctx, stored?.title || id);
@@ -139,6 +135,16 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
                 }
                 throw err;
             }
+            const writeResult = await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
+                buildNextSidecar(current, (sessions) => {
+                    sessions[String(id)] = structuredClone(migrated);
+                }),
+            );
+            if (!writeResult.ok) {
+                // eslint-disable-next-line no-console
+                console.warn(`[memory-graph schema-iteration] migration save failed (reason=${writeResult.reason}, hint=${writeResult.hint})`);
+            }
+            return migrated;
         }
         const bucket = getGlobalBucket(getMgSettingsRoot() || {});
         const stored = bucket[String(id)];
@@ -170,11 +176,14 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
         const sessionClone = structuredClone(session);
         sessionClone.version = 3;
         if (avatar) {
-            await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
+            const result = await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
                 buildNextSidecar(current, (sessions) => {
                     sessions[String(session.id)] = sessionClone;
                 }),
             );
+            if (!result.ok) {
+                throw new Error(`[memory-graph schema-iteration] save failed (${result.reason}): ${result.hint}`);
+            }
             return;
         }
         const bucket = getGlobalBucket(getMgSettingsRoot() || {});
@@ -186,11 +195,14 @@ export function createMgSchemaSessionStore({ getMgSettingsRoot, persistSettings,
         const scope = computeScope() || 'global';
         const avatar = extractAvatarFromScope(scope);
         if (avatar) {
-            await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
+            const result = await ctx.updateCharacterState(avatar, MG_SIDECAR_NAMESPACE, (current) =>
                 buildNextSidecar(current, (sessions) => {
                     delete sessions[String(id)];
                 }),
             );
+            if (!result.ok) {
+                throw new Error(`[memory-graph schema-iteration] delete failed (${result.reason}): ${result.hint}`);
+            }
             return;
         }
         const bucket = getGlobalBucket(getMgSettingsRoot() || {});

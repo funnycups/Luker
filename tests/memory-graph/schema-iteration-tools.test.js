@@ -127,17 +127,19 @@ describe('MG schema — normalizeToolCallToEdit (smoke)', () => {
         expect(edits[0].path).toBe('');
     });
 
-    test('returns [] for an unknown tool name (no-op)', async () => {
+    test('throws unknown_tool for an unrecognized tool name', async () => {
+        // Per the iter-studio noop→error contract (2026-06-23): unknown
+        // tool names must surface a real error reply to the AI instead of
+        // collapsing onto the misleading "already matches" noop.
         const call = {
             function: {
                 name: 'not_a_real_tool',
                 arguments: JSON.stringify({}),
             },
         };
-        const edits = await normalizeToolCallToEdit(call, {
+        await expect(normalizeToolCallToEdit(call, {
             live: [],
             normalizeNodeTypeSchema: normalize,
-        });
-        expect(edits).toEqual([]);
+        })).rejects.toThrow(/unknown_tool/);
     });
 });

@@ -110,8 +110,8 @@ describe('v8-oplog shape', () => {
         expect(out.log.commits).toEqual([]);
         expect(out.meta.schemaVersion).toBe(2);
         // No commits ⇒ no scaffolding seeded; replay produces {}, so the
-        // pipeline output's data is {} too. Subsequent commitGraphEntry calls
-        // will overlay GRAPH_PAYLOAD_DEFAULTS on the empty namespace.
+        // pipeline output's data is {} too. Subsequent commit writers
+        // overlay GRAPH_PAYLOAD_DEFAULTS on the empty namespace.
         expect(out.data).toEqual({});
     });
 });

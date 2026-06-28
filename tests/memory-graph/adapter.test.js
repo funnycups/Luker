@@ -18,7 +18,7 @@ import {
 } from '../../public/scripts/floor-state.js';
 import {
     getFloorFromAssistantSeq,
-    commitGraphEntry,
+    getFloorStateInstance,
     loadMetaFields,
     persistMetaFields,
     migrateLegacyMemoryGraphState,
@@ -228,6 +228,42 @@ async function flush() {
     await new Promise((r) => setTimeout(r, 0));
 }
 
+/**
+ * Test fixture: write a memory-graph "log entry" as a single floor-state
+ * commit at the given floor. Inlines the body of persistence.js's deleted
+ * `commitGraphEntry` helper so the floor-state event suites below can keep
+ * pre-populating commits without coupling to a production function that no
+ * production code path actually calls.
+ *
+ * Returns the materialized payload (post-write) or null on skip/failure.
+ */
+const GRAPH_PAYLOAD_DEFAULTS = Object.freeze({
+    nodes: {},
+    edges: [],
+    nodeSeq: 0,
+    seqCounter: 0,
+    appliedSeqTo: 0,
+    loggedSeqTo: 0,
+    coveredAssistantSeq: 0,
+});
+
+async function commitGraphEntryFixture(context, entry, floor, reducer) {
+    if (!entry || !Array.isArray(entry.ops) || entry.ops.length === 0) return null;
+    if (!Number.isInteger(floor) || floor < 0) return null;
+    const fs = await getFloorStateInstance(context);
+    const seq = Math.max(0, Math.floor(Number(entry.seq || 0)));
+    const updateResult = await fs.update((current) => {
+        const safeCurrent = current && typeof current === 'object' ? current : {};
+        const next = structuredClone({ ...GRAPH_PAYLOAD_DEFAULTS, ...safeCurrent });
+        reducer(next, { seq, ops: entry.ops });
+        next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
+        return next;
+    }, { floor });
+    if (!updateResult.ok) return null;
+    const result = await fs.get();
+    return result?.state ?? null;
+}
+
 beforeEach(() => {
     resetFloorStateInstanceForTesting();
 });
@@ -284,13 +320,13 @@ describe('persistMetaFields / loadMetaFields', () => {
 
 // --- commit semantics ---
 
-describe('commitGraphEntry', () => {
+describe('commitGraphEntryFixture (test helper)', () => {
     test('writes one floor-state commit at the resolved floor for a given assistant seq', async () => {
         const chatRef = { value: [assistantMsg()] };
         const { store, context } = makeContext(chatRef);
 
         const entry = { seq: 1, ops: [{ type: 'upsert_node', node: { id: 'n_1', type: 'event', seqTo: 1 } }] };
-        const payload = await commitGraphEntry(context, entry, 0, applyMemoryLogEntryToStore);
+        const payload = await commitGraphEntryFixture(context, entry, 0, applyMemoryLogEntryToStore);
         expect(payload).not.toBeNull();
         expect(payload.nodes['n_1']).toMatchObject({ id: 'n_1' });
         expect(payload.coveredAssistantSeq).toBe(1);
@@ -304,28 +340,35 @@ describe('commitGraphEntry', () => {
         const chatRef = { value: [assistantMsg(), assistantMsg(), assistantMsg()] };
         const { context } = makeContext(chatRef);
 
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 3, ops: [{ type: 'upsert_node', node: { id: 'n_3', type: 'event', seqTo: 3 } }] },
             2,
             applyMemoryLogEntryToStore,
         );
-        // Commit an out-of-order entry at a smaller seq — coveredAssistantSeq must not regress.
-        const after = await commitGraphEntry(
+        // Attempt to commit an out-of-order entry at a lower floor — under
+        // the current monotonic-floor contract this is rejected (the helper
+        // returns null because fs.update reports VALIDATION_COMMIT for
+        // override floor below the log tail) and the existing commit at
+        // floor 2 stays intact. coveredAssistantSeq must not regress.
+        const after = await commitGraphEntryFixture(
             context,
             { seq: 1, ops: [{ type: 'upsert_node', node: { id: 'n_1', type: 'event', seqTo: 1 } }] },
             0,
             applyMemoryLogEntryToStore,
         );
-        expect(after.coveredAssistantSeq).toBe(3);
-        expect(Object.keys(after.nodes).sort()).toEqual(['n_1', 'n_3']);
+        expect(after).toBeNull();
+        const fs = await getFloorStateInstance(context);
+        const finalState = (await fs.get()).state;
+        expect(finalState.coveredAssistantSeq).toBe(3);
+        expect(Object.keys(finalState.nodes).sort()).toEqual(['n_3']);
     });
 
     test('rejects entries with empty ops or invalid floor', async () => {
         const chatRef = { value: [assistantMsg()] };
         const { context } = makeContext(chatRef);
-        expect(await commitGraphEntry(context, { seq: 1, ops: [] }, 0, applyMemoryLogEntryToStore)).toBeNull();
-        expect(await commitGraphEntry(
+        expect(await commitGraphEntryFixture(context, { seq: 1, ops: [] }, 0, applyMemoryLogEntryToStore)).toBeNull();
+        expect(await commitGraphEntryFixture(
             context,
             { seq: 1, ops: [{ type: 'upsert_node', node: { id: 'n_1' } }] },
             -1,
@@ -342,7 +385,7 @@ describe('floor-state events on adapter commits', () => {
         const { store, eventSource, context, getInstance } = makeContext(chatRef);
 
         for (let i = 0; i < 3; i++) {
-            await commitGraphEntry(
+            await commitGraphEntryFixture(
                 context,
                 { seq: i + 1, ops: [{ type: 'upsert_node', node: { id: `n_${i + 1}`, type: 'event', seqTo: i + 1 } }] },
                 i,
@@ -359,7 +402,7 @@ describe('floor-state events on adapter commits', () => {
 
         const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
         expect(log.commits.map((c) => c.floor)).toEqual([0, 1]);
-        const data = await fs.get();
+        const data = (await fs.get()).state;
         expect(Object.keys(data.nodes).sort()).toEqual(['n_1', 'n_2']);
         expect(data.coveredAssistantSeq).toBe(2);
     });
@@ -369,14 +412,14 @@ describe('floor-state events on adapter commits', () => {
         const { store, eventSource, context, getInstance } = makeContext(chatRef);
 
         // Commit on swipe 0 of floor 1.
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 2, ops: [{ type: 'upsert_node', node: { id: 'n_swipe0', type: 'event', seqTo: 2 } }] },
             1,
             applyMemoryLogEntryToStore,
         );
         const fs = getInstance();
-        expect(Object.keys((await fs.get()).nodes)).toContain('n_swipe0');
+        expect(Object.keys((await fs.get()).state.nodes)).toContain('n_swipe0');
 
         // User regenerates → new swipe → swipe_id flips to 1.
         chatRef.value[1].swipe_id = 1;
@@ -384,30 +427,30 @@ describe('floor-state events on adapter commits', () => {
         await fs.ready();
 
         // Floor 1 swipe 1 has no commits; replayed state is empty.
-        const data = await fs.get();
+        const data = (await fs.get()).state;
         expect(data ?? {}).toEqual({});
 
         // Now the new swipe extracts something — commit on swipe 1.
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 2, ops: [{ type: 'upsert_node', node: { id: 'n_swipe1', type: 'event', seqTo: 2 } }] },
             1,
             applyMemoryLogEntryToStore,
         );
-        expect(Object.keys((await fs.get()).nodes)).toContain('n_swipe1');
+        expect(Object.keys((await fs.get()).state.nodes)).toContain('n_swipe1');
 
         // Switch back to swipe 0 — n_swipe0 should reappear, n_swipe1 vanish.
         chatRef.value[1].swipe_id = 0;
         await eventSource.emit(event_types.MESSAGE_SWIPED, 1);
         await fs.ready();
-        const dataBack = await fs.get();
+        const dataBack = (await fs.get()).state;
         expect(Object.keys(dataBack.nodes)).toEqual(['n_swipe0']);
     });
 
     test('MESSAGE_SWIPE_DELETED drops the deleted swipe and shifts higher swipes down', async () => {
         const chatRef = { value: [assistantMsg({ swipe_id: 0 })] };
         const { store, eventSource, context, getInstance } = makeContext(chatRef);
-        const fs = getInstance() || (await commitGraphEntry(
+        const fs = getInstance() || (await commitGraphEntryFixture(
             context,
             { seq: 1, ops: [{ type: 'upsert_node', node: { id: 's0', type: 'event', seqTo: 1 } }] },
             0,
@@ -418,7 +461,7 @@ describe('floor-state events on adapter commits', () => {
         chatRef.value[0].swipe_id = 1;
         await eventSource.emit(event_types.MESSAGE_SWIPED, 0);
         await fs.ready();
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 1, ops: [{ type: 'upsert_node', node: { id: 's1', type: 'event', seqTo: 1 } }] },
             0,
@@ -428,7 +471,7 @@ describe('floor-state events on adapter commits', () => {
         chatRef.value[0].swipe_id = 2;
         await eventSource.emit(event_types.MESSAGE_SWIPED, 0);
         await fs.ready();
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 1, ops: [{ type: 'upsert_node', node: { id: 's2', type: 'event', seqTo: 1 } }] },
             0,
@@ -440,7 +483,7 @@ describe('floor-state events on adapter commits', () => {
         await eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId: 0, swipeId: 1 });
         await fs.ready();
 
-        const data = await fs.get();
+        const data = (await fs.get()).state;
         expect(Object.keys(data.nodes).sort()).toEqual(['s2']);
         const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
         expect(log.commits.map((c) => c.swipeId).sort()).toEqual([0, 1]);
@@ -623,7 +666,7 @@ describe('migrateLegacyMemoryGraphState', () => {
 
         const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
         expect(log.commits.map((c) => c.floor)).toEqual([0, 1]);
-        const data = await fs.get();
+        const data = (await fs.get()).state;
         expect(Object.keys(data.nodes).sort()).toEqual(['n_1', 'n_2']);
     });
 
@@ -668,15 +711,15 @@ describe('regenerate bug repro', () => {
         const { store, eventSource, context, getInstance } = makeContext(chatRef);
 
         // Initial extraction commits a node on swipe 0 of the tail.
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 2, ops: [{ type: 'upsert_node', node: { id: 'n_first', type: 'event', seqTo: 2 } }] },
             1,
             applyMemoryLogEntryToStore,
         );
         const fs = getInstance();
-        expect((await fs.get()).nodes['n_first']).toBeDefined();
-        const coveredBefore = (await fs.get()).coveredAssistantSeq;
+        expect((await fs.get()).state.nodes['n_first']).toBeDefined();
+        const coveredBefore = (await fs.get()).state.coveredAssistantSeq;
         expect(coveredBefore).toBe(2);
 
         // User regenerates the tail message — swipe_id flips, MESSAGE_SWIPED fires.
@@ -688,19 +731,19 @@ describe('regenerate bug repro', () => {
         // bare empty object (no "swipe_cache_hit" sticky tail). With no
         // commits the data namespace reverts to {}; the legacy code would
         // have left coveredSeqTo pinned at 2 here, blocking re-extraction.
-        const afterSwipe = (await fs.get()) ?? {};
+        const afterSwipe = (await fs.get()).state ?? {};
         expect(afterSwipe.nodes ?? {}).toEqual({});
         expect(afterSwipe.coveredAssistantSeq ?? 0).toBe(0);
 
         // Extract on the new swipe — this is the path that the legacy bug
         // silently skipped.
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 2, ops: [{ type: 'upsert_node', node: { id: 'n_regen', type: 'event', seqTo: 2 } }] },
             1,
             applyMemoryLogEntryToStore,
         );
-        const final = await fs.get();
+        const final = (await fs.get()).state;
         expect(Object.keys(final.nodes)).toEqual(['n_regen']);
         expect(final.coveredAssistantSeq).toBe(2);
     });
@@ -744,7 +787,7 @@ describe('main.js sequencing: initial mount migration before fs', () => {
         const fs = await context.createFloorState({ namespace: adapterConstants.MODULE_NAME });
         await fs.ready();
 
-        const data = await fs.get();
+        const data = (await fs.get()).state;
         expect(Object.keys(data.nodes).sort()).toEqual(['n_legacy', 'n_legacy_2']);
         expect(data.coveredAssistantSeq).toBe(2);
         const meta = store._raw.get(adapterConstants.META_NAMESPACE);
@@ -844,7 +887,7 @@ describe('main.js sequencing: CHAT_CHANGED migration handler runs before fs hand
         // ran second → rematerialized from the new log, idempotently
         // overwrote the data namespace with the same content the migration
         // produced.
-        const data = await fs.get();
+        const data = (await fs.get()).state;
         expect(Object.keys(data.nodes)).toEqual(['n_switched']);
         const log = store._raw.get(adapterConstants.LOG_NAMESPACE);
         expect(log.commits).toHaveLength(1);
@@ -1072,7 +1115,7 @@ describe('main.js sequencing: meta-only persist stays in its lane', () => {
         const { store, context } = makeContext(chatRef);
 
         // Prime fs with one graph commit.
-        await commitGraphEntry(
+        await commitGraphEntryFixture(
             context,
             { seq: 1, ops: [{ type: 'upsert_node', node: { id: 'graph_only', type: 'event', seqTo: 1 } }] },
             0,

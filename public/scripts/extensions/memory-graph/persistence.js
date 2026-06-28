@@ -53,22 +53,6 @@ const SCHEMA_VERSION = 2;
 const PERSISTED_STORE_VERSION = 8;
 
 /**
- * Fields of memory-graph's runtime store that fs owns. Anything outside
- * this whitelist must NOT leak into commits — the reducer overlays this
- * shape on top of the existing data so unrelated payload doesn't accumulate
- * in the floor-state log.
- */
-const GRAPH_PAYLOAD_DEFAULTS = Object.freeze({
-    nodes: {},
-    edges: [],
-    nodeSeq: 0,
-    seqCounter: 0,
-    appliedSeqTo: 0,
-    loggedSeqTo: 0,
-    coveredAssistantSeq: 0,
-});
-
-/**
  * Walk the chat array counting `isExtractableAssistantMessage` matches and
  * return the chat index whose count equals `assistantSeq` (1-based).
  *
@@ -108,7 +92,14 @@ export async function getFloorStateInstance(context) {
         if (typeof context?.createFloorState !== 'function') {
             throw new Error('[memory-graph] createFloorState API is unavailable in extension context.');
         }
-        floorStatePromise = context.createFloorState({ namespace: MODULE_NAME });
+        // Caching a rejected Promise would pin every later call to the same
+        // failure even after the underlying issue clears; drop the cache on
+        // failure so the next call retries from scratch.
+        floorStatePromise = context.createFloorState({ namespace: MODULE_NAME })
+            .catch((err) => {
+                floorStatePromise = null;
+                throw err;
+            });
     }
     return floorStatePromise;
 }
@@ -142,69 +133,15 @@ export async function loadMetaFields(context, target = undefined) {
 /**
  * Write the metadata sidecar. Caller must pass the full meta object — we
  * don't merge against existing.
+ *
+ * Returns the state-API envelope ({ok, reason, hint, state, …}) untouched so
+ * each caller can decide which `reason` values are recoverable (e.g.
+ * `VALIDATION_TARGET` for background flushes with no active chat) and which
+ * deserve an error.
  */
 export async function persistMetaFields(context, meta, target = undefined) {
     const options = target ? { target, maxOperations: 16000 } : { maxOperations: 16000 };
-    const result = await context.updateChatState(META_NAMESPACE, () => meta, options);
-    if (!result?.ok) {
-        throw new Error('[memory-graph] Failed to persist memory-graph meta sidecar.');
-    }
-    return result;
-}
-
-/**
- * Apply a memory-graph "log entry" (ops array) as a single floor-state
- * commit tagged at the given assistant floor. Each commit stores an
- * incremental `prev → next` diff: `next` is the materialized data namespace
- * state with this entry's ops applied, `prev` is the materialized state
- * floor-state already holds. The reducer overlays the graph-payload defaults
- * so a never-written namespace doesn't trip Math.max-on-undefined when
- * `applyMemoryLogEntryToStore` runs.
- *
- * Why incremental, not snapshot-from-empty: snapshot patches grow O(N×state)
- * — every commit serializes the full graph — and produced 19MB log files
- * for ~1MB worth of data. The user requirement for floor-state is that
- * deletions (message delete, swipe delete) are tail-only, so commits on the
- * active replay path always form a contiguous chain and incremental patches
- * compose cleanly. Snapshot semantics were over-engineered for a middle-skip
- * scenario that doesn't exist in practice.
- *
- * Returns the latest payload (post-write) as a convenience for callers
- * that want to update their in-memory cache without an extra read.
- *
- * @param {object} context — getContext() result
- * @param {{seq: number, ops: object[]}} entry
- * @param {number} floor — chat index where this entry belongs
- * @param {(store: object, entry: object) => void} applyMemoryLogEntryToStore
- * @returns {Promise<object|null>} latest payload after the commit, or null
- *   when the commit was skipped (empty ops, invalid floor)
- */
-export async function commitGraphEntry(context, entry, floor, applyMemoryLogEntryToStore) {
-    if (!entry || !Array.isArray(entry.ops) || entry.ops.length === 0) {
-        return null;
-    }
-    if (!Number.isInteger(floor) || floor < 0) {
-        return null;
-    }
-    const fs = await getFloorStateInstance(context);
-    const seq = Math.max(0, Math.floor(Number(entry.seq || 0)));
-
-    // fs.update handles the prev→next diff internally: it reads the current
-    // materialized state, runs the reducer, and uses the host-injected
-    // buildObjectPatchOperationsAsync to compute the incremental patches.
-    // structuredClone is essential — applyMemoryLogEntryToStore mutates the
-    // store in place, and fs.update diffs `current` (the source) against the
-    // reducer's return value. Without the clone, next.nodes/edges share refs
-    // with current, mutation propagates back, and the diff comes out empty.
-    const ok = await fs.update((current) => {
-        const safeCurrent = current && typeof current === 'object' ? current : {};
-        const next = structuredClone({ ...GRAPH_PAYLOAD_DEFAULTS, ...safeCurrent });
-        applyMemoryLogEntryToStore(next, { seq, ops: entry.ops });
-        next.coveredAssistantSeq = Math.max(Number(next.coveredAssistantSeq || 0), seq);
-        return next;
-    }, { floor });
-    if (!ok) return null;
-    return await fs.get();
+    return await context.updateChatState(META_NAMESPACE, () => meta, options);
 }
 
 /**
@@ -261,7 +198,7 @@ export async function migrateLegacyMemoryGraphState(
                 targetWriteOption,
             );
             if (!stampResult?.ok) {
-                console.warn(`[${MODULE_NAME}] migration: meta stamp failed`, { target, result: stampResult });
+                console.warn(`[${MODULE_NAME}] migration: meta stamp failed (reason=${stampResult?.reason}, hint=${stampResult?.hint})`, { target });
             } else {
                 console.info(`[${MODULE_NAME}] migration: stamped __meta.schemaVersion=${SCHEMA_VERSION} (no shape detected, data was ${data == null ? 'absent' : 'unrecognized'})`);
             }
@@ -280,15 +217,15 @@ export async function migrateLegacyMemoryGraphState(
 
     const logResult = await context.updateChatState(LOG_NAMESPACE, () => result.log, targetWriteOption);
     if (!logResult?.ok) {
-        throw new Error(`[${MODULE_NAME}] migration: __floor_log write failed (state=${JSON.stringify(logResult)})`);
+        throw new Error(`[${MODULE_NAME}] migration: __floor_log write failed (reason=${logResult?.reason}, hint=${logResult?.hint})`);
     }
     const dataResult = await context.updateChatState(MODULE_NAME, () => result.data, targetWriteOption);
     if (!dataResult?.ok) {
-        throw new Error(`[${MODULE_NAME}] migration: data namespace write failed (state=${JSON.stringify(dataResult)})`);
+        throw new Error(`[${MODULE_NAME}] migration: data namespace write failed (reason=${dataResult?.reason}, hint=${dataResult?.hint})`);
     }
     const metaResult = await context.updateChatState(META_NAMESPACE, () => result.meta, targetWriteOption);
     if (!metaResult?.ok) {
-        throw new Error(`[${MODULE_NAME}] migration: __meta write failed (state=${JSON.stringify(metaResult)})`);
+        throw new Error(`[${MODULE_NAME}] migration: __meta write failed (reason=${metaResult?.reason}, hint=${metaResult?.hint})`);
     }
     console.info(`[${MODULE_NAME}] migration: complete, schemaVersion=${SCHEMA_VERSION} stamped`);
     return { migrated: true, migrations: result.migrations };
@@ -791,8 +728,9 @@ export function metaFieldsFromStore(store) {
 
 /**
  * Extract the floor-state payload shape from a runtime store. This is
- * what `commitGraphEntry` snapshots into the data namespace on each
- * commit. Excludes the meta fields (those go to `<ns>__meta`).
+ * what callers snapshot into the data namespace on each commit (see
+ * `commitMemoryStoreReplaceByChatKey` / `commitMemoryStoreDiffByChatKey`
+ * in main.js). Excludes the meta fields (those go to `<ns>__meta`).
  */
 export function graphPayloadFromStore(store) {
     const normalized = normalizeStoreForRuntime(store);

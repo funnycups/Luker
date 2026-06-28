@@ -29,7 +29,10 @@ function makeStubs({ scope = 'global', avatar = null, initialSidecar = null } = 
         persistSettings: jest.fn(),
         computeScope: () => scope === 'character' && avatar ? `character_${avatar}` : 'global',
         ctx: {
-            getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
+            getCharacterState: jest.fn(async (a, ns) => {
+                const v = sidecars[`${a}:${ns}`];
+                return v != null ? { ok: true, state: v } : { ok: true, state: null };
+            }),
             updateCharacterState: jest.fn(async (a, ns, updater) => {
                 const current = sidecars[`${a}:${ns}`] || null;
                 const next = await updater(
@@ -93,6 +96,28 @@ describe('createMgSchemaSessionStore — global scope uses settings, character s
         const stubs = makeStubs({ scope: 'global' });
         const store = createMgSchemaSessionStore(stubs);
         await expect(store.clearObsolete()).resolves.toBeUndefined();
+    });
+
+    test('character-scope save throws when underlying envelope reports failure', async () => {
+        const stubs = makeStubs({ scope: 'character', avatar: 'alice.png' });
+        stubs.ctx.updateCharacterState = jest.fn(async () => ({ ok: false, reason: 'CONFLICT', hint: 'HTTP 409 after 1 retry' }));
+        const store = createMgSchemaSessionStore(stubs);
+        await expect(store.save({ id: 's-fail', title: 'x', updatedAt: 1 }))
+            .rejects.toThrow(/save failed \(CONFLICT\): HTTP 409 after 1 retry/);
+    });
+
+    test('character-scope delete throws when underlying envelope reports failure', async () => {
+        const stubs = makeStubs({ scope: 'character', avatar: 'alice.png' });
+        stubs.ctx.updateCharacterState = jest.fn(async () => ({ ok: false, reason: 'HTTP_ERROR', hint: 'HTTP 500' }));
+        const store = createMgSchemaSessionStore(stubs);
+        await expect(store.delete('s-fail')).rejects.toThrow(/delete failed \(HTTP_ERROR\): HTTP 500/);
+    });
+
+    test('character-scope readSidecar treats envelope failure as empty (does not throw)', async () => {
+        const stubs = makeStubs({ scope: 'character', avatar: 'alice.png' });
+        stubs.ctx.getCharacterState = jest.fn(async () => ({ ok: false, reason: 'TRANSPORT_ERROR', hint: 'network down' }));
+        const store = createMgSchemaSessionStore(stubs);
+        await expect(store.list()).resolves.toEqual([]);
     });
 });
 

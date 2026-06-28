@@ -122,6 +122,7 @@ import {
     resolveInFlightAnchor,
     seqToFloor,
 } from './persistence.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 import {
     LEVEL,
     normalizeText,
@@ -1201,37 +1202,93 @@ async function deleteMemoryStoreByTarget(context, target) {
     // The legacy CHAT_STATE_NAMESPACE data sidecar should already be gone
     // post-migration; deleting it here is a no-op guard for chats whose
     // first fs.get() never ran (e.g. fresh install meeting an old sidecar).
+    //
+    // Returns `{ ok, partial }` so the Reset button can surface which step
+    // failed (log / meta / legacy) instead of flashing a green success toast
+    // over a half-deleted state. Each failure is also console-logged.
+    const partial = {};
     try {
         const fs = await getFloorStateInstance(context);
-        await fs.destroy({ purge: true });
+        const r = await fs.destroy({ purge: true });
+        if (!r.ok) {
+            partial.fs = r.reason;
+            console.warn(`[${MODULE_NAME}] floor-state log purge failed (reason=${r.reason}, hint=${r.hint})`);
+        }
     } catch (error) {
         console.warn(`[${MODULE_NAME}] Failed to purge floor-state log sidecar`, { target, error });
+        partial.fs = 'EXCEPTION';
     }
     // The singleton is now dead; clear the cache so the next mutation gets
     // a fresh instance bound to the (now-empty) namespace.
     resetFloorStateInstance();
     try {
-        await context.deleteChatState(META_NAMESPACE, { target });
+        const metaResult = await context.deleteChatState(META_NAMESPACE, { target });
+        if (metaResult && metaResult.ok === false) {
+            partial.meta = metaResult.reason;
+            console.warn(`[${MODULE_NAME}] meta sidecar delete failed (reason=${metaResult.reason}, hint=${metaResult.hint})`);
+        }
     } catch (error) {
         console.warn(`[${MODULE_NAME}] Failed to delete memory-graph meta sidecar`, { target, error });
+        partial.meta = 'EXCEPTION';
     }
     try {
-        await context.deleteChatState(CHAT_STATE_NAMESPACE, { target });
+        const legacyResult = await context.deleteChatState(CHAT_STATE_NAMESPACE, { target });
+        if (legacyResult && legacyResult.ok === false) {
+            partial.legacy = legacyResult.reason;
+            console.warn(`[${MODULE_NAME}] legacy data sidecar delete failed (reason=${legacyResult.reason}, hint=${legacyResult.hint})`);
+        }
     } catch (error) {
         console.warn(`[${MODULE_NAME}] Failed to delete legacy memory-graph data sidecar`, { target, error });
+        partial.legacy = 'EXCEPTION';
     }
+    return { ok: Object.keys(partial).length === 0, partial };
 }
 
-function formatPersistFailureWithSeq({ op, stage, seq, floor, chatLen, reason }) {
-    return i18nFormat(
-        'Memory graph persist failed [op=${0} stage=${1} seq=${2} floor=${3} chatLen=${4}]: ${5}',
+/**
+ * Build a user-visible, reason-localized persist-failure message.
+ *
+ * The visible message is composed of (a) a short reason sentence (one of the
+ * STATE_ERROR_REASONS values, mapped to a translatable string) and (b) a
+ * `[op=… stage=… seq=… floor=… chatLen=…]` debug suffix so a screenshot still
+ * tells us which path and which floor was involved. The `hint` carried by the
+ * envelope is intentionally NOT spliced into the toast: hints are
+ * `STATE_HINT_MAX_LENGTH`-capped diagnostic strings from the producer layer,
+ * not localized user copy. They land in `console.error` instead.
+ */
+function formatPersistFailure({ op, stage, seq, floor, chatLen, reason }) {
+    const reasonText = (() => {
+        switch (reason) {
+            case STATE_ERROR_REASONS.VALIDATION_ARGS:
+                return i18n('Internal bug, invalid arguments passed to memory save.');
+            case STATE_ERROR_REASONS.VALIDATION_TARGET:
+                return i18n('No active chat for memory save.');
+            case STATE_ERROR_REASONS.VALIDATION_COMMIT:
+                return i18n('Memory log commit rejected by validation.');
+            case STATE_ERROR_REASONS.INSTANCE_DESTROYED:
+                return i18n('Memory storage was destroyed, reload the chat.');
+            case STATE_ERROR_REASONS.CONFLICT:
+                return i18n('Memory save lost a race after retry, try again.');
+            case STATE_ERROR_REASONS.HTTP_ERROR:
+                return i18n('Memory save failed (server error).');
+            case STATE_ERROR_REASONS.TRANSPORT_ERROR:
+                return i18n('Memory save failed (network error).');
+            case STATE_ERROR_REASONS.REPLAY_BROKEN:
+                return i18n('Memory log replay failed and could not be recovered.');
+            case STATE_ERROR_REASONS.LOG_WRITE_FAILED:
+                return i18n('Memory log write failed.');
+            default:
+                return i18n('Memory save failed.');
+        }
+    })();
+    const contextSuffix = i18nFormat(
+        ' [op=${0} stage=${1} seq=${2} floor=${3} chatLen=${4}]',
         String(op || '?'),
         String(stage || '?'),
         seq === null || seq === undefined ? 'n/a' : String(seq),
         floor === null || floor === undefined ? 'n/a' : String(floor),
         chatLen === null || chatLen === undefined ? 'n/a' : String(chatLen),
-        String(reason || 'unknown'),
     );
+    return `${reasonText}${contextSuffix}`;
 }
 
 /**
@@ -1270,20 +1327,38 @@ async function replaceGraphLogForTarget(context, store, seq, floor) {
     const patches = await buildObjectPatchOperationsAsync({}, finalPayload);
 
     if (Array.isArray(patches) && patches.length > 0 && floorResolved) {
-        const ok = await fs.reset([{ floor, swipeId, patches }]);
-        return { payload: finalPayload, hasCommit: ok, skipped: !ok };
+        const result = await fs.reset([{ floor, swipeId, patches }]);
+        return {
+            payload: finalPayload,
+            hasCommit: result.ok,
+            skipped: !result.ok,
+            reason: result.ok ? null : result.reason,
+            hint: result.ok ? null : result.hint,
+        };
     }
 
     if (!floorResolved) {
         console.warn(`[${MODULE_NAME}] replace skipped: caller did not supply a valid trigger floor (seq=${normalizedSeq}, floor=${floor}).`);
-        return { payload: finalPayload, hasCommit: false, skipped: true };
+        return {
+            payload: finalPayload,
+            hasCommit: false,
+            skipped: true,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: 'caller did not supply a valid trigger floor',
+        };
     }
 
     // floor resolved but patches empty — the store is genuinely empty.
     // Clear the log to the empty baseline so a freshly-cleared chat doesn't
     // keep stale commits on disk.
-    const ok = await fs.reset([]);
-    return { payload: finalPayload, hasCommit: false, skipped: !ok };
+    const result = await fs.reset([]);
+    return {
+        payload: finalPayload,
+        hasCommit: false,
+        skipped: !result.ok,
+        reason: result.ok ? null : result.reason,
+        hint: result.ok ? null : result.hint,
+    };
 }
 
 async function loadMemoryStoreByTarget(context, target) {
@@ -1299,7 +1374,20 @@ async function loadMemoryStoreByTarget(context, target) {
         // in fs.get(). We never read the log namespace directly here.
         const fs = await getFloorStateInstance(context);
         await fs.ready();
-        const payload = (await fs.get()) || {};
+        const payloadResult = await fs.get();
+        let payload = {};
+        if (payloadResult.ok && payloadResult.state) {
+            payload = payloadResult.state;
+        } else if (!payloadResult.ok) {
+            if (payloadResult.reason === STATE_ERROR_REASONS.REPLAY_BROKEN) {
+                // Replay couldn't truncate to a recoverable state. Don't
+                // overwrite whatever cached store the user already saw — they
+                // can still recover via Reset / Import / Rebuild.
+                notifyError(i18n('Memory graph log replay failed, data may be unrecoverable. Use Reset or Import to recover.'));
+            } else {
+                console.warn(`[${MODULE_NAME}] loadMemoryStoreByTarget read failed (reason=${payloadResult.reason}, hint=${payloadResult.hint})`);
+            }
+        }
         const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
         return {
             state: synthesizePersistedStateFromStoreAndMeta(runtimeStore, meta),
@@ -1325,13 +1413,26 @@ async function loadMemoryStoreByTarget(context, target) {
 
 /**
  * Persist the meta sidecar for a chat target and refresh the cache.
+ *
+ * `persistMetaFields` is now an envelope passthrough — when the underlying
+ * `updateChatState` reports `VALIDATION_TARGET` we treat it as a benign skip
+ * (background extractions / debounced flushes that fire with no active chat
+ * land here); any other `reason` becomes an Error so the caller's existing
+ * `try/catch` wiring can react.
  */
 async function persistMetaForChatKey(context, chatKey, store, target = undefined) {
     const resolvedTarget = target || memoryStoreTargets.get(chatKey);
     if (!resolvedTarget) return null;
     const meta = metaFieldsFromStore(store);
     setCachedMeta(chatKey, meta);
-    await persistMetaFields(context, meta, resolvedTarget);
+    const result = await persistMetaFields(context, meta, resolvedTarget);
+    if (!result?.ok) {
+        if (result?.reason === STATE_ERROR_REASONS.VALIDATION_TARGET) {
+            console.warn(`[${MODULE_NAME}] meta persist skipped: ${result.hint}`);
+            return meta;
+        }
+        throw new Error(`[${MODULE_NAME}] meta sidecar persist failed (${result?.reason}): ${result?.hint}`);
+    }
     return meta;
 }
 
@@ -1352,12 +1453,19 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
     const normalizedStore = normalizeStoreForRuntime(store);
     const normalizedSeq = Math.max(0, Math.floor(Number(seq || getStoreCoveredSeqTo(normalizedStore) || 0)));
 
-    const { payload, skipped } = await replaceGraphLogForTarget(context, normalizedStore, normalizedSeq, floor);
-    if (skipped) {
+    const replaceResult = await replaceGraphLogForTarget(context, normalizedStore, normalizedSeq, floor);
+    if (replaceResult.skipped) {
         // Disk untouched; do not advance the in-memory cache to a state that
         // is not persisted. Existing cache stays the source of truth until
-        // a later write succeeds.
-        return memoryStoreCache.get(chatKey) || normalizedStore;
+        // a later write succeeds. Propagate the skip reason so the wrapping
+        // UI callers (persistLatest, raw-JSON Apply, rebuild) can surface a
+        // real failure toast instead of pretending the save landed.
+        return {
+            store: memoryStoreCache.get(chatKey) || normalizedStore,
+            skipped: true,
+            reason: replaceResult.reason || null,
+            hint: replaceResult.hint || null,
+        };
     }
 
     const meta = await persistMetaForChatKey(context, chatKey, {
@@ -1365,7 +1473,7 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
         sourceMessageCount: normalizedStore.sourceMessageCount,
     }, target);
 
-    const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
+    const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(replaceResult.payload, meta);
     runtimeStore.lastExtractionDebug = normalizedStore?.lastExtractionDebug && typeof normalizedStore.lastExtractionDebug === 'object'
         ? structuredClone(normalizedStore.lastExtractionDebug)
         : null;
@@ -1375,7 +1483,7 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
         const effectiveSettings = getEffectiveSettings(context, getSettings());
         await syncPersistentLorebookProjection(context, effectiveSettings, runtimeStore);
     }
-    return runtimeStore;
+    return { store: runtimeStore, skipped: false, reason: null, hint: null };
 }
 
 /**
@@ -1390,8 +1498,7 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
  * place. Snapshot-from-empty patches violate that contract and balloon log
  * size (every commit serializes the full graph). Floor-state guarantees
  * deletions are tail-only on the active replay path, so commits form a
- * contiguous chain and incremental patches replay correctly. Same reasoning
- * as persistence.js commitGraphEntry.
+ * contiguous chain and incremental patches replay correctly.
  *
  * fs.update reads the current materialized state, runs the reducer (which
  * here just returns afterPayload), computes the prev→next diff via the
@@ -1423,7 +1530,7 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
 
     if (!hasGraphChange && !metadataChanged) {
         const cached = memoryStoreCache.get(chatKey);
-        return cached || normalizedAfter;
+        return { store: cached || normalizedAfter, skipped: false, reason: null, hint: null };
     }
 
     if (hasGraphChange) {
@@ -1435,46 +1542,79 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
         // by the caller: anchoring at "chat tail at write time" sampled here
         // would mis-attribute commits when the user posts new messages
         // mid-extraction.
+        //
+        // Missing floor is an MG-internal precondition violation (the caller
+        // forgot to derive one), NOT a state-API failure. Log + throw a
+        // developer-shaped error — the user can't fix it.
         if (!Number.isInteger(floor) || floor < 0) {
-            throw new Error(formatPersistFailureWithSeq({
-                op: 'commit-diff',
-                stage: 'floor-resolution',
-                seq: normalizedSeq,
-                floor: floor === null ? 'missing' : String(floor),
-                chatLen,
-                reason: 'caller did not supply a valid floor; commits must be anchored at the chat slot the covered seq maps to',
-            }));
+            const internalMsg = `[${MODULE_NAME}] commit-diff caller did not supply a valid floor (seq=${normalizedSeq}, floor=${floor === null ? 'missing' : String(floor)}, chatLen=${chatLen}); commits must be anchored at the chat slot the covered seq maps to`;
+            console.error(internalMsg);
+            throw new Error(internalMsg);
         }
         let committed;
         try {
             committed = await fs.update(() => afterPayload, { floor });
         } catch (error) {
-            throw new Error(formatPersistFailureWithSeq({
+            // fs.update is envelope-typed now and shouldn't throw, but if a
+            // dep injection bug or older build leaks through we still
+            // want a localized message rather than a raw stack.
+            const msg = formatPersistFailure({
                 op: 'commit-diff',
                 stage: 'log-append',
                 seq: normalizedSeq,
                 floor,
                 chatLen,
-                reason: `fs.update threw: ${error?.message || error}`,
-            }));
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+            });
+            console.error(`[${MODULE_NAME}] commit-diff fs.update threw: ${error?.message || error}`);
+            throw new Error(msg);
         }
-        if (!committed) {
-            throw new Error(formatPersistFailureWithSeq({
+        if (!committed.ok) {
+            // Chat switched mid-flight → benign no-op; matches the existing
+            // "no commit, drop the in-flight payload" semantics that callers
+            // rely on. Don't throw, don't toast — caller will see no graph
+            // mutation but the new chat owns the next write. Carry the
+            // skip reason in the envelope so UI wrappers (persistLatest)
+            // can decide whether to suppress the success toast.
+            if (committed.reason === STATE_ERROR_REASONS.VALIDATION_TARGET) {
+                console.warn(`[${MODULE_NAME}] commit-diff skipped (target changed): ${committed.hint}`);
+                return {
+                    store: memoryStoreCache.get(chatKey) || normalizedAfter,
+                    skipped: true,
+                    reason: committed.reason,
+                    hint: committed.hint,
+                };
+            }
+            const msg = formatPersistFailure({
                 op: 'commit-diff',
                 stage: 'log-append',
                 seq: normalizedSeq,
                 floor,
                 chatLen,
-                reason: 'floor-state log append rejected — most likely a state/patch 409 after retry. Check Network tab for /api/chats/state/patch responses on namespace memory_graph__floor_log',
-            }));
+                reason: committed.reason,
+            });
+            console.error(`[${MODULE_NAME}] commit-diff failed reason=${committed.reason} hint=${committed.hint}`);
+            throw new Error(msg);
         }
     }
 
     const meta = await persistMetaForChatKey(context, chatKey, normalizedAfter, target);
-    const latestPayload = await fs.get();
-    const payload = latestPayload && typeof latestPayload === 'object'
-        ? latestPayload
-        : afterPayload;
+    // Re-read materialized state so the cache reflects the post-commit shape
+    // (the commit we just appended plus any sibling commits that landed in
+    // between). When the replay is broken or destroyed we fall back to the
+    // in-memory `afterPayload` we wrote — the commit itself landed on disk,
+    // so the cache stays in sync with what users see on reload; only the
+    // REPLAY_BROKEN case warrants a toast (data may be unrecoverable).
+    const latestResult = await fs.get();
+    let payload = afterPayload;
+    if (latestResult.ok && latestResult.state && typeof latestResult.state === 'object') {
+        payload = latestResult.state;
+    } else if (!latestResult.ok) {
+        if (latestResult.reason === STATE_ERROR_REASONS.REPLAY_BROKEN) {
+            notifyError(i18n('Memory log corrupted after commit, please reload chat.'));
+        }
+        console.warn(`[${MODULE_NAME}] post-commit cache refresh failed (reason=${latestResult.reason}, hint=${latestResult.hint}); using in-memory afterPayload`);
+    }
     const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
     runtimeStore.lastExtractionDebug = normalizedAfter?.lastExtractionDebug && typeof normalizedAfter.lastExtractionDebug === 'object'
         ? structuredClone(normalizedAfter.lastExtractionDebug)
@@ -1485,7 +1625,7 @@ async function commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, aft
         const effectiveSettings = getEffectiveSettings(context, getSettings());
         await syncPersistentLorebookProjection(context, effectiveSettings, runtimeStore);
     }
-    return runtimeStore;
+    return { store: runtimeStore, skipped: false, reason: null, hint: null };
 }
 
 /**
@@ -1500,11 +1640,12 @@ function replacePersistedGraphWithStore(context, chatKey, store, seq, { floor = 
 /**
  * Editor-save path: caller has a beforeStore and an afterStore and wants the
  * delta committed. Same semantics as commitMemoryStoreDiffByChatKey;
- * `floor` is forwarded as the trigger anchor.
+ * `floor` is forwarded as the trigger anchor. Returns the envelope from
+ * commitMemoryStoreDiffByChatKey unchanged so callers can inspect
+ * `.skipped` / `.reason` / `.hint` for surfacing accurate UI feedback.
  */
 async function appendPersistedDiffEntry(context, chatKey, beforeStore, afterStore, seq, { floor = null } = {}) {
-    const result = await commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, afterStore, seq, { floor });
-    return Boolean(result);
+    return commitMemoryStoreDiffByChatKey(context, chatKey, beforeStore, afterStore, seq, { floor });
 }
 
 export async function ensureMemoryStoreLoaded(context, { force = false } = {}) {
@@ -1713,7 +1854,14 @@ async function persistRecallMetadataByChatKey(context, chatKey, { trace, project
             : null,
     };
     setCachedMeta(chatKey, nextMeta);
-    await persistMetaFields(context, nextMeta, target);
+    const result = await persistMetaFields(context, nextMeta, target);
+    if (!result?.ok) {
+        if (result?.reason === STATE_ERROR_REASONS.VALIDATION_TARGET) {
+            console.warn(`[${MODULE_NAME}] recall meta persist skipped: ${result.hint}`);
+            return { ok: false, reason: result.reason };
+        }
+        throw new Error(`[${MODULE_NAME}] recall meta persist failed (${result?.reason}): ${result?.hint}`);
+    }
     const store = memoryStoreCache.get(chatKey);
     if (store) {
         store.lastRecallTrace = structuredClone(nextMeta.lastRecallTrace);
@@ -1772,11 +1920,18 @@ async function inheritMemoryStoreForBranch(context, payload) {
     };
     setCachedMeta(targetChatKey, branchMeta);
     if (typeof context.updateChatState === 'function') {
-        await context.updateChatState(
+        const result = await context.updateChatState(
             META_NAMESPACE,
             () => branchMeta,
             { target: targetTarget, maxOperations: 16000 },
         );
+        if (result && result.ok === false) {
+            // Seed write failed — branch chat's __meta will be missing
+            // sourceMessageCount and the next ensureMemoryStoreLoaded will
+            // synthesize a default. We log so the dev surface still shows
+            // the failure (the user can't act on it directly).
+            console.warn(`[${MODULE_NAME}] branch meta seed failed (reason=${result.reason}, hint=${result.hint})`);
+        }
     }
 }
 
@@ -7314,14 +7469,14 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
     updateStoreSourceState(rebuilt, context);
     memoryStoreTargets.set(chatKey, target);
     const finalSeq = Number(rebuilt?.lastExtractionDebug?.latestSeq || getStoreCoveredSeqTo(rebuilt) || 0);
-    const persistedStore = await commitMemoryStoreReplaceByChatKey(
+    const persistResult = await commitMemoryStoreReplaceByChatKey(
         context,
         chatKey,
         rebuilt,
         finalSeq,
         { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
     );
-    return persistedStore;
+    return persistResult.store;
 }
 
 function buildPlayableFramesFromContext(context) {
@@ -7587,7 +7742,7 @@ async function injectMemoryPrompts(context, payload) {
             try {
                 await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
             } catch (persistError) {
-                console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after hybrid-recall lazy sync`, persistError);
+                console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after hybrid-recall lazy sync: ${persistError?.message || persistError}`);
             }
         }
 
@@ -7952,7 +8107,7 @@ async function runScheduledExtractionPass(chatKey) {
                 updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
             },
             onBatchApplied: async ({ endSeq }) => {
-                committedStore = await commitMemoryStoreDiffByChatKey(
+                const batchResult = await commitMemoryStoreDiffByChatKey(
                     runtimeContext,
                     chatKey,
                     committedStore,
@@ -7960,9 +8115,10 @@ async function runScheduledExtractionPass(chatKey) {
                     endSeq,
                     { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
                 );
+                committedStore = batchResult.store;
             },
             onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
-                committedStore = await commitMemoryStoreDiffByChatKey(
+                const compactionResult = await commitMemoryStoreDiffByChatKey(
                     runtimeContext,
                     chatKey,
                     beforeStore,
@@ -7970,10 +8126,11 @@ async function runScheduledExtractionPass(chatKey) {
                     batchEndSeq,
                     { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, batchEndSeq) },
                 );
+                committedStore = compactionResult.store;
             },
         });
         const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
-        const finalStore = await commitMemoryStoreDiffByChatKey(
+        const finalResult = await commitMemoryStoreDiffByChatKey(
             runtimeContext,
             chatKey,
             committedStore,
@@ -7981,6 +8138,7 @@ async function runScheduledExtractionPass(chatKey) {
             finalSeq,
             { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, finalSeq) },
         );
+        const finalStore = finalResult.store;
         // Sync vector index after extraction (only if using hybrid recall)
         const effectiveStore = finalStore || workingStore;
         const recallMethod = String(settings.recallMethod || 'llm').trim().toLowerCase();
@@ -8002,7 +8160,7 @@ async function runScheduledExtractionPass(chatKey) {
                     try {
                         await persistMemoryStoreByChatKey(runtimeContext, chatKey, effectiveStore, { syncPersistentProjection: false });
                     } catch (persistError) {
-                        console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after extraction-tail sync`, persistError);
+                        console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after extraction-tail sync: ${persistError?.message || persistError}`);
                     }
                 }
             } catch (vecError) {
@@ -9660,15 +9818,25 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             ? Math.max(0, Math.floor(Number(seq)))
             : getStoreCoveredSeqTo(latest);
         const editorSaveFloor = seqToFloor(context, effectiveSeq);
+        // Defaults assume "no inner commit was attempted" → treated as success
+        // for the paths that don't call commitMemoryStore*ByChatKey at all.
+        let innerResult = { skipped: false, reason: null, hint: null };
         if (replaceGraph) {
-            await replacePersistedGraphWithStore(context, chatKey, latest, effectiveSeq, { floor: editorSaveFloor });
+            innerResult = await replacePersistedGraphWithStore(context, chatKey, latest, effectiveSeq, { floor: editorSaveFloor });
         } else if (beforeStore) {
-            await appendPersistedDiffEntry(context, chatKey, beforeStore, latest, effectiveSeq, { floor: editorSaveFloor });
+            innerResult = await appendPersistedDiffEntry(context, chatKey, beforeStore, latest, effectiveSeq, { floor: editorSaveFloor });
         }
         await persistMemoryStoreByChatKey(context, chatKey, latest, { syncPersistentProjection: true });
         refreshUiStats();
         if (statusText) {
             updateUiStatus(statusText);
+        }
+        if (innerResult && innerResult.skipped) {
+            // Commit was silently skipped (typically VALIDATION_TARGET when
+            // the user switched chats mid-edit). Surface the real reason
+            // instead of firing a success toast over a write that didn't land.
+            notifyError(i18nFormat('Memory save skipped: ${0}', innerResult.hint || innerResult.reason || i18n('reason unknown')));
+            return;
         }
         if (successText) {
             notifySuccess(successText);
@@ -10607,7 +10775,7 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             const migrated = normalizeStoreForRuntime(parsed);
             updateStoreSourceState(migrated, context);
             const migratedSeq = getStoreCoveredSeqTo(migrated);
-            replacePersistedGraphWithStore(
+            const applyResult = await replacePersistedGraphWithStore(
                 context,
                 chatKey,
                 migrated,
@@ -10617,6 +10785,10 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
             clearRollbackHistory(chatKey);
             await persistMemoryStoreByChatKey(context, chatKey, migrated, { syncPersistentProjection: true });
             refreshUiStats();
+            if (applyResult && applyResult.skipped) {
+                notifyError(i18nFormat('Failed to apply graph JSON: ${0}', applyResult.hint || applyResult.reason || i18n('reason unknown')));
+                return;
+            }
             updateUiStatus(i18n('Applied raw graph JSON edit.'));
             notifySuccess(i18n('Memory graph JSON updated.'));
             selectedEdgeIndex = -1;
@@ -14009,7 +14181,7 @@ function bindUi() {
                     updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
                 },
                 onBatchApplied: async ({ endSeq }) => {
-                    committedStore = await commitMemoryStoreDiffByChatKey(
+                    const batchResult = await commitMemoryStoreDiffByChatKey(
                         context,
                         chatKey,
                         committedStore,
@@ -14017,9 +14189,10 @@ function bindUi() {
                         endSeq,
                         { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
                     );
+                    committedStore = batchResult.store;
                 },
                 onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
-                    committedStore = await commitMemoryStoreDiffByChatKey(
+                    const compactionResult = await commitMemoryStoreDiffByChatKey(
                         context,
                         chatKey,
                         beforeStore,
@@ -14027,10 +14200,11 @@ function bindUi() {
                         batchEndSeq,
                         { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
                     );
+                    committedStore = compactionResult.store;
                 },
             });
             const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
-            const finalStore = await commitMemoryStoreDiffByChatKey(
+            const finalResult = await commitMemoryStoreDiffByChatKey(
                 context,
                 chatKey,
                 committedStore,
@@ -14038,6 +14212,7 @@ function bindUi() {
                 finalSeq,
                 { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
             );
+            const finalStore = finalResult.store;
             const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
             updateUiStatus(i18nFormat(
                 'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
@@ -14245,13 +14420,14 @@ function bindUi() {
                 throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
             }
             const finalSeq = Number(latestSeq || debug.latestSeq || 0);
-            const persistedStore = await commitMemoryStoreReplaceByChatKey(
+            const persistResult = await commitMemoryStoreReplaceByChatKey(
                 context,
                 chatKey,
                 workingStore,
                 finalSeq,
                 { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
             );
+            const persistedStore = persistResult.store;
             const committedDebug = persistedStore?.lastExtractionDebug || debug;
             refreshUiStats();
             notifySuccess(i18nFormat('Memory graph rebuilt for recent ${0} assistant turn(s).', recentTurns));
@@ -14295,12 +14471,18 @@ function bindUi() {
         memoryStoreCache.set(chatKey, createEmptyStore());
         clearCachedMeta(chatKey);
         clearRollbackHistory(chatKey);
+        let resetResult = { ok: true, partial: {} };
         if (target) {
-            await deleteMemoryStoreByTarget(context, target);
+            resetResult = await deleteMemoryStoreByTarget(context, target);
         }
         await clearAllMemoryLorebookProjection(context, settings);
         refreshUiStats();
-        notifySuccess(i18n('Current chat memory graph reset.'));
+        if (resetResult.ok) {
+            notifySuccess(i18n('Current chat memory graph reset.'));
+        } else {
+            const stages = Object.entries(resetResult.partial).map(([k, v]) => `${k}=${v}`).join(', ');
+            notifyError(i18nFormat('Memory graph reset incomplete: ${0}', stages));
+        }
         updateUiStatus(i18n('Reset memory graph for current chat.'));
     });
 
@@ -14417,17 +14599,24 @@ function ensureUi() {
 async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
     if (!chatKey || chatKey === 'invalid_target') return null;
     const target = memoryStoreTargets.get(chatKey);
-    // fs.get() owns migration + replay-failure recovery. If it still
-    // throws after that, the store is genuinely broken — surface to the
-    // user and leave the cache as-is rather than overwriting with an
-    // empty store (which would visually erase the user's data).
+    // fs.get() owns migration + replay-failure recovery. It returns an
+    // envelope: hard failures (REPLAY_BROKEN, INSTANCE_DESTROYED) surface
+    // to the user; transient soft failures keep the cache as-is rather
+    // than overwriting with an empty store (which would visually erase
+    // the user's data).
     let payload;
     try {
         const fs = await getFloorStateInstance(runtimeContext);
         await fs.ready();
-        payload = await fs.get();
+        const getResult = await fs.get();
+        if (!getResult.ok) {
+            console.error(`[${MODULE_NAME}] floor-state get failed during cache refresh (reason=${getResult.reason}, hint=${getResult.hint})`);
+            notifyError(i18nFormat('Memory graph load failed: ${0}', getResult.hint || getResult.reason || i18n('reason unknown')));
+            return memoryStoreCache.get(chatKey) || null;
+        }
+        payload = getResult.state;
     } catch (error) {
-        console.error(`[${MODULE_NAME}] floor-state get failed during cache refresh`, error);
+        console.error(`[${MODULE_NAME}] floor-state get threw during cache refresh`, error);
         notifyError(i18nFormat('Memory graph load failed: ${0}', error?.message || error));
         return memoryStoreCache.get(chatKey) || null;
     }
