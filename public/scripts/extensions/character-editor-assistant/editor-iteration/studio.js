@@ -505,6 +505,26 @@ async function processRoundOutcome({
                 // (applied vs skipped). Adding "queued" would double the
                 // per-tool feedback the model has to digest.
             } else {
+                // Shape note: the orch iter-studio uses the shared
+                // `interpretSandboxOutcome` + `buildEditCallReply`
+                // helpers at
+                // `public/scripts/extensions/orchestrator/iter-studio/sandbox-result.js`
+                // to disambiguate 4 outcomes (edits / failure / throw /
+                // noop) because its `executeAiIterationToolCalls`
+                // executor returns a `{toolResults:[{ok:false,...}]}`
+                // envelope that must be inspected separately from the
+                // before/after snapshot. CEA's `normalizeToolCallToEdit`
+                // (editor-iteration/tools.js:588) THROWS on real failures
+                // and returns `[]` only on true noops, so the 4-way
+                // discrimination collapses to 3 here (edits / noop /
+                // catch). Adopting the helpers directly would require
+                // rewriting `normalizeToolCallToEdit` to return envelope
+                // outcomes instead of throwing — out of scope for now.
+                // AUDIT: this branch only fires when normalize returned
+                // an empty array AFTER successfully executing the call;
+                // executor failures land in the catch arm below as
+                // `{error: ...}` — there is no path here where an
+                // executor failure is silently surfaced as a noop.
                 editToolResults.push({
                     tool_call_id: callId,
                     content: { status: 'noop', message: 'No edits produced. The target state already matches what you requested; an earlier round may have already applied this change. Re-read the live state before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (path / field / value).' },

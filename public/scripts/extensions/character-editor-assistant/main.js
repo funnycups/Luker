@@ -100,6 +100,46 @@ function i18nFormat(text, ...values) {
     return i18n(text).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 }
 
+/**
+ * Map a state-error envelope reason to a localized message describing why a
+ * character-bound sidecar write failed. Used by `setOperationStateSidecar` /
+ * `persistCharacterEditorSessionStore` to surface reason-aware toasts when a
+ * user-initiated save cannot land.
+ *
+ * Covers all 9 closed-enum reasons from `state-errors.js` (VALIDATION_ARGS,
+ * VALIDATION_TARGET, VALIDATION_COMMIT, INSTANCE_DESTROYED, CONFLICT,
+ * HTTP_ERROR, TRANSPORT_ERROR, REPLAY_BROKEN, LOG_WRITE_FAILED). Unknown or
+ * missing reason falls back to a generic message.
+ *
+ * @param {string} reason — envelope reason; may be undefined when the result
+ *                          itself is null (defensive against non-conforming stubs).
+ * @returns {string} Localized error message ready for `toastr.error` or `throw`.
+ */
+function formatCharacterStateWriteError(reason) {
+    switch (reason) {
+        case 'VALIDATION_ARGS':
+            return i18n('Failed to save character editor changes (invalid request).');
+        case 'VALIDATION_TARGET':
+            return i18n('Failed to save character editor changes (no active character).');
+        case 'VALIDATION_COMMIT':
+            return i18n('Failed to save character editor changes (invalid commit).');
+        case 'INSTANCE_DESTROYED':
+            return i18n('Character editor storage destroyed, reload the page.');
+        case 'CONFLICT':
+            return i18n('Failed to save character editor changes (storage conflict, try again).');
+        case 'HTTP_ERROR':
+            return i18n('Failed to save character editor changes (server error).');
+        case 'TRANSPORT_ERROR':
+            return i18n('Failed to save character editor changes (network error).');
+        case 'REPLAY_BROKEN':
+            return i18n('Failed to save character editor changes (storage corrupted, reload chat).');
+        case 'LOG_WRITE_FAILED':
+            return i18n('Failed to save character editor changes (disk write failed).');
+        default:
+            return i18n('Failed to save character editor changes.');
+    }
+}
+
 function registerLocaleData() {
     addLocaleData('zh-cn', {
         'Character Editor Assistant': '角色卡编辑助手',
@@ -345,6 +385,31 @@ function registerLocaleData() {
         'View raw record': '查看原始记录',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '会话「${0}」无法迁移到新格式，已跳过，该会话不可用。',
+        // Character editor sidecar write-failure toasts — reason-aware
+        // surfaces from formatCharacterStateWriteError.
+        'Failed to save character editor changes (invalid request).': '保存角色编辑器更改失败（请求无效）。',
+        'Failed to save character editor changes (no active character).': '保存角色编辑器更改失败（没有活动角色）。',
+        'Failed to save character editor changes (invalid commit).': '保存角色编辑器更改失败（提交无效）。',
+        'Character editor storage destroyed, reload the page.': '角色编辑器存储已销毁，请刷新页面。',
+        'Failed to save character editor changes (storage conflict, try again).': '保存角色编辑器更改失败（存储冲突，请重试）。',
+        'Failed to save character editor changes (server error).': '保存角色编辑器更改失败（服务器错误）。',
+        'Failed to save character editor changes (network error).': '保存角色编辑器更改失败（网络错误）。',
+        'Failed to save character editor changes (storage corrupted, reload chat).': '保存角色编辑器更改失败（存储已损坏，请重新加载聊天）。',
+        'Failed to save character editor changes (disk write failed).': '保存角色编辑器更改失败（磁盘写入失败）。',
+        'Failed to save character editor changes.': '保存角色编辑器更改失败。',
+        // CardApp Studio session-write toasts — reason-aware surfaces from
+        // formatSaveSessionsError (studio.js).
+        'Failed to save CardApp Studio session (invalid request).': '保存 CardApp Studio 会话失败（请求无效）。',
+        'Failed to save CardApp Studio session (no active character).': '保存 CardApp Studio 会话失败（没有活动角色）。',
+        'Failed to save CardApp Studio session (invalid commit).': '保存 CardApp Studio 会话失败（提交无效）。',
+        'CardApp Studio storage destroyed, reload the page.': 'CardApp Studio 存储已销毁，请刷新页面。',
+        'Failed to save CardApp Studio session (storage conflict, try again).': '保存 CardApp Studio 会话失败（存储冲突，请重试）。',
+        'Failed to save CardApp Studio session (server error).': '保存 CardApp Studio 会话失败（服务器错误）。',
+        'Failed to save CardApp Studio session (network error).': '保存 CardApp Studio 会话失败（网络错误）。',
+        'Failed to save CardApp Studio session (storage corrupted, reload chat).': '保存 CardApp Studio 会话失败（存储已损坏，请重新加载聊天）。',
+        'Failed to save CardApp Studio session (disk write failed).': '保存 CardApp Studio 会话失败（磁盘写入失败）。',
+        'Failed to save CardApp Studio session.': '保存 CardApp Studio 会话失败。',
+        'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已恢复为独立界面。已清空过渡迭代版的会话——磁盘上的文件保持不变。',
  });
  addLocaleData('zh-tw', {
  'Character Editor Assistant': '角色卡編輯助手',
@@ -590,6 +655,31 @@ function registerLocaleData() {
         'View raw record': '檢視原始記錄',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '會話「${0}」無法遷移到新格式，已跳過，該會話不可用。',
+        // Character editor sidecar write-failure toasts — reason-aware
+        // surfaces from formatCharacterStateWriteError.
+        'Failed to save character editor changes (invalid request).': '儲存角色編輯器變更失敗（請求無效）。',
+        'Failed to save character editor changes (no active character).': '儲存角色編輯器變更失敗（沒有活動角色）。',
+        'Failed to save character editor changes (invalid commit).': '儲存角色編輯器變更失敗（提交無效）。',
+        'Character editor storage destroyed, reload the page.': '角色編輯器儲存已銷毀，請重新整理頁面。',
+        'Failed to save character editor changes (storage conflict, try again).': '儲存角色編輯器變更失敗（儲存衝突，請重試）。',
+        'Failed to save character editor changes (server error).': '儲存角色編輯器變更失敗（伺服器錯誤）。',
+        'Failed to save character editor changes (network error).': '儲存角色編輯器變更失敗（網路錯誤）。',
+        'Failed to save character editor changes (storage corrupted, reload chat).': '儲存角色編輯器變更失敗（儲存已損毀，請重新載入聊天）。',
+        'Failed to save character editor changes (disk write failed).': '儲存角色編輯器變更失敗（磁碟寫入失敗）。',
+        'Failed to save character editor changes.': '儲存角色編輯器變更失敗。',
+        // CardApp Studio session-write toasts — reason-aware surfaces from
+        // formatSaveSessionsError (studio.js).
+        'Failed to save CardApp Studio session (invalid request).': '儲存 CardApp Studio 會話失敗（請求無效）。',
+        'Failed to save CardApp Studio session (no active character).': '儲存 CardApp Studio 會話失敗（沒有活動角色）。',
+        'Failed to save CardApp Studio session (invalid commit).': '儲存 CardApp Studio 會話失敗（提交無效）。',
+        'CardApp Studio storage destroyed, reload the page.': 'CardApp Studio 儲存已銷毀，請重新整理頁面。',
+        'Failed to save CardApp Studio session (storage conflict, try again).': '儲存 CardApp Studio 會話失敗（儲存衝突，請重試）。',
+        'Failed to save CardApp Studio session (server error).': '儲存 CardApp Studio 會話失敗（伺服器錯誤）。',
+        'Failed to save CardApp Studio session (network error).': '儲存 CardApp Studio 會話失敗（網路錯誤）。',
+        'Failed to save CardApp Studio session (storage corrupted, reload chat).': '儲存 CardApp Studio 會話失敗（儲存已損毀，請重新載入聊天）。',
+        'Failed to save CardApp Studio session (disk write failed).': '儲存 CardApp Studio 會話失敗（磁碟寫入失敗）。',
+        'Failed to save CardApp Studio session.': '儲存 CardApp Studio 會話失敗。',
+        'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已還原為獨立介面。已清空過渡迭代版的會話——磁碟上的檔案保持不變。',
  });
 }
 
@@ -847,14 +937,36 @@ function getCharacterOperationStateKey(context, avatar = '') {
 }
 
 async function getOperationStateSidecar(context, avatar) {
-    return await getCharacterState(avatar, MODULE_NAME);
+    const result = await getCharacterState(avatar, MODULE_NAME);
+    // Envelope: `{ok, state}` on success or empty miss; `{ok: false, reason,
+    // hint}` on transport/HTTP/validation failure. Read failures fall back to
+    // an empty state so the editor still opens — the next persist will
+    // overwrite the sidecar with a fresh journal.
+    if (!result?.ok) {
+        if (result?.reason) {
+            // eslint-disable-next-line no-console
+            console.warn(`[character-editor-assistant] operation-state read failed: ${result.reason} ${result.hint || ''}`);
+        }
+        return null;
+    }
+    return result.state;
 }
 
 async function setOperationStateSidecar(context, avatar, state) {
     // Caller (persistOperationState) has already computed the full next state,
     // so the reducer returns it verbatim. updateCharacterState still diffs
     // against the server snapshot and ships only the changed slice on the wire.
-    await updateCharacterState(avatar, MODULE_NAME, () => clone(state));
+    //
+    // This write is user-initiated (delete history record / clear history /
+    // approve change) — throw on hard failure so the caller can surface a
+    // reason-aware toast and roll back its optimistic UI state.
+    const result = await updateCharacterState(avatar, MODULE_NAME, () => clone(state));
+    if (!result?.ok) {
+        const message = formatCharacterStateWriteError(result?.reason);
+        // eslint-disable-next-line no-console
+        console.warn(`[character-editor-assistant] operation-state write failed: ${result?.reason} ${result?.hint || ''}`);
+        throw new Error(message);
+    }
 }
 
 async function loadOperationState(context, { force = false, avatar = '' } = {}) {
@@ -994,7 +1106,18 @@ function normalizeCharacterEditorSessionStore(rawStore) {
 }
 
 async function loadCharacterEditorSessionStore(context, avatar) {
-    const raw = await getCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE);
+    const result = await getCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE);
+    // Read failures fall back to an empty store so the popup still opens.
+    // Hard failures are logged so devs can chase persistence issues without
+    // the UI swallowing them silently.
+    if (!result?.ok) {
+        if (result?.reason) {
+            // eslint-disable-next-line no-console
+            console.warn(`[character-editor-assistant] session-store read failed: ${result.reason} ${result.hint || ''}`);
+        }
+        return normalizeCharacterEditorSessionStore(createEmptyCharacterEditorSessionStore());
+    }
+    const raw = result.state;
     return normalizeCharacterEditorSessionStore(raw || createEmptyCharacterEditorSessionStore());
 }
 
@@ -1015,7 +1138,18 @@ async function loadCharacterEditorSessionStore(context, avatar) {
  */
 export async function readLegacyCeaEditorSessions(context, avatar) {
     try {
-        const raw = await getCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE);
+        const result = await getCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE);
+        // Best-effort legacy migration read — any envelope failure (or a thrown
+        // surprise from a non-conforming stub) falls through to `[]` so the
+        // unified popup never blocks on a recoverable read error.
+        if (!result?.ok) {
+            if (result?.reason) {
+                // eslint-disable-next-line no-console
+                console.warn(`[character-editor-assistant] legacy session read failed: ${result.reason} ${result.hint || ''}`);
+            }
+            return [];
+        }
+        const raw = result.state;
         const sessions = Array.isArray(raw?.sessions) ? raw.sessions : [];
         // Return a shallow clone so downstream mutation can't corrupt the
         // persisted card state if the migrator decides to mutate-in-place.
@@ -1078,7 +1212,17 @@ async function persistCharacterEditorSessionStore(context, avatar, store) {
     const next = normalizeCharacterEditorSessionStore(store);
     // See setOperationStateSidecar — caller already produced the full bundle;
     // updateCharacterState's diff cuts the wire payload to just what changed.
-    await updateCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE, () => next);
+    //
+    // Session writes are user-initiated (send / save / load / delete in the
+    // chat popup), so throw on hard failure with a reason-aware message and
+    // let the caller toast.
+    const result = await updateCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE, () => next);
+    if (!result?.ok) {
+        const message = formatCharacterStateWriteError(result?.reason);
+        // eslint-disable-next-line no-console
+        console.warn(`[character-editor-assistant] session-store write failed: ${result?.reason} ${result?.hint || ''}`);
+        throw new Error(message);
+    }
 }
 
 function upsertCharacterEditorSession(store, session) {

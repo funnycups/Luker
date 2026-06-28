@@ -1983,6 +1983,27 @@ export async function openCpaIterationStudio(deps) {
                     // avoids prescribing a specific replacement tool —
                     // older copies pointed at preset_upsert_prompt_order_item
                     // which sent the AI into a 4-noop loop.
+                    //
+                    // Shape note: the orch iter-studio uses the shared
+                    // `interpretSandboxOutcome` + `buildEditCallReply`
+                    // helpers at
+                    // `public/scripts/extensions/orchestrator/iter-studio/sandbox-result.js`
+                    // to disambiguate 4 outcomes (edits / failure /
+                    // throw / noop) because its `executeAiIterationToolCalls`
+                    // executor returns a `{toolResults:[{ok:false,...}]}`
+                    // envelope that must be inspected separately from the
+                    // before/after snapshot. CPA's `normalizeToolCallToEdit`
+                    // (tools.js:1287) THROWS on real failures and returns
+                    // `[]` only on true noops, so the 4-way discrimination
+                    // collapses to 3 here (edits / noop / catch). Adopting
+                    // the helpers directly would require rewriting
+                    // `normalizeToolCallToEdit` to return envelope outcomes
+                    // instead of throwing — out of scope for now. AUDIT:
+                    // this branch only fires when normalize returned an
+                    // empty array AFTER successfully executing the call;
+                    // executor failures land in the catch arm below as
+                    // `{error: ...}` — there is no path here where an
+                    // executor failure is silently surfaced as a noop.
                     const hint = 'The target state already matches what you requested; an earlier round may have already applied this change. Re-read the live state with preset_read_live_fields before retrying — do not re-issue the same call.';
                     editToolResults.push({
                         tool_call_id: callId,

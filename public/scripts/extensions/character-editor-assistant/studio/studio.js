@@ -44,6 +44,47 @@ function t(text) {
 function tFormat(text, ...values) {
     return t(text).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
 }
+
+/**
+ * Map a state-error envelope reason to a localized toastr message describing
+ * why a CardApp Studio session-write failed. Covers all 9 closed-enum reasons
+ * from `state-errors.js` (VALIDATION_ARGS, VALIDATION_TARGET, VALIDATION_COMMIT,
+ * INSTANCE_DESTROYED, CONFLICT, HTTP_ERROR, TRANSPORT_ERROR, REPLAY_BROKEN,
+ * LOG_WRITE_FAILED). Unknown reason falls back to a generic message.
+ *
+ * Used only by `saveAllSessions` non-silent paths (user-initiated saves like
+ * New session / Delete session / Clear chat). Autosave keeps the toast quiet
+ * via `{silent: true}` because it fires on every AI turn — the warning still
+ * goes to console for dev visibility.
+ *
+ * @param {string} reason — envelope reason
+ * @param {string} [_hint] — envelope hint (reserved for future log enrichment)
+ * @returns {string} Localized toast message
+ */
+function formatSaveSessionsError(reason, _hint) {
+    switch (reason) {
+        case 'VALIDATION_ARGS':
+            return t('Failed to save CardApp Studio session (invalid request).');
+        case 'VALIDATION_TARGET':
+            return t('Failed to save CardApp Studio session (no active character).');
+        case 'VALIDATION_COMMIT':
+            return t('Failed to save CardApp Studio session (invalid commit).');
+        case 'INSTANCE_DESTROYED':
+            return t('CardApp Studio storage destroyed, reload the page.');
+        case 'CONFLICT':
+            return t('Failed to save CardApp Studio session (storage conflict, try again).');
+        case 'HTTP_ERROR':
+            return t('Failed to save CardApp Studio session (server error).');
+        case 'TRANSPORT_ERROR':
+            return t('Failed to save CardApp Studio session (network error).');
+        case 'REPLAY_BROKEN':
+            return t('Failed to save CardApp Studio session (storage corrupted, reload chat).');
+        case 'LOG_WRITE_FAILED':
+            return t('Failed to save CardApp Studio session (disk write failed).');
+        default:
+            return t('Failed to save CardApp Studio session.');
+    }
+}
 const STUDIO_PANEL_LEFT_ID = 'card-app-studio-left';
 const STUDIO_PANEL_RIGHT_ID = 'card-app-studio-right';
 const STUDIO_MOBILE_TABS_ID = 'card-app-studio-mobile-tabs';
@@ -106,9 +147,20 @@ async function loadAllSessions() {
     const avatar = getCurrentAvatar();
     if (!avatar) return [];
     try {
-        const data = await getCharacterState(avatar, SESSION_NAMESPACE);
+        // Envelope: `{ok, state}` on hit/empty-miss; `{ok: false, reason,
+        // hint}` on transport/HTTP/validation failure. Read failures fall
+        // back to `[]` so the studio still opens — autosave will recreate
+        // the sidecar on the next AI turn.
+        const result = await getCharacterState(avatar, SESSION_NAMESPACE);
+        if (!result?.ok) {
+            if (result?.reason) {
+                console.warn(`[${MODULE_NAME}] loadAllSessions read failed: ${result.reason} ${result.hint || ''}`);
+            }
+            return [];
+        }
+        const data = result.state;
         if (!data) return [];
-        
+
         // Migrate old single-session format to new multi-session format
         if (Array.isArray(data.messages)) {
             // Old format: { messages, updatedAt }
@@ -123,15 +175,21 @@ async function loadAllSessions() {
                     },
                 ],
             };
-            await updateCharacterState(avatar, SESSION_NAMESPACE, () => migrated);
+            const migrateResult = await updateCharacterState(avatar, SESSION_NAMESPACE, () => migrated);
+            if (!migrateResult?.ok) {
+                // Migration write failure is non-fatal — return the in-memory
+                // migrated payload so the user sees their old session this
+                // run, and let the next save retry persistence.
+                console.warn(`[${MODULE_NAME}] loadAllSessions migrate-write failed: ${migrateResult?.reason} ${migrateResult?.hint || ''}`);
+            }
             return migrated.sessions;
         }
-        
+
         // New format: { version, sessions }
         if (data.version === SESSION_VERSION && Array.isArray(data.sessions)) {
             return data.sessions;
         }
-        
+
         return [];
     } catch (err) {
         console.warn(`[${MODULE_NAME}] Failed to load sessions from sidecar:`, err);
@@ -141,9 +199,19 @@ async function loadAllSessions() {
 
 /**
  * Save all sessions to sidecar.
+ *
+ * `saveAllSessions` is the studio's hot persistence path — autosave invokes it
+ * on every AI turn. The `silent` option keeps autosave from spamming toasts on
+ * a single transient failure; user-initiated saves (new session / delete /
+ * clear chat) pass `silent: false` so the user knows their click did not land.
+ * In both cases the warning still goes to console so devs can chase persistence
+ * issues without the UI swallowing them.
+ *
  * @param {Array} sessions
+ * @param {{silent?: boolean}} [options] — `silent: true` suppresses toastr but
+ *   still logs to console. Defaults to `false` (toast on failure).
  */
-async function saveAllSessions(sessions) {
+async function saveAllSessions(sessions, { silent = false } = {}) {
     const avatar = getCurrentAvatar();
     if (!avatar) return;
     try {
@@ -154,9 +222,18 @@ async function saveAllSessions(sessions) {
                 messages: s.messages.slice(-MAX_PERSISTED_MESSAGES),
             })),
         };
-        await updateCharacterState(avatar, SESSION_NAMESPACE, () => data);
+        const result = await updateCharacterState(avatar, SESSION_NAMESPACE, () => data);
+        if (!result?.ok) {
+            console.warn(`[${MODULE_NAME}] saveAllSessions failed: ${result?.reason} ${result?.hint || ''}`);
+            if (!silent && typeof toastr !== 'undefined') {
+                toastr.error(formatSaveSessionsError(result?.reason, result?.hint));
+            }
+        }
     } catch (err) {
         console.warn(`[${MODULE_NAME}] Failed to save sessions to sidecar:`, err);
+        if (!silent && typeof toastr !== 'undefined') {
+            toastr.error(formatSaveSessionsError(undefined));
+        }
     }
 }
 
@@ -176,25 +253,28 @@ async function loadSession(sessionId) {
  * @param {string} sessionId
  * @param {Array} messages
  * @param {string} [summary]
+ * @param {{silent?: boolean}} [options] — forwarded to saveAllSessions.
+ *   Autosave on AI turn completion passes `silent: true`; user-initiated
+ *   saves leave it false so failures surface as toasts.
  */
-async function saveCurrentSession(sessionId, messages, summary = null) {
+async function saveCurrentSession(sessionId, messages, summary = null, { silent = false } = {}) {
     const sessions = await loadAllSessions();
     const existingIndex = sessions.findIndex(s => s.id === sessionId);
-    
+
     const sessionData = {
         id: sessionId,
         messages: messages.slice(-MAX_PERSISTED_MESSAGES),
         updatedAt: Date.now(),
         summary: summary || (existingIndex >= 0 ? sessions[existingIndex].summary : 'New session'),
     };
-    
+
     if (existingIndex >= 0) {
         sessions[existingIndex] = sessionData;
     } else {
         sessions.push(sessionData);
     }
-    
-    await saveAllSessions(sessions);
+
+    await saveAllSessions(sessions, { silent });
 }
 
 /**
@@ -231,7 +311,13 @@ async function clearSession() {
     const avatar = getCurrentAvatar();
     if (!avatar) return;
     try {
-        await deleteCharacterState(avatar, SESSION_NAMESPACE);
+        const result = await deleteCharacterState(avatar, SESSION_NAMESPACE);
+        if (!result?.ok) {
+            console.warn(`[${MODULE_NAME}] clearSession failed: ${result?.reason} ${result?.hint || ''}`);
+            if (typeof toastr !== 'undefined') {
+                toastr.error(formatSaveSessionsError(result?.reason, result?.hint));
+            }
+        }
     } catch (err) {
         console.warn(`[${MODULE_NAME}] Failed to clear session from sidecar:`, err);
     }
@@ -815,13 +901,28 @@ async function wipeSp2EraSessionsIfNeeded(avatar) {
         }
         let hadSp2Data = false;
         try {
-            const sp2 = await context.getCharacterState?.(avatar, 'cardapp_studio_sessions_v2');
+            // Envelope read — `result.state` holds the raw payload on hit,
+            // null on empty miss. A real read failure (`!ok` with a reason)
+            // means we can't safely decide whether to wipe; skip the flag so
+            // the next open retries. An empty miss falls through normally.
+            const readResult = await context.getCharacterState?.(avatar, 'cardapp_studio_sessions_v2');
+            if (readResult && !readResult.ok) {
+                console.warn(`[${MODULE_NAME}] SP-2 wipe read failed: ${readResult.reason} ${readResult.hint || ''}`);
+                return;
+            }
+            const sp2 = readResult?.ok ? readResult.state : null;
             hadSp2Data = sp2 != null && Object.keys(sp2).length > 0;
         } catch { /* state may not exist */ }
         if (hadSp2Data) {
-            await context.deleteCharacterState(avatar, 'cardapp_studio_sessions_v2');
+            const deleteResult = await context.deleteCharacterState(avatar, 'cardapp_studio_sessions_v2');
+            if (!deleteResult?.ok) {
+                // Best-effort one-shot wipe — log and skip the flag so the next
+                // open retries. The user has no actionable recovery here.
+                console.warn(`[${MODULE_NAME}] SP-2 wipe delete failed: ${deleteResult?.reason} ${deleteResult?.hint || ''}`);
+                return;
+            }
             if (typeof toastr !== 'undefined') {
-                toastr.info(t('CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared; files on disk unchanged.'));
+                toastr.info(t('CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.'));
             }
         }
         localStorage.setItem(SP2_WIPE_FLAG_KEY, '1');
@@ -1454,10 +1555,12 @@ async function handleAISend() {
         if (activeAbortController === controller) activeAbortController = null;
         isSending = false;
         syncComposerState();
-        // Auto-save conversation with summary
+        // Auto-save conversation with summary. Hot path — fires on every AI
+        // turn — so suppress the toastr error to avoid spamming the user on
+        // a single transient failure. The warning still hits the console.
         if (currentCharId && currentSessionId && conversationMessages.length > 0) {
             const summary = generateSessionSummary(conversationMessages);
-            await saveCurrentSession(currentSessionId, conversationMessages, summary);
+            await saveCurrentSession(currentSessionId, conversationMessages, summary, { silent: true });
             await renderSessionList();
         }
     }

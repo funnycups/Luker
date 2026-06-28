@@ -1925,6 +1925,30 @@ export async function openSchemaIterationStudio(deps) {
                     // matched). Invalid_args / not_found / not_allowed /
                     // unknown_tool all throw upstream and land in the
                     // catch arm below as `{error: '...'}` replies.
+                    //
+                    // Shape note: the orch iter-studio uses the shared
+                    // `interpretSandboxOutcome` + `buildEditCallReply`
+                    // helpers at
+                    // `public/scripts/extensions/orchestrator/iter-studio/sandbox-result.js`
+                    // to disambiguate 4 outcomes (edits / failure /
+                    // throw / noop) because its `executeAiIterationToolCalls`
+                    // executor returns a `{toolResults:[{ok:false,...}]}`
+                    // envelope that must be inspected separately from the
+                    // before/after snapshot. MG schema's
+                    // `normalizeToolCallToEdit` (tools.js:318) THROWS on
+                    // real failures (see `applyToolCallToSandbox` at
+                    // tools.js:294 for the unknown_tool throw, and the
+                    // per-tool throw arms documented at tools.js:307-312)
+                    // and returns `[]` only on true noops, so the 4-way
+                    // discrimination collapses to 3 here (edits / noop /
+                    // catch). Adopting the helpers directly would require
+                    // rewriting `normalizeToolCallToEdit` to return
+                    // envelope outcomes instead of throwing — out of
+                    // scope for now. AUDIT: this branch only fires when
+                    // normalize returned an empty array AFTER successfully
+                    // executing the call; executor failures land in the
+                    // catch arm below — there is no path here where an
+                    // executor failure is silently surfaced as a noop.
                     editToolResults.push({
                         tool_call_id: callId,
                         content: { status: 'noop', message: 'No edits produced. The target schema state already matches what you requested; an earlier round may have already applied this change. Re-read the live schema before retrying — do not re-issue the same call. If you genuinely intended a different result, verify args (node_type identifier, value shape).' },

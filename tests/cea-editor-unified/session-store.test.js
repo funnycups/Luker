@@ -5,7 +5,10 @@ function makeCtx({ initialSidecar = null } = {}) {
     const sidecars = {};
     if (initialSidecar) sidecars[`alice.png:${CEA_SIDECAR_NAMESPACE}`] = initialSidecar;
     return {
-        getCharacterState: jest.fn(async (a, ns) => sidecars[`${a}:${ns}`] || null),
+        getCharacterState: jest.fn(async (a, ns) => {
+            const state = sidecars[`${a}:${ns}`];
+            return state ? { ok: true, state } : { ok: true, state: null };
+        }),
         updateCharacterState: jest.fn(async (a, ns, updater) => {
             const current = sidecars[`${a}:${ns}`] || null;
             const next = await updater(

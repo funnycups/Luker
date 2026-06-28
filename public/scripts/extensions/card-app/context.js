@@ -428,10 +428,15 @@ export function buildContext(container, charId, config) {
          * structured namespace not driven by macros (e.g. CardApp UI panels
          * that own their own settled object).
          *
+         * Returns an envelope: `{ok: true, state}` on hit or empty miss (state
+         * is `null` when nothing is stored); `{ok: false, state: null, reason,
+         * hint}` on validation/transport/HTTP failure. The wrapper does not
+         * throw — every failure mode is reported through `reason`/`hint`.
+         *
          * @param {string} namespace
          * @param {object} [options] Optional `target` for cross-chat reads
          *   (e.g. branching scenarios). See script.js#getChatState.
-         * @returns {Promise<object|null>}
+         * @returns {Promise<{ok: true, state: object|null} | {ok: false, state: null, reason: string, hint: string}>}
          */
         async getChatState(namespace, options = {}) {
             return await lukerGetChatState(namespace, options);
@@ -442,13 +447,19 @@ export function buildContext(container, charId, config) {
          * the current namespace value and returns the next one; the diff is
          * computed and patched server-side.
          *
+         * Returns an envelope: `{ok: true, state, updated}` on success
+         * (`updated` is `false` when the reducer returns `null`/`undefined`
+         * or produces no net change); `{ok: false, reason, hint}` on
+         * validation/transport/HTTP/conflict failure. The wrapper never
+         * throws — inspect `result.ok` before consuming `result.state`.
+         *
          * @param {string} namespace
          * @param {(current: object, meta?: { attempt: number, target: object, namespace: string }) => (object|null|undefined|Promise<object|null|undefined>)} updater
          *   Return `null`/`undefined` from the reducer to leave state
          *   unchanged.
          * @param {object} [options] Optional `target` / `maxOperations` /
          *   `maxRetries`. See script.js#updateChatState.
-         * @returns {Promise<{ ok: boolean, state: object|null, updated: boolean }>}
+         * @returns {Promise<{ok: true, state: object|null, updated: boolean} | {ok: false, reason: string, hint: string}>}
          */
         async updateChatState(namespace, updater, options = {}) {
             return await lukerUpdateChatState(namespace, updater, options);
@@ -460,21 +471,32 @@ export function buildContext(container, charId, config) {
          * case — `patchChatState` is here for when you've already computed
          * patch ops yourself.
          *
+         * Returns an envelope: `{ok: true}` on success;
+         * `{ok: false, reason, hint}` on validation/transport/HTTP/conflict
+         * failure. The wrapper never throws — branch on `result.ok` rather
+         * than catching.
+         *
          * @param {string} namespace
          * @param {object[]} operations JSON-Patch-style ops (with optional
          *   tests; see script.js#patchChatState).
          * @param {object} [options]
-         * @returns {Promise<boolean>}
+         * @returns {Promise<{ok: true} | {ok: false, reason: string, hint: string}>}
          */
         async patchChatState(namespace, operations, options = {}) {
             return await lukerPatchChatState(namespace, operations, options);
         },
 
         /**
-         * Delete the entire chat-bound sidecar namespace.
+         * Delete the entire chat-bound sidecar namespace. Idempotent at the
+         * envelope level — succeeds even when the namespace was empty.
+         *
+         * Returns an envelope: `{ok: true}` on success;
+         * `{ok: false, reason, hint}` on validation/transport/HTTP failure.
+         * The wrapper never throws.
+         *
          * @param {string} namespace
          * @param {object} [options]
-         * @returns {Promise<boolean>}
+         * @returns {Promise<{ok: true} | {ok: false, reason: string, hint: string}>}
          */
         async deleteChatState(namespace, options = {}) {
             return await lukerDeleteChatState(namespace, options);
@@ -489,8 +511,14 @@ export function buildContext(container, charId, config) {
          * use it for plugin config that should follow the card, not the
          * conversation.
          *
+         * Returns an envelope: `{ok: true, state}` on hit or empty miss
+         * (`state` is `null` when nothing is stored); `{ok: false, state: null,
+         * reason, hint}` on validation/transport/HTTP failure. The wrapper
+         * never throws for state failures — only when no character is
+         * active (which is a CardApp lifecycle bug, not a state failure).
+         *
          * @param {string} namespace
-         * @returns {Promise<any>}
+         * @returns {Promise<{ok: true, state: object|null} | {ok: false, state: null, reason: string, hint: string}>}
          */
         async getCharacterState(namespace) {
             const character = characters[__ctx.characterId];
@@ -504,9 +532,15 @@ export function buildContext(container, charId, config) {
          * Pass `null` as `data` to delete the namespace. Whole-object write —
          * prefer `updateCharacterState` for non-trivial payloads so only the
          * changed slice crosses the wire.
+         *
+         * Returns an envelope: `{ok: true, state}` on success (state echoes
+         * what was written); `{ok: false, reason, hint}` on validation /
+         * transport / HTTP failure. The wrapper never throws for state
+         * failures — only when no character is active.
+         *
          * @param {string} namespace
          * @param {any} data
-         * @returns {Promise<void>}
+         * @returns {Promise<{ok: true, state: any} | {ok: false, reason: string, hint: string}>}
          */
         async setCharacterState(namespace, data) {
             const character = characters[__ctx.characterId];
@@ -521,10 +555,17 @@ export function buildContext(container, charId, config) {
          * next state; the diff is computed and shipped, so only changed
          * fields cross the wire. Recommended for any non-trivial payload.
          *
+         * Returns an envelope: `{ok: true, state, updated, created?}` on
+         * success (`updated` is `false` when the reducer returns
+         * `null`/`undefined` or produces no net change; `created` is `true`
+         * the first time the sidecar is written); `{ok: false, reason, hint}`
+         * on validation/transport/HTTP/conflict failure. The wrapper never
+         * throws for state failures — only when no character is active.
+         *
          * @param {string} namespace
          * @param {(current: object) => object | null | undefined | Promise<object | null | undefined>} updater
          * @param {object} [options] - { maxOperations?, maxRetries?, asyncDiff? }
-         * @returns {Promise<{ok: boolean, state: object|null, updated: boolean, created?: boolean}>}
+         * @returns {Promise<{ok: true, state: object|null, updated: boolean, created?: boolean} | {ok: false, reason: string, hint: string}>}
          */
         async updateCharacterState(namespace, updater, options = {}) {
             const character = characters[__ctx.characterId];
@@ -534,10 +575,16 @@ export function buildContext(container, charId, config) {
         },
 
         /**
-         * Remove the character-state sidecar for this namespace. Idempotent —
-         * succeeds when the sidecar does not exist.
+         * Remove the character-state sidecar for this namespace. Idempotent
+         * at the envelope level — succeeds when the sidecar does not exist.
+         *
+         * Returns an envelope: `{ok: true}` on success;
+         * `{ok: false, reason, hint}` on validation/transport/HTTP failure.
+         * The wrapper never throws for state failures — only when no
+         * character is active.
+         *
          * @param {string} namespace
-         * @returns {Promise<void>}
+         * @returns {Promise<{ok: true} | {ok: false, reason: string, hint: string}>}
          */
         async deleteCharacterState(namespace) {
             const character = characters[__ctx.characterId];

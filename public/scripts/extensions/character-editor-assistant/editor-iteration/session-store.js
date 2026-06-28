@@ -45,14 +45,15 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
 }
 
 async function readSidecar(ctx, avatar) {
-    try {
-        const raw = await ctx.getCharacterState(avatar, CEA_SIDECAR_NAMESPACE);
-        if (raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object') {
-            return raw;
-        }
-    } catch (err) {
+    const result = await ctx.getCharacterState(avatar, CEA_SIDECAR_NAMESPACE);
+    if (!result.ok) {
         // eslint-disable-next-line no-console
-        console.warn(`[character-editor-assistant] sidecar read failed for ${avatar}, treating as empty:`, err?.message || err);
+        console.warn(`[character-editor-assistant] sidecar read failed for ${avatar} (reason=${result.reason}, hint=${result.hint})`);
+        return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
+    }
+    const raw = result.state;
+    if (raw && typeof raw === 'object' && raw.sessions && typeof raw.sessions === 'object') {
+        return raw;
     }
     return { version: SIDECAR_SCHEMA_VERSION, sessions: {} };
 }
@@ -93,18 +94,13 @@ export function createUnifiedCeaEditorSessionStore(opts = {}) {
         if (!stored) return null;
         const cloned = structuredClone(stored);
         if (cloned.version === 3) return cloned;
+        let migrated;
         try {
-            const migrated = migrateToV3(cloned, {
+            migrated = migrateToV3(cloned, {
                 defaultTargetForKind: (kind) => kind === 'cea-lorebook-edits'
                     ? null
                     : { type: 'character' },
             });
-            await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
-                buildNextSidecar(current, (sessions) => {
-                    sessions[String(id)] = structuredClone(migrated);
-                }),
-            );
-            return migrated;
         } catch (err) {
             if (err instanceof MigrationFailedError) {
                 notifyMigrationFailed(ctx, stored?.title || id);
@@ -114,25 +110,41 @@ export function createUnifiedCeaEditorSessionStore(opts = {}) {
             }
             throw err;
         }
+        const writeResult = await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
+            buildNextSidecar(current, (sessions) => {
+                sessions[String(id)] = structuredClone(migrated);
+            }),
+        );
+        if (!writeResult.ok) {
+            // eslint-disable-next-line no-console
+            console.warn(`[character-editor-assistant] migration save failed (reason=${writeResult.reason}, hint=${writeResult.hint})`);
+        }
+        return migrated;
     }
 
     async function save(session) {
         if (!session?.id) return;
         const sessionClone = structuredClone(session);
         sessionClone.version = 3;
-        await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
+        const result = await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
             buildNextSidecar(current, (sessions) => {
                 sessions[String(session.id)] = sessionClone;
             }),
         );
+        if (!result.ok) {
+            throw new Error(`[character-editor-assistant] save failed (${result.reason}): ${result.hint}`);
+        }
     }
 
     async function deleteFn(id) {
-        await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
+        const result = await ctx.updateCharacterState(avatar, CEA_SIDECAR_NAMESPACE, (current) =>
             buildNextSidecar(current, (sessions) => {
                 delete sessions[String(id)];
             }),
         );
+        if (!result.ok) {
+            throw new Error(`[character-editor-assistant] delete failed (${result.reason}): ${result.hint}`);
+        }
     }
 
     return {

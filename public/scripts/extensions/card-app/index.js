@@ -168,7 +168,7 @@ async function recordCardAppDiagnosticForStudio(content) {
         content: String(content || '').slice(0, 16000),
     };
 
-    await updateCharacterState(avatar, STUDIO_SESSION_NAMESPACE, (current) => {
+    const result = await updateCharacterState(avatar, STUDIO_SESSION_NAMESPACE, (current) => {
         let sessions = [];
         if (current && Array.isArray(current.sessions)) {
             sessions = current.sessions.map(s => ({ ...s, messages: Array.isArray(s.messages) ? s.messages.slice() : [] }));
@@ -198,6 +198,10 @@ async function recordCardAppDiagnosticForStudio(content) {
 
         return { version: 1, sessions };
     });
+    if (!result?.ok) {
+        // Dev-only — diagnostic recording is best-effort and not user-visible.
+        console.warn(`[${MODULE_NAME}] diagnostic record failed: ${result?.reason || 'unknown'} ${result?.hint || ''}`.trim());
+    }
 }
 
 /**

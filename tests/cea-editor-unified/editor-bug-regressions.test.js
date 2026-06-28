@@ -373,7 +373,10 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
         // observe what would actually land on disk.
         const sidecars = {};
         const fakeCtx = {
-            getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
+            getCharacterState: async (a, ns) => {
+                const state = sidecars[`${a}:${ns}`];
+                return state ? { ok: true, state } : { ok: true, state: null };
+            },
             updateCharacterState: async (a, ns, updater) => {
                 const current = sidecars[`${a}:${ns}`] || null;
                 const next = await updater(
@@ -419,7 +422,10 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
     test('once messages exist the gate falls through and the session persists', async () => {
         const sidecars = {};
         const fakeCtx = {
-            getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
+            getCharacterState: async (a, ns) => {
+                const state = sidecars[`${a}:${ns}`];
+                return state ? { ok: true, state } : { ok: true, state: null };
+            },
             updateCharacterState: async (a, ns, updater) => {
                 const current = sidecars[`${a}:${ns}`] || null;
                 const next = await updater(
@@ -468,7 +474,10 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
         // store must end up empty.
         const sidecars = {};
         const fakeCtx = {
-            getCharacterState: async (a, ns) => sidecars[`${a}:${ns}`] || null,
+            getCharacterState: async (a, ns) => {
+                const state = sidecars[`${a}:${ns}`];
+                return state ? { ok: true, state } : { ok: true, state: null };
+            },
             updateCharacterState: async (a, ns, updater) => {
                 const current = sidecars[`${a}:${ns}`] || null;
                 const next = await updater(
