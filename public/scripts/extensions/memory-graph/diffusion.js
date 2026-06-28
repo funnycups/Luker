@@ -26,6 +26,16 @@ const EDGE_CONDUCTANCE = {
  evidence: 0.3,
 };
 
+// Relations that are semantically symmetric (A R B ⇔ B R A). Extractor writes
+// them in one direction only (sorted by node_id) but diffusion treats both
+// directions as full-conductance neighbors — no reverseEdgeAttenuation.
+const SYMMETRIC_RELATIONS = new Set([
+ 'allied_with',
+ 'hostile_to',
+ 'family_of',
+ 'partner_of',
+]);
+
 const TYPE_HALF_LIFE = {
  event: 50,
  character_sheet: 200,
@@ -109,6 +119,7 @@ export function buildAdjacencyMap(store, opts = {}) {
 
  const relationType = String(edge.type || 'related').trim().toLowerCase();
  const conductance = EDGE_CONDUCTANCE[relationType] ?? 0.4;
+ const isSymmetric = SYMMETRIC_RELATIONS.has(relationType);
 
  addNeighbor(map, from, {
  targetId: to,
@@ -118,7 +129,7 @@ export function buildAdjacencyMap(store, opts = {}) {
  });
  addNeighbor(map, to, {
  targetId: from,
- strength: conductance * options.reverseEdgeAttenuation,
+ strength: isSymmetric ? conductance : conductance * options.reverseEdgeAttenuation,
  edgeType: relationType,
  layer: 'semantic',
  });
@@ -550,4 +561,4 @@ export function computeCooccurrenceBoost(candidateNode, queryEntityIds, cooccurr
  return boost;
 }
 
-export { DEFAULT_OPTIONS as DIFFUSION_DEFAULTS, EDGE_CONDUCTANCE, TYPE_HALF_LIFE };
+export { DEFAULT_OPTIONS as DIFFUSION_DEFAULTS, EDGE_CONDUCTANCE, TYPE_HALF_LIFE, SYMMETRIC_RELATIONS };

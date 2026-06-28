@@ -92,6 +92,7 @@ import {
 } from '../connection-manager/embed-rerank.js';
 import {
     isEntityType,
+    SYMMETRIC_RELATIONS,
 } from './diffusion.js';
 import {
     getFloorStateInstance,
@@ -403,9 +404,11 @@ const CANONICAL_EXTRACT_RELATION_TYPES_TEXT = CANONICAL_EXTRACT_RELATION_TYPES.j
 const EXTRACT_PROMPT_EDGE_TYPE_LINES = [
     `Relation vocabulary hard rule: only use these canonical relation types for semantic links: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.`,
     'Thought relation review rule: in section [3] (link plan), explicitly inspect graph_data edges and reuse existing canonical relation labels when the meaning matches. Do not invent a new synonym, translation, or near-duplicate relation label.',
-    'Relation normalization rule: if the meaning is "entity/character participates in or is materially involved in an event", always use involved_in.',
-    'Relation normalization rule: if the meaning is "an event takes place at a location", always use occurred_at.',
-    'Relation normalization rule: if the meaning is simple weak association and no sharper canonical type fits, use related.',
+    'Relation normalization rule: involved_in vs mentions for event-end edges: use involved_in only when the entity/character is ON SCENE with dialogue/action/perception/being-acted-on; use mentions when the entity is discussed/referenced/implicated but NOT on scene (e.g. two characters talk about an absent third).',
+    'Relation normalization rule: occurred_at — use when an event takes place at a location.',
+    'Relation normalization rule: advances vs updates for event→thread edges: use advances when the event PROGRESSES the thread toward its resolution condition (including status flips to resolved/abandoned); use updates when the same event materially CHANGED thread.note text in this batch. Both can apply simultaneously (write both edges). Neither applies → write no edge; do not default to advances for tangential threads.',
+    'Relation normalization rule: related is a narrow catch-all — allowed ONLY for character↔character weak ties (below allied/hostile/family/partner/sworn/mentor/debt/deceiving) and location↔location proximity/containment. NEVER use related for character→location (write to character_sheet.identity instead), event-end, or thread-end.',
+    'Relation normalization rule: symmetric relations (partner_of, family_of, allied_with, hostile_to) — write ONE edge per pair with direction=bidirectional; do not write two edges (A→B and B→A) for the same relationship. System canonicalizes storage and diffuses symmetrically.',
     'Forbidden relation drift: do not mix Chinese and English variants or near-synonyms for the same meaning. Forbidden examples include 参与者 / 涉及主角 / participant / main_character when involved_in fits, and 发生地 / 发生在 / 发生地点 / 发生于 / occurred_at / happened_at / location / located_at / happened_in / occurs_at for the same event-location meaning.',
     'Internal edge prohibition: do not create contains or semantic_contains via extraction tools; hierarchy edges are managed by the graph system, not by semantic extraction.',
 ];
@@ -4686,6 +4689,17 @@ function applyExtractedLinks(store, sourceNode, rawLinks, options = {}) {
         const relation = normalizeText(link?.relation || 'related') || 'related';
         const direction = String(link?.direction || 'bidirectional').toLowerCase();
 
+        // Symmetric relations collapse to ONE canonical edge (sorted-id
+        // from→to). Direction directive is ignored — "A allied_with B" and
+        // "B allied_with A" are the same fact, stored once.
+        if (SYMMETRIC_RELATIONS.has(relation)) {
+            const [canonicalFrom, canonicalTo] = sourceNode.id < targetNode.id
+                ? [sourceNode.id, targetNode.id]
+                : [targetNode.id, sourceNode.id];
+            addEdge(store, canonicalFrom, canonicalTo, relation, edgeOptions);
+            continue;
+        }
+
         if (direction === 'incoming') {
             addEdge(store, targetNode.id, sourceNode.id, relation, edgeOptions);
             continue;
@@ -6067,16 +6081,24 @@ export function buildProjectedEdges(store, {
         if (!fromVisible || !toVisible || fromVisible === toVisible) {
             continue;
         }
-        const key = `${fromVisible}::${toVisible}::${edgeType}`;
+        // Symmetric relations (allied_with / hostile_to / family_of /
+        // partner_of) collapse direction: A→B and B→A merge into a single row
+        // with canonical from = lexicographically smaller id. Non-symmetric
+        // relations keep direction in the key.
+        const isSymmetric = SYMMETRIC_RELATIONS.has(edgeType);
+        const canonicalFrom = isSymmetric && fromVisible > toVisible ? toVisible : fromVisible;
+        const canonicalTo = isSymmetric && fromVisible > toVisible ? fromVisible : toVisible;
+        const key = `${canonicalFrom}::${canonicalTo}::${edgeType}`;
         const edgeSeq = edgeSeqTo(edge, store);
         const current = merged.get(key);
         if (!current) {
             merged.set(key, {
-                from: fromVisible,
-                to: toVisible,
+                from: canonicalFrom,
+                to: canonicalTo,
                 type: edgeType,
                 weight: 1,
                 seqTo: edgeSeq,
+                ...(isSymmetric ? { symmetric: true } : {}),
             });
             continue;
         }
@@ -6132,10 +6154,10 @@ export function buildEdgeSummary(store, nodeId, { nodeSet = null, relationTypes 
         let direction = '';
         if (edge.from === nodeId) {
             neighborId = String(edge.to || '');
-            direction = 'out';
+            direction = edge.symmetric ? 'symmetric' : 'out';
         } else if (edge.to === nodeId) {
             neighborId = String(edge.from || '');
-            direction = 'in';
+            direction = edge.symmetric ? 'symmetric' : 'in';
         } else {
             continue;
         }

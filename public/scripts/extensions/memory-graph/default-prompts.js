@@ -497,6 +497,7 @@ Direct create without appearing in roll-call → response is invalid, regenerate
 [3] Link plan (only if [1] or [2] produced nodes or relation changes).
 For each planned edge: from → relation → target, locator (target_node_id vs target_ref), seq evidence.
 Use ONLY canonical relations: related, involved_in, occurred_at, mentions, evidence, updates, advances, partner_of, family_of, allied_with, hostile_to, mentor_of, sworn_to, debt_owed_to, deceiving.
+Apply the **Relation type discipline** rules from Edge mechanics below — wrong type choice (involved_in vs mentions, advances vs updates, related catch-all, symmetric direction) is treated as a planning error, not a stylistic preference.
 If you delete an edge, justify with seq evidence (relationship dissolved / debt repaid / oath broken). Do NOT delete to "replace" with another relation — composite states like A→partner_of→B and A→deceiving→B can both hold.
 
 [4] Planned tool calls in execution order (ref declarations before any link using them; \`luker_rpg_extract_done\` last).
@@ -668,10 +669,41 @@ aliases 字段: 真正的别称/简称/双语名/in-world 通称。不重复 nam
 
 ### Edge mechanics
 - Canonical relations only (见 [3]).
-- 普通"角色参与某事件" → involved_in。"事件发生于某地" → occurred_at。无更精确分类的弱关联 → related。
 - Internal edge prohibition: 不要创建 contains 或 semantic_contains; 这些由系统管理。
 - 链接 target: 用 target_ref (本批次新建的 ref) 或 target_node_id (已存在的 id), 不要用 title 匹配。
 - 创建即链接: 如果新节点需要链接, links 写在 create 调用里, 不要延后。
+
+### Relation type discipline (硬约束 — 用错类型 = planning error)
+
+#### involved_in vs mentions (event 端)
+- **involved_in**: 角色**在场**, 有对白 / 动作 / 感知 / 受动 — 即该 event 的实际参与者
+- **mentions**: 角色**不在场**, 但 event 提及 / 讨论 / 涉及到 ta
+  - 例: A B 私下讨论 C 的处境, C 不在场 → A B 是 involved_in, C 是 mentions
+  - 例: 某文件揭露已死的 X 是凶手, X 不在场 → mentions
+- **边界**: 在场但纯背景观察, 远程目击, 画面里出现但没动作 → mentions
+- 主体多 ≠ 都 involved_in; 主体少 ≠ 都 mentions — 严格按"是否在场 + 是否有行动" 判定
+
+#### advances vs updates (event → thread)
+- **advances**: 本批次 event **推进 thread 进度** — resolution 条件接近; 包括 thread status 变为 resolved / abandoned
+- **updates**: 本批次 event **改写了 thread.note 的内容** (你在同批次 EDIT 了该 thread, note 的事实层面有更新)
+- **二者可同时**: 既改写 note 又推进进度 → 两条 edge 都写
+- 都没发生 → 不写 edge (不要为"沾边"挂 advances)
+- 默认偏 advances 是错误习惯, 修正: 没改 note ≠ 自动 advances, 必须真的推进进度
+
+#### related 适用范围 (catch-all 收口)
+- ✅ **character ↔ character** 弱关联 (没到 allied / hostile / family / partner / sworn / mentor / debt / deceiving 的强度)
+- ✅ **location ↔ location** 地点临近 / 包含 / 物理关联 (没有专门 relation)
+- ❌ **禁** character → location: 角色长期驻扎某地 → 写进 character_sheet.identity 字段, 不写 edge
+- ❌ **禁** event 端: 用 involved_in / occurred_at / mentions / advances / updates 之一
+- ❌ **禁** thread 端: 用 mentions / advances / updates 之一
+- 不确定时优先选更具体的 relation, related 只是真正没有专门 relation 时的兜底
+
+#### Symmetric relations (allied_with / hostile_to / family_of / partner_of)
+- 这四种关系是**天然对称**的 (A allied B ⇔ B allied A 是同一件事)
+- **只写一条 edge**, 不要写两条 (即不要既写 A→B 又写 B→A 的同类型边)
+- **方向选择**: 用 \`direction: bidirectional\` (默认), 系统会自动按 node_id 字典序规范化存储一条边
+- 算法层会自动按对称语义处理 (满电导双向扩散), 你不需要写双向边来"提示"系统
+- 其他关系 (sworn_to / debt_owed_to / mentor_of / deceiving) 有明确方向, 按动作发出者→接受者写一条
 
 ## Event summary time format (强制)
 
