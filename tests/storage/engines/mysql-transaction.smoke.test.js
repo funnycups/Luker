@@ -284,7 +284,7 @@ describeMysql('MysqlTransaction handlers (smoke)', () => {
     test('world: put with empty name throws', async () => {
         await expect(harness.engine.withTransaction(harness.handle, async (tx) =>
             tx.putResource(worldKey('   '), { doc: { name: 'x' } })),
-        ).rejects.toThrow(/world put: invalid name/);
+        ).rejects.toThrow(/world\.name is required/);
     });
 
     // --- named-doc ---
@@ -339,7 +339,7 @@ describeMysql('MysqlTransaction handlers (smoke)', () => {
     test('group: put with empty id throws', async () => {
         await expect(harness.engine.withTransaction(harness.handle, async (tx) =>
             tx.putResource(groupKey(''), { doc: { id: 'x' } })),
-        ).rejects.toThrow(/group put: invalid id/);
+        ).rejects.toThrow(/group\.id is required/);
     });
 
     test('group: listGroupsWithChatStats merges group doc with chat stats', async () => {

@@ -1,4 +1,5 @@
 import { NotFoundError } from '../errors.js';
+import { assertSafeRepoName } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
 
 export class SqliteTransaction {
@@ -107,6 +108,12 @@ export function registerChatHandler(tx) {
             };
         },
         put(key, record) {
+            if (key.isGroup) {
+                assertSafeRepoName(key.groupId ?? key.name, { field: 'chat.groupId' });
+            } else {
+                assertSafeRepoName(key.charDir, { field: 'chat.charDir' });
+                assertSafeRepoName(key.name, { field: 'chat.name' });
+            }
             const p = chatKeyToParams(key);
             const headerWithIntegrity = {
                 ...record.header,
@@ -265,6 +272,7 @@ export function registerPresetHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
+            assertSafeRepoName(key.name, { field: 'preset.name' });
             const p = presetKeyToParams(key);
             stmt.upsert.run(p.handle, p.dir_key, p.name, JSON.stringify(record.doc), Date.now());
         },
@@ -349,6 +357,7 @@ export function registerWorldInfoHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
+            assertSafeRepoName(key.name, { field: 'world.name' });
             // Match FS behavior: if a tolerant match exists under a different name, overwrite THAT one.
             const canonical = resolveCanonical(key.handle, key.name);
             const targetName = canonical ?? String(key.name || '').trim();
@@ -407,6 +416,7 @@ export function registerNamedDocHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
+            assertSafeRepoName(key.name, { field: 'named-doc.name' });
             stmt.upsert.run(key.handle, key.bucket, key.name, JSON.stringify(record.doc), Date.now());
         },
         delete(key) {
@@ -460,6 +470,7 @@ export function registerGroupHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
+            assertSafeRepoName(key.id, { field: 'group.id' });
             const p = groupKeyToParams(key);
             if (!p.id) throw new Error(`group put: invalid id ${key.id}`);
             // Preserve existing created_at on overwrite; freshly set on first insert.

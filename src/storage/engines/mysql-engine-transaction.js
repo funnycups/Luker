@@ -1,4 +1,5 @@
 import { NotFoundError } from '../errors.js';
+import { assertSafeRepoName } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
 
 // MysqlTransaction — mysql2/promise port of SqliteTransaction. Same handler
@@ -117,6 +118,12 @@ export function registerChatHandler(tx) {
             };
         },
         async put(key, record) {
+            if (key.isGroup) {
+                assertSafeRepoName(key.groupId ?? key.name, { field: 'chat.groupId' });
+            } else {
+                assertSafeRepoName(key.charDir, { field: 'chat.charDir' });
+                assertSafeRepoName(key.name, { field: 'chat.name' });
+            }
             const p = chatKeyToParams(key);
             const headerWithIntegrity = {
                 ...record.header,
@@ -287,6 +294,7 @@ export function registerPresetHandler(tx) {
             return null;
         },
         async put(key, record) {
+            assertSafeRepoName(key.name, { field: 'preset.name' });
             const p = presetKeyToParams(key);
             await conn.execute(
                 `INSERT INTO presets (handle, dir_key, name, doc, updated_at) VALUES (?, ?, ?, ?, ?) AS new
@@ -400,6 +408,7 @@ export function registerWorldInfoHandler(tx) {
             return parsed;
         },
         async put(key, record) {
+            assertSafeRepoName(key.name, { field: 'world.name' });
             // Match FS behavior: if a tolerant match exists under a different
             // name, overwrite THAT one (so users can't accidentally create a
             // visually-identical-but-byte-distinct duplicate).
@@ -462,6 +471,7 @@ export function registerNamedDocHandler(tx) {
             return parsed;
         },
         async put(key, record) {
+            assertSafeRepoName(key.name, { field: 'named-doc.name' });
             await conn.execute(
                 `INSERT INTO named_docs (handle, bucket, name, doc, updated_at) VALUES (?, ?, ?, ?, ?) AS new
                  ON DUPLICATE KEY UPDATE doc = new.doc, updated_at = new.updated_at`,
@@ -517,6 +527,7 @@ export function registerGroupHandler(tx) {
             return parsed;
         },
         async put(key, record) {
+            assertSafeRepoName(key.id, { field: 'group.id' });
             const p = groupKeyToParams(key);
             if (!p.id) throw new Error(`group put: invalid id ${key.id}`);
             // Preserve existing created_at on overwrite; freshly set on first insert.

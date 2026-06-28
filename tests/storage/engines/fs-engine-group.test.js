@@ -120,6 +120,18 @@ describe('FsEngine group handler', () => {
     test('put rejects empty id', async () => {
         await expect(h.engine.withTransaction(h.handle, (tx) =>
             tx.putResource({ kind: 'group', handle: h.handle, id: '' }, { doc: { id: '' } }),
-        )).rejects.toThrow(/invalid id/);
+        )).rejects.toThrow(/group\.id is required/);
+    });
+
+    test('put rejects ids with sanitize-rewritten characters', async () => {
+        await expect(h.engine.withTransaction(h.handle, (tx) =>
+            tx.putResource({ kind: 'group', handle: h.handle, id: 'foo/bar' }, { doc: {} }),
+        )).rejects.toThrow(/cannot appear in a stored name/);
+    });
+
+    test('put rejects ids that look like filenames', async () => {
+        await expect(h.engine.withTransaction(h.handle, (tx) =>
+            tx.putResource({ kind: 'group', handle: h.handle, id: 'foo.json' }, { doc: {} }),
+        )).rejects.toThrow(/must not end with ".json"/);
     });
 });
