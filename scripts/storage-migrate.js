@@ -350,6 +350,29 @@ async function main() {
     console.log(`Backup root: ${backupRoot}`);
     console.log('');
 
+    // VARCHAR(128) preflight: MySQL and Postgres truncate or raise mid-copy
+    // when a name doesn't fit. Surface the conflict up front so the operator
+    // can rename in the live app before the migration begins writing.
+    if (args.to === 'mysql' || args.to === 'postgres') {
+        const { preflightNameLengths, formatPreflightOffenders } = await import('../src/storage/migration/preflight.js');
+        const { PRESET_FOLDER_BY_API_ID } = await import('../src/storage/repositories/preset-repo.js');
+        const { BUCKET_TO_DIR } = await import('../src/storage/repositories/named-doc-repo.js');
+        const preflight = await preflightNameLengths({
+            dstMode: args.to,
+            sourceRepos,
+            handles,
+            namedDocBuckets: Object.keys(BUCKET_TO_DIR),
+            presetApiIds: Object.keys(PRESET_FOLDER_BY_API_ID),
+        });
+        if (!preflight.ok) {
+            console.error(formatPreflightOffenders(preflight.offenders));
+            if (sourceEngine.close) { try { await sourceEngine.close(); } catch { /* best-effort */ } }
+            if (destEngine.close) { try { await destEngine.close(); } catch { /* best-effort */ } }
+            await releaseMigrationLock({ dataRoot, holderId: lockHolderId }).catch(() => {});
+            process.exit(2);
+        }
+    }
+
     // Heartbeat (spec §4.5): the CLI is the long-running entry point — a
     // multi-user dataRoot migration will routinely exceed the 60s default
     // TTL. Without a refresh loop the lock would expire mid-run and an
