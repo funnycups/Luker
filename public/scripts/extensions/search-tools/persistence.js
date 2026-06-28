@@ -57,6 +57,7 @@ import {
     isAnchoredSnapshotStillValid,
     normalizeAnchorPlayableFloor,
 } from './anchors.js';
+import { STATE_ERROR_REASONS, makeStateError } from '../../state-errors.js';
 
 const STATE_NAMESPACE = 'luker_search_tools_anchors';
 const META_NAMESPACE = `${STATE_NAMESPACE}__meta`;
@@ -77,7 +78,14 @@ export async function getFloorStateInstance(context) {
         if (typeof context?.createFloorState !== 'function') {
             throw new Error('[search-tools] createFloorState API is unavailable in extension context.');
         }
-        floorStatePromise = context.createFloorState({ namespace: STATE_NAMESPACE });
+        // Caching a rejected Promise would pin every later call to the same
+        // failure even after the underlying issue clears; drop the cache on
+        // failure so the next call retries from scratch.
+        floorStatePromise = context.createFloorState({ namespace: STATE_NAMESPACE })
+            .catch((err) => {
+                floorStatePromise = null;
+                throw err;
+            });
     }
     return floorStatePromise;
 }
@@ -103,10 +111,15 @@ function getLegacyAnchorNamespace(playableFloor) {
  * so callers don't have to guard.
  */
 export async function loadMetaSidecar(context) {
-    const raw = typeof context?.getChatState === 'function'
-        ? await context.getChatState(META_NAMESPACE, {})
-        : null;
-    const source = raw && typeof raw === 'object' ? raw : {};
+    if (typeof context?.getChatState !== 'function') {
+        return { schemaVersion: 0, fallbackManagedEntries: [] };
+    }
+    const result = await context.getChatState(META_NAMESPACE, {});
+    if (!result.ok) {
+        console.warn(`[search-tools] meta sidecar read failed (reason=${result.reason}, hint=${result.hint})`);
+        return { schemaVersion: 0, fallbackManagedEntries: [] };
+    }
+    const source = result.state && typeof result.state === 'object' ? result.state : {};
     return {
         schemaVersion: Math.max(0, Math.floor(Number(source.schemaVersion || 0))),
         fallbackManagedEntries: Array.isArray(source.fallbackManagedEntries)
@@ -116,11 +129,15 @@ export async function loadMetaSidecar(context) {
 }
 
 async function writeMetaSidecar(context, meta) {
-    if (typeof context?.updateChatState !== 'function') return;
-    await context.updateChatState(META_NAMESPACE, () => meta, {
+    if (typeof context?.updateChatState !== 'function') return false;
+    const result = await context.updateChatState(META_NAMESPACE, () => meta, {
         maxOperations: 2000,
         maxRetries: 1,
     });
+    if (!result.ok) {
+        throw new Error(`[search-tools] meta sidecar write failed (${result.reason}): ${result.hint}`);
+    }
+    return true;
 }
 
 /**
@@ -148,8 +165,17 @@ export async function persistFallbackManagedEntries(context, entries) {
  */
 export async function loadAnchorMap(context) {
     const fs = await getFloorStateInstance(context);
-    await fs.ready();
-    const data = await fs.get();
+    const readyResult = await fs.ready();
+    if (readyResult && readyResult.ok === false) {
+        console.warn(`[search-tools] floor-state ready failed (reason=${readyResult.reason}, hint=${readyResult.hint})`);
+        return {};
+    }
+    const getResult = await fs.get();
+    if (!getResult.ok) {
+        console.warn(`[search-tools] floor-state get failed (reason=${getResult.reason}, hint=${getResult.hint})`);
+        return {};
+    }
+    const data = getResult.state;
     return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
 }
 
@@ -159,25 +185,34 @@ export async function loadAnchorMap(context) {
  * live chat so floor-state's structural-event handlers can correctly
  * invalidate it later.
  *
- * Returns `false` when the anchor cannot be resolved against the current
- * chat (the user message at that playable floor is missing / no longer
- * is_user), or the underlying patch failed; the caller should treat
- * this as a soft error and surface it to the UI.
+ * Returns a state envelope: `{ ok: false, reason, hint }` when the anchor
+ * cannot be resolved against the current chat (the user message at that
+ * playable floor is missing / no longer is_user) or the snapshot fails
+ * validation, otherwise the envelope returned by `fs.patch`
+ * (`{ ok: true, updated: boolean }` on success, or
+ * `{ ok: false, reason, hint }` on failure). Callers should branch on
+ * `result.ok` and surface non-ok envelopes to the UI as soft errors.
  *
  * @param {object} context — getContext() result
  * @param {{ playableFloor: number, hash: string }} anchor
  * @param {object} snapshot — opaque payload (the search-agent result),
  *   stored as-is under `/${playableFloor}` in the data namespace.
- * @returns {Promise<boolean>}
+ * @returns {Promise<{ ok: boolean, updated?: boolean, reason?: string, hint?: string }>}
  */
 export async function commitAnchorSnapshot(context, anchor, snapshot) {
     const playableFloor = normalizeAnchorPlayableFloor(anchor?.playableFloor);
-    if (!playableFloor) return false;
-    if (!snapshot || typeof snapshot !== 'object') return false;
+    if (!playableFloor) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'invalid anchor playableFloor');
+    }
+    if (!snapshot || typeof snapshot !== 'object') {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'snapshot must be a non-null object');
+    }
 
     const messages = Array.isArray(context?.chat) ? context.chat : [];
     const target = getPlayableMessageAt(messages, playableFloor);
-    if (!target?.message || !target.message.is_user) return false;
+    if (!target?.message || !target.message.is_user) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, 'anchored user message no longer present at playable floor');
+    }
 
     const swipeIdRaw = target.message.swipe_id;
     const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
@@ -224,7 +259,11 @@ export function pickLatestValidSnapshot(context, anchorMap) {
  */
 async function readLegacySearchToolsState(context) {
     if (typeof context?.getChatState !== 'function') return null;
-    const indexPayload = await context.getChatState(LEGACY_INDEX_NAMESPACE, {});
+    const indexResult = await context.getChatState(LEGACY_INDEX_NAMESPACE, {});
+    if (!indexResult.ok) {
+        throw new Error(`[search-tools] legacy index unreadable (${indexResult.reason}): ${indexResult.hint}`);
+    }
+    const indexPayload = indexResult.state;
     if (!indexPayload || typeof indexPayload !== 'object') return null;
 
     const rawAnchors = Array.isArray(indexPayload.anchors) ? indexPayload.anchors : [];
@@ -241,7 +280,11 @@ async function readLegacySearchToolsState(context) {
     for (const playableFloor of anchors) {
         const ns = getLegacyAnchorNamespace(playableFloor);
         if (!ns) continue;
-        const sidecar = await context.getChatState(ns, {});
+        const sidecarResult = await context.getChatState(ns, {});
+        if (!sidecarResult.ok) {
+            throw new Error(`[search-tools] legacy sidecar unreadable for floor ${playableFloor} (${sidecarResult.reason}): ${sidecarResult.hint}`);
+        }
+        const sidecar = sidecarResult.state;
         if (sidecar && typeof sidecar === 'object') {
             snapshots.set(playableFloor, sidecar);
         }
@@ -284,9 +327,15 @@ async function deleteLegacySearchToolsState(context, anchors) {
     for (const playableFloor of anchors) {
         const ns = getLegacyAnchorNamespace(playableFloor);
         if (!ns) continue;
-        await context.deleteChatState(ns, {});
+        const result = await context.deleteChatState(ns, {});
+        if (!result.ok) {
+            console.warn(`[search-tools] legacy anchor cleanup for ${ns} failed (reason=${result.reason}, hint=${result.hint})`);
+        }
     }
-    await context.deleteChatState(LEGACY_INDEX_NAMESPACE, {});
+    const indexResult = await context.deleteChatState(LEGACY_INDEX_NAMESPACE, {});
+    if (!indexResult.ok) {
+        console.warn(`[search-tools] legacy index cleanup failed (reason=${indexResult.reason}, hint=${indexResult.hint})`);
+    }
 }
 
 /**
@@ -295,11 +344,16 @@ async function deleteLegacySearchToolsState(context, anchors) {
  * cannot be located in the current chat (e.g. truncated since the
  * snapshot was taken) are dropped.
  *
- * Returns the number of commits successfully written.
+ * Returns `{ committed, skipped }` so callers can log progress. Aborts
+ * early (returning the partial counts) when fs.patch reports
+ * REPLAY_BROKEN / INSTANCE_DESTROYED / LOG_WRITE_FAILED — those reasons
+ * indicate the floor-state instance itself is wedged and continuing
+ * would just rack up more failures.
  */
 async function replayLegacyAnchorsAsCommits(context, fs, legacy) {
     const messages = Array.isArray(context?.chat) ? context.chat : [];
     let committed = 0;
+    let skipped = 0;
     for (const playableFloor of legacy.anchors) {
         const snapshot = legacy.snapshots.get(playableFloor);
         if (!snapshot || typeof snapshot !== 'object') continue;
@@ -307,13 +361,24 @@ async function replayLegacyAnchorsAsCommits(context, fs, legacy) {
         if (!target?.message || !target.message.is_user) continue;
         const swipeIdRaw = target.message.swipe_id;
         const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
-        const ok = await fs.patch(
+        const result = await fs.patch(
             [{ op: 'add', path: `/${playableFloor}`, value: snapshot }],
             { floor: target.index, swipeId },
         );
-        if (ok) committed += 1;
+        if (result.ok) {
+            committed += 1;
+            continue;
+        }
+        if (result.reason === STATE_ERROR_REASONS.REPLAY_BROKEN
+            || result.reason === STATE_ERROR_REASONS.INSTANCE_DESTROYED
+            || result.reason === STATE_ERROR_REASONS.LOG_WRITE_FAILED) {
+            console.warn(`[search-tools] migration aborted at anchor F${playableFloor} (reason=${result.reason}, hint=${result.hint})`);
+            return { committed, skipped: legacy.anchors.length - committed };
+        }
+        skipped += 1;
+        console.warn(`[search-tools] migration: anchor F${playableFloor} dropped (reason=${result.reason}, hint=${result.hint})`);
     }
-    return committed;
+    return { committed, skipped };
 }
 
 /**
@@ -327,6 +392,12 @@ async function replayLegacyAnchorsAsCommits(context, fs, legacy) {
  * (floor, swipeId) so the replay is benign. A crash before the legacy
  * delete leaves orphan namespaces that the post-migration code never
  * reads; they are reaped on the next successful migration attempt.
+ *
+ * Atomicity: `writeMetaSidecar` throws on hard failure, so the
+ * `deleteLegacySearchToolsState` below is gated on schema-stamp success.
+ * The explicit try/catch makes this contract local and documented — if
+ * the schema stamp ever silently fails, legacy data MUST be preserved
+ * so the next boot can retry the migration end-to-end.
  */
 export async function migrateLegacyAnchorsIfNeeded(context) {
     const meta = await loadMetaSidecar(context);
@@ -342,12 +413,17 @@ export async function migrateLegacyAnchorsIfNeeded(context) {
 
     const fs = await getFloorStateInstance(context);
     await fs.ready();
-    const committed = await replayLegacyAnchorsAsCommits(context, fs, legacy);
+    const { committed } = await replayLegacyAnchorsAsCommits(context, fs, legacy);
 
-    await writeMetaSidecar(context, {
-        schemaVersion: SCHEMA_VERSION,
-        fallbackManagedEntries: legacy.managedEntries,
-    });
+    try {
+        await writeMetaSidecar(context, {
+            schemaVersion: SCHEMA_VERSION,
+            fallbackManagedEntries: legacy.managedEntries,
+        });
+    } catch (e) {
+        console.warn(`[search-tools] migration schema stamp failed: ${e.message}; legacy data preserved`);
+        throw e;  // do NOT proceed to deleteLegacySearchToolsState
+    }
     await deleteLegacySearchToolsState(context, legacy.anchors);
 
     return {

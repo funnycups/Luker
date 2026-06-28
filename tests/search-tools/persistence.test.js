@@ -145,12 +145,21 @@ function makeContext(chatRef) {
     };
     let createdInstance = null;
     const context = {
-        getChatState: fsDeps.getChatState,
+        // Context-level wrappers expose the state-API envelope shape
+        // (`{ok, state, ...}` / `{ok, reason, hint}`). Extension code
+        // consumes them this way after the state-error-reasons migration.
+        // The dep-level callbacks above (`fsDeps.*`) keep returning raw
+        // payloads because `floor-state.js` internally reads them as raw.
+        getChatState: async (ns, options) => {
+            const state = await fsDeps.getChatState(ns, options);
+            return { ok: true, state };
+        },
         patchChatState: fsDeps.patchChatState,
         updateChatState: fsDeps.updateChatState,
         deleteChatState: async (ns) => {
             const k = String(ns ?? '').trim().toLowerCase();
-            return store._raw.delete(k);
+            store._raw.delete(k);
+            return { ok: true };
         },
         buildObjectPatchOperationsAsync,
         async createFloorState({ namespace }) {
@@ -217,8 +226,8 @@ describe('commitAnchorSnapshot', () => {
         expect(anchor).toMatchObject({ playableFloor: 1, floor: 1 });
 
         const snapshot = makeSnapshot(anchor, { summary: 'first run' });
-        const ok = await commitAnchorSnapshot(context, anchor, snapshot);
-        expect(ok).toBe(true);
+        const result = await commitAnchorSnapshot(context, anchor, snapshot);
+        expect(result.ok).toBe(true);
 
         const map = await loadAnchorMap(context);
         expect(map[1]).toMatchObject({
@@ -230,7 +239,7 @@ describe('commitAnchorSnapshot', () => {
     test('rejects anchors with missing playableFloor', async () => {
         const chatRef = { value: [userMsg('hi')] };
         const { context } = makeContext(chatRef);
-        expect(await commitAnchorSnapshot(context, { playableFloor: 0, hash: 'x' }, makeSnapshot({ hash: 'x' }))).toBe(false);
+        expect((await commitAnchorSnapshot(context, { playableFloor: 0, hash: 'x' }, makeSnapshot({ hash: 'x' }))).ok).toBe(false);
     });
 
     test('rejects when the anchor playable floor maps to no user message', async () => {
@@ -239,8 +248,8 @@ describe('commitAnchorSnapshot', () => {
         const chatRef = { value: [asstMsg('not user')] };
         const { context } = makeContext(chatRef);
         const anchor = { floor: 1, playableFloor: 1, hash: 'h' };
-        const ok = await commitAnchorSnapshot(context, anchor, makeSnapshot({ hash: 'h' }));
-        expect(ok).toBe(false);
+        const result = await commitAnchorSnapshot(context, anchor, makeSnapshot({ hash: 'h' }));
+        expect(result.ok).toBe(false);
         const map = await loadAnchorMap(context);
         expect(map).toEqual({});
     });
@@ -249,8 +258,8 @@ describe('commitAnchorSnapshot', () => {
         const chatRef = { value: [userMsg('hi')] };
         const { context } = makeContext(chatRef);
         const anchor = buildAnchorAt(chatRef.value, 0);
-        expect(await commitAnchorSnapshot(context, anchor, null)).toBe(false);
-        expect(await commitAnchorSnapshot(context, anchor, 'not-an-object')).toBe(false);
+        expect((await commitAnchorSnapshot(context, anchor, null)).ok).toBe(false);
+        expect((await commitAnchorSnapshot(context, anchor, 'not-an-object')).ok).toBe(false);
     });
 
     test('a second commit at the same anchor replaces the snapshot', async () => {

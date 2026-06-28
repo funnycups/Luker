@@ -369,6 +369,28 @@ function i18n(text) {
     return translate(String(text || ''));
 }
 
+/**
+ * Map a state-error envelope reason to a localized user-facing message
+ * describing why a search-agent snapshot failed to persist. Used for
+ * hard-failure branches that surface to the UI status + throw.
+ */
+function persistSnapshotErrorMessage(reason) {
+    switch (reason) {
+        case 'CONFLICT':
+            return i18n('Failed to persist search agent snapshot (storage conflict).');
+        case 'HTTP_ERROR':
+            return i18n('Failed to persist search agent snapshot (server error).');
+        case 'TRANSPORT_ERROR':
+            return i18n('Failed to persist search agent snapshot (network error).');
+        case 'REPLAY_BROKEN':
+            return i18n('Failed to persist search agent snapshot (storage corrupted, reload chat).');
+        case 'LOG_WRITE_FAILED':
+            return i18n('Failed to persist search agent snapshot (disk write failed).');
+        default:
+            return i18n('Failed to persist search agent snapshot.');
+    }
+}
+
 function clampInteger(value, min, max, fallback) {
     const parsed = Number.parseInt(String(value ?? ''), 10);
     if (!Number.isFinite(parsed)) {
@@ -728,7 +750,14 @@ async function loadSearchToolsChatState(context, { force = false } = {}) {
         const migratedEntries = await loadLegacyManagedEntries(context);
         if (migratedEntries.length > 0) {
             latestManagedEntries = migratedEntries;
-            await persistFallbackManagedEntries(context, migratedEntries);
+            try {
+                await persistFallbackManagedEntries(context, migratedEntries);
+            } catch (e) {
+                // Bootstrap fallback is best-effort — if storage rejects it
+                // (server hiccup, transport, etc.) we keep the in-memory
+                // entries and let the next manual / agent write retry.
+                console.warn(`[search-tools] bootstrap fallback persist failed: ${e.message}`);
+            }
         }
     }
 }
@@ -2001,9 +2030,28 @@ async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
         }
     }
     ops.push({ op: 'add', path: `/${anchorPlayableFloor}`, value: nextSnapshot });
-    const ok = await fs.patch(ops, { floor: target.index, swipeId });
-    if (!ok) {
-        throw new Error(i18n('Failed to persist search agent snapshot.'));
+    const patchResult = await fs.patch(ops, { floor: target.index, swipeId });
+    if (!patchResult.ok) {
+        console.warn(`[search-tools] floor-state patch failed (reason=${patchResult.reason}, hint=${patchResult.hint})`);
+        // Anchor lost mid-write (user message deleted or no longer is_user
+        // after we re-checked target above) — drop the snapshot and stash
+        // the entries in the meta sidecar so the change survives a reload.
+        if (patchResult.reason === 'VALIDATION_TARGET' || patchResult.reason === 'VALIDATION_COMMIT') {
+            latestSearchAgentSnapshot = null;
+            latestManagedEntries = managedEntries;
+            try {
+                await persistFallbackManagedEntries(context, managedEntries);
+            } catch (e) {
+                console.warn(`[search-tools] meta sidecar fallback failed: ${e.message}`);
+            }
+            return null;
+        }
+        // Hard failure (storage conflict, transport, replay broken, etc.) —
+        // surface a reason-aware message to the UI and rethrow so the
+        // caller can stop the run.
+        const msg = persistSnapshotErrorMessage(patchResult.reason);
+        updateUiStatus(msg);
+        throw new Error(msg);
     }
 
     latestSearchAgentSnapshot = materializeSearchAgentSnapshot(chatKey, anchorPlayableFloor, nextSnapshot);
@@ -2012,46 +2060,66 @@ async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
 }
 
 async function applyManualManagedEntriesUpdate(context, nextEntries) {
-    const normalized = normalizeStoredManagedEntries(nextEntries);
-    latestManagedEntries = normalized;
+    const snapshotBackup = latestSearchAgentSnapshot;
+    const entriesBackup = latestManagedEntries;
+    try {
+        const normalized = normalizeStoredManagedEntries(nextEntries);
+        latestManagedEntries = normalized;
 
-    if (latestSearchAgentSnapshot && typeof latestSearchAgentSnapshot === 'object') {
-        const updated = {
-            anchorHash: String(latestSearchAgentSnapshot.anchorHash || '').trim(),
-            updatedAt: new Date().toISOString(),
-            summary: normalizeWhitespace(latestSearchAgentSnapshot.summary || ''),
-            mutationCount: Math.max(0, Math.floor(Number(latestSearchAgentSnapshot.mutationCount || 0))),
-            managedEntryCount: normalized.length,
-            bookName: normalizeWhitespace(latestSearchAgentSnapshot.bookName || ''),
-            managedEntries: normalized,
-        };
-        const committed = await commitAnchorSnapshot(
-            context,
-            {
-                playableFloor: latestSearchAgentSnapshot.anchorPlayableFloor,
-                hash: latestSearchAgentSnapshot.anchorHash,
-            },
-            updated,
-        );
-        if (committed) {
-            latestSearchAgentSnapshot = materializeSearchAgentSnapshot(
-                getChatKey(context),
-                latestSearchAgentSnapshot.anchorPlayableFloor,
+        if (latestSearchAgentSnapshot && typeof latestSearchAgentSnapshot === 'object') {
+            const updated = {
+                anchorHash: String(latestSearchAgentSnapshot.anchorHash || '').trim(),
+                updatedAt: new Date().toISOString(),
+                summary: normalizeWhitespace(latestSearchAgentSnapshot.summary || ''),
+                mutationCount: Math.max(0, Math.floor(Number(latestSearchAgentSnapshot.mutationCount || 0))),
+                managedEntryCount: normalized.length,
+                bookName: normalizeWhitespace(latestSearchAgentSnapshot.bookName || ''),
+                managedEntries: normalized,
+            };
+            const commitResult = await commitAnchorSnapshot(
+                context,
+                {
+                    playableFloor: latestSearchAgentSnapshot.anchorPlayableFloor,
+                    hash: latestSearchAgentSnapshot.anchorHash,
+                },
                 updated,
             );
+            if (commitResult.ok) {
+                latestSearchAgentSnapshot = materializeSearchAgentSnapshot(
+                    getChatKey(context),
+                    latestSearchAgentSnapshot.anchorPlayableFloor,
+                    updated,
+                );
+            } else if (commitResult.reason === 'VALIDATION_TARGET' || commitResult.reason === 'VALIDATION_COMMIT') {
+                // Anchor no longer resolvable (user message was deleted or
+                // turned non-user) — drop the snapshot and fall back to the
+                // meta sidecar so the change survives a reload.
+                console.warn(`[search-tools] commitAnchorSnapshot anchor lost (reason=${commitResult.reason}, hint=${commitResult.hint})`);
+                latestSearchAgentSnapshot = null;
+                await persistFallbackManagedEntries(context, normalized);
+            } else {
+                // Hard failure (storage conflict, transport, replay broken,
+                // disk write failed, etc.) — keep the snapshot in place and
+                // surface to the caller. The outer try/catch restores
+                // in-memory state from snapshotBackup / entriesBackup so the
+                // UI and storage stay aligned.
+                console.error(`[search-tools] manual snapshot commit failed (reason=${commitResult.reason}, hint=${commitResult.hint})`);
+                throw new Error(i18n('Failed to update managed entries. See console for details.'));
+            }
         } else {
-            // Anchor no longer resolvable (user message was deleted or
-            // turned non-user) — drop the snapshot and fall back to the
-            // meta sidecar so the change survives a reload.
-            latestSearchAgentSnapshot = null;
             await persistFallbackManagedEntries(context, normalized);
         }
-    } else {
-        await persistFallbackManagedEntries(context, normalized);
-    }
 
-    await syncSharedLorebookForCurrentChat(context);
-    return normalized;
+        await syncSharedLorebookForCurrentChat(context);
+        return normalized;
+    } catch (err) {
+        // Restore in-memory state so the UI and storage stay aligned with
+        // what the user sees. The snapshotBackup / entriesBackup pair was
+        // captured before any mutation in this call.
+        latestSearchAgentSnapshot = snapshotBackup;
+        latestManagedEntries = entriesBackup;
+        throw err;
+    }
 }
 
 async function manuallyDeleteManagedEntries(context, entryIds = []) {
@@ -2622,7 +2690,22 @@ async function maybeRunPreRequestSearchAgent(payload) {
             return;
         }
         console.warn(`[${MODULE_NAME}] Pre-request search agent failed`, error);
-        updateUiStatus(i18n('Search agent failed. Check console for details.'));
+        // If the failure was a snapshot-persistence throw, the error message
+        // already carries the reason-aware text from persistSnapshotErrorMessage;
+        // preserve it so the user sees why (storage conflict, network error,
+        // etc.) instead of a generic fallback. Every variant of that helper
+        // shares the same prefix in each locale, derived from the canonical
+        // localized "Failed to persist search agent snapshot." minus its
+        // trailing period — so localize once and strip the period to get the
+        // prefix that matches both English and translated locales.
+        const errorMsg = String(error?.message || '');
+        const snapshotKey = i18n('Failed to persist search agent snapshot.');
+        const snapshotPrefix = snapshotKey.replace(/[.。]\s*$/, '');
+        if (snapshotPrefix && errorMsg.startsWith(snapshotPrefix)) {
+            updateUiStatus(errorMsg);
+        } else {
+            updateUiStatus(i18n('Search agent failed. Check console for details.'));
+        }
     } finally {
         linkedAbort.cleanup();
         if (activeAgentAbortController === pluginAbortController) {
@@ -2704,6 +2787,12 @@ function registerLocaleData() {
         'Delete {count} selected search entries? This cannot be undone for the current chat.': '删除已选中的 {count} 条搜索条目？当前聊天的此操作无法撤销。',
         'Remove ALL managed search entries from this chat? This cannot be undone.': '清空当前聊天的全部搜索条目？此操作无法撤销。',
         'Failed to update managed entries. See console for details.': '更新搜索条目失败，详情查看控制台。',
+        'Failed to persist search agent snapshot.': '保存搜索 Agent 快照失败。',
+        'Failed to persist search agent snapshot (storage conflict).': '保存搜索 Agent 快照失败（存储冲突）。',
+        'Failed to persist search agent snapshot (server error).': '保存搜索 Agent 快照失败（服务器错误）。',
+        'Failed to persist search agent snapshot (network error).': '保存搜索 Agent 快照失败（网络错误）。',
+        'Failed to persist search agent snapshot (storage corrupted, reload chat).': '保存搜索 Agent 快照失败（存储已损坏，请重新加载聊天）。',
+        'Failed to persist search agent snapshot (disk write failed).': '保存搜索 Agent 快照失败（磁盘写入失败）。',
     });
 
     addLocaleData('zh-tw', {
@@ -2775,6 +2864,12 @@ function registerLocaleData() {
         'Delete {count} selected search entries? This cannot be undone for the current chat.': '刪除已選中的 {count} 條搜尋條目？目前聊天的此操作無法復原。',
         'Remove ALL managed search entries from this chat? This cannot be undone.': '清空目前聊天的全部搜尋條目？此操作無法復原。',
         'Failed to update managed entries. See console for details.': '更新搜尋條目失敗，詳情請查看主控台。',
+        'Failed to persist search agent snapshot.': '儲存搜尋 Agent 快照失敗。',
+        'Failed to persist search agent snapshot (storage conflict).': '儲存搜尋 Agent 快照失敗（儲存衝突）。',
+        'Failed to persist search agent snapshot (server error).': '儲存搜尋 Agent 快照失敗（伺服器錯誤）。',
+        'Failed to persist search agent snapshot (network error).': '儲存搜尋 Agent 快照失敗（網路錯誤）。',
+        'Failed to persist search agent snapshot (storage corrupted, reload chat).': '儲存搜尋 Agent 快照失敗（儲存已損毀，請重新載入聊天）。',
+        'Failed to persist search agent snapshot (disk write failed).': '儲存搜尋 Agent 快照失敗（磁碟寫入失敗）。',
     });
 }
 
@@ -2842,6 +2937,12 @@ jQuery(() => {
     });
     void loadSearchToolsChatState(context, { force: true })
         .then(() => syncSharedLorebookForCurrentChat(context))
+        .catch((error) => {
+            // readLegacySearchToolsState now throws on transient legacy-index
+            // reads (storage envelope rejected); without a .catch this would
+            // become an unhandled rejection on boot.
+            console.warn(`[${MODULE_NAME}] boot load failed: ${error?.message || error}`);
+        })
         .finally(() => refreshUiStatusForCurrentChat());
 
     const wiAfterEvent = context?.eventTypes?.GENERATION_AFTER_WORLD_INFO_SCAN;
