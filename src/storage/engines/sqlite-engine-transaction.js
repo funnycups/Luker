@@ -92,7 +92,11 @@ export function registerChatHandler(tx) {
             const p = chatKeyToParams(key);
             const row = stmt.get.get(p.handle, p.char_dir, p.name, p.is_group, p.group_id);
             if (!row) return null;
-            const parsed = JSON.parse(row.doc);
+            let parsed;
+            try { parsed = JSON.parse(row.doc); } catch { return null; }
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+            if (!parsed.header || typeof parsed.header !== 'object' || Array.isArray(parsed.header)) return null;
+            if (!Array.isArray(parsed.body)) return null;
             return {
                 key,
                 header: parsed.header,

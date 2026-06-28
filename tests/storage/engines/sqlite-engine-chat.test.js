@@ -215,4 +215,27 @@ describe('SqliteEngine chat handler', () => {
         const got = await engine.withTransaction(handle, async (tx) => tx.getResource(chatKey()));
         expect(got.integrity).toBe('v2');
     });
+
+    test('get returns null for corrupt/non-conformant docs (no throw)', async () => {
+        // Plant rows that bypass the put pipeline so we can see what get does
+        // when stored JSON drifts from the expected {header, body} shape. All
+        // four engines have to behave the same way here — silently returning
+        // a half-record causes TypeErrors downstream in ChatRepo.append/patch.
+        const insertRaw = (name, doc) => engine.withTransaction(handle, async (tx) => {
+            tx._db.prepare(`INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
+                            VALUES (?, ?, ?, 0, '', ?, ?, ?)`)
+                .run(handle, 'TestChar', name, doc, Date.now(), Date.now());
+        });
+        await insertRaw('corrupt-json', '{not json');
+        await insertRaw('not-object', '"a string"');
+        await insertRaw('array-root', '[1, 2, 3]');
+        await insertRaw('missing-body', JSON.stringify({ header: { chat_metadata: {} } }));
+        await insertRaw('body-not-array', JSON.stringify({ header: { chat_metadata: {} }, body: { not: 'array' } }));
+        await insertRaw('missing-header', JSON.stringify({ body: [] }));
+
+        for (const name of ['corrupt-json', 'not-object', 'array-root', 'missing-body', 'body-not-array', 'missing-header']) {
+            const got = await engine.withTransaction(handle, async (tx) => tx.getResource(chatKey({ name })));
+            expect(got).toBeNull();
+        }
+    });
 });

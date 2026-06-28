@@ -123,9 +123,14 @@ function registerChatHandler(tx) {
             const raw = fs.readFileSync(filePath, 'utf-8');
             const lines = raw.split('\n').filter((l) => l.length > 0);
             if (lines.length === 0) return null;
-            const header = JSON.parse(lines[0]);
+            let header;
+            try { header = JSON.parse(lines[0]); } catch { return null; }
+            if (!header || typeof header !== 'object' || Array.isArray(header)) return null;
+            const body = [];
+            for (const line of lines.slice(1)) {
+                try { body.push(JSON.parse(line)); } catch { return null; }
+            }
             const integrity = header.chat_metadata?.integrity ?? '';
-            const body = lines.slice(1).map((l) => JSON.parse(l));
             const stat = fs.statSync(filePath);
             return {
                 key,

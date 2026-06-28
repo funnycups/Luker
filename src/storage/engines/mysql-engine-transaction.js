@@ -103,7 +103,10 @@ export function registerChatHandler(tx) {
             const p = chatKeyToParams(key);
             const row = await readRow(p);
             if (!row) return null;
-            const parsed = coerceJson(row.doc) || {};
+            const parsed = coerceJson(row.doc);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+            if (!parsed.header || typeof parsed.header !== 'object' || Array.isArray(parsed.header)) return null;
+            if (!Array.isArray(parsed.body)) return null;
             return {
                 key,
                 header: parsed.header,
