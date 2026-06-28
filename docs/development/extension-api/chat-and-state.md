@@ -165,10 +165,13 @@ Chat State is a new chat-bound state mechanism introduced by Luker, allowing plu
 getChatState(
   namespace: string,
   options?: { target?: ChatTarget }
-): Promise<any | null>
+): Promise<
+  | { ok: true, state: object | null }
+  | { ok: false, state: null, reason: string, hint: string }
+>
 ```
 
-Reads the chat state for a given namespace. Returns `null` if no data exists for that namespace.
+Reads the chat state for a given namespace. On success returns `{ok: true, state}` where `state` is the stored value or `null` if no data exists for that namespace. On failure returns `{ok: false, state: null, reason, hint}` — see [Error reasons](#error-reasons) below.
 
 - `namespace`: A unique identifier for the plugin; using the plugin name is recommended
 - `target`: Optional; specifies the target chat (for cross-chat reads, e.g., branching scenarios)
@@ -179,10 +182,13 @@ Reads the chat state for a given namespace. Returns `null` if no data exists for
 getChatStateBatch(
   namespaces: string[],
   options?: { target?: ChatTarget }
-): Promise<Record<string, any>>
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: object | null }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
 ```
 
-Reads chat state for multiple namespaces in batch. Returns an object keyed by namespace.
+Reads chat state for multiple namespaces in batch. On success returns `{ok: true, results}` where `results` is a `Map` keyed by namespace; each entry is itself `{ok: true, state}` and missing namespaces map to `{ok: true, state: null}`. On failure (no active chat, transport error, HTTP error) the call returns `{ok: false, results: <empty Map>, reason, hint}`.
 
 ### updateChatState
 
@@ -191,10 +197,13 @@ updateChatState(
   namespace: string,
   updater: (current: any) => any,
   options?: { target?: ChatTarget }
-): Promise<{ ok: boolean }>
+): Promise<
+  | { ok: true, state: object | null, updated: boolean }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-**Recommended read-modify-write approach.** The `updater` function receives the current state and returns the new state. The system automatically handles concurrency conflicts.
+**Recommended read-modify-write approach.** The `updater` function receives the current state and returns the new state. The system automatically handles concurrency conflicts (one retry on `CONFLICT` by default). On success returns `{ok: true, state, updated}` where `updated` is `false` if the reducer returned `null`/`undefined` or produced no diff. On failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons) below. This function never throws; exceptions inside the reducer are caught and surfaced as `reason: 'VALIDATION_ARGS'`.
 
 ```js
 await context.updateChatState('my-plugin', (current = {}) => ({
@@ -210,18 +219,59 @@ await context.updateChatState('my-plugin', (current = {}) => ({
 deleteChatState(
   namespace: string,
   options?: { target?: ChatTarget }
-): Promise<{ ok: boolean }>
+): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
 ```
 
-Deletes the chat state for a given namespace.
+Deletes the chat state for a given namespace. On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons) below.
 
 ### Best Practices
 
 - Use `updateChatState()` for read-modify-write instead of manually chaining `getChatState()` + `patchChatState()`
 - Keep payloads as JSON-serializable plain objects
-- Handle `ok: false` return values to keep your plugin UI resilient
+- Handle `ok: false` return values to keep your plugin UI resilient — switch on `reason` rather than translating `hint` (see [Error reasons](#error-reasons))
 - For large plugin data, prefer Chat State over `chat_metadata`
 - If your state needs to follow swipes, message deletes, and chat switches automatically, use [Floor State](#floor-state) instead of writing reconciliation logic on top of `updateChatState`
+
+### Error reasons
+
+Every write returns `{ok: false, reason, hint}` on failure. The `reason` field is one of nine values:
+
+| Reason | When it fires | Suggested handling |
+|---|---|---|
+| `VALIDATION_ARGS` | Bad arguments (empty namespace, non-function updater, reducer threw) | Fix caller — this is a programmer bug |
+| `VALIDATION_TARGET` | No active chat | Skip the write silently, retry once the user opens one |
+| `VALIDATION_COMMIT` | floor-state only: override violates monotonicity, malformed commit, floor out of range | Caller's `floor` argument is wrong, recompute and re-issue |
+| `INSTANCE_DESTROYED` | floor-state instance was destroyed | Reload the chat or rebuild the instance |
+| `CONFLICT` | HTTP 409 even after retry | Re-read current state and try again |
+| `HTTP_ERROR` | Other non-2xx response | Inspect `hint` for the status code, user-visible toast acceptable |
+| `TRANSPORT_ERROR` | fetch threw (network, CORS, abort) | Retry or surface network error to user |
+| `REPLAY_BROKEN` | floor-state log replay failed and recovery also failed | Data unrecoverable, advise user to Reset and rebuild |
+| `LOG_WRITE_FAILED` | floor-state private log write rejected | Same as the underlying chat-state failure embedded in `hint` |
+
+The `hint` field is English, no longer than 120 characters, and contains actionable diagnostic info. It is not localized — surface a localized message to users by switching on `reason`, not by translating `hint`.
+
+Example:
+
+```js
+const result = await context.updateChatState('my-ext', (cur) => ({ ...cur, x: 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('Save conflicted with another writer, please retry.'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('Server unreachable, changes not saved.'));
+            break;
+        case 'VALIDATION_TARGET':
+            // No active chat; silently skip.
+            break;
+        default:
+            console.warn('[my-ext] save failed:', result.reason, result.hint);
+    }
+    return;
+}
+```
 
 ## Floor State
 
@@ -246,21 +296,28 @@ createFloorState(options: { namespace: string }): Promise<FloorStateInstance>
 
 Use `getContext().createFloorState({ namespace })` from a plugin or CardApp. Each instance is bound to one namespace; create a separate instance per logical state slice.
 
+All instance methods that perform writes (`update`, `patch`, `reset`, `destroy({ purge: true })`) and reads (`get`) return an envelope — they never throw. Inspect `result.ok` and switch on `result.reason` for the failure modes listed in [Error reasons](#error-reasons-1).
+
 ```js
 const ctx = SillyTavern.getContext();
 const fs = await ctx.createFloorState({ namespace: 'my-plugin' });
 
 // Recommended: reducer-style writes. The reducer receives the current state
 // and returns the next state; the diff is computed and committed for you.
-await fs.update((current) => ({ ...current, score: 10 }));
+// Returns {ok: true, updated} on success, {ok: false, reason, hint} on failure.
+const writeResult = await fs.update((current) => ({ ...current, score: 10 }));
+if (!writeResult.ok) {
+    console.warn('[my-plugin] floor write failed:', writeResult.reason, writeResult.hint);
+}
 await fs.update((current) => ({ ...current, level: (current?.level ?? 0) + 1 }));
 await fs.update((current) => {
     const { temp, ...rest } = current ?? {};
     return rest;
 });
 
-// Read current state:
-const state = await fs.get();
+// Read current state. Returns {ok: true, state} on success, {ok: false, state: null, reason, hint} on failure.
+const readResult = await fs.get();
+const state = readResult.ok ? readResult.state : null;
 
 // Wait for any in-flight rebuild or write to finish before reading:
 await fs.ready();
@@ -268,12 +325,16 @@ await fs.ready();
 // Detach from the registry (rarely needed; instances usually live for the page session):
 fs.destroy();
 
-// Wipe this namespace's state from disk and detach:
+// Wipe this namespace's state from disk and detach. Returns {ok, reason?, hint?}.
 await fs.destroy({ purge: true });
 ```
 
 ::: warning
-Reducers must return a plain object. Returning an array, primitive, `null`, or `undefined` is treated as "no change" and the call resolves without writing.
+Reducers must return a plain object. Returning an array, primitive, `null`, or `undefined` is treated as "no change" and the call resolves with `{ok: true, updated: false}` (no write).
+:::
+
+::: warning Behavior change (2026-06-28)
+Exceptions thrown from inside the `fs.update` reducer are caught and surfaced as `{ok: false, reason: 'VALIDATION_ARGS', hint: 'reducer threw: ...'}` instead of bubbling out. Plugin code that depended on the throw must switch to inspecting `result.ok` + `result.hint`.
 :::
 
 ### Replacing the entire log (import / rebuild)
@@ -282,13 +343,15 @@ Reducers must return a plain object. Returning an array, primitive, `null`, or `
 
 ```js
 // Atomically replace the log with this exact set of commits.
-const ok = await fs.reset([
+const result = await fs.reset([
     { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/intro', value: '...' }] },
     { floor: 3, swipeId: 0, patches: [{ op: 'add', path: '/scene', value: '...' }] },
 ]);
-if (!ok) {
+if (!result.ok) {
+    // result.reason is one of VALIDATION_ARGS / VALIDATION_COMMIT / LOG_WRITE_FAILED / ...
     // Validation failed (malformed commit, floor out of chat range) or the
     // underlying write was rejected. The log is left in its prior state.
+    console.warn('[my-plugin] reset rejected:', result.reason, result.hint);
 }
 
 // Empty list clears the log entirely.
@@ -312,7 +375,7 @@ await fs.update(
 await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 ```
 
-When `options` is omitted the chat tail is used. `floor` must be a valid index into the current `chat` (`0 <= floor < chat.length`); out-of-range, negative, non-integer, or negative `swipeId` overrides are rejected and the call returns `false`, so misuse fails fast instead of silently mis-attributing the commit.
+When `options` is omitted the chat tail is used. `floor` must be a valid index into the current `chat` (`0 <= floor < chat.length`); out-of-range, negative, non-integer, or negative `swipeId` overrides are rejected and the call returns `{ok: false, reason: 'VALIDATION_COMMIT', hint}`, so misuse fails fast instead of silently mis-attributing the commit.
 
 ::: tip
 The override only changes what label this commit carries in the log — `MESSAGE_DELETED` still truncates by floor and `MESSAGE_SWIPE_DELETED` still renumbers by (floor, swipeId). Replay order is the log's insertion order; specifying a smaller `floor` does not "jump the queue" during replay.
@@ -351,12 +414,56 @@ The four structural transitions are settled by core synchronously before the mat
 ### Reference
 
 - `createFloorState({ namespace })` — async factory; returns a frozen instance.
-- `instance.update(reducer, options?)` — read-modify-write; reducer receives the current state and returns the next, the diff is computed and committed for you. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail. **This is the recommended write API.**
-- `instance.patch(operations, options?)` — advanced: append a commit whose patches you already computed yourself. Operations must be an incremental RFC 6902 diff (`buildObjectPatchOperationsAsync(prev, next)` against `await instance.get()`); not for snapshot-style overwrites. Same `options` shape as `update`.
-- `instance.reset(commits)` — atomically replace the log with a fresh commit list. Use for import / rebuild / reset workflows. Every commit is validated; the whole batch is rejected if any commit is malformed or its `floor` is out of chat range.
-- `instance.get()` — read the current materialized state. Derived on demand by replaying the log against the current swipe map; never reads a separate data namespace.
-- `instance.ready()` — resolves when no in-flight write is pending.
-- `instance.destroy(options?)` — detach the instance from the registry. Pass `{ purge: true }` to additionally delete this namespace's state from disk (use for permanent reset / wipe workflows).
+- `instance.update(reducer, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>` — read-modify-write; reducer receives the current state and returns the next, the diff is computed and committed for you. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail. **This is the recommended write API.**
+- `instance.patch(operations, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>` — advanced: append a commit whose patches you already computed yourself. Operations must be an incremental RFC 6902 diff (`buildObjectPatchOperationsAsync(prev, next)` against `await instance.get()`); not for snapshot-style overwrites. Same `options` shape as `update`.
+- `instance.reset(commits): Promise<{ok: true} | {ok: false, reason, hint}>` — atomically replace the log with a fresh commit list. Use for import / rebuild / reset workflows. Every commit is validated; the whole batch is rejected if any commit is malformed or its `floor` is out of chat range.
+- `instance.get(): Promise<{ok: true, state} | {ok: false, state: null, reason, hint}>` — read the current materialized state. Derived on demand by replaying the log against the current swipe map; never reads a separate data namespace.
+- `instance.ready(): Promise<void>` — resolves when no in-flight write is pending.
+- `instance.destroy(options?): Promise<{ok: true} | {ok: false, reason, hint}>` — detach the instance from the registry. Pass `{ purge: true }` to additionally delete this namespace's state from disk (use for permanent reset / wipe workflows). When called without `purge`, the synchronous detach still returns an envelope for consistency.
+
+### Error reasons
+
+Every write returns `{ok: false, reason, hint}` on failure. The `reason` field is one of nine values:
+
+| Reason | When it fires | Suggested handling |
+|---|---|---|
+| `VALIDATION_ARGS` | Bad arguments (empty namespace, non-function updater, reducer threw) | Fix caller — this is a programmer bug |
+| `VALIDATION_TARGET` | No active chat | Skip the write silently, retry once the user opens one |
+| `VALIDATION_COMMIT` | floor-state only: override violates monotonicity, malformed commit, floor out of range | Caller's `floor` argument is wrong, recompute and re-issue |
+| `INSTANCE_DESTROYED` | floor-state instance was destroyed | Reload the chat or rebuild the instance |
+| `CONFLICT` | HTTP 409 even after retry | Re-read current state and try again |
+| `HTTP_ERROR` | Other non-2xx response | Inspect `hint` for the status code, user-visible toast acceptable |
+| `TRANSPORT_ERROR` | fetch threw (network, CORS, abort) | Retry or surface network error to user |
+| `REPLAY_BROKEN` | floor-state log replay failed and recovery also failed | Data unrecoverable, advise user to Reset and rebuild |
+| `LOG_WRITE_FAILED` | floor-state private log write rejected | Same as the underlying chat-state failure embedded in `hint` |
+
+The `hint` field is English, no longer than 120 characters, and contains actionable diagnostic info. It is not localized — surface a localized message to users by switching on `reason`, not by translating `hint`.
+
+Example:
+
+```js
+const result = await fs.update((cur) => ({ ...cur, score: (cur?.score ?? 0) + 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('Save conflicted with another writer, please retry.'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('Server unreachable, changes not saved.'));
+            break;
+        case 'REPLAY_BROKEN':
+            toastr.error(t('Floor state log is unrecoverable; please Reset and rebuild.'));
+            break;
+        case 'INSTANCE_DESTROYED':
+            // Instance was destroyed; rebuild it via createFloorState() if you still need it.
+            break;
+        default:
+            console.warn('[my-ext] floor write failed:', result.reason, result.hint);
+    }
+    return;
+}
+```
 
 ### resolveChatStateTarget
 
@@ -372,13 +479,23 @@ Use this when implementing storage layers that should follow the active chat by 
 
 Character state is persistent storage bound to the Character Card itself, shared across all chats for that character. Unlike chat state (which is scoped to a single chat), character state is suitable for storing cross-chat, character-level configuration.
 
+::: warning Behavior change (2026-06-28)
+The character-state API stops throwing on HTTP failures and instead returns the `{ok, state, reason, hint}` envelope (matching chat-state). If your plugin had `try { await ctx.getCharacterState(...) } catch (e) { ... }` blocks, migrate them to `if (!result.ok) { ... }`.
+:::
+
 ### getCharacterState
 
 ```ts
-getCharacterState(avatar: string, namespace: string): Promise<any | null>
+getCharacterState(
+  avatar: string,
+  namespace: string,
+): Promise<
+  | { ok: true, state: any }
+  | { ok: false, state: null, reason: string, hint: string }
+>
 ```
 
-Reads the character state for the specified avatar and namespace. Returns `null` if no data has been stored for that namespace.
+Reads the character state for the specified avatar and namespace. On success returns `{ok: true, state}` where `state` is the stored value or `null` if no data has been stored for that namespace. On failure returns `{ok: false, state: null, reason, hint}` — see [Error reasons](#error-reasons-2) below.
 
 | Parameter | Description |
 |------|------|
@@ -391,18 +508,28 @@ Reads the character state for the specified avatar and namespace. Returns `null`
 getCharacterStateBatch(
   avatar: string,
   namespaces: string[],
-): Promise<Record<string, any | null>>
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: any }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
 ```
 
-Reads multiple character state namespaces in a single request. Returns an object keyed by namespace; missing namespaces map to `null`.
+Reads multiple character state namespaces in a single request. On success returns `{ok: true, results}` where `results` is a `Map` keyed by namespace; each entry is itself `{ok: true, state}` and missing namespaces map to `{ok: true, state: null}`. On failure returns `{ok: false, results: <empty Map>, reason, hint}`.
 
 ### setCharacterState
 
 ```ts
-setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
+setCharacterState(
+  avatar: string,
+  namespace: string,
+  data: any,
+): Promise<
+  | { ok: true, state: any }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-Writes character state under the specified namespace as a whole-document overwrite. Pass `null` as `data` to delete the state for that namespace. For non-trivial payloads prefer `updateCharacterState` — `setCharacterState` ships the entire document on every call.
+Writes character state under the specified namespace as a whole-document overwrite. Pass `null` as `data` to delete the state for that namespace. For non-trivial payloads prefer `updateCharacterState` — `setCharacterState` ships the entire document on every call. On success returns `{ok: true, state}` echoing the stored value; on failure returns `{ok: false, reason, hint}`.
 
 | Parameter | Description |
 |------|------|
@@ -419,10 +546,13 @@ updateCharacterState(
   updater: (currentState: object, meta: { attempt: number, avatar: string, namespace: string })
     => object | null | undefined | Promise<object | null | undefined>,
   options?: { maxOperations?: number, maxRetries?: number, asyncDiff?: boolean },
-): Promise<{ ok: boolean, state: object | null, updated: boolean, created?: boolean }>
+): Promise<
+  | { ok: true, state: object | null, updated: boolean, created?: boolean }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change". 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1).
+**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change". 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1). This function never throws; reducer exceptions are caught and surfaced as `reason: 'VALIDATION_ARGS'`.
 
 ```js
 await context.updateCharacterState(character.avatar, 'my-plugin', (current = {}) => ({
@@ -435,16 +565,62 @@ await context.updateCharacterState(character.avatar, 'my-plugin', (current = {})
 ### deleteCharacterState
 
 ```ts
-deleteCharacterState(avatar: string, namespace: string): Promise<void>
+deleteCharacterState(
+  avatar: string,
+  namespace: string,
+): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
 ```
 
-Removes the character state sidecar for the given namespace. Idempotent — succeeds when the sidecar does not exist. Equivalent to `setCharacterState(avatar, namespace, null)` for callers that prefer an explicit delete verb.
+Removes the character state sidecar for the given namespace. Idempotent — succeeds when the sidecar does not exist. Equivalent to `setCharacterState(avatar, namespace, null)` for callers that prefer an explicit delete verb. Returns `{ok: true}` on success; `{ok: false, reason, hint}` on failure.
 
 ### Best Practices
 
 - Use `updateCharacterState()` for read-modify-write instead of manually chaining `getCharacterState()` + `setCharacterState()` — the helper ships only the diff and handles the 409 retry for you.
 - Use `setCharacterState()` only for first-time seeding or when you genuinely want to replace the whole sidecar.
 - Keep payloads as JSON-serializable plain objects; arrays and primitives at the top level are not supported.
+- Inspect `result.ok` and switch on `result.reason` — these APIs no longer throw on HTTP failures (see the behavior change above and [Error reasons](#error-reasons-2)).
+
+### Error reasons
+
+Every write returns `{ok: false, reason, hint}` on failure. The `reason` field is one of nine values:
+
+| Reason | When it fires | Suggested handling |
+|---|---|---|
+| `VALIDATION_ARGS` | Bad arguments (empty avatar / namespace, non-function updater, reducer threw) | Fix caller — this is a programmer bug |
+| `VALIDATION_TARGET` | No active chat (chat-state only; character-state writes do not require an active chat) | Skip the write silently, retry once the user opens one |
+| `VALIDATION_COMMIT` | floor-state only: override violates monotonicity, malformed commit, floor out of range | Caller's `floor` argument is wrong, recompute and re-issue |
+| `INSTANCE_DESTROYED` | floor-state instance was destroyed | Reload the chat or rebuild the instance |
+| `CONFLICT` | HTTP 409 even after retry | Re-read current state and try again |
+| `HTTP_ERROR` | Other non-2xx response | Inspect `hint` for the status code, user-visible toast acceptable |
+| `TRANSPORT_ERROR` | fetch threw (network, CORS, abort) | Retry or surface network error to user |
+| `REPLAY_BROKEN` | floor-state log replay failed and recovery also failed | Data unrecoverable, advise user to Reset and rebuild |
+| `LOG_WRITE_FAILED` | floor-state private log write rejected | Same as the underlying chat-state failure embedded in `hint` |
+
+The `hint` field is English, no longer than 120 characters, and contains actionable diagnostic info. It is not localized — surface a localized message to users by switching on `reason`, not by translating `hint`.
+
+Example:
+
+```js
+const result = await context.updateCharacterState(character.avatar, 'my-ext', (cur) => ({ ...cur, x: 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('Save conflicted with another writer, please retry.'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('Server unreachable, changes not saved.'));
+            break;
+        case 'VALIDATION_ARGS':
+            // Programmer bug — empty avatar/namespace or reducer threw.
+            console.error('[my-ext] bad arguments:', result.hint);
+            break;
+        default:
+            console.warn('[my-ext] save failed:', result.reason, result.hint);
+    }
+    return;
+}
+```
 
 ### Character State vs Chat State
 

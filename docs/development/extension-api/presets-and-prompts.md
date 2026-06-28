@@ -70,16 +70,23 @@ Plugin runtime/session data bound to a preset. State sidecars live next to the p
 
 All methods accept `options.target` (a `PresetRef`) and `options.collection` for cross-preset reads/writes; both default to the currently selected preset.
 
+::: warning Behavior change (2026-06-28)
+Preset state read/write APIs (`get`, `getBatch`, `update`, `patch`, `delete`, `deleteAll`) no longer throw on HTTP failures. They now return a `{ok, ...}` envelope (matching the chat-state pattern). If your plugin previously wrote `try { await ctx.presets.state.get(...) } catch (e) { ... }`, switch to `if (!result.ok) { ... }`.
+:::
+
 #### presets.state.get
 
 ```ts
 presets.state.get(
   namespace: string,
   options?: { target?: PresetRef, collection?: string }
-): Promise<any | null>
+): Promise<
+  | { ok: true, state: object | null }
+  | { ok: false, state: null, reason: string, hint: string }
+>
 ```
 
-Reads the preset state for a given namespace. Returns `null` if no data exists for that namespace.
+Reads the preset state for a given namespace. On success returns `{ok: true, state}` where `state` is the stored value or `null` if no data exists for that namespace. On failure returns `{ok: false, state: null, reason, hint}` — see [Error reasons](#error-reasons-1) below.
 
 #### presets.state.getBatch
 
@@ -87,10 +94,13 @@ Reads the preset state for a given namespace. Returns `null` if no data exists f
 presets.state.getBatch(
   namespaces: string[],
   options?: { target?: PresetRef, collection?: string }
-): Promise<Map<string, any | null>>
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: object | null }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
 ```
 
-Reads preset state for multiple namespaces in batch. Returns a `Map` keyed by namespace; missing namespaces map to `null`.
+Reads preset state for multiple namespaces in batch. On success returns `{ok: true, results}` where `results` is a `Map` keyed by namespace; each entry is `{ok: true, state}` and missing namespaces map to `{ok: true, state: null}`. On failure (no active preset, transport error, HTTP error) returns `{ok: false, results: <empty Map>, reason, hint}`.
 
 #### presets.state.update
 
@@ -99,10 +109,13 @@ presets.state.update(
   namespace: string,
   updater: (current: any) => any,
   options?: { target?: PresetRef, collection?: string, maxOperations?: number, maxRetries?: number }
-): Promise<{ ok: boolean, state: object | null, updated: boolean }>
+): Promise<
+  | { ok: true, state: object | null, updated: boolean }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change". 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1).
+**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change" and resolves with `{ok: true, updated: false}`. 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1). On failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below. This function never throws; exceptions inside the reducer are caught and surfaced as `reason: 'VALIDATION_ARGS'`.
 
 ```js
 await context.presets.state.update('my-plugin', (current = {}) => ({
@@ -112,30 +125,70 @@ await context.presets.state.update('my-plugin', (current = {}) => ({
 }));
 ```
 
+#### presets.state.patch
+
+```ts
+presets.state.patch(
+  namespace: string,
+  operations: object[],
+  options?: { target?: PresetRef, collection?: string }
+): Promise<
+  | { ok: true }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+Applies RFC 6902 patch operations directly. Prefer `update()` for typical read-modify-write flows; reach for `patch()` only when you already have the operation list (e.g., re-applying a previously computed diff). On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below.
+
 #### presets.state.delete
 
 ```ts
 presets.state.delete(
   namespace: string,
   options?: { target?: PresetRef, collection?: string }
-): Promise<boolean>
+): Promise<
+  | { ok: true }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-Deletes the preset state for a given namespace. Idempotent — succeeds when the sidecar does not exist.
+Deletes the preset state for a given namespace. Idempotent — succeeds when the sidecar does not exist. On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below.
 
 #### presets.state.deleteAll
 
 ```ts
-presets.state.deleteAll(target?: PresetRef | string | null): Promise<boolean>
+presets.state.deleteAll(target?: PresetRef | string | null): Promise<
+  | { ok: true }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-Wipes every namespace under the given preset. Use sparingly — typically only when the preset itself is being deleted or reset.
+Wipes every namespace under the given preset. Use sparingly — typically only when the preset itself is being deleted or reset. On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below.
 
 #### Best Practices
 
 - Use `presets.state.update()` for read-modify-write instead of manually chaining `get()` + a full overwrite — the helper ships only the diff and handles the 409 retry for you.
 - Keep payloads as JSON-serializable plain objects; arrays and primitives at the top level are not supported.
 - One namespace per logical state slice; don't pack unrelated data under a single namespace.
+- Handle `ok: false` return values to keep your plugin UI resilient — switch on `reason` rather than translating `hint` (see [Error reasons](#error-reasons-1)).
+
+#### Error reasons
+
+Preset state read/write methods (`get`, `getBatch`, `update`, `patch`, `delete`, `deleteAll`) return `{ok: false, reason, hint}` on failure. The `reason` field uses the same vocabulary as [Chat State](/development/extension-api/chat-and-state#error-reasons):
+
+| Reason | When it fires | Suggested handling |
+|---|---|---|
+| `VALIDATION_ARGS` | Bad arguments (empty namespace, non-function updater, non-array operations, reducer threw) | Fix caller — this is a programmer bug |
+| `VALIDATION_TARGET` | No active preset (apiId/name resolution failed) | Skip the write, retry once a preset is selected |
+| `VALIDATION_COMMIT` | floor-state only (not applicable to preset state) | — |
+| `INSTANCE_DESTROYED` | floor-state only (not applicable to preset state) | — |
+| `CONFLICT` | HTTP 409 even after retry | Re-read current state and try again |
+| `HTTP_ERROR` | Other non-2xx response | Inspect `hint` for the status code, user-visible toast acceptable |
+| `TRANSPORT_ERROR` | fetch threw (network, CORS, abort) | Retry or surface network error to user |
+| `REPLAY_BROKEN` | floor-state only (not applicable to preset state) | — |
+| `LOG_WRITE_FAILED` | floor-state only (not applicable to preset state) | — |
+
+The `hint` field is English, no longer than 120 characters, and contains actionable diagnostic info. It is not localized — surface a localized message to users by switching on `reason`, not by translating `hint`.
 
 ### Usage Rules
 

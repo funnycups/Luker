@@ -165,10 +165,13 @@ saveChatMetadata(withMetadata?: object): Promise<boolean>
 getChatState(
   namespace: string,
   options?: { target?: ChatTarget }
-): Promise<any | null>
+): Promise<
+  | { ok: true, state: object | null }
+  | { ok: false, state: null, reason: string, hint: string }
+>
 ```
 
-讀取指定命名空間的聊天狀態。回傳 `null` 表示該命名空間無資料。
+讀取指定命名空間的聊天狀態。成功時回傳 `{ok: true, state}`，其中 `state` 是儲存的值，命名空間無資料時為 `null`。失敗時回傳 `{ok: false, state: null, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
 
 - `namespace`：外掛的唯一識別碼，建議使用外掛名
 - `target`：可選，指定目標聊天（用於跨聊天讀取，如分支場景）
@@ -179,10 +182,13 @@ getChatState(
 getChatStateBatch(
   namespaces: string[],
   options?: { target?: ChatTarget }
-): Promise<Record<string, any>>
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: object | null }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
 ```
 
-批次讀取多個命名空間的聊天狀態。回傳一個以命名空間為鍵的物件。
+批次讀取多個命名空間的聊天狀態。成功時回傳 `{ok: true, results}`，其中 `results` 是以命名空間為鍵的 `Map`，每筆條目本身是 `{ok: true, state}`，缺失的命名空間對應 `{ok: true, state: null}`。失敗（無作用聊天、傳輸錯誤、HTTP 錯誤）時回傳 `{ok: false, results: <空 Map>, reason, hint}`。
 
 ### updateChatState
 
@@ -191,10 +197,13 @@ updateChatState(
   namespace: string,
   updater: (current: any) => any,
   options?: { target?: ChatTarget }
-): Promise<{ ok: boolean }>
+): Promise<
+  | { ok: true, state: object | null, updated: boolean }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-**推薦的讀-改-寫方式。** `updater` 函數接收當前狀態，回傳新狀態。系統會自動處理並行衝突。
+**推薦的讀-改-寫方式。** `updater` 函數接收當前狀態，回傳新狀態。系統會自動處理並行衝突（預設對 `CONFLICT` 重試一次）。成功時回傳 `{ok: true, state, updated}`，當 reducer 回傳 `null`/`undefined` 或未產生 diff 時 `updated` 為 `false`。失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。該函式永不拋出；reducer 內部拋出的例外會被捕獲並以 `reason: 'VALIDATION_ARGS'` 形式回報。
 
 ```js
 await context.updateChatState('my-plugin', (current = {}) => ({
@@ -210,18 +219,59 @@ await context.updateChatState('my-plugin', (current = {}) => ({
 deleteChatState(
   namespace: string,
   options?: { target?: ChatTarget }
-): Promise<{ ok: boolean }>
+): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
 ```
 
-刪除指定命名空間的聊天狀態。
+刪除指定命名空間的聊天狀態。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
 
 ### 最佳實踐
 
 - 使用 `updateChatState()` 進行讀-改-寫，而非手動鏈式呼叫 `getChatState()` + `patchChatState()`
 - 保持 payload 為可 JSON 序列化的純物件
-- 處理 `ok: false` 回傳值，保持外掛 UI 的彈性
+- 處理 `ok: false` 回傳值，保持外掛 UI 的彈性 —— 依 `reason` 分支處理，不要翻譯 `hint`（見[錯誤原因](#錯誤原因)）
 - 對於大型外掛資料，優先使用聊天狀態而非 `chat_metadata`
 - 若狀態需要隨 swipe、刪訊息、切換聊天自動跟進，請使用 [樓層狀態](#樓層狀態)，而不是在 `updateChatState` 之上自己寫對帳邏輯
+
+### 錯誤原因
+
+每次寫入失敗都會回傳 `{ok: false, reason, hint}`。`reason` 欄位是以下九個值之一：
+
+| Reason | 觸發時機 | 建議處理 |
+|---|---|---|
+| `VALIDATION_ARGS` | 參數錯誤（命名空間為空、updater 非函式、reducer 拋錯） | 修正呼叫端 —— 這是程式碼 bug |
+| `VALIDATION_TARGET` | 無作用聊天 | 靜默跳過寫入，等使用者打開聊天後再試 |
+| `VALIDATION_COMMIT` | 僅樓層狀態：override 違反單調性、提交結構非法、floor 越界 | 呼叫端的 `floor` 參數有誤，重新計算後再發 |
+| `INSTANCE_DESTROYED` | 樓層狀態實例已被銷毀 | 重新載入聊天或重建實例 |
+| `CONFLICT` | 重試後仍是 HTTP 409 | 重新讀取當前狀態後再試 |
+| `HTTP_ERROR` | 其他非 2xx 回應 | 檢查 `hint` 中的狀態碼，可向使用者彈 toast |
+| `TRANSPORT_ERROR` | fetch 拋錯（網路、CORS、abort） | 重試或向使用者顯示網路錯誤 |
+| `REPLAY_BROKEN` | 僅樓層狀態：日誌重放失敗且復原也失敗 | 資料無法復原，建議使用者重置後重建 |
+| `LOG_WRITE_FAILED` | 僅樓層狀態：私有日誌寫入被拒 | 與 `hint` 中嵌入的底層聊天狀態失敗原因相同 |
+
+`hint` 欄位是英文、不超過 120 字元的可操作診斷資訊。它不會被在地化 —— 面向使用者的在地化文案請依 `reason` 切換，而不是翻譯 `hint`。
+
+範例：
+
+```js
+const result = await context.updateChatState('my-ext', (cur) => ({ ...cur, x: 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('儲存時與其他寫入衝突，請重試。'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('無法連線伺服器，變更未儲存。'));
+            break;
+        case 'VALIDATION_TARGET':
+            // 無作用聊天；靜默跳過。
+            break;
+        default:
+            console.warn('[my-ext] 儲存失敗：', result.reason, result.hint);
+    }
+    return;
+}
+```
 
 ## 樓層狀態
 
@@ -246,20 +296,27 @@ createFloorState(options: { namespace: string }): Promise<FloorStateInstance>
 
 在外掛或 CardApp 裡使用 `getContext().createFloorState({ namespace })`。每個實例綁定一個命名空間；若業務狀態分多塊，請建立多個實例。
 
+所有執行寫入的實例方法（`update`、`patch`、`reset`、`destroy({ purge: true })`）與讀取方法（`get`）皆回傳一個 envelope —— 它們永不拋出。檢查 `result.ok` 並依 `result.reason` 切換處理失敗模式，見[錯誤原因](#錯誤原因-1)。
+
 ```js
 const ctx = SillyTavern.getContext();
 const fs = await ctx.createFloorState({ namespace: 'my-plugin' });
 
 // 推薦：reducer 風格寫入。reducer 收到目前狀態、回傳下一份狀態，差異自動算完並提交。
-await fs.update((current) => ({ ...current, score: 10 }));
+// 成功時回傳 {ok: true, updated}，失敗時回傳 {ok: false, reason, hint}。
+const writeResult = await fs.update((current) => ({ ...current, score: 10 }));
+if (!writeResult.ok) {
+    console.warn('[my-plugin] 樓層寫入失敗：', writeResult.reason, writeResult.hint);
+}
 await fs.update((current) => ({ ...current, level: (current?.level ?? 0) + 1 }));
 await fs.update((current) => {
     const { temp, ...rest } = current ?? {};
     return rest;
 });
 
-// 讀取目前狀態：
-const state = await fs.get();
+// 讀取目前狀態。成功時回傳 {ok: true, state}，失敗時回傳 {ok: false, state: null, reason, hint}。
+const readResult = await fs.get();
+const state = readResult.ok ? readResult.state : null;
 
 // 在讀取前等待重建或寫入完成：
 await fs.ready();
@@ -267,12 +324,16 @@ await fs.ready();
 // 從註冊表移除（極少需要，實例通常與頁面同壽）：
 fs.destroy();
 
-// 抹除該命名空間的狀態並從註冊表移除：
+// 抹除該命名空間的狀態並從註冊表移除。回傳 {ok, reason?, hint?}。
 await fs.destroy({ purge: true });
 ```
 
 ::: warning
-reducer 必須回傳普通物件。回傳陣列、基本型別、`null`、`undefined` 一律視作「無變化」，呼叫直接成功回傳但不寫入。
+reducer 必須回傳普通物件。回傳陣列、基本型別、`null`、`undefined` 一律視作「無變化」，呼叫直接回傳 `{ok: true, updated: false}`（不寫入）。
+:::
+
+::: warning 行為變更（2026-06-28）
+`fs.update` reducer 內部拋出的例外現在會被捕獲並以 `{ok: false, reason: 'VALIDATION_ARGS', hint: 'reducer threw: ...'}` 形式回傳，而不再向上冒泡。原本依賴例外拋出的外掛程式碼需要改為檢查 `result.ok` 與 `result.hint`。
 :::
 
 ### 整盤替換日誌（匯入 / 重建）
@@ -281,12 +342,14 @@ reducer 必須回傳普通物件。回傳陣列、基本型別、`null`、`undef
 
 ```js
 // 用這組提交原子性替換整段日誌。
-const ok = await fs.reset([
+const result = await fs.reset([
     { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/intro', value: '...' }] },
     { floor: 3, swipeId: 0, patches: [{ op: 'add', path: '/scene', value: '...' }] },
 ]);
-if (!ok) {
+if (!result.ok) {
+    // result.reason 是 VALIDATION_ARGS / VALIDATION_COMMIT / LOG_WRITE_FAILED / ... 之一
     // 校驗失敗（提交結構非法、floor 越出目前聊天範圍）或底層寫被拒，日誌保持原狀。
+    console.warn('[my-plugin] reset 被拒絕：', result.reason, result.hint);
 }
 
 // 傳空陣列等於清空日誌。
@@ -310,7 +373,7 @@ await fs.update(
 await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 ```
 
-不傳 `options` 時依聊天尾端推斷。`floor` 必須是目前 `chat` 的有效索引（`0 <= floor < chat.length`），越界、負數、非整數、負 `swipeId` 都會被拒絕並回傳 `false`，避免悄無聲息地把狀態錯掛到不存在的樓層。
+不傳 `options` 時依聊天尾端推斷。`floor` 必須是目前 `chat` 的有效索引（`0 <= floor < chat.length`），越界、負數、非整數、負 `swipeId` 都會被拒絕並回傳 `{ok: false, reason: 'VALIDATION_COMMIT', hint}`，避免悄無聲息地把狀態錯掛到不存在的樓層。
 
 ::: tip
 覆寫只影響這條提交在日誌中的標籤——`MESSAGE_DELETED` 仍依 floor 截斷，`MESSAGE_SWIPE_DELETED` 仍依 （floor， swipeId） 重新編號。重建順序由日誌的寫入順序決定，不會因為你指定了較小的 `floor` 就被「插隊」到前面執行。
@@ -349,12 +412,56 @@ context.buildObjectPatchOperationsAsync(
 ### 參考
 
 - `createFloorState({ namespace })`——非同步工廠，回傳凍結的實例。
-- `instance.update(reducer, options?)`——讀—改—寫；reducer 收到目前狀態、回傳下一份狀態，差異自動算完並提交。可選的 `options = { floor, swipeId? }` 把提交掛到指定樓層而非聊天尾端。**這是建議的寫入 API。**
-- `instance.patch(operations, options?)`——進階：追加一筆「自己已經算好 patch」的提交。operations 必須是相對 `await instance.get()` 的增量 RFC 6902 diff（`buildObjectPatchOperationsAsync(prev, next)`），不能是整盤覆寫式 snapshot。`options` 與 `update` 相同。
-- `instance.reset(commits)`——原子性整盤替換日誌為給定提交清單。用於匯入 / 重建 / 重置類工作流。每筆提交都會被校驗，任意一筆結構非法或 `floor` 越界，整批拒絕。
-- `instance.get()`——讀取目前 materialized 狀態。按需對日誌做重放（以目前 swipe map 為準），不讀獨立的 data 命名空間。
-- `instance.ready()`——所有飛行中寫入完成時解析。
-- `instance.destroy(options?)`——從註冊表移除實例。傳 `{ purge: true }` 時同時把該命名空間的狀態從磁碟抹除（用於永久重置 / 抹除場景）。
+- `instance.update(reducer, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>`——讀—改—寫；reducer 收到目前狀態、回傳下一份狀態，差異自動算完並提交。可選的 `options = { floor, swipeId? }` 把提交掛到指定樓層而非聊天尾端。**這是建議的寫入 API。**
+- `instance.patch(operations, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>`——進階：追加一筆「自己已經算好 patch」的提交。operations 必須是相對 `await instance.get()` 的增量 RFC 6902 diff（`buildObjectPatchOperationsAsync(prev, next)`），不能是整盤覆寫式 snapshot。`options` 與 `update` 相同。
+- `instance.reset(commits): Promise<{ok: true} | {ok: false, reason, hint}>`——原子性整盤替換日誌為給定提交清單。用於匯入 / 重建 / 重置類工作流。每筆提交都會被校驗，任意一筆結構非法或 `floor` 越界，整批拒絕。
+- `instance.get(): Promise<{ok: true, state} | {ok: false, state: null, reason, hint}>`——讀取目前 materialized 狀態。按需對日誌做重放（以目前 swipe map 為準），不讀獨立的 data 命名空間。
+- `instance.ready(): Promise<void>`——所有飛行中寫入完成時解析。
+- `instance.destroy(options?): Promise<{ok: true} | {ok: false, reason, hint}>`——從註冊表移除實例。傳 `{ purge: true }` 時同時把該命名空間的狀態從磁碟抹除（用於永久重置 / 抹除場景）。不帶 `purge` 呼叫時，同步的註銷路徑也回傳 envelope 以保持一致。
+
+### 錯誤原因
+
+每次寫入失敗都會回傳 `{ok: false, reason, hint}`。`reason` 欄位是以下九個值之一：
+
+| Reason | 觸發時機 | 建議處理 |
+|---|---|---|
+| `VALIDATION_ARGS` | 參數錯誤（命名空間為空、updater 非函式、reducer 拋錯） | 修正呼叫端 —— 這是程式碼 bug |
+| `VALIDATION_TARGET` | 無作用聊天 | 靜默跳過寫入，等使用者打開聊天後再試 |
+| `VALIDATION_COMMIT` | 僅樓層狀態：override 違反單調性、提交結構非法、floor 越界 | 呼叫端的 `floor` 參數有誤，重新計算後再發 |
+| `INSTANCE_DESTROYED` | 樓層狀態實例已被銷毀 | 重新載入聊天或重建實例 |
+| `CONFLICT` | 重試後仍是 HTTP 409 | 重新讀取當前狀態後再試 |
+| `HTTP_ERROR` | 其他非 2xx 回應 | 檢查 `hint` 中的狀態碼，可向使用者彈 toast |
+| `TRANSPORT_ERROR` | fetch 拋錯（網路、CORS、abort） | 重試或向使用者顯示網路錯誤 |
+| `REPLAY_BROKEN` | 僅樓層狀態：日誌重放失敗且復原也失敗 | 資料無法復原，建議使用者重置後重建 |
+| `LOG_WRITE_FAILED` | 僅樓層狀態：私有日誌寫入被拒 | 與 `hint` 中嵌入的底層聊天狀態失敗原因相同 |
+
+`hint` 欄位是英文、不超過 120 字元的可操作診斷資訊。它不會被在地化 —— 面向使用者的在地化文案請依 `reason` 切換，而不是翻譯 `hint`。
+
+範例：
+
+```js
+const result = await fs.update((cur) => ({ ...cur, score: (cur?.score ?? 0) + 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('儲存時與其他寫入衝突，請重試。'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('無法連線伺服器，變更未儲存。'));
+            break;
+        case 'REPLAY_BROKEN':
+            toastr.error(t('樓層狀態日誌無法復原，請重置後重建。'));
+            break;
+        case 'INSTANCE_DESTROYED':
+            // 實例已被銷毀，如仍需使用請用 createFloorState() 重建。
+            break;
+        default:
+            console.warn('[my-ext] 樓層寫入失敗：', result.reason, result.hint);
+    }
+    return;
+}
+```
 
 ### resolveChatStateTarget
 
@@ -362,7 +469,7 @@ context.buildObjectPatchOperationsAsync(
 context.resolveChatStateTarget(target?: { chatId?: string, characterId?: number | string } | null): { chatId: string, characterId: number | string } | null
 ```
 
-把 chat-state target 描述符按當前活躍聊天做歸一化。傳 `null`（或省略）拿到目前聊天的 `{ chatId, characterId }`;傳部分物件則用提供的欄位覆寫,另一欄位從活躍狀態填補。沒有活躍聊天且 `target` 缺 `chatId` 時回傳 `null`。
+把 chat-state target 描述符按當前活躍聊天做歸一化。傳 `null`（或省略）拿到目前聊天的 `{ chatId, characterId }`；傳部分物件則用提供的欄位覆寫，另一欄位從活躍狀態填補。沒有活躍聊天且 `target` 缺 `chatId` 時回傳 `null`。
 
 實作「預設跟隨活躍聊天但允許程式化指定目標」的儲存層時使用（例如 floor-state、chat-state API）。
 
@@ -370,13 +477,23 @@ context.resolveChatStateTarget(target?: { chatId?: string, characterId?: number 
 
 角色狀態是綁定到角色卡本身的持久化儲存，在該角色的所有聊天之間共享。與聊天狀態（僅在單個聊天內有效）不同，角色狀態適合儲存跨聊天的角色級別設定。
 
+::: warning 行為變更（2026-06-28）
+角色狀態 API 在 HTTP 失敗時不再拋出例外，改為回傳 `{ok, state, reason, hint}` envelope（與聊天狀態一致）。如果你的外掛原本寫了 `try { await ctx.getCharacterState(...) } catch (e) { ... }`，請改用 `if (!result.ok) { ... }`。
+:::
+
 ### getCharacterState
 
 ```ts
-getCharacterState(avatar: string, namespace: string): Promise<any | null>
+getCharacterState(
+  avatar: string,
+  namespace: string,
+): Promise<
+  | { ok: true, state: any }
+  | { ok: false, state: null, reason: string, hint: string }
+>
 ```
 
-讀取指定 avatar 與命名空間下的角色狀態。如果該命名空間沒有儲存過資料，回傳 `null`。
+讀取指定 avatar 與命名空間下的角色狀態。成功時回傳 `{ok: true, state}`，其中 `state` 是儲存的值，命名空間無資料時為 `null`。失敗時回傳 `{ok: false, state: null, reason, hint}` —— 見下方[錯誤原因](#錯誤原因-2)。
 
 | 參數 | 說明 |
 |------|------|
@@ -389,18 +506,28 @@ getCharacterState(avatar: string, namespace: string): Promise<any | null>
 getCharacterStateBatch(
   avatar: string,
   namespaces: string[],
-): Promise<Record<string, any | null>>
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: any }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
 ```
 
-單次請求批次讀取多個角色狀態命名空間。回傳以命名空間為鍵的物件；不存在的命名空間對應值為 `null`。
+單次請求批次讀取多個角色狀態命名空間。成功時回傳 `{ok: true, results}`，其中 `results` 是以命名空間為鍵的 `Map`，每筆條目本身是 `{ok: true, state}`，缺失的命名空間對應 `{ok: true, state: null}`。失敗時回傳 `{ok: false, results: <空 Map>, reason, hint}`。
 
 ### setCharacterState
 
 ```ts
-setCharacterState(avatar: string, namespace: string, data: any): Promise<void>
+setCharacterState(
+  avatar: string,
+  namespace: string,
+  data: any,
+): Promise<
+  | { ok: true, state: any }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-以整份覆寫的方式在指定命名空間下寫入角色狀態。傳 `null` 作為 `data` 可以刪除該命名空間的狀態。非平凡負載請優先用 `updateCharacterState` —— `setCharacterState` 每次都會把整份文件上網。
+以整份覆寫的方式在指定命名空間下寫入角色狀態。傳 `null` 作為 `data` 可以刪除該命名空間的狀態。非平凡負載請優先用 `updateCharacterState` —— `setCharacterState` 每次都會把整份文件上網。成功時回傳 `{ok: true, state}` 回顯儲存的值；失敗時回傳 `{ok: false, reason, hint}`。
 
 | 參數 | 說明 |
 |------|------|
@@ -417,10 +544,13 @@ updateCharacterState(
   updater: (currentState: object, meta: { attempt: number, avatar: string, namespace: string })
     => object | null | undefined | Promise<object | null | undefined>,
   options?: { maxOperations?: number, maxRetries?: number, asyncDiff?: boolean },
-): Promise<{ ok: boolean, state: object | null, updated: boolean, created?: boolean }>
+): Promise<
+  | { ok: true, state: object | null, updated: boolean, created?: boolean }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統底層自動計算最小增量 patch，只有變化的那部分上網。回傳 `null` / `undefined` 視為「無變更」。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。
+**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統底層自動計算最小增量 patch，只有變化的那部分上網。回傳 `null` / `undefined` 視為「無變更」。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。該函式永不拋出；reducer 內部拋出的例外會被捕獲並以 `reason: 'VALIDATION_ARGS'` 形式回報。
 
 ```js
 await context.updateCharacterState(character.avatar, 'my-plugin', (current = {}) => ({
@@ -433,16 +563,62 @@ await context.updateCharacterState(character.avatar, 'my-plugin', (current = {})
 ### deleteCharacterState
 
 ```ts
-deleteCharacterState(avatar: string, namespace: string): Promise<void>
+deleteCharacterState(
+  avatar: string,
+  namespace: string,
+): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
 ```
 
-刪除指定命名空間的角色狀態 sidecar。冪等 —— sidecar 不存在時也會成功回傳。語意等價於 `setCharacterState(avatar, namespace, null)`，提供給希望使用顯式刪除動詞的呼叫端。
+刪除指定命名空間的角色狀態 sidecar。冪等 —— sidecar 不存在時也會成功回傳。語意等價於 `setCharacterState(avatar, namespace, null)`，提供給希望使用顯式刪除動詞的呼叫端。成功時回傳 `{ok: true}`，失敗時回傳 `{ok: false, reason, hint}`。
 
 ### 最佳實踐
 
 - 優先用 `updateCharacterState()`，不要手動串 `getCharacterState()` + `setCharacterState()` —— helper 只發 diff，並替你處理 409 重試。
 - `setCharacterState()` 只用於首次初始化或確實想整份替換 sidecar 的場景。
 - 負載保持為可 JSON 序列化的普通物件；頂層陣列或基本型別不支援。
+- 檢查 `result.ok` 並依 `result.reason` 切換處理 —— 這些 API 不再在 HTTP 失敗時拋出例外（見上方行為變更與[錯誤原因](#錯誤原因-2)）。
+
+### 錯誤原因
+
+每次寫入失敗都會回傳 `{ok: false, reason, hint}`。`reason` 欄位是以下九個值之一：
+
+| Reason | 觸發時機 | 建議處理 |
+|---|---|---|
+| `VALIDATION_ARGS` | 參數錯誤（avatar / 命名空間為空、updater 非函式、reducer 拋錯） | 修正呼叫端 —— 這是程式碼 bug |
+| `VALIDATION_TARGET` | 無作用聊天（僅聊天狀態；角色狀態寫入不需要作用聊天） | 靜默跳過寫入，等使用者打開聊天後再試 |
+| `VALIDATION_COMMIT` | 僅樓層狀態：override 違反單調性、提交結構非法、floor 越界 | 呼叫端的 `floor` 參數有誤，重新計算後再發 |
+| `INSTANCE_DESTROYED` | 樓層狀態實例已被銷毀 | 重新載入聊天或重建實例 |
+| `CONFLICT` | 重試後仍是 HTTP 409 | 重新讀取當前狀態後再試 |
+| `HTTP_ERROR` | 其他非 2xx 回應 | 檢查 `hint` 中的狀態碼，可向使用者彈 toast |
+| `TRANSPORT_ERROR` | fetch 拋錯（網路、CORS、abort） | 重試或向使用者顯示網路錯誤 |
+| `REPLAY_BROKEN` | 僅樓層狀態：日誌重放失敗且復原也失敗 | 資料無法復原，建議使用者重置後重建 |
+| `LOG_WRITE_FAILED` | 僅樓層狀態：私有日誌寫入被拒 | 與 `hint` 中嵌入的底層聊天狀態失敗原因相同 |
+
+`hint` 欄位是英文、不超過 120 字元的可操作診斷資訊。它不會被在地化 —— 面向使用者的在地化文案請依 `reason` 切換，而不是翻譯 `hint`。
+
+範例：
+
+```js
+const result = await context.updateCharacterState(character.avatar, 'my-ext', (cur) => ({ ...cur, x: 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('儲存時與其他寫入衝突，請重試。'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('無法連線伺服器，變更未儲存。'));
+            break;
+        case 'VALIDATION_ARGS':
+            // 程式碼 bug —— avatar/命名空間為空或 reducer 拋錯。
+            console.error('[my-ext] 參數錯誤：', result.hint);
+            break;
+        default:
+            console.warn('[my-ext] 儲存失敗：', result.reason, result.hint);
+    }
+    return;
+}
+```
 
 ### 角色狀態 vs 聊天狀態
 

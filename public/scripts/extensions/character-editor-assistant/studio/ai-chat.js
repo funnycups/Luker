@@ -1601,13 +1601,14 @@ Once the layer set is decided, move on to the actual card content (description, 
 - ctx.updateCharacterFields(fields) async — Update card fields (description, personality, scenario, first_mes, mes_example, world, etc.). Same field names as the Studio \`character_update_fields\` tool. Use sparingly from CardApp runtime; most card content is set at authoring time.
 - ctx.getVariable(key) — Get chat variable (use this for HP / gold / affinity / inventory / quest flags — i.e. anything macro-driven and AI-mutable)
 - ctx.setVariable(key, value, options?) async — Set a chat variable. Pass \`{ floor: latestMessageId }\` for AI-readable state — appends a setvar op to that floor's var_ops, so swipe/delete/branch reconcile it like an AI-written \`{{setvar}}\`. Without \`floor\`, writes straight to \`__ctx.chatMetadata.variables\` and skips op-log — only safe for ephemeral UI state the AI doesn't see (open tab, draft form values, panel selection)
-- ctx.getChatState(namespace, options?) async — Read a chat-bound state namespace (server-backed via /api/chats/state/, NOT __ctx.chatMetadata). Use for structured CardApp state that doesn't fit a flat variable.
-- ctx.updateChatState(namespace, updater, options?) async — Reducer-style write of chat-bound state. Returns { ok, state, updated }.
-- ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound state.
-- ctx.deleteChatState(namespace, options?) async — Drop a chat-bound state namespace.
-- ctx.getCharacterState(namespace) async — Read character-bound state (avatar auto-resolved). Survives across every chat with this character — for plugin/CardApp config, not per-run state.
-- ctx.updateCharacterState(namespace, updater, options?) async — Reducer-style write of character-bound state. Returns { ok, state, updated }.
-- ctx.setCharacterState(namespace, data) async — Whole-object write of character-bound state. Pass null to delete. Prefer updateCharacterState for non-trivial payloads.
+- ctx.getChatState(namespace, options?) async — Read a chat-bound state namespace (server-backed via /api/chats/state/, NOT __ctx.chatMetadata). Use for structured CardApp state that doesn't fit a flat variable. Returns \`{ ok: true, state }\` on hit/empty-miss (state is null when nothing is stored) or \`{ ok: false, state: null, reason, hint }\` on failure.
+- ctx.updateChatState(namespace, updater, options?) async — Reducer-style write of chat-bound state. Returns \`{ ok: true, state, updated }\` on success (updated is false when the reducer returned null/undefined or produced no diff) or \`{ ok: false, reason, hint }\` on failure.
+- ctx.patchChatState(namespace, operations, options?) async — Apply JSON-patch ops to chat-bound state. Returns \`{ ok: true }\` on success or \`{ ok: false, reason, hint }\` on failure.
+- ctx.deleteChatState(namespace, options?) async — Drop a chat-bound state namespace. Returns \`{ ok: true }\` on success or \`{ ok: false, reason, hint }\` on failure.
+- ctx.getCharacterState(namespace) async — Read character-bound state (avatar auto-resolved). Survives across every chat with this character — for plugin/CardApp config, not per-run state. Returns \`{ ok: true, state }\` on hit/empty-miss or \`{ ok: false, state: null, reason, hint }\` on failure.
+- ctx.updateCharacterState(namespace, updater, options?) async — Reducer-style write of character-bound state. Returns \`{ ok: true, state, updated, created? }\` on success or \`{ ok: false, reason, hint }\` on failure.
+- ctx.setCharacterState(namespace, data) async — Whole-object write of character-bound state. Pass null to delete. Prefer updateCharacterState for non-trivial payloads. Returns \`{ ok: true, state }\` on success or \`{ ok: false, reason, hint }\` on failure.
+- ctx.deleteCharacterState(namespace) async — Delete a character-bound sidecar namespace. Returns \`{ ok, reason?, hint? }\`.
 
 ### Chat Management
 - ctx.getChatList() — List all chats for this character
@@ -1773,6 +1774,8 @@ Per-chat state in CardApps lives in one of two places, picked by **what kind of 
 
 - **Structured namespaces only the CardApp owns** (UI panel state objects, settled tracker payloads, anything you'd otherwise reach for "a JSON store" for) → \`ctx.getChatState\` / \`ctx.updateChatState\` / \`ctx.patchChatState\`. These hit the chat state store (server-backed at \`/api/chats/state/\`) — the same store the rest of Luker (memory-graph, orchestrator, search-tools) uses via \`getContext().getChatState\`. Per-chat scope; the data is durable across reloads but resets on a new chat. Don't put AI-mutable scalars here — they belong in chat variables where macros can reach them.
 
+When any of these state writes fails, the call returns \`{ ok: false, reason, hint }\` instead of throwing. Always check \`result.ok\` before treating the write as successful, and surface \`hint\` to the user via toastr only when the write was user-initiated (not for background autosaves). The \`reason\` enum has 9 values — branch on it to retry CONFLICT or to give up on HTTP_ERROR.
+
 ### Floor State
 
 \`Floor State\` is a thin layer on top of chat state that logs every write at the chat tail (floor index + swipe id) and replays surviving commits whenever the chat structure changes. Use it when your structured state needs to **follow swipes, message deletions, and chat switches automatically** — game progress that should rewind when the user swipes back, trackers that should stay consistent with the active conversation path, etc. Without Floor State, \`ctx.updateChatState\` writes the underlying namespace but doesn't track which floor the write happened on, so swipe-back leaves stale state.
@@ -1788,18 +1791,31 @@ await fs.update((current) => ({ ...current, score: (current?.score ?? 0) + 1 }))
 // Read current state. Floor State is settled by core before any
 // CHAT_CHANGED / MESSAGE_SWIPED / MESSAGE_DELETED listener fires, so
 // reading inside those handlers is safe — no ready() needed there.
-const state = await fs.get();
+// fs.get() (like fs.update / fs.patch / fs.reset / fs.destroy) returns
+// an { ok, state, ... } envelope — destructure state directly when you
+// only care about the value, or branch on ok to handle failures.
+const { state } = await fs.get();
 
 // fs.ready() is only useful when serializing against possibly concurrent
 // fs.update / fs.patch writes (rare in CardApp UI code).
 await fs.ready();
-const latest = await fs.get();
+const { state: latest } = await fs.get();
+
+// Branch on the envelope when you need to react to failures.
+const result = await fs.update(reducer);
+if (!result.ok) {
+    // result.reason is one of VALIDATION_ARGS / VALIDATION_TARGET /
+    // VALIDATION_COMMIT / INSTANCE_DESTROYED / CONFLICT / HTTP_ERROR /
+    // TRANSPORT_ERROR / REPLAY_BROKEN / LOG_WRITE_FAILED.
+    // result.hint is a short English diagnostic string (<= 120 chars).
+    console.warn('Floor State write failed:', result.reason, result.hint);
+}
 \`\`\`
 
 ### Hard rules (violating these breaks state)
 
 - One namespace, one owner. Do NOT mix \`ctx.updateChatState(ns, ...)\` / \`ctx.patchChatState(ns, ...)\` and \`fs.update(...)\` against the same namespace — they write the same backing state object, but Floor State's floor-rebuild replays the commit log and will overwrite any direct write that wasn't logged. Pick one access path per namespace.
-- Reducer must return a plain object. Returning array, primitive, null, or undefined is treated as "no change" (no commit, silent).
+- Reducer must return a plain object. Returning array, primitive, null, or undefined is treated as "no change" — the call still resolves to \`{ ok: true, updated: false }\` (silent-noop is success), NOT \`{ ok: false }\`. Only branch on \`!result.ok\` for real failures.
 - Each instance owns one namespace. Create separate instances per logical state slice.
 - Namespaces ending in \`__floor_log\` are reserved for private commit logs.
 

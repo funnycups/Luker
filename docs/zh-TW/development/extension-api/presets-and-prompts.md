@@ -70,16 +70,23 @@ presets.resolve(
 
 所有方法都接受 `options.target`（`PresetRef`）和 `options.collection` 做跨預設讀寫；兩者預設指向當前選中的預設。
 
+::: warning 行為變更（2026-06-28）
+預設狀態的讀寫 API（`get`、`getBatch`、`update`、`patch`、`delete`、`deleteAll`）在 HTTP 失敗時不再拋出例外，改為回傳 `{ok, ...}` envelope（與聊天狀態一致）。如果你的外掛原本寫了 `try { await ctx.presets.state.get(...) } catch (e) { ... }`，請改用 `if (!result.ok) { ... }`。
+:::
+
 #### presets.state.get
 
 ```ts
 presets.state.get(
   namespace: string,
   options?: { target?: PresetRef, collection?: string }
-): Promise<any | null>
+): Promise<
+  | { ok: true, state: object | null }
+  | { ok: false, state: null, reason: string, hint: string }
+>
 ```
 
-讀取指定命名空間下的預設狀態。如果該命名空間沒有資料，回傳 `null`。
+讀取指定命名空間下的預設狀態。成功時回傳 `{ok: true, state}`，其中 `state` 是儲存的值，命名空間無資料時為 `null`。失敗時回傳 `{ok: false, state: null, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
 
 #### presets.state.getBatch
 
@@ -87,10 +94,13 @@ presets.state.get(
 presets.state.getBatch(
   namespaces: string[],
   options?: { target?: PresetRef, collection?: string }
-): Promise<Map<string, any | null>>
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: object | null }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
 ```
 
-單次請求批次讀取多個命名空間。回傳以命名空間為鍵的 `Map`；不存在的命名空間對應 `null`。
+單次請求批次讀取多個命名空間。成功時回傳 `{ok: true, results}`，其中 `results` 是以命名空間為鍵的 `Map`；每個條目本身為 `{ok: true, state}`，不存在的命名空間對應 `{ok: true, state: null}`。失敗時（無作用預設、傳輸錯誤、HTTP 錯誤）回傳 `{ok: false, results: <空 Map>, reason, hint}`。
 
 #### presets.state.update
 
@@ -99,10 +109,13 @@ presets.state.update(
   namespace: string,
   updater: (current: any) => any,
   options?: { target?: PresetRef, collection?: string, maxOperations?: number, maxRetries?: number }
-): Promise<{ ok: boolean, state: object | null, updated: boolean }>
+): Promise<
+  | { ok: true, state: object | null, updated: boolean }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統底層自動計算最小增量 patch，只有變化的那部分上網。回傳 `null` / `undefined` 視為「無變更」。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。
+**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統底層自動計算最小增量 patch，只有變化的那部分上網。回傳 `null` / `undefined` 視為「無變更」，結果為 `{ok: true, updated: false}`。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。該函式永不拋出；reducer 內部拋出的例外會被捕獲並以 `reason: 'VALIDATION_ARGS'` 形式回報。
 
 ```js
 await context.presets.state.update('my-plugin', (current = {}) => ({
@@ -112,30 +125,70 @@ await context.presets.state.update('my-plugin', (current = {}) => ({
 }));
 ```
 
+#### presets.state.patch
+
+```ts
+presets.state.patch(
+  namespace: string,
+  operations: object[],
+  options?: { target?: PresetRef, collection?: string }
+): Promise<
+  | { ok: true }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+直接施加 RFC 6902 patch 操作。典型的讀—改—寫流程優先用 `update()`；只有當你已有操作列表（例如重放此前計算好的 diff）時才用 `patch()`。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
+
 #### presets.state.delete
 
 ```ts
 presets.state.delete(
   namespace: string,
   options?: { target?: PresetRef, collection?: string }
-): Promise<boolean>
+): Promise<
+  | { ok: true }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-刪除指定命名空間的預設狀態。冪等 —— sidecar 不存在時也會成功回傳。
+刪除指定命名空間的預設狀態。冪等 —— sidecar 不存在時也會成功回傳。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
 
 #### presets.state.deleteAll
 
 ```ts
-presets.state.deleteAll(target?: PresetRef | string | null): Promise<boolean>
+presets.state.deleteAll(target?: PresetRef | string | null): Promise<
+  | { ok: true }
+  | { ok: false, reason: string, hint: string }
+>
 ```
 
-清空指定預設下的所有命名空間。慎用 —— 通常只在預設本身被刪除或重設時呼叫。
+清空指定預設下的所有命名空間。慎用 —— 通常只在預設本身被刪除或重設時呼叫。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
 
 #### 最佳實踐
 
 - 優先用 `presets.state.update()`，不要手動串 `get()` + 整份覆寫 —— helper 只發 diff，並替你處理 409 重試。
 - 負載保持為可 JSON 序列化的普通物件；頂層陣列或基本型別不支援。
 - 一個命名空間裝一片邏輯狀態，不要把無關資料塞同一個命名空間。
+- 處理 `ok: false` 回傳值，保持外掛 UI 的彈性 —— 依 `reason` 分支處理，不要翻譯 `hint`（見[錯誤原因](#錯誤原因)）。
+
+#### 錯誤原因
+
+預設狀態的讀寫方法（`get`、`getBatch`、`update`、`patch`、`delete`、`deleteAll`）失敗時會回傳 `{ok: false, reason, hint}`。`reason` 欄位沿用與[聊天狀態](/zh-TW/development/extension-api/chat-and-state#錯誤原因)相同的詞彙表：
+
+| Reason | 觸發時機 | 建議處理 |
+|---|---|---|
+| `VALIDATION_ARGS` | 參數錯誤（命名空間為空、updater 非函式、operations 非陣列、reducer 拋錯） | 修正呼叫端 —— 這是程式碼 bug |
+| `VALIDATION_TARGET` | 無作用預設（apiId/name 解析失敗） | 跳過寫入，等使用者選定預設後再試 |
+| `VALIDATION_COMMIT` | 僅樓層狀態（不適用於預設狀態） | —— |
+| `INSTANCE_DESTROYED` | 僅樓層狀態（不適用於預設狀態） | —— |
+| `CONFLICT` | 重試後仍是 HTTP 409 | 重新讀取當前狀態後再試 |
+| `HTTP_ERROR` | 其他非 2xx 回應 | 檢查 `hint` 中的狀態碼，可向使用者彈 toast |
+| `TRANSPORT_ERROR` | fetch 拋錯（網路、CORS、abort） | 重試或向使用者顯示網路錯誤 |
+| `REPLAY_BROKEN` | 僅樓層狀態（不適用於預設狀態） | —— |
+| `LOG_WRITE_FAILED` | 僅樓層狀態（不適用於預設狀態） | —— |
+
+`hint` 欄位是英文、不超過 120 字元的可操作診斷資訊。它不會被在地化 —— 面向使用者的在地化文案請依 `reason` 切換，而不是翻譯 `hint`。
 
 ### 使用規則
 

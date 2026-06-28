@@ -821,8 +821,10 @@ export function createFloorStateWithDeps(options, deps) {
      * is migration's responsibility on next mount.
      *
      * @param {{purge?: boolean}} [options]
-     * @returns {Promise<boolean>} true on success (always true unless purge
-     *     was requested and the underlying delete failed)
+     * @returns {Promise<{ok: true} | {ok: false, reason: string, hint: string}>}
+     *     `{ok: true}` on detach (always succeeds unless purge was requested
+     *     and the underlying chat-state delete failed, in which case the
+     *     embedded chat-state failure envelope is returned).
      */
     async function destroy({ purge = false } = {}) {
         if (destroyed) return makeStateOk();
