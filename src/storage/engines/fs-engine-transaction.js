@@ -638,8 +638,15 @@ function registerGroupHandler(tx) {
                 const raw = fs.readFileSync(fp, 'utf-8');
                 const group = JSON.parse(raw);
                 const groupStat = fs.statSync(fp);
-                group.date_added = groupStat.birthtimeMs;
-                group.create_date = new Date(groupStat.birthtimeMs).toISOString();
+                // Prefer doc.date_added (set by GroupRepo.save on first write)
+                // so the value survives FS↔DB migration. Fall back to the file
+                // birthtime for groups created before the GroupRepo started
+                // stamping date_added.
+                const docDateAdded = (typeof group.date_added === 'number' && Number.isFinite(group.date_added))
+                    ? group.date_added
+                    : null;
+                group.date_added = docDateAdded ?? groupStat.birthtimeMs;
+                group.create_date = new Date(group.date_added).toISOString();
                 let chat_size = 0;
                 let date_last_chat = 0;
                 if (Array.isArray(group.chats)) {

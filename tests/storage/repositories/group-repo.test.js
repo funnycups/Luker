@@ -23,7 +23,11 @@ describe.each(CONTRACT_HARNESSES)('GroupRepo on $name', ({ make }) => {
         const doc = { id: 'grp-1', name: 'Crew', members: ['a', 'b'], chats: ['c-1'] };
         await repo.save(h.handle, 'grp-1', doc);
         const got = await repo.get(h.handle, 'grp-1');
-        expect(got).toEqual(doc);
+        // GroupRepo.save stamps doc.date_added on first write so the value
+        // survives FS↔DB migration. Strip it before comparing user fields.
+        expect(typeof got.date_added).toBe('number');
+        const { date_added: _da, ...gotRest } = got;
+        expect(gotRest).toEqual(doc);
     });
 
     test('save overwrites existing group', async () => {
@@ -33,10 +37,31 @@ describe.each(CONTRACT_HARNESSES)('GroupRepo on $name', ({ make }) => {
         expect(got.name).toBe('new');
     });
 
+    test('save preserves existing date_added on overwrite', async () => {
+        await repo.save(h.handle, 'grp-1', { id: 'grp-1', name: 'old' });
+        const firstDate = (await repo.get(h.handle, 'grp-1')).date_added;
+        // Force a different wall-clock so a fresh stamp would obviously diverge.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await repo.save(h.handle, 'grp-1', { id: 'grp-1', name: 'new' });
+        const got = await repo.get(h.handle, 'grp-1');
+        expect(got.date_added).toBe(firstDate);
+    });
+
+    test('save honors caller-supplied date_added', async () => {
+        await repo.save(h.handle, 'grp-1', { id: 'grp-1', name: 'g', date_added: 1700000000000 });
+        const got = await repo.get(h.handle, 'grp-1');
+        expect(got.date_added).toBe(1700000000000);
+    });
+
     test('save coerces non-string id', async () => {
         await repo.save(h.handle, 12345, { id: '12345' });
-        expect(await repo.get(h.handle, '12345')).toEqual({ id: '12345' });
-        expect(await repo.get(h.handle, 12345)).toEqual({ id: '12345' });
+        const got = await repo.get(h.handle, '12345');
+        expect(typeof got.date_added).toBe('number');
+        const { date_added: _da, ...gotRest } = got;
+        expect(gotRest).toEqual({ id: '12345' });
+        const got2 = await repo.get(h.handle, 12345);
+        const { date_added: _da2, ...got2Rest } = got2;
+        expect(got2Rest).toEqual({ id: '12345' });
     });
 
     test('delete returns {deleted:false,chatsDeleted:0} when group missing', async () => {

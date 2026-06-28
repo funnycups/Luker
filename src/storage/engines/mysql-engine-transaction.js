@@ -588,8 +588,14 @@ export function registerGroupHandler(tx) {
         for (const row of groupRows) {
             const group = coerceJson(row.doc);
             if (!group || typeof group !== 'object' || Array.isArray(group)) continue;
-            group.date_added = row.created_at;
-            group.create_date = new Date(row.created_at).toISOString();
+            // Prefer doc.date_added (set by GroupRepo.save on first write)
+            // so the value survives FS↔DB migration. Fall back to row.created_at
+            // for groups created before the GroupRepo started stamping date_added.
+            const docDateAdded = (typeof group.date_added === 'number' && Number.isFinite(group.date_added))
+                ? group.date_added
+                : null;
+            group.date_added = docDateAdded ?? row.created_at;
+            group.create_date = new Date(group.date_added).toISOString();
             let chat_size = 0;
             let date_last_chat = 0;
             if (Array.isArray(group.chats)) {
