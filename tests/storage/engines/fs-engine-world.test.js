@@ -120,4 +120,53 @@ describe('FsEngine world handler', () => {
         const stragglers = fs.readdirSync(h.dirs.worlds).filter(e => e.endsWith('.tmp'));
         expect(stragglers).toEqual([]);
     });
+
+    // Round-trip safety: which "poison" names the engine accepts vs. rejects
+    // (poison = anything sanitize-filename would rewrite or that looks like a
+    // filename). These should all reject — the FS engine must not silently
+    // change a stored name on the way to disk.
+    describe('poison-name rejection at put', () => {
+        const cases = [
+            { label: 'path separator', name: 'foo/bar' },
+            { label: 'backslash', name: 'foo\\bar' },
+            { label: 'colon', name: 'foo:bar' },
+            { label: 'trailing .json', name: 'foo.json' },
+            { label: 'trailing .jsonl', name: 'foo.jsonl' },
+            { label: 'empty', name: '' },
+            { label: 'whitespace only', name: '   ' },
+            { label: 'over 128 bytes', name: 'a'.repeat(129) },
+        ];
+        for (const { label, name } of cases) {
+            test(`rejects "${label}"`, async () => {
+                await expect(h.engine.withTransaction(h.handle, (tx) =>
+                    tx.putResource({ kind: 'world', handle: h.handle, name }, { doc: { entries: {} } }),
+                )).rejects.toThrow();
+            });
+        }
+    });
+
+    // Round-trip safety: legal "interesting" names must survive a save→read
+    // cycle byte-for-byte, because Postgres / MySQL store these as the PK and
+    // the FS engine uses them as filenames.
+    describe('legal poison-name round-trip', () => {
+        const cases = [
+            { label: 'CJK', name: '我的世界' },
+            { label: 'emoji', name: '🔥World' },
+            { label: 'NFC café', name: 'café' },
+            { label: 'NFD café', name: 'café' },
+            { label: 'exactly 128 bytes', name: 'a'.repeat(128) },
+        ];
+        for (const { label, name } of cases) {
+            test(`preserves "${label}" verbatim`, async () => {
+                await h.engine.withTransaction(h.handle, (tx) =>
+                    tx.putResource({ kind: 'world', handle: h.handle, name }, { doc: { entries: { '0': { uid: 0, content: label } } } }));
+                const resolved = await h.engine.withTransaction(h.handle, (tx) =>
+                    tx.resolveWorldName({ kind: 'world', handle: h.handle, name }));
+                expect(resolved).toBe(name);
+                const file = await h.engine.withTransaction(h.handle, (tx) =>
+                    tx.getResource({ kind: 'world', handle: h.handle, name: resolved }));
+                expect(file?.entries?.['0']?.content).toBe(label);
+            });
+        }
+    });
 });
