@@ -30,6 +30,8 @@ import {
 import { sanitizeAgendaWorkingProfile } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { sanitizeSpec } from './spec-schema.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from '../../state-errors.js';
+import { formatValidationTargetHint } from '../../state-errors/format.js';
 
 const MODULE_NAME = 'orchestrator';
 const DEFAULT_PRESET_ID = 'default';
@@ -322,10 +324,11 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
 
 export function getActivePreset(settings, mode, { scope = 'global', context, avatar } = {}) {
     const c = ensureDefaultSeeded(settings, mode, scope, { context, avatar });
-    if (!c) return null;
+    if (!c) return { ok: true, state: null };
     const id = c.activeIds[mode];
     const raw = c.libraries[mode]?.[id];
-    return raw ? sanitizePresetEntry(mode, raw) : null;
+    if (!raw) return { ok: true, state: null };
+    return { ok: true, state: sanitizePresetEntry(mode, raw) };
 }
 
 export function deletePreset(settings, mode, scope, presetId, { context, avatar } = {}) {
@@ -383,13 +386,23 @@ export function duplicatePreset(settings, mode, scope, sourceId, { name }, { con
  */
 export function writeActivePreset(settings, mode, scope, payload, { context, avatar } = {}) {
     const c = getScopeContainer(settings, scope, { context, avatar });
-    if (!c) return false;
+    if (!c) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+            scope === 'character'
+                ? formatValidationTargetHint(`no character override container for avatar=${String(avatar || '').slice(0, 40)}`)
+                : formatValidationTargetHint('global preset container unavailable'));
+    }
     const id = c.activeIds[mode];
+    if (!id) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT, `no active preset id for mode=${mode}`);
+    }
     const prev = c.libraries[mode]?.[id];
-    if (!prev) return false;
+    if (!prev) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT, `active preset id=${id} missing from library for mode=${mode}`);
+    }
     const sanitized = sanitizePresetEntry(mode, { ...payload, name: prev.name });
     c.libraries[mode][id] = sanitized;
-    return true;
+    return makeStateOk({ state: sanitized });
 }
 
 export function allModes() {
