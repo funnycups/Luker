@@ -21,6 +21,7 @@ import {
     removeSwipeFromCommits,
     inferCommitTargetFromChat,
     resolveCommitTarget,
+    isTransientReason,
 } from '../../public/scripts/floor-state/core.js';
 
 describe('isValidCommit', () => {
@@ -337,4 +338,14 @@ describe('resolveCommitTarget', () => {
         expect(resolveCommitTarget(sparse, { floor: 1 })).toEqual({ floor: 1, swipeId: 0 });
         expect(resolveCommitTarget(sparse, { floor: 2 })).toEqual({ floor: 2, swipeId: 0 });
     });
+});
+
+describe('isTransientReason', () => {
+    test.each(['CONFLICT', 'HTTP_ERROR', 'TRANSPORT_ERROR'])('%s is transient', (r) =>
+        expect(isTransientReason(r)).toBe(true));
+    test.each([
+        'VALIDATION_ARGS', 'VALIDATION_TARGET', 'VALIDATION_COMMIT',
+        'INSTANCE_DESTROYED', 'REPLAY_BROKEN', 'LOG_WRITE_FAILED',
+        null, undefined, '', 'NOPE',
+    ])('%p is not transient', (r) => expect(isTransientReason(r)).toBe(false));
 });

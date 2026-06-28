@@ -205,6 +205,14 @@ import {
 import { debounce_timeout, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
 
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/state-errors.js';
+import {
+    formatHttpErrorHint,
+    formatTransportErrorHint,
+    formatConflictHint,
+    formatValidationArgsHint,
+    formatValidationTargetHint,
+} from './scripts/state-errors/format.js';
 import { COMMENT_NAME_DEFAULT, CONNECT_API_MAP, consumeEphemeralScriptInjectsForMainGeneration, executeSlashCommandsOnChatInput, initDefaultSlashCommands, initSlashCommandAutoComplete, isExecutingCommandsFromChatInput, pauseScriptExecution, processChatSlashCommands, stopScriptExecution, UNIQUE_APIS } from './scripts/slash-commands.js';
 import { initMacroAutoComplete } from './scripts/autocomplete/MacroAutoComplete.js';
 import {
@@ -12009,93 +12017,100 @@ export async function setVariable(name, value, options = {}) {
 }
 
 /**
- * Gets chat-bound plugin state payload from server side.
+ * Gets chat-bound plugin state payloads from server side.
  * @param {string[]} namespaces Chat state namespaces.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit chat target.
- * @returns {Promise<Map<string, object|null>>} Stored state payloads keyed by namespace.
+ * @returns {Promise<{ok: boolean, results: Map<string, {ok: boolean, state: object|null, reason?: string, hint?: string}>, reason?: string, hint?: string}>}
+ *          Envelope: top-level `ok` reflects whole-batch transport/validation success.
+ *          `results` maps each requested namespace to a per-namespace envelope:
+ *          `{ok: true, state}` for a hit or empty miss inside a successful batch,
+ *          or `{ok: false, state: null, reason, hint}` for per-namespace failures.
  */
 export async function getChatStateBatch(namespaces, options = {}) {
-    try {
-        const requestedNamespaces = [...new Set((Array.isArray(namespaces) ? namespaces : [])
-            .map((namespace) => String(namespace || '').trim().toLowerCase())
-            .filter(Boolean))];
-        if (!requestedNamespaces.length) {
-            return new Map();
-        }
-
-        const target = resolveChatStateTarget(options?.target || null);
-        if (!target) {
-            return new Map();
-        }
-
-        const results = new Map();
-        const awaitedRequests = [];
-        const pendingNamespaces = [];
-
-        for (const namespace of requestedNamespaces) {
-            const requestKey = getChatStateRequestKey(target, namespace);
-            if (chatStateRequestCache.has(requestKey)) {
-                awaitedRequests.push(chatStateRequestCache.get(requestKey).then((data) => {
-                    results.set(namespace, cloneJsonValue(data));
-                }));
-                continue;
-            }
-
-            pendingNamespaces.push(namespace);
-        }
-
-        if (pendingNamespaces.length) {
-            const batchPromise = (async () => {
-                const response = await fetch('/api/chats/state/get-batch', {
-                    method: 'POST',
-                    cache: 'no-cache',
-                    headers: getRequestHeaders(),
-                    body: JSON.stringify({
-                        ...target,
-                        namespaces: pendingNamespaces,
-                    }),
-                });
-
-                if (!response.ok) {
-                    return new Map(pendingNamespaces.map((namespace) => [namespace, null]));
-                }
-
-                const payload = await response.json();
-                const batchResults = new Map();
-                for (const namespace of pendingNamespaces) {
-                    const data = payload?.data?.[namespace];
-                    batchResults.set(namespace, data && typeof data === 'object' ? data : null);
-                }
-                return batchResults;
-            })();
-
-            for (const namespace of pendingNamespaces) {
-                const requestKey = getChatStateRequestKey(target, namespace);
-                chatStateRequestCache.set(requestKey, batchPromise.then((batchResults) => batchResults.get(namespace) ?? null));
-            }
-
-            try {
-                const batchResults = await batchPromise;
-                for (const namespace of pendingNamespaces) {
-                    results.set(namespace, cloneJsonValue(batchResults.get(namespace) ?? null));
-                }
-            } finally {
-                for (const namespace of pendingNamespaces) {
-                    chatStateRequestCache.delete(getChatStateRequestKey(target, namespace));
-                }
-            }
-        }
-
-        if (awaitedRequests.length) {
-            await Promise.all(awaitedRequests);
-        }
-
-        return results;
-    } catch (error) {
-        console.warn('Incremental chat state batch get failed', error);
-        return new Map();
+    const cleaned = Array.from(new Set(
+        (Array.isArray(namespaces) ? namespaces : [])
+            .map(n => String(n || '').trim().toLowerCase())
+            .filter(Boolean),
+    ));
+    if (cleaned.length === 0) {
+        return { ok: true, results: new Map() };
     }
+    const target = resolveChatStateTarget(options?.target || null);
+    if (!target) {
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.VALIDATION_TARGET,
+            hint: formatValidationTargetHint('no active chat (chatId resolution failed)') };
+    }
+
+    const fromCache = new Map();
+    const need = [];
+    for (const ns of cleaned) {
+        const requestKey = getChatStateRequestKey(target, ns);
+        const cached = chatStateRequestCache.get(requestKey);
+        if (cached !== undefined) {
+            fromCache.set(ns, cached);
+        } else {
+            need.push(ns);
+        }
+    }
+    if (need.length === 0) {
+        return { ok: true, results: new Map(
+            cleaned.map(ns => [ns, { ok: true, state: fromCache.get(ns) ?? null }]),
+        ) };
+    }
+
+    let response;
+    try {
+        response = await fetch('/api/chats/state/get-batch', {
+            method: 'POST',
+            cache: 'no-cache',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ ...target, namespaces: need }),
+        });
+    } catch (error) {
+        console.warn('Chat state batch read failed (transport)', error);
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            hint: formatTransportErrorHint(error?.message || error) };
+    }
+    if (!response.ok) {
+        const bodyText = await response.text().catch(() => '');
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.HTTP_ERROR,
+            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
+    }
+    const payload = await response.json().catch(() => null);
+    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
+        ? payload.data : {};
+
+    const results = new Map();
+    for (const ns of cleaned) {
+        if (fromCache.has(ns)) {
+            results.set(ns, { ok: true, state: fromCache.get(ns) ?? null });
+            continue;
+        }
+        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
+        const requestKey = getChatStateRequestKey(target, ns);
+        chatStateRequestCache.set(requestKey, raw);
+        results.set(ns, { ok: true, state: raw });
+    }
+    return { ok: true, results };
+}
+
+/**
+ * Internal helper: reads raw chat state for namespaces during the envelope
+ * migration window. Unwraps the future {ok, state} envelope and returns the
+ * raw state object (or null). Used by producers that need the baseline state
+ * to compute optimistic `test` operations.
+ *
+ * @param {string} namespace Chat state namespace.
+ * @param {object} [options] Additional options forwarded to getChatState.
+ * @returns {Promise<object|null>} Raw state object or null.
+ */
+async function getChatStateRaw(namespace, options = {}) {
+    const result = await getChatState(namespace, options);
+    return result?.ok ? result.state : null;
 }
 
 /**
@@ -12103,16 +12118,23 @@ export async function getChatStateBatch(namespaces, options = {}) {
  * @param {string} namespace Chat state namespace.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit chat target.
- * @returns {Promise<object|null>} Stored state object or null when not found/failed.
+ * @returns {Promise<{ok: boolean, state: object|null, reason?: string, hint?: string}>}
+ *          Envelope: `{ok: true, state}` on hit or empty miss; `{ok: false, state: null, reason, hint}` on failure.
  */
 export async function getChatState(namespace, options = {}) {
     const stateNamespace = String(namespace || '').trim().toLowerCase();
     if (!stateNamespace) {
-        return null;
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: formatValidationArgsHint('namespace', 'must be a non-empty string') };
     }
-
     const results = await getChatStateBatch([stateNamespace], options);
-    return results.get(stateNamespace) ?? null;
+    if (!results.ok) {
+        return { ok: false, state: null, reason: results.reason, hint: results.hint };
+    }
+    const entry = results.results.get(stateNamespace);
+    // Per-namespace miss inside a successful batch is still ok:true with state:null.
+    return entry ?? { ok: true, state: null };
 }
 
 /**
@@ -12121,24 +12143,32 @@ export async function getChatState(namespace, options = {}) {
  * @param {object[]} operations Patch operations.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit chat target.
- * @returns {Promise<boolean>} True when patch request succeeded.
+ * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>} Result envelope: `{ok: true}` on success, or `{ok: false, reason, hint}` describing the failure mode.
  */
 export async function patchChatState(namespace, operations, options = {}) {
     try {
         const stateNamespace = String(namespace || '').trim();
-        if (!stateNamespace || !Array.isArray(operations) || operations.length === 0) {
-            return false;
+        if (!stateNamespace) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('namespace', 'must be a non-empty string'));
+        }
+        if (!Array.isArray(operations)) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('operations', 'must be an array'));
+        }
+        if (operations.length === 0) {
+            return makeStateOk();
         }
         const target = resolveChatStateTarget(options?.target || null);
         if (!target) {
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+                formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
         invalidateChatStateRequestCache(target, [stateNamespace]);
         const sourceOperations = operations.filter(op => op && typeof op === 'object');
-        // Rebuild optimistic tests from the freshest state to avoid stale test collisions.
         const baseOperations = sourceOperations.filter(op => String(op.op || '').trim().toLowerCase() !== 'test');
         if (baseOperations.length === 0) {
-            return true;
+            return makeStateOk();
         }
 
         const patchOnce = async (baseState) => {
@@ -12155,22 +12185,35 @@ export async function patchChatState(namespace, operations, options = {}) {
             });
         };
 
-        let currentState = await getChatState(stateNamespace, { target });
+        let currentState = await getChatStateRaw(stateNamespace, { target });
         let response = await patchOnce(currentState);
+        let retries = 0;
 
         if (response.status === 409) {
-            currentState = await getChatState(stateNamespace, { target });
+            retries = 1;
+            currentState = await getChatStateRaw(stateNamespace, { target });
             response = await patchOnce(currentState);
         }
 
         if (response.ok) {
             invalidateChatStateRequestCache(target, [stateNamespace]);
+            return makeStateOk();
         }
 
-        return response.ok;
+        if (response.status === 409) {
+            return makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(retries));
+        }
+        const bodyText = await response.text().catch(() => '');
+        return makeStateError(
+            STATE_ERROR_REASONS.HTTP_ERROR,
+            formatHttpErrorHint(response.status, response.statusText, bodyText),
+        );
     } catch (error) {
         console.warn('Incremental chat state patch failed', error);
-        return false;
+        return makeStateError(
+            STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error),
+        );
     }
 }
 
@@ -12187,13 +12230,19 @@ export async function patchChatState(namespace, operations, options = {}) {
 export async function updateChatState(namespace, updater, options = {}) {
     try {
         const stateNamespace = String(namespace || '').trim();
-        if (!stateNamespace || typeof updater !== 'function') {
-            return { ok: false, state: null, updated: false };
+        if (!stateNamespace) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('namespace', 'must be a non-empty string'));
+        }
+        if (typeof updater !== 'function') {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('updater', `must be a function (got: ${typeof updater})`));
         }
 
         const target = resolveChatStateTarget(options?.target || null);
         if (!target) {
-            return { ok: false, state: null, updated: false };
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+                formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
         invalidateChatStateRequestCache(target, [stateNamespace]);
 
@@ -12204,21 +12253,26 @@ export async function updateChatState(namespace, updater, options = {}) {
             ? Number(options.maxRetries)
             : 1;
 
+        let lastFailure = null;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            const currentStateRaw = await getChatState(stateNamespace, { target });
+            const currentStateRaw = await getChatStateRaw(stateNamespace, { target });
             const currentState = normalizeJsonObject(currentStateRaw);
-            const nextStateRaw = await updater(cloneJsonValue(currentState), {
-                attempt,
-                target: cloneJsonValue(target),
-                namespace: stateNamespace,
-            });
+            let nextStateRaw;
+            try {
+                nextStateRaw = await updater(cloneJsonValue(currentState), {
+                    attempt,
+                    target: cloneJsonValue(target),
+                    namespace: stateNamespace,
+                });
+            } catch (reducerError) {
+                return makeStateError(
+                    STATE_ERROR_REASONS.VALIDATION_ARGS,
+                    `reducer threw: ${String(reducerError?.message || reducerError).slice(0, 80)}`,
+                );
+            }
 
             if (nextStateRaw === undefined || nextStateRaw === null) {
-                return {
-                    ok: true,
-                    state: currentState,
-                    updated: false,
-                };
+                return makeStateOk({ state: currentState, updated: false });
             }
 
             const nextState = normalizeJsonObject(nextStateRaw);
@@ -12226,28 +12280,27 @@ export async function updateChatState(namespace, updater, options = {}) {
                 ? buildObjectPatchOperations(currentState, nextState, { maxOperations })
                 : await buildObjectPatchOperationsAsync(currentState, nextState, { maxOperations });
             if (operations.length === 0) {
-                return {
-                    ok: true,
-                    state: nextState,
-                    updated: false,
-                };
+                return makeStateOk({ state: nextState, updated: false });
             }
 
-            const ok = await patchChatState(stateNamespace, operations, { target });
-            if (ok) {
+            const patchResult = await patchChatState(stateNamespace, operations, { target });
+            if (patchResult.ok) {
                 invalidateChatStateRequestCache(target, [stateNamespace]);
-                return {
-                    ok: true,
-                    state: nextState,
-                    updated: true,
-                };
+                return makeStateOk({ state: nextState, updated: true });
+            }
+            lastFailure = patchResult;
+            // Only CONFLICT is retried — other failures short-circuit.
+            if (patchResult.reason !== STATE_ERROR_REASONS.CONFLICT) {
+                return patchResult;
             }
         }
-
-        return { ok: false, state: null, updated: false };
+        return lastFailure ?? makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(maxRetries));
     } catch (error) {
         console.warn('Incremental chat state update failed', error);
-        return { ok: false, state: null, updated: false };
+        return makeStateError(
+            STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error),
+        );
     }
 }
 
@@ -12256,38 +12309,39 @@ export async function updateChatState(namespace, updater, options = {}) {
  * @param {string} namespace Chat state namespace.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit chat target.
- * @returns {Promise<boolean>} True when delete request succeeded.
+ * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>} Result envelope: `{ok: true}` on success, or `{ok: false, reason, hint}` describing the failure mode.
  */
 export async function deleteChatState(namespace, options = {}) {
     try {
         const stateNamespace = String(namespace || '').trim();
         if (!stateNamespace) {
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('namespace', 'must be a non-empty string'));
         }
         const target = resolveChatStateTarget(options?.target || null);
         if (!target) {
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+                formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
         invalidateChatStateRequestCache(target, [stateNamespace]);
-
         const response = await fetch('/api/chats/state/delete', {
             method: 'POST',
             cache: 'no-cache',
             headers: getRequestHeaders(),
-            body: JSON.stringify({
-                ...target,
-                namespace: stateNamespace,
-            }),
+            body: JSON.stringify({ ...target, namespace: stateNamespace }),
         });
-
-        if (response.ok) {
-            invalidateChatStateRequestCache(target, [stateNamespace]);
-        }
-
-        return response.ok;
+        if (response.ok) return makeStateOk();
+        const bodyText = await response.text().catch(() => '');
+        return makeStateError(
+            STATE_ERROR_REASONS.HTTP_ERROR,
+            formatHttpErrorHint(response.status, response.statusText, bodyText),
+        );
     } catch (error) {
-        console.warn('Incremental chat state delete failed', error);
-        return false;
+        console.warn('Chat state delete failed', error);
+        return makeStateError(
+            STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error),
+        );
     }
 }
 
@@ -12296,90 +12350,96 @@ export async function deleteChatState(namespace, options = {}) {
  * @param {string[]} namespaces Preset state namespaces.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit preset target.
- * @returns {Promise<Map<string, object|null>>} Stored state payloads keyed by namespace.
+ * @returns {Promise<{ok: boolean, results: Map<string, {ok: boolean, state: object|null, reason?: string, hint?: string}>, reason?: string, hint?: string}>}
+ *          Envelope: top-level `ok` reflects whole-batch transport/validation success.
+ *          `results` maps each requested namespace to a per-namespace envelope:
+ *          `{ok: true, state}` for a hit or empty miss inside a successful batch,
+ *          or `{ok: false, state: null, reason, hint}` for per-namespace failures.
  */
 export async function getPresetStateBatch(namespaces, options = {}) {
-    try {
-        const requestedNamespaces = [...new Set((Array.isArray(namespaces) ? namespaces : [])
-            .map((namespace) => String(namespace || '').trim().toLowerCase())
-            .filter(Boolean))];
-        if (!requestedNamespaces.length) {
-            return new Map();
-        }
-
-        const target = resolvePresetStateTarget(options?.target || null);
-        if (!target) {
-            return new Map();
-        }
-
-        const results = new Map();
-        const awaitedRequests = [];
-        const pendingNamespaces = [];
-
-        for (const namespace of requestedNamespaces) {
-            const requestKey = getPresetStateRequestKey(target, namespace);
-            if (presetStateRequestCache.has(requestKey)) {
-                awaitedRequests.push(presetStateRequestCache.get(requestKey).then((data) => {
-                    results.set(namespace, cloneJsonValue(data));
-                }));
-                continue;
-            }
-
-            pendingNamespaces.push(namespace);
-        }
-
-        if (pendingNamespaces.length) {
-            const batchPromise = (async () => {
-                const response = await fetch('/api/presets/state/get-batch', {
-                    method: 'POST',
-                    cache: 'no-cache',
-                    headers: getRequestHeaders(),
-                    body: JSON.stringify({
-                        apiId: target.apiId,
-                        name: target.name,
-                        namespaces: pendingNamespaces,
-                    }),
-                });
-
-                if (!response.ok) {
-                    return new Map(pendingNamespaces.map((namespace) => [namespace, null]));
-                }
-
-                const payload = await response.json();
-                const batchResults = new Map();
-                for (const namespace of pendingNamespaces) {
-                    const data = payload?.data?.[namespace];
-                    batchResults.set(namespace, data && typeof data === 'object' ? data : null);
-                }
-                return batchResults;
-            })();
-
-            for (const namespace of pendingNamespaces) {
-                const requestKey = getPresetStateRequestKey(target, namespace);
-                presetStateRequestCache.set(requestKey, batchPromise.then((batchResults) => batchResults.get(namespace) ?? null));
-            }
-
-            try {
-                const batchResults = await batchPromise;
-                for (const namespace of pendingNamespaces) {
-                    results.set(namespace, cloneJsonValue(batchResults.get(namespace) ?? null));
-                }
-            } finally {
-                for (const namespace of pendingNamespaces) {
-                    presetStateRequestCache.delete(getPresetStateRequestKey(target, namespace));
-                }
-            }
-        }
-
-        if (awaitedRequests.length) {
-            await Promise.all(awaitedRequests);
-        }
-
-        return results;
-    } catch (error) {
-        console.warn('Incremental preset state batch get failed', error);
-        return new Map();
+    const cleaned = Array.from(new Set(
+        (Array.isArray(namespaces) ? namespaces : [])
+            .map(n => String(n || '').trim().toLowerCase())
+            .filter(Boolean),
+    ));
+    if (cleaned.length === 0) {
+        return { ok: true, results: new Map() };
     }
+    const target = resolvePresetStateTarget(options?.target || null);
+    if (!target) {
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.VALIDATION_TARGET,
+            hint: formatValidationTargetHint('no active preset (apiId/name resolution failed)') };
+    }
+
+    const fromCache = new Map();
+    const need = [];
+    for (const ns of cleaned) {
+        const requestKey = getPresetStateRequestKey(target, ns);
+        const cached = presetStateRequestCache.get(requestKey);
+        if (cached !== undefined) {
+            fromCache.set(ns, cached);
+        } else {
+            need.push(ns);
+        }
+    }
+    if (need.length === 0) {
+        return { ok: true, results: new Map(
+            cleaned.map(ns => [ns, { ok: true, state: fromCache.get(ns) ?? null }]),
+        ) };
+    }
+
+    let response;
+    try {
+        response = await fetch('/api/presets/state/get-batch', {
+            method: 'POST',
+            cache: 'no-cache',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ apiId: target.apiId, name: target.name, namespaces: need }),
+        });
+    } catch (error) {
+        console.warn('Preset state batch read failed (transport)', error);
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            hint: formatTransportErrorHint(error?.message || error) };
+    }
+    if (!response.ok) {
+        const bodyText = await response.text().catch(() => '');
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.HTTP_ERROR,
+            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
+    }
+    const payload = await response.json().catch(() => null);
+    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
+        ? payload.data : {};
+
+    const results = new Map();
+    for (const ns of cleaned) {
+        if (fromCache.has(ns)) {
+            results.set(ns, { ok: true, state: fromCache.get(ns) ?? null });
+            continue;
+        }
+        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
+        const requestKey = getPresetStateRequestKey(target, ns);
+        presetStateRequestCache.set(requestKey, raw);
+        results.set(ns, { ok: true, state: raw });
+    }
+    return { ok: true, results };
+}
+
+/**
+ * Internal helper: reads raw preset state for a namespace during the envelope
+ * migration window. Unwraps the future {ok, state} envelope and returns the
+ * raw state object (or null). Used by producers that need the baseline state
+ * to compute optimistic `test` operations.
+ *
+ * @param {string} namespace Preset state namespace.
+ * @param {object} [options] Additional options forwarded to getPresetState.
+ * @returns {Promise<object|null>} Raw state object or null.
+ */
+async function getPresetStateRaw(namespace, options = {}) {
+    const result = await getPresetState(namespace, options);
+    return result?.ok ? result.state : null;
 }
 
 /**
@@ -12387,16 +12447,23 @@ export async function getPresetStateBatch(namespaces, options = {}) {
  * @param {string} namespace Preset state namespace.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit preset target.
- * @returns {Promise<object|null>} Stored state object or null when not found/failed.
+ * @returns {Promise<{ok: boolean, state: object|null, reason?: string, hint?: string}>}
+ *          Envelope: `{ok: true, state}` on hit or empty miss; `{ok: false, state: null, reason, hint}` on failure.
  */
 export async function getPresetState(namespace, options = {}) {
     const stateNamespace = String(namespace || '').trim().toLowerCase();
     if (!stateNamespace) {
-        return null;
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: formatValidationArgsHint('namespace', 'must be a non-empty string') };
     }
-
     const results = await getPresetStateBatch([stateNamespace], options);
-    return results.get(stateNamespace) ?? null;
+    if (!results.ok) {
+        return { ok: false, state: null, reason: results.reason, hint: results.hint };
+    }
+    const entry = results.results.get(stateNamespace);
+    // Per-namespace miss inside a successful batch is still ok:true with state:null.
+    return entry ?? { ok: true, state: null };
 }
 
 /**
@@ -12405,23 +12472,32 @@ export async function getPresetState(namespace, options = {}) {
  * @param {object[]} operations Patch operations.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit preset target.
- * @returns {Promise<boolean>} True when patch request succeeded.
+ * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>} Result envelope: `{ok: true}` on success, or `{ok: false, reason, hint}` describing the failure mode.
  */
 export async function patchPresetState(namespace, operations, options = {}) {
     try {
         const stateNamespace = String(namespace || '').trim();
-        if (!stateNamespace || !Array.isArray(operations) || operations.length === 0) {
-            return false;
+        if (!stateNamespace) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('namespace', 'must be a non-empty string'));
+        }
+        if (!Array.isArray(operations)) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('operations', 'must be an array'));
+        }
+        if (operations.length === 0) {
+            return makeStateOk();
         }
         const target = resolvePresetStateTarget(options?.target || null);
         if (!target) {
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+                formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
         invalidatePresetStateRequestCache(target, [stateNamespace]);
         const sourceOperations = operations.filter(op => op && typeof op === 'object');
         const baseOperations = sourceOperations.filter(op => String(op.op || '').trim().toLowerCase() !== 'test');
         if (baseOperations.length === 0) {
-            return true;
+            return makeStateOk();
         }
 
         const patchOnce = async (baseState) => {
@@ -12439,22 +12515,35 @@ export async function patchPresetState(namespace, operations, options = {}) {
             });
         };
 
-        let currentState = await getPresetState(stateNamespace, { target });
+        let currentState = await getPresetStateRaw(stateNamespace, { target });
         let response = await patchOnce(currentState);
+        let retries = 0;
 
         if (response.status === 409) {
-            currentState = await getPresetState(stateNamespace, { target });
+            retries = 1;
+            currentState = await getPresetStateRaw(stateNamespace, { target });
             response = await patchOnce(currentState);
         }
 
         if (response.ok) {
             invalidatePresetStateRequestCache(target, [stateNamespace]);
+            return makeStateOk();
         }
 
-        return response.ok;
+        if (response.status === 409) {
+            return makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(retries));
+        }
+        const bodyText = await response.text().catch(() => '');
+        return makeStateError(
+            STATE_ERROR_REASONS.HTTP_ERROR,
+            formatHttpErrorHint(response.status, response.statusText, bodyText),
+        );
     } catch (error) {
         console.warn('Incremental preset state patch failed', error);
-        return false;
+        return makeStateError(
+            STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error),
+        );
     }
 }
 
@@ -12471,13 +12560,19 @@ export async function patchPresetState(namespace, operations, options = {}) {
 export async function updatePresetState(namespace, updater, options = {}) {
     try {
         const stateNamespace = String(namespace || '').trim();
-        if (!stateNamespace || typeof updater !== 'function') {
-            return { ok: false, state: null, updated: false };
+        if (!stateNamespace) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('namespace', 'must be a non-empty string'));
+        }
+        if (typeof updater !== 'function') {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('updater', `must be a function (got: ${typeof updater})`));
         }
 
         const target = resolvePresetStateTarget(options?.target || null);
         if (!target) {
-            return { ok: false, state: null, updated: false };
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+                formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
         invalidatePresetStateRequestCache(target, [stateNamespace]);
 
@@ -12488,21 +12583,26 @@ export async function updatePresetState(namespace, updater, options = {}) {
             ? Number(options.maxRetries)
             : 1;
 
+        let lastFailure = null;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            const currentStateRaw = await getPresetState(stateNamespace, { target });
+            const currentStateRaw = await getPresetStateRaw(stateNamespace, { target });
             const currentState = normalizeJsonObject(currentStateRaw);
-            const nextStateRaw = await updater(cloneJsonValue(currentState), {
-                attempt,
-                target: cloneJsonValue(target),
-                namespace: stateNamespace,
-            });
+            let nextStateRaw;
+            try {
+                nextStateRaw = await updater(cloneJsonValue(currentState), {
+                    attempt,
+                    target: cloneJsonValue(target),
+                    namespace: stateNamespace,
+                });
+            } catch (reducerError) {
+                return makeStateError(
+                    STATE_ERROR_REASONS.VALIDATION_ARGS,
+                    `reducer threw: ${String(reducerError?.message || reducerError).slice(0, 80)}`,
+                );
+            }
 
             if (nextStateRaw === undefined || nextStateRaw === null) {
-                return {
-                    ok: true,
-                    state: currentState,
-                    updated: false,
-                };
+                return makeStateOk({ state: currentState, updated: false });
             }
 
             const nextState = normalizeJsonObject(nextStateRaw);
@@ -12510,28 +12610,27 @@ export async function updatePresetState(namespace, updater, options = {}) {
                 ? buildObjectPatchOperations(currentState, nextState, { maxOperations })
                 : await buildObjectPatchOperationsAsync(currentState, nextState, { maxOperations });
             if (operations.length === 0) {
-                return {
-                    ok: true,
-                    state: nextState,
-                    updated: false,
-                };
+                return makeStateOk({ state: nextState, updated: false });
             }
 
-            const ok = await patchPresetState(stateNamespace, operations, { target });
-            if (ok) {
+            const patchResult = await patchPresetState(stateNamespace, operations, { target });
+            if (patchResult.ok) {
                 invalidatePresetStateRequestCache(target, [stateNamespace]);
-                return {
-                    ok: true,
-                    state: nextState,
-                    updated: true,
-                };
+                return makeStateOk({ state: nextState, updated: true });
+            }
+            lastFailure = patchResult;
+            // Only CONFLICT is retried — other failures short-circuit.
+            if (patchResult.reason !== STATE_ERROR_REASONS.CONFLICT) {
+                return patchResult;
             }
         }
-
-        return { ok: false, state: null, updated: false };
+        return lastFailure ?? makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(maxRetries));
     } catch (error) {
         console.warn('Incremental preset state update failed', error);
-        return { ok: false, state: null, updated: false };
+        return makeStateError(
+            STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error),
+        );
     }
 }
 
@@ -12540,20 +12639,21 @@ export async function updatePresetState(namespace, updater, options = {}) {
  * @param {string} namespace Preset state namespace.
  * @param {object} [options] Additional options.
  * @param {object|null} [options.target] Optional explicit preset target.
- * @returns {Promise<boolean>} True when delete request succeeded.
+ * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>} Result envelope: `{ok: true}` on success, or `{ok: false, reason, hint}` describing the failure mode.
  */
 export async function deletePresetState(namespace, options = {}) {
     try {
         const stateNamespace = String(namespace || '').trim();
         if (!stateNamespace) {
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                formatValidationArgsHint('namespace', 'must be a non-empty string'));
         }
         const target = resolvePresetStateTarget(options?.target || null);
         if (!target) {
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+                formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
         invalidatePresetStateRequestCache(target, [stateNamespace]);
-
         const response = await fetch('/api/presets/state/delete', {
             method: 'POST',
             cache: 'no-cache',
@@ -12564,28 +12664,32 @@ export async function deletePresetState(namespace, options = {}) {
                 namespace: stateNamespace,
             }),
         });
-
-        if (response.ok) {
-            invalidatePresetStateRequestCache(target, [stateNamespace]);
-        }
-
-        return response.ok;
+        if (response.ok) return makeStateOk();
+        const bodyText = await response.text().catch(() => '');
+        return makeStateError(
+            STATE_ERROR_REASONS.HTTP_ERROR,
+            formatHttpErrorHint(response.status, response.statusText, bodyText),
+        );
     } catch (error) {
-        console.warn('Incremental preset state delete failed', error);
-        return false;
+        console.warn('Preset state delete failed', error);
+        return makeStateError(
+            STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error),
+        );
     }
 }
 
 /**
  * Deletes all preset-bound plugin state payloads for a preset target.
  * @param {object|null} target Explicit preset target.
- * @returns {Promise<boolean>} True when delete request succeeded.
+ * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>} Result envelope: `{ok: true}` on success, or `{ok: false, reason, hint}` describing the failure mode.
  */
 export async function deleteAllPresetState(target = null) {
     try {
         const resolvedTarget = resolvePresetStateTarget(target);
         if (!resolvedTarget) {
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+                'No active preset to resolve apiId/name from — select a preset before calling deleteAllPresetState.');
         }
         invalidateAllPresetStateRequestCache(resolvedTarget);
 
@@ -12601,12 +12705,19 @@ export async function deleteAllPresetState(target = null) {
 
         if (response.ok) {
             invalidateAllPresetStateRequestCache(resolvedTarget);
+            return makeStateOk();
         }
-
-        return response.ok;
+        const bodyText = await response.text().catch(() => '');
+        return makeStateError(
+            STATE_ERROR_REASONS.HTTP_ERROR,
+            formatHttpErrorHint(response.status, response.statusText, bodyText),
+        );
     } catch (error) {
         console.warn('Preset state delete-all failed', error);
-        return false;
+        return makeStateError(
+            STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error),
+        );
     }
 }
 

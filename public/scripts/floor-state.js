@@ -35,10 +35,21 @@ import {
     removeSwipeFromCommits,
     inferCommitTargetFromChat,
     resolveCommitTarget,
+    isTransientReason,
 } from './floor-state/core.js';
 import { applyPatch } from './util/fast-json-patch.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
 
 const LOG_SUFFIX = '__floor_log';
+
+/**
+ * Compose a `LOG_WRITE_FAILED` hint that names the offending log namespace
+ * and folds in the underlying writer's hint (if any) within the 120-char
+ * cap that `makeStateError` enforces on every envelope hint.
+ */
+function logWriteFailedHint(namespace, underlyingHint) {
+    return `private log ${namespace}__floor_log: ${underlyingHint || 'write rejected'}`.slice(0, 120);
+}
 
 /**
  * Resolve runtime deps from script.js. Lazy so test files can
@@ -226,14 +237,17 @@ export function createFloorStateWithDeps(options, deps) {
 
     /**
      * Replace the entire commit log with the given log object.
+     *
+     * @returns {Promise<{ok: true} | {ok: false, reason: string, hint: string}>}
      */
     async function writeLog(nextLog) {
         const result = await runtime.updateChatState(logNamespace, () => nextLog);
         if (!result || result.ok === false) {
+            const hint = logWriteFailedHint(namespace, result?.hint);
             console.warn(`[floor-state:${namespace}] writeLog failed`, result);
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.LOG_WRITE_FAILED, hint);
         }
-        return true;
+        return makeStateOk();
     }
 
     /**
@@ -253,9 +267,21 @@ export function createFloorStateWithDeps(options, deps) {
      * the chat shrinks past the prior commit's floor, which matches how a
      * user thinks about "stuff I just did sticks around until I delete the
      * thing that triggered it."
+     *
+     * The clamp branch is unreachable when the caller is fs.patch — the
+     * public API now rejects monotonicity violations up front (Task 3.3) —
+     * but the clamp is kept as a defensive recovery for direct internal
+     * callers that bypass the public API.
+     *
+     * @returns {Promise<{ok: true} | {ok: false, reason: string, hint: string}>}
      */
     async function appendCommit(commit) {
-        if (!isValidCommit(commit)) return false;
+        if (!isValidCommit(commit)) {
+            return makeStateError(
+                STATE_ERROR_REASONS.VALIDATION_COMMIT,
+                'commit failed isValidCommit (malformed shape)',
+            );
+        }
         const result = await runtime.updateChatState(logNamespace, (current) => {
             const next = normalizeLog(current);
             let toAppend = commit;
@@ -272,10 +298,11 @@ export function createFloorStateWithDeps(options, deps) {
             return next;
         });
         if (!result || result.ok === false) {
+            const hint = logWriteFailedHint(namespace, result?.hint);
             console.warn(`[floor-state:${namespace}] appendCommit failed`, result);
-            return false;
+            return makeStateError(STATE_ERROR_REASONS.LOG_WRITE_FAILED, hint);
         }
-        return true;
+        return makeStateOk();
     }
 
     /**
@@ -288,7 +315,11 @@ export function createFloorStateWithDeps(options, deps) {
             const log = await readLog();
             const survivors = truncateCommits(log.commits, Number(newChatLength));
             if (survivors.length !== log.commits.length) {
-                await writeLog({ version: LOG_VERSION, commits: survivors });
+                const writeResult = await writeLog({ version: LOG_VERSION, commits: survivors });
+                if (!writeResult.ok) {
+                    console.warn(`[floor-state:${namespace}] truncate write failed (${writeResult.reason}): ${writeResult.hint}`);
+                    return; // stale cache matches stale log on disk
+                }
             }
             invalidateCache();
         } catch (error) {
@@ -311,7 +342,11 @@ export function createFloorStateWithDeps(options, deps) {
             const log = await readLog();
             const next = removeSwipeFromCommits(log.commits, messageId, swipeId);
             if (next.length !== log.commits.length || next.some((c, i) => c !== log.commits[i])) {
-                await writeLog({ version: LOG_VERSION, commits: next });
+                const writeResult = await writeLog({ version: LOG_VERSION, commits: next });
+                if (!writeResult.ok) {
+                    console.warn(`[floor-state:${namespace}] swipe-delete write failed (${writeResult.reason}): ${writeResult.hint}`);
+                    return; // stale cache matches stale log on disk
+                }
             }
             invalidateCache();
         } catch (error) {
@@ -352,7 +387,8 @@ export function createFloorStateWithDeps(options, deps) {
                 { target: targetTarget },
             );
             if (!result || result.ok === false) {
-                console.warn(`[floor-state:${namespace}] branch inheritance write failed`, result);
+                const hint = logWriteFailedHint(namespace, result?.hint);
+                console.warn(`[floor-state:${namespace}] branch inheritance write failed (${STATE_ERROR_REASONS.LOG_WRITE_FAILED}): ${hint}`);
             }
         } catch (error) {
             console.warn(`[floor-state:${namespace}] branch inheritance failed`, error);
@@ -408,8 +444,17 @@ export function createFloorStateWithDeps(options, deps) {
      * @returns {Promise<boolean>} true on success
      */
     async function patch(operations, options) {
-        if (destroyed) return false;
-        if (!Array.isArray(operations) || operations.length === 0) return true;
+        if (destroyed) {
+            return makeStateError(STATE_ERROR_REASONS.INSTANCE_DESTROYED,
+                `floor-state instance for namespace=${namespace} was destroyed`);
+        }
+        if (!Array.isArray(operations)) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                'operations must be an array');
+        }
+        if (operations.length === 0) {
+            return makeStateOk({ updated: false });
+        }
 
         const hasOverride = options !== null && options !== undefined
             && typeof options === 'object'
@@ -419,22 +464,37 @@ export function createFloorStateWithDeps(options, deps) {
             : inferCommitTargetFromChat(runtime.getChat());
         if (!target) {
             if (hasOverride) {
-                console.warn(`[floor-state:${namespace}] patch rejected: invalid floor/swipeId override`, options);
-                return false;
+                const chat = runtime.getChat();
+                const len = Array.isArray(chat) ? chat.length : 0;
+                return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
+                    `override floor=${options?.floor} out of range (chat.length=${len})`);
             }
-            return true;
+            return makeStateOk({ updated: false });
+        }
+
+        // Monotonicity check at the public API surface: refuse override that would
+        // violate the append-order invariant rather than silently clamping.
+        if (hasOverride) {
+            const log = await readLog();
+            if (log.commits.length > 0) {
+                const lastFloor = log.commits[log.commits.length - 1].floor;
+                if (target.floor < lastFloor) {
+                    return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
+                        `override floor=${target.floor} below log tail=${lastFloor}, would violate monotonicity`);
+                }
+            }
         }
 
         beginPending();
         try {
-            const appended = await appendCommit({
+            const appendResult = await appendCommit({
                 floor: target.floor,
                 swipeId: target.swipeId,
                 patches: operations,
             });
-            if (!appended) return false;
+            if (!appendResult.ok) return appendResult;
             invalidateCache();
-            return true;
+            return makeStateOk({ updated: true });
         } finally {
             endPending();
         }
@@ -459,16 +519,35 @@ export function createFloorStateWithDeps(options, deps) {
      * @returns {Promise<boolean>}
      */
     async function update(reducer, options) {
-        if (destroyed) return false;
-        if (typeof reducer !== 'function') return false;
+        if (destroyed) {
+            return makeStateError(STATE_ERROR_REASONS.INSTANCE_DESTROYED,
+                `floor-state instance for namespace=${namespace} was destroyed`);
+        }
+        if (typeof reducer !== 'function') {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                `updater must be a function (got: ${typeof reducer})`);
+        }
 
         const run = async () => {
-            const current = (await get()) ?? {};
-            const next = await reducer(current);
-            if (!next || typeof next !== 'object' || Array.isArray(next)) return true;
-
+            const readResult = await get();
+            if (!readResult.ok) return readResult;
+            const current = readResult.state ?? {};
+            let next;
+            try {
+                next = await reducer(current);
+            } catch (reducerError) {
+                return makeStateError(
+                    STATE_ERROR_REASONS.VALIDATION_ARGS,
+                    `reducer threw: ${String(reducerError?.message || reducerError).slice(0, 80)}`,
+                );
+            }
+            if (!next || typeof next !== 'object' || Array.isArray(next)) {
+                return makeStateOk({ updated: false });
+            }
             const operations = await runtime.buildObjectPatchOperationsAsync(current, next);
-            if (!Array.isArray(operations) || operations.length === 0) return true;
+            if (!Array.isArray(operations) || operations.length === 0) {
+                return makeStateOk({ updated: false });
+            }
             return patch(operations, options);
         };
         const queued = updateQueue.then(run, run);
@@ -494,27 +573,32 @@ export function createFloorStateWithDeps(options, deps) {
      * @returns {Promise<boolean>} true when the new log is durably persisted
      */
     async function reset(commits) {
-        if (destroyed) return false;
-        if (!Array.isArray(commits)) return false;
+        if (destroyed) {
+            return makeStateError(STATE_ERROR_REASONS.INSTANCE_DESTROYED,
+                `floor-state instance for namespace=${namespace} was destroyed`);
+        }
+        if (!Array.isArray(commits)) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'commits must be an array');
+        }
         const chat = runtime.getChat();
         const chatLen = Array.isArray(chat) ? chat.length : 0;
         for (let i = 0; i < commits.length; i++) {
             const commit = commits[i];
             if (!isValidCommit(commit)) {
-                console.warn(`[floor-state:${namespace}] reset rejected: commit ${i} is malformed`, commit);
-                return false;
+                return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
+                    `commit #${i}: malformed`);
             }
             if (commit.floor >= chatLen) {
-                console.warn(`[floor-state:${namespace}] reset rejected: commit ${i} floor=${commit.floor} is out of range (chat.length=${chatLen})`);
-                return false;
+                return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
+                    `commit #${i}: floor=${commit.floor} out of range (chat.length=${chatLen})`);
             }
         }
         beginPending();
         try {
-            const ok = await writeLog({ version: LOG_VERSION, commits });
-            if (!ok) return false;
+            const writeResult = await writeLog({ version: LOG_VERSION, commits });
+            if (!writeResult.ok) return writeResult;
             invalidateCache();
-            return true;
+            return makeStateOk({ updated: true });
         } finally {
             endPending();
         }
@@ -542,15 +626,19 @@ export function createFloorStateWithDeps(options, deps) {
      * @returns {Promise<object|null>}
      */
     async function get() {
-        if (destroyed) return null;
+        if (destroyed) {
+            return { ok: false, state: null,
+                reason: STATE_ERROR_REASONS.INSTANCE_DESTROYED,
+                hint: `floor-state instance for namespace=${namespace} was destroyed` };
+        }
         await migrateIfNeeded();
         if (cachedReplay !== CACHE_UNSET) {
-            return cachedReplay === null ? null : structuredClone(cachedReplay);
+            return { ok: true, state: cachedReplay === null ? null : structuredClone(cachedReplay) };
         }
         const log = await readLog();
         if (log.commits.length === 0) {
             cachedReplay = null;
-            return null;
+            return { ok: true, state: null };
         }
         const swipeMap = buildSwipeMapFromChat(runtime.getChat());
         try {
@@ -558,13 +646,13 @@ export function createFloorStateWithDeps(options, deps) {
         } catch (error) {
             console.warn(`[floor-state:${namespace}] replay failed, truncating by broken floor`, error);
             const recovered = await recoverByTruncatingBrokenFloor(log, swipeMap, error);
-            if (recovered === null) {
-                cachedReplay = null;
-                return null;
+            if (recovered && recovered.ok === false) {
+                cachedReplay = CACHE_UNSET;
+                return recovered;
             }
             cachedReplay = recovered;
         }
-        return structuredClone(cachedReplay);
+        return { ok: true, state: cachedReplay === null ? null : structuredClone(cachedReplay) };
     }
 
     /**
@@ -588,43 +676,37 @@ export function createFloorStateWithDeps(options, deps) {
         for (let i = 0; i < log.commits.length; i++) {
             const commit = log.commits[i];
             if (!shouldKeepCommit(commit, swipeMap)) continue;
-            try {
-                applyPatch(probe, commit.patches, false, true);
-            } catch (_) {
-                brokenIndex = i;
-                break;
-            }
+            try { applyPatch(probe, commit.patches, false, true); }
+            catch (_) { brokenIndex = i; break; }
         }
         if (brokenIndex < 0) {
-            // Either the per-commit probe didn't reproduce the failure (a
-            // race we can't classify) or every commit was filtered out by
-            // swipeMap. Surface the original error rather than silently
-            // returning empty.
-            throw replayError;
+            return { ok: false, state: null,
+                reason: STATE_ERROR_REASONS.REPLAY_BROKEN,
+                hint: `replay failed but no broken commit found: ${String(replayError?.message || replayError).slice(0, 60)}` };
         }
         const brokenFloor = log.commits[brokenIndex].floor;
         if (typeof runtime.updateChatState === 'function') {
-            try {
-                await runtime.updateChatState(
-                    `${namespace}__orphans`,
-                    () => ({
-                        recoveredFromBrokenLog: true,
-                        replayError: String(replayError?.message || replayError || 'unknown'),
-                        brokenCommitIndex: brokenIndex,
-                        brokenFloor,
-                        brokenLog: log,
-                    }),
-                    { maxOperations: 16000 },
-                );
-            } catch (backupErr) {
-                console.warn(`[floor-state:${namespace}] recovery: orphans backup write failed, continuing`, backupErr);
+            const backupResult = await runtime.updateChatState(
+                `${namespace}__orphans`,
+                () => ({
+                    recoveredFromBrokenLog: true,
+                    replayError: String(replayError?.message || replayError || 'unknown'),
+                    brokenCommitIndex: brokenIndex,
+                    brokenFloor,
+                    brokenLog: log,
+                }),
+                { maxOperations: 16000 },
+            );
+            if (!backupResult.ok) {
+                console.warn(`[floor-state:${namespace}] recovery: orphans backup write failed (${backupResult.reason}): ${backupResult.hint}, continuing`);
             }
         }
         const survivors = log.commits.filter((c) => c.floor < brokenFloor);
-        const ok = await writeLog({ version: LOG_VERSION, commits: survivors });
-        if (!ok) {
-            console.warn(`[floor-state:${namespace}] recovery: truncated log write failed, leaving broken log in place`);
-            throw replayError;
+        const writeResult = await writeLog({ version: LOG_VERSION, commits: survivors });
+        if (!writeResult.ok) {
+            return { ok: false, state: null,
+                reason: STATE_ERROR_REASONS.REPLAY_BROKEN,
+                hint: `replay failed at commit #${brokenIndex} (floor=${brokenFloor}); recovery write also failed: ${writeResult.hint}`.slice(0, 120) };
         }
         if (survivors.length === 0) return null;
         return computeTargetState(survivors, buildSwipeMapFromChat(runtime.getChat()));
@@ -654,7 +736,18 @@ export function createFloorStateWithDeps(options, deps) {
         if (migrationPromise) return migrationPromise;
         migrationPromise = (async () => {
             try {
-                const data = await runtime.getChatState(namespace);
+                const dataResult = await runtime.getChatState(namespace);
+                // Read failed transiently? Don't latch — retry on next get().
+                if (dataResult && dataResult.ok === false) {
+                    if (isTransientReason(dataResult.reason)) {
+                        console.warn(`[floor-state:${namespace}] migration read failed transiently (${dataResult.reason}): ${dataResult.hint}; will retry on next get()`);
+                        return;
+                    }
+                    console.warn(`[floor-state:${namespace}] migration read failed terminally (${dataResult.reason}): ${dataResult.hint}; abandoning migration`);
+                    migrationDone = true;
+                    return;
+                }
+                const data = dataResult?.ok ? dataResult.state : dataResult;
                 if (data == null || typeof data !== 'object') {
                     migrationDone = true;
                     return;
@@ -662,14 +755,8 @@ export function createFloorStateWithDeps(options, deps) {
                 const log = await readLog();
                 let replay = {};
                 if (log.commits.length > 0) {
-                    try {
-                        replay = computeTargetState(log.commits, buildSwipeMapFromChat(runtime.getChat()));
-                    } catch (_) {
-                        // Leave replay as {} — the diff will then treat the
-                        // entire data sidecar as drift, which is the right
-                        // call when the log is broken: get()'s recovery
-                        // will truncate the log next.
-                    }
+                    try { replay = computeTargetState(log.commits, buildSwipeMapFromChat(runtime.getChat())); }
+                    catch (_) { /* leave replay as {} */ }
                 }
                 await captureOrphansAndDeleteData(data, replay);
                 migrationDone = true;
@@ -694,25 +781,21 @@ export function createFloorStateWithDeps(options, deps) {
             }
         }
         if (Array.isArray(diff) && diff.length > 0 && typeof runtime.updateChatState === 'function') {
-            try {
-                await runtime.updateChatState(
-                    `${namespace}__orphans`,
-                    () => ({
-                        dataPayload: data,
-                        replayPayload: replay,
-                        diff,
-                    }),
-                    { maxOperations: 16000 },
-                );
-            } catch (backupErr) {
-                console.warn(`[floor-state:${namespace}] migration: orphans backup write failed, continuing`, backupErr);
+            const backupResult = await runtime.updateChatState(
+                `${namespace}__orphans`,
+                () => ({ dataPayload: data, replayPayload: replay, diff }),
+                { maxOperations: 16000 },
+            );
+            if (!backupResult.ok) {
+                console.warn(`[floor-state:${namespace}] migration: orphans backup write failed (${backupResult.reason}): ${backupResult.hint}; preserving legacy data, will retry next mount`);
+                throw new Error('migration backup failed');  // caller's catch leaves migrationDone=false
             }
         }
         if (typeof runtime.deleteChatState === 'function') {
-            try {
-                await runtime.deleteChatState(namespace);
-            } catch (deleteErr) {
-                console.warn(`[floor-state:${namespace}] migration: deleteChatState failed, continuing`, deleteErr);
+            const deleteResult = await runtime.deleteChatState(namespace);
+            if (!deleteResult.ok) {
+                console.warn(`[floor-state:${namespace}] migration: delete failed (${deleteResult.reason}): ${deleteResult.hint}; will retry next mount`);
+                throw new Error('migration delete failed');
             }
         }
     }
@@ -742,30 +825,28 @@ export function createFloorStateWithDeps(options, deps) {
      *     was requested and the underlying delete failed)
      */
     async function destroy({ purge = false } = {}) {
-        if (destroyed) return true;
+        if (destroyed) return makeStateOk();
         destroyed = true;
         allInstances.delete(instance);
-        // Force-resolve any pending gate so callers awaiting ready() unblock; in-flight
-        // work will complete on its own without further side effects on this instance.
         pendingCount = 0;
-        if (pendingResolver) {
-            const r = pendingResolver;
-            pendingResolver = null;
-            r();
-        }
+        if (pendingResolver) { const r = pendingResolver; pendingResolver = null; r(); }
         invalidateCache();
-        if (!purge) return true;
+        if (!purge) return makeStateOk();
         if (typeof runtime.deleteChatState !== 'function') {
-            console.warn(`[floor-state:${namespace}] destroy(purge): deleteChatState is unavailable; log sidecar left on disk`);
-            return false;
+            console.warn(`[floor-state:${namespace}] destroy(purge): deleteChatState unavailable`);
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                'deleteChatState dep is missing');
         }
-        try {
-            await runtime.deleteChatState(logNamespace);
-            return true;
-        } catch (error) {
-            console.warn(`[floor-state:${namespace}] destroy(purge): deleteChatState failed`, error);
-            return false;
+        const deleteResult = await runtime.deleteChatState(logNamespace);
+        if (!deleteResult || deleteResult.ok === false) {
+            const hint = deleteResult?.hint || 'log sidecar delete rejected';
+            console.warn(`[floor-state:${namespace}] destroy(purge): delete failed: ${hint}`);
+            return makeStateError(
+                deleteResult?.reason || STATE_ERROR_REASONS.HTTP_ERROR,
+                hint,
+            );
         }
+        return makeStateOk();
     }
 
     const instance = Object.freeze({

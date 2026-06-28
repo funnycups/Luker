@@ -223,3 +223,9 @@ export function resolveCommitTarget(chat, override) {
     }
     return { floor, swipeId };
 }
+
+const TRANSIENT_REASONS = new Set(['CONFLICT', 'HTTP_ERROR', 'TRANSPORT_ERROR']);
+
+export function isTransientReason(reason) {
+    return typeof reason === 'string' && TRANSIENT_REASONS.has(reason);
+}

@@ -63,7 +63,7 @@ function makeStore() {
             const k = String(ns ?? '').trim().toLowerCase();
             const part = partitionFor(options?.target);
             part.delete(k);
-            return true;
+            return { ok: true };
         },
         // Backwards-compatible alias for tests that pre-seed / inspect the
         // default-target partition directly.
@@ -195,24 +195,24 @@ describe('createFloorStateWithDeps — basic operations', () => {
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        const ok = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-        expect(ok).toBe(true);
+        const result = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(result.ok).toBe(true);
 
         // Single-write: only the log is touched; data namespace is derived.
         expect(store._raw.get('foo')).toBeUndefined();
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
 
         const log = store._raw.get('foo__floor_log');
         expect(log.commits).toHaveLength(1);
         expect(log.commits[0]).toMatchObject({ floor: 0, swipeId: 0 });
     });
 
-    test('patch returns true on empty operations without writing', async () => {
+    test('patch returns ok on empty operations without writing', async () => {
         const chatRef = { value: [msg(0)] };
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        expect(await fs.patch([])).toBe(true);
+        expect((await fs.patch([])).ok).toBe(true);
         expect(store._raw.get('foo')).toBeUndefined();
         expect(store._raw.get('foo__floor_log')).toBeUndefined();
     });
@@ -223,10 +223,10 @@ describe('createFloorStateWithDeps — basic operations', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
         await fs.update(() => ({ a: 1, b: { c: 2 } }));
-        expect(await fs.get()).toEqual({ a: 1, b: { c: 2 } });
+        expect((await fs.get()).state).toEqual({ a: 1, b: { c: 2 } });
 
         await fs.update((current) => ({ ...current, b: { c: 99 } }));
-        expect(await fs.get()).toEqual({ a: 1, b: { c: 99 } });
+        expect((await fs.get()).state).toEqual({ a: 1, b: { c: 99 } });
 
         expect(store._raw.get('foo__floor_log').commits).toHaveLength(2);
         // Data namespace never written.
@@ -238,10 +238,10 @@ describe('createFloorStateWithDeps — basic operations', () => {
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        expect(await fs.update(() => null)).toBe(true);
-        expect(await fs.update(() => 'string')).toBe(true);
-        expect(await fs.update(() => [1, 2, 3])).toBe(true);
-        expect(await fs.get()).toBeNull();
+        expect((await fs.update(() => null)).ok).toBe(true);
+        expect((await fs.update(() => 'string')).ok).toBe(true);
+        expect((await fs.update(() => [1, 2, 3])).ok).toBe(true);
+        expect((await fs.get()).state).toBeNull();
     });
 
     test('get returns current state or null', async () => {
@@ -249,9 +249,9 @@ describe('createFloorStateWithDeps — basic operations', () => {
         const { deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        expect(await fs.get()).toBeNull();
+        expect((await fs.get()).state).toBeNull();
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
     });
 });
 
@@ -263,7 +263,7 @@ describe('event reactions', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
 
         // Simulate switching to a different chat: drop the log (empty)
         // and replace the chat array.
@@ -273,8 +273,8 @@ describe('event reactions', () => {
         await eventSource.emit(event_types.CHAT_CHANGED);
         await fs.ready();
 
-        // Empty log → get() returns null.
-        expect(await fs.get()).toBeNull();
+        // Empty log → get() returns null state.
+        expect((await fs.get()).state).toBeNull();
     });
 
     test('one-time migration backs up legacy data namespace and deletes it', async () => {
@@ -293,7 +293,7 @@ describe('event reactions', () => {
         const result = await fs.get();
 
         // Legacy data was treated as drift since log was empty.
-        expect(result).toBeNull();
+        expect(result.state).toBeNull();
         // Legacy data namespace removed.
         expect(store._raw.has('foo')).toBe(false);
         // Orphans backup captured.
@@ -326,7 +326,7 @@ describe('event reactions', () => {
         const log = store._raw.get('foo__floor_log');
         expect(log.commits).toHaveLength(1);
         expect(log.commits[0].floor).toBe(2);
-        expect(await fs.get()).toEqual({ a: 1 });
+        expect((await fs.get()).state).toEqual({ a: 1 });
     });
 
     test('MESSAGE_DELETED to length 0 leaves an empty log and null state', async () => {
@@ -335,14 +335,14 @@ describe('event reactions', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
 
         chatRef.value = [];
         await eventSource.emit(event_types.MESSAGE_DELETED, 0);
         await fs.ready();
 
         expect(store._raw.get('foo__floor_log').commits).toHaveLength(0);
-        expect(await fs.get()).toBeNull();
+        expect((await fs.get()).state).toBeNull();
     });
 
     test('MESSAGE_SWIPED replays log under the active swipe', async () => {
@@ -360,23 +360,23 @@ describe('event reactions', () => {
 
         // Swipe-1 has no commits yet; replay against swipe 1 produces an
         // empty target state (log has commits, but none survive the swipeMap).
-        expect(await fs.get()).toEqual({});
+        expect((await fs.get()).state).toEqual({});
 
         // Plugin writes a different commit on swipe 1.
         await fs.patch([{ op: 'add', path: '/from1', value: true }]);
-        expect(await fs.get()).toEqual({ from1: true });
+        expect((await fs.get()).state).toEqual({ from1: true });
 
         // User swipes back to 0.
         chatRef.value[0].swipe_id = 0;
         await eventSource.emit(event_types.MESSAGE_SWIPED, 0);
         await fs.ready();
-        expect(await fs.get()).toEqual({ from0: true });
+        expect((await fs.get()).state).toEqual({ from0: true });
 
         // And again to 1.
         chatRef.value[0].swipe_id = 1;
         await eventSource.emit(event_types.MESSAGE_SWIPED, 0);
         await fs.ready();
-        expect(await fs.get()).toEqual({ from1: true });
+        expect((await fs.get()).state).toEqual({ from1: true });
     });
 
     test('MESSAGE_SWIPE_DELETED drops target swipe and shifts higher ones down', async () => {
@@ -411,7 +411,7 @@ describe('event reactions', () => {
         expect(swipeIds).toEqual([0, 1]);
 
         // Active swipe is now 1 (formerly swipe 2's content).
-        expect(await fs.get()).toEqual({ s2: 2 });
+        expect((await fs.get()).state).toEqual({ s2: 2 });
     });
 });
 
@@ -485,9 +485,16 @@ describe('destroy', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         fs.destroy();
 
-        expect(await fs.patch([{ op: 'add', path: '/x', value: 1 }])).toBe(false);
-        expect(await fs.update(() => ({ x: 1 }))).toBe(false);
-        expect(await fs.get()).toBeNull();
+        const patchRes = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(patchRes.ok).toBe(false);
+        expect(patchRes.reason).toBe('INSTANCE_DESTROYED');
+        const updateRes = await fs.update(() => ({ x: 1 }));
+        expect(updateRes.ok).toBe(false);
+        expect(updateRes.reason).toBe('INSTANCE_DESTROYED');
+        const getRes = await fs.get();
+        expect(getRes.ok).toBe(false);
+        expect(getRes.state).toBeNull();
+        expect(getRes.reason).toBe('INSTANCE_DESTROYED');
         expect(store._raw.size).toBe(0);
     });
 
@@ -499,8 +506,8 @@ describe('destroy', () => {
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
         expect(store._raw.has('foo__floor_log')).toBe(true);
 
-        const ok = await fs.destroy({ purge: true });
-        expect(ok).toBe(true);
+        const result = await fs.destroy({ purge: true });
+        expect(result.ok).toBe(true);
         expect(store._raw.has('foo__floor_log')).toBe(false);
     });
 
@@ -529,13 +536,13 @@ describe('reset (log replacement)', () => {
             { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/y', value: 2 }] },
             { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/z', value: 3 }] },
         ];
-        const ok = await fs.reset(newCommits);
-        expect(ok).toBe(true);
+        const result = await fs.reset(newCommits);
+        expect(result.ok).toBe(true);
 
         const log = store._raw.get('foo__floor_log');
         expect(log.commits).toEqual(newCommits);
         // Cache was invalidated; next get() replays the new log.
-        expect(await fs.get()).toEqual({ y: 2, z: 3 });
+        expect((await fs.get()).state).toEqual({ y: 2, z: 3 });
     });
 
     test('reset([]) clears the log to an empty replay', async () => {
@@ -544,12 +551,12 @@ describe('reset (log replacement)', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
 
-        const ok = await fs.reset([]);
-        expect(ok).toBe(true);
+        const result = await fs.reset([]);
+        expect(result.ok).toBe(true);
         expect(store._raw.get('foo__floor_log').commits).toEqual([]);
-        expect(await fs.get()).toBeNull();
+        expect((await fs.get()).state).toBeNull();
     });
 
     test('reset() rejects a batch with an out-of-range floor and leaves the log untouched', async () => {
@@ -560,17 +567,13 @@ describe('reset (log replacement)', () => {
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
         const before = JSON.stringify(store._raw.get('foo__floor_log'));
 
-        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        try {
-            const ok = await fs.reset([
-                { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
-                { floor: 5, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] }, // out of range
-            ]);
-            expect(ok).toBe(false);
-            expect(warn).toHaveBeenCalledWith(expect.stringContaining('out of range'));
-        } finally {
-            warn.mockRestore();
-        }
+        const result = await fs.reset([
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+            { floor: 5, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] }, // out of range
+        ]);
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('VALIDATION_COMMIT');
+        expect(result.hint).toMatch(/out of range/);
         // Log unchanged.
         expect(JSON.stringify(store._raw.get('foo__floor_log'))).toBe(before);
     });
@@ -580,14 +583,15 @@ describe('reset (log replacement)', () => {
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        try {
-            expect(await fs.reset([{ floor: -1, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] }])).toBe(false);
-            expect(await fs.reset([{ floor: 0, swipeId: 0, patches: [] }])).toBe(false); // empty patches
-            expect(await fs.reset([{ floor: 0, swipeId: 0 }])).toBe(false); // missing patches
-        } finally {
-            warn.mockRestore();
-        }
+        const r1 = await fs.reset([{ floor: -1, swipeId: 0, patches: [{ op: 'add', path: '/x', value: 1 }] }]);
+        expect(r1.ok).toBe(false);
+        expect(r1.reason).toBe('VALIDATION_COMMIT');
+        const r2 = await fs.reset([{ floor: 0, swipeId: 0, patches: [] }]); // empty patches
+        expect(r2.ok).toBe(false);
+        expect(r2.reason).toBe('VALIDATION_COMMIT');
+        const r3 = await fs.reset([{ floor: 0, swipeId: 0 }]); // missing patches
+        expect(r3.ok).toBe(false);
+        expect(r3.reason).toBe('VALIDATION_COMMIT');
         expect(store._raw.get('foo__floor_log')).toBeUndefined();
     });
 
@@ -596,17 +600,25 @@ describe('reset (log replacement)', () => {
         const { deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        expect(await fs.reset(null)).toBe(false);
-        expect(await fs.reset(undefined)).toBe(false);
-        expect(await fs.reset({ commits: [] })).toBe(false);
+        const r1 = await fs.reset(null);
+        expect(r1.ok).toBe(false);
+        expect(r1.reason).toBe('VALIDATION_ARGS');
+        const r2 = await fs.reset(undefined);
+        expect(r2.ok).toBe(false);
+        expect(r2.reason).toBe('VALIDATION_ARGS');
+        const r3 = await fs.reset({ commits: [] });
+        expect(r3.ok).toBe(false);
+        expect(r3.reason).toBe('VALIDATION_ARGS');
     });
 
-    test('reset() returns false after destroy', async () => {
+    test('reset() returns INSTANCE_DESTROYED after destroy', async () => {
         const chatRef = { value: [msg(0)] };
         const { deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.destroy();
-        expect(await fs.reset([])).toBe(false);
+        const result = await fs.reset([]);
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('INSTANCE_DESTROYED');
     });
 
     test('patch after reset chains onto the new history', async () => {
@@ -621,7 +633,7 @@ describe('reset (log replacement)', () => {
 
         const log = store._raw.get('foo__floor_log');
         expect(log.commits).toHaveLength(2);
-        expect(await fs.get()).toEqual({ y: 2, z: 3 });
+        expect((await fs.get()).state).toEqual({ y: 2, z: 3 });
     });
 });
 
@@ -642,7 +654,7 @@ describe('lazy log replay', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        expect(await fs.get()).toEqual({ a: 1, b: 2 });
+        expect((await fs.get()).state).toEqual({ a: 1, b: 2 });
     });
 
     test('respects current swipe map when replaying on first get()', async () => {
@@ -661,7 +673,7 @@ describe('lazy log replay', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        expect(await fs.get()).toEqual({ from1: true });
+        expect((await fs.get()).state).toEqual({ from1: true });
     });
 
     test('get() returns null when log namespace is absent', async () => {
@@ -671,7 +683,7 @@ describe('lazy log replay', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        expect(await fs.get()).toBeNull();
+        expect((await fs.get()).state).toBeNull();
         // No writes were performed by construction.
         expect(store._raw.get('foo')).toBeUndefined();
         expect(store._raw.get('foo__floor_log')).toBeUndefined();
@@ -685,7 +697,7 @@ describe('lazy log replay', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        expect(await fs.get()).toBeNull();
+        expect((await fs.get()).state).toBeNull();
         expect(store._raw.get('foo')).toBeUndefined();
     });
 });
@@ -717,7 +729,7 @@ describe('broken-log recovery via floor truncate', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        expect(await fs.get()).toEqual({ x: 2 });
+        expect((await fs.get()).state).toEqual({ x: 2 });
 
         const orphans = store._raw.get('foo__orphans');
         expect(orphans).toBeTruthy();
@@ -761,7 +773,7 @@ describe('broken-log recovery via floor truncate', () => {
         await fs.ready();
 
         // Only the floor-1 commit survives: the sibling on floor 2 goes too.
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
 
         const rewritten = store._raw.get('foo__floor_log');
         expect(rewritten.commits).toHaveLength(1);
@@ -787,7 +799,7 @@ describe('broken-log recovery via floor truncate', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        expect(await fs.get()).toBeNull();
+        expect((await fs.get()).state).toBeNull();
 
         const rewritten = store._raw.get('foo__floor_log');
         expect(rewritten.commits).toHaveLength(0);
@@ -812,14 +824,14 @@ describe('broken-log recovery via floor truncate', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
         const firstOrphan = store._raw.get('foo__orphans');
         expect(firstOrphan).toBeTruthy();
 
         // Mutate the orphans entry; if a second get() re-ran recovery it
         // would overwrite this back to the original shape.
         store._raw.set('foo__orphans', { ...firstOrphan, tampered: true });
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
         expect(store._raw.get('foo__orphans').tampered).toBe(true);
     });
 });
@@ -857,7 +869,7 @@ describe('concurrency: patch vs structural event', () => {
 
         const log = base.store._raw.get('foo__floor_log');
         expect(log.commits).toHaveLength(1);
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
     });
 
     test('ready() waits for both an in-flight patch and a concurrent event', async () => {
@@ -893,7 +905,7 @@ describe('concurrency: patch vs structural event', () => {
         expect(readyResolved).toBe(true);
     });
 
-    test('patch returns false when appendCommit fails; state stays at pre-patch', async () => {
+    test('patch returns error envelope when appendCommit fails; state stays at pre-patch', async () => {
         // Single-write semantics: if the only write (log append) fails, there
         // is no half-state to recover from. fs.get() must still return the
         // pre-patch value derived from the unchanged log.
@@ -903,7 +915,7 @@ describe('concurrency: patch vs structural event', () => {
         await (async () => {
             const fs = createFloorStateWithDeps({ namespace: 'foo' }, base.deps);
             await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-            expect(await fs.get()).toEqual({ x: 1 });
+            expect((await fs.get()).state).toEqual({ x: 1 });
         })();
 
         const failingUpdate = async (ns, updater, options) => {
@@ -915,9 +927,10 @@ describe('concurrency: patch vs structural event', () => {
         const deps = { ...base.deps, updateChatState: failingUpdate };
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        const ok = await fs.patch([{ op: 'add', path: '/y', value: 2 }]);
-        expect(ok).toBe(false);
-        expect(await fs.get()).toEqual({ x: 1 });
+        const result = await fs.patch([{ op: 'add', path: '/y', value: 2 }]);
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('LOG_WRITE_FAILED');
+        expect((await fs.get()).state).toEqual({ x: 1 });
     });
 });
 
@@ -991,7 +1004,7 @@ describe('branch inheritance via CHAT_BRANCH_CREATED', () => {
         const branchFs = createFloorStateWithDeps({ namespace: 'foo' }, branchDeps);
         await branchFs.ready();
 
-        expect(await branchFs.get()).toEqual({ a: 1, b: 2 });
+        expect((await branchFs.get()).state).toEqual({ a: 1, b: 2 });
     });
 
     test('does nothing when source log is empty / absent', async () => {
@@ -1112,17 +1125,17 @@ describe('explicit floor tagging', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         await fs.ready();
 
-        const ok = await fs.patch(
+        const result = await fs.patch(
             [{ op: 'add', path: '/x', value: 1 }],
             { floor: 1 },
         );
-        expect(ok).toBe(true);
+        expect(result.ok).toBe(true);
 
         const log = store._raw.get('foo__floor_log');
         expect(log.commits).toHaveLength(1);
         // swipeId picked up from chat[1].swipe_id (= 2), not the tail's swipe.
         expect(log.commits[0]).toMatchObject({ floor: 1, swipeId: 2 });
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
     });
 
     test('patch with { floor, swipeId } honors both', async () => {
@@ -1156,56 +1169,43 @@ describe('explicit floor tagging', () => {
     test('patch rejects out-of-range floor and writes nothing', async () => {
         const chatRef = { value: [msg(0)] };
         const { store, deps } = makeDeps(chatRef);
-        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        try {
-            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
-            await fs.ready();
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
 
-            const ok = await fs.patch(
-                [{ op: 'add', path: '/x', value: 1 }],
-                { floor: 5 },
-            );
-            expect(ok).toBe(false);
-            expect(await fs.get()).toBeNull();
-            expect(store._raw.get('foo__floor_log')).toBeUndefined();
-            expect(warn).toHaveBeenCalledWith(
-                expect.stringContaining('invalid floor/swipeId override'),
-                expect.anything(),
-            );
-        } finally {
-            warn.mockRestore();
-        }
+        const result = await fs.patch(
+            [{ op: 'add', path: '/x', value: 1 }],
+            { floor: 5 },
+        );
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('VALIDATION_COMMIT');
+        expect(result.hint).toMatch(/out of range/);
+        expect((await fs.get()).state).toBeNull();
+        expect(store._raw.get('foo__floor_log')).toBeUndefined();
     });
 
     test('patch rejects negative floor', async () => {
         const chatRef = { value: [msg(0)] };
         const { store, deps } = makeDeps(chatRef);
-        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        try {
-            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
-            await fs.ready();
-            expect(await fs.patch([{ op: 'add', path: '/x', value: 1 }], { floor: -1 })).toBe(false);
-            expect(store._raw.get('foo__floor_log')).toBeUndefined();
-        } finally {
-            warn.mockRestore();
-        }
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+        const result = await fs.patch([{ op: 'add', path: '/x', value: 1 }], { floor: -1 });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('VALIDATION_COMMIT');
+        expect(store._raw.get('foo__floor_log')).toBeUndefined();
     });
 
     test('patch rejects negative swipeId on a valid floor', async () => {
         const chatRef = { value: [msg(0)] };
         const { store, deps } = makeDeps(chatRef);
-        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        try {
-            const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
-            await fs.ready();
-            expect(await fs.patch(
-                [{ op: 'add', path: '/x', value: 1 }],
-                { floor: 0, swipeId: -1 },
-            )).toBe(false);
-            expect(store._raw.get('foo__floor_log')).toBeUndefined();
-        } finally {
-            warn.mockRestore();
-        }
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+        const result = await fs.patch(
+            [{ op: 'add', path: '/x', value: 1 }],
+            { floor: 0, swipeId: -1 },
+        );
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('VALIDATION_COMMIT');
+        expect(store._raw.get('foo__floor_log')).toBeUndefined();
     });
 
     test('update forwards the override to the underlying patch', async () => {
@@ -1222,7 +1222,7 @@ describe('explicit floor tagging', () => {
         const log = store._raw.get('foo__floor_log');
         expect(log.commits).toHaveLength(1);
         expect(log.commits[0]).toMatchObject({ floor: 1, swipeId: 0 });
-        expect(await fs.get()).toEqual({ level: 1 });
+        expect((await fs.get()).state).toEqual({ level: 1 });
     });
 
     test('explicit floor commit survives MESSAGE_DELETED that spares it', async () => {
@@ -1239,7 +1239,7 @@ describe('explicit floor tagging', () => {
         await fs.ready();
 
         expect(store._raw.get('foo__floor_log').commits).toHaveLength(1);
-        expect(await fs.get()).toEqual({ x: 1 });
+        expect((await fs.get()).state).toEqual({ x: 1 });
     });
 
     test('explicit floor commit dropped by MESSAGE_DELETED that removes its floor', async () => {
@@ -1254,7 +1254,7 @@ describe('explicit floor tagging', () => {
         await fs.ready();
 
         expect(store._raw.get('foo__floor_log').commits).toHaveLength(0);
-        expect(await fs.get()).toBeNull();
+        expect((await fs.get()).state).toBeNull();
     });
 });
 
@@ -1269,8 +1269,8 @@ describe('multi-instance isolation', () => {
         await a.patch([{ op: 'add', path: '/foo', value: 'A' }]);
         await b.patch([{ op: 'add', path: '/foo', value: 'B' }]);
 
-        expect(await a.get()).toEqual({ foo: 'A' });
-        expect(await b.get()).toEqual({ foo: 'B' });
+        expect((await a.get()).state).toEqual({ foo: 'A' });
+        expect((await b.get()).state).toEqual({ foo: 'B' });
         expect(store._raw.get('plugin-a__floor_log').commits).toHaveLength(1);
         expect(store._raw.get('plugin-b__floor_log').commits).toHaveLength(1);
 
@@ -1280,13 +1280,13 @@ describe('multi-instance isolation', () => {
         await a.ready();
         await b.ready();
 
-        expect(await a.get()).toEqual({});
-        expect(await b.get()).toEqual({});
+        expect((await a.get()).state).toEqual({});
+        expect((await b.get()).state).toEqual({});
     });
 });
 
 describe('error tolerance', () => {
-    test('patch returns false when commit log append fails (no state change)', async () => {
+    test('patch returns error envelope when commit log append fails (no state change)', async () => {
         // Single-write semantics: a failed log append leaves the entire system
         // untouched. No half-state to recover from. get() reflects the
         // pre-patch log.
@@ -1303,9 +1303,10 @@ describe('error tolerance', () => {
             };
             const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-            const ok = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
-            expect(ok).toBe(false);
-            expect(await fs.get()).toBeNull();
+            const result = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+            expect(result.ok).toBe(false);
+            expect(result.reason).toBe('LOG_WRITE_FAILED');
+            expect((await fs.get()).state).toBeNull();
             expect(warn).toHaveBeenCalledWith(
                 expect.stringContaining('appendCommit failed'),
                 expect.anything(),
@@ -1424,18 +1425,93 @@ describe('error tolerance', () => {
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        expect(await fs.update(null)).toBe(false);
-        expect(await fs.update('not a function')).toBe(false);
-        expect(await fs.update(42)).toBe(false);
+        const r1 = await fs.update(null);
+        expect(r1.ok).toBe(false);
+        expect(r1.reason).toBe('VALIDATION_ARGS');
+        const r2 = await fs.update('not a function');
+        expect(r2.ok).toBe(false);
+        expect(r2.reason).toBe('VALIDATION_ARGS');
+        const r3 = await fs.update(42);
+        expect(r3.ok).toBe(false);
+        expect(r3.reason).toBe('VALIDATION_ARGS');
         expect(store._raw.size).toBe(0);
     });
 
-    test('update propagates reducer exceptions to caller', async () => {
+    test('update returns VALIDATION_ARGS envelope when reducer throws', async () => {
         const chatRef = { value: [msg(0)] };
         const { deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
-        await expect(fs.update(() => { throw new Error('reducer boom'); }))
-            .rejects.toThrow('reducer boom');
+        const result = await fs.update(() => { throw new Error('reducer boom'); });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('VALIDATION_ARGS');
+        expect(result.hint).toContain('reducer threw');
+        expect(result.hint).toContain('reducer boom');
+    });
+});
+
+describe('envelope shape', () => {
+    test('fs.patch with no chat returns {ok:true, updated:false}', async () => {
+        const chatRef = { value: [] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        const result = await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(result).toEqual({ ok: true, updated: false });
+    });
+
+    test('fs.patch with override floor below log tail returns VALIDATION_COMMIT', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        // First commit at floor=2 (tail)
+        const r1 = await fs.patch([{ op: 'add', path: '/a', value: 1 }]);
+        expect(r1.ok).toBe(true);
+        // Try to override with floor=0 — below tail
+        const r2 = await fs.patch(
+            [{ op: 'add', path: '/b', value: 2 }],
+            { floor: 0 },
+        );
+        expect(r2.ok).toBe(false);
+        expect(r2.reason).toBe('VALIDATION_COMMIT');
+        expect(r2.hint).toMatch(/floor=0 below log tail/);
+    });
+
+    test('fs.update with throwing reducer returns VALIDATION_ARGS', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        const result = await fs.update(() => { throw new Error('boom'); });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('VALIDATION_ARGS');
+        expect(result.hint).toContain('reducer threw');
+        expect(result.hint).toContain('boom');
+    });
+
+    test('fs.destroy on already-destroyed returns {ok:true}', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        const r1 = await fs.destroy();
+        const r2 = await fs.destroy();
+        expect(r1).toEqual({ ok: true });
+        expect(r2).toEqual({ ok: true });
+    });
+
+    test('fs.update after destroy returns INSTANCE_DESTROYED', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.destroy();
+        const result = await fs.update(() => ({ x: 1 }));
+        expect(result.ok).toBe(false);
+        expect(result.reason).toBe('INSTANCE_DESTROYED');
+    });
+
+    test('fs.get on empty namespace returns {ok:true, state:null}', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        const result = await fs.get();
+        expect(result).toEqual({ ok: true, state: null });
     });
 });

@@ -11,6 +11,13 @@ import { addLocaleData, getCurrentLocale, t } from './i18n.js';
 import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
+import {
+    formatHttpErrorHint,
+    formatTransportErrorHint,
+    formatConflictHint,
+    formatValidationArgsHint,
+} from './state-errors/format.js';
 
 export {
     getContext,
@@ -2212,21 +2219,44 @@ export async function writeExtensionField(characterId, key, value) {
  * without modifying the card JSON itself.
  * @param {string} avatar - Character avatar filename (e.g. 'xxx.png')
  * @param {string} namespace - Storage namespace (e.g. 'my_extension')
- * @returns {Promise<any>} The stored data, or null if not found
+ * @returns {Promise<{ok: boolean, state: object|null, reason?: string, hint?: string}>}
+ *          Envelope: `{ok: true, state}` on hit or empty miss; `{ok: false, state: null, reason, hint}` on failure.
  */
 export async function getCharacterState(avatar, namespace) {
-    const response = await fetch('/api/characters/state/get', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ avatar_url: avatar, namespace }),
-        cache: 'no-cache',
-    });
+    const safeAvatar = String(avatar || '').trim();
+    const safeNamespace = String(namespace || '').trim();
+    if (!safeAvatar) {
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: formatValidationArgsHint('avatar', 'is required') };
+    }
+    if (!safeNamespace) {
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: formatValidationArgsHint('namespace', 'is required') };
+    }
+    let response;
+    try {
+        response = await fetch('/api/characters/state/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace }),
+            cache: 'no-cache',
+        });
+    } catch (error) {
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            hint: formatTransportErrorHint(error?.message || error) };
+    }
     if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`Character state read failed (${response.status}): ${detail || response.statusText}`);
+        const bodyText = await response.text().catch(() => '');
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.HTTP_ERROR,
+            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
     }
     const payload = await response.json().catch(() => null);
-    return payload && typeof payload === 'object' ? payload.data : null;
+    const state = payload && typeof payload === 'object' ? payload.data : null;
+    return { ok: true, state };
 }
 
 /**
@@ -2235,77 +2265,152 @@ export async function getCharacterState(avatar, namespace) {
  * @param {string} avatar - Character avatar filename (e.g. 'xxx.png')
  * @param {string} namespace - Storage namespace (e.g. 'my_extension')
  * @param {any} data - Data to store (or null to delete)
- * @returns {Promise<void>}
+ * @returns {Promise<{ok: boolean, state?: any, reason?: string, hint?: string}>}
+ *          Envelope: `{ok: true, state}` on success; `{ok: false, reason, hint}` on failure.
  */
 export async function setCharacterState(avatar, namespace, data) {
-    const response = await fetch('/api/characters/state/set', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ avatar_url: avatar, namespace, data }),
-        cache: 'no-cache',
-    });
-    if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`Character state write failed (${response.status}): ${detail || response.statusText}`);
+    const safeAvatar = String(avatar || '').trim();
+    const safeNamespace = String(namespace || '').trim();
+    if (!safeAvatar) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('avatar', 'is required'));
     }
+    if (!safeNamespace) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('namespace', 'is required'));
+    }
+    let response;
+    try {
+        response = await fetch('/api/characters/state/set', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace, data }),
+            cache: 'no-cache',
+        });
+    } catch (error) {
+        return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error));
+    }
+    if (response.ok) return makeStateOk({ state: data });
+    const bodyText = await response.text().catch(() => '');
+    return makeStateError(STATE_ERROR_REASONS.HTTP_ERROR,
+        formatHttpErrorHint(response.status, response.statusText, bodyText));
 }
 
 /**
  * Apply RFC 6902 JSON Patch operations to a character state sidecar.
  * The server reads the current sidecar, applies the operations, and writes
- * the result back atomically. Returns `{ applied, created }` — `created`
- * is true when the sidecar did not previously exist (seeded from `{}`).
+ * the result back atomically. Returns an envelope; on success `applied` is
+ * the count of ops applied and `created` is true when the sidecar did not
+ * previously exist (seeded from `{}`).
  *
- * Throws on transport failure. The server returns 409 on patch test/missing-
- * parent failures (treat as "another writer changed the sidecar; retry") and
- * 400 on malformed operations.
+ * Returns `{ok: false, reason: CONFLICT}` when the server returns 409
+ * (patch test/missing-parent failures — treat as "another writer changed
+ * the sidecar; retry"). Returns `{ok: false, reason: HTTP_ERROR}` for other
+ * non-2xx responses (e.g. 400 on malformed operations).
  *
  * @param {string} avatar - Character avatar filename
  * @param {string} namespace - Storage namespace
  * @param {Array<object>} operations - RFC 6902 patch operations
- * @returns {Promise<{ ok: true, applied: number, created: boolean }>}
+ * @returns {Promise<{ok: boolean, applied?: number, created?: boolean, reason?: string, hint?: string}>}
  */
 export async function patchCharacterState(avatar, namespace, operations) {
-    const response = await fetch('/api/characters/state/patch', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ avatar_url: avatar, namespace, operations }),
-        cache: 'no-cache',
-    });
-    if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`Character state patch failed (${response.status}): ${detail || response.statusText}`);
+    const safeAvatar = String(avatar || '').trim();
+    const safeNamespace = String(namespace || '').trim();
+    if (!safeAvatar) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('avatar', 'is required'));
     }
-    return response.json();
+    if (!safeNamespace) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('namespace', 'is required'));
+    }
+    if (!Array.isArray(operations) || operations.length === 0) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('operations', 'must be a non-empty array'));
+    }
+    let response;
+    try {
+        response = await fetch('/api/characters/state/patch', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace, operations }),
+            cache: 'no-cache',
+        });
+    } catch (error) {
+        return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error));
+    }
+    if (response.ok) {
+        const result = await response.json().catch(() => null);
+        return makeStateOk({
+            applied: Number(result?.applied) || 0,
+            created: Boolean(result?.created),
+        });
+    }
+    if (response.status === 409) {
+        return makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(0));
+    }
+    const bodyText = await response.text().catch(() => '');
+    return makeStateError(STATE_ERROR_REASONS.HTTP_ERROR,
+        formatHttpErrorHint(response.status, response.statusText, bodyText));
 }
 
 /**
  * Read multiple character state namespaces in one round trip. Returns an
- * object keyed by namespace; missing namespaces map to `null`.
+ * envelope with a per-namespace results map. Missing namespaces map to
+ * `{ok: true, state: null}` (treated as empty miss). Top-level `ok` reflects
+ * whole-batch transport/validation success.
  *
  * @param {string} avatar - Character avatar filename
  * @param {string[]} namespaces - Storage namespaces to read
- * @returns {Promise<Record<string, any>>}
+ * @returns {Promise<{ok: boolean, results: Map<string, {ok: boolean, state: object|null, reason?: string, hint?: string}>, reason?: string, hint?: string}>}
  */
 export async function getCharacterStateBatch(avatar, namespaces) {
-    const response = await fetch('/api/characters/state/get-batch', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ avatar_url: avatar, namespaces }),
-        cache: 'no-cache',
-    });
+    const safeAvatar = String(avatar || '').trim();
+    if (!safeAvatar) {
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: formatValidationArgsHint('avatar', 'is required') };
+    }
+    const cleaned = Array.from(new Set(
+        (Array.isArray(namespaces) ? namespaces : [])
+            .map(n => String(n || '').trim())
+            .filter(Boolean),
+    ));
+    if (cleaned.length === 0) {
+        return { ok: true, results: new Map() };
+    }
+
+    let response;
+    try {
+        response = await fetch('/api/characters/state/get-batch', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: safeAvatar, namespaces: cleaned }),
+            cache: 'no-cache',
+        });
+    } catch (error) {
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            hint: formatTransportErrorHint(error?.message || error) };
+    }
     if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`Character state batch read failed (${response.status}): ${detail || response.statusText}`);
+        const bodyText = await response.text().catch(() => '');
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.HTTP_ERROR,
+            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
     }
     const payload = await response.json().catch(() => null);
-    return payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object'
-        ? payload.data
-        : {};
-}
+    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
+        ? payload.data : {};
 
-function isPlainObjectLike(value) {
-    return value != null && typeof value === 'object' && !Array.isArray(value);
+    const results = new Map();
+    for (const ns of cleaned) {
+        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
+        results.set(ns, { ok: true, state: raw });
+    }
+    return { ok: true, results };
 }
 
 /**
@@ -2320,10 +2425,10 @@ function isPlainObjectLike(value) {
  * and resolves with `updated: false`.
  *
  * On a 409 (concurrent edit) the helper re-reads the sidecar and re-runs the
- * updater once. The retry budget is controlled by `options.maxRetries`
- * (default 1, i.e. one re-attempt after the initial try). Non-409 transport
- * failures bubble up — wrap the call in try/catch if you want to swallow
- * them; the helper does NOT silently fall back to a full set.
+ * updater. The retry budget is controlled by `options.maxRetries` (default 1,
+ * i.e. one re-attempt after the initial try). All failures — transport, HTTP,
+ * conflict-after-retries, validation, reducer-throw — surface as `{ok: false,
+ * reason, hint}` envelopes; this helper does not throw.
  *
  * @param {string} avatar - Character avatar filename
  * @param {string} namespace - Storage namespace
@@ -2332,60 +2437,67 @@ function isPlainObjectLike(value) {
  * @param {number} [options.maxOperations] - Cap on patch op count before falling back to a single replace op. Default 2000.
  * @param {number} [options.maxRetries] - Re-attempts on 409. Default 1.
  * @param {boolean} [options.asyncDiff] - When `false`, use the sync diff path (skips the worker).
- * @returns {Promise<{ ok: boolean, state: object|null, updated: boolean, created?: boolean }>}
+ * @returns {Promise<{ok: boolean, state?: object|null, updated?: boolean, created?: boolean, reason?: string, hint?: string}>}
  */
 export async function updateCharacterState(avatar, namespace, updater, options = {}) {
     const safeAvatar = String(avatar || '').trim();
     const safeNamespace = String(namespace || '').trim();
     if (!safeAvatar || !safeNamespace || typeof updater !== 'function') {
-        return { ok: false, state: null, updated: false };
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint(!safeAvatar ? 'avatar' : !safeNamespace ? 'namespace' : 'updater',
+                'is required / must be a function'));
     }
 
     const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
-        ? Number(options.maxOperations)
-        : 2000;
+        ? Number(options.maxOperations) : 2000;
     const maxRetries = Number.isInteger(options?.maxRetries) && options.maxRetries >= 0
-        ? Number(options.maxRetries)
-        : 1;
+        ? Number(options.maxRetries) : 1;
 
+    let lastFailure = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const currentRaw = await getCharacterState(safeAvatar, safeNamespace);
-        const currentState = isPlainObjectLike(cloneJsonValue(currentRaw)) ? cloneJsonValue(currentRaw) : {};
-        const nextRaw = await updater(cloneJsonValue(currentState), {
-            attempt,
-            avatar: safeAvatar,
-            namespace: safeNamespace,
-        });
-
-        if (nextRaw === undefined || nextRaw === null) {
-            return { ok: true, state: currentState, updated: false };
+        const readResult = await getCharacterState(safeAvatar, safeNamespace);
+        if (!readResult.ok) {
+            return { ok: false, reason: readResult.reason, hint: readResult.hint };
         }
-        if (!isPlainObjectLike(nextRaw)) {
-            throw new Error('updateCharacterState: updater must return a plain object (or null/undefined to skip).');
+        const currentRaw = readResult.state;
+        const currentState = (currentRaw != null && typeof currentRaw === 'object' && !Array.isArray(currentRaw))
+            ? cloneJsonValue(currentRaw) : {};
+        let nextRaw;
+        try {
+            nextRaw = await updater(cloneJsonValue(currentState), {
+                attempt, avatar: safeAvatar, namespace: safeNamespace,
+            });
+        } catch (reducerError) {
+            return makeStateError(
+                STATE_ERROR_REASONS.VALIDATION_ARGS,
+                `reducer threw: ${String(reducerError?.message || reducerError).slice(0, 80)}`,
+            );
+        }
+        if (nextRaw === undefined || nextRaw === null) {
+            return makeStateOk({ state: currentState, updated: false });
+        }
+        if (!(nextRaw && typeof nextRaw === 'object' && !Array.isArray(nextRaw))) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                'updater must return a plain object (or null/undefined to skip)');
         }
         const nextState = cloneJsonValue(nextRaw);
-
         const operations = options?.asyncDiff === false
             ? buildObjectPatchOperations(currentState, nextState, { maxOperations })
             : await buildObjectPatchOperationsAsync(currentState, nextState, { maxOperations });
         if (operations.length === 0) {
-            return { ok: true, state: nextState, updated: false };
+            return makeStateOk({ state: nextState, updated: false });
         }
 
-        try {
-            const result = await patchCharacterState(safeAvatar, safeNamespace, operations);
-            return { ok: true, state: nextState, updated: true, created: Boolean(result?.created) };
-        } catch (error) {
-            const message = String(error?.message || error || '');
-            const isConflict = message.includes('(409)');
-            if (!isConflict || attempt >= maxRetries) {
-                throw error;
-            }
-            // Conflict: another writer raced us. Loop re-reads and re-applies the updater.
+        const patchResult = await patchCharacterState(safeAvatar, safeNamespace, operations);
+        if (patchResult.ok) {
+            return makeStateOk({
+                state: nextState, updated: true, created: Boolean(patchResult.created),
+            });
         }
+        lastFailure = patchResult;
+        if (patchResult.reason !== STATE_ERROR_REASONS.CONFLICT) return patchResult;
     }
-
-    return { ok: false, state: null, updated: false };
+    return lastFailure ?? makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(maxRetries));
 }
 
 /**
@@ -2395,19 +2507,31 @@ export async function updateCharacterState(avatar, namespace, updater, options =
  *
  * @param {string} avatar
  * @param {string} namespace
- * @returns {Promise<void>}
+ * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>}
  */
 export async function deleteCharacterState(avatar, namespace) {
-    const response = await fetch('/api/characters/state/delete', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ avatar_url: avatar, namespace }),
-        cache: 'no-cache',
-    });
-    if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`Character state delete failed (${response.status}): ${detail || response.statusText}`);
+    const safeAvatar = String(avatar || '').trim();
+    const safeNamespace = String(namespace || '').trim();
+    if (!safeAvatar || !safeNamespace) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint(!safeAvatar ? 'avatar' : 'namespace', 'is required'));
     }
+    let response;
+    try {
+        response = await fetch('/api/characters/state/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace }),
+            cache: 'no-cache',
+        });
+    } catch (error) {
+        return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error));
+    }
+    if (response.ok) return makeStateOk();
+    const bodyText = await response.text().catch(() => '');
+    return makeStateError(STATE_ERROR_REASONS.HTTP_ERROR,
+        formatHttpErrorHint(response.status, response.statusText, bodyText));
 }
 
 /**

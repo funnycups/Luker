@@ -69,7 +69,7 @@ function makeStore() {
         async deleteChatState(ns, options) {
             const k = String(ns ?? '').trim().toLowerCase();
             partitionFor(options?.target).delete(k);
-            return true;
+            return { ok: true };
         },
         get _raw() { return partitionFor(undefined); },
     };
@@ -148,7 +148,7 @@ describe('compaction commit floor anchor — invariants', () => {
 
         // Log-append-order anchor sequence: [0, 2, 2, 4] — strictly non-decreasing.
         expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 2, 4]);
-        const beforeDelete = await fs.get();
+        const beforeDelete = (await fs.get()).state;
         expect(beforeDelete.edges).toHaveLength(4);
 
         // User deletes back to length=3 → truncate floor >= 3.
@@ -156,7 +156,7 @@ describe('compaction commit floor anchor — invariants', () => {
         await fs.__handleMessageDeleted(3);
         await fs.ready();
 
-        const recovered = await fs.get();
+        const recovered = (await fs.get()).state;
         expect(recovered).not.toBeNull();
         // Surviving commits: batch-0 + batch-2 + rollup-after-batch-2.
         expect(recovered.edges).toEqual([
@@ -199,7 +199,7 @@ describe('compaction commit floor anchor — invariants', () => {
             edges: [...(cur.edges || []), { from: 'rollup-tail', to: 'c-d' }],
         }), { floor: 4 });
 
-        const beforeSwipe = await fs.get();
+        const beforeSwipe = (await fs.get()).state;
         expect(beforeSwipe.edges).toHaveLength(4);
 
         // User swipes floor 4 — chat[4].swipe_id flips from 0 to 1, so
@@ -208,7 +208,7 @@ describe('compaction commit floor anchor — invariants', () => {
         await fs.__handleMessageSwiped();
         await fs.ready();
 
-        const recovered = await fs.get();
+        const recovered = (await fs.get()).state;
         expect(recovered).not.toBeNull();
         // Floor-0 and floor-2 commits survive untouched.
         expect(recovered.edges).toEqual([
@@ -223,9 +223,7 @@ describe('compaction commit floor anchor — invariants', () => {
 
     /**
      * Regression for the "整个图被废掉" outcome: a compression commit whose
-     * caller-supplied anchor floor is BELOW the log tail (e.g. compression
-     * folds in pre-existing older nodes and the caller anchors at
-     * `parent.seqTo` rather than the triggering batch's endSeq).
+     * caller-supplied anchor floor is BELOW the log tail.
      *
      * Pre-fix: the out-of-order commit landed in the log; on delete,
      * `truncateCommits` dropped a mid-log slice and left a dangling
@@ -234,12 +232,17 @@ describe('compaction commit floor anchor — invariants', () => {
      * throws "Array index out of bounds" → recovery truncated by brokenFloor
      * and the rest of the graph went with it.
      *
-     * Post-fix: `appendCommit` clamps any out-of-order commit's floor up to
-     * the log tail's floor, preserving the chain. The user's data still
-     * lands, and the commit survives until the chat shrinks past the prior
-     * tail.
+     * Original mitigation: `appendCommit` clamped the floor up to the log
+     * tail's floor; the commit still landed.
+     *
+     * Current (Task 3.3) behavior: the public `patch` API rejects the
+     * out-of-order override outright with a VALIDATION_COMMIT envelope, so
+     * the caller gets immediate feedback and the broken commit never lands
+     * in the log. The user's previously-recorded data is unchanged — the
+     * earlier batches still replay cleanly. Memory-graph fixes its own
+     * anchor selection rather than relying on a silent server-side clamp.
      */
-    test('out-of-order compression commit is clamped to log tail and survives', async () => {
+    test('out-of-order compression commit is rejected with VALIDATION_COMMIT envelope', async () => {
         const chatRef = { value: [msg(), msg(), msg(), msg(), msg()] };
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'mg' }, deps);
@@ -255,24 +258,26 @@ describe('compaction commit floor anchor — invariants', () => {
         }), { floor: 4 });
 
         // Buggy caller anchors compression at a historical floor (2) even
-        // though the log tail is already at floor 4. appendCommit's clamp
-        // pulls the floor up to 4 to keep the chain monotone.
+        // though the log tail is already at floor 4. The public API rejects
+        // the call instead of clamping silently.
         const HISTORICAL_FLOOR = 2;
-        await updateToPayload(fs, (cur) => ({
+        const rejected = await updateToPayload(fs, (cur) => ({
             edges: [...(cur.edges || []), { from: 'rollup', to: 'parent' }],
         }), { floor: HISTORICAL_FLOOR });
+        expect(rejected.ok).toBe(false);
+        expect(rejected.reason).toBe('VALIDATION_COMMIT');
+        expect(rejected.hint).toMatch(/below log tail/);
 
-        // Log floors: [0, 2, 4, 4] — strictly non-decreasing thanks to clamp.
-        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 4, 4]);
+        // Log unchanged — no clamped commit landed; original batches intact.
+        expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([0, 2, 4]);
 
         chatRef.value = chatRef.value.slice(0, 3);
         await fs.__handleMessageDeleted(3);
         await fs.ready();
 
-        // Truncate floor >= 3 drops the floor-4 batch and the clamped-to-4
-        // compression together — a clean log suffix. The historical-floor
-        // batches survive intact.
-        const recovered = await fs.get();
+        // Truncate floor >= 3 drops the floor-4 batch; the historical-floor
+        // batches survive intact (the rejected rollup was never recorded).
+        const recovered = (await fs.get()).state;
         expect(recovered.edges).toEqual([
             { from: 'a', to: 'b' },
             { from: 'b', to: 'c' },
@@ -285,12 +290,14 @@ describe('compaction commit floor anchor — invariants', () => {
      * real chat: extraction batches advance the log to floor 12, then manual
      * compression folds in pre-existing older nodes and the rollup's
      * parent.seqTo translates back to a much earlier floor (8, then 0, 0, 0,
-     * 0 across multiple rounds). Without clamp this is the exact failure
+     * 0 across multiple rounds). Without rejection this is the exact failure
      * mode that orphaned 5 compression commits at floor=0 in the brokenLog.
-     * With clamp every out-of-order commit gets pulled up to floor 12, so
-     * delete-on-tail still yields a monotone chain and a clean truncate.
+     * With Task 3.3's VALIDATION_COMMIT rejection at the public surface,
+     * every out-of-order commit is refused upfront — the caller (memory-graph)
+     * is responsible for choosing a sound anchor; floor-state simply refuses
+     * to corrupt the log on its behalf.
      */
-    test('multi-round compression folding old nodes stays monotone via clamp', async () => {
+    test('multi-round compression folding old nodes is rejected per attempt', async () => {
         const chatRef = { value: Array.from({ length: 14 }, msg) };
         const { store, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'mg' }, deps);
@@ -304,32 +311,33 @@ describe('compaction commit floor anchor — invariants', () => {
 
         // Five compression rounds, each anchored at a historical floor that
         // matches the rollup's parent.seqTo (the bug). 8 → 0 → 0 → 0 → 0.
+        // Every one is rejected at the public API.
         for (const buggyFloor of [8, 0, 0, 0, 0]) {
-            await updateToPayload(fs, (cur) => ({
+            const r = await updateToPayload(fs, (cur) => ({
                 edges: [...(cur.edges || []), { from: `rollup-at-${buggyFloor}`, to: 'parent' }],
             }), { floor: buggyFloor });
+            expect(r.ok).toBe(false);
+            expect(r.reason).toBe('VALIDATION_COMMIT');
         }
 
-        // Log floors are clamped to the tail (12) for every out-of-order
-        // commit. Monotone.
+        // Log floors stay strictly the monotone batch sequence — no
+        // compression commits landed.
         expect(store._raw.get('mg__floor_log').commits.map((c) => c.floor)).toEqual([
-            0, 2, 6, 8, 10, 12,   // batches
-            12, 12, 12, 12, 12,    // clamped compression commits
+            0, 2, 6, 8, 10, 12,
         ]);
 
         // Replay from scratch (no recovery path) — should never throw.
-        const replayed = await fs.get();
+        const replayed = (await fs.get()).state;
         expect(replayed).not.toBeNull();
-        expect(replayed.edges).toHaveLength(11);
+        expect(replayed.edges).toHaveLength(6);
 
         // Delete back to length=11 → truncate floor >= 11 → drops the
-        // floor-12 batch and all clamped compression commits. The
-        // floor-0..10 batches survive.
+        // floor-12 batch. The floor-0..10 batches survive.
         chatRef.value = chatRef.value.slice(0, 11);
         await fs.__handleMessageDeleted(11);
         await fs.ready();
 
-        const recovered = await fs.get();
+        const recovered = (await fs.get()).state;
         expect(recovered).not.toBeNull();
         expect(recovered.edges).toEqual([
             { from: 'batch-0', to: 'x' },
