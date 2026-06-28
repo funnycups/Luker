@@ -53,6 +53,7 @@ import { renderTurnActions } from './render-turn.js';
 import { dispatch as dispatchProposalClick } from './event-router.js';
 import { encodeInverse, decodeBackward, deriveForward, applyOps, PatchConflictError } from '../storage/patch-codec.js';
 import { resolveTarget } from '../storage/target-registry.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 
 export function createBus(opts = {}) {
     const i18n = typeof opts.i18n === 'function' ? opts.i18n : (s) => String(s ?? '');
@@ -231,15 +232,37 @@ export function createBus(opts = {}) {
         });
     }
 
+    function inferReasonFromError(err) {
+        if (err && typeof err === 'object') {
+            if (typeof err.reason === 'string' && err.reason in STATE_ERROR_REASONS) {
+                return { reason: err.reason, hint: String(err.hint || err.message || '').slice(0, 120) };
+            }
+            if (err instanceof PatchConflictError) {
+                return { reason: STATE_ERROR_REASONS.CONFLICT, hint: String(err.hint || err.message || 'patch conflict').slice(0, 120) };
+            }
+            if (err.name === 'AbortError') {
+                return { reason: STATE_ERROR_REASONS.TRANSPORT_ERROR, hint: `fetch aborted: ${String(err.message || 'aborted').slice(0, 100)}` };
+            }
+            if (typeof err.status === 'number' && err.status >= 400) {
+                return { reason: STATE_ERROR_REASONS.HTTP_ERROR, hint: `HTTP ${err.status}: ${String(err.statusText || err.message || '').slice(0, 80)}` };
+            }
+        }
+        return {
+            reason: STATE_ERROR_REASONS.CONFLICT,
+            hint: String(err?.message || err || 'unknown failure').slice(0, 120),
+        };
+    }
+
     function parkConflict(entry, err) {
+        const inferred = inferReasonFromError(err);
         entry.status = 'conflict';
         entry.decidedAt = Date.now();
         entry.conflictError = err instanceof PatchConflictError
-            ? { targetType: err.targetType, targetName: err.targetName, jsonPath: err.jsonPath, reason: err.reason }
-            : { reason: String(err?.message || err || 'unknown') };
-        enqueueOutcome(entry, { error: entry.conflictError.reason });
+            ? { targetType: err.targetType, targetName: err.targetName, jsonPath: err.jsonPath, reason: inferred.reason, hint: inferred.hint }
+            : { reason: inferred.reason, hint: inferred.hint };
+        enqueueOutcome(entry, { error: inferred.hint, reason: inferred.reason, hint: inferred.hint });
         onChange();
-        return { ok: false, status: 'conflict', error: entry.conflictError.reason };
+        return { ok: false, status: 'conflict', error: inferred.hint, reason: inferred.reason, hint: inferred.hint };
     }
 
     async function approve(id, _ctx) {
@@ -400,7 +423,7 @@ export function createBus(opts = {}) {
         } catch (err) {
             const error = wrapConflict(err, entry.target);
             events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-            return { ok: false, status: 'conflict', error: error.reason };
+            return parkConflict(entry, error);
         }
         // Path-overlap drift guard: when we still have the propose-time after
         // in memory (in-session committed entry), the current value at each
@@ -418,16 +441,7 @@ export function createBus(opts = {}) {
                         reason: 'external modification on patched path',
                     });
                     events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-                    entry.status = 'conflict';
-                    entry.conflictError = {
-                        targetType: error.targetType,
-                        targetName: error.targetName,
-                        jsonPath: error.jsonPath,
-                        reason: error.reason,
-                    };
-                    enqueueOutcome(entry, { error: error.reason });
-                    onChange();
-                    return { ok: false, status: 'conflict', error: error.reason };
+                    return parkConflict(entry, error);
                 }
             }
         }
@@ -440,14 +454,14 @@ export function createBus(opts = {}) {
         } catch (err) {
             const error = wrapConflict(err, entry.target);
             events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-            return { ok: false, status: 'conflict', error: error.reason };
+            return parkConflict(entry, error);
         }
         try {
             await handler.write(entry.target, previous);
         } catch (err) {
             const error = wrapConflict(err, entry.target);
             events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-            return { ok: false, status: 'conflict', error: error.reason };
+            return parkConflict(entry, error);
         }
         entry.status = 'rolledBack';
         entry.rolledBackAt = Date.now();

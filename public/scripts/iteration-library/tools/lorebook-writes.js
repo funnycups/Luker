@@ -26,7 +26,8 @@
  *   - `lorebook_str_replace_in_entry(book_name, uid, oldString, newString, replaceAll?)`
  */
 
-import { lorebookHelpers as H } from './_lorebook-helpers.js';
+import { lorebookHelpers as H, LorebookError } from './_lorebook-helpers.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 
 const TOOL_NAMES = Object.freeze({
     LOREBOOK_UPDATE_ENTRY: 'lorebook_update_entry',
@@ -84,25 +85,29 @@ export const LOREBOOK_WRITE_TOOL_DEFS = [
     },
 ];
 
-async function computeUpdate(context, args) {
+async function computeUpdate(context, args, { missingReason = STATE_ERROR_REASONS.VALIDATION_TARGET } = {}) {
     const bookName = String(args?.book_name || '').trim();
-    if (!bookName) throw new Error('lorebook_update_entry requires book_name.');
+    if (!bookName) throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_update_entry requires book_name' });
     const uid = H.asFiniteInteger(args?.uid, null);
     if (!Number.isInteger(uid) || uid < 0) {
-        throw new Error('lorebook_update_entry requires a non-negative integer uid.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_update_entry requires a non-negative integer uid' });
     }
     const patch = args?.patch;
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
-        throw new Error('lorebook_update_entry requires a patch object.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_update_entry requires a patch object' });
     }
     const patchKeys = Object.keys(patch);
     if (patchKeys.length === 0) {
-        throw new Error('lorebook_update_entry patch must contain at least one field.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_update_entry patch must contain at least one field' });
     }
     const data = await context.loadWorldInfo(bookName);
-    if (!data) throw new Error(`World book "${bookName}" not found.`);
+    if (!data) {
+        throw new LorebookError({ reason: missingReason, hint: `World book "${bookName}" not found` });
+    }
     const entry = data.entries?.[uid];
-    if (!entry) throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    if (!entry) {
+        throw new LorebookError({ reason: missingReason, hint: `Entry uid ${uid} not found in "${bookName}"` });
+    }
     const before = structuredClone(entry);
     const after = structuredClone(entry);
     Object.assign(after, patch);
@@ -118,31 +123,38 @@ async function computeUpdate(context, args) {
     };
 }
 
-async function computeStrReplace(context, args) {
+async function computeStrReplace(context, args, { missingReason = STATE_ERROR_REASONS.VALIDATION_TARGET } = {}) {
     const bookName = String(args?.book_name || '').trim();
-    if (!bookName) throw new Error('lorebook_str_replace_in_entry requires book_name.');
+    if (!bookName) throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_str_replace_in_entry requires book_name' });
     const uid = H.asFiniteInteger(args?.uid, null);
     if (!Number.isInteger(uid) || uid < 0) {
-        throw new Error('lorebook_str_replace_in_entry requires a non-negative integer uid.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_str_replace_in_entry requires a non-negative integer uid' });
     }
     if (typeof args?.oldString !== 'string' || args.oldString.length === 0) {
-        throw new Error('lorebook_str_replace_in_entry requires a non-empty oldString.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_str_replace_in_entry requires a non-empty oldString' });
     }
     if (typeof args?.newString !== 'string') {
-        throw new Error('lorebook_str_replace_in_entry requires newString (use an empty string to delete).');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_str_replace_in_entry requires newString (use an empty string to delete)' });
     }
     const replaceAll = Boolean(args?.replaceAll);
     const data = await context.loadWorldInfo(bookName);
-    if (!data) throw new Error(`World book "${bookName}" not found.`);
+    if (!data) {
+        throw new LorebookError({ reason: missingReason, hint: `World book "${bookName}" not found` });
+    }
     const entry = data.entries?.[uid];
-    if (!entry) throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    if (!entry) {
+        throw new LorebookError({ reason: missingReason, hint: `Entry uid ${uid} not found in "${bookName}"` });
+    }
     const content = String(entry.content ?? '');
     const firstIdx = content.indexOf(args.oldString);
     if (firstIdx === -1) {
-        throw new Error(`oldString not found in entry ${uid} of "${bookName}".`);
+        throw new LorebookError({ reason: missingReason, hint: `oldString not found in entry ${uid} of "${bookName}"` });
     }
     if (!replaceAll && content.indexOf(args.oldString, firstIdx + args.oldString.length) !== -1) {
-        throw new Error(`oldString occurs more than once in entry ${uid} of "${bookName}"; narrow it to a unique substring or pass replaceAll: true.`);
+        throw new LorebookError({
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: `oldString occurs more than once in entry ${uid} of "${bookName}"; narrow it or pass replaceAll: true`,
+        });
     }
     const before = structuredClone(entry);
     const after = structuredClone(entry);
@@ -171,17 +183,17 @@ async function computeStrReplace(context, args) {
  */
 export async function applyLorebookCommit(context, { book_name, uid, after } = {}) {
     const bookName = String(book_name || '').trim();
-    if (!bookName) throw new Error('applyLorebookCommit: book_name is required.');
+    if (!bookName) throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'applyLorebookCommit: book_name is required' });
     if (!Number.isInteger(uid) || uid < 0) {
-        throw new Error('applyLorebookCommit: uid must be a non-negative integer.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'applyLorebookCommit: uid must be a non-negative integer' });
     }
     if (!after || typeof after !== 'object' || Array.isArray(after)) {
-        throw new Error('applyLorebookCommit: after must be an object.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'applyLorebookCommit: after must be an object' });
     }
     const data = await context.loadWorldInfo(bookName);
-    if (!data) throw new Error(`World book "${bookName}" not found.`);
+    if (!data) throw new LorebookError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `World book "${bookName}" not found` });
     const entry = data.entries?.[uid];
-    if (!entry) throw new Error(`Entry uid ${uid} not found in "${bookName}".`);
+    if (!entry) throw new LorebookError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `Entry uid ${uid} not found in "${bookName}"` });
     Object.assign(entry, after);
     entry.uid = uid;
     await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
@@ -206,11 +218,11 @@ export async function applyLorebookProposal(context, { kind, args } = {}) {
     const safeArgs = (args && typeof args === 'object') ? args : {};
     let computed;
     if (kind === 'update') {
-        computed = await computeUpdate(context, safeArgs);
+        computed = await computeUpdate(context, safeArgs, { missingReason: STATE_ERROR_REASONS.CONFLICT });
     } else if (kind === 'str_replace') {
-        computed = await computeStrReplace(context, safeArgs);
+        computed = await computeStrReplace(context, safeArgs, { missingReason: STATE_ERROR_REASONS.CONFLICT });
     } else {
-        throw new Error(`applyLorebookProposal: unknown kind "${kind}"`);
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `applyLorebookProposal: unknown kind "${kind}"` });
     }
     return applyLorebookCommit(context, {
         book_name: computed.book_name,
@@ -249,6 +261,9 @@ export async function runLorebookWriteTool(call, { context } = {}) {
         }
         return { ok: true, result };
     } catch (err) {
+        if (err instanceof LorebookError) {
+            return { ok: false, reason: err.reason, hint: err.hint, error: err.message };
+        }
         return { ok: false, error: String(err?.message || err || 'unknown error') };
     }
 }

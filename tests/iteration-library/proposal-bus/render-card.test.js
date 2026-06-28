@@ -161,6 +161,32 @@ describe('renderProposalCard', () => {
         const html = renderProposalCard(e, HANDLER, { i18n: (s) => s });
         expect(html).toContain('Cannot show details for this change: related content has been modified.');
     });
+
+    test('conflict card prefers hint over reason (envelope shape)', () => {
+        // New envelope shape: conflictError carries both a machine-readable
+        // `reason` enum and a human-readable `hint`. The user-facing error
+        // line must surface the hint — exposing the raw enum (e.g.
+        // "Error: CONFLICT") leaks an internal token and tells the user
+        // nothing about what actually happened. Use a template-aware i18n
+        // stub so '${0}' interpolation runs and we can see whether `hint`
+        // or `reason` actually lands in the rendered string.
+        const i18n = (template, ...values) =>
+            String(template ?? '').replace(/\$\{(\d+)\}/g, (_, n) => String(values[Number(n)] ?? ''));
+        const e = entry({
+            status: 'conflict',
+            target: { type: 'profile' },
+            conflictError: {
+                targetType: 'profile',
+                targetName: null,
+                jsonPath: '/x',
+                reason: 'CONFLICT',
+                hint: 'network broke',
+            },
+        });
+        const html = renderProposalCard(e, HANDLER, { i18n });
+        expect(html).toContain('network broke');
+        expect(html).not.toContain('Error: CONFLICT');
+    });
 });
 
 describe('preset-clone descriptor suppresses the Rollback button even with non-empty inverse', () => {

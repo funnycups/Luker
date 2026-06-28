@@ -1,12 +1,16 @@
 import { encodeInverse } from './patch-codec.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 
 export class MigrationFailedError extends Error {
-    constructor({ sessionId, turnId, reason }) {
-        super(`migration failed for session=${sessionId} turn=${turnId}: ${reason}`);
+    constructor({ sessionId, turnId, reason: legacyReason, reasonCode = STATE_ERROR_REASONS.REPLAY_BROKEN, hint = null }) {
+        const computedHint = hint != null ? String(hint) : String(legacyReason || 'migration failed');
+        super(`migration failed for session=${sessionId} turn=${turnId}: ${computedHint}`);
         this.name = 'MigrationFailedError';
         this.sessionId = sessionId;
         this.turnId = turnId;
-        this.reason = reason;
+        this.reason = reasonCode;
+        this.hint = String(computedHint).slice(0, 120);
+        this.legacyReason = legacyReason;
     }
 }
 

@@ -12,6 +12,31 @@
  * editor-assistant')` and without re-implementing the parse/match logic.
  */
 
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
+
+/**
+ * Structured error thrown by lorebook helpers, reads, and writes. Carries
+ * a `reason` from `STATE_ERROR_REASONS` plus a short human-readable `hint`
+ * so the proposal bus's parkConflict path can route directly to the right
+ * UI affordance (arg fixer vs target-missing vs commit conflict) instead
+ * of regex-matching the message text.
+ *
+ * Helpers shared between propose-time validation and apply-time commit
+ * (e.g. `loadBookByName`, `computeUpdate`, `computeStrReplace`) accept an
+ * optional `{ missingReason }` argument so the same "not found" lookup
+ * can be tagged VALIDATION_TARGET when the AI's tool call references a
+ * missing target, or CONFLICT when a target that existed at propose time
+ * has since vanished on the apply path.
+ */
+export class LorebookError extends Error {
+    constructor({ reason, hint }) {
+        super(`[lorebook] ${reason}: ${hint}`);
+        this.name = 'LorebookError';
+        this.reason = reason;
+        this.hint = String(hint || '').slice(0, 120);
+    }
+}
+
 const QUERY_LIMIT_DEFAULT = 10;
 const QUERY_LIMIT_MAX = 20;
 const DETAIL_LIMIT_MAX = 10;
@@ -64,14 +89,14 @@ function normalizeUidRange(value) {
     if (exact) {
         const uid = asFiniteInteger(exact[1], null);
         if (!Number.isInteger(uid) || uid < 0) {
-            throw new Error(`Invalid lorebook range: ${text}`);
+            throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `Invalid lorebook range: ${text}` });
         }
         return { start: uid, end: uid };
     }
 
     const rangeMatch = text.match(/^(\d+)?\s*(?:~|-|:|\.\.)\s*(\d+)?$/);
     if (!rangeMatch) {
-        throw new Error(`Invalid lorebook range: ${text}. Use formats like 0~100, 50~, or ~100.`);
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `Invalid lorebook range: ${text}. Use formats like 0~100, 50~, or ~100.` });
     }
 
     const startText = String(rangeMatch[1] ?? '').trim();
@@ -80,10 +105,10 @@ function normalizeUidRange(value) {
     const end = endText ? asFiniteInteger(endText, null) : Number.MAX_SAFE_INTEGER;
 
     if (!Number.isInteger(start) || start < 0 || !Number.isInteger(end) || end < 0) {
-        throw new Error(`Invalid lorebook range: ${text}`);
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `Invalid lorebook range: ${text}` });
     }
     if (start > end) {
-        throw new Error(`Invalid lorebook range: ${text}. Range start must be <= end.`);
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `Invalid lorebook range: ${text}. Range start must be <= end.` });
     }
     return { start, end };
 }
@@ -243,14 +268,14 @@ function buildEntryMatch(entry, query, searchMode) {
     return { matched: matchFields.length > 0, score, matchFields, matchedExcerpt };
 }
 
-async function loadBookByName(context, bookName) {
+async function loadBookByName(context, bookName, { missingReason = STATE_ERROR_REASONS.VALIDATION_TARGET } = {}) {
     const trimmed = String(bookName || '').trim();
     if (!trimmed) {
-        throw new Error('book_name is required.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'book_name is required' });
     }
     const allBooks = typeof context?.getWorldInfoNames === 'function' ? context.getWorldInfoNames() : [];
     if (Array.isArray(allBooks) && allBooks.length > 0 && !allBooks.includes(trimmed)) {
-        throw new Error(`World book "${trimmed}" not found.`);
+        throw new LorebookError({ reason: missingReason, hint: `World book "${trimmed}" not found` });
     }
     const data = await context.loadWorldInfo(trimmed);
     const lorebookData = (data && typeof data === 'object')

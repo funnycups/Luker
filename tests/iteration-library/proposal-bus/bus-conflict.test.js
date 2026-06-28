@@ -74,7 +74,8 @@ describe('ProposalBus — conflict detection (patch-based)', () => {
         expect(out.error).toContain('network broke');
         const entry = bus._testOnly_entries().find((e) => e.id === id);
         expect(entry.status).toBe('conflict');
-        expect(entry.conflictError.reason).toContain('network broke');
+        expect(entry.conflictError.reason).toBe('CONFLICT');
+        expect(entry.conflictError.hint).toContain('network broke');
     });
 
     test('read-throw also goes to conflict', async () => {

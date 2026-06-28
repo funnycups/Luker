@@ -76,6 +76,24 @@
  *     authoring tool.
  */
 
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
+
+/**
+ * Structured error thrown by skill iter-studio handlers and the
+ * apply-time commit helper. Carries a `reason` from `STATE_ERROR_REASONS`
+ * plus a short `hint` (capped at 120 chars) so callers can route the
+ * failure to the right UI affordance (arg fixer vs target-missing vs
+ * malformed commit) without parsing the message.
+ */
+export class SkillProposalError extends Error {
+    constructor({ reason, hint }) {
+        super(`[skill] ${reason}: ${hint}`);
+        this.name = 'SkillProposalError';
+        this.reason = reason;
+        this.hint = String(hint || '').slice(0, 120);
+    }
+}
+
 // iteration-library convention (mirrors lorebook-reads / lorebook-writes
 // and the rest of iter-lib): never capture Luker.getContext() at
 // module load — the context may not be ready when the module first
@@ -149,7 +167,7 @@ function normalizeScope(scope) {
     if (scope.kind === 'character' && scope.characterFile) {
         return { kind: 'character', characterFile: String(scope.characterFile) };
     }
-    throw new Error(`invalid scope: ${JSON.stringify(scope)}`);
+    throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `invalid scope: ${JSON.stringify(scope)}` });
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -162,12 +180,12 @@ function normalizeScope(scope) {
 function splitFrontmatter(content) {
     const text = String(content || '').replace(/\r\n/g, '\n');
     if (!text.startsWith('---\n')) {
-        throw new Error('SKILL.md missing opening YAML frontmatter (---)');
+        throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_COMMIT, hint: 'SKILL.md missing opening YAML frontmatter (---)' });
     }
     const rest = text.slice(4);
     const closeIdx = rest.indexOf('\n---');
     if (closeIdx === -1) {
-        throw new Error('SKILL.md frontmatter is not closed (---)');
+        throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_COMMIT, hint: 'SKILL.md frontmatter is not closed (---)' });
     }
     const yamlBlock = rest.slice(0, closeIdx);
     // Body starts after `\n---` (the closing marker), skipping the trailing
@@ -291,7 +309,7 @@ function buildProposalAck({ kind, skillName, scope, path, op }) {
  */
 export async function commitApprovedSkillProposal(op) {
     if (!op || typeof op !== 'object' || !op.name) {
-        throw new Error('commitApprovedSkillProposal: invalid op');
+        throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'commitApprovedSkillProposal: invalid op' });
     }
     const skillsApi = getSkillsApi();
     const args = op.args && typeof op.args === 'object' ? op.args : {};
@@ -337,7 +355,7 @@ export async function commitApprovedSkillProposal(op) {
             // parallel-session edit lands cleanly. If the file vanished
             // between proposal and apply, surface that as the error.
             const current = await readFileSafe(args.scope, args.name, 'SKILL.md');
-            if (current === null) throw new Error(`SKILL.md not found at apply time: ${args.name}`);
+            if (current === null) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `SKILL.md not found at apply time: ${args.name}` });
             const newContent = applyFrontmatterPatch(current, args.patch);
             return skillsApi.writeFile({
                 scope: args.scope,
@@ -353,7 +371,7 @@ export async function commitApprovedSkillProposal(op) {
         case 'skill_delete':
             return skillsApi.delete(args.scope, args.name);
         default:
-            throw new Error(`commitApprovedSkillProposal: unknown op ${op.name}`);
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `commitApprovedSkillProposal: unknown op ${op.name}` });
     }
 }
 
@@ -770,7 +788,7 @@ const HANDLERS = {
             };
         }
         const container = resolveAgentSkillsContainer(profile, agentId);
-        if (!container) throw new Error(`agent not found in working profile: ${agentId}`);
+        if (!container) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `agent not found in working profile: ${agentId}` });
         return {
             agentId,
             modeLevel: profile?.skills || null,
@@ -780,14 +798,14 @@ const HANDLERS = {
     },
 
     async skill_inspect(args) {
-        if (!args?.name) throw new Error('name is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         const skillsApi = getSkillsApi();
         const scope = normalizeScope(args.scope);
         const [entry, fileTree] = await Promise.all([
             skillsApi.get(args.name, scope),
             skillsApi.listFiles({ scope, name: args.name }),
         ]);
-        if (!entry) throw new Error(`skill not found: ${args.name}`);
+        if (!entry) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `skill not found: ${args.name}` });
         const files = Array.isArray(fileTree?.files) ? fileTree.files : [];
         const sizeBytes = files.reduce((acc, f) => acc + (Number(f?.size) || 0), 0);
         return {
@@ -804,7 +822,7 @@ const HANDLERS = {
     },
 
     async skill_read_content(args) {
-        if (!args?.name) throw new Error('name is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         return getSkillsApi().readFile({
             scope: normalizeScope(args.scope),
             name: String(args.name),
@@ -815,8 +833,8 @@ const HANDLERS = {
     },
 
     async skill_search_content(args) {
-        if (!args?.name) throw new Error('name is required');
-        if (!args?.query) throw new Error('query is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
+        if (!args?.query) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'query is required' });
         return getSkillsApi().search({
             scope: normalizeScope(args.scope),
             name: String(args.name),
@@ -825,9 +843,9 @@ const HANDLERS = {
     },
 
     async skill_create(args) {
-        if (!args?.name) throw new Error('name is required');
-        if (!args?.description) throw new Error('description is required');
-        if (typeof args?.body !== 'string') throw new Error('body is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
+        if (!args?.description) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'description is required' });
+        if (typeof args?.body !== 'string') throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'body is required' });
         const name = String(args.name);
         const description = String(args.description);
         const body = String(args.body);
@@ -867,9 +885,9 @@ const HANDLERS = {
     },
 
     async skill_update_content(args) {
-        if (!args?.name) throw new Error('name is required');
-        if (!args?.path) throw new Error('path is required');
-        if (typeof args?.content !== 'string') throw new Error('content is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
+        if (!args?.path) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'path is required' });
+        if (typeof args?.content !== 'string') throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'content is required' });
         const scope = normalizeScope(args.scope);
         const name = String(args.name);
         const path = String(args.path);
@@ -895,22 +913,22 @@ const HANDLERS = {
     },
 
     async skill_edit_content(args) {
-        if (!args?.name) throw new Error('name is required');
-        if (!args?.path) throw new Error('path is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
+        if (!args?.path) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'path is required' });
         if (typeof args?.oldString !== 'string' || args.oldString.length === 0) {
-            throw new Error('oldString is required (non-empty)');
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'oldString is required (non-empty)' });
         }
-        if (typeof args?.newString !== 'string') throw new Error('newString is required');
+        if (typeof args?.newString !== 'string') throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'newString is required' });
         const scope = normalizeScope(args.scope);
         const name = String(args.name);
         const path = String(args.path);
         const replaceAll = Boolean(args.replaceAll);
         const before = await readFileSafe(scope, name, path);
         if (before === null) {
-            throw new Error(`file not found: ${name}/${path}`);
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `file not found: ${name}/${path}` });
         }
         if (!before.includes(args.oldString)) {
-            throw new Error('oldString not found in file (substring must appear at least once)');
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: 'oldString not found in file (substring must appear at least once)' });
         }
         const after = replaceAll
             ? before.split(args.oldString).join(args.newString)
@@ -937,15 +955,15 @@ const HANDLERS = {
     },
 
     async skill_update_frontmatter(args) {
-        if (!args?.name) throw new Error('name is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         if (!args?.patch || typeof args.patch !== 'object') {
-            throw new Error('patch is required');
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'patch is required' });
         }
         const scope = normalizeScope(args.scope);
         const name = String(args.name);
         const before = await readFileSafe(scope, name, 'SKILL.md');
         if (before === null) {
-            throw new Error(`SKILL.md not found: ${name}`);
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `SKILL.md not found: ${name}` });
         }
         const after = applyFrontmatterPatch(before, args.patch);
         return proposalReturn({
@@ -963,8 +981,8 @@ const HANDLERS = {
     },
 
     async skill_rename(args) {
-        if (!args?.fromName) throw new Error('fromName is required');
-        if (!args?.toName) throw new Error('toName is required');
+        if (!args?.fromName) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'fromName is required' });
+        if (!args?.toName) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'toName is required' });
         const scope = normalizeScope(args.scope);
         const fromName = String(args.fromName);
         const toName = String(args.toName);
@@ -983,9 +1001,9 @@ const HANDLERS = {
     },
 
     async skill_change_scope(args) {
-        if (!args?.name) throw new Error('name is required');
-        if (!args?.fromScope) throw new Error('fromScope is required');
-        if (!args?.toScope) throw new Error('toScope is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
+        if (!args?.fromScope) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'fromScope is required' });
+        if (!args?.toScope) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'toScope is required' });
         const fromScope = normalizeScope(args.fromScope);
         const toScope = normalizeScope(args.toScope);
         const name = String(args.name);
@@ -1000,7 +1018,7 @@ const HANDLERS = {
     },
 
     async skill_delete(args) {
-        if (!args?.name) throw new Error('name is required');
+        if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         const scope = normalizeScope(args.scope);
         const name = String(args.name);
         return proposalReturn({
@@ -1015,17 +1033,17 @@ const HANDLERS = {
 
     // ── Policy binding ──────────────────────────────────────────────────
     async skill_bind_to_agent(args, mctx) {
-        if (!args?.agentId) throw new Error('agentId is required');
-        if (!args?.skillName) throw new Error('skillName is required');
+        if (!args?.agentId) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'agentId is required' });
+        if (!args?.skillName) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'skillName is required' });
         if (args.list !== 'visible' && args.list !== 'deny') {
-            throw new Error('list must be \'visible\' or \'deny\'');
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'list must be \'visible\' or \'deny\'' });
         }
         const profile = mctx.getWorkingProfile?.();
-        if (!profile) throw new Error('working profile unavailable');
+        if (!profile) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: 'working profile unavailable' });
         const before = structuredClone(profile);
         const next = structuredClone(profile);
         const container = resolveAgentSkillsContainer(next, args.agentId);
-        if (!container) throw new Error(`agent not found in working profile: ${args.agentId}`);
+        if (!container) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `agent not found in working profile: ${args.agentId}` });
         ensureAgentSkillsField(container);
         const list = container.skills[args.list];
         if (!list.includes(args.skillName)) list.push(args.skillName);
@@ -1039,17 +1057,17 @@ const HANDLERS = {
     },
 
     async skill_unbind_from_agent(args, mctx) {
-        if (!args?.agentId) throw new Error('agentId is required');
-        if (!args?.skillName) throw new Error('skillName is required');
+        if (!args?.agentId) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'agentId is required' });
+        if (!args?.skillName) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'skillName is required' });
         if (args.list !== 'visible' && args.list !== 'deny') {
-            throw new Error('list must be \'visible\' or \'deny\'');
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'list must be \'visible\' or \'deny\'' });
         }
         const profile = mctx.getWorkingProfile?.();
-        if (!profile) throw new Error('working profile unavailable');
+        if (!profile) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: 'working profile unavailable' });
         const before = structuredClone(profile);
         const next = structuredClone(profile);
         const container = resolveAgentSkillsContainer(next, args.agentId);
-        if (!container) throw new Error(`agent not found in working profile: ${args.agentId}`);
+        if (!container) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `agent not found in working profile: ${args.agentId}` });
         ensureAgentSkillsField(container);
         const list = container.skills[args.list];
         const idx = list.indexOf(args.skillName);
@@ -1065,7 +1083,7 @@ const HANDLERS = {
 
     async skill_set_mode_defaults(args, mctx) {
         const profile = mctx.getWorkingProfile?.();
-        if (!profile) throw new Error('working profile unavailable');
+        if (!profile) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: 'working profile unavailable' });
         const before = structuredClone(profile);
         const next = structuredClone(profile);
         ensureModeSkillsField(next);
@@ -1083,10 +1101,10 @@ const HANDLERS = {
     // ── Migration helpers ───────────────────────────────────────────────
     async skill_extract_from_text(args) {
         if (typeof args?.sourceText !== 'string' || args.sourceText.length === 0) {
-            throw new Error('sourceText is required (non-empty)');
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'sourceText is required (non-empty)' });
         }
-        if (!args?.suggestedName) throw new Error('suggestedName is required');
-        if (!args?.description) throw new Error('description is required');
+        if (!args?.suggestedName) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'suggestedName is required' });
+        if (!args?.description) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'description is required' });
         // Compose through skill_create so the same proposal shape (+ commit
         // path) handles both extraction-driven creates and direct creates.
         return HANDLERS.skill_create({
@@ -1098,15 +1116,15 @@ const HANDLERS = {
     },
 
     async skill_replace_in_systemprompt(args, mctx) {
-        if (!args?.agentId) throw new Error('agentId is required');
-        if (!Array.isArray(args.removeRanges)) throw new Error('removeRanges is required');
-        if (typeof args.insertText !== 'string') throw new Error('insertText is required');
+        if (!args?.agentId) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'agentId is required' });
+        if (!Array.isArray(args.removeRanges)) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'removeRanges is required' });
+        if (typeof args.insertText !== 'string') throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'insertText is required' });
         const profile = mctx.getWorkingProfile?.();
-        if (!profile) throw new Error('working profile unavailable');
+        if (!profile) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: 'working profile unavailable' });
         const before = structuredClone(profile);
         const next = structuredClone(profile);
         const container = resolveAgentSkillsContainer(next, args.agentId);
-        if (!container) throw new Error(`agent not found in working profile: ${args.agentId}`);
+        if (!container) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `agent not found in working profile: ${args.agentId}` });
         const sp = String(container.systemPrompt || '');
         // Sort ranges descending by start so later splices don't invalidate
         // earlier offsets. Insert the replacement text at the FIRST range
@@ -1117,7 +1135,7 @@ const HANDLERS = {
             .map(r => [Number(r[0]), Number(r[1])])
             .filter(([s, e]) => Number.isFinite(s) && Number.isFinite(e) && s >= 0 && e > s && e <= sp.length)
             .sort((a, b) => b[0] - a[0]);
-        if (sorted.length === 0) throw new Error('no valid removeRanges (each must be [start, end) within systemPrompt bounds)');
+        if (sorted.length === 0) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'no valid removeRanges (each must be [start, end) within systemPrompt bounds)' });
         let text = sp;
         for (let i = 0; i < sorted.length; i++) {
             const [start, end] = sorted[i];
@@ -1164,6 +1182,9 @@ export async function runSkillIterStudioTool(call, mutationCtx = {}) {
         }
         return { ok: true, result: out };
     } catch (err) {
+        if (err instanceof SkillProposalError) {
+            return { ok: false, reason: err.reason, hint: err.hint, error: err.message };
+        }
         return { ok: false, error: String(err?.message || err || 'unknown error') };
     }
 }

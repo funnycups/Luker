@@ -1,14 +1,18 @@
 import { applyPatch, compare } from '../../util/fast-json-patch.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 
 export class PatchConflictError extends Error {
-    constructor({ targetType, targetName = null, opIndex, jsonPath, reason }) {
-        super(`patch conflict at ${jsonPath || '(root)'}: ${reason}`);
+    constructor({ targetType, targetName = null, opIndex, jsonPath, reason: legacyReason, reasonCode = STATE_ERROR_REASONS.CONFLICT, hint = null }) {
+        const computedHint = hint != null ? String(hint) : String(legacyReason || 'patch conflict');
+        super(`patch conflict at ${jsonPath || '(root)'}: ${computedHint}`);
         this.name = 'PatchConflictError';
         this.targetType = targetType;
         this.targetName = targetName;
         this.opIndex = opIndex;
         this.jsonPath = jsonPath;
-        this.reason = reason;
+        this.reason = reasonCode;
+        this.hint = String(computedHint).slice(0, 120);
+        this.legacyReason = legacyReason;
     }
 }
 

@@ -1,8 +1,12 @@
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
+
 export class UnknownTargetError extends Error {
     constructor(target) {
         super(`unknown target: ${JSON.stringify(target)}`);
         this.name = 'UnknownTargetError';
         this.target = target;
+        this.reason = STATE_ERROR_REASONS.VALIDATION_ARGS;
+        this.hint = `unknown target type: ${String(target?.type || 'no-type').slice(0, 80)}`;
     }
 }
 

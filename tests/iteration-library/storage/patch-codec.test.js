@@ -60,7 +60,8 @@ describe('decodeBackward', () => {
         try { decodeBackward(current, inverse); } catch (err) {
             expect(err.jsonPath).toBe('/missing');
             expect(err.opIndex).toBe(0);
-            expect(err.reason).toMatch(/missing|not found|cannot/i);
+            expect(err.reason).toBe('CONFLICT');
+            expect(err.hint).toMatch(/missing|not found|cannot/i);
         }
     });
 

@@ -28,7 +28,8 @@
  *     popup can persist a tool_result either way.
  */
 
-import { lorebookHelpers as H } from './_lorebook-helpers.js';
+import { lorebookHelpers as H, LorebookError } from './_lorebook-helpers.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 
 const TOOL_NAMES = Object.freeze({
     WORLD_BOOK_LIST: 'world_book_list',
@@ -165,7 +166,7 @@ async function queryEntries(context, args) {
     const hasConstantFilter = typeof args?.constant === 'boolean';
     const hasEnabledFilter = typeof args?.enabled === 'boolean';
     if (!queryText && !hasConstantFilter && !hasEnabledFilter) {
-        throw new Error('lorebook_query requires text, constant, or enabled.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_query requires text, constant, or enabled' });
     }
     const limit = H.normalizeQueryLimit(args?.limit);
     const state = await H.loadBookByName(context, args?.book_name);
@@ -214,7 +215,7 @@ async function queryEntries(context, args) {
 async function getEntries(context, args) {
     const uids = H.normalizeDetailUids(args?.uids);
     if (uids.length === 0) {
-        throw new Error('lorebook_get requires one or more valid uids.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_get requires one or more valid uids' });
     }
     const state = await H.loadBookByName(context, args?.book_name);
     const entries = state?.lorebookData?.entries && typeof state.lorebookData.entries === 'object'
@@ -269,6 +270,9 @@ export async function runLorebookReadTool(call, { context, avatar = '' } = {}) {
         }
         return { ok: true, result };
     } catch (err) {
-        return { ok: false, error: String(err?.message || err || 'unknown error') };
+        if (err instanceof LorebookError) {
+            return { ok: false, reason: err.reason, hint: err.hint, error: err.message };
+        }
+        return { ok: false, reason: STATE_ERROR_REASONS.TRANSPORT_ERROR, hint: String(err?.message || err).slice(0, 120), error: String(err?.message || err || 'unknown error') };
     }
 }

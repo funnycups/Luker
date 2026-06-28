@@ -72,7 +72,7 @@ function controls(entry, handler, i18n) {
 function conflictBlock(entry, i18n) {
     if (entry.status !== 'conflict') return '';
     const info = entry.conflictError || entry.conflictInfo || null;
-    const reason = info && (info.reason || info.error);
+    const reason = info && (info.hint || info.reason || info.error);
     const targetType = (info && info.targetType) || entry?.target?.type || '';
     const idAttr = escapeHtml(entry.id);
     const messageEnglish = rollbackFailKeyForTargetType(targetType) || STR.previewFail_generic;
