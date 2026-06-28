@@ -48,4 +48,22 @@ describe('FsEngine chat handler — corrupt-doc tolerance', () => {
         const got = await engine.withTransaction(handle, async (tx) => tx.getResource(chatKey({ name: 'never-written' })));
         expect(got).toBeNull();
     });
+
+    test('deleteSidecar returns boolean', async () => {
+        // Seed a parent chat so putChatState is allowed (FS doesn't enforce
+        // this, but the test reads more honestly when the chat exists).
+        await engine.withTransaction(handle, async (tx) =>
+            tx.putResource(chatKey(), {
+                header: { chat_metadata: {} }, body: [], integrity: 'x',
+                updatedAt: 1, createdAt: 1,
+            }));
+        const missing = await engine.withTransaction(handle, async (tx) =>
+            tx.deleteChatState(chatKey(), 'absent'));
+        expect(missing).toBe(false);
+        await engine.withTransaction(handle, async (tx) =>
+            tx.putChatState(chatKey(), 'present', { v: 1 }));
+        const present = await engine.withTransaction(handle, async (tx) =>
+            tx.deleteChatState(chatKey(), 'present'));
+        expect(present).toBe(true);
+    });
 });

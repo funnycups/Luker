@@ -45,6 +45,15 @@ describe('FsEngine settings handler', () => {
         expect(fs.existsSync(fp)).toBe(false);
     });
 
+    test('delete returns boolean (matches DB engines and other FS handlers)', async () => {
+        const settingsKey = { kind: 'settings', handle: h.handle };
+        const missing = await h.engine.withTransaction(h.handle, (tx) => tx.deleteResource(settingsKey));
+        expect(missing).toBe(false);
+        await h.engine.withTransaction(h.handle, (tx) => tx.putResource(settingsKey, { doc: { x: 1 } }));
+        const present = await h.engine.withTransaction(h.handle, (tx) => tx.deleteResource(settingsKey));
+        expect(present).toBe(true);
+    });
+
     test('list throws on settings kind (singleton)', async () => {
         await expect(h.engine.withTransaction(h.handle, (tx) =>
             tx.listResources({ kind: 'settings', handle: h.handle })))

@@ -277,7 +277,9 @@ function registerChatHandler(tx) {
         },
         deleteSidecar(key, ns) {
             const sp = sidecarPath(key, ns);
-            if (fs.existsSync(sp)) fs.unlinkSync(sp);
+            if (!fs.existsSync(sp)) return false;
+            fs.unlinkSync(sp);
+            return true;
         },
         listSidecarNamespaces(key) {
             return listNamespaces(key);
@@ -300,7 +302,9 @@ function registerSettingsHandler(tx) {
         },
         delete(key) {
             const fp = filePath(key);
-            if (fs.existsSync(fp)) fs.unlinkSync(fp);
+            if (!fs.existsSync(fp)) return false;
+            fs.unlinkSync(fp);
+            return true;
         },
         list() { throw new Error('settings is a singleton; list unsupported'); },
     });
