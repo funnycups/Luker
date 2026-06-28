@@ -41,6 +41,7 @@ import {
 import { DEFAULT_LOOP_SYSTEM_PROMPT } from './loop-default-prompt.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
+import { STATE_ERROR_REASONS } from '../../state-errors.js';
 
 const STATE_NAMESPACE = 'luker_orchestrator_anchors';
 const SCHEMA_NAMESPACE = `${STATE_NAMESPACE}__schema`;
@@ -583,7 +584,11 @@ export async function getFloorStateInstance(context) {
         if (typeof context?.createFloorState !== 'function') {
             throw new Error('[orchestrator] createFloorState API is unavailable in extension context.');
         }
-        floorStatePromise = context.createFloorState({ namespace: STATE_NAMESPACE });
+        floorStatePromise = context.createFloorState({ namespace: STATE_NAMESPACE })
+            .catch((err) => {
+                floorStatePromise = null;  // do not cache rejection
+                throw err;
+            });
     }
     return floorStatePromise;
 }
@@ -609,16 +614,24 @@ function getLegacyAnchorNamespace(playableFloor) {
  */
 async function readSchemaVersion(context) {
     if (typeof context?.getChatState !== 'function') return 0;
-    const raw = await context.getChatState(SCHEMA_NAMESPACE, {});
+    const result = await context.getChatState(SCHEMA_NAMESPACE, {});
+    if (!result.ok) {
+        console.warn(`[orchestrator] readSchemaVersion failed (reason=${result.reason}, hint=${result.hint})`);
+        return 0;
+    }
+    const raw = result.state;
     return Math.max(0, Math.floor(Number(raw?.version || 0)));
 }
 
 async function writeSchemaVersion(context, version) {
     if (typeof context?.updateChatState !== 'function') return;
-    await context.updateChatState(SCHEMA_NAMESPACE, () => ({ version: Number(version) || 0 }), {
+    const result = await context.updateChatState(SCHEMA_NAMESPACE, () => ({ version: Number(version) || 0 }), {
         maxOperations: 4,
         maxRetries: 1,
     });
+    if (!result.ok) {
+        console.warn(`[orchestrator] writeSchemaVersion failed (reason=${result.reason}, hint=${result.hint})`);
+    }
 }
 
 /**
@@ -629,7 +642,13 @@ async function writeSchemaVersion(context, version) {
  */
 async function readLegacyOrchestratorState(context) {
     if (typeof context?.getChatState !== 'function') return null;
-    const indexPayload = await context.getChatState(LEGACY_INDEX_NAMESPACE, {});
+    const indexResult = await context.getChatState(LEGACY_INDEX_NAMESPACE, {});
+    if (!indexResult.ok) {
+        console.warn(`[orchestrator] legacy index read failed (reason=${indexResult.reason}, hint=${indexResult.hint})`);
+        // Throw — caller's migrateLegacyAnchorsIfNeeded must NOT proceed to schema-stamp if we couldn't read legacy
+        throw new Error(`[orchestrator] legacy index unreadable: ${indexResult.hint}`);
+    }
+    const indexPayload = indexResult.state;
     if (!indexPayload || typeof indexPayload !== 'object') return null;
 
     const rawAnchors = Array.isArray(indexPayload.anchors) ? indexPayload.anchors : [];
@@ -646,7 +665,12 @@ async function readLegacyOrchestratorState(context) {
     for (const anchorPlayableFloor of anchors) {
         const ns = getLegacyAnchorNamespace(anchorPlayableFloor);
         if (!ns) continue;
-        const snapshot = await context.getChatState(ns, {});
+        const sidecarResult = await context.getChatState(ns, {});
+        if (!sidecarResult.ok) {
+            console.warn(`[orchestrator] legacy sidecar read failed for ${ns} (reason=${sidecarResult.reason}, hint=${sidecarResult.hint})`);
+            throw new Error(`[orchestrator] legacy sidecar read failed: ${sidecarResult.hint}`);
+        }
+        const snapshot = sidecarResult.state;
         const normalized = normalizeOrchestrationSnapshot(snapshot);
         if (normalized) {
             snapshots.set(anchorPlayableFloor, normalized);
@@ -684,9 +708,15 @@ async function deleteLegacyOrchestratorState(context, anchors) {
     for (const playableFloor of anchors) {
         const ns = getLegacyAnchorNamespace(playableFloor);
         if (!ns) continue;
-        await context.deleteChatState(ns, {});
+        const result = await context.deleteChatState(ns, {});
+        if (!result.ok) {
+            console.warn(`[orchestrator] legacy cleanup failed for ${ns} (reason=${result.reason}, hint=${result.hint})`);
+        }
     }
-    await context.deleteChatState(LEGACY_INDEX_NAMESPACE, {});
+    const indexResult = await context.deleteChatState(LEGACY_INDEX_NAMESPACE, {});
+    if (!indexResult.ok) {
+        console.warn(`[orchestrator] legacy index cleanup failed (reason=${indexResult.reason}, hint=${indexResult.hint})`);
+    }
 }
 
 /**
@@ -695,11 +725,16 @@ async function deleteLegacyOrchestratorState(context, anchors) {
  * cannot be located in the current chat (e.g. truncated since the
  * snapshot was taken) are dropped.
  *
- * Returns the number of commits written so callers can log progress.
+ * Returns `{ committed, skipped }` so callers can log progress. Aborts
+ * early (returning the partial counts) when fs.patch reports
+ * REPLAY_BROKEN / INSTANCE_DESTROYED / LOG_WRITE_FAILED — those reasons
+ * indicate the floor-state instance itself is wedged and continuing
+ * would just rack up more failures.
  */
 async function replayLegacyAnchorsAsCommits(context, fs, legacy) {
     const messages = Array.isArray(context?.chat) ? context.chat : [];
     let committed = 0;
+    let skipped = 0;
     for (const playableFloor of legacy.anchors) {
         const snapshot = legacy.snapshots.get(playableFloor);
         if (!snapshot) continue;
@@ -707,13 +742,24 @@ async function replayLegacyAnchorsAsCommits(context, fs, legacy) {
         if (!target?.message || !target.message.is_user) continue;
         const swipeIdRaw = target.message.swipe_id;
         const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
-        const ok = await fs.patch(
+        const result = await fs.patch(
             [{ op: 'add', path: `/${playableFloor}`, value: snapshot }],
             { floor: target.index, swipeId },
         );
-        if (ok) committed += 1;
+        if (result.ok) {
+            committed += 1;
+            continue;
+        }
+        if (result.reason === STATE_ERROR_REASONS.REPLAY_BROKEN
+            || result.reason === STATE_ERROR_REASONS.INSTANCE_DESTROYED
+            || result.reason === STATE_ERROR_REASONS.LOG_WRITE_FAILED) {
+            console.warn(`[orchestrator] migration aborted at anchor F${playableFloor} (reason=${result.reason}, hint=${result.hint})`);
+            return { committed, skipped: legacy.anchors.length - committed };
+        }
+        skipped += 1;
+        console.warn(`[orchestrator] migration: anchor F${playableFloor} dropped (reason=${result.reason}, hint=${result.hint})`);
     }
-    return committed;
+    return { committed, skipped };
 }
 
 /**
@@ -742,7 +788,7 @@ export async function migrateLegacyAnchorsIfNeeded(context) {
 
     const fs = await getFloorStateInstance(context);
     await fs.ready();
-    const committed = await replayLegacyAnchorsAsCommits(context, fs, legacy);
+    const { committed } = await replayLegacyAnchorsAsCommits(context, fs, legacy);
 
     await writeSchemaVersion(context, SCHEMA_VERSION);
     await deleteLegacyOrchestratorState(context, legacy.anchors);
@@ -757,7 +803,12 @@ export async function migrateLegacyAnchorsIfNeeded(context) {
 export async function loadAnchorMap(context) {
     const fs = await getFloorStateInstance(context);
     await fs.ready();
-    const data = await fs.get();
+    const result = await fs.get();
+    if (!result.ok) {
+        console.warn(`[orchestrator] loadAnchorMap failed (reason=${result.reason}, hint=${result.hint})`);
+        return {};
+    }
+    const data = result.state;
     return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
 }
 
@@ -767,27 +818,29 @@ export async function loadAnchorMap(context) {
  * so floor-state's structural-event handlers can correctly invalidate it
  * later.
  *
- * Returns `false` when the anchor is incomplete (missing chatIndex /
- * playableFloor) or the underlying patch failed; the caller should treat
- * this as a soft error and surface it to the UI.
+ * Returns a state envelope: `{ ok: false, reason, hint }` when the anchor
+ * is incomplete (missing chatIndex / playableFloor) or the snapshot
+ * cannot be normalized, otherwise the envelope returned by `fs.patch`
+ * (`{ ok: true, updated: boolean }` on success, or
+ * `{ ok: false, reason, hint }` on failure). Callers should branch on
+ * `result.ok` and surface non-ok envelopes to the UI as soft errors.
  *
  * @param {object} context
  * @param {{ playableFloor: number, chatIndex: number, swipeId: number, hash: string }} anchor
  * @param {{ anchorHash: string, capsuleText: string, stageOutputs: object[] }} snapshot
- * @returns {Promise<boolean>}
+ * @returns {Promise<{ ok: boolean, updated?: boolean, reason?: string, hint?: string }>}
  */
 export async function commitAnchorSnapshot(context, anchor, snapshot) {
     const playableFloor = normalizeAnchorPlayableFloor(anchor?.playableFloor);
     const chatIndex = Number(anchor?.chatIndex);
     const swipeId = Number(anchor?.swipeId);
     if (!playableFloor || !Number.isInteger(chatIndex) || chatIndex < 0) {
-        return false;
+        return { ok: false, reason: 'VALIDATION_ARGS', hint: 'invalid anchor coordinates' };
     }
     const normalizedSnapshot = normalizeOrchestrationSnapshot(snapshot);
     if (!normalizedSnapshot) {
-        return false;
+        return { ok: false, reason: 'VALIDATION_ARGS', hint: 'snapshot normalization failed' };
     }
-
     const fs = await getFloorStateInstance(context);
     return fs.patch(
         [{ op: 'add', path: `/${playableFloor}`, value: normalizedSnapshot }],

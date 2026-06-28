@@ -37,25 +37,43 @@
  * Validation:
  *   - `note_open` text empty / whitespace-only → ToolError(NOTE_EMPTY)
  *   - `note_open` text byte length > 16384 → ToolError(NOTE_TOO_LONG)
+ *   - `note_open` adapter write rejection → ToolError mapped from the
+ *     state-error reason (CONFLICT → NOTE_WRITE_CONFLICT, INSTANCE_DESTROYED
+ *     → NOTE_FS_DESTROYED, etc. — see `mapNoteReasonToToolError`)
  *   - `note_close` id missing / empty → ToolError(NOTE_ID_EMPTY)
  *   - `note_close` against unknown / already-closed id is NOT a throw —
  *     the adapter returns `{ ok: false, error: 'not_found' | 'already_closed' }`
  *     and the tool passes that through so the agent can branch on it
  *     without an exception interrupting the loop.
+ *   - `note_close` adapter write rejection → ToolError mapped the same way
+ *     as note_open. The reducer-no-op path is distinguished by inspecting
+ *     `result.error` (preserved as-is) vs `result.reason` (the failure
+ *     envelope to translate).
  *
  * Adapter contract (`context.__floorStateForNotes` in tests, production
  * wrapper in loop-runtime's `attachNotesFloorState`):
  *
  *   {
- *     appendForFloor(floor: number, text: string): Promise<string>
- *       // returns new id; entry persisted with status: 'open'
+ *     appendForFloor(floor: number, text: string):
+ *         Promise<{ok:true, id:string} | {ok:false, reason:string, hint:string}>
+ *       // success returns the new id; write rejections surface state-error
+ *       // reason/hint envelopes (see ../loop-runtime.js: makeNotesAdapter
+ *       // and ../../state-errors.js: STATE_ERROR_REASONS).
  *     listAcrossFloors(): Promise<Array<{id, text, status, closure_reason?}>>
  *       // chronological; legacy entries without `status` are treated as 'open'
- *     updateStatusById(id, status, reason?): Promise<{ok:true} | {ok:false, error:string}>
- *       // flip a single entry's status; reports `already_<status>` on no-op
- *     updateTextById(id, text): Promise<{ok:true} | {ok:false, error:string}>
- *       // mutate an existing entry's text (used by UI / curator agent)
- *     deleteByIds(ids: string[]): Promise<{ removed: string[], missing: string[] }>
+ *     updateStatusById(id, status, reason?):
+ *         Promise<{ok:true}
+ *               | {ok:false, error:string}
+ *               | {ok:false, reason:string, hint:string}>
+ *       // ok:false+error covers reducer no-ops (not_found / already_<status>);
+ *       // ok:false+reason covers patch rejection.
+ *     updateTextById(id, text):
+ *         Promise<{ok:true}
+ *               | {ok:false, error:string}
+ *               | {ok:false, reason:string, hint:string}>
+ *     deleteByIds(ids: string[]):
+ *         Promise<{ removed: string[], missing: string[] }
+ *               | {ok:false, reason:string, hint:string}>
  *       // hard-delete from storage (used by UI / curator agent, not the LLM tools).
  *       // `removed` lists the ids that were actually present and dropped.
  *   }
@@ -103,6 +121,49 @@ function pickTargetFloor(context) {
 }
 
 /**
+ * Translate the notes adapter's write-rejection envelope into a structured
+ * ToolError the agent can read on the next round. Mirrors the closed enum
+ * in `state-errors.js` (`STATE_ERROR_REASONS`); any unknown reason maps to
+ * a generic `NOTE_WRITE_FAILED` so a future floor-state failure mode can't
+ * silently drop the agent into a fake-success path.
+ *
+ * Reducer no-op outcomes (`{ok:false, error:'not_found'|'already_X'}`)
+ * never reach this helper — those are domain results the tool layer passes
+ * through verbatim so the agent can branch on them without an exception.
+ *
+ * @param {'note_open'|'note_close'|'note_edit'|'note_delete'} op
+ * @param {{reason?: string, hint?: string}} result
+ * @returns {ToolError}
+ */
+function mapNoteReasonToToolError(op, result) {
+    const reason = result?.reason || 'UNKNOWN';
+    const hint = String(result?.hint || '');
+    const mapping = {
+        VALIDATION_ARGS: ['NOTE_WRITE_INVALID_ARGS',
+            hint ? `Note arguments were rejected by floor-state: ${hint}` : 'Note arguments were rejected by floor-state.'],
+        VALIDATION_TARGET: ['NOTE_NO_ACTIVE_CHAT',
+            'The active chat has not been persisted yet. Persist a turn first or drop this note for this round.'],
+        VALIDATION_COMMIT: ['NOTE_FLOOR_INVALID',
+            hint ? `Floor for this note is invalid: ${hint}` : 'Floor for this note is invalid.'],
+        INSTANCE_DESTROYED: ['NOTE_FS_DESTROYED',
+            'Notes storage was destroyed for this session. Drop this note — the user must reload the page to recover.'],
+        CONFLICT: ['NOTE_WRITE_CONFLICT',
+            'Another writer raced this note. Retry once; if it still fails, drop the note for this round.'],
+        HTTP_ERROR: ['NOTE_WRITE_HTTP_ERROR',
+            hint ? `Notes store returned an HTTP error: ${hint}` : 'Notes store returned an HTTP error. Retry once.'],
+        TRANSPORT_ERROR: ['NOTE_WRITE_TRANSPORT_ERROR',
+            hint ? `Network error saving the note: ${hint}` : 'Network error saving the note. Retry once.'],
+        REPLAY_BROKEN: ['NOTE_LOG_BROKEN',
+            'Notes commit log is broken (replay failed). Stop trying to write notes this run.'],
+        LOG_WRITE_FAILED: ['NOTE_LOG_WRITE_FAILED',
+            hint ? `Notes log write failed: ${hint}` : 'Notes log write failed. Retry once; if it still fails, drop the note for this round.'],
+    };
+    const [code, mappedHint] = mapping[reason] || ['NOTE_WRITE_FAILED',
+        'Notes write failed. Drop this note for this round.'];
+    return new ToolError(`${op}: notes write rejected (${reason}).`, code, mappedHint);
+}
+
+/**
  * Open (= append) a persistent note tagged at the chat tail (or
  * `context.__targetFloorForNote` if provided). New notes are persisted
  * with `status: 'open'` by the adapter. Returns the new note's stable id
@@ -138,18 +199,27 @@ export async function execNoteOpen(args, context) {
     }
 
     const floor = pickTargetFloor(context);
-    const newId = await fs.appendForFloor(floor, trimmed);
-    return { id: String(newId) };
+    const result = await fs.appendForFloor(floor, trimmed);
+    if (!result || result.ok === false) {
+        throw mapNoteReasonToToolError('note_open', result || {});
+    }
+    return { id: String(result.id) };
 }
 
 /**
  * Close an open note by stable id, with an optional one-line reason
- * (e.g. "used by hero at floor 53"). The adapter returns
- * `{ ok: true }` on a successful flip, or `{ ok: false, error }` for
- * `not_found` / `already_closed` — those are real outcomes the agent
- * should branch on, not exceptional failures, so the tool passes the
- * adapter result through without ToolError wrapping. Only structural
- * problems (missing id arg, adapter not mounted) throw.
+ * (e.g. "used by hero at floor 53"). The adapter returns:
+ *   - `{ ok: true }` on a successful flip — passed through.
+ *   - `{ ok: false, error }` for reducer no-ops (`not_found` /
+ *     `already_closed`) — passed through verbatim so the agent can branch
+ *     on a real result without an exception interrupting the loop.
+ *   - `{ ok: false, reason, hint }` when the underlying floor-state patch
+ *     was rejected — translated to a structured `ToolError` so the agent
+ *     sees the failure mode (and the runtime turns it into a `role: tool`
+ *     reply for the next round, not a runtime crash).
+ *
+ * Only structural problems (missing id arg, adapter not mounted) and
+ * adapter write rejections throw.
  *
  * @param {{ id: string, reason?: string }} args
  * @param {object} context
@@ -173,7 +243,16 @@ export async function execNoteClose(args, context) {
             'The loop runtime did not mount the notes floor-state for this run. This is usually a setup issue (missing context.createFloorState) — retry once.',
         );
     }
-    return await fs.updateStatusById(id, 'closed', reason);
+    const result = await fs.updateStatusById(id, 'closed', reason);
+    // Only the write-rejection branch (has `reason`) becomes a ToolError;
+    // reducer no-ops (have `error`) are domain outcomes the agent should
+    // branch on directly. Keeping these distinct preserves the existing
+    // contract for not_found / already_closed without masking real
+    // floor-state failures behind the same shape.
+    if (result && result.ok === false && result.reason) {
+        throw mapNoteReasonToToolError('note_close', result);
+    }
+    return result;
 }
 
 /**

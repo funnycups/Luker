@@ -55,7 +55,7 @@ function makeFakeFloorState() {
         appendForFloor: async (floor, text) => {
             const id = mintId();
             stored.push({ floor, id, text });
-            return id;
+            return { ok: true, id };
         },
         listAcrossFloors: async () => stored.map(s => ({ id: s.id, text: s.text })),
         deleteByIds: async (ids) => {
@@ -93,7 +93,7 @@ function makeAdapter(initial = []) {
         appendForFloor: async (_floor, text) => {
             const id = `n${entries.length + 1}`;
             entries.push({ id, text, status: 'open' });
-            return id;
+            return { ok: true, id };
         },
         listAcrossFloors: async () => entries.map(e => ({ ...e })),
         updateStatusById: async (id, status, reason) => {
@@ -131,7 +131,7 @@ describe('notes adapter status state machine', () => {
 
     test('updateStatusById flips open → closed with reason', async () => {
         const fs = makeAdapter();
-        const id = await fs.appendForFloor(0, 'planted key');
+        const { id } = await fs.appendForFloor(0, 'planted key');
         const r = await fs.updateStatusById(id, 'closed', 'used by hero at floor 53');
         expect(r).toEqual({ ok: true });
         expect(fs.__entries[0]).toMatchObject({ status: 'closed', closure_reason: 'used by hero at floor 53' });
@@ -139,7 +139,7 @@ describe('notes adapter status state machine', () => {
 
     test('updateStatusById on already-closed reports already_closed', async () => {
         const fs = makeAdapter();
-        const id = await fs.appendForFloor(0, 'x');
+        const { id } = await fs.appendForFloor(0, 'x');
         await fs.updateStatusById(id, 'closed', 'r1');
         const r = await fs.updateStatusById(id, 'closed', 'r2');
         expect(r).toEqual({ ok: false, error: 'already_closed' });
@@ -149,7 +149,7 @@ describe('notes adapter status state machine', () => {
 describe('notes adapter user-only ops', () => {
     test('updateTextById changes text without altering status', async () => {
         const fs = makeAdapter();
-        const id = await fs.appendForFloor(0, 'original');
+        const { id } = await fs.appendForFloor(0, 'original');
         await fs.updateStatusById(id, 'closed', 'r');
         const r = await fs.updateTextById(id, 'corrected');
         expect(r.ok).toBe(true);
@@ -159,8 +159,8 @@ describe('notes adapter user-only ops', () => {
 
     test('deleteByIds removes entries entirely (hard delete)', async () => {
         const fs = makeAdapter();
-        const id1 = await fs.appendForFloor(0, 'a');
-        const id2 = await fs.appendForFloor(0, 'b');
+        const { id: id1 } = await fs.appendForFloor(0, 'a');
+        const { id: id2 } = await fs.appendForFloor(0, 'b');
         const r = await fs.deleteByIds([id1, 'nope']);
         expect(r.removed).toEqual([id1]);
         expect(r.missing).toEqual(['nope']);
@@ -410,107 +410,270 @@ describe('buildInitialMessages renders ## Open Notes', () => {
 // Direct coverage of the production adapter built by `makeNotesAdapter` inside
 // `attachNotesFloorState`. The other adapter-shape tests above use hand-rolled
 // fakes that bypass the real builder; this block exercises the real builder
-// against a fake floor-state whose update() returns false, the production-side
-// signal that a chat-state patch was rejected.
-describe('makeNotesAdapter surfaces write failures', () => {
+// against a fake floor-state whose `update()` returns the state-error
+// envelope, the production-side signal that a chat-state patch was rejected.
+// Adapter now SURFACES write failures as envelopes (`{ok:false, reason, hint}`)
+// instead of throwing — the tool layer (`note.js`) translates them to
+// ToolError so the agent sees the failure mode without a runtime crash.
+describe('makeNotesAdapter surfaces write failures as envelopes', () => {
     // Helper: build a fake floor-state instance shaped like the real one and
-    // mount it via attachNotesFloorState. updateOk controls what every
-    // fs.update returns; everything else is enough to satisfy the
-    // attach guard.
-    async function mountAdapterWith(updateOk) {
+    // mount it via attachNotesFloorState. `updateResult` is what every
+    // fs.update returns; `getResult` is what every fs.get returns. Both
+    // default to the success envelope.
+    async function mountAdapterWith({ updateResult, getResult } = {}) {
         const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
             await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
         resetNotesFloorStateInstanceForTesting();
         const fakeFs = {
             ready: async () => undefined,
-            get: async () => ({}),
-            update: async () => updateOk,
+            get: async () => getResult ?? { ok: true, state: {} },
+            update: async () => updateResult ?? { ok: true, updated: true },
         };
         const ctx = { createFloorState: async () => fakeFs };
         await attachNotesFloorState(ctx);
         return ctx.__floorStateForNotes;
     }
 
-    test('appendForFloor throws NOTE_WRITE_FAILED when fs.update returns false', async () => {
-        const adapter = await mountAdapterWith(false);
-        await expect(adapter.appendForFloor(0, 'lost')).rejects.toMatchObject({
-            name: 'ToolError',
-            code: 'NOTE_WRITE_FAILED',
+    test('appendForFloor returns ok:false envelope when fs.update rejects', async () => {
+        const adapter = await mountAdapterWith({
+            updateResult: { ok: false, reason: 'CONFLICT', hint: 'racing writer' },
         });
+        const r = await adapter.appendForFloor(0, 'lost');
+        expect(r).toEqual({ ok: false, reason: 'CONFLICT', hint: 'racing writer' });
     });
 
-    test('appendForFloor still returns the id when fs.update returns true', async () => {
-        const adapter = await mountAdapterWith(true);
-        const id = await adapter.appendForFloor(0, 'kept');
-        expect(typeof id).toBe('string');
-        expect(id.length).toBeGreaterThan(0);
+    test('appendForFloor returns ok:true with id on success', async () => {
+        const adapter = await mountAdapterWith({
+            updateResult: { ok: true, updated: true },
+        });
+        const r = await adapter.appendForFloor(0, 'kept');
+        expect(r.ok).toBe(true);
+        expect(typeof r.id).toBe('string');
+        expect(r.id.length).toBeGreaterThan(0);
     });
 
-    test('updateStatusById throws NOTE_WRITE_FAILED on patch rejection of a real flip', async () => {
-        // Seed an entry the reducer can find, then make fs.update return false
-        // for the next call by toggling through a stateful fake.
+    test('appendForFloor propagates unknown reasons unchanged', async () => {
+        // Future state-error reasons should not silently collapse onto a
+        // single fallback inside the adapter; the tool layer is what maps
+        // unknown reasons onto NOTE_WRITE_FAILED.
+        const adapter = await mountAdapterWith({
+            updateResult: { ok: false, reason: 'HTTP_ERROR', hint: '503 from /chat-state' },
+        });
+        const r = await adapter.appendForFloor(0, 'x');
+        expect(r).toEqual({ ok: false, reason: 'HTTP_ERROR', hint: '503 from /chat-state' });
+    });
+
+    test('updateStatusById returns ok:false envelope on patch rejection of a real flip', async () => {
+        // Seed an entry the reducer can find, then make fs.update return the
+        // failure envelope for the next call by toggling through a stateful fake.
         const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
             await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
         resetNotesFloorStateInstanceForTesting();
-        let returnFromUpdate = true;
+        let nextUpdateResult = { ok: true, updated: true };
         let stored = { entries: [{ id: 'x', text: 't', status: 'open' }] };
         const fakeFs = {
             ready: async () => undefined,
-            get: async () => stored,
+            get: async () => ({ ok: true, state: stored }),
             update: async (reducer) => {
                 const next = await reducer(stored);
-                if (returnFromUpdate && next && typeof next === 'object') stored = next;
-                return returnFromUpdate;
+                if (nextUpdateResult.ok && next && typeof next === 'object') stored = next;
+                return nextUpdateResult;
             },
         };
         const ctx = { createFloorState: async () => fakeFs };
         await attachNotesFloorState(ctx);
         const adapter = ctx.__floorStateForNotes;
 
-        returnFromUpdate = false;
-        await expect(adapter.updateStatusById('x', 'closed', 'r')).rejects.toMatchObject({
-            name: 'ToolError',
-            code: 'NOTE_WRITE_FAILED',
-        });
+        nextUpdateResult = { ok: false, reason: 'CONFLICT', hint: 'log tail moved' };
+        const r = await adapter.updateStatusById('x', 'closed', 'r');
+        expect(r).toEqual({ ok: false, reason: 'CONFLICT', hint: 'log tail moved' });
     });
 
-    test('updateStatusById passes through no-op outcomes (not_found) without throwing', async () => {
-        // The reducer's "no row matches" case is a legitimate result, not a
-        // write rejection. We must not turn it into NOTE_WRITE_FAILED.
-        const adapter = await mountAdapterWith(true);
+    test('updateStatusById passes through reducer no-op outcomes (not_found) untouched', async () => {
+        // The reducer's "no row matches" case is a legitimate domain result,
+        // not a write rejection. The adapter must NOT collapse it onto an
+        // envelope — the agent / panel need to distinguish "id missing" from
+        // "the chat-state patch was rejected".
+        const adapter = await mountAdapterWith();
         const r = await adapter.updateStatusById('missing', 'closed');
         expect(r).toEqual({ ok: false, error: 'not_found' });
     });
 
-    test('deleteByIds throws NOTE_WRITE_FAILED only when an actual delete is rejected', async () => {
+    test('updateStatusById passes through already_<status> no-op outcomes', async () => {
+        // Same domain-vs-failure split for the already-at-target branch.
         const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
             await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
         resetNotesFloorStateInstanceForTesting();
-        let returnFromUpdate = true;
-        let stored = { entries: [{ id: 'a', text: 't', status: 'open' }] };
+        const stored = { entries: [{ id: 'x', text: 't', status: 'closed' }] };
         const fakeFs = {
             ready: async () => undefined,
-            get: async () => stored,
+            get: async () => ({ ok: true, state: stored }),
+            // The reducer must actually run so the outcome variable captures
+            // its already_<status> branch; a plain `async () => ok` would
+            // leave outcome at its default not_found.
+            update: async (reducer) => {
+                await reducer(stored);
+                return { ok: true, updated: false };
+            },
+        };
+        const ctx = { createFloorState: async () => fakeFs };
+        await attachNotesFloorState(ctx);
+        const adapter = ctx.__floorStateForNotes;
+        const r = await adapter.updateStatusById('x', 'closed');
+        expect(r).toEqual({ ok: false, error: 'already_closed' });
+    });
+
+    test('updateTextById returns ok:false envelope on patch rejection of a real edit', async () => {
+        const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
+            await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
+        resetNotesFloorStateInstanceForTesting();
+        let nextUpdateResult = { ok: true, updated: true };
+        let stored = { entries: [{ id: 'y', text: 'original', status: 'open' }] };
+        const fakeFs = {
+            ready: async () => undefined,
+            get: async () => ({ ok: true, state: stored }),
             update: async (reducer) => {
                 const next = await reducer(stored);
-                if (returnFromUpdate && next && typeof next === 'object') stored = next;
-                return returnFromUpdate;
+                if (nextUpdateResult.ok && next && typeof next === 'object') stored = next;
+                return nextUpdateResult;
             },
         };
         const ctx = { createFloorState: async () => fakeFs };
         await attachNotesFloorState(ctx);
         const adapter = ctx.__floorStateForNotes;
 
-        // Case 1: requested ids don't exist → no real delete attempted → no throw
-        returnFromUpdate = false;
+        nextUpdateResult = { ok: false, reason: 'LOG_WRITE_FAILED', hint: 'disk full' };
+        const r = await adapter.updateTextById('y', 'edited');
+        expect(r).toEqual({ ok: false, reason: 'LOG_WRITE_FAILED', hint: 'disk full' });
+    });
+
+    test('deleteByIds returns ok:false envelope only when an actual delete is rejected', async () => {
+        const { attachNotesFloorState, resetNotesFloorStateInstanceForTesting } =
+            await import('../../public/scripts/extensions/orchestrator/loop-runtime.js');
+        resetNotesFloorStateInstanceForTesting();
+        let nextUpdateResult = { ok: true, updated: true };
+        let stored = { entries: [{ id: 'a', text: 't', status: 'open' }] };
+        const fakeFs = {
+            ready: async () => undefined,
+            get: async () => ({ ok: true, state: stored }),
+            update: async (reducer) => {
+                const next = await reducer(stored);
+                if (nextUpdateResult.ok && next && typeof next === 'object') stored = next;
+                return nextUpdateResult;
+            },
+        };
+        const ctx = { createFloorState: async () => fakeFs };
+        await attachNotesFloorState(ctx);
+        const adapter = ctx.__floorStateForNotes;
+
+        // Case 1: requested ids don't exist → reducer no-op, no real delete
+        // attempted → manifest path even when fs.update is failing.
+        nextUpdateResult = { ok: false, reason: 'CONFLICT', hint: 'late' };
         const r1 = await adapter.deleteByIds(['ghost']);
         expect(r1).toEqual({ removed: [], missing: ['ghost'] });
 
-        // Case 2: requested id exists, write rejected → throw
-        returnFromUpdate = false;
-        await expect(adapter.deleteByIds(['a'])).rejects.toMatchObject({
+        // Case 2: requested id exists, write rejected → envelope.
+        nextUpdateResult = { ok: false, reason: 'CONFLICT', hint: 'log tail moved' };
+        const r2 = await adapter.deleteByIds(['a']);
+        expect(r2).toEqual({ ok: false, reason: 'CONFLICT', hint: 'log tail moved' });
+    });
+
+    test('listAcrossFloors degrades to empty array when fs.get rejects', async () => {
+        // Read failures must NOT throw — director-runtime, director-tools,
+        // notes-panel and the open-notes system prompt all treat reads as
+        // soft-fail (return / inject nothing). Surfacing reason here would
+        // force every consumer to unwrap envelopes for a path they already
+        // treat as silent-degrade.
+        const adapter = await mountAdapterWith({
+            getResult: { ok: false, state: null, reason: 'REPLAY_BROKEN', hint: 'commit chain torn' },
+        });
+        const r = await adapter.listAcrossFloors();
+        expect(Array.isArray(r)).toBe(true);
+        expect(r).toEqual([]);
+    });
+});
+
+// Coverage for the tool-layer translation: note.js must convert the
+// adapter's write-rejection envelope into a structured ToolError so the
+// runtime can surface it to the agent on the next round. Reducer no-op
+// outcomes (`{ok:false, error:'not_found'|'already_X'}`) are passed
+// through verbatim — the agent should branch on them, not see them as
+// exceptions.
+describe('note.js translates adapter envelope to ToolError', () => {
+    function fakeAdapterWithEnvelope(reason, hint) {
+        return {
+            appendForFloor: async () => ({ ok: false, reason, hint }),
+            updateStatusById: async () => ({ ok: false, reason, hint }),
+            updateTextById: async () => ({ ok: false, reason, hint }),
+            listAcrossFloors: async () => [],
+            deleteByIds: async () => ({ ok: false, reason, hint }),
+        };
+    }
+
+    test('execNoteOpen converts CONFLICT envelope to ToolError(NOTE_WRITE_CONFLICT)', async () => {
+        const ctx = {
+            chat: [{}, {}],
+            __floorStateForNotes: fakeAdapterWithEnvelope('CONFLICT', 'racing writer'),
+        };
+        await expect(execNoteOpen({ text: 'x' }, ctx)).rejects.toMatchObject({
+            name: 'ToolError',
+            code: 'NOTE_WRITE_CONFLICT',
+        });
+    });
+
+    test('execNoteOpen converts INSTANCE_DESTROYED envelope to ToolError(NOTE_FS_DESTROYED)', async () => {
+        const ctx = {
+            chat: [{}, {}],
+            __floorStateForNotes: fakeAdapterWithEnvelope('INSTANCE_DESTROYED', 'gone'),
+        };
+        await expect(execNoteOpen({ text: 'x' }, ctx)).rejects.toMatchObject({
+            name: 'ToolError',
+            code: 'NOTE_FS_DESTROYED',
+        });
+    });
+
+    test('execNoteOpen converts unknown reason to generic ToolError(NOTE_WRITE_FAILED)', async () => {
+        const ctx = {
+            chat: [{}, {}],
+            __floorStateForNotes: fakeAdapterWithEnvelope('SOMETHING_NEW', 'unmapped'),
+        };
+        await expect(execNoteOpen({ text: 'x' }, ctx)).rejects.toMatchObject({
             name: 'ToolError',
             code: 'NOTE_WRITE_FAILED',
         });
+    });
+
+    test('execNoteClose converts CONFLICT envelope to ToolError(NOTE_WRITE_CONFLICT)', async () => {
+        const ctx = {
+            chat: [{}, {}],
+            __floorStateForNotes: fakeAdapterWithEnvelope('CONFLICT', 'log tail moved'),
+        };
+        await expect(execNoteClose({ id: 'n1', reason: 'r' }, ctx)).rejects.toMatchObject({
+            name: 'ToolError',
+            code: 'NOTE_WRITE_CONFLICT',
+        });
+    });
+
+    test('execNoteClose passes through reducer no-op {ok:false, error:not_found} without throwing', async () => {
+        // Domain outcome, not a failure — the agent must see it verbatim.
+        const adapter = {
+            appendForFloor: async () => ({ ok: true, id: 'n1' }),
+            updateStatusById: async () => ({ ok: false, error: 'not_found' }),
+            listAcrossFloors: async () => [],
+        };
+        const ctx = { chat: [{}, {}], __floorStateForNotes: adapter };
+        const r = await execNoteClose({ id: 'missing', reason: '' }, ctx);
+        expect(r).toEqual({ ok: false, error: 'not_found' });
+    });
+
+    test('execNoteClose passes through reducer no-op {ok:false, error:already_closed} without throwing', async () => {
+        const adapter = {
+            appendForFloor: async () => ({ ok: true, id: 'n1' }),
+            updateStatusById: async () => ({ ok: false, error: 'already_closed' }),
+            listAcrossFloors: async () => [],
+        };
+        const ctx = { chat: [{}, {}], __floorStateForNotes: adapter };
+        const r = await execNoteClose({ id: 'n1', reason: '' }, ctx);
+        expect(r).toEqual({ ok: false, error: 'already_closed' });
     });
 });

@@ -74,7 +74,8 @@ test.describe('#78 — Multi-skill visible: live director dispatch', () => {
             const settings = ctx.extensionSettings.orchestrator;
             const presetLib = await import('/scripts/extensions/orchestrator/preset-library.js');
             const dirDefaults = await import('/scripts/extensions/orchestrator/director-defaults.js');
-            const current = presetLib.getActivePreset(settings, 'director', { scope: 'global', context: ctx });
+            const currentResult = presetLib.getActivePreset(settings, 'director', { scope: 'global', context: ctx });
+            const current = (currentResult.ok && currentResult.state) ? currentResult.state : {};
             const next = dirDefaults.sanitizeDirectorProfile({
                 ...current,
                 skills: { visible: [...names], deny: [] },
@@ -87,7 +88,10 @@ test.describe('#78 — Multi-skill visible: live director dispatch', () => {
                     skills: { visible: ['+'], deny: [] }, // inherit mode
                 })),
             });
-            presetLib.writeActivePreset(settings, 'director', 'global', next);
+            const writeResult = presetLib.writeActivePreset(settings, 'director', 'global', next);
+            if (!writeResult.ok) {
+                throw new Error(`writeActivePreset failed: ${writeResult.reason}: ${writeResult.hint}`);
+            }
             // No saveSettings flush needed — this spec does not restart the
             // server; the in-memory preset write is all the director-runtime
             // reads from on the very next turn.

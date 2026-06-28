@@ -118,6 +118,33 @@ describe('migrateOrchSessionsV2ToSidecar', () => {
         warnSpy.mockRestore();
     });
 
+    test('preserves V2 entries when underlying envelope rejects with {ok:false, reason, hint}', async () => {
+        const settingsRoot = {
+            iterStudioV2: {
+                director: {
+                    'character_alice.png': {
+                        's1': { id: 's1', updatedAt: 1, mode: 'director' },
+                    },
+                },
+            },
+        };
+        const ctx = {
+            getCharacterState: jest.fn(async () => null),
+            updateCharacterState: jest.fn(async () => ({ ok: false, reason: 'HTTP_ERROR', hint: 'HTTP 500' })),
+            characters: [{ avatar: 'alice.png' }],
+        };
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const result = await migrateOrchSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings: jest.fn() });
+
+        expect(result.skipped).toBe(1);
+        expect(result.migrated).toBe(0);
+        expect(settingsRoot.iterStudioV2.director['character_alice.png'].s1).toBeDefined();
+        const warnMessage = warnSpy.mock.calls.map(args => args.join(' ')).join('\n');
+        expect(warnMessage).toMatch(/sidecar write failed \(HTTP_ERROR\): HTTP 500/);
+        warnSpy.mockRestore();
+    });
+
     test('merges into existing sidecar payload (does NOT clobber pre-existing entries)', async () => {
         const settingsRoot = {
             iterStudioV2: {

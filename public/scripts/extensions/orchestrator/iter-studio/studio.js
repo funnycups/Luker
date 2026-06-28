@@ -1030,14 +1030,30 @@ export async function openOrchestratorIterationStudio(deps) {
         const baseScope = getIterationDefaultScope(context);
         const isCharScope = baseScope === 'character';
         const avatar = getCurrentAvatar(context);
-        const active = isCharScope
+        // `getActivePreset` returns `{ok:true, state}` envelope; `state` is
+        // null when the (mode, scope) tuple has no active preset configured
+        // (success, just nothing to read).
+        const activeResult = isCharScope
             ? getActivePreset(settings, mode, { scope: 'character', context, avatar })
             : getActivePreset(settings, mode, { scope: 'global' });
+        const active = activeResult.ok && activeResult.state ? activeResult.state : null;
         if (active) return sanitizeForMode(active);
         // Fall back to global active when the character scope returned
         // nothing (e.g. no avatar resolved yet). Keeps the popup usable
-        // instead of opening on an empty profile.
-        const fallback = getActivePreset(settings, mode, { scope: 'global' });
+        // instead of opening on an empty profile. Surface this fallback
+        // once via toastr so the user is not left guessing why iter-studio
+        // is showing the global profile in a character-scoped session.
+        const fallbackResult = getActivePreset(settings, mode, { scope: 'global' });
+        const fallback = fallbackResult.ok && fallbackResult.state ? fallbackResult.state : null;
+        if (isCharScope && typeof toastr !== 'undefined') {
+            try {
+                toastr.info(
+                    `No character-scope ${mode} preset for this card — iter-studio opened on the global profile.`,
+                    'iter-studio',
+                    { timeOut: 4000 },
+                );
+            } catch { /* ignore */ }
+        }
         return sanitizeForMode(fallback || {});
     }
 
@@ -1473,7 +1489,8 @@ export async function openOrchestratorIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     function loadGlobalProfileForMode() {
         try { syncCharacterEditorWithActiveAvatar?.(context); } catch { /* ignore */ }
-        const active = getActivePreset(settings, mode, { scope: 'global' });
+        const activeResult = getActivePreset(settings, mode, { scope: 'global' });
+        const active = activeResult.ok && activeResult.state ? activeResult.state : null;
         return sanitizeForMode(active || {});
     }
 

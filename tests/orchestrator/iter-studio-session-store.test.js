@@ -8,7 +8,7 @@ function makeStubs({ avatar = 'alice.png', getCharacterState, updateCharacterSta
     let storedSidecar = null;
     const defaultGet = async (a, ns) => {
         sidecarReads.push({ a, ns });
-        return storedSidecar;
+        return { ok: true, state: storedSidecar };
     };
     const get = getCharacterState || defaultGet;
     const stubs = {
@@ -20,7 +20,8 @@ function makeStubs({ avatar = 'alice.png', getCharacterState, updateCharacterSta
         ctx: {
             getCharacterState: get,
             updateCharacterState: updateCharacterState || (async (a, ns, updater) => {
-                const current = await get(a, ns);
+                const envelope = await get(a, ns);
+                const current = envelope && envelope.ok ? envelope.state : null;
                 const next = await updater(
                     current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
                     { attempt: 0, avatar: a, namespace: ns },
@@ -67,7 +68,7 @@ describe('createOrchestratorIterationSessionStore — per-character sessions go 
             },
         };
         const stubs = makeStubs({
-            getCharacterState: async () => sidecar,
+            getCharacterState: async () => ({ ok: true, state: sidecar }),
         });
         const store = createOrchestratorIterationSessionStore({
             mode: 'director',
@@ -104,7 +105,7 @@ describe('createOrchestratorIterationSessionStore — per-character sessions go 
     test('delete() removes the session from the sidecar map and rewrites it', async () => {
         const sidecar = { version: 1, sessions: { 's1': { id: 's1', mode: 'director', updatedAt: 1 }, 's2': { id: 's2', mode: 'director', updatedAt: 2 } } };
         const stubs = makeStubs({
-            getCharacterState: async () => structuredClone(sidecar),
+            getCharacterState: async () => ({ ok: true, state: structuredClone(sidecar) }),
         });
         const store = createOrchestratorIterationSessionStore({
             mode: 'director',
@@ -148,6 +149,68 @@ describe('createOrchestratorIterationSessionStore — per-character sessions go 
         await store.clearObsolete();
         expect(stubs.settingsRoot.global_iteration_history).toBeUndefined();
         expect(stubs.persistSettings).toHaveBeenCalledTimes(1);
+    });
+
+    test('save() under character scope throws when underlying envelope reports failure', async () => {
+        const stubs = makeStubs({
+            updateCharacterState: jest.fn(async () => ({ ok: false, reason: 'CONFLICT', hint: 'HTTP 409 after 1 retry' })),
+        });
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        await expect(store.save({ id: 's-fail', title: 'x', updatedAt: 1, mode: 'director' }))
+            .rejects.toThrow(/save failed \(CONFLICT\): HTTP 409 after 1 retry/);
+    });
+
+    test('saveFlush() under character scope throws when underlying envelope reports failure', async () => {
+        const stubs = makeStubs({
+            updateCharacterState: jest.fn(async () => ({ ok: false, reason: 'HTTP_ERROR', hint: 'HTTP 500' })),
+        });
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        await expect(store.saveFlush({ id: 's-fail', title: 'x', updatedAt: 1, mode: 'director' }))
+            .rejects.toThrow(/saveFlush failed \(HTTP_ERROR\): HTTP 500/);
+    });
+
+    test('delete() under character scope throws when underlying envelope reports failure', async () => {
+        const stubs = makeStubs({
+            updateCharacterState: jest.fn(async () => ({ ok: false, reason: 'HTTP_ERROR', hint: 'HTTP 500' })),
+        });
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        await expect(store.delete('s-fail')).rejects.toThrow(/delete failed \(HTTP_ERROR\): HTTP 500/);
+    });
+
+    test('list() under character scope treats envelope read failure as empty (does not throw)', async () => {
+        const stubs = makeStubs({
+            getCharacterState: async () => ({ ok: false, reason: 'TRANSPORT_ERROR', hint: 'network down' }),
+        });
+        const store = createOrchestratorIterationSessionStore({
+            mode: 'director',
+            getOrchestratorSettingsRoot: stubs.getOrchestratorSettingsRoot,
+            persistSettings: stubs.persistSettings,
+            persistSettingsImmediate: stubs.persistSettingsImmediate,
+            computeScope: stubs.computeScope,
+            ctx: stubs.ctx,
+        });
+        await expect(store.list()).resolves.toEqual([]);
     });
 });
 

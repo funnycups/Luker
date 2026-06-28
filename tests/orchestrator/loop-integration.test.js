@@ -71,7 +71,7 @@ function makeFakeFloorStateNotes(initialEntries = []) {
         appendForFloor: async (floor, text) => {
             const id = mintId();
             stored.push({ floor, id, text: String(text), status: 'open' });
-            return id;
+            return { ok: true, id };
         },
         listAcrossFloors: async () => stored.map(s => ({ id: s.id, text: s.text, status: s.status })),
         updateStatusById: async (id, status, reason) => {

@@ -44,6 +44,7 @@ import {
     migrateLegacyAnchorsIfNeeded,
     pickLatestValidSnapshot,
 } from './persistence.js';
+import { STATE_ERROR_REASONS, makeStateError } from '../../state-errors.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -235,9 +236,9 @@ export async function storeCompletedOrchestrationSnapshot(context, anchor, capsu
         stageOutputs: compactStageOutputs(stageOutputs || []),
     };
 
-    const ok = await commitAnchorSnapshot(context, anchor, nextSnapshot);
-    if (!ok) {
-        throw new Error('Failed to persist orchestration snapshot.');
+    const result = await commitAnchorSnapshot(context, anchor, nextSnapshot);
+    if (!result.ok) {
+        throw new Error(`Failed to persist orchestration snapshot (${result.reason}): ${result.hint}`);
     }
 
     const map = { ...getLoadedAnchorMap(context), [anchorPlayableFloor]: nextSnapshot };
@@ -305,13 +306,24 @@ export async function refreshOrchestratorStateAfterStructuralEvent(context) {
  * Orchestration popup). Re-reads the live chat to derive the floor-state
  * commit tag (chatIndex + swipeId) so future structural events can still
  * invalidate the entry correctly.
+ *
+ * Returns a state envelope (`{ ok: true }` on success, `{ ok: false, reason, hint }`
+ * when the anchor is invalid, the anchored user message has been deleted
+ * or replaced, or the floor-state commit itself fails). Callers should
+ * branch on `result.ok` and surface non-ok envelopes to the UI.
+ *
+ * @returns {Promise<{ ok: boolean, reason?: string, hint?: string }>}
  */
 export async function persistEditedSnapshotToFloorState(context, snapshot) {
     const anchorPlayableFloor = normalizeAnchorPlayableFloor(snapshot?.anchorPlayableFloor);
-    if (!anchorPlayableFloor) return false;
+    if (!anchorPlayableFloor) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'snapshot anchorPlayableFloor missing or invalid');
+    }
     const messages = Array.isArray(context?.chat) ? context.chat : [];
     const target = getPlayableMessageAt(messages, anchorPlayableFloor);
-    if (!target?.message || !target.message.is_user) return false;
+    if (!target?.message || !target.message.is_user) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET, 'anchored user message no longer present at playable floor');
+    }
     const swipeIdRaw = target.message.swipe_id;
     const swipeId = Number.isInteger(swipeIdRaw) && swipeIdRaw >= 0 ? swipeIdRaw : 0;
     const anchor = {
@@ -325,14 +337,14 @@ export async function persistEditedSnapshotToFloorState(context, snapshot) {
         capsuleText: String(snapshot?.capsuleText || ''),
         stageOutputs: Array.isArray(snapshot?.stageOutputs) ? snapshot.stageOutputs : [],
     };
-    const ok = await commitAnchorSnapshot(context, anchor, dataSnapshot);
-    if (!ok) return false;
+    const result = await commitAnchorSnapshot(context, anchor, dataSnapshot);
+    if (!result.ok) return result;
     const chatKey = getChatKey(context);
     if (chatKey) {
         const map = { ...getLoadedAnchorMap(context), [anchorPlayableFloor]: dataSnapshot };
         setLatestAnchorMap(chatKey, map);
     }
-    return true;
+    return { ok: true };
 }
 
 /**

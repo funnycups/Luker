@@ -149,12 +149,21 @@ function makeContext(chatRef) {
     let createdInstance = null;
     const context = {
         chat: chatRef.value,
-        getChatState: fsDeps.getChatState,
+        // Context-level wrappers expose the state-API envelope shape
+        // (`{ok, state, ...}` / `{ok, reason, hint}`). Extension code
+        // consumes them this way after the state-error-reasons migration.
+        // The dep-level callbacks above (`fsDeps.*`) keep returning raw
+        // payloads because `floor-state.js` internally reads them as raw.
+        getChatState: async (ns, options) => {
+            const state = await fsDeps.getChatState(ns, options);
+            return { ok: true, state };
+        },
         patchChatState: fsDeps.patchChatState,
         updateChatState: fsDeps.updateChatState,
         deleteChatState: async (ns) => {
             const k = String(ns ?? '').trim().toLowerCase();
-            return store._raw.delete(k);
+            store._raw.delete(k);
+            return { ok: true };
         },
         buildObjectPatchOperationsAsync,
         async createFloorState({ namespace }) {
@@ -201,12 +210,12 @@ describe('commitAnchorSnapshot', () => {
         const anchor = buildAnchorAt(chatRef.value, 0);
         expect(anchor).toMatchObject({ playableFloor: 1, chatIndex: 0, swipeId: 0 });
 
-        const ok = await commitAnchorSnapshot(context, anchor, {
+        const result = await commitAnchorSnapshot(context, anchor, {
             anchorHash: anchor.hash,
             capsuleText: 'capsule v1',
             stageOutputs: [{ id: 's1', mode: 'serial', nodes: [] }],
         });
-        expect(ok).toBe(true);
+        expect(result.ok).toBe(true);
 
         const map = await loadAnchorMap(context);
         expect(map[1]).toMatchObject({
@@ -219,8 +228,8 @@ describe('commitAnchorSnapshot', () => {
         const chatRef = { value: [userMsg('hi')] };
         const { context } = makeContext(chatRef);
         const anchor = buildAnchorAt(chatRef.value, 0);
-        const ok = await commitAnchorSnapshot(context, anchor, { anchorHash: anchor.hash, capsuleText: '', stageOutputs: [] });
-        expect(ok).toBe(false);
+        const result = await commitAnchorSnapshot(context, anchor, { anchorHash: anchor.hash, capsuleText: '', stageOutputs: [] });
+        expect(result.ok).toBe(false);
         const map = await loadAnchorMap(context);
         expect(map).toEqual({});
     });
@@ -228,8 +237,8 @@ describe('commitAnchorSnapshot', () => {
     test('rejects anchors with missing playableFloor / chatIndex', async () => {
         const chatRef = { value: [userMsg('hi')] };
         const { context } = makeContext(chatRef);
-        expect(await commitAnchorSnapshot(context, { playableFloor: 0, chatIndex: 0 }, { capsuleText: 'x' })).toBe(false);
-        expect(await commitAnchorSnapshot(context, { playableFloor: 1, chatIndex: -1 }, { capsuleText: 'x' })).toBe(false);
+        expect((await commitAnchorSnapshot(context, { playableFloor: 0, chatIndex: 0 }, { capsuleText: 'x' })).ok).toBe(false);
+        expect((await commitAnchorSnapshot(context, { playableFloor: 1, chatIndex: -1 }, { capsuleText: 'x' })).ok).toBe(false);
     });
 
     test('a second commit at the same anchor replaces the snapshot', async () => {
@@ -250,12 +259,12 @@ describe('commitAnchorSnapshot', () => {
         // This is the binding's only structural defence against bad anchors.
         const chatRef = { value: [userMsg('only message')] };
         const { context } = makeContext(chatRef);
-        const ok = await commitAnchorSnapshot(
+        const result = await commitAnchorSnapshot(
             context,
             { playableFloor: 5, chatIndex: 99, swipeId: 0, hash: 'x' },
             { anchorHash: 'x', capsuleText: 'cap', stageOutputs: [] },
         );
-        expect(ok).toBe(false);
+        expect(result.ok).toBe(false);
         const map = await loadAnchorMap(context);
         expect(map).toEqual({});
     });

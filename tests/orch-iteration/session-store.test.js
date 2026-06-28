@@ -18,7 +18,9 @@ function makeSidecarCtx() {
     return {
         getCharacterState: jest.fn(async (avatar, ns) => {
             const key = `${avatar}::${ns}`;
-            return sidecars[key] ? structuredClone(sidecars[key]) : null;
+            return sidecars[key]
+                ? { ok: true, state: structuredClone(sidecars[key]) }
+                : { ok: true, state: null };
         }),
         updateCharacterState: jest.fn(async (avatar, ns, updater) => {
             const key = `${avatar}::${ns}`;

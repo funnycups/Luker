@@ -63,10 +63,17 @@ const MODULE_NAME = 'orchestrator';
 
 export async function persistGlobalEditorFrom(settings, editor) {
     ensureEditorIntegrity(editor);
-    writeActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, 'global', {
+    const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, 'global', {
         spec: serializeEditorSpec(editor.spec),
         presets: serializeEditorPresetMap(editor.presets),
     });
+    if (!writeResult.ok) {
+        // Silent persisters: surface via console so the failure is
+        // observable in dev. UI-level callers (Apply, Reset) check the
+        // envelope themselves and notify the user.
+        console.warn('[orchestrator] persistGlobalEditorFrom: writeActivePreset failed',
+            writeResult.reason, writeResult.hint);
+    }
     await saveSettings();
 }
 
@@ -75,8 +82,12 @@ export async function persistGlobalAgendaEditorFrom(settings, editor) {
     // Funnel the whole editor draft through the canonical sanitizer (same
     // pattern as loop/director). Listing payload fields by hand here used
     // to silently drop tools/customTools/skills on every save.
-    writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global',
+    const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global',
         sanitizeAgendaWorkingProfile(editor));
+    if (!writeResult.ok) {
+        console.warn('[orchestrator] persistGlobalAgendaEditorFrom: writeActivePreset failed',
+            writeResult.reason, writeResult.hint);
+    }
     await saveSettings();
 }
 
@@ -88,7 +99,11 @@ export async function persistGlobalAgendaEditorFrom(settings, editor) {
  */
 export async function persistGlobalLoopEditorFrom(settings, editor) {
     const sanitized = sanitizeLoopProfile(editor);
-    writeActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, 'global', sanitized);
+    const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, 'global', sanitized);
+    if (!writeResult.ok) {
+        console.warn('[orchestrator] persistGlobalLoopEditorFrom: writeActivePreset failed',
+            writeResult.reason, writeResult.hint);
+    }
     await saveSettings();
 }
 
@@ -101,7 +116,11 @@ export async function persistGlobalLoopEditorFrom(settings, editor) {
  */
 export async function persistGlobalDirectorEditorFrom(settings, editor) {
     const sanitized = sanitizeDirectorProfile(editor);
-    writeActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global', sanitized);
+    const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global', sanitized);
+    if (!writeResult.ok) {
+        console.warn('[orchestrator] persistGlobalDirectorEditorFrom: writeActivePreset failed',
+            writeResult.reason, writeResult.hint);
+    }
     await saveSettings();
 }
 

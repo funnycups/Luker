@@ -34,20 +34,22 @@ import {
  * persistent, chat-aware, and event-driven; for adapter-level emit tests
  * we only need the three methods `attachNotesFloorState` actually calls:
  * `ready` / `get` / `update`. Storage is a plain object so the adapter's
- * normalize / entries logic runs end-to-end.
+ * normalize / entries logic runs end-to-end. `get` and `update` return the
+ * state-error envelope (`{ok:true, state}` / `{ok:true, updated:true}`)
+ * the production adapter expects after the state-error-reasons refactor.
  */
 function makeFakeCreateFloorState() {
     return async (_opts) => {
         let data = {};
         return {
             ready: async () => {},
-            get: async () => data,
+            get: async () => ({ ok: true, state: data }),
             update: async (reducer, _opts) => {
                 const next = await reducer(data);
                 if (next && typeof next === 'object' && !Array.isArray(next)) {
                     data = next;
                 }
-                return data;
+                return { ok: true, updated: true };
             },
         };
     };
@@ -81,7 +83,7 @@ describe('onNotesChanged + adapter emit hooks', () => {
     test('updateStatusById emits on real flip; suppressed on already_<status> / not_found', async () => {
         const ctx = await freshContext();
         const fs = ctx.__floorStateForNotes;
-        const id = await fs.appendForFloor(0, 'note A');
+        const { id } = await fs.appendForFloor(0, 'note A');
 
         const listener = jest.fn();
         onNotesChanged(listener);
@@ -105,7 +107,7 @@ describe('onNotesChanged + adapter emit hooks', () => {
     test('updateTextById emits on real edit; suppressed on not_found', async () => {
         const ctx = await freshContext();
         const fs = ctx.__floorStateForNotes;
-        const id = await fs.appendForFloor(0, 'original');
+        const { id } = await fs.appendForFloor(0, 'original');
 
         const listener = jest.fn();
         onNotesChanged(listener);
@@ -122,7 +124,7 @@ describe('onNotesChanged + adapter emit hooks', () => {
     test('deleteByIds emits when at least one id was removed; suppressed otherwise', async () => {
         const ctx = await freshContext();
         const fs = ctx.__floorStateForNotes;
-        const id = await fs.appendForFloor(0, 'doomed');
+        const { id } = await fs.appendForFloor(0, 'doomed');
 
         const listener = jest.fn();
         onNotesChanged(listener);
@@ -171,8 +173,9 @@ describe('onNotesChanged + adapter emit hooks', () => {
 
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
         try {
-            const id = await fs.appendForFloor(0, 'survives');
-            expect(typeof id).toBe('string');
+            const r = await fs.appendForFloor(0, 'survives');
+            expect(r.ok).toBe(true);
+            expect(typeof r.id).toBe('string');
             expect(boom).toHaveBeenCalledTimes(1);
             expect(sibling).toHaveBeenCalledTimes(1);
             const all = await fs.listAcrossFloors();

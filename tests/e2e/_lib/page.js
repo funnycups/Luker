@@ -760,8 +760,8 @@ export async function installMinimalDirectorProfile(page, {
             discardOnAbort: false,
         };
         const sanitized = dirDefaults.sanitizeDirectorProfile(minimalProfile);
-        const ok = presetLib.writeActivePreset(settings, 'director', 'global', sanitized);
-        if (!ok) throw new Error('writeActivePreset failed; library not seeded');
+        const writeResult = presetLib.writeActivePreset(settings, 'director', 'global', sanitized);
+        if (!writeResult.ok) throw new Error(`writeActivePreset failed; library not seeded (${writeResult.reason}: ${writeResult.hint})`);
         try { await ctx.saveSettings?.(0, { directSave: true }); } catch (_) { /* best-effort */ }
         ctx.saveSettingsDebounced?.();
     }, { mainSystemPrompt, subAgents, tools });

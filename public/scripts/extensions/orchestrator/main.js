@@ -670,8 +670,11 @@ async function editLastOrchestrationResult(context) {
     setActiveSnapshot(updatedSnapshot);
     clearCapsulePrompt(context);
     const persisted = await persistEditedSnapshotToFloorState(context, updatedSnapshot);
-    if (!persisted) {
-        notifyError(i18n('Failed to persist orchestration snapshot.'));
+    if (!persisted.ok) {
+        notifyError(i18nFormat(
+            'Failed to persist orchestration snapshot: ${0}',
+            persisted.hint || persisted.reason || i18n('reason unknown'),
+        ));
         return false;
     }
     ensureUi();
@@ -778,7 +781,13 @@ export function getEffectiveProfile(context) {
     const useCard = Boolean(avatar)
         && isCharacterPresetActiveOverrideEnabled(context, avatar, executionMode);
     const scope = useCard ? 'character' : 'global';
-    const active = getActivePreset(settings, executionMode, { scope, context, avatar });
+    // `getActivePreset` returns `{ok:true, state}` envelope after Task 4.1;
+    // `state` is null when no preset is configured (legitimate success).
+    // Mode-specific blocks below already tolerate `active == null` via
+    // their `|| defaultLoopProfile` / `|| {}` / `|| createDefaultDirectorProfile()`
+    // fallbacks, so we just unwrap here.
+    const presetResult = getActivePreset(settings, executionMode, { scope, context, avatar });
+    const active = presetResult.ok && presetResult.state ? presetResult.state : null;
 
     const sourceLabel = useCard ? 'character' : 'global';
     const keyLabel = useCard ? avatar : executionMode;
@@ -942,7 +951,11 @@ function reapplyLatestCapsuleInjection(context) {
     };
     setActiveSnapshot(updatedSnapshot);
     clearCapsulePrompt(context);
-    void persistEditedSnapshotToFloorState(context, updatedSnapshot);
+    persistEditedSnapshotToFloorState(context, updatedSnapshot).then(result => {
+        if (!result.ok) {
+            console.warn(`[${MODULE_NAME}] reapplyLatestCapsuleInjection persist failed (reason=${result.reason}, hint=${result.hint})`);
+        }
+    });
 }
 
 async function onWorldInfoFinalized(payload) {
@@ -1790,7 +1803,8 @@ async function triggerExportActivePreset(mode, scope) {
     const ctx = getContext();
     const avatar = String(getCurrentAvatar(ctx) || '').trim();
     const settings = extension_settings[MODULE_NAME];
-    const active = getActivePreset(settings, mode, { scope, context: ctx, avatar });
+    const presetResult = getActivePreset(settings, mode, { scope, context: ctx, avatar });
+    const active = presetResult.ok && presetResult.state ? presetResult.state : null;
     if (!active) {
         notifyError(i18n('No active preset to export.'));
         return;
@@ -1832,8 +1846,12 @@ async function triggerImportPresetIntoLibrary(mode, scope, root, context) {
             return;
         }
         setActivePresetId(settings, mode, scope, id, { context: ctx, avatar });
-        writeActivePreset(settings, mode, scope, extractImportedProfileForMode(imported),
+        const writeResult = writeActivePreset(settings, mode, scope, extractImportedProfileForMode(imported),
             { context: ctx, avatar });
+        if (!writeResult.ok) {
+            notifyError(i18nFormat('Import failed: ${0}', writeResult.hint || writeResult.reason));
+            return;
+        }
         if (scope === 'character') {
             const idx = getCharacterIndexByAvatar(ctx, avatar);
             if (idx >= 0) {
@@ -6023,7 +6041,12 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         const profile = sanitizeLoopProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_LOOP;
         settings.singleAgentModeEnabled = false;
-        writeActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, 'global', profile);
+        const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, 'global', profile);
+        if (!writeResult.ok) {
+            notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
+                writeResult.hint || writeResult.reason));
+            return;
+        }
         await saveSettings();
         uiState.globalLoopEditor = loadGlobalLoopEditorState();
         ensureLoopEditorIntegrity(uiState.globalLoopEditor);
@@ -6036,7 +6059,12 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         const profile = sanitizeAgendaWorkingProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_AGENDA;
         settings.singleAgentModeEnabled = false;
-        writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global', profile);
+        const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global', profile);
+        if (!writeResult.ok) {
+            notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
+                writeResult.hint || writeResult.reason));
+            return;
+        }
         await saveSettings();
         uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
         ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
@@ -6049,7 +6077,12 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         const profile = sanitizeDirectorProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
         settings.singleAgentModeEnabled = false;
-        writeActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global', profile);
+        const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global', profile);
+        if (!writeResult.ok) {
+            notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
+                writeResult.hint || writeResult.reason));
+            return;
+        }
         await saveSettings();
         uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
         ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
@@ -6062,7 +6095,12 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         spec: sanitizeSpec(session?.workingProfile?.spec),
         presets: sanitizePresetMap(session?.workingProfile?.presets),
     };
-    writeActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, 'global', specPayload);
+    const specWriteResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, 'global', specPayload);
+    if (!specWriteResult.ok) {
+        notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
+            specWriteResult.hint || specWriteResult.reason));
+        return;
+    }
     await saveSettings();
     uiState.globalEditor = loadGlobalEditorState();
     ensureEditorIntegrity(uiState.globalEditor);
@@ -7801,7 +7839,12 @@ function bindUi() {
                 }
                 factoryPayload = createFactoryPresetForMode(currentMode);
             }
-            writeActivePreset(settings, currentMode, 'global', factoryPayload);
+            const resetWriteResult = writeActivePreset(settings, currentMode, 'global', factoryPayload);
+            if (!resetWriteResult.ok) {
+                notifyError(i18nFormat('Failed to reset global profile: ${0}',
+                    resetWriteResult.hint || resetWriteResult.reason));
+                return;
+            }
             await saveSettings();
             if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
                 uiState.globalLoopEditor = loadGlobalLoopEditorState();

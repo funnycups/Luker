@@ -136,7 +136,8 @@ export function registerLocaleData() {
         'Edit latest orchestration result text.': '编辑最近一轮编排结果文本。',
         'Orchestration result cannot be empty.': '编排结果不能为空。',
         'Saved latest orchestration result.': '最近一轮编排结果已保存。',
-        'Failed to persist orchestration snapshot.': '编排结果写入失败。',
+        'Failed to persist orchestration snapshot: ${0}': '编排结果写入失败：${0}',
+        'reason unknown': '原因未知',
         'No recent orchestration result available for this chat.': '当前聊天暂无最近编排结果。',
         'Orchestration history invalidated. Rolled back to user turn ${0}.': '编排历史已失效，已回退到用户楼层 ${0}。',
         'Orchestration history invalidated. No valid stored result remains.': '编排历史已失效，当前没有可用的已存结果。',
@@ -355,6 +356,23 @@ export function registerLocaleData() {
         '(forced on)': '（强制启用）',
         'Loop mode runs a single agent that calls tools in a loop and finalizes when ready.': 'Loop 模式让单个 Agent 反复调用工具，自行决定何时调用 finalize 完成。',
         'Main system prompt': '主代理系统提示词',
+        // Notes panel — write-rejection toasts emitted by `notes-panel.js`.
+        // English uses commas (not semicolons) so the data-i18n parser, which
+        // splits on `;`, does not eat half the message. Templates carry `${0}`
+        // for the verb (Close / Edit / Delete) supplied at toast time; the
+        // verb strings themselves reuse existing entries elsewhere in this
+        // catalog.
+        'Closure reason (optional)': '关闭原因（可选）',
+        'Confirm delete (permanent)?': '确认删除（不可恢复）？',
+        '${0} failed': '${0} 失败',
+        '${0} failed, invalid request': '${0} 失败，请求无效',
+        '${0} failed, floor is invalid': '${0} 失败，楼层无效',
+        '${0} failed, server error': '${0} 失败，服务端错误',
+        '${0} failed, network error': '${0} 失败，网络错误',
+        '${0} failed to persist': '${0} 未能写入存储',
+        '${0} conflicted with another writer, try again': '${0} 与其他写入冲突，请重试',
+        'Notes storage destroyed, reload the page': '便签存储已销毁，请刷新页面',
+        'Notes storage broken, reload the page': '便签存储已损坏，请刷新页面',
         // Director mode preset hint — long English text with semicolons,
         // so data-i18n uses a custom key (the i18n parser splits on `;`).
         'director_preset_help_pure_instruction': '请选择纯指令预设。常规 RP 预设里强制输出格式的指令（强制 CoT、必填 schema 块等）会卡死 agent 的工具调用通道。',
@@ -800,7 +818,8 @@ export function registerLocaleData() {
         'Edit latest orchestration result text.': '編輯最近一輪編排結果文本。',
         'Orchestration result cannot be empty.': '編排結果不能為空。',
         'Saved latest orchestration result.': '最近一輪編排結果已儲存。',
-        'Failed to persist orchestration snapshot.': '編排結果寫入失敗。',
+        'Failed to persist orchestration snapshot: ${0}': '編排結果寫入失敗：${0}',
+        'reason unknown': '原因未知',
         'No recent orchestration result available for this chat.': '目前聊天暫無最近編排結果。',
         'Orchestration history invalidated. Rolled back to user turn ${0}.': '編排歷史已失效，已回退到使用者樓層 ${0}。',
         'Orchestration history invalidated. No valid stored result remains.': '編排歷史已失效，目前沒有可用的已存結果。',
@@ -1019,6 +1038,23 @@ export function registerLocaleData() {
         '(forced on)': '（強制啟用）',
         'Loop mode runs a single agent that calls tools in a loop and finalizes when ready.': 'Loop 模式讓單個 Agent 反覆呼叫工具，自行決定何時呼叫 finalize 完成。',
         'Main system prompt': '主代理系統提示詞',
+        // Notes panel — write-rejection toasts emitted by `notes-panel.js`.
+        // English uses commas (not semicolons) so the data-i18n parser, which
+        // splits on `;`, does not eat half the message. Templates carry `${0}`
+        // for the verb (Close / Edit / Delete) supplied at toast time; the
+        // verb strings themselves reuse existing entries elsewhere in this
+        // catalog.
+        'Closure reason (optional)': '關閉原因（選填）',
+        'Confirm delete (permanent)?': '確認刪除（無法復原）？',
+        '${0} failed': '${0} 失敗',
+        '${0} failed, invalid request': '${0} 失敗，請求無效',
+        '${0} failed, floor is invalid': '${0} 失敗，樓層無效',
+        '${0} failed, server error': '${0} 失敗，伺服器錯誤',
+        '${0} failed, network error': '${0} 失敗，網路錯誤',
+        '${0} failed to persist': '${0} 未能寫入儲存',
+        '${0} conflicted with another writer, try again': '${0} 與其他寫入衝突，請重試',
+        'Notes storage destroyed, reload the page': '便箋儲存已銷毀，請重新整理頁面',
+        'Notes storage broken, reload the page': '便箋儲存已損壞，請重新整理頁面',
         // Director mode preset hint — long English text with semicolons,
         // so data-i18n uses a custom key (the i18n parser splits on `;`).
         'director_preset_help_pure_instruction': '請選擇純指令預設。常規 RP 預設裡強制輸出格式的指令（強制 CoT、必填 schema 塊等）會卡死 agent 的工具呼叫通道。',

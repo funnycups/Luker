@@ -124,15 +124,17 @@ describe('preset-library — active preset resolution', () => {
         const settings = freshSettings();
         const id = lib.createPreset(settings, mode, 'global', { name: 'A' });
         lib.setActivePresetId(settings, mode, 'global', id);
-        const p = lib.getActivePreset(settings, mode, { scope: 'global' });
-        expect(p?.name).toBe('A');
+        const result = lib.getActivePreset(settings, mode, { scope: 'global' });
+        expect(result.ok).toBe(true);
+        expect(result.state?.name).toBe('A');
     });
 
     test.each(MODES.filter(m => m !== 'director'))('getActivePreset on empty library re-seeds Default and returns it (%s)', (mode) => {
         const settings = freshSettings();
         // library starts empty
-        const p = lib.getActivePreset(settings, mode, { scope: 'global' });
-        expect(p?.name).toBe('Default');
+        const result = lib.getActivePreset(settings, mode, { scope: 'global' });
+        expect(result.ok).toBe(true);
+        expect(result.state?.name).toBe('Default');
         // The seeded entry should also be in the library now under id 'default'
         expect(settings.presetLibraries[mode].default).toBeTruthy();
         expect(settings.activePresetIds[mode]).toBe('default');
@@ -144,8 +146,9 @@ describe('preset-library — active preset resolution', () => {
         // first (Full). The mode-agnostic test above can't handle this
         // because the name and active id differ from 'Default' / 'default'.
         const settings = freshSettings();
-        const p = lib.getActivePreset(settings, 'director', { scope: 'global' });
-        expect(p?.name).toBe('Default (记忆图 + 搜索)');
+        const result = lib.getActivePreset(settings, 'director', { scope: 'global' });
+        expect(result.ok).toBe(true);
+        expect(result.state?.name).toBe('Default (记忆图 + 搜索)');
         expect(settings.presetLibraries.director['default-full']).toBeTruthy();
         expect(settings.presetLibraries.director['default']).toBeTruthy();
         expect(settings.activePresetIds.director).toBe('default-full');
@@ -279,8 +282,12 @@ describe('preset-library — character-scope absence behavior', () => {
         // callers fall back to the global active preset.
         const settings = { presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} }, activePresetIds: {} };
         const ctx = { characters: [{ avatar: 'bob.png', data: { extensions: { orchestrator: {} } } }] };
-        const active = lib.getActivePreset(settings, 'director', { scope: 'character', context: ctx, avatar: 'bob.png' });
-        expect(active).toBeNull();
+        const result = lib.getActivePreset(settings, 'director', { scope: 'character', context: ctx, avatar: 'bob.png' });
+        // Envelope is `{ok: true, state: null}` — character scope with no
+        // card-scope library legitimately resolves to "no preset" (caller
+        // is expected to fall back to global active).
+        expect(result.ok).toBe(true);
+        expect(result.state).toBeNull();
         // Card data must not be mutated by a phantom seed.
         const cardLib = ctx.characters[0].data.extensions.orchestrator.presetLibraries?.director || {};
         expect(Object.keys(cardLib)).toHaveLength(0);
@@ -295,8 +302,9 @@ describe('preset-library — legacy override migration', () => {
         } } } };
         const ctx = { characters: [character] };
 
-        const active = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
-        expect(active?.system_prompt).toBe('MY-CUSTOM');
+        const result = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+        expect(result.ok).toBe(true);
+        expect(result.state?.system_prompt).toBe('MY-CUSTOM');
 
         const cardExt = character.data.extensions.orchestrator;
         expect(cardExt.presetLibraries.loop.default.system_prompt).toBe('MY-CUSTOM');
@@ -342,8 +350,9 @@ describe('preset-library — legacy override migration', () => {
         } } } };
         const ctx = { characters: [character] };
 
-        const active = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
-        expect(active?.system_prompt).toBe('ALREADY');
+        const result = lib.getActivePreset(settings, 'loop', { scope: 'character', context: ctx, avatar: 'alice.png' });
+        expect(result.ok).toBe(true);
+        expect(result.state?.system_prompt).toBe('ALREADY');
         // No `default` slot synthesized on top of the existing library.
         expect(character.data.extensions.orchestrator.presetLibraries.loop.default).toBeUndefined();
     });

@@ -121,7 +121,11 @@ export function createNewStage(editor) {
 
 export function loadGlobalEditorState() {
     const settings = getSettings();
-    const active = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, { scope: 'global' }) || {};
+    // `getActivePreset` returns `{ok:true, state}` envelope after Task 4.1;
+    // `state` is null when no preset is configured. Existing sanitizer
+    // fallbacks already tolerate `{}`, so we unwrap to a plain object here.
+    const activeResult = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, { scope: 'global' });
+    const active = (activeResult.ok && activeResult.state) ? activeResult.state : {};
     const presets = toEditablePresetMap(active.presets);
     const spec = toEditableSpec(active.spec || defaultSpec, presets);
     return { spec, presets };
@@ -130,9 +134,11 @@ export function loadGlobalEditorState() {
 export function loadCharacterEditorState(context, avatar) {
     const settings = getSettings();
     const safeAvatar = String(avatar || '');
-    const globalActive = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, { scope: 'global' }) || {};
-    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC,
+    const globalActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, { scope: 'global' });
+    const globalActive = (globalActiveResult.ok && globalActiveResult.state) ? globalActiveResult.state : {};
+    const charActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_SPEC,
         { scope: 'character', context, avatar: safeAvatar });
+    const charActive = (charActiveResult.ok && charActiveResult.state) ? charActiveResult.state : null;
     // Always merge override on top of the global base so partial overrides
     // inherit missing fields instead of getting filled with empty defaults
     // by the sanitizers. We merge preset maps (override wins per-id) and
@@ -158,7 +164,8 @@ export function loadCharacterEditorState(context, avatar) {
 
 export function loadGlobalAgendaEditorState() {
     const settings = getSettings();
-    const active = getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, { scope: 'global' });
+    const activeResult = getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, { scope: 'global' });
+    const active = (activeResult.ok && activeResult.state) ? activeResult.state : null;
     return sanitizeAgendaWorkingProfile(active || {});
 }
 
@@ -170,11 +177,12 @@ export function loadCharacterAgendaEditorState(context, avatar) {
     // override (e.g. only `{ enabled: true, planner: { systemPrompt } }`)
     // would replace the global agents with the sanitizer's default
     // single-finalizer fallback instead of keeping the global agent set.
-    const globalBase = sanitizeAgendaWorkingProfile(
-        getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, { scope: 'global' }) || {},
-    );
-    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA,
+    const globalActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, { scope: 'global' });
+    const globalActive = (globalActiveResult.ok && globalActiveResult.state) ? globalActiveResult.state : {};
+    const globalBase = sanitizeAgendaWorkingProfile(globalActive);
+    const charActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA,
         { scope: 'character', context, avatar: safeAvatar });
+    const charActive = (charActiveResult.ok && charActiveResult.state) ? charActiveResult.state : null;
     const profile = charActive
         ? sanitizeAgendaWorkingProfile({ ...globalBase, ...charActive })
         : globalBase;
@@ -216,9 +224,9 @@ export function ensureLoopEditorIntegrity(editor) {
  */
 export function loadGlobalLoopEditorState() {
     const settings = getSettings();
-    return sanitizeLoopProfile(
-        getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, { scope: 'global' }) || defaultLoopProfile,
-    );
+    const activeResult = getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, { scope: 'global' });
+    const active = (activeResult.ok && activeResult.state) ? activeResult.state : null;
+    return sanitizeLoopProfile(active || defaultLoopProfile);
 }
 
 /**
@@ -234,11 +242,12 @@ export function loadCharacterLoopEditorState(context, avatar) {
     // Override merged on top of global base — fields the override doesn't
     // specify (system_prompt, tools, max_rounds, etc.) inherit from the
     // global loop profile instead of falling back to LOOP_PROFILE_DEFAULTS.
-    const globalActive = sanitizeLoopProfile(
-        getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, { scope: 'global' }) || defaultLoopProfile,
-    );
-    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP,
+    const globalActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, { scope: 'global' });
+    const globalActiveRaw = (globalActiveResult.ok && globalActiveResult.state) ? globalActiveResult.state : null;
+    const globalActive = sanitizeLoopProfile(globalActiveRaw || defaultLoopProfile);
+    const charActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_LOOP,
         { scope: 'character', context, avatar: safeAvatar });
+    const charActive = (charActiveResult.ok && charActiveResult.state) ? charActiveResult.state : null;
     const baseProfile = charActive
         ? sanitizeLoopProfile({ ...globalActive, ...charActive })
         : globalActive;
@@ -286,7 +295,8 @@ export function ensureDirectorEditorIntegrity(editor) {
  */
 export function loadGlobalDirectorEditorState() {
     const settings = getSettings();
-    const active = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, { scope: 'global' });
+    const activeResult = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, { scope: 'global' });
+    const active = (activeResult.ok && activeResult.state) ? activeResult.state : null;
     return sanitizeDirectorProfile(active || createDefaultDirectorProfile());
 }
 
@@ -305,12 +315,12 @@ export function loadCharacterDirectorEditorState(context, avatar) {
     // with an empty mainAgent.systemPrompt and zero sub-agents because
     // sanitizeDirectorProfile fills missing slots with empty defaults
     // rather than inheriting from the global director profile.
-    const globalBase = sanitizeDirectorProfile(
-        getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, { scope: 'global' })
-            || createDefaultDirectorProfile(),
-    );
-    const charActive = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR,
+    const globalActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, { scope: 'global' });
+    const globalActiveRaw = (globalActiveResult.ok && globalActiveResult.state) ? globalActiveResult.state : null;
+    const globalBase = sanitizeDirectorProfile(globalActiveRaw || createDefaultDirectorProfile());
+    const charActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR,
         { scope: 'character', context, avatar: safeAvatar });
+    const charActive = (charActiveResult.ok && charActiveResult.state) ? charActiveResult.state : null;
     const overrideEnabled = isCharacterPresetActiveOverrideEnabled(
         context, safeAvatar, ORCH_EXECUTION_MODE_DIRECTOR,
     );

@@ -28,6 +28,48 @@ import { i18n as t } from './i18n.js';
 
 const MODULE_NAME = 'orchestrator';
 
+/**
+ * Localize a notes-adapter write-rejection envelope into a user-facing
+ * toast. Mirrors `mapNoteReasonToToolError` in `loop-tools/note.js` (which
+ * targets the LLM); this version targets the human at the keyboard, so
+ * reasons that imply "the user must take action" (INSTANCE_DESTROYED,
+ * REPLAY_BROKEN) tell them to reload, while the transient ones (CONFLICT,
+ * HTTP_ERROR, TRANSPORT_ERROR) tell them to retry.
+ *
+ * `VALIDATION_TARGET` is silent (no active chat — the user can't act on
+ * it; just `console.debug` so the swallow is visible to devs). Every
+ * other reason raises a toast so the user knows the click did not land.
+ *
+ * @param {string} verb — localized infinitive verb describing the failed
+ *                        operation (e.g. `t('Close')`); used to compose
+ *                        the localized message.
+ * @param {{reason?: string, hint?: string}} result — adapter envelope
+ */
+function toastReasonForUser(verb, result) {
+    const reason = result?.reason || 'UNKNOWN';
+    if (reason === 'VALIDATION_TARGET') {
+        // No active chat to write into — the user can't act on this. Log
+        // for devs so silent swallow is observable, then return.
+        console.debug(`[${MODULE_NAME}/notes] ${verb} skipped (no active chat target)`);
+        return;
+    }
+    const tpl = (() => {
+        switch (reason) {
+            case 'VALIDATION_ARGS':    return t('${0} failed, invalid request');
+            case 'VALIDATION_COMMIT':  return t('${0} failed, floor is invalid');
+            case 'INSTANCE_DESTROYED': return t('Notes storage destroyed, reload the page');
+            case 'CONFLICT':           return t('${0} conflicted with another writer, try again');
+            case 'HTTP_ERROR':         return t('${0} failed, server error');
+            case 'TRANSPORT_ERROR':    return t('${0} failed, network error');
+            case 'REPLAY_BROKEN':      return t('Notes storage broken, reload the page');
+            case 'LOG_WRITE_FAILED':   return t('${0} failed to persist');
+            default:                   return t('${0} failed');
+        }
+    })();
+    const message = tpl.replace('${0}', String(verb || ''));
+    toastr.error(message);
+}
+
 export async function mountNotesPanel(host, context) {
     if (!host || host.dataset.luker_notes_mounted === '1') return;
     host.dataset.luker_notes_mounted = '1';
@@ -115,7 +157,18 @@ export async function mountNotesPanel(host, context) {
         if (action === 'close') {
             const reason = (window.prompt(t('Closure reason (optional)')) || '').trim();
             const r = await fs.updateStatusById(entry.id, 'closed', reason);
-            if (!r.ok) console.warn(`[${MODULE_NAME}/notes] close failed:`, r.error);
+            if (r && r.ok === false) {
+                if (r.reason) {
+                    // Write rejection — surface to the user so the click doesn't
+                    // appear to no-op silently.
+                    toastReasonForUser(t('Close'), r);
+                } else {
+                    // Reducer no-op (not_found / already_closed) — the row
+                    // probably went stale (chat switch, sibling write). Log so
+                    // devs can see it; the re-render below restores the view.
+                    console.debug(`[${MODULE_NAME}/notes] close no-op: ${r.error || 'unknown'}`);
+                }
+            }
             await rerender();
         } else if (action === 'edit') {
             const row = btn.closest('.luker-notes-row');
@@ -123,7 +176,16 @@ export async function mountNotesPanel(host, context) {
             if (textEl.contentEditable === 'true') {
                 textEl.contentEditable = 'false';
                 const next = textEl.textContent.trim();
-                if (next && next !== entry.text) await fs.updateTextById(entry.id, next);
+                if (next && next !== entry.text) {
+                    const r = await fs.updateTextById(entry.id, next);
+                    if (r && r.ok === false) {
+                        if (r.reason) {
+                            toastReasonForUser(t('Edit'), r);
+                        } else {
+                            console.debug(`[${MODULE_NAME}/notes] edit no-op: ${r.error || 'unknown'}`);
+                        }
+                    }
+                }
                 await rerender();
             } else {
                 textEl.contentEditable = 'true';
@@ -131,7 +193,17 @@ export async function mountNotesPanel(host, context) {
             }
         } else if (action === 'delete') {
             if (!window.confirm(t('Confirm delete (permanent)?'))) return;
-            await fs.deleteByIds([entry.id]);
+            const r = await fs.deleteByIds([entry.id]);
+            // deleteByIds either returns the {removed, missing} manifest on
+            // success OR the {ok:false, reason, hint} envelope on a write
+            // rejection of a real delete. The envelope is the only failure
+            // shape; an empty `removed` with a non-empty `missing` is a
+            // stale-row no-op (the row vanished between render and click).
+            if (r && r.ok === false && r.reason) {
+                toastReasonForUser(t('Delete'), r);
+            } else if (r && Array.isArray(r.missing) && r.missing.length > 0 && (!r.removed || r.removed.length === 0)) {
+                console.debug(`[${MODULE_NAME}/notes] delete no-op: id missing`);
+            }
             await rerender();
         }
     }

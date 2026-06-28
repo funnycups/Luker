@@ -29,7 +29,7 @@ function isKnownAvatar(ctx, avatar) {
 }
 
 async function mergeSessionsIntoSidecar(ctx, avatar, newSessions) {
-    await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) => {
+    const result = await ctx.updateCharacterState(avatar, ORCH_SIDECAR_NAMESPACE, (current) => {
         const base = (current && typeof current === 'object' && current.sessions && typeof current.sessions === 'object')
             ? { ...current.sessions }
             : {};
@@ -38,6 +38,9 @@ async function mergeSessionsIntoSidecar(ctx, avatar, newSessions) {
         }
         return { version: SIDECAR_SCHEMA_VERSION, sessions: base };
     });
+    if (!result.ok) {
+        throw new Error(`sidecar write failed (${result.reason}): ${result.hint}`);
+    }
 }
 
 export async function migrateOrchSessionsV2ToSidecar({ settingsRoot, ctx, persistSettings }) {

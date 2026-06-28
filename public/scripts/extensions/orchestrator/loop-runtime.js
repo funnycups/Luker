@@ -437,23 +437,38 @@ export function resetNotesFloorStateInstanceForTesting() {
  * Adapter shape (matches the test fixture in `loop-tools-note.test.js`):
  *
  *   {
- *     appendForFloor(floor, text): Promise<string>
- *       // returns new id; entry persisted with status: 'open'
+ *     appendForFloor(floor, text):
+ *         Promise<{ok:true, id:string} | {ok:false, reason:string, hint:string}>
+ *       // On success: ok:true + new id; entry persisted with status:'open'.
+ *       // On floor-state rejection: ok:false + reason/hint envelope from
+ *       // state-errors.js (VALIDATION_TARGET / CONFLICT / HTTP_ERROR / etc.).
+ *       // Translation to ToolError is the tool layer's job (see note.js).
  *     listAcrossFloors(): Promise<Array<{id, text, status, closure_reason?}>>
- *       // chronological; full entry shape so the UI panel can show
- *       // closure reasons. Legacy entries without `status` are
- *       // surfaced as status='open' by the lazy migration so the
- *       // open-notes prompt filter has a stable field to read.
- *     updateStatusById(id, status, reason?): Promise<{ok:true} | {ok:false, error:string}>
- *       // flip a single entry's status; reports `already_<status>` on no-op
- *     updateTextById(id, text): Promise<{ok:true} | {ok:false, error:string}>
- *       // mutate an existing entry's text (used by UI / curator agent)
- *     deleteByIds(ids: string[]): Promise<{ removed: string[], missing: string[] }>
- *       // hard-delete from storage (used by UI / curator agent, not the LLM tools).
- *       // `removed` is the list of ids that were actually present and dropped;
- *       // `missing` is the requested ids that were not in storage. The UI can
- *       // diff its optimistic list against `removed` directly without an
- *       // index-based reconciliation against the original request.
+ *       // Chronological; full entry shape so the UI panel can show
+ *       // closure reasons. Legacy entries without `status` are surfaced as
+ *       // status='open' by the lazy migration so the open-notes prompt
+ *       // filter has a stable field to read. A failed read degrades to an
+ *       // empty array (warn-only) so prompt building never throws.
+ *     updateStatusById(id, status, reason?):
+ *         Promise<{ok:true}
+ *               | {ok:false, error:'not_found'|'already_<status>'}
+ *               | {ok:false, reason:string, hint:string}>
+ *       // Three outcomes: ok:true on a real flip, ok:false+error for
+ *       // reducer no-ops (entry missing or already at target status; these
+ *       // are domain outcomes the agent should branch on, not failures),
+ *       // ok:false+reason/hint when the underlying patch was rejected.
+ *     updateTextById(id, text):
+ *         Promise<{ok:true}
+ *               | {ok:false, error:'not_found'}
+ *               | {ok:false, reason:string, hint:string}>
+ *       // Same three-outcome shape as updateStatusById.
+ *     deleteByIds(ids: string[]):
+ *         Promise<{ removed:string[], missing:string[] }
+ *               | {ok:false, reason:string, hint:string}>
+ *       // Success: returns the removed/missing manifest so the UI can diff
+ *       // its optimistic list against `removed` without index-based
+ *       // reconciliation. A write rejection on a real delete returns the
+ *       // reason/hint envelope instead.
  *   }
  *
  * Each note carries a stable id assigned at append time and a `status`
@@ -509,51 +524,67 @@ function makeNotesAdapter(fs) {
         return { entries: out, dirty };
     };
 
-    // fs.update returns false when the underlying chat-state patch is rejected
-    // (target unresolvable, HTTP failure, replay conflict, etc.). Surface that
-    // as a thrown ToolError so execNoteOpen / execNoteClose can report the
-    // failure to the agent instead of returning a fake-success id the panel
-    // and the agent both believe — see Task 7.
-    const throwOnWriteFailure = (op) => {
-        throw new ToolError(
-            `${op}: notes write rejected by floor-state.`,
-            'NOTE_WRITE_FAILED',
-            'The chat-state patch did not land (typical causes: chat not yet persisted, target chat unresolved, or a replay conflict). The note was NOT saved. Retry once; if it still fails, drop the note for this turn.',
-        );
-    };
+    // fs.update / fs.get return state-error envelopes
+    // (`{ok:true, ...}` | `{ok:false, reason, hint}` from state-errors.js).
+    // The adapter forwards write rejections back to the caller as
+    // `{ok:false, reason, hint}` instead of throwing — the tool layer
+    // (loop-tools/note.js) translates the reason to a structured
+    // ToolError so the agent sees the failure mode, while the UI panel
+    // maps the reason to a localized toast. Translation lives at each
+    // surface so audience-specific copy (agent hints vs user toasts) stays
+    // co-located with the layer that needs it.
 
     return {
         async appendForFloor(floor, text) {
             const targetFloor = Math.max(0, Math.floor(Number(floor) || 0));
             const id = mintId();
-            const ok = await lock(() => fs.update((current) => {
+            const writeResult = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 entries.push({ id, text: String(text), status: 'open' });
                 return { ...safe, entries };
             }, { floor: targetFloor }));
-            if (ok === false) throwOnWriteFailure('note_open');
+            if (!writeResult || writeResult.ok === false) {
+                return {
+                    ok: false,
+                    reason: writeResult?.reason || 'LOG_WRITE_FAILED',
+                    hint: writeResult?.hint || '',
+                };
+            }
             emitNotesChanged();
-            return id;
+            return { ok: true, id };
         },
         async listAcrossFloors() {
             await fs.ready();
-            const data = await fs.get();
+            const getResult = await fs.get();
+            if (!getResult || getResult.ok === false) {
+                // Reads degrade to empty so the prompt-builder never throws.
+                // Surfacing reason here would force every consumer (note.js
+                // loadOpenNotes, director-runtime, director-tools, panel) to
+                // unwrap envelopes for a path they already treat as soft-fail.
+                console.warn(`[orchestrator/notes] list failed: ${getResult?.reason || 'unknown'} ${getResult?.hint || ''}`);
+                return [];
+            }
+            const data = getResult.state;
             const safe = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
             const { entries, dirty } = normalizeEntries(safe.entries);
             // Lazy migration: if any legacy string entries were upgraded,
             // commit the new shape back so subsequent reads see stable ids.
+            // Migration failure is acceptable (warn-only) because the next
+            // read will retry from the same legacy starting point.
             if (dirty) {
-                await lock(() => fs.update((current) => {
+                const migrateResult = await lock(() => fs.update((current) => {
                     const inner = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                     const { entries: migrated } = normalizeEntries(inner.entries);
                     return { ...inner, entries: migrated };
                 }));
+                if (!migrateResult || migrateResult.ok === false) {
+                    console.warn(`[orchestrator/notes] dirty migration failed: ${migrateResult?.reason || 'unknown'} ${migrateResult?.hint || ''}`);
+                }
             }
             // Return the full entry shape (id, text, status, closure_reason)
-            // so the UI panel in Task 12 can render closure metadata. The
-            // open-notes prompt filter in `loadOpenNotes` projects to its
-            // own narrower shape.
+            // so the UI panel can render closure metadata. The open-notes
+            // prompt filter in `loadOpenNotes` projects to its narrower shape.
             return entries.map(e => {
                 const out = { id: e.id, text: e.text };
                 if (typeof e.status === 'string') out.status = e.status;
@@ -566,7 +597,7 @@ function makeNotesAdapter(fs) {
             if (!targetId) return { ok: false, error: 'not_found' };
             const nextStatus = String(status || '');
             let outcome = { ok: false, error: 'not_found' };
-            const writeOk = await lock(() => fs.update((current) => {
+            const writeResult = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 const idx = entries.findIndex(e => e.id === targetId);
@@ -588,12 +619,20 @@ function makeNotesAdapter(fs) {
                 outcome = { ok: true };
                 return { ...safe, entries };
             }));
-            // Distinguish a no-op reducer (writeOk === true with outcome.ok === false
-            // means the reducer found a logical reason like not_found / already_*) from
-            // a real write rejection (writeOk === false means the patch itself failed).
-            // Only the latter must throw — the reducer's no-op outcomes are legitimate
-            // tool results the agent should react to.
-            if (writeOk === false && outcome.ok) throwOnWriteFailure('note_close');
+            // Distinguish a no-op reducer (writeResult.ok === true with
+            // outcome.ok === false means the reducer found a logical reason
+            // like not_found / already_*) from a real write rejection
+            // (writeResult.ok === false means the patch itself failed). Only
+            // the latter swaps the outcome for an envelope — the reducer's
+            // no-op outcomes are legitimate tool results the agent should
+            // react to verbatim.
+            if (writeResult && writeResult.ok === false && outcome.ok) {
+                return {
+                    ok: false,
+                    reason: writeResult.reason || 'LOG_WRITE_FAILED',
+                    hint: writeResult.hint || '',
+                };
+            }
             if (outcome.ok) emitNotesChanged();
             return outcome;
         },
@@ -602,7 +641,7 @@ function makeNotesAdapter(fs) {
             if (!targetId) return { ok: false, error: 'not_found' };
             const nextText = String(text ?? '');
             let outcome = { ok: false, error: 'not_found' };
-            const writeOk = await lock(() => fs.update((current) => {
+            const writeResult = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 const idx = entries.findIndex(e => e.id === targetId);
@@ -614,7 +653,13 @@ function makeNotesAdapter(fs) {
                 outcome = { ok: true };
                 return { ...safe, entries };
             }));
-            if (writeOk === false && outcome.ok) throwOnWriteFailure('note_edit');
+            if (writeResult && writeResult.ok === false && outcome.ok) {
+                return {
+                    ok: false,
+                    reason: writeResult.reason || 'LOG_WRITE_FAILED',
+                    hint: writeResult.hint || '',
+                };
+            }
             if (outcome.ok) emitNotesChanged();
             return outcome;
         },
@@ -631,7 +676,7 @@ function makeNotesAdapter(fs) {
             // we can compute `missing` (= requested - seen) after the write.
             const removed = [];
             const seen = new Set();
-            const writeOk = await lock(() => fs.update((current) => {
+            const writeResult = await lock(() => fs.update((current) => {
                 const safe = (current && typeof current === 'object' && !Array.isArray(current)) ? current : {};
                 const { entries } = normalizeEntries(safe.entries);
                 const kept = [];
@@ -646,12 +691,18 @@ function makeNotesAdapter(fs) {
                 }
                 return { ...safe, entries: kept };
             }));
-            // Same shape as updateStatusById: only treat writeOk === false as a real
-            // failure when something was actually meant to be deleted. If `removed`
-            // is empty, the reducer was a no-op (all ids missing) and writeOk may
-            // legitimately be true with nothing changed — there is no rejection to
-            // surface.
-            if (writeOk === false && removed.length > 0) throwOnWriteFailure('note_delete');
+            // Same shape as updateStatusById: surface write rejection only
+            // when something was actually meant to be deleted. If `removed`
+            // is empty, the reducer was a no-op (all ids missing) and a
+            // failed writeResult may legitimately exist (or not) with
+            // nothing changed — there is no rejection to surface.
+            if (writeResult && writeResult.ok === false && removed.length > 0) {
+                return {
+                    ok: false,
+                    reason: writeResult.reason || 'LOG_WRITE_FAILED',
+                    hint: writeResult.hint || '',
+                };
+            }
             const missing = [];
             for (const id of requested) {
                 if (!seen.has(id)) missing.push(id);
