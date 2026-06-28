@@ -43,6 +43,18 @@ export class ChatRepo {
         });
     }
 
+    // Direct write that preserves the caller-supplied integrity / timestamps.
+    // Use this only for migration: regular writes go through save() so the
+    // engine rotates integrity and bumps updatedAt on every edit. The
+    // MigrationRunner needs this escape hatch so a FS→DB copy doesn't reset
+    // every chat's createdAt to "now" and invalidate cached integrity values.
+    async saveRaw(handle, charDir, name, record, { isGroup = false, groupId } = {}) {
+        assertWritable();
+        const key = this._key(handle, charDir, name, { isGroup, groupId });
+        return this._engine.withTransaction(handle, async (tx) =>
+            tx.putResource(key, record));
+    }
+
     async append(handle, charDir, name, newMessages, expectedIntegrity, { isGroup = false, groupId } = {}) {
         assertWritable();
         const key = this._key(handle, charDir, name, { isGroup, groupId });

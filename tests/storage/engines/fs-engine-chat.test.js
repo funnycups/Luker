@@ -66,4 +66,17 @@ describe('FsEngine chat handler — corrupt-doc tolerance', () => {
             tx.deleteChatState(chatKey(), 'present'));
         expect(present).toBe(true);
     });
+
+    test('put preserves caller-supplied updatedAt as file mtime', async () => {
+        // saveRaw / migration path: a numeric updatedAt should land as the
+        // file mtime so the source's "last edited" time survives a copy.
+        const updatedAt = 1700000000000; // 2023-11-14 22:13:20 UTC, in ms
+        await engine.withTransaction(handle, async (tx) =>
+            tx.putResource(chatKey(), {
+                header: { chat_metadata: {} }, body: [], integrity: 'x',
+                updatedAt, createdAt: updatedAt,
+            }));
+        const got = await engine.withTransaction(handle, async (tx) => tx.getResource(chatKey()));
+        expect(got.updatedAt).toBe(updatedAt);
+    });
 });

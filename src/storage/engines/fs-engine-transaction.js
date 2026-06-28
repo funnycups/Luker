@@ -161,6 +161,16 @@ function registerChatHandler(tx) {
             const lines = [JSON.stringify(headerWithIntegrity)];
             for (const msg of record.body) lines.push(JSON.stringify(msg));
             writeFileAtomic(filePath, lines.join('\n') + '\n');
+            // Restore the caller-supplied updatedAt as the file mtime so a
+            // migration-time saveRaw doesn't reset every chat's "last edited"
+            // to the migration moment. createdAt maps to birthtime on FS,
+            // which most OSes don't expose for writing — chat.get falls back
+            // to ctime there, and a migrated chat will report the migration
+            // moment as createdAt. The user payload is unaffected.
+            if (typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)) {
+                const secs = record.updatedAt / 1000;
+                try { fs.utimesSync(filePath, secs, secs); } catch { /* best-effort */ }
+            }
         },
         delete(key) {
             const namespaces = listNamespaces(key);

@@ -416,16 +416,27 @@ export class MigrationRunner {
                 const chat = await this._src.chat.get(srcHandle, key.charDir, key.name);
                 if (chat == null) continue;
                 if (!this._dryRun) {
-                    // ChatRepo.save rotates integrity on the dest — that's why
-                    // the inline verify uses `recordsEqual('chat', ...)` which
-                    // calls stripChatEngineMeta to ignore those engine fields.
-                    await this._dst.chat.save(
+                    // Use saveRaw to preserve the source's integrity, createdAt,
+                    // and updatedAt — ChatRepo.save() would rotate integrity to a
+                    // new UUID and stamp updatedAt = now, which silently breaks
+                    // any client caching the old integrity and reorders the
+                    // recency index after migration.
+                    await this._dst.chat.saveRaw(
                         dstHandle, key.charDir, key.name,
-                        chat.header, chat.body, null,
+                        {
+                            header: chat.header,
+                            body: chat.body,
+                            integrity: chat.integrity,
+                            updatedAt: chat.updatedAt,
+                            createdAt: chat.createdAt,
+                        },
                     );
                     const dstChat = await this._dst.chat.get(dstHandle, key.charDir, key.name);
                     if (!recordsEqual('chat', chat, dstChat)) {
                         throw new Error(`chat verify mismatch for ${key.charDir || '(group)'}::${key.name}`);
+                    }
+                    if (dstChat?.integrity !== chat.integrity) {
+                        throw new Error(`chat integrity drift for ${key.charDir || '(group)'}::${key.name}`);
                     }
                 }
                 stats.chats++;
@@ -457,9 +468,15 @@ export class MigrationRunner {
                     );
                     if (chat == null) continue;
                     if (!this._dryRun) {
-                        await this._dst.chat.save(
+                        await this._dst.chat.saveRaw(
                             dstHandle, null, chatId,
-                            chat.header, chat.body, null,
+                            {
+                                header: chat.header,
+                                body: chat.body,
+                                integrity: chat.integrity,
+                                updatedAt: chat.updatedAt,
+                                createdAt: chat.createdAt,
+                            },
                             { isGroup: true, groupId: chatId },
                         );
                         const dstChat = await this._dst.chat.get(
@@ -468,6 +485,9 @@ export class MigrationRunner {
                         );
                         if (!recordsEqual('chat', chat, dstChat)) {
                             throw new Error(`chat verify mismatch for (group)::${chatId} (groupId=${chatId})`);
+                        }
+                        if (dstChat?.integrity !== chat.integrity) {
+                            throw new Error(`chat integrity drift for (group)::${chatId} (groupId=${chatId})`);
                         }
                     }
                     stats.chats++;

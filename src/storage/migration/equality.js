@@ -2,12 +2,14 @@ import _ from 'lodash';
 
 /**
  * Strip the chat record fields whose values are engine-internal and not part
- * of the user payload, so two chat records from different engines compare
- * equal under deep-equality.
+ * of the user payload, so two chat records compared after a save can still be
+ * equal under deep-equality even when one engine rotated integrity or stamped
+ * a fresh timestamp.
  *
  * Stripped fields:
  *   - `integrity` (rotated by ChatRepo.save in EACH engine)
- *   - `updatedAt` / `createdAt` (engine-specific clock resolution)
+ *   - `updatedAt` / `createdAt` (FS reflects filesystem mtime/birthtime which
+ *     don't survive a write; DB engines stamp on insert)
  *   - `key` (engine fills this from the lookup key)
  *   - `header.chat_metadata.integrity` (both engines write the rotated
  *     integrity into chat_metadata on save and read it back out on get — so
@@ -16,7 +18,9 @@ import _ from 'lodash';
  * What remains — `header` (minus the embedded integrity) and `body` — is what
  * must round-trip identically.
  *
- * Shared between `round-trip.test.js` and `MigrationRunner._copyAll`'s inline verify.
+ * Shared between `round-trip.test.js` and `MigrationRunner._copyAll`'s inline
+ * verify. MigrationRunner additionally asserts integrity equality outside this
+ * helper, since it uses ChatRepo.saveRaw to keep the source's integrity.
  */
 export function stripChatEngineMeta(record) {
     if (record == null) return record;
