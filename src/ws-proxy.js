@@ -151,6 +151,11 @@ export function initWsProxy(servers, expressApp) {
     app = expressApp;
     wss = new WebSocketServer({
         noServer: true,
+        // Disable the WS frame size cap. Luker only transports LLM/image
+        // generate payloads here; size limits are the upstream API's job to
+        // enforce and surface. The default 100 MiB cap would otherwise reject
+        // long-context requests at the socket layer with an opaque close 1009.
+        maxPayload: 0,
         // Picks the same ticket subprotocol back so `ws` writes it into the
         // 101 response. Validation already happened in `server.on('upgrade')`
         // below; here we just echo the chosen string.
