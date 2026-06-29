@@ -14,7 +14,7 @@
 
 ### Core features
 
-- **Memory Graph** — Knowledge-graph long-term memory, 9-layer hybrid recall pipeline
+- **Memory Graph** — Knowledge-graph long-term memory with two recall modes: LLM Recall (multi-round LLM-driven node selection) and RAG Recall (vector retrieval with optional rerank and optional LLM query rewrite).
 - **Multi-Agent Orchestrator** — Three execution modes (Spec workflow, Single agent, Agenda planner)
 - **Card Editor Assistant** — AI-driven conversational character-card editing with 7 tools
 - **Search Tools** — Three-engine support: DuckDuckGo, SearXNG, Brave Search

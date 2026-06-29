@@ -26,7 +26,7 @@ Luker ships with several professional tools designed for roleplay scenarios — 
 
 ### Memory Graph
 
-A character memory system based on knowledge graph structures. It organizes events, characters, locations, storylines, and other information from roleplay sessions into a graph structure, enabling intelligent memory recall through cognitive layer processing, vector index retrieval, and diffusion-based memory propagation. The recall model can perform multi-hop deep exploration within the graph to find the most relevant memory nodes for the current storyline and inject them into the creative context.
+A character memory system based on knowledge graph structures. It organizes events, characters, locations, storylines, and other information from roleplay sessions into a graph structure, enabling intelligent memory recall through either LLM-driven multi-hop exploration or semantic vector retrieval with optional rerank. The recall model finds the most relevant memory nodes for the current storyline and injects them into the creative context.
 
 → [Memory Graph Documentation](/features/memory-graph)
 

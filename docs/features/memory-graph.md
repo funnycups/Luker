@@ -59,16 +59,19 @@ When you send a message, Memory Graph looks at the conversation context and reca
 | Method | Description |
 |---|---|
 | LLM Recall | The LLM directly picks relevant nodes from the memory store, with multi-round deep exploration |
-| Hybrid | Combines vector retrieval, graph diffusion, lexical match, and other signals into a multi-dimensional score |
-| Hybrid + Reranking | Hybrid, then a reranking model refines the top candidates |
-| Hybrid + LLM | Hybrid, then the LLM does a second-pass filter |
+| RAG Recall | Vector retrieval over the embedded memory store, with optional cross-encoder rerank and optional LLM query rewrite |
 
 ::: tip Which one?
 **LLM Recall is the default because it's the easiest to configure** — you already have an LLM API set up for chat, and that's all it needs.
 
-**Hybrid recall is faster and more in line with how production retrieval systems work** (vector search + graph propagation), but it requires you to configure an **Embedding Profile** first. Embedding profiles live in the Connection Manager next to chat-completion connections, so any plugin (Vector Storage, Memory Graph, future ones) can pick the same provider/model/key triplet from a shared list. For higher-quality results, you can stack on a reranking model (Hybrid+Rerank — also driven by a shared Rerank Profile) or an LLM filter (Hybrid+LLM).
+**RAG Recall is faster and aligns with how production retrieval systems work** (semantic vector search). It requires an **Embedding Profile** to be set up first — embedding profiles live in the Connection Manager next to chat-completion connections, so any plugin (Vector Storage, Memory Graph, future ones) can pick the same provider/model/key triplet from a shared list.
 
-Rule of thumb: stay on LLM Recall while you're trying things out. If you start hitting cost or latency walls — or if you want recall to stay deterministic across model swaps — switch to Hybrid.
+Inside RAG Recall, two opt-in switches let you trade extra cost for better quality:
+
+- **Enable rerank** — adds a cross-encoder rerank pass over the vector hits. Useful when your embedding model is small and the rerank model is strong; requires a Rerank Profile (cohere / jina / a custom endpoint).
+- **Enable query rewrite** — adds one extra LLM call before retrieval that rewrites the recent dialogue into a single concise sentence optimised for vector search. Materially improves recall when the user message is generic or roundabout. Adds latency + cost (one LLM call per turn).
+
+Rule of thumb: stay on LLM Recall while trying things out. Move to RAG Recall when you start hitting cost or latency walls on LLM Recall, or when you want recall to stay deterministic across model swaps. Turn on the two switches one at a time — they're independent.
 :::
 
 ### Hierarchical compression
@@ -262,23 +265,18 @@ When you swipe or regenerate on the same floor, Memory Graph reuses the previous
 | Extraction Interval | `1` | Run extraction every N AI replies |
 | Max Processing Rounds | `900` | Hard cap on processing rounds |
 
-### Vector and Diffusion
+### Vector and Rerank
 
 | Setting | Default | Description |
 |---|---|---|
 | Embedding Profile | (none) | Connection-Manager profile that owns the embedding provider/model/endpoint/key. Created in the Memory Graph UI or in Vector Storage; profiles are shared. |
 | Vector Top-K | `20` | Top-K for vector retrieval |
-| Graph Diffusion Steps | `2` | Number of diffusion steps |
-| Graph Diffusion Decay | `0.6` | Decay factor |
-| Graph Diffusion Top-K | `100` | Top-K after diffusion |
-| Graph Diffusion Teleport Probability | `0.0` | Teleport probability |
-
-### Reranking
-
-| Setting | Default | Description |
-|---|---|---|
-| Enable Reranking | `false` | Whether to rerank |
-| Rerank Profile | (none) | Connection-Manager profile (mode `rerank`) defining the rerank provider/model/endpoint/key. Shared with Vector Storage. |
+| Max recall results | `15` | Final cap on the number of nodes injected per recall |
+| Enable rerank | `off` | Whether to apply a cross-encoder rerank over the vector hits |
+| Rerank Profile | (none) | Connection-Manager profile (mode `rerank`) defining the rerank provider/model/endpoint/key. Only consulted when "Enable rerank" is on. Shared with Vector Storage. |
+| Enable query rewrite | `off` | Whether to add an extra LLM call before retrieval that rewrites the recent dialogue into a concise sentence optimised for vector search |
+| Query rewrite API preset | (none) | Connection profile to use for the rewrite LLM call. Only consulted when "Enable query rewrite" is on. |
+| Query rewrite prompt preset | (none) | Chat-completion preset to use for the rewrite LLM call |
 
 ### Other
 
@@ -299,28 +297,15 @@ When you swipe or regenerate on the same floor, Memory Graph reuses the previous
 <details>
 <summary>For curious readers and contributors</summary>
 
-### Multi-stage hybrid recall pipeline
+### RAG recall pipeline
 
-In hybrid recall mode, Memory Graph runs an 8-stage pipeline:
+In RAG Recall mode, Memory Graph runs a three-stage linear pipeline:
 
-1. **Vector pre-filtering** — retrieve the most semantically similar Top-K nodes from the vector store
-2. **Entity anchoring** — match known entity names and aliases in the query
-3. **Build seeds** — merge vector hits and entity anchors as diffusion starting points
-4. **Build adjacency list** — construct the graph's two-layer adjacency list
-5. **PEDSA graph diffusion** — propagate energy through graph structure to find indirect relations
-6. **Hybrid scoring** — merge vector scores, diffusion energy, lexical match, anchor scores, recency boost, etc.
-7. **Cognitive pipeline (NMF / FISTA / DPP)** — three algorithms ensure recall is both comprehensive and diverse
-8. **Optional reranking** — apply an external reranker for final ordering
+1. **Optional query rewrite** — if "Enable query rewrite" is on, one LLM call rewrites the last few dialogue turns into a single concise sentence optimised for vector search (the model is told to use entity names and concrete verbs that look like what would appear verbatim in a stored event summary).
+2. **Vector retrieval** — fetch the top-K nearest neighbours from the embedded memory store, keyed by either the raw query or the rewritten sentence.
+3. **Optional cross-encoder rerank** — if "Enable rerank" is on, every candidate is scored by the rerank model and the order is replaced with the rerank ranking. If rerank fails for any reason, the pipeline falls back to vector order rather than failing the whole recall.
 
-### Cognitive layer algorithms
-
-- **NMF topic rebalancing** — Non-negative Matrix Factorization identifies underrepresented topic directions and boosts representative nodes
-- **FISTA residual discovery** — Fast Iterative Shrinkage-Thresholding finds query directions not covered by candidates and runs supplementary searches
-- **DPP diversity sampling** — Determinantal Point Processes select a high-quality, mutually-diverse subset, avoiding overly concentrated recall
-
-### PEDSA graph diffusion
-
-PEDSA (Personalized Efficient Diffusion with Sparse Approximation) lets Memory Graph find important memories that aren't directly semantically tied to the query but are connected through graph structure. Energy propagates through edges over multiple rounds, with optional teleport probability (PageRank-like) and sparse approximation for efficiency.
+That's the whole path. There is no graph-diffusion stage and no cognitive layer — earlier versions of Memory Graph had a multi-stage PEDSA diffusion + NMF/FISTA/DPP cognitive pipeline, but A/B testing showed those stages contributed negatively or not at all to recall quality on real long-form roleplay. The pipeline was collapsed to vector + optional rerank + optional rewrite so users have fewer knobs to misconfigure.
 
 ### Vector index
 

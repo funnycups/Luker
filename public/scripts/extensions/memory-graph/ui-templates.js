@@ -50,6 +50,7 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
         DEFAULT_EXTRACT_SYSTEM_PROMPT,
         DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
         DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
+        DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
         DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
         defaultSettings,
         escapeHtml,
@@ -61,6 +62,7 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
     const extractPrompt = String(settings.extractSystemPrompt || defaultSettings.extractSystemPrompt || '');
     const routePrompt = String(settings.recallRouteSystemPrompt || defaultSettings.recallRouteSystemPrompt || '');
     const finalizePrompt = String(settings.recallFinalizeSystemPrompt || defaultSettings.recallFinalizeSystemPrompt || '');
+    const ragRewritePrompt = String(settings.ragRewriteSystemPrompt || defaultSettings.ragRewriteSystemPrompt || '');
     const schemaIterPrompt = String(settings.schemaIterSystemPrompt || defaultSettings.schemaIterSystemPrompt || '');
     const scopeText = scopeInfo?.hasOverride
         ? i18nFormat('Advanced scope: character override (${0})', scopeInfo.characterName || scopeInfo.avatar || i18n('(unset)'))
@@ -99,21 +101,6 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
     <label>${escapeHtml(i18n('Extract batch assistant turns'))}
         <input id="${popupId}_extract_batch_turns" class="text_pole" type="number" min="1" step="1" value="${Math.max(1, Number(settings.extractBatchTurns || defaultSettings.extractBatchTurns))}" />
     </label>
-    <div id="${popupId}_diffusion_settings" style="border-top:1px solid var(--SmartThemeBorderColor,#555);margin-top:8px;padding-top:8px">
-        <b>${escapeHtml(i18n('Graph Diffusion Parameters'))}</b>
-        <label>${escapeHtml(i18n('Diffusion steps'))}
-            <input id="${popupId}_diffusion_steps" class="text_pole" type="number" min="1" max="5" step="1" value="${Number(settings.diffusionSteps || defaultSettings.diffusionSteps || 2)}" />
-        </label>
-        <label>${escapeHtml(i18n('Diffusion decay factor'))}
-            <input id="${popupId}_diffusion_decay" class="text_pole" type="number" min="0.1" max="1.0" step="0.05" value="${Number(settings.diffusionDecay || defaultSettings.diffusionDecay || 0.6)}" />
-        </label>
-        <label>${escapeHtml(i18n('Diffusion Top-K (per step)'))}
-            <input id="${popupId}_diffusion_topk" class="text_pole" type="number" min="10" max="500" step="10" value="${Number(settings.diffusionTopK || defaultSettings.diffusionTopK || 100)}" />
-        </label>
-        <label>${escapeHtml(i18n('PPR teleport alpha (0 = disabled)'))}
-            <input id="${popupId}_diffusion_teleport" class="text_pole" type="number" min="0" max="0.5" step="0.05" value="${Number(settings.diffusionTeleportAlpha || defaultSettings.diffusionTeleportAlpha || 0)}" />
-        </label>
-    </div>
     <label>${escapeHtml(i18n('Extract Table Fill Prompt'))}
         <textarea id="${popupId}_extract_system_prompt" class="text_pole textarea_compact" rows="8">${escapeHtml(extractPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT)}</textarea>
     </label>
@@ -123,6 +110,11 @@ export function buildAdvancedSettingsPopupHtml(deps, popupId, scopeInfo) {
     <label>${escapeHtml(i18n('Recall Stage 2 Prompt (Finalize)'))}
         <textarea id="${popupId}_recall_finalize_prompt" class="text_pole textarea_compact" rows="8">${escapeHtml(finalizePrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT)}</textarea>
     </label>
+    <div id="${popupId}_rag_rewrite_prompt_block" style="display:none">
+        <label>${escapeHtml(i18n('Query rewrite system prompt'))}
+            <textarea id="${popupId}_rag_rewrite_prompt" class="text_pole textarea_compact" rows="8">${escapeHtml(ragRewritePrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT)}</textarea>
+        </label>
+    </div>
     <label>${escapeHtml(i18n('Schema Iteration Prompt (schema-editor AI)'))}
         <textarea id="${popupId}_schema_iter_system_prompt" class="text_pole textarea_compact" rows="8">${escapeHtml(schemaIterPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT)}</textarea>
     </label>
@@ -204,20 +196,26 @@ export function buildMemoryGraphSettingsHtml(deps) {
             <label for="luker_rpg_memory_recall_method">${escapeHtml(i18n('Recall method'))}</label>
             <select id="luker_rpg_memory_recall_method" class="text_pole">
                 <option value="llm">${escapeHtml(i18n('LLM Recall (default)'))}</option>
-                <option value="hybrid">${escapeHtml(i18n('Hybrid Pipeline (vector + graph diffusion)'))}</option>
-                <option value="hybrid_rerank">${escapeHtml(i18n('Hybrid + Rerank'))}</option>
-                <option value="hybrid_llm">${escapeHtml(i18n('Hybrid + LLM Rerank'))}</option>
+                <option value="rag">${escapeHtml(i18n('RAG Recall (vector + optional rerank + optional rewrite)'))}</option>
             </select>
-            <div id="luker_rpg_memory_hybrid_settings" style="display:none">
+            <div id="luker_rpg_memory_rag_settings" style="display:none">
                 <small style="opacity:0.85">${escapeHtml(i18n('Embedding profile is shared via the Connection Profile registry — pick one below. Manage profiles in the Connection Profile panel (Embedding tab) under API Connections.'))}</small><br>
                 <label>${escapeHtml(i18n('Embedding profile'))}</label>
                 <select id="luker_rpg_memory_embedding_profile" class="text_pole flex1"></select>
                 <label>${escapeHtml(i18n('Vector pre-filter Top-K'))} <input id="luker_rpg_memory_vector_topk" class="text_pole" type="number" min="5" max="100" step="1" /></label>
                 <label>${escapeHtml(i18n('Max recall results'))} <input id="luker_rpg_memory_hybrid_max_results" class="text_pole" type="number" min="3" max="50" step="1" /></label>
-            </div>
-            <div id="luker_rpg_memory_rerank_settings" style="display:none">
-                <label>${escapeHtml(i18n('Rerank profile'))}</label>
-                <select id="luker_rpg_memory_rerank_profile" class="text_pole flex1"></select>
+                <label class="checkbox_label"><input id="luker_rpg_memory_rag_use_rerank" type="checkbox" /> ${escapeHtml(i18n('Enable rerank'))}</label>
+                <div id="luker_rpg_memory_rag_rerank_block" style="display:none;padding-left:18px">
+                    <label>${escapeHtml(i18n('Rerank profile'))}</label>
+                    <select id="luker_rpg_memory_rerank_profile" class="text_pole flex1"></select>
+                </div>
+                <label class="checkbox_label"><input id="luker_rpg_memory_rag_use_query_rewrite" type="checkbox" /> ${escapeHtml(i18n('Enable query rewrite (extra LLM call)'))}</label>
+                <div id="luker_rpg_memory_rag_rewrite_block" style="display:none;padding-left:18px">
+                    <label for="luker_rpg_memory_rag_rewrite_api_preset">${escapeHtml(i18n('Query rewrite API preset (Connection profile)'))}</label>
+                    <select id="luker_rpg_memory_rag_rewrite_api_preset" class="text_pole"></select>
+                    <label for="luker_rpg_memory_rag_rewrite_llm_preset">${escapeHtml(i18n('Query rewrite prompt preset'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'luker_rpg_memory_rag_rewrite_llm_preset' })}</label>
+                    <select id="luker_rpg_memory_rag_rewrite_llm_preset" class="text_pole"></select>
+                </div>
             </div>
             <label for="luker_rpg_memory_recall_inject_position">${escapeHtml(i18n('Injection position'))}</label>
             <select id="luker_rpg_memory_recall_inject_position" class="text_pole">
