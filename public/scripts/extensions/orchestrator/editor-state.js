@@ -332,28 +332,19 @@ export function loadCharacterDirectorEditorState(context, avatar) {
         };
     }
     // The character active payload is already preset-shaped — sanitize for
-    // the canonical flat shape and merge over the global base.
+    // the canonical flat shape and merge over the global base. Spread
+    // semantics give the override the final word for each top-level key
+    // (mainAgent / subAgents / limits / tools), exactly like the
+    // loop / agenda character editors. Empty subAgents `[]` and empty
+    // mainAgent.systemPrompt `''` are treated as explicit user/AI intent,
+    // NOT silently rehydrated from global — otherwise iter-studio's
+    // "delete all sub-agents on this card" or "blank the main prompt"
+    // edits would appear to persist but rematerialize the global content
+    // the next time the editor reads.
     const sanitizedOverride = sanitizeDirectorProfile(charActive);
     const merged = {
         ...globalBase,
         ...sanitizedOverride,
-        mainAgent: {
-            ...globalBase.mainAgent,
-            ...sanitizedOverride.mainAgent,
-            // Empty mainAgent.systemPrompt → fall back to global. The user
-            // never wants a blank prompt out of a partial override; if they
-            // truly want to disable the main agent they'd unbind the
-            // override (Reset Character) rather than write `''` explicitly.
-            systemPrompt: String(sanitizedOverride.mainAgent.systemPrompt || '').trim()
-                ? sanitizedOverride.mainAgent.systemPrompt
-                : globalBase.mainAgent.systemPrompt,
-        },
-        // Empty subAgents (override cleared or contained only invalid
-        // entries) → fall back to global so the inherited sub-agent set
-        // survives partial overrides.
-        subAgents: Array.isArray(sanitizedOverride.subAgents) && sanitizedOverride.subAgents.length > 0
-            ? sanitizedOverride.subAgents
-            : globalBase.subAgents,
     };
     return {
         ...merged,
