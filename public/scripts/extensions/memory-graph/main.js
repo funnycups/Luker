@@ -1378,19 +1378,21 @@ async function loadMemoryStoreByTarget(context, target) {
         const fs = await getFloorStateInstance(context);
         await fs.ready();
         const payloadResult = await fs.get();
-        let payload = {};
-        if (payloadResult.ok && payloadResult.state) {
-            payload = payloadResult.state;
-        } else if (!payloadResult.ok) {
-            if (payloadResult.reason === STATE_ERROR_REASONS.REPLAY_BROKEN) {
-                // Replay couldn't truncate to a recoverable state. Don't
-                // overwrite whatever cached store the user already saw — they
-                // can still recover via Reset / Import / Rebuild.
-                notifyError(i18n('Memory graph log replay failed, data may be unrecoverable. Use Reset or Import to recover.'));
-            } else {
-                console.warn(`[${MODULE_NAME}] loadMemoryStoreByTarget read failed (reason=${payloadResult.reason}, hint=${payloadResult.hint})`);
-            }
+        if (!payloadResult.ok) {
+            // A read failure (transient HTTP / REPLAY_BROKEN / destroyed) must
+            // NOT degrade to an empty payload — the caller would cache an
+            // empty store, then the next write would diff `realLog → empty`
+            // and persist a graph-wiping commit (or `commitSessionMutation`
+            // would fs.reset([]) the log entirely). Surface the failure and
+            // let the caller decide; the on-disk log stays intact.
+            const isReplayBroken = payloadResult.reason === STATE_ERROR_REASONS.REPLAY_BROKEN;
+            const message = isReplayBroken
+                ? i18n('Memory graph log replay failed, data may be unrecoverable. Use Reset or Import to recover.')
+                : i18nFormat('Memory graph load failed: ${0}', payloadResult.hint || payloadResult.reason || i18n('reason unknown'));
+            notifyError(message);
+            throw new Error(`[${MODULE_NAME}] loadMemoryStoreByTarget read failed (reason=${payloadResult.reason}, hint=${payloadResult.hint})`);
         }
+        const payload = payloadResult.state || {};
         const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta);
         return {
             state: synthesizePersistedStateFromStoreAndMeta(runtimeStore, meta),
