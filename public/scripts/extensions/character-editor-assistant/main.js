@@ -145,23 +145,43 @@ function registerLocaleData() {
         'Character Editor Assistant': '角色卡编辑助手',
         'Open Editor': '打开编辑器',
         'Character Editor': '角色编辑器',
-        'Enable lorebook sync popup after Replace/Update': '替换/更新角色卡后询问是否打开编辑器',
-        'Open the character editor?': '打开角色编辑器？',
-        'You just replaced or updated a character card. Open the editor to iterate on the card and its world book with the AI, or skip and keep the imported card as-is.': '你刚替换或更新了一张角色卡。打开编辑器可以与 AI 多轮对话,逐步修改角色卡和世界书;跳过则保留刚导入的内容不动。',
-        'Open editor': '打开编辑器',
-        'Skip': '跳过',
-        'Just imported this card — review the baseline and suggest tweaks.': '刚导入了这张角色卡。请先审视卡片当前的基础设定与世界书条目,然后与我多轮对话、逐步给出改进建议或直接动手编辑。',
-        'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '刚更新了这张角色卡。下方是与上一版的差异——请审阅这些变化,然后给出后续调整建议或直接动手编辑。',
-        'Character card diff (previous → current):': '角色卡差异(旧 → 新):',
-        'World book diff (previous → current):': '世界书差异(旧 → 新):',
-        'Primary world book: ${0} → ${1}': '主世界书:${0} → ${1}',
-        'Field changed: ${0}': '字段变更:${0}',
-        'Field added: ${0}': '新增字段:${0}',
-        'Field removed: ${0}': '移除字段:${0}',
-        'Entry added (uid ${0}): ${1}': '新增条目(uid ${0}):${1}',
-        'Entry removed (uid ${0}): ${1}': '移除条目(uid ${0}):${1}',
-        'Entry changed (uid ${0}, ${1}): ${2}': '条目变更(uid ${0},${1}):${2}',
-        '(no human-readable changes detected)': '(未检测到可读差异)',
+        'Enable lorebook sync popup after Replace/Update': '替换／更新角色卡后弹出世界书处理选项',
+        'Replace lorebook: what should happen to the world book?': '替换角色卡：要如何处理世界书？',
+        'You just replaced or updated this character card. Choose what to do with its world book:': '你刚替换或更新了这张角色卡。请选择如何处理它的世界书：',
+        'Import the new card\'s embedded world book': '导入新卡自带的世界书',
+        'Open editor: let AI iterate old book into new': '打开编辑器：让 AI 把旧世界书迭代到新世界书',
+        'Skip and keep the previous book bound (${0})': '跳过并保留原绑定的世界书（${0}）',
+        'Cancel': '取消',
+        '• Import the new card\'s embedded world book — saves the V2/V3 character_book carried by the imported card as a standalone world book file, and binds it as the primary book. Use this when you want the new card\'s shipped lore verbatim.': '• 导入新卡自带的世界书 —— 把新卡片随包的内置世界书另存为独立的世界书文件，并绑定为主世界书。当你希望原汁原味地使用新卡片自带的设定时选这个。',
+        '• Open editor — opens the iteration studio with a diff of the previous card and book versus the new ones, so the AI can carry your earlier edits forward into the new book. Use this when you have hand-curated additions you want preserved.': '• 打开编辑器 —— 在迭代工作台中加载新旧角色卡与世界书的差异，让 AI 把你之前手工添加的内容迁移到新世界书。当你之前有手动修改过的世界书条目想保留时选这个。',
+        '• Skip and keep the previous book bound — re-binds the previously bound book (${0}) to this card and leaves the new card\'s embedded book on the card unused. Use this when you only wanted to refresh the card fields and not touch lore.': '• 跳过并保留原绑定的世界书 —— 把先前绑定的世界书（${0}）重新绑回这张卡片，新卡自带的内置世界书保留在卡片中但不启用。当你只想刷新角色卡字段、不想动世界书时选这个。',
+        'Kept the previous primary world book bound: ${0}': '已保留原主世界书的绑定：${0}',
+        'Just imported this card — review the baseline and suggest tweaks.': '刚导入了这张角色卡。请先审视卡片当前的基础设定与世界书条目，然后与我多轮对话、逐步给出改进建议或直接动手编辑。',
+        'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '刚更新了这张角色卡。下方是与上一版的差异——请审阅这些变化，然后给出后续调整建议或直接动手编辑。',
+        'Character card diff (previous → current):': '角色卡差异（旧 → 新）：',
+        'World book diff (previous → current):': '世界书差异（旧 → 新）：',
+        'Primary world book: ${0} → ${1}': '主世界书：${0} → ${1}',
+        'Field changed: ${0}': '字段变更：${0}',
+        'Field added: ${0}': '新增字段：${0}',
+        'Field removed: ${0}': '移除字段：${0}',
+        'Entry added (uid ${0}): ${1}': '新增条目（uid ${0}）：${1}',
+        'Entry removed (uid ${0}): ${1}': '移除条目（uid ${0}）：${1}',
+        'Entry changed (uid ${0}, ${1}): ${2}': '条目变更（uid ${0}，${1}）：${2}',
+        '(no human-readable changes detected)': '（未检测到可读差异）',
+        'You are running a post-replace iteration. The user replaced their character card with a new version. Your job is to help the user reconcile the previous version (prev, the one they were actually using) with the new version (next, the one they just imported) — but DO NOT touch the card or world book on this first turn.': '你现在处于"替换角色卡之后"的迭代流程。用户刚刚把角色卡更新为新版本。你的工作是帮用户把旧版本（prev，用户之前一直在用的）和新版本（next，刚导入的）做调和。但本轮不要动角色卡或世界书。',
+        'Direction convention used throughout this seed message and the diffs below:': '本条消息及下方差异中使用的方向约定：',
+        '- `prev` / "previous" / 旧 = the version the user was actually using until just now. May contain edits, additions, and refinements the user made by hand.': '- `prev` / "previous" / 旧 = 用户在替换之前一直在使用的版本，可能包含用户手工添加、修改、打磨过的内容。',
+        '- `next` / "current" / 新 = the version that was just imported. Treat this as the new baseline.': '- `next` / "current" / 新 = 刚刚导入的新版本，作为新的基线。',
+        'This first turn — REVIEW ONLY, no tool calls:': '本轮——只做审阅，不调任何工具：',
+        '1. Read the diff below and summarize for the user what actually changed between prev and next (card fields + world book entries).': '1. 阅读下方差异，向用户总结 prev 和 next 之间到底发生了什么变化（角色卡字段 + 世界书条目）。',
+        '2. Flag specific entries / fields where prev contains user-curated content that next does not have, or has in a regressed form — those are migration candidates.': '2. 标出 prev 中有、next 中缺失或退化的、用户手工 curate 过的字段／条目——这些是迁移候选。',
+        '3. Propose a concrete reconciliation plan in plain text: which prev-only items would you migrate into next, which prev-vs-next conflicts you would keep as next, and anything you would leave to the user to decide.': '3. 用纯文本给出具体的调和方案：哪些 prev-only 条目你会迁移到 next，哪些 prev-vs-next 冲突你会保留 next，哪些留给用户决定。',
+        '4. End the turn with a plain text message and NO tool calls. The user will read your summary and either approve the plan, refine it, or ask for specific changes.': '4. 本轮以纯文本消息结束，不调任何工具。用户会读你的总结，然后批准方案、调整方案、或要求具体修改。',
+        'Only on subsequent turns — after the user replies — apply the agreed changes with `cea_*` / `worldinfo_*` tools. When you do apply changes, follow the migration policy:': '只在后续轮次——用户回复之后——用 `cea_*` / `worldinfo_*` 工具落地已同意的修改。落地时遵守迁移原则：',
+        '- Migrate prev-only curated content into next.': '- 把 prev-only 的 curate 内容迁移到 next。',
+        '- Keep next\'s genuine improvements.': '- 保留 next 带来的实际改进。',
+        '- On conflicts, prefer next unless prev is obviously hand-curated and richer.': '- 冲突时优先采用 next，除非 prev 明显是手工打磨过且更丰富的版本。',
+        '- Never dump prev wholesale into next — that defeats the point of accepting a new version.': '- 不要把 prev 整体灌入 next ——那会让"接受新版本"这件事失去意义。',
         'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示词预设（参数+提示词）',
         'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 预设（连接配置）',
         'Plain-text function-call mode': '纯文本函数调用模式',
@@ -415,23 +435,43 @@ function registerLocaleData() {
  'Character Editor Assistant': '角色卡編輯助手',
         'Open Editor': '開啟編輯器',
         'Character Editor': '角色編輯器',
-        'Enable lorebook sync popup after Replace/Update': '替換/更新角色卡後詢問是否開啟編輯器',
-        'Open the character editor?': '開啟角色編輯器？',
-        'You just replaced or updated a character card. Open the editor to iterate on the card and its world book with the AI, or skip and keep the imported card as-is.': '你剛替換或更新了一張角色卡。開啟編輯器可以與 AI 多輪對話,逐步修改角色卡與世界書;跳過則保留剛匯入的內容不動。',
-        'Open editor': '開啟編輯器',
-        'Skip': '跳過',
-        'Just imported this card — review the baseline and suggest tweaks.': '剛匯入了這張角色卡。請先審視卡片目前的基礎設定與世界書條目,然後與我多輪對話、逐步給出改進建議或直接動手編輯。',
-        'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '剛更新了這張角色卡。下方是與上一版的差異——請審閱這些變化,然後給出後續調整建議或直接動手編輯。',
-        'Character card diff (previous → current):': '角色卡差異(舊 → 新):',
-        'World book diff (previous → current):': '世界書差異(舊 → 新):',
-        'Primary world book: ${0} → ${1}': '主世界書:${0} → ${1}',
-        'Field changed: ${0}': '欄位變更:${0}',
-        'Field added: ${0}': '新增欄位:${0}',
-        'Field removed: ${0}': '移除欄位:${0}',
-        'Entry added (uid ${0}): ${1}': '新增條目(uid ${0}):${1}',
-        'Entry removed (uid ${0}): ${1}': '移除條目(uid ${0}):${1}',
-        'Entry changed (uid ${0}, ${1}): ${2}': '條目變更(uid ${0},${1}):${2}',
-        '(no human-readable changes detected)': '(未偵測到可讀差異)',
+        'Enable lorebook sync popup after Replace/Update': '替換／更新角色卡後彈出世界書處理選項',
+        'Replace lorebook: what should happen to the world book?': '替換角色卡：要如何處理世界書？',
+        'You just replaced or updated this character card. Choose what to do with its world book:': '你剛替換或更新了這張角色卡。請選擇如何處理它的世界書：',
+        'Import the new card\'s embedded world book': '匯入新卡自帶的世界書',
+        'Open editor: let AI iterate old book into new': '開啟編輯器：讓 AI 把舊世界書迭代到新世界書',
+        'Skip and keep the previous book bound (${0})': '跳過並保留原綁定的世界書（${0}）',
+        'Cancel': '取消',
+        '• Import the new card\'s embedded world book — saves the V2/V3 character_book carried by the imported card as a standalone world book file, and binds it as the primary book. Use this when you want the new card\'s shipped lore verbatim.': '• 匯入新卡自帶的世界書 —— 把新卡片隨附的內建世界書另存為獨立的世界書檔案，並綁定為主世界書。當你希望原汁原味地使用新卡片自帶的設定時選這個。',
+        '• Open editor — opens the iteration studio with a diff of the previous card and book versus the new ones, so the AI can carry your earlier edits forward into the new book. Use this when you have hand-curated additions you want preserved.': '• 開啟編輯器 —— 在迭代工作台中載入新舊角色卡與世界書的差異，讓 AI 把你之前手工加入的內容遷移到新世界書。當你之前有手動修改過的世界書條目想保留時選這個。',
+        '• Skip and keep the previous book bound — re-binds the previously bound book (${0}) to this card and leaves the new card\'s embedded book on the card unused. Use this when you only wanted to refresh the card fields and not touch lore.': '• 跳過並保留原綁定的世界書 —— 把先前綁定的世界書（${0}）重新綁回這張卡片，新卡自帶的內建世界書保留在卡片中但不啟用。當你只想刷新角色卡欄位、不想動世界書時選這個。',
+        'Kept the previous primary world book bound: ${0}': '已保留原主世界書的綁定：${0}',
+        'Just imported this card — review the baseline and suggest tweaks.': '剛匯入了這張角色卡。請先審視卡片目前的基礎設定與世界書條目，然後與我多輪對話、逐步給出改進建議或直接動手編輯。',
+        'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '剛更新了這張角色卡。下方是與上一版的差異——請審閱這些變化，然後給出後續調整建議或直接動手編輯。',
+        'Character card diff (previous → current):': '角色卡差異（舊 → 新）：',
+        'World book diff (previous → current):': '世界書差異（舊 → 新）：',
+        'Primary world book: ${0} → ${1}': '主世界書：${0} → ${1}',
+        'Field changed: ${0}': '欄位變更：${0}',
+        'Field added: ${0}': '新增欄位：${0}',
+        'Field removed: ${0}': '移除欄位：${0}',
+        'Entry added (uid ${0}): ${1}': '新增條目（uid ${0}）：${1}',
+        'Entry removed (uid ${0}): ${1}': '移除條目（uid ${0}）：${1}',
+        'Entry changed (uid ${0}, ${1}): ${2}': '條目變更（uid ${0}，${1}）：${2}',
+        '(no human-readable changes detected)': '（未偵測到可讀差異）',
+        'You are running a post-replace iteration. The user replaced their character card with a new version. Your job is to help the user reconcile the previous version (prev, the one they were actually using) with the new version (next, the one they just imported) — but DO NOT touch the card or world book on this first turn.': '你現在處於「替換角色卡之後」的迭代流程。使用者剛剛把角色卡更新為新版本。你的工作是幫使用者把舊版本（prev，使用者之前一直在用的）和新版本（next，剛匯入的）做調和。但本輪不要動角色卡或世界書。',
+        'Direction convention used throughout this seed message and the diffs below:': '本條訊息及下方差異中使用的方向約定：',
+        '- `prev` / "previous" / 旧 = the version the user was actually using until just now. May contain edits, additions, and refinements the user made by hand.': '- `prev` / "previous" / 舊 = 使用者在替換之前一直在使用的版本，可能包含使用者手工新增、修改、打磨過的內容。',
+        '- `next` / "current" / 新 = the version that was just imported. Treat this as the new baseline.': '- `next` / "current" / 新 = 剛剛匯入的新版本，作為新的基線。',
+        'This first turn — REVIEW ONLY, no tool calls:': '本輪——只做審閱，不呼叫任何工具：',
+        '1. Read the diff below and summarize for the user what actually changed between prev and next (card fields + world book entries).': '1. 閱讀下方差異，向使用者總結 prev 和 next 之間到底發生了什麼變化（角色卡欄位 + 世界書條目）。',
+        '2. Flag specific entries / fields where prev contains user-curated content that next does not have, or has in a regressed form — those are migration candidates.': '2. 標出 prev 中有、next 中缺失或退化的、使用者手工 curate 過的欄位／條目——這些是遷移候選。',
+        '3. Propose a concrete reconciliation plan in plain text: which prev-only items would you migrate into next, which prev-vs-next conflicts you would keep as next, and anything you would leave to the user to decide.': '3. 用純文字給出具體的調和方案：哪些 prev-only 條目你會遷移到 next，哪些 prev-vs-next 衝突你會保留 next，哪些留給使用者決定。',
+        '4. End the turn with a plain text message and NO tool calls. The user will read your summary and either approve the plan, refine it, or ask for specific changes.': '4. 本輪以純文字訊息結束，不呼叫任何工具。使用者會讀你的總結，然後核准方案、調整方案、或要求具體修改。',
+        'Only on subsequent turns — after the user replies — apply the agreed changes with `cea_*` / `worldinfo_*` tools. When you do apply changes, follow the migration policy:': '只在後續輪次——使用者回覆之後——用 `cea_*` / `worldinfo_*` 工具落地已同意的修改。落地時遵守遷移原則：',
+        '- Migrate prev-only curated content into next.': '- 把 prev-only 的 curate 內容遷移到 next。',
+        '- Keep next\'s genuine improvements.': '- 保留 next 帶來的實際改進。',
+        '- On conflicts, prefer next unless prev is obviously hand-curated and richer.': '- 衝突時優先採用 next，除非 prev 明顯是手工打磨過且更豐富的版本。',
+        '- Never dump prev wholesale into next — that defeats the point of accepting a new version.': '- 不要把 prev 整體灌入 next ——那會讓「接受新版本」這件事失去意義。',
         'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示詞預設（參數+提示詞）',
         'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 預設（連線設定）',
         'Plain-text function-call mode': '純文本函數調用模式',
@@ -3663,17 +3703,59 @@ export async function buildPostReplaceSeedMessage(context, detail) {
     }
     const nextBookName = String(nextCharacter?.data?.extensions?.world || '').trim();
     const prevBookName = String(previousLorebookSnapshot?.bookName || previousCharacter?.data?.extensions?.world || '').trim();
+
+    // The new card's authoritative book content is `nextCharacter.data.character_book`
+    // (V2/V3 spec slot). Read it directly via convertCharacterBook so the diff
+    // always compares against what the new card actually carries — independent
+    // of whether the OPEN_EDITOR branch's pre-materialize step ran, whether
+    // the disk file is the same content, or whether `nextBookName` collides
+    // with a different local book the user already had. Fall back to disk
+    // only when the card carries no embedded book (i.e. it ships referring
+    // to a pre-existing local book by name).
     let nextLorebookData = { entries: {} };
-    if (nextBookName) {
+    const embeddedBook = nextCharacter?.data?.character_book;
+    const embeddedHasEntries = embeddedBook
+        && Array.isArray(embeddedBook.entries)
+        && embeddedBook.entries.length > 0;
+    if (embeddedHasEntries && typeof __ctx?.convertCharacterBook === 'function') {
+        try {
+            const converted = __ctx.convertCharacterBook(embeddedBook);
+            if (converted && typeof converted === 'object' && converted.entries) {
+                nextLorebookData = { entries: converted.entries };
+            }
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] convertCharacterBook failed for diff; falling back to disk`, error);
+        }
+    }
+    if (!Object.keys(nextLorebookData.entries).length && nextBookName) {
         try {
             nextLorebookData = await loadLorebookData(context, nextBookName);
         } catch (error) {
             console.warn(`[${MODULE_NAME}] failed to load post-replace lorebook for diff`, error);
         }
     }
+
     const cardLines = summarizeCharacterDiff(previousCharacter, nextCharacter);
     const bookLines = summarizeLorebookDiff(previousLorebookSnapshot, nextLorebookData, prevBookName, nextBookName);
-    const sections = [i18n('Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.')];
+    const sections = [
+        i18n('You are running a post-replace iteration. The user replaced their character card with a new version. Your job is to help the user reconcile the previous version (prev, the one they were actually using) with the new version (next, the one they just imported) — but DO NOT touch the card or world book on this first turn.'),
+        '',
+        i18n('Direction convention used throughout this seed message and the diffs below:'),
+        i18n('- `prev` / "previous" / 旧 = the version the user was actually using until just now. May contain edits, additions, and refinements the user made by hand.'),
+        i18n('- `next` / "current" / 新 = the version that was just imported. Treat this as the new baseline.'),
+        '',
+        i18n('This first turn — REVIEW ONLY, no tool calls:'),
+        i18n('1. Read the diff below and summarize for the user what actually changed between prev and next (card fields + world book entries).'),
+        i18n('2. Flag specific entries / fields where prev contains user-curated content that next does not have, or has in a regressed form — those are migration candidates.'),
+        i18n('3. Propose a concrete reconciliation plan in plain text: which prev-only items would you migrate into next, which prev-vs-next conflicts you would keep as next, and anything you would leave to the user to decide.'),
+        i18n('4. End the turn with a plain text message and NO tool calls. The user will read your summary and either approve the plan, refine it, or ask for specific changes.'),
+        '',
+        i18n('Only on subsequent turns — after the user replies — apply the agreed changes with `cea_*` / `worldinfo_*` tools. When you do apply changes, follow the migration policy:'),
+        i18n('- Migrate prev-only curated content into next.'),
+        i18n('- Keep next\'s genuine improvements.'),
+        i18n('- On conflicts, prefer next unless prev is obviously hand-curated and richer.'),
+        i18n('- Never dump prev wholesale into next — that defeats the point of accepting a new version.'),
+    ];
     if (cardLines.length) {
         sections.push('');
         sections.push(i18n('Character card diff (previous → current):'));
@@ -3691,16 +3773,88 @@ export async function buildPostReplaceSeedMessage(context, detail) {
     return sections.join('\n');
 }
 
-async function confirmOpenCharacterEditorAfterReplace() {
+export const REPLACE_POPUP_CHOICE = Object.freeze({
+    IMPORT_NEW_BOOK: 'import_new_book',
+    OPEN_EDITOR: 'open_editor',
+    KEEP_OLD_BOOK: 'keep_old_book',
+    CANCELLED: 'cancelled',
+});
+
+export const REPLACE_POPUP_RESULT_VALUE = Object.freeze({
+    IMPORT_NEW_BOOK: 1001, // POPUP_RESULT.CUSTOM1
+    OPEN_EDITOR: 1002,     // POPUP_RESULT.CUSTOM2
+    KEEP_OLD_BOOK: 1003,   // POPUP_RESULT.CUSTOM3
+});
+
+/**
+ * Post-replace confirm popup. Surfaces up to three choices, each one a
+ * concrete next-step the user actually wants after dropping a new card
+ * onto an existing one:
+ *
+ *   - import_new_book — import the new card's embedded character_book as a
+ *     standalone world book and bind it (hidden when the new card carries
+ *     no embedded book).
+ *   - open_editor — open the iter studio with the prev/next diff seed so
+ *     the AI can carry forward edits from the old book into the new one.
+ *   - keep_old_book — re-bind the previous primary book to the replaced
+ *     card (hidden when there was no prior binding) so the user does not
+ *     silently lose a hand-curated world.
+ *
+ * Returns a REPLACE_POPUP_CHOICE constant. Cancelled (Esc, click-outside)
+ * returns CANCELLED so the caller does nothing — never confuse cancel
+ * with skip-and-rebind.
+ */
+async function promptReplaceOutcomeChoice({ hasNewEmbeddedBook, previousBookName, previousBookExists }) {
+    const buttons = [];
+    if (hasNewEmbeddedBook) {
+        buttons.push({
+            text: i18n('Import the new card\'s embedded world book'),
+            result: REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK,
+            classes: ['popup-button-ok'],
+        });
+    }
+    buttons.push({
+        text: i18n('Open editor: let AI iterate old book into new'),
+        result: REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR,
+        classes: ['popup-button-ok'],
+    });
+    if (previousBookName && previousBookExists) {
+        buttons.push({
+            text: i18nFormat('Skip and keep the previous book bound (${0})', previousBookName),
+            result: REPLACE_POPUP_RESULT_VALUE.KEEP_OLD_BOOK,
+            classes: [],
+        });
+    }
+    const bodyLines = [
+        i18n('You just replaced or updated this character card. Choose what to do with its world book:'),
+        '',
+    ];
+    if (hasNewEmbeddedBook) {
+        bodyLines.push(i18n('• Import the new card\'s embedded world book — saves the V2/V3 character_book carried by the imported card as a standalone world book file, and binds it as the primary book. Use this when you want the new card\'s shipped lore verbatim.'));
+    }
+    bodyLines.push(i18n('• Open editor — opens the iteration studio with a diff of the previous card and book versus the new ones, so the AI can carry your earlier edits forward into the new book. Use this when you have hand-curated additions you want preserved.'));
+    if (previousBookName && previousBookExists) {
+        bodyLines.push(i18nFormat('• Skip and keep the previous book bound — re-binds the previously bound book (${0}) to this card and leaves the new card\'s embedded book on the card unused. Use this when you only wanted to refresh the card fields and not touch lore.', previousBookName));
+    }
+    const html = DOMPurify.sanitize(bodyLines.map(line => line === '' ? '<br/>' : `<div>${escapeHtml(line)}</div>`).join(''));
+
     const result = await Popup.show.confirm(
-        i18n('Open the character editor?'),
-        i18n('You just replaced or updated a character card. Open the editor to iterate on the card and its world book with the AI, or skip and keep the imported card as-is.'),
+        i18n('Replace lorebook: what should happen to the world book?'),
+        html,
         {
-            okButton: i18n('Open editor'),
-            cancelButton: i18n('Skip'),
+            okButton: false,
+            cancelButton: i18n('Cancel'),
+            customButtons: buttons,
+            defaultResult: hasNewEmbeddedBook
+                ? REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK
+                : REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR,
         },
     );
-    return result === __ctx.POPUP_RESULT.AFFIRMATIVE;
+
+    if (result === REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK) return REPLACE_POPUP_CHOICE.IMPORT_NEW_BOOK;
+    if (result === REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR) return REPLACE_POPUP_CHOICE.OPEN_EDITOR;
+    if (result === REPLACE_POPUP_RESULT_VALUE.KEEP_OLD_BOOK) return REPLACE_POPUP_CHOICE.KEEP_OLD_BOOK;
+    return REPLACE_POPUP_CHOICE.CANCELLED;
 }
 
 async function openCharacterEditorPopup(context = getContext(), opts = {}) {
@@ -4590,22 +4744,216 @@ jQuery(async () => {
             return;
         }
         try {
-            const shouldOpen = await confirmOpenCharacterEditorAfterReplace();
-            if (!shouldOpen) {
-                return;
-            }
-            const seedSystemMessage = await buildPostReplaceSeedMessage(getContext(), detail);
-            await openCharacterEditorPopup(getContext(), {
-                avatar,
-                seedSystemMessage,
-                autoSend: true,
-            });
+            await handlePostReplaceWorldBookChoice(detail, avatar);
         } catch (error) {
             console.warn(`[${MODULE_NAME}] Character editor iteration failed`, error);
             notifyError(String(error?.message || error));
         }
     });
 });
+
+async function handlePostReplaceWorldBookChoice(detail, avatar) {
+    const context = getContext();
+    const nextCharacter = detail.character && typeof detail.character === 'object' ? detail.character : null;
+    const previousLorebookSnapshot = detail.previousLorebookSnapshot && typeof detail.previousLorebookSnapshot === 'object'
+        ? detail.previousLorebookSnapshot
+        : null;
+    const previousBookName = String(previousLorebookSnapshot?.bookName || detail.previousCharacter?.data?.extensions?.world || '').trim();
+    const previousBookExists = previousBookName ? worldBookExists(context, previousBookName) : false;
+    const hasNewEmbeddedBook = Boolean(nextCharacter?.data?.character_book
+        && Array.isArray(nextCharacter.data.character_book.entries)
+        && nextCharacter.data.character_book.entries.length > 0);
+
+    // The replace flow triggers `select_selected_character` -> `checkEmbeddedWorld`
+    // which shows ST's legacy "import embedded world book?" popup whenever
+    // the new card carries `data.character_book` AND the previous card
+    // didn't (so the per-avatar `AlertWI_*` key was never set). That
+    // legacy popup is a strict subset of CEA's three-choice popup —
+    // showing both at once stacks dialogs and confuses the user. Mark
+    // the per-avatar key now to suppress any future fire of the legacy
+    // popup for this avatar, and dismiss any legacy popup currently on
+    // screen by cancelling its underlying confirm. CEA's popup is
+    // strictly more capable.
+    suppressLegacyEmbeddedWorldPopup(avatar);
+
+    const choice = await promptReplaceOutcomeChoice({ hasNewEmbeddedBook, previousBookName, previousBookExists });
+
+    if (choice === REPLACE_POPUP_CHOICE.CANCELLED) {
+        return;
+    }
+
+    if (choice === REPLACE_POPUP_CHOICE.KEEP_OLD_BOOK) {
+        if (!previousBookName) return;
+        await rebindPreviousPrimaryBook(context, avatar, previousBookName);
+        notifySuccess(i18nFormat('Kept the previous primary world book bound: ${0}', previousBookName));
+        return;
+    }
+
+    if (choice === REPLACE_POPUP_CHOICE.IMPORT_NEW_BOOK) {
+        if (!hasNewEmbeddedBook) return;
+        await importEmbeddedBookForAvatar(context, avatar);
+        return;
+    }
+
+    // OPEN_EDITOR — materialize the new card's embedded book FIRST so the
+    // diff the AI sees compares the real prev book entries against the
+    // real new book entries. Without this, `nextBookName` resolves to a
+    // book file that doesn't exist yet on disk and `loadLorebookData`
+    // returns `{ entries: {} }` — the diff degenerates into "every prev
+    // entry is Removed, no entries Added", and the AI ends up reading
+    // "the new world book is empty, all your old lore is gone" instead
+    // of "here are the additions / removals between the two versions".
+    //
+    // Skip the import only when (a) the new card carries no embedded
+    // book at all, (b) the new card's bookName equals the previous
+    // bookName (importing would overwrite the previous book the user
+    // may still want to keep), or (c) the new card's bookName already
+    // exists locally as a different book the user manages — overwriting
+    // a third-party book the user owns would be data loss.
+    const newEmbeddedBookName = String(nextCharacter?.data?.character_book?.name || '').trim();
+    const newBindingTarget = String(nextCharacter?.data?.extensions?.world || '').trim();
+    const effectiveNewBookName = newEmbeddedBookName || newBindingTarget;
+    const shouldMaterializeNewBook = hasNewEmbeddedBook
+        && effectiveNewBookName
+        && effectiveNewBookName !== previousBookName
+        && !worldBookExists(context, effectiveNewBookName);
+    if (shouldMaterializeNewBook) {
+        try {
+            await importEmbeddedBookForAvatar(context, avatar);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] OPEN_EDITOR: failed to materialize new card's embedded book before diff`, error);
+            // Fall through — we still want the AI session to open. The
+            // diff will be degraded but the user can still iterate manually.
+        }
+    }
+
+    const seedSystemMessage = await buildPostReplaceSeedMessage(context, detail);
+    await openCharacterEditorPopup(context, {
+        avatar,
+        seedSystemMessage,
+        autoSend: true,
+    });
+}
+
+function suppressLegacyEmbeddedWorldPopup(avatar) {
+    const trimmed = String(avatar || '').trim();
+    if (!trimmed) return;
+    // ST's `checkEmbeddedWorld` gates its popup on `accountStorage.getItem('AlertWI_' + avatar)`.
+    // Stamp the key so any future call short-circuits before opening the
+    // legacy dialog (matches what the legacy popup itself does on first
+    // show — we're just doing it earlier and from the replace path).
+    try {
+        const storage = __ctx?.accountStorage;
+        if (storage && typeof storage.setItem === 'function') {
+            storage.setItem(`AlertWI_${trimmed}`, 'true');
+        }
+    } catch { /* best-effort */ }
+    // The legacy popup may have already opened (`select_selected_character`
+    // runs synchronously inside the replace-flow's selectImportedChar
+    // earlier than CHARACTER_REPLACED fires). Walk the open popup list
+    // and cancel any dialog whose body matches the legacy embedded-world
+    // copy. Matches both default English and the Chinese fallbacks ST
+    // ships with so localized installs still get the dismiss.
+    try {
+        const dialogs = document.querySelectorAll('dialog.popup[open]');
+        dialogs.forEach(dlg => {
+            const body = dlg.querySelector('.popup-body, .popup-content');
+            const text = String(body?.textContent || '');
+            if (!text) return;
+            if (/embedded World\/Lorebook|内置的世界书\/Lorebook|內嵌的世界書\/Lorebook/i.test(text)) {
+                const cancelBtn = dlg.querySelector('.popup-button-cancel');
+                const closeBtn = dlg.querySelector('.popup-button-close');
+                if (cancelBtn instanceof HTMLElement) cancelBtn.click();
+                else if (closeBtn instanceof HTMLElement) closeBtn.click();
+            }
+        });
+    } catch { /* best-effort */ }
+}
+
+function worldBookExists(context, name) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return false;
+    // Prefer the live-array reader on getContext().
+    if (typeof context?.getWorldInfoNames === 'function') {
+        try {
+            const names = context.getWorldInfoNames();
+            if (Array.isArray(names) && names.some(n => String(n || '').trim() === trimmed)) {
+                return true;
+            }
+        } catch { /* fall through */ }
+    }
+    if (typeof __ctx?.getWorldInfoNames === 'function') {
+        try {
+            const names = __ctx.getWorldInfoNames();
+            if (Array.isArray(names) && names.some(n => String(n || '').trim() === trimmed)) {
+                return true;
+            }
+        } catch { /* fall through */ }
+    }
+    return false;
+}
+
+async function rebindPreviousPrimaryBook(context, avatar, previousBookName) {
+    if (typeof __ctx.charUpdatePrimaryWorld !== 'function') {
+        throw new Error('rebindPreviousPrimaryBook: charUpdatePrimaryWorld is unavailable');
+    }
+    // charUpdatePrimaryWorld reads `this_chid` from the script.js module
+    // scope, not from a parameter. The replaced character was just
+    // selected by the import flow (`selectImportedChar` →
+    // `select_selected_character`), so this_chid points at it by the
+    // time CHARACTER_REPLACED fires. Still — double-check the visible
+    // edit panel reflects the right card before writing, otherwise we
+    // could persist the binding onto the wrong character.
+    const characters = Array.isArray(context?.characters) ? context.characters : (Array.isArray(__ctx.characters) ? __ctx.characters : []);
+    const chid = characters.findIndex(c => String(c?.avatar || '').trim() === avatar);
+    if (chid < 0) {
+        throw new Error('rebindPreviousPrimaryBook: replaced character not found in characters list');
+    }
+    const editPanelChid = jQuery('#set_character_world').data('chid');
+    if (editPanelChid !== chid && typeof __ctx.selectCharacterById === 'function') {
+        try { await __ctx.selectCharacterById(chid); } catch { /* best-effort — fall through */ }
+    }
+    await __ctx.charUpdatePrimaryWorld(previousBookName);
+    // Mirror the UI gesture so the visible #character_world select picks
+    // up the value (the writeExtensionField path persists the binding,
+    // but it does not touch the visible dropdown).
+    jQuery('#character_world').val(previousBookName).trigger('change');
+    if (typeof __ctx.worldInfoEntry?.setButtonClass === 'function') {
+        __ctx.worldInfoEntry.setButtonClass(chid, true);
+    }
+}
+
+async function importEmbeddedBookForAvatar(context, avatar) {
+    const characters = Array.isArray(context?.characters) ? context.characters : (Array.isArray(__ctx.characters) ? __ctx.characters : []);
+    const chid = characters.findIndex(c => String(c?.avatar || '').trim() === avatar);
+    if (chid < 0) {
+        throw new Error('importEmbeddedBookForAvatar: replaced character not found in characters list');
+    }
+    // Make sure the chid the import dialog reads from points at the
+    // replaced character. After a replace, `select_selected_character`
+    // already called `checkEmbeddedWorld(chid)` which set this — but
+    // the per-avatar "AlertWI_*" gate may have suppressed the legacy
+    // popup, leaving the visible `#import_character_info` hidden. We
+    // re-arm it here so `importEmbeddedWorldInfo` can find the chid.
+    jQuery('#import_character_info').data('chid', chid).show();
+    if (typeof __ctx.importEmbeddedWorldInfo !== 'function') {
+        throw new Error('importEmbeddedBookForAvatar: importEmbeddedWorldInfo is unavailable');
+    }
+    await __ctx.importEmbeddedWorldInfo(true);
+    // `importEmbeddedWorldInfo` saves the world book file and updates
+    // the visible select, but it does NOT persist
+    // `data.extensions.world` to the character file (the More-menu
+    // caller does that via `saveCharacterDebounced` after the await).
+    // Mirror that here so the binding survives a reload.
+    const bookName = String(characters[chid]?.data?.character_book?.name || `${characters[chid]?.name}'s Lorebook`).trim();
+    if (bookName && typeof __ctx.charUpdatePrimaryWorld === 'function') {
+        const editPanelChid = jQuery('#set_character_world').data('chid');
+        if (editPanelChid !== chid && typeof __ctx.selectCharacterById === 'function') {
+            try { await __ctx.selectCharacterById(chid); } catch { /* best-effort */ }
+        }
+        await __ctx.charUpdatePrimaryWorld(bookName);
+    }
+}
 
 // Lorebook read/write tools used to be exposed here for orchestrator
 // iter-studio and memory-graph schema iter-studio. Those popups now

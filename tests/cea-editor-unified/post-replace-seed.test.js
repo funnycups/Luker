@@ -245,7 +245,7 @@ describe('buildPostReplaceSeedMessage', () => {
         };
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
         expect(seed).toContain('Just imported this card');
-        expect(seed).not.toContain('Diff vs the previous version');
+        expect(seed).not.toContain('post-replace iteration');
     });
 
     test('builds a multi-section diff seed when both prev and next are present', async () => {
@@ -274,14 +274,31 @@ describe('buildPostReplaceSeedMessage', () => {
             },
         };
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
-        expect(seed).toContain('Diff vs the previous version');
+        // Migration intent + direction convention is the new framing.
+        expect(seed).toContain('post-replace iteration');
+        expect(seed).toContain('REVIEW ONLY');
+        expect(seed).toContain('Direction convention');
         expect(seed).toContain('Character card diff');
         expect(seed).toContain('Field changed: `description`');
-        expect(seed).toContain('`Old description`');
-        expect(seed).toContain('`New description`');
         expect(seed).toContain('World book diff');
-        expect(seed).toContain('`OldBook`');
-        expect(seed).toContain('`NewBook`');
+        // Direction is hard-baked: prev: <old>, next: <new>.
+        // If this ever flips, the AI will migrate the wrong direction.
+        const prevLine = seed.split('\n').find(line => line.trim().startsWith('- prev:'));
+        const nextLine = seed.split('\n').find(line => line.trim().startsWith('- next:'));
+        expect(prevLine).toBeTruthy();
+        expect(nextLine).toBeTruthy();
+        expect(prevLine).toContain('Old description');
+        expect(prevLine).not.toContain('New description');
+        expect(nextLine).toContain('New description');
+        expect(nextLine).not.toContain('Old description');
+        // Book rename also fixed: OldBook → NewBook (NOT the reverse).
+        const renameLine = seed.split('\n').find(line => line.includes('Primary world book'));
+        expect(renameLine).toBeTruthy();
+        const oldIdx = renameLine.indexOf('OldBook');
+        const newIdx = renameLine.indexOf('NewBook');
+        expect(oldIdx).toBeGreaterThanOrEqual(0);
+        expect(newIdx).toBeGreaterThanOrEqual(0);
+        expect(oldIdx).toBeLessThan(newIdx);
     });
 
     test('reports "no human-readable changes" when prev and next are identical', async () => {
@@ -302,5 +319,146 @@ describe('buildPostReplaceSeedMessage', () => {
         };
         const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
         expect(seed).toContain('no human-readable changes detected');
+    });
+
+    test('REGRESSION: diff direction does not flip when prev and next are swapped at the call site', () => {
+        // If someone refactors buildPostReplaceSeedMessage and accidentally
+        // calls summarizeCharacterDiff(nextCharacter, previousCharacter) with
+        // the arguments swapped, the AI would migrate in the wrong direction
+        // (treat new official content as "user customization" and overwrite
+        // it with the prev/legacy state). Lock the direction with a direct
+        // call to summarizeCharacterDiff against both orderings.
+        const prev = { description: 'OLD_VALUE_PREV' };
+        const next = { description: 'NEW_VALUE_NEXT' };
+
+        const linesCorrect = CEA.summarizeCharacterDiff(prev, next).join('\n');
+        const prevLineCorrect = linesCorrect.split('\n').find(l => l.trim().startsWith('- prev:'));
+        const nextLineCorrect = linesCorrect.split('\n').find(l => l.trim().startsWith('- next:'));
+        expect(prevLineCorrect).toContain('OLD_VALUE_PREV');
+        expect(nextLineCorrect).toContain('NEW_VALUE_NEXT');
+
+        // And the opposite ordering MUST give the opposite labels —
+        // proving the labels track the parameter positions, not a hardcoded
+        // string match on the values.
+        const linesFlipped = CEA.summarizeCharacterDiff(next, prev).join('\n');
+        const prevLineFlipped = linesFlipped.split('\n').find(l => l.trim().startsWith('- prev:'));
+        const nextLineFlipped = linesFlipped.split('\n').find(l => l.trim().startsWith('- next:'));
+        expect(prevLineFlipped).toContain('NEW_VALUE_NEXT');
+        expect(nextLineFlipped).toContain('OLD_VALUE_PREV');
+    });
+
+    test('REGRESSION: lorebook diff labels removed entries as prev and added entries as next', () => {
+        // Same hazard for lorebook diff. If swap happens, "added" and
+        // "removed" semantics flip, AI deletes the user's curated entries
+        // thinking they were added in next.
+        const prevSnap = {
+            bookName: 'B',
+            entries: {
+                1: { uid: 1, content: 'only_in_prev', comment: 'prev_only' },
+            },
+        };
+        const nextData = {
+            entries: {
+                2: { uid: 2, content: 'only_in_next', comment: 'next_only' },
+            },
+        };
+        const lines = CEA.summarizeLorebookDiff(prevSnap, nextData, 'B', 'B').join('\n');
+        // uid 1 is only in prev → should be tagged "removed", labeled with prev's comment.
+        expect(lines).toMatch(/Entry removed \(uid 1\).*prev_only/);
+        // uid 2 is only in next → should be tagged "added", labeled with next's comment.
+        expect(lines).toMatch(/Entry added \(uid 2\).*next_only/);
+        // Cross-check: NEVER the reverse.
+        expect(lines).not.toMatch(/Entry added \(uid 1\)/);
+        expect(lines).not.toMatch(/Entry removed \(uid 2\)/);
+    });
+
+    test('REGRESSION: when nextCharacter carries data.character_book, the diff reads from it via convertCharacterBook (not from disk)', async () => {
+        // Without this path the post-replace diff for the OPEN_EDITOR
+        // branch degenerates to "every prev entry Removed, no Added"
+        // whenever the new card's bookName hasn't been materialized to
+        // disk yet — exactly the degenerate state we just fixed.
+        //
+        // Reach into the live import-time __ctx capture in main.js by
+        // overriding globalThis.Luker.getContext().convertCharacterBook.
+        // The main.js module already imported __ctx at top of file, so
+        // we override the stub at call time by replacing the proxy with
+        // an object that exposes a real implementation. The
+        // `embeddedHasEntries && convertCharacterBook` branch fires
+        // when convertCharacterBook is `typeof === 'function'`.
+        const realConvert = (book) => ({
+            entries: Object.fromEntries(
+                book.entries.map((e, i) => [String(i), { uid: i, content: e.content, comment: e.keys?.[0] || '' }]),
+            ),
+        });
+        const prevCtx = globalThis.Luker;
+        globalThis.Luker = {
+            getContext: () => ({ convertCharacterBook: realConvert }),
+        };
+        try {
+            // loadWorldInfo is mocked to throw — proves we did NOT fall back to disk.
+            const context = { loadWorldInfo: async () => { throw new Error('disk path must not be reached when embedded book is present'); } };
+            const detail = {
+                character: {
+                    avatar: 'a.png', name: 'Alice',
+                    description: 'new',
+                    data: {
+                        extensions: { world: 'NewBook' },
+                        character_book: {
+                            name: 'NewBook',
+                            entries: [
+                                { keys: ['new_only'], content: 'fresh content', extensions: {}, enabled: true, insertion_order: 0 },
+                            ],
+                        },
+                    },
+                },
+                previousCharacter: {
+                    avatar: 'a.png', name: 'Alice',
+                    description: 'old',
+                    data: { extensions: { world: 'OldBook' } },
+                },
+                previousLorebookSnapshot: {
+                    bookName: 'OldBook',
+                    entries: { 1: { uid: 1, content: 'old content', comment: 'old_only' } },
+                },
+            };
+            const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
+            // The seed must mention BOTH:
+            //  - that we are running the review/migration flow
+            expect(seed).toContain('post-replace iteration');
+            //  - the book rename (OldBook → NewBook)
+            expect(seed).toMatch(/Primary world book.*OldBook.*→.*NewBook/);
+            // Card-field diff for description (prev=old, next=new).
+            expect(seed).toContain('Field changed: `description`');
+            const prevLine = seed.split('\n').find(l => l.trim().startsWith('- prev:'));
+            const nextLine = seed.split('\n').find(l => l.trim().startsWith('- next:'));
+            expect(prevLine).toContain('old');
+            expect(nextLine).toContain('new');
+        } finally {
+            globalThis.Luker = prevCtx;
+        }
+    });
+
+    test('seed asks AI to review + summarize first (no tool calls on turn 1) — not to start editing immediately', async () => {
+        // UX requirement: on the first turn the AI must produce a plain-text
+        // summary + reconciliation plan. Editing happens only on subsequent
+        // turns after the user has reviewed.
+        const context = { loadWorldInfo: async () => ({ entries: {} }) };
+        const detail = {
+            character: { avatar: 'a.png', name: 'A', description: 'x', data: { extensions: { world: 'B' } } },
+            previousCharacter: { avatar: 'a.png', name: 'A', description: 'y', data: { extensions: { world: 'B' } } },
+            previousLorebookSnapshot: { bookName: 'B', entries: {} },
+        };
+        const seed = await CEA.buildPostReplaceSeedMessage(context, detail);
+        // Must explicitly forbid tool calls on the first turn.
+        expect(seed).toContain('REVIEW ONLY');
+        expect(seed).toContain('NO tool calls');
+        // Must describe the expected first-turn deliverables.
+        expect(seed).toMatch(/summarize for the user/);
+        expect(seed).toMatch(/reconciliation plan/);
+        // Tool use is only for "subsequent turns".
+        expect(seed).toMatch(/subsequent turns/);
+        // Migration direction policy is present so the AI knows what
+        // "apply" means when the user does approve.
+        expect(seed).toContain('Migrate prev-only curated content into next');
     });
 });
