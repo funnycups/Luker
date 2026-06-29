@@ -229,9 +229,17 @@ export function createFloorStateWithDeps(options, deps) {
 
     /**
      * Read and normalize the private commit log.
+     *
+     * `runtime.getChatState` returns an envelope `{ok, state, reason, hint}`;
+     * feeding the envelope into `normalizeLog` would lose every commit (no
+     * `commits` array on the envelope itself), so unwrap to the raw payload.
+     * A failed read collapses to "no log on disk yet" — same as a fresh
+     * namespace — so replay falls through to `state:null` and write paths
+     * proceed normally without touching disk.
      */
     async function readLog() {
-        const raw = await runtime.getChatState(logNamespace);
+        const result = await runtime.getChatState(logNamespace);
+        const raw = result?.ok ? result.state : null;
         return normalizeLog(raw);
     }
 
@@ -377,7 +385,8 @@ export function createFloorStateWithDeps(options, deps) {
         if (!targetTarget || typeof targetTarget !== 'object') return;
         if (!Number.isInteger(mesId) || mesId < 0) return;
         try {
-            const raw = await runtime.getChatState(logNamespace, { target: sourceTarget });
+            const sourceResult = await runtime.getChatState(logNamespace, { target: sourceTarget });
+            const raw = sourceResult?.ok ? sourceResult.state : null;
             const sourceLog = normalizeLog(raw);
             const survivors = truncateCommits(sourceLog.commits, mesId + 1);
             if (survivors.length === 0) return;

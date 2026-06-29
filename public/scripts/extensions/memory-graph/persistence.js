@@ -123,11 +123,18 @@ export function resetFloorStateInstanceForTesting() {
 
 /**
  * Read the metadata sidecar (`<ns>__meta`). May return `null` when the
- * sidecar has never been written for this chat.
+ * sidecar has never been written for this chat OR when the read failed —
+ * callers treat both the same (no cached meta, derive from store).
+ *
+ * Unwraps the state-API envelope here so the returned value is the raw
+ * meta object (or null), matching the contract this function has always
+ * had — leaking the envelope poisons every consumer that spreads or
+ * indexes the result.
  */
 export async function loadMetaFields(context, target = undefined) {
     const options = target ? { target } : undefined;
-    return await context.getChatState(META_NAMESPACE, options);
+    const result = await context.getChatState(META_NAMESPACE, options);
+    return result?.ok ? result.state : null;
 }
 
 /**
