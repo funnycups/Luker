@@ -9,21 +9,24 @@
  * preset-level content (NSFW prompt, jailbreak, custom prompt_order,
  * etc.). This module owns that swap.
  *
- * Earlier revisions did in-place key replacement on `oai_settings` and
- * relied on three events (GENERATE_TAKEOVER_DISPATCH head,
- * GENERATION_ENDED, GENERATION_STOPPED) to restore the original keys.
- * If all three were missed, `oai_settings.prompts` / `prompt_order`
- * stayed pinned to the pure body. ST's `hasUnsavedOpenAIPresetChanges`
- * then reported the dirty `oai_settings` as "unsaved changes" against
- * the clean cache; the user clicked Save, and the pure body was
- * persisted to the original preset's disk file. Data loss.
+ * The swap routes through a registered synthetic preset
+ * (`orchestrator:director-pure`), not in-place key replacement on
+ * oai_settings. Apply and restore both delegate to
+ * `ctx.openai.applyByName(name)` so the swap goes through the same
+ * `onSettingsPresetChange` code path that runs when the user manually
+ * picks a preset from the dropdown — that path only touches keys listed
+ * in `settingsToUpdate`, leaving settings-only state (e.g. the
+ * `bias_presets` dictionary, in-memory UI flags) untouched. The earlier
+ * hand-rolled `delete + Object.assign` restore wiped any key that the
+ * user's preset body did not contain, which destroyed `bias_presets` on
+ * every director turn and produced
+ * `Cannot read properties of undefined (reading 'Default (none)')`
+ * the next time a sub-agent dispatched with
+ * `chat_completion_source: openai`.
  *
- * The new design registers `orchestrator:director-pure` as a session-
- * only synthetic Chat-Completion preset (cache + dropdown option, no
- * disk persistence) and routes the swap through it. Even if restore
- * leaks, the active preset name is now the synthetic one, so ST's
- * unsaved-changes detector cannot diff against the user's original
- * and cannot offer to overwrite it.
+ * Even if restore leaks, the active preset name during the swap is the
+ * synthetic one, so ST's unsaved-changes detector cannot diff against
+ * the user's original and cannot offer to overwrite it.
  *
  * An additional guard at the apply entry: if the active preset has
  * unsaved changes when director is about to run, prompt the user
@@ -40,20 +43,6 @@ function cloneForSettings(value) {
         return structuredClone(value);
     } catch (_) {
         return JSON.parse(JSON.stringify(value));
-    }
-}
-
-function getSelectElement() {
-    if (typeof document === 'undefined') return null;
-    return document.getElementById('settings_preset_openai');
-}
-
-function selectOptionByValue(value) {
-    const select = getSelectElement();
-    if (!select) return;
-    const target = String(value);
-    for (const option of select.options) {
-        option.selected = option.value === target;
     }
 }
 
@@ -81,16 +70,18 @@ export function ensureDirectorPureSyntheticPreset(ctx) {
     settings.push(bodyClone);
     const idx = settings.length - 1;
     settingNames[DIRECTOR_PURE_PRESET_NAME] = idx;
-    const select = getSelectElement();
-    if (select && typeof document !== 'undefined') {
-        const existing = Array.from(select.options).find(opt => opt.innerText === DIRECTOR_PURE_PRESET_NAME);
-        if (!existing) {
-            const option = document.createElement('option');
-            option.value = String(idx);
-            option.innerText = DIRECTOR_PURE_PRESET_NAME;
-            select.appendChild(option);
-        } else {
-            existing.value = String(idx);
+    if (typeof document !== 'undefined') {
+        const select = document.getElementById('settings_preset_openai');
+        if (select) {
+            const existing = Array.from(select.options).find(opt => opt.innerText === DIRECTOR_PURE_PRESET_NAME);
+            if (!existing) {
+                const option = document.createElement('option');
+                option.value = String(idx);
+                option.innerText = DIRECTOR_PURE_PRESET_NAME;
+                select.appendChild(option);
+            } else {
+                existing.value = String(idx);
+            }
         }
     }
 }
@@ -108,14 +99,16 @@ export async function applyDirectorPresetSwap(ctx) {
     }
 
     const oaiSettings = ctx?.chatCompletionSettings;
-    const settings = ctx?.openai?.settings;
     const settingNames = ctx?.openai?.settingNames;
-    if (!oaiSettings || !Array.isArray(settings) || !settingNames) {
+    const applyByName = ctx?.openai?.applyByName;
+    if (!oaiSettings || !settingNames || typeof applyByName !== 'function') {
         throw new Error('[orchestrator] cannot apply preset swap: openai context missing');
+    }
+    if (!Number.isInteger(settingNames[DIRECTOR_PURE_PRESET_NAME])) {
+        throw new Error('[orchestrator] synthetic preset not registered; call ensureDirectorPureSyntheticPreset at init');
     }
 
     const activeName = oaiSettings.preset_settings_openai;
-    const activeIdx = settingNames[activeName];
 
     if (typeof ctx?.openai?.hasUnsavedChanges === 'function' && ctx.openai.hasUnsavedChanges(activeName)) {
         const result = await ctx.callGenericPopup(
@@ -143,77 +136,32 @@ export async function applyDirectorPresetSwap(ctx) {
         if (result === ctx.POPUP_RESULT.AFFIRMATIVE) {
             await ctx.openai.savePreset(activeName, oaiSettings, false);
         }
-        // POPUP_RESULT.NEGATIVE → Discard: fall through; swap below
-        // overwrites the dirty oai_settings, and cache (clean disk
-        // copy) backs the restore later.
+        // POPUP_RESULT.NEGATIVE → Discard: fall through; the swap below
+        // overwrites the dirty oai_settings via applyByName, and the
+        // cache (clean disk copy) backs the restore later.
     }
 
-    const pureIdx = settingNames[DIRECTOR_PURE_PRESET_NAME];
-    if (!Number.isInteger(pureIdx)) {
-        throw new Error('[orchestrator] synthetic preset not registered; call ensureDirectorPureSyntheticPreset at init');
-    }
-
-    const bodyClone = cloneForSettings(DIRECTOR_PURE_PRESET_BODY);
-    for (const key of Object.keys(bodyClone)) {
-        oaiSettings[key] = bodyClone[key];
-    }
-    oaiSettings.preset_settings_openai = DIRECTOR_PURE_PRESET_NAME;
-    selectOptionByValue(pureIdx);
-
-    pendingPresetSnapshot = { activeName, activeIdx };
+    applyByName(DIRECTOR_PURE_PRESET_NAME, { forceChange: true });
+    pendingPresetSnapshot = { activeName };
 }
 
 /**
- * Restore the original preset by copying its cached body back into
- * `oai_settings`. Idempotent — no-op when no swap is pending. Safe to
- * call from multiple unrelated event hooks.
- *
- * Reads from `openai_settings[idx]` cache rather than a frozen
- * snapshot so that any user "Save and continue" choice during the
- * unsaved-changes guard is preserved at restore time.
+ * Restore the original preset by delegating to the core's
+ * `applyPresetByName`. Idempotent — no-op when no swap is pending. Safe
+ * to call from multiple unrelated event hooks.
  */
 export function restoreDirectorPresetSwap(ctx) {
     if (pendingPresetSnapshot === null) return;
-    const { activeName, activeIdx } = pendingPresetSnapshot;
+    const { activeName } = pendingPresetSnapshot;
     pendingPresetSnapshot = null;
 
-    const oaiSettings = ctx?.chatCompletionSettings;
-    const settings = ctx?.openai?.settings;
-    const settingNames = ctx?.openai?.settingNames;
-    if (!oaiSettings || !Array.isArray(settings) || !settingNames) {
-        console.warn('[orchestrator] cannot restore preset swap: openai context missing');
+    const applyByName = ctx?.openai?.applyByName;
+    if (typeof applyByName !== 'function') {
+        console.warn('[orchestrator] cannot restore preset swap: ctx.openai.applyByName missing');
         return;
     }
 
-    const resolvedIdx = Number.isInteger(settingNames[activeName])
-        ? settingNames[activeName]
-        : activeIdx;
-    const origBody = Number.isInteger(resolvedIdx) ? settings[resolvedIdx] : null;
-
-    if (!origBody || typeof origBody !== 'object') {
-        console.warn(`[orchestrator] cannot restore preset "${activeName}": cache entry missing. Resetting active preset name only.`);
-        oaiSettings.preset_settings_openai = activeName;
-        return;
-    }
-
-    const orig = cloneForSettings(origBody);
-    for (const key of Object.keys(oaiSettings)) {
-        if (!Object.prototype.hasOwnProperty.call(orig, key) && key !== 'preset_settings_openai') {
-            try { delete oaiSettings[key]; } catch (_) { /* best-effort */ }
-        }
-    }
-    Object.assign(oaiSettings, orig);
-    oaiSettings.preset_settings_openai = activeName;
-
-    if (Number.isInteger(resolvedIdx)) {
-        selectOptionByValue(resolvedIdx);
-    }
-
-    try {
-        ctx?.openai?.promptManager?.render?.(false);
-    } catch (err) {
-        console.warn('[orchestrator] promptManager render after restore failed:', err);
-    }
+    applyByName(activeName, { forceChange: true });
 }
 
 // Test-only: reset module state between unit tests.

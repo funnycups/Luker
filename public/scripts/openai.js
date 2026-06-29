@@ -5933,7 +5933,7 @@ async function syncCharacterBoundPresetJsonData(characterId, boundPreset) {
     }
 }
 
-function applyPresetByName(presetName, { forceChange = false } = {}) {
+export function applyPresetByName(presetName, { forceChange = false } = {}) {
     const target = findCanonicalNameInList(Object.keys(openai_setting_names || {}), presetName) || String(presetName ?? '').trim();
     if (!target) {
         return false;
