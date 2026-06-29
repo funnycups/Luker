@@ -512,6 +512,59 @@ export function createBus(opts = {}) {
         return { results };
     }
 
+    /**
+     * Roll back every committed entry whose sourceCallId belongs to ANY of
+     * the supplied messages. Used by `regenerateFromMessage` to undo the
+     * disk effects of assistant turns about to be truncated from the chat.
+     *
+     * Walks the union message list, gathers committed entries, sorts by
+     * committedAt desc so dependent later commits unwind before earlier
+     * ones, then rollbacks in sequence. Stops at the first failure so the
+     * caller can surface "regenerate aborted — these commits could not be
+     * unwound" rather than partially-rewinding into an inconsistent state.
+     *
+     * Returns `{results, ok, failedAt}`: `ok` is true iff every rollback
+     * succeeded; `failedAt` carries the failing entry id (and its result)
+     * when not ok so the caller can compose a precise toast.
+     */
+    async function rollbackAllInMessages(messages, ctx) {
+        const callIds = new Set();
+        for (const m of Array.isArray(messages) ? messages : []) {
+            for (const id of callIdSetFromMessage(m)) callIds.add(id);
+        }
+        if (callIds.size === 0) {
+            return { results: [], ok: true, failedAt: null };
+        }
+        const committed = entries
+            .filter((e) => e.status === 'committed' && callIds.has(String(e.sourceCallId || '')))
+            .sort((a, b) => (b.committedAt || 0) - (a.committedAt || 0));
+        const results = [];
+        for (const e of committed) {
+            const r = await rollback(e.id, ctx);
+            results.push({ id: e.id, target: e.target, ...r });
+            if (!r.ok) {
+                return { results, ok: false, failedAt: { id: e.id, target: e.target, ...r } };
+            }
+        }
+        return { results, ok: true, failedAt: null };
+    }
+
+    /**
+     * Inspect (without mutating) whether `rollbackAllInMessages` for the
+     * given message range would have any committed entries to undo. Used
+     * to short-circuit the regenerate path when nothing needs rolling
+     * back — keeps the no-edits common case from emitting a "rolled back
+     * 0 commits" toast.
+     */
+    function countCommittedInMessages(messages) {
+        const callIds = new Set();
+        for (const m of Array.isArray(messages) ? messages : []) {
+            for (const id of callIdSetFromMessage(m)) callIds.add(id);
+        }
+        if (callIds.size === 0) return 0;
+        return entries.filter((e) => e.status === 'committed' && callIds.has(String(e.sourceCallId || ''))).length;
+    }
+
     function serialize() {
         return {
             version: 3,
@@ -640,6 +693,8 @@ export function createBus(opts = {}) {
         approveAllPendingInTurn,
         rejectAllPendingInTurn,
         rollbackAllInTurn,
+        rollbackAllInMessages,
+        countCommittedInMessages,
         serialize,
         hydrate,
         drainOutcomes,

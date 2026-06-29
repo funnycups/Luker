@@ -90,6 +90,11 @@ function registerLocaleData() {
         // Live UI strings owned by main.js
         'Completion Preset Assistant': '聊天补全预设助手',
         'Open Assistant': '打开助手',
+        'Regenerate aborted': '重新生成已中止',
+        'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
+        'Edit': '编辑',
+        'Edit and regenerate from here': '编辑并从此处重新生成',
+        'Edit message — saving will regenerate from this turn:': '编辑消息——保存将从此轮开始重新生成：',
         'Create New Preset': '新建预设',
         'Bundle skills with this preset': '将 Skills 打包到此预设',
         'No preset is currently selected.': '当前未选择预设。',
@@ -215,6 +220,11 @@ function registerLocaleData() {
     addLocaleData('zh-tw', {
         'Completion Preset Assistant': '聊天補全預設助手',
         'Open Assistant': '開啟助手',
+        'Regenerate aborted': '重新產生已中止',
+        'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新產生已中止——無法回退 ${0} 上的提交：${1}',
+        'Edit': '編輯',
+        'Edit and regenerate from here': '編輯並從此處重新產生',
+        'Edit message — saving will regenerate from this turn:': '編輯訊息——儲存將從此輪開始重新產生：',
         'Create New Preset': '新建預設',
         'Bundle skills with this preset': '將 Skills 打包到此預設',
         'No preset is currently selected.': '目前未選擇預設。',

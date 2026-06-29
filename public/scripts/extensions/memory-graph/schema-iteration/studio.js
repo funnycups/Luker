@@ -2095,6 +2095,31 @@ export async function openSchemaIterationStudio(deps) {
         }
         if (userIdx < 0) return;
         const userText = String(messages[userIdx].content || '');
+
+        // Roll back disk commits the discarded assistant turns made. Abort
+        // on any failure: a half-rolled-back schema would mislead the next
+        // regenerate. See orchestrator/iter-studio/studio.js for the full
+        // rationale — both popups share `bus.rollbackAllInMessages`.
+        const discardedRange = messages.slice(userIdx);
+        if (bus.countCommittedInMessages(discardedRange) > 0) {
+            const rollbackOutcome = await bus.rollbackAllInMessages(discardedRange);
+            if (!rollbackOutcome.ok) {
+                const failedTarget = rollbackOutcome.failedAt?.target;
+                const targetLabel = failedTarget?.name
+                    ? `${failedTarget.type}:${failedTarget.name}`
+                    : (failedTarget?.type || 'unknown');
+                const reason = String(rollbackOutcome.failedAt?.error?.message
+                    || rollbackOutcome.failedAt?.status
+                    || 'unknown');
+                const msg = tf('Regenerate aborted — could not roll back commit on ${0}: ${1}',
+                    targetLabel, reason);
+                try { toastr.error(msg, t('Regenerate aborted'), { timeOut: 8000 }); } catch { /* ignore */ }
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] regenerate rollback failed`, rollbackOutcome.failedAt);
+                return;
+            }
+        }
+
         // Truncate before the user message; the resend will push it again.
         state.session.messages = messages.slice(0, userIdx);
         // Discard any bus proposals tied to discarded assistant turns —
@@ -2122,6 +2147,66 @@ export async function openSchemaIterationStudio(deps) {
         await render();
         const $textarea = $root.find('[data-mg-schema-it-input]');
         $textarea.val(userText);
+        await handleSendMessage();
+    }
+
+    // editUserMessage(messageId): edit a prior user message + auto-regenerate.
+    // See orchestrator/iter-studio/studio.js for the rationale; all four
+    // popups share the prompt() → rollback → truncate → handleSendMessage
+    // flow.
+    async function editUserMessage(messageId) {
+        if (state.isBusy) return;
+        const messages = state.session.messages || [];
+        const targetIdx = messages.findIndex(m => m && m.id === messageId && m.role === 'user' && !m.auto);
+        if (targetIdx < 0) return;
+        const original = String(messages[targetIdx].content || '');
+        // eslint-disable-next-line no-alert
+        const next = window.prompt(t('Edit message — saving will regenerate from this turn:'), original);
+        if (next === null) return;
+        const trimmed = String(next).trim();
+        if (!trimmed) return;
+
+        const discardedRange = messages.slice(targetIdx);
+        if (bus.countCommittedInMessages(discardedRange) > 0) {
+            const rollbackOutcome = await bus.rollbackAllInMessages(discardedRange);
+            if (!rollbackOutcome.ok) {
+                const failedTarget = rollbackOutcome.failedAt?.target;
+                const targetLabel = failedTarget?.name
+                    ? `${failedTarget.type}:${failedTarget.name}`
+                    : (failedTarget?.type || 'unknown');
+                const reason = String(rollbackOutcome.failedAt?.error?.message
+                    || rollbackOutcome.failedAt?.status
+                    || 'unknown');
+                const msg = tf('Regenerate aborted — could not roll back commit on ${0}: ${1}',
+                    targetLabel, reason);
+                try { toastr.error(msg, t('Regenerate aborted'), { timeOut: 8000 }); } catch { /* ignore */ }
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] edit-user-message rollback failed`, rollbackOutcome.failedAt);
+                return;
+            }
+        }
+        state.session.messages = messages.slice(0, targetIdx);
+        const survivingCallIds = new Set();
+        for (const m of state.session.messages) {
+            if (Array.isArray(m?.toolCalls)) {
+                for (const tc of m.toolCalls) if (tc?.id) survivingCallIds.add(String(tc.id));
+            }
+        }
+        state.__suspendBusOnChange = true;
+        try {
+            for (const entry of bus._testOnly_entries()) {
+                const cid = String(entry.sourceCallId || '');
+                if (entry.status === 'pending' && cid && !survivingCallIds.has(cid)) {
+                    bus.reject(entry.id);
+                }
+            }
+        } finally {
+            state.__suspendBusOnChange = false;
+        }
+        await persistSession();
+        await render();
+        const $textarea = $root.find('[data-mg-schema-it-input]');
+        $textarea.val(trimmed);
         await handleSendMessage();
     }
 
@@ -2346,6 +2431,13 @@ export async function openSchemaIterationStudio(deps) {
         const msgId = resolveMsgId(e.currentTarget);
         if (!msgId) return;
         await regenerateFromMessage(msgId);
+    });
+    $root.on('click.mgSchemaIt', '[data-mg-schema-it-action="edit-user-message"]', async (e) => {
+        e.preventDefault();
+        if (state.isBusy) return;
+        const msgId = resolveMsgId(e.currentTarget);
+        if (!msgId) return;
+        await editUserMessage(msgId);
     });
     // Per-batch rollback is now bus-driven: the turn-actions row rendered
     // by bus.renderTurnActions emits `data-proposal-action="rollback-turn"`

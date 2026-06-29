@@ -67,7 +67,15 @@ export function renderMessageCard(message, opts = {}) {
         if (message.auto) return '';
         const cls = 'luker_lib_message luker_lib_message_user';
         const body = escapeHtml(String(message.content || '')).replace(/\n/g, '<br>');
-        return `<div class="${cls}" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">${body}</div>`;
+        // Edit affordance: clicking pulls the message text back into the
+        // composer textarea, truncates the chat to just before this turn,
+        // and rolls back every commit those discarded turns made. The
+        // composer stays editable so the user can adjust before resending
+        // (sending then re-fires the normal send pipeline). Without the
+        // rollback step, edit-and-resend would regenerate against a disk
+        // state already polluted by the prior round's commits.
+        const editBtn = `<button class="luker_lib_message_user_edit menu_button menu_button_small" ${actionAttr}="edit-user-message" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}" title="${escapeHtmlAttr(i18n('Edit and regenerate from here'))}">${escapeHtml(i18n('Edit'))}</button>`;
+        return `<div class="${cls}" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">${body}${editBtn}</div>`;
     }
 
     // assistant

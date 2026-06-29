@@ -24,6 +24,11 @@ export function i18nFormat(key, ...values) {
 export function registerLocaleData() {
     addLocaleData('zh-cn', {
         'Memory': '记忆',
+        'Regenerate aborted': '重新生成已中止',
+        'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
+        'Edit': '编辑',
+        'Edit and regenerate from here': '编辑并从此处重新生成',
+        'Edit message — saving will regenerate from this turn:': '编辑消息——保存将从此轮开始重新生成：',
         'Enabled': '启用',
         'Auto extraction': '自动抽取',
         'Auto extraction help': '每次 AI 回复后由记忆图自动抽取节点。关闭后可由编排器的 memory_curator 接管,或完全手动。',
@@ -452,6 +457,11 @@ export function registerLocaleData() {
     });
     addLocaleData('zh-tw', {
         'Memory': '記憶',
+        'Regenerate aborted': '重新產生已中止',
+        'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新產生已中止——無法回退 ${0} 上的提交：${1}',
+        'Edit': '編輯',
+        'Edit and regenerate from here': '編輯並從此處重新產生',
+        'Edit message — saving will regenerate from this turn:': '編輯訊息——儲存將從此輪開始重新產生：',
         'Enabled': '啟用',
         'Auto extraction': '自動抽取',
         'Auto extraction help': '每次 AI 回覆後由記憶圖自動抽取節點。關閉後可由編排器的 memory_curator 接管,或完全手動。',

@@ -2518,6 +2518,50 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         await renderHistory();
     }
 
+    // editUserMessage(messageId): edit a prior user message + auto-regenerate.
+    // Mirrors the regenerate flow but lets the user rephrase the seed prompt
+    // before re-firing the loop. See orchestrator/iter-studio/studio.js for
+    // the shared rationale.
+    async function editUserMessage(messageId) {
+        if (state.isBusy) return;
+        const messages = state.session.messages || [];
+        const targetIdx = messages.findIndex(m => m && m.id === messageId && m.role === 'user' && !m.auto);
+        if (targetIdx < 0) return;
+        const original = String(messages[targetIdx].content || '');
+        // eslint-disable-next-line no-alert
+        const next = window.prompt(t('Edit message — saving will regenerate from this turn:'), original);
+        if (next === null) return;
+        const trimmed = String(next).trim();
+        if (!trimmed) return;
+
+        const discardedRange = messages.slice(targetIdx);
+        if (bus.countCommittedInMessages(discardedRange) > 0) {
+            const rollbackOutcome = await bus.rollbackAllInMessages(discardedRange);
+            if (!rollbackOutcome.ok) {
+                const failedTarget = rollbackOutcome.failedAt?.target;
+                const targetLabel = failedTarget?.name
+                    ? `${failedTarget.type}:${failedTarget.name}`
+                    : (failedTarget?.type || 'unknown');
+                const reason = String(rollbackOutcome.failedAt?.error?.message
+                    || rollbackOutcome.failedAt?.status
+                    || 'unknown');
+                const msg = tf('Regenerate aborted — could not roll back commit on ${0}: ${1}',
+                    targetLabel, reason);
+                try { toastr.error(msg, t('Regenerate aborted'), { timeOut: 8000 }); } catch { /* ignore */ }
+                // eslint-disable-next-line no-console
+                console.warn(`[${MODULE}] edit-user-message rollback failed`, rollbackOutcome.failedAt);
+                return;
+            }
+        }
+        state.session.messages = messages.slice(0, targetIdx);
+        state.pendingEdits = [];
+        await persistSession();
+        await render();
+        const $textarea = $root?.find('[data-cea-editor-input]');
+        if ($textarea && $textarea.length) $textarea.val(trimmed);
+        await handleSendMessage();
+    }
+
     async function handleSendMessage() {
         if (state.isBusy) {
             // Stop request: abort the in-flight runner call. Mark
@@ -2808,6 +2852,32 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                     break;
                 }
             }
+
+            // Roll back disk commits the discarded assistant turns made
+            // (character card + lorebook). Abort on any failure: a
+            // half-rolled-back state would mislead the next regenerate.
+            // See orchestrator/iter-studio/studio.js for the full rationale —
+            // all four iter popups share `bus.rollbackAllInMessages`.
+            const discardedRange = messages.slice(truncateAt);
+            if (bus.countCommittedInMessages(discardedRange) > 0) {
+                const rollbackOutcome = await bus.rollbackAllInMessages(discardedRange);
+                if (!rollbackOutcome.ok) {
+                    const failedTarget = rollbackOutcome.failedAt?.target;
+                    const targetLabel = failedTarget?.name
+                        ? `${failedTarget.type}:${failedTarget.name}`
+                        : (failedTarget?.type || 'unknown');
+                    const reason = String(rollbackOutcome.failedAt?.error?.message
+                        || rollbackOutcome.failedAt?.status
+                        || 'unknown');
+                    const msg = tf('Regenerate aborted — could not roll back commit on ${0}: ${1}',
+                        targetLabel, reason);
+                    try { toastr.error(msg, t('Regenerate aborted'), { timeOut: 8000 }); } catch { /* ignore */ }
+                    // eslint-disable-next-line no-console
+                    console.warn(`[${MODULE}] regenerate rollback failed`, rollbackOutcome.failedAt);
+                    return;
+                }
+            }
+
             state.session.messages = messages.slice(0, truncateAt);
             state.pendingEdits = [];
             state.isBusy = true;
@@ -2851,6 +2921,13 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
                 bumpChatBadge();
                 await render();
             }
+        });
+        $root.on('click.ceaEditor', '[data-cea-editor-action="edit-user-message"]', async (e) => {
+            e.preventDefault();
+            if (state.isBusy) return;
+            const id = String(e.currentTarget?.getAttribute('data-luker-lib-msg-id') || '');
+            if (!id) return;
+            await editUserMessage(id);
         });
         $root.on('change.ceaEditor', '[data-cea-editor-action="toggle-auto-apply"]', async (e) => {
             const checked = Boolean(e.currentTarget?.checked);

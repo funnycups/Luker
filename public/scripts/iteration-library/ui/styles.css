@@ -169,6 +169,23 @@
     gap: 6px;
 }
 
+.luker_lib_message_user {
+    position: relative;
+}
+.luker_lib_message_user_edit {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    opacity: 0;
+    transition: opacity 0.12s ease-in;
+    font-size: 0.85em;
+    padding: 2px 8px;
+}
+.luker_lib_message_user:hover .luker_lib_message_user_edit,
+.luker_lib_message_user_edit:focus-visible {
+    opacity: 1;
+}
+
 /* ── diff card ─────────────────────────────────────────────────── */
 .luker_lib_diff_card {
     margin: 4px 0;
