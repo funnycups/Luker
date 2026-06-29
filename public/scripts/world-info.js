@@ -30,7 +30,7 @@ import {
 } from './world-info-bulk-edit.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { getOrCreatePersonaDescriptor, setPersonaDescription, user_avatar } from './personas.js';
-import { initActionableSingleSelect } from './select2-actionable-single.js';
+import { initActionableSingleSelect, refreshOpenDropdown } from './select2-actionable-single.js';
 import { showUndoToast } from './undo-toast.js';
 
 function buildWorldInfoDragHelper(item) {
@@ -3147,9 +3147,15 @@ export async function updateWorldInfoList() {
         _suppressLegacySelectSync = false;
 
         const nextEditorIndex = editorSelected ? world_names.indexOf(editorSelected) : -1;
-        $('#world_editor_select').val(nextEditorIndex === -1 ? '' : String(nextEditorIndex));
-        if ($('#world_editor_select').data('select2')) {
-            $('#world_editor_select').trigger('change.select2');
+        const $editorSelect = $('#world_editor_select');
+        $editorSelect.val(nextEditorIndex === -1 ? '' : String(nextEditorIndex));
+        if ($editorSelect.data('select2')) {
+            const isOpen = $editorSelect.next('.select2-container').hasClass('select2-container--open');
+            if (isOpen) {
+                refreshOpenDropdown($editorSelect[0]);
+            } else {
+                $editorSelect.trigger('change.select2');
+            }
         }
 
         if (Array.isArray(data)) {

@@ -133,7 +133,7 @@ function applyCollapsedState(selectElement, collapsedGroups) {
  * Re-renders an already-open Select2 dropdown after options are rebuilt.
  * @param {HTMLSelectElement} selectElement
  */
-function refreshOpenDropdown(selectElement, ownerKey = '') {
+export function refreshOpenDropdown(selectElement, ownerKey = '') {
     const $select = $(selectElement);
     const isOpen = $select.next('.select2-container').hasClass('select2-container--open');
     if (isOpen) {
