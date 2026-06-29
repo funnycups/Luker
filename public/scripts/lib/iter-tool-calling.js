@@ -236,6 +236,15 @@ export async function requestToolCallsWithRetry(context, settings, {
             const normalizedCalls = rawCalls.map(call => ({
                 name: String(call?.name || ''),
                 args: call?.args && typeof call.args === 'object' ? call.args : {},
+                // generate-task surfaces the provider-issued id on `call.raw.id`
+                // (Anthropic tool_use.id / OpenAI tool_calls[].id / Gemini
+                // synthesized). Propagate it so iter-studio popups round-trip
+                // the same id across rounds — without this they fall back to
+                // a locally-generated `edit_<idx>_<ts>` which collides when
+                // two tool calls in one turn share the round-local index AND
+                // millisecond, surfacing as Anthropic "tool_use ids must be
+                // unique" 400 on the next round's replay.
+                id: String(call?.id || call?.raw?.id || '').trim(),
                 raw: call?.raw || null,
             }));
             const filteredCalls = allowedSet && allowedSet.size > 0

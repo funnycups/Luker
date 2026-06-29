@@ -1897,9 +1897,13 @@ export async function openSchemaIterationStudio(deps) {
         const edits = [];
         const editToolResults = [];
         let chainedLive = state.live;
+        // Round-local monotonic counter — see the same-named comment in
+        // orchestrator/iter-studio/studio.js's edit-loop for why this can't
+        // reuse `editToolResults.length` as the index.
+        let editCallSeq = 0;
         for (const call of editToolCalls) {
             const name = String(call?.name || '');
-            const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
+            const callId = String(call?.id || `edit_${editCallSeq++}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
             call.id = callId;
             try {
                 const normalized = await normalizeToolCallToEdit(

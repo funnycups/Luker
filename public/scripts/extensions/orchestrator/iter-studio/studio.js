@@ -2908,9 +2908,21 @@ export async function openOrchestratorIterationStudio(deps) {
         // seeding the first edit-tool call would snapshot the pre-skill
         // state.live and clobber skill-tool mutations on apply.
         let chainedBefore = skillToolChainedLive;
+        // Round-local monotonic counter for the fallback id suffix. Using
+        // `editToolResults.length` here meant successful edits (which push no
+        // toolResult — see buildEditCallReply's `kind:'edits'` branch) did
+        // not advance the index, so two edits in the same turn where the
+        // first succeeded and the second failed both landed on
+        // `edit_0_<ts>`. With same-ms ticks (and Date.now is ms-resolution)
+        // assistantMsg.toolCalls then carried two entries with identical
+        // id, which Anthropic rejects on the next round's replay with
+        // "tool_use ids must be unique". The random suffix is a belt-and-
+        // braces backstop for the rare case where call.id is also empty
+        // after the runner started propagating provider ids.
+        let editCallSeq = 0;
         for (const call of editToolCalls) {
             const name = String(call?.name || '');
-            const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
+            const callId = String(call?.id || `edit_${editCallSeq++}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
             call.id = callId;
             try {
                 const outcome = await normalizeToolCallToEditInline(call, chainedBefore);

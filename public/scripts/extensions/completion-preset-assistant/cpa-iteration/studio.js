@@ -1730,7 +1730,7 @@ export async function openCpaIterationStudio(deps) {
                 : null,
         };
         for (const call of readCalls) {
-            const callId = String(call?.id || `read_${persistedToolResults.length}_${Date.now().toString(36)}`);
+            const callId = String(call?.id || `read_${persistedToolResults.length}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             let resultPayload;
             let statusLabel = 'ok';
@@ -1831,7 +1831,7 @@ export async function openCpaIterationStudio(deps) {
         // as a fresh validation error rather than clobbering with stale
         // before/after snapshots.
         for (const call of skillCalls) {
-            const callId = String(call?.id || `skill_${persistedToolResults.length}_${Date.now().toString(36)}`);
+            const callId = String(call?.id || `skill_${persistedToolResults.length}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             let resultPayload;
             let statusLabel = 'ok';
@@ -1930,10 +1930,16 @@ export async function openCpaIterationStudio(deps) {
         const edits = [];
         const editToolResults = [];
         let chainedLive = state.live;
+        // Round-local monotonic counter — see the same-named comment in
+        // orchestrator/iter-studio/studio.js's edit-loop for why this can't
+        // reuse `editToolResults.length` as the index. Unlike read/skill
+        // tools which always push a toolResult, edit tools skip the push
+        // on success (queued for user review), so `length` lags behind.
+        let editCallSeq = 0;
         for (const call of editToolCalls) {
             const name = String(call?.name || '');
             if (!EDITABLE_TOOL_NAMES.has(name)) continue; // defensive
-            const callId = String(call?.id || `edit_${editToolResults.length}_${Date.now().toString(36)}`);
+            const callId = String(call?.id || `edit_${editCallSeq++}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
             // Back-fill call.id so the persisted assistant message and any
             // future replay reference the same id the tool result is keyed
             // under. Mirrors the read-tool branch above.
