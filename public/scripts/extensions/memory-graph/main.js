@@ -1368,7 +1368,8 @@ async function loadMemoryStoreByTarget(context, target) {
     if (typeof context.getChatState !== 'function') {
         throw new Error('Chat state API is unavailable in extension context.');
     }
-    const meta = await context.getChatState(META_NAMESPACE, { target });
+    const metaResult = await context.getChatState(META_NAMESPACE, { target });
+    const meta = metaResult?.ok ? metaResult.state : null;
     const isV2 = meta && Number(meta.schemaVersion || 0) >= META_SCHEMA_VERSION;
 
     if (isV2) {
@@ -1405,7 +1406,8 @@ async function loadMemoryStoreByTarget(context, target) {
 
     // v1 / legacy raw fallback: opLog inside main namespace, no __meta.
     // Schema-migration will hoist this to v2 on the next ensureMemoryStoreLoaded.
-    const data = await context.getChatState(CHAT_STATE_NAMESPACE, { target });
+    const dataResult = await context.getChatState(CHAT_STATE_NAMESPACE, { target });
+    const data = dataResult?.ok ? dataResult.state : null;
     const { state, migrated } = normalizePersistedMemoryState(data, context);
     return {
         state,

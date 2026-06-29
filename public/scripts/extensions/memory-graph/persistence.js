@@ -168,11 +168,19 @@ export async function migrateLegacyMemoryGraphState(
         ? { target, maxOperations: 16000 }
         : { maxOperations: 16000 };
 
-    const [data, meta, log] = await Promise.all([
+    // getChatState now always returns an envelope {ok, state, reason?, hint?}.
+    // The migration detectors operate on raw payload shapes, so unwrap here —
+    // leaking the envelope makes every detector return false, which silently
+    // stamps __meta with a polluted base object and leaves the load path
+    // reading the envelope back as "unrecognized" forever.
+    const [dataRead, metaRead, logRead] = await Promise.all([
         context.getChatState(MODULE_NAME, targetOption),
         context.getChatState(META_NAMESPACE, targetOption),
         context.getChatState(LOG_NAMESPACE, targetOption),
     ]);
+    const data = dataRead?.ok ? dataRead.state : null;
+    const meta = metaRead?.ok ? metaRead.state : null;
+    const log = logRead?.ok ? logRead.state : null;
 
     const ctx = {
         chat: Array.isArray(context?.chat) ? context.chat : [],
