@@ -2281,6 +2281,11 @@ export function getContext() {
         get onlineStatus() { return online_status; },
         get maxContext() { return Number(max_context); },
         get chatMetadata() { return chat_metadata; },
+        // Back-compat: some third-party extensions assign `ctx.chatMetadata = obj`
+        // to replace the whole metadata. The getter above made that throw
+        // (TypeError: only has a getter). Route the assignment through
+        // updateChatMetadata so it actually replaces module-scope `chat_metadata`.
+        set chatMetadata(value) { updateChatMetadata(value, true); },
         saveMetadataDebounced,
         streamingProcessor,
         eventSource,
