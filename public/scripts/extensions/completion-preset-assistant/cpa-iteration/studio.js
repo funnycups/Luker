@@ -1959,10 +1959,27 @@ export async function openCpaIterationStudio(deps) {
                     // edits to a clone. The next call's normalize sees the
                     // composed state so its coarse path:'prompts' sandbox
                     // is built on top of, not parallel to, prior work.
+                    //
+                    // `applyEdits` returns `{newLive, clean, conflicts,
+                    // alreadyDone}`. Conflicts and already-done ops do not
+                    // throw — they're dropped silently from the staged
+                    // newLive. Without surfacing them per-call, the LLM
+                    // sees the proposal commit (Apply) summary as one
+                    // success line, never learning that 2-of-5 ops were
+                    // skipped because the target path moved on or already
+                    // matched. Push a per-call toolResult so the next
+                    // round's role:'tool' reply enumerates the partial
+                    // outcome — model can route on `conflicts.length`
+                    // (retry with corrected anchor) vs `alreadyDone.length`
+                    // (consider the call satisfied).
+                    let chainConflicts = [];
+                    let chainAlreadyDone = [];
                     try {
                         const clone = structuredClone(chainedLive);
                         const result = applyEdits(normalized, clone);
                         chainedLive = result?.newLive ?? clone;
+                        chainConflicts = Array.isArray(result?.conflicts) ? result.conflicts : [];
+                        chainAlreadyDone = Array.isArray(result?.alreadyDone) ? result.alreadyDone : [];
                     } catch (err) {
                         // applyEdits choke shouldn't kill the whole turn;
                         // keep the chain frozen so subsequent calls at
@@ -1971,9 +1988,35 @@ export async function openCpaIterationStudio(deps) {
                         // eslint-disable-next-line no-console
                         console.warn(`[${MODULE}] chain advance failed after ${name}`, err);
                     }
-                    // Don't push a toolResult for queued edits — the
-                    // post-review synthetic user message carries the real
-                    // outcome (applied vs skipped). Adding a "queued"
+                    if (chainConflicts.length > 0 || chainAlreadyDone.length > 0) {
+                        // Partial outcome: at least one op produced no edit
+                        // on the staged baseline. The remaining ops are in
+                        // `edits` and queued for review; describe what was
+                        // applied vs. dropped so the model can decide.
+                        const cleanCount = normalized.length - chainConflicts.length - chainAlreadyDone.length;
+                        editToolResults.push({
+                            tool_call_id: callId,
+                            content: {
+                                status: 'partial',
+                                applied: cleanCount,
+                                total: normalized.length,
+                                conflicts: chainConflicts.map((c) => ({
+                                    op: c?.op || null,
+                                    path: c?.path || '',
+                                    reason: String(c?.reason || c?.error || 'conflict'),
+                                })),
+                                already_done: chainAlreadyDone.map((c) => ({
+                                    op: c?.op || null,
+                                    path: c?.path || '',
+                                })),
+                                hint: 'Some operations could not be applied to the current baseline. Conflicts: the path moved or the anchor no longer matches — re-read live with preset_read_live_fields before retrying. Already-done: the target state already matches; no further action needed for those.',
+                            },
+                            status: 'fail',
+                        });
+                    }
+                    // Don't push a clean-success toolResult for queued edits —
+                    // the post-review synthetic user message carries the
+                    // real outcome (applied vs skipped). Adding a "queued"
                     // reply here would create two pieces of feedback per
                     // tool call and double the prompt budget.
                 } else {
