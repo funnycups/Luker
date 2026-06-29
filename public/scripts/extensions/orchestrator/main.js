@@ -238,11 +238,13 @@ import {
     duplicatePreset,
     getActivePreset,
     getActivePresetId,
+    getPreset,
     migrateGlobalLegacyToLibraries,
     renamePreset,
     setActivePresetId,
     setMigrationPersistHook,
     writeActivePreset,
+    writePresetByName,
 } from './preset-library.js';
 import {
     LOOP_ITERATION_CONTRACT_LINES,
@@ -6031,85 +6033,139 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
     };
 }
 
+/**
+ * Resolve the global target preset id to write into for an iter-studio
+ * "save to global" action. When the session was opened from a character
+ * scope, prefer the global preset whose `name` matches the character's
+ * active preset name — the user's mental model is "save this work to the
+ * same-named preset", not "overwrite whatever happens to be global's
+ * currently-active slot (almost always 'default')". Character-scope
+ * sessions with no source name (cards that never customized the preset
+ * name) and global-scope sessions both fall through to the original
+ * writeActivePreset path.
+ *
+ * Returns {payload, applyWrite}: applyWrite(payload) performs the write
+ * and returns the standard {ok, hint?, reason?, ambiguous?, created?,
+ * candidateIds?, presetId?} envelope. Toast wording is the caller's job.
+ */
+function resolveSaveToGlobalWriter(context, settings, mode, session) {
+    const sourceScope = String(session?.scope || 'global');
+    if (sourceScope !== 'character') {
+        return {
+            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
+            sourceName: '',
+        };
+    }
+    const avatar = String(context?.characters?.[context?.characterId]?.avatar || '');
+    if (!avatar) {
+        return {
+            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
+            sourceName: '',
+        };
+    }
+    const charActiveId = getActivePresetId(settings, mode, { scope: 'character', context, avatar });
+    const charActive = charActiveId
+        ? getPreset(settings, mode, 'character', charActiveId, { context, avatar })
+        : null;
+    const sourceName = String(charActive?.name || '').trim();
+    if (!sourceName) {
+        return {
+            applyWrite: (payload) => writeActivePreset(settings, mode, 'global', payload),
+            sourceName: '',
+        };
+    }
+    return {
+        applyWrite: (payload) => writePresetByName(settings, mode, 'global', sourceName, payload),
+        sourceName,
+    };
+}
+
 async function applyAiIterationSessionToGlobal(context, settings, session, root) {
-    // All four modes commit through writeActivePreset(settings, mode, 'global', payload):
-    // the active preset slot under `presetLibraries.<mode>.<activeId>` is the
+    // All four modes commit through writeActivePreset / writePresetByName:
+    // the chosen preset slot under `presetLibraries.<mode>.<id>` is the
     // single source of truth that getActivePreset reads back. Writing the
     // legacy flat fields (settings.directorProfile, settings.loopProfile,
     // settings.agendaPlanner+friends, settings.orchestrationSpec/settings.presets)
     // is a no-op now — the preset-library migration strips them on next
     // startup AND the runtime / iter-studio / global panel all read via
     // getActivePreset, never via the legacy fields.
+    //
+    // Save-target resolution: a session opened from a character scope
+    // routes through `writePresetByName` so the global preset that shares
+    // the source character preset's name receives the payload (creating
+    // it if no global same-name match exists). Global-scope sessions
+    // and character sessions with no source name fall back to
+    // writeActivePreset's "overwrite the current global active id"
+    // behavior. See resolveSaveToGlobalWriter.
+    const notifyWriteFailure = (writeResult) => {
+        notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
+            writeResult.hint || writeResult.reason));
+    };
+    const notifyWriteOutcome = (writeResult, sourceName) => {
+        if (writeResult.created) {
+            notifySuccess(i18nFormat('Iteration session saved as new global preset "${0}".', sourceName));
+        } else if (writeResult.ambiguous) {
+            notifySuccess(i18nFormat('Iteration session applied to global preset "${0}". Multiple presets share this name — wrote to the first match.', sourceName));
+        } else {
+            notifySuccess(i18n('Iteration session applied to global profile.'));
+        }
+        updateUiStatus(i18n('Iteration session applied to global profile.'));
+    };
+
     if (isLoopIterationSession(session)) {
         const profile = sanitizeLoopProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_LOOP;
         settings.singleAgentModeEnabled = false;
-        const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_LOOP, 'global', profile);
-        if (!writeResult.ok) {
-            notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
-                writeResult.hint || writeResult.reason));
-            return;
-        }
+        const { applyWrite, sourceName } = resolveSaveToGlobalWriter(context, settings, ORCH_EXECUTION_MODE_LOOP, session);
+        const writeResult = applyWrite(profile);
+        if (!writeResult.ok) { notifyWriteFailure(writeResult); return; }
         await saveSettings();
         uiState.globalLoopEditor = loadGlobalLoopEditorState();
         ensureLoopEditorIntegrity(uiState.globalLoopEditor);
         renderDynamicPanels(root, context);
-        notifySuccess(i18n('Iteration session applied to global profile.'));
-        updateUiStatus(i18n('Iteration session applied to global profile.'));
+        notifyWriteOutcome(writeResult, sourceName);
         return;
     }
     if (isAgendaIterationSession(session)) {
         const profile = sanitizeAgendaWorkingProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_AGENDA;
         settings.singleAgentModeEnabled = false;
-        const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_AGENDA, 'global', profile);
-        if (!writeResult.ok) {
-            notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
-                writeResult.hint || writeResult.reason));
-            return;
-        }
+        const { applyWrite, sourceName } = resolveSaveToGlobalWriter(context, settings, ORCH_EXECUTION_MODE_AGENDA, session);
+        const writeResult = applyWrite(profile);
+        if (!writeResult.ok) { notifyWriteFailure(writeResult); return; }
         await saveSettings();
         uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
         ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
         renderDynamicPanels(root, context);
-        notifySuccess(i18n('Iteration session applied to global profile.'));
-        updateUiStatus(i18n('Iteration session applied to global profile.'));
+        notifyWriteOutcome(writeResult, sourceName);
         return;
     }
     if (isDirectorIterationSession(session)) {
         const profile = sanitizeDirectorProfile(session?.workingProfile);
         settings.executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
         settings.singleAgentModeEnabled = false;
-        const writeResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global', profile);
-        if (!writeResult.ok) {
-            notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
-                writeResult.hint || writeResult.reason));
-            return;
-        }
+        const { applyWrite, sourceName } = resolveSaveToGlobalWriter(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, session);
+        const writeResult = applyWrite(profile);
+        if (!writeResult.ok) { notifyWriteFailure(writeResult); return; }
         await saveSettings();
         uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
         ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
         renderDynamicPanels(root, context);
-        notifySuccess(i18n('Iteration session applied to global profile.'));
-        updateUiStatus(i18n('Iteration session applied to global profile.'));
+        notifyWriteOutcome(writeResult, sourceName);
         return;
     }
     const specPayload = {
         spec: sanitizeSpec(session?.workingProfile?.spec),
         presets: sanitizePresetMap(session?.workingProfile?.presets),
     };
-    const specWriteResult = writeActivePreset(settings, ORCH_EXECUTION_MODE_SPEC, 'global', specPayload);
-    if (!specWriteResult.ok) {
-        notifyError(i18nFormat('Failed to apply iteration session to global profile: ${0}',
-            specWriteResult.hint || specWriteResult.reason));
-        return;
-    }
+    const { applyWrite, sourceName } = resolveSaveToGlobalWriter(context, settings, ORCH_EXECUTION_MODE_SPEC, session);
+    const specWriteResult = applyWrite(specPayload);
+    if (!specWriteResult.ok) { notifyWriteFailure(specWriteResult); return; }
     await saveSettings();
     uiState.globalEditor = loadGlobalEditorState();
     ensureEditorIntegrity(uiState.globalEditor);
     renderDynamicPanels(root, context);
-    notifySuccess(i18n('Iteration session applied to global profile.'));
-    updateUiStatus(i18n('Iteration session applied to global profile.'));
+    notifyWriteOutcome(specWriteResult, sourceName);
 }
 
 async function applyAiIterationSessionToCharacter(context, settings, session, root) {

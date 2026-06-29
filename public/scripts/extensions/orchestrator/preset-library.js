@@ -405,6 +405,59 @@ export function writeActivePreset(settings, mode, scope, payload, { context, ava
     return makeStateOk({ state: sanitized });
 }
 
+/**
+ * Save a payload into the scope's library matched by `name`. Iter-studio's
+ * "save to global" path uses this so a session opened from a character
+ * preset named "MyCustom" lands on the global preset also named "MyCustom"
+ * instead of blindly overwriting whatever happens to sit in global's active
+ * slot (which is almost always 'default'). Behavior:
+ *   - Zero name matches → create a new preset entry under that name and
+ *     return `{ok:true, state, presetId, created:true}`. The scope's
+ *     active preset id is NOT touched — creating a same-named copy of a
+ *     character preset is a save destination, not a switch of what the
+ *     scope considers active.
+ *   - One match → overwrite that preset (preserving `name`) and return
+ *     `{ok:true, state, presetId, created:false, ambiguous:false}`.
+ *   - Multiple matches → write the first, return
+ *     `{ok:true, state, presetId, created:false, ambiguous:true, candidateIds}`
+ *     so the caller can surface a "wrote to first match, multiple existed"
+ *     warning rather than silently picking one.
+ */
+export function writePresetByName(settings, mode, scope, name, payload, { context, avatar } = {}) {
+    const c = getScopeContainer(settings, scope, { context, avatar });
+    if (!c) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
+            scope === 'character'
+                ? formatValidationTargetHint(`no character override container for avatar=${String(avatar || '').slice(0, 40)}`)
+                : formatValidationTargetHint('global preset container unavailable'));
+    }
+    const trimmedName = String(name || '').trim();
+    if (!trimmedName) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT, 'preset name is required for by-name write');
+    }
+    if (!c.libraries[mode]) c.libraries[mode] = {};
+    const lib = c.libraries[mode];
+    const matches = Object.keys(lib).filter(id => String(lib[id]?.name || '').trim() === trimmedName);
+
+    if (matches.length === 0) {
+        const newId = makePresetId();
+        const sanitized = sanitizePresetEntry(mode, { ...payload, name: trimmedName });
+        lib[newId] = sanitized;
+        return { ok: true, state: sanitized, presetId: newId, created: true, ambiguous: false, candidateIds: [newId] };
+    }
+    const targetId = matches[0];
+    const sanitized = sanitizePresetEntry(mode, { ...payload, name: trimmedName });
+    lib[targetId] = sanitized;
+    return {
+        ok: true,
+        state: sanitized,
+        presetId: targetId,
+        created: false,
+        ambiguous: matches.length > 1,
+        candidateIds: matches,
+    };
+}
+
 export function allModes() {
     return [...ALL_MODES];
 }
