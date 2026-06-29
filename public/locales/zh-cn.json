@@ -707,7 +707,7 @@
     "Scan Depth": "扫描深度",
     "Context %": "上下文百分比",
     "Budget Cap": "Token预算上限",
-    "(0 = disabled)": "(“0”为禁用)",
+    "(0 = disabled)": "（“0”为禁用）",
     "Scan chronologically until reached min entries or token budget.": "按时间顺序扫描直到达到最少条目或词符预算。",
     "Min Activations": "最小激活数",
     "(disabled when max recursion steps are used)": "（当使用最大递归步数时禁用）",
@@ -1538,8 +1538,8 @@
     "Chat sync: integrity drift detected, auto-recovering.": "聊天同步：检测到完整性漂移，正在自动恢复。",
     "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步：检测到快照冲突，正在自动恢复。",
     "Chat write conflict": "聊天写入冲突",
-    "server: ${0}": "服务端:${0}",
-    "diverge: ${0}": "差异:${0}",
+    "server: ${0}": "服务端：${0}",
+    "diverge: ${0}": "差异：${0}",
     "Your messages will now be sent as ${0}": "你的消息现在将以 ${0} 发送",
     "Persona Changed": "用户设定已更改",
     "Settings could not be loaded after multiple attempts. Please try again later.": "多次尝试后仍无法加载设置。请稍后再试。",
@@ -2239,16 +2239,16 @@
     "Enter style name:": "输入样式名称：",
     "Enter new style name:": "输入新样式名称：",
     "A style with that name already exists": "同名样式已存在",
-    "sd_res_512x512": "512x512 (1:1，图标，个人信息图像)",
-    "sd_res_600x600": "600x600 (1:1，图标，个人信息图像)",
-    "sd_res_512x768": "512x768 (2:3，纵向角色卡)",
-    "sd_res_768x512": "768x512 (3:2，横向 35-mm 电影胶片)",
-    "sd_res_960x540": "960x540 (16:9，横向壁纸)",
-    "sd_res_540x960": "540x960 (9:16，纵向壁纸)",
-    "sd_res_1920x1088": "1920x1088 (16:9，1080p，横向壁纸)",
-    "sd_res_1088x1920": "1088x1920 (9:16，1080p，纵向壁纸)",
-    "sd_res_1280x720": "1280x720 (16:9，720p，横向壁纸)",
-    "sd_res_720x1280": "720x1280 (9:16，720p，纵向壁纸)",
+    "sd_res_512x512": "512x512 （1:1，图标，个人信息图像）",
+    "sd_res_600x600": "600x600 （1:1，图标，个人信息图像）",
+    "sd_res_512x768": "512x768 （2:3，纵向角色卡）",
+    "sd_res_768x512": "768x512 （3:2，横向 35-mm 电影胶片）",
+    "sd_res_960x540": "960x540 （16:9，横向壁纸）",
+    "sd_res_540x960": "540x960 （9:16，纵向壁纸）",
+    "sd_res_1920x1088": "1920x1088 （16:9，1080p，横向壁纸）",
+    "sd_res_1088x1920": "1088x1920 （9:16，1080p，纵向壁纸）",
+    "sd_res_1280x720": "1280x720 （16:9，720p，横向壁纸）",
+    "sd_res_720x1280": "720x1280 （9:16，720p，纵向壁纸）",
     "<Enter Model ID above>": "<请在上方输入模型 ID>",
     "Generating an image": "正在生成图像",
     "Delete the workflow? This action is irreversible.": "删除该工作流？此操作不可撤销。",
@@ -2277,7 +2277,7 @@
     "sd_minimal_prompt_processing_txt": "最小化响应提示词处理",
     "sd_auto_url": "例如：{{auto_url}}",
     "Authentication (optional)": "身份验证（可选）",
-    "Example: username:password": "例：用户名:密码",
+    "Example: username:password": "例：用户名：密码",
     "Important:": "重要：",
     "sd_auto_auth_warning_1": "使用",
     "sd_auto_auth_warning_2": "注意！服务器必须可从 Luker 主机访问。",
@@ -3604,7 +3604,7 @@
     "World Info file has no entries": "世界书文件没有任何条目",
     "Open a chat to get a name of the chat-bound lorebook": "打开一个聊天以获取绑定到该聊天的知识书名称",
     "Apply your current sorting to the \"Order\" field. The Order values will go down from the chosen number.": "将当前排序应用到“Order”字段。Order 值将从所选数字开始递减。",
-    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${0}": "此世界书有超过 100 个条目。如果不选择比它更高的数字，更靠后的条目将默认变为 0。<br />(通常默认值：100)<br />最小值：${0}",
+    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${0}": "此世界书有超过 100 个条目。如果不选择比它更高的数字，更靠后的条目将默认变为 0。<br />（通常默认值：100）<br />最小值：${0}",
     "Apply Current Sorting": "应用当前排序",
     "Apply": "应用",
     "Invalid number: ${0}": "无效数字：${0}",
@@ -4187,7 +4187,7 @@
     "Failed to restore World/Lorebook.": "恢复世界书失败。",
     "File is not valid: ${file.name}": "文件无效：${file.name}",
     "Invalid number: ${result}": "无效数字：${result}",
-    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${entryCount}": "此世界书有超过 100 个条目。如果不选择比它更高的数字，更靠后的条目将默认变为 0。<br />(通常默认值：100)<br />最小值：${entryCount}",
+    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${entryCount}": "此世界书有超过 100 个条目。如果不选择比它更高的数字，更靠后的条目将默认变为 0。<br />（通常默认值：100）<br />最小值：${entryCount}",
     "Move/Copy '${sourceName}' to:": "将 '${sourceName}' 移动/复制到：",
     "No world found named: ${worldName}": "未找到名为 ${worldName} 的世界书",
     "Source lorebook '${sourceName}' not found.": "未找到源世界书 '${sourceName}'。",
@@ -4982,7 +4982,7 @@
     "No wire messages.": "无出站消息。",
     "Other Params": "其他参数",
     "Response Body": "响应正文",
-    "(empty)": "(空)",
+    "(empty)": "（空）",
     "Search source / model / messages / response...": "搜索 来源 / 模型 / 消息 / 响应…",
     "Search in this request...": "在此请求内搜索…",
     "Function Call": "函数调用",
@@ -5091,7 +5091,7 @@
     ,"On": "开"
     ,"currently On": "当前：开"
     ,"currently Off": "当前：关"
-    ,"New value:": "新值:"
+    ,"New value:": "新值："
     ,"Mixed values across selected entries": "各条目当前值不一致"
     ,"For each option: choose Keep / On / Off": "每行可选：保持不变 / 开 / 关"
     ,"Select…": "选择…"
@@ -5099,7 +5099,7 @@
     ,"Please choose a value": "请选择一个值"
     ,"Invalid value": "输入无效"
     ,"Set ${0}": "设置 ${0}"
-    ,"Updated ${0} entries: ${1}": "已更新 ${0} 个条目: ${1}"
+    ,"Updated ${0} entries: ${1}": "已更新 ${0} 个条目： ${1}"
     ,"Reverted ${0} entries": "已撤销 ${0} 个条目"
     ,"No changes — all selected entries already had this value": "无变化 — 所有选中条目都已是该值"
     ,"No changes — all options are set to Keep": "无变化 — 所有选项都是保持不变"
@@ -5179,14 +5179,14 @@
     ,"Loop Orchestration": "循环编排"
     ,"Loop Agent": "循环 Agent"
     ,"Loop tools": "循环工具"
-    ,"note (persistent notes)": "note(持久化笔记)"
-    ,"chat (in-chat history)": "chat(聊天历史)"
-    ,"lorebook (world info)": "lorebook(世界书)"
-    ,"custom (extension + profile tools)": "custom(扩展与 profile 工具)"
-    ,"memory (memory-graph)": "memory(记忆图)"
-    ,"search (web search)": "search(联网搜索)"
+    ,"note (persistent notes)": "note（持久化笔记）"
+    ,"chat (in-chat history)": "chat（聊天历史）"
+    ,"lorebook (world info)": "lorebook（世界书）"
+    ,"custom (extension + profile tools)": "custom（扩展与 profile 工具）"
+    ,"memory (memory-graph)": "memory（记忆图）"
+    ,"search (web search)": "search（联网搜索）"
     ,"terminator": "终止器"
-    ,"(forced on)": "(强制开启)"
+    ,"(forced on)": "（强制开启）"
     ,"Loop API preset (Connection profile, empty = global orchestration API preset)": "循环 API 预设（Connection profile，留空 = 全局编排 API 预设）"
     ,"Loop preset (params + prompt, empty = global orchestration preset)": "循环预设（参数 + prompt，留空 = 全局编排预设）"
     ,"Loop system prompt": "循环 system prompt"
@@ -5246,7 +5246,7 @@
     ,"User": "用户"
     ,"Assistant": "助手"
     ,"round ${0}": "第 ${0} 轮"
-    ,"(empty)": "(空)"
+    ,"(empty)": "（空）"
     ,"Todo Board": "任务看板"
     ,"Todo board is empty.": "任务看板为空。"
     ,"Planner Rounds": "Planner 轮次"
@@ -5262,7 +5262,7 @@
     ,"done": "完成"
     ,"blocked": "阻塞"
     ,"dropped": "已丢弃"
-    ,"(none)": "(无)"
+    ,"(none)": "（无）"
     ,"Director (multi-agent)": "导演模式（多 agent）"
     ,"Main agent": "主代理"
     ,"Main agent tools": "主代理工具"
@@ -5501,10 +5501,10 @@
     ,"Preview unavailable": "预览不可用"
     ,"Max context unlocked": "解锁最大上下文"
     ,"No data": "暂无数据"
-    ,"(was ${0} → now ${1})": "(待修改:${0} → ${1})"
+    ,"(was ${0} → now ${1})": "（待修改：${0} → ${1}）"
     ,"No preset loaded.": "未加载预设。"
     ,"Live target preview": "实时目标预览"
-    ,"Pending applied (preview):": "应用后(预览):"
+    ,"Pending applied (preview):": "应用后（预览）:"
     ,"Resize columns": "拖动调整宽度"
     ,"New messages while you were on Preview": "在预览页面时收到的新消息"
     ,"Schema": "Schema"
@@ -5535,7 +5535,7 @@
     ,"Character fields": "角色字段"
     ,"Bound lorebook": "绑定世界书"
     ,"No character loaded.": "未加载角色。"
-    ,"(click to expand)": "(点击展开)"
+    ,"(click to expand)": "（点击展开）"
     ,"World book: ${0}": "世界书：${0}"
     ,"Auto-apply AI proposed changes": "自动应用 AI 提议的变更"
     ,"Draft (not applied)": "草稿（未应用）"
@@ -5564,7 +5564,7 @@
     ,"Apply failed: ${0}": "应用失败：${0}"
     ,"Applied ${0} edit(s) to ${1}": "已应用 ${0} 条编辑到 ${1}"
     ,"Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped": "已应用 ${0}/${1} 条编辑到 ${2};${3} 条跳过"
-    ,"Applied ${0} of ${1} change(s); ${2} skipped": "已应用 ${0}/${1} 项变更;${2} 项跳过"
+    ,"Applied ${0} of ${1} change(s); ${2} skipped": "已应用 ${0}/${1} 项变更；${2} 项跳过"
     ,"No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)": "未应用任何编辑到 ${0}：全部 ${1} 条都被跳过（冲突或已是期望状态）"
     ,"No edits applied: all ${0} were skipped (conflicts or already in desired state)": "未应用任何编辑：全部 ${0} 条都被跳过（冲突或已是期望状态）"
     ,"Edit error: ${0}": "编辑错误：${0}"
@@ -5574,9 +5574,9 @@
     ,"Failed to save character: ${0}": "保存角色失败：${0}"
     ,"Session finalized": "会话已完成"
     ,"No presets": "暂无预设"
-    ,"Field updated: ${0}": "字段已更新:${0}"
+    ,"Field updated: ${0}": "字段已更新：${0}"
     ,"Show ${0} more entries": "展开剩余 ${0} 条"
-    ,"Working profile reset to a blank shell — building this card's orchestration from scratch.": "工作中的配置已重置为空白模板,将从零开始为这张角色卡编写编排。"
+    ,"Working profile reset to a blank shell — building this card's orchestration from scratch.": "工作中的配置已重置为空白模板，将从零开始为这张角色卡编写编排。"
     ,"Working profile reset to match the current global profile — adjust from there.": "工作中的配置已重置为当前全局配置——请在此基础上调整。"
     ,"Schema reset to a blank shell — building from scratch.": "结构已重置为空白模板——从零开始搭建。"
     ,"Schema reset to match the current global schema — adjust from there.": "结构已重置为当前全局结构——请在此基础上调整。"
@@ -5587,16 +5587,16 @@
     ,"✓ Applied at ${0}": "✓ 已应用于 ${0}"
     ,"Apply ${0}": "应用 ${0}"
     ,"Rollback this round": "回退本轮"
-    ,"Roll back ${0} change(s) from this round?": "确认回退本轮的 ${0} 项变更?"
+    ,"Roll back ${0} change(s) from this round?": "确认回退本轮的 ${0} 项变更？"
     ,"Rolled back ${0} change(s).": "已回退 ${0} 项变更。"
-    ,"Batch rollback finished with ${0} failure(s).": "批量回退完成,${0} 项失败。"
-    ,"(untitled entry)": "(无标题条目)"
+    ,"Batch rollback finished with ${0} failure(s).": "批量回退完成，${0} 项失败。"
+    ,"(untitled entry)": "（无标题条目）"
     ,"${0} entries": "${0} 条"
     ,"${0} pending": "${0} 项待批准"
     ,"${0} draft": "${0} 项草稿"
     ,"Error: ${0}": "错误：${0}"
     ,"Auto-continue": "自动续轮"
-    ,"AI read the indicated data and is waiting to act on the result next round.": "AI 读取了相关数据,等待下一轮根据结果调整。"
+    ,"AI read the indicated data and is waiting to act on the result next round.": "AI 读取了相关数据，等待下一轮根据结果调整。"
     ,"Just imported this card — review the baseline and suggest tweaks.": "刚导入这张卡——回顾基础设定并提出调整建议。"
 
     ,"Continue iteration": "继续迭代"

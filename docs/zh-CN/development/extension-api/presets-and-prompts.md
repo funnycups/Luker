@@ -487,7 +487,7 @@ context.openai: {
 }
 ```
 
-处理 chat completion 连接状态的辅助集合。`proxies` 是用户配置的反向代理实时列表;`ZAI_ENDPOINT` 列出已知的智谱 / Z.AI 端点 URL;`stripPresetConnectionFields` 返回去掉连接相关字段（API 源、模型、proxy 等）的预设克隆——导出「不同用户环境也能用」的预设时使用。
+处理 chat completion 连接状态的辅助集合。`proxies` 是用户配置的反向代理实时列表；`ZAI_ENDPOINT` 列出已知的智谱 / Z.AI 端点 URL;`stripPresetConnectionFields` 返回去掉连接相关字段（API 源、模型、proxy 等）的预设克隆——导出「不同用户环境也能用」的预设时使用。
 
 ```js
 const ctx = Luker.getContext();

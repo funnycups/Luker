@@ -258,7 +258,7 @@ convertCharacterBook(characterBook: V2CharacterBook): {
 context.worldInfoEntry.template: WIEntry
 ```
 
-條目的標準預設結構（佔位 `uid: 0`、空 key 清單、`position: 0` 等）。批次建構條目時用「複製—修改」方式使用,這樣未來 schema 新增欄位會自動跟上。
+條目的標準預設結構（佔位 `uid: 0`、空 key 清單、`position: 0` 等）。批次建構條目時用「複製—修改」方式使用，這樣未來 schema 新增欄位會自動跟上。
 
 ```js
 const ctx = Luker.getContext();
@@ -271,7 +271,7 @@ const fresh = { ...ctx.worldInfoEntry.template, uid: newUid, key: ['npc:Bob'], c
 context.worldInfoEntry.create(name: string, data: WorldInfoData): WIEntry
 ```
 
-在指定的世界書 `data` 中建立並插入一筆新條目,回傳插入的條目物件。會分配下一個空閒 `uid`,填預設值,並就地修改 `data.entries`。之後用 `saveWorldInfo()` 持久化。
+在指定的世界書 `data` 中建立並插入一筆新條目，回傳插入的條目物件。會分配下一個空閒 `uid`，填預設值，並就地修改 `data.entries`。之後用 `saveWorldInfo()` 持久化。
 
 ### worldInfoEntry.delete
 
@@ -279,7 +279,7 @@ context.worldInfoEntry.create(name: string, data: WorldInfoData): WIEntry
 context.worldInfoEntry.delete(data: WorldInfoData, uid: number, options?: { silent?: boolean }): Promise<boolean>
 ```
 
-從 `data.entries` 中移除指定 `uid` 的條目,回傳刪除是否成功。傳 `silent: true` 跳過給使用者的確認 toast——批次程式化編輯時有用。之後用 `saveWorldInfo()` 持久化。
+從 `data.entries` 中移除指定 `uid` 的條目，回傳刪除是否成功。傳 `silent: true` 跳過給使用者的確認 toast——批次程式化編輯時有用。之後用 `saveWorldInfo()` 持久化。
 
 ### worldInfoEntry.setButtonClass
 
@@ -299,7 +299,7 @@ context.worldInfoEntry.setGlobalSelection(
 ): Promise<void>
 ```
 
-把某本世界書加入或移出全域啟用清單（即世界書面板頂部的多選）。立即持久化;UI 在下次 selector 重整時同步。
+把某本世界書加入或移出全域啟用清單（即世界書面板頂部的多選）。立即持久化；UI 在下次 selector 重整時同步。
 
 ### worldInfoEntry.getSorted
 
@@ -307,11 +307,11 @@ context.worldInfoEntry.setGlobalSelection(
 context.worldInfoEntry.getSorted(): Promise<WIEntry[]>
 ```
 
-回傳目前所有啟用世界書（按聊天 + 全域 + 角色主書 + 角色輔助書）裡的全部條目,預先合併並依注入順序排好。需要拿到「掃描器當下看到的視圖」時用——例如外掛想列「現在哪些條目有資格觸發」而不想重新跑一遍完整啟用流程。
+回傳目前所有啟用世界書（按聊天 + 全域 + 角色主書 + 角色輔助書）裡的全部條目，預先合併並依注入順序排好。需要拿到「掃描器當下看到的視圖」時用——例如外掛想列「現在哪些條目有資格觸發」而不想重新跑一遍完整啟用流程。
 
 ## 聊天綁定的世界書
 
-按聊天的世界書綁定存在 `chat_metadata.world_info` 中,跟著聊天走。用 `context.chatWorldInfo` 檢視與修改。
+按聊天的世界書綁定存在 `chat_metadata.world_info` 中，跟著聊天走。用 `context.chatWorldInfo` 檢視與修改。
 
 ### chatWorldInfo.getNames
 
@@ -322,7 +322,7 @@ context.chatWorldInfo.getNames(
 ): string[]
 ```
 
-回傳綁定到該聊天的世界書名稱清單。預設走當前聊天的 metadata。`resolveNames: true`（預設）把 uid 形式的條目映射回檔名;`onlyExisting: true`（預設）捨棄檔案已不存在的名稱。
+回傳綁定到該聊天的世界書名稱清單。預設走當前聊天的 metadata。`resolveNames: true`（預設）把 uid 形式的條目映射回檔名；`onlyExisting: true`（預設）捨棄檔案已不存在的名稱。
 
 ### chatWorldInfo.setSelection
 
@@ -330,7 +330,7 @@ context.chatWorldInfo.getNames(
 context.chatWorldInfo.setSelection(names: string[], metadata?: object): boolean
 ```
 
-把聊天綁定的世界書選擇替換為 `names`。就地修改 metadata,回傳選擇是否實際變了。呼叫者透過 `saveMetadata()` / `saveMetadataDebounced()` 持久化。
+把聊天綁定的世界書選擇替換為 `names`。就地修改 metadata，回傳選擇是否實際變了。呼叫者透過 `saveMetadata()` / `saveMetadataDebounced()` 持久化。
 
 ### chatWorldInfo.globalSelection
 

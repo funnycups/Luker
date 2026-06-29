@@ -208,7 +208,7 @@ context.saveSettingsDebounced(): void
 context.saveSettings(loopCounter?: number, options?: object): Promise<void>
 ```
 
-`saveSettingsDebounced` 的可 await 版本。繞過防抖佇列,網路往返完成後才解析。僅當後續邏輯依賴「設定已落盤」時才用（少見——絕大多數呼叫點都應優先選防抖版）。
+`saveSettingsDebounced` 的可 await 版本。繞過防抖佇列，網路往返完成後才解析。僅當後續邏輯依賴「設定已落盤」時才用（少見——絕大多數呼叫點都應優先選防抖版）。
 
 ### saveMetadataDebounced
 
@@ -395,7 +395,7 @@ shouldSendOnEnter(): boolean
 context.escapeHtml(str: string): string
 ```
 
-跳脫 `&`、`<`、`>`、`"`、`'`,便於把純文字安全嵌入 HTML。比手寫跳脫更穩。
+跳脫 `&`、`<`、`>`、`"`、`'`，便於把純文字安全嵌入 HTML。比手寫跳脫更穩。
 
 ### download
 
@@ -449,11 +449,11 @@ context.performFuzzySearch(
 ): Array<{ item: object, score: number, refIndex: number }>
 ```
 
-在平台已命名的某個索引（`'characters'`、`'groups'`、`'tags'` 等）上跑一次 Fuse.js 模糊比對,按相關度排序回傳 Fuse 風格的結果物件。傳入一個 out-cache 物件可在多次呼叫之間複用建好的索引。
+在平台已命名的某個索引（`'characters'`、`'groups'`、`'tags'` 等）上跑一次 Fuse.js 模糊比對，按相關度排序回傳 Fuse 風格的結果物件。傳入一個 out-cache 物件可在多次呼叫之間複用建好的索引。
 
 ## 函式庫捆綁（Lib Bundle）
 
-外掛偶爾需要用到核心已經打包進 `lib.core.bundle.js` 的第三方函式庫。比起在每個外掛裡再打一次或者依賴全域物件,建議走 `context.lib`。
+外掛偶爾需要用到核心已經打包進 `lib.core.bundle.js` 的第三方函式庫。比起在每個外掛裡再打一次或者依賴全域物件，建議走 `context.lib`。
 
 ### context.lib
 
@@ -519,7 +519,7 @@ context.embeddingService: {
 }
 ```
 
-vectors / memory-graph 子系統共用的向量嵌入服務,會按當前設定的嵌入 provider 走。需要做相似度檢索又不想自己重寫一次 provider 裝配的外掛可以用。
+vectors / memory-graph 子系統共用的向量嵌入服務，會按當前設定的嵌入 provider 走。需要做相似度檢索又不想自己重寫一次 provider 裝配的外掛可以用。
 
 ## Symbols 與常數
 
@@ -581,7 +581,7 @@ context.CONNECT_API_MAP: Record<string, ConnectApiEntry>
 context.createModelIcon(apiName: string, modelName?: string): string
 ```
 
-回傳某 provider 品牌圖示的內聯 SVG 標記,尺寸適合嵌在下拉選單 / chip 中和模型名並排。`apiName` 傳 `CONNECT_API_MAP` 的某個 key;可選的 `modelName` 讓 helper 挑特定模型的變體（例如 Claude 普通 vs Claude reasoning）。
+回傳某 provider 品牌圖示的內聯 SVG 標記，尺寸適合嵌在下拉選單 / chip 中和模型名並排。`apiName` 傳 `CONNECT_API_MAP` 的某個 key；可選的 `modelName` 讓 helper 挑特定模型的變體（例如 Claude 普通 vs Claude reasoning）。
 
 ### mainApi / maxContext / menuType
 

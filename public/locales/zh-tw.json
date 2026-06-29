@@ -97,10 +97,10 @@
     "Set to get deterministic results. Use -1 for random seed.": "設定數值以取得可重現的結果。使用 -1 作為隨機種子",
     "Temperature controls the randomness in token selection": "溫度（Temperature）控制符元選擇的隨機性。\n- 低溫（<1.0）：產生更可預測且具邏輯性的文字，優先選擇機率較高的符元。\n- 高溫（>1.0）：提升創造性與輸出的多樣性，更常選擇機率較低的符元。\n將值設為 1.0 可使用原始機率。",
     "Top_K_desc": "Top K 設定可以選擇的最高符元數量。\n例如，Top K 為 20，這意味著只保留排名前 20 的符元（無論它們的機率是多樣還是有限的）。\n設定為 0 以停用。",
-    "Top_P_desc": "Top P(又名核心取樣) 會將所有頂級符元加總，直到達到目標百分比。\n例如，如果前兩個符元都是 25%，而 Top P 設為 0.5，那麼只有前兩個符元會被考慮。\n設定為 1.0 以停用。",
+    "Top_P_desc": "Top P（又名核心取樣） 會將所有頂級符元加總，直到達到目標百分比。\n例如，如果前兩個符元都是 25%，而 Top P 設為 0.5，那麼只有前兩個符元會被考慮。\n設定為 1.0 以停用。",
     "Typical P": "Typical P",
     "Typical_P_desc": "Typical P 取樣根據符元偏離集合平均熵的程度進行優先排序。\n它會保留累積機率接近預設閾值（例如 0.5）的符元，強調那些具有平均資訊量的符元。\n設定為 1.0 以停用。",
-    "Min_P_desc": "Min P 設定基本最小機率。\n這個值會根據最高符元的機率進行調整。例如，如果最高符元機率為 80%,而 Min P 設為 0.1，那麼只有機率高於 8% 的符元會被考慮。\n設定為 0 以停用。",
+    "Min_P_desc": "Min P 設定基本最小機率。\n這個值會根據最高符元的機率進行調整。例如，如果最高符元機率為 80%，而 Min P 設為 0.1，那麼只有機率高於 8% 的符元會被考慮。\n設定為 0 以停用。",
     "Top_A_desc": "Top A 根據最高符元機率的平方設定符元選擇的門檻。\n例如，如果 Top A 值為 0.2，而最高符元機率為 50%，那麼低於 5%(0.2 * 0.5^2) 的符元機率就會被排除。\n設定為 0 以停用。",
     "Tail_Free_Sampling_desc": "無尾取樣（Tail-Free Sampling, TFS）會透過分析符元機率的變化率（使用導數）來尋找分佈中的低機率符元尾部。\n它會根據標準化的二階導數，保留直到某個閾值（例如 0.3）的符元。\n數值越接近 0，表示會棄去越多符元。設定為 1.0 以停用。",
     "rep.pen range": "重複懲罰範圍",
@@ -1293,7 +1293,7 @@
     "Source": "來源",
     "sd_auto_url": "範例：{{auto_url}}",
     "Authentication (optional)": "授權驗證（選填）",
-    "Example: username:password": "範例：帳號:密碼",
+    "Example: username:password": "範例：帳號：密碼",
     "Important:": "重要：",
     "sd_auto_auth_warning_1": "使用",
     "sd_auto_auth_warning_2": "旗標執行 SD Web UI！伺服器必須能夠被 Luker 主機存取。",
@@ -3183,8 +3183,8 @@
     "Chat sync: integrity drift detected, auto-recovering.": "聊天同步：偵測到完整性漂移，正在自動還原。",
     "Chat sync: snapshot conflict detected, auto-recovering.": "聊天同步：偵測到快照衝突，正在自動還原。",
     "Chat write conflict": "聊天寫入衝突",
-    "server: ${0}": "伺服端:${0}",
-    "diverge: ${0}": "差異:${0}",
+    "server: ${0}": "伺服端：${0}",
+    "diverge: ${0}": "差異：${0}",
     "Chat deleted.": "聊天已刪除。",
     "Chat files associated with deleted characters.": "與已刪除角色相關聯的聊天檔案。",
     "Chat files associated with deleted groups.": "與已刪除群組相關聯的聊天檔案。",
@@ -3547,8 +3547,8 @@
     "Model Id": "模型 ID",
     "Model Name": "模型名稱",
     "Model Quantizations": "模型量化",
-    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${entryCount}": "此世界書有超過 100 個條目。如果不選擇比它更高的數字，更靠後的條目將預設變為 0。<br />(通常預設值：100)<br />最小值：${entryCount}",
-    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${0}": "此世界書有超過 100 個條目。如果不選擇比它更高的數字，更靠後的條目將預設變為 0。<br />(通常預設值：100)<br />最小值：${0}",
+    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${entryCount}": "此世界書有超過 100 個條目。如果不選擇比它更高的數字，更靠後的條目將預設變為 0。<br />（通常預設值：100）<br />最小值：${entryCount}",
+    "More than 100 entries in this world. If you don't choose a number higher than that, the lower entries will default to 0.<br />(Usual default: 100)<br />Minimum: ${0}": "此世界書有超過 100 個條目。如果不選擇比它更高的數字，更靠後的條目將預設變為 0。<br />（通常預設值：100）<br />最小值：${0}",
     "Move": "移動",
     "Move extension": "移動擴充套件",
     "Move/Copy '${sourceName}' to:": "將 '${sourceName}' 移動/複製到：",
@@ -4817,7 +4817,7 @@
     "No wire messages.": "無出站訊息。",
     "Other Params": "其他參數",
     "Response Body": "回應正文",
-    "(empty)": "(空)",
+    "(empty)": "（空）",
     "Search source / model / messages / response...": "搜尋 來源 / 模型 / 訊息 / 回應…",
     "Search in this request...": "在此請求內搜尋…",
     "Function Call": "函式呼叫",
@@ -4928,7 +4928,7 @@
     ,"On": "開"
     ,"currently On": "目前：開"
     ,"currently Off": "目前：關"
-    ,"New value:": "新值:"
+    ,"New value:": "新值："
     ,"Mixed values across selected entries": "各條目目前值不一致"
     ,"For each option: choose Keep / On / Off": "每列可選：保持不變 / 開 / 關"
     ,"Select…": "選擇…"
@@ -4937,7 +4937,7 @@
     ,"Invalid value": "輸入無效"
     ,"Set ${0}": "設定 ${0}"
     ,"${0} entries selected": "已選 ${0} 個條目"
-    ,"Updated ${0} entries: ${1}": "已更新 ${0} 個條目: ${1}"
+    ,"Updated ${0} entries: ${1}": "已更新 ${0} 個條目： ${1}"
     ,"Reverted ${0} entries": "已撤銷 ${0} 個條目"
     ,"No changes — all selected entries already had this value": "無變化 — 所有選取條目都已是該值"
     ,"No changes — all options are set to Keep": "無變化 — 所有選項都是保持不變"
@@ -5017,14 +5017,14 @@
     ,"Loop Orchestration": "迴圈編排"
     ,"Loop Agent": "迴圈 Agent"
     ,"Loop tools": "迴圈工具"
-    ,"note (persistent notes)": "note(持久化便箋)"
-    ,"chat (in-chat history)": "chat(聊天歷史)"
-    ,"lorebook (world info)": "lorebook(世界書)"
-    ,"custom (extension + profile tools)": "custom(擴充功能與 profile 工具)"
-    ,"memory (memory-graph)": "memory(記憶圖)"
-    ,"search (web search)": "search(聯網搜尋)"
+    ,"note (persistent notes)": "note（持久化便箋）"
+    ,"chat (in-chat history)": "chat（聊天歷史）"
+    ,"lorebook (world info)": "lorebook（世界書）"
+    ,"custom (extension + profile tools)": "custom（擴充功能與 profile 工具）"
+    ,"memory (memory-graph)": "memory（記憶圖）"
+    ,"search (web search)": "search（聯網搜尋）"
     ,"terminator": "終止器"
-    ,"(forced on)": "(強制開啟)"
+    ,"(forced on)": "（強制開啟）"
     ,"Loop API preset (Connection profile, empty = global orchestration API preset)": "迴圈 API 預設（Connection profile，留空 = 全域編排 API 預設）"
     ,"Loop preset (params + prompt, empty = global orchestration preset)": "迴圈預設（參數 + prompt，留空 = 全域編排預設）"
     ,"Loop system prompt": "迴圈 system prompt"
@@ -5084,7 +5084,7 @@
     ,"User": "使用者"
     ,"Assistant": "助手"
     ,"round ${0}": "第 ${0} 輪"
-    ,"(empty)": "(空)"
+    ,"(empty)": "（空）"
     ,"Todo Board": "任務看板"
     ,"Todo board is empty.": "任務看板為空。"
     ,"Planner Rounds": "Planner 輪次"
@@ -5100,7 +5100,7 @@
     ,"done": "完成"
     ,"blocked": "阻塞"
     ,"dropped": "已丟棄"
-    ,"(none)": "(無)"
+    ,"(none)": "（無）"
     ,"Director (multi-agent)": "導演模式（多 agent）"
     ,"Main agent": "主代理"
     ,"Main agent tools": "主代理工具"
@@ -5340,10 +5340,10 @@
     ,"Preview unavailable": "預覽不可用"
     ,"Max context unlocked": "解鎖最大上下文"
     ,"No data": "暫無資料"
-    ,"(was ${0} → now ${1})": "(待修改:${0} → ${1})"
+    ,"(was ${0} → now ${1})": "（待修改：${0} → ${1}）"
     ,"No preset loaded.": "未載入預設。"
     ,"Live target preview": "即時目標預覽"
-    ,"Pending applied (preview):": "套用後(預覽):"
+    ,"Pending applied (preview):": "套用後（預覽）:"
     ,"Resize columns": "拖動調整寬度"
     ,"New messages while you were on Preview": "在預覽頁面時收到的新訊息"
     ,"Schema": "Schema"
@@ -5374,7 +5374,7 @@
     ,"Character fields": "角色欄位"
     ,"Bound lorebook": "綁定世界書"
     ,"No character loaded.": "未載入角色。"
-    ,"(click to expand)": "(點擊展開)"
+    ,"(click to expand)": "（點擊展開）"
     ,"World book: ${0}": "世界書：${0}"
     ,"Auto-apply AI proposed changes": "自動套用 AI 提議的變更"
     ,"Draft (not applied)": "草稿（未套用）"
@@ -5403,7 +5403,7 @@
     ,"Apply failed: ${0}": "套用失敗：${0}"
     ,"Applied ${0} edit(s) to ${1}": "已套用 ${0} 條編輯到 ${1}"
     ,"Applied ${0} of ${1} edit(s) to ${2}; ${3} skipped": "已套用 ${0}/${1} 條編輯到 ${2};${3} 條跳過"
-    ,"Applied ${0} of ${1} change(s); ${2} skipped": "已套用 ${0}/${1} 項變更;${2} 項跳過"
+    ,"Applied ${0} of ${1} change(s); ${2} skipped": "已套用 ${0}/${1} 項變更；${2} 項跳過"
     ,"No edits applied to ${0}: all ${1} were skipped (conflicts or already in desired state)": "未套用任何編輯到 ${0}：全部 ${1} 條都被跳過（衝突或已是期望狀態）"
     ,"No edits applied: all ${0} were skipped (conflicts or already in desired state)": "未套用任何編輯：全部 ${0} 條都被跳過（衝突或已是期望狀態）"
     ,"Edit error: ${0}": "編輯錯誤：${0}"
@@ -5413,9 +5413,9 @@
     ,"Failed to save character: ${0}": "儲存角色失敗：${0}"
     ,"Session finalized": "會話已完成"
     ,"No presets": "暫無預設"
-    ,"Field updated: ${0}": "欄位已更新:${0}"
+    ,"Field updated: ${0}": "欄位已更新：${0}"
     ,"Show ${0} more entries": "展開剩餘 ${0} 條"
-    ,"Working profile reset to a blank shell — building this card's orchestration from scratch.": "工作中的設定已重置為空白範本,將從零開始為這張角色卡編寫編排。"
+    ,"Working profile reset to a blank shell — building this card's orchestration from scratch.": "工作中的設定已重置為空白範本，將從零開始為這張角色卡編寫編排。"
     ,"Working profile reset to match the current global profile — adjust from there.": "工作中的設定已重置為當前全域設定——請在此基礎上調整。"
     ,"Schema reset to a blank shell — building from scratch.": "結構已重置為空白範本——從零開始搭建。"
     ,"Schema reset to match the current global schema — adjust from there.": "結構已重置為當前全域結構——請在此基礎上調整。"
@@ -5426,16 +5426,16 @@
     ,"✓ Applied at ${0}": "✓ 已套用於 ${0}"
     ,"Apply ${0}": "套用 ${0}"
     ,"Rollback this round": "回退本輪"
-    ,"Roll back ${0} change(s) from this round?": "確認回退本輪的 ${0} 項變更?"
+    ,"Roll back ${0} change(s) from this round?": "確認回退本輪的 ${0} 項變更？"
     ,"Rolled back ${0} change(s).": "已回退 ${0} 項變更。"
-    ,"Batch rollback finished with ${0} failure(s).": "批次回退完成,${0} 項失敗。"
-    ,"(untitled entry)": "(無標題條目)"
+    ,"Batch rollback finished with ${0} failure(s).": "批次回退完成，${0} 項失敗。"
+    ,"(untitled entry)": "（無標題條目）"
     ,"${0} entries": "${0} 條"
     ,"${0} pending": "${0} 項待批准"
     ,"${0} draft": "${0} 項草稿"
     ,"Error: ${0}": "錯誤：${0}"
     ,"Auto-continue": "自動續輪"
-    ,"AI read the indicated data and is waiting to act on the result next round.": "AI 讀取了相關資料,等待下一輪根據結果調整。"
+    ,"AI read the indicated data and is waiting to act on the result next round.": "AI 讀取了相關資料，等待下一輪根據結果調整。"
     ,"Just imported this card — review the baseline and suggest tweaks.": "剛匯入這張卡——回顧基礎設定並提出調整建議。"
 
     ,"Continue iteration": "繼續迭代"

@@ -208,7 +208,7 @@ debounce 形式的持久化触发。修改 `extensionSettings` 或任何设置�
 context.saveSettings(loopCounter?: number, options?: object): Promise<void>
 ```
 
-`saveSettingsDebounced` 的可 await 版本。绕过 debounce 队列,网络往返完成后才解决。仅当后续逻辑依赖「设置已落盘」时才用（罕见——绝大多数调用点都应优先选 debounce 版）。
+`saveSettingsDebounced` 的可 await 版本。绕过 debounce 队列，网络往返完成后才解决。仅当后续逻辑依赖「设置已落盘」时才用（罕见——绝大多数调用点都应优先选 debounce 版）。
 
 ### saveMetadataDebounced
 
@@ -395,7 +395,7 @@ shouldSendOnEnter(): boolean
 context.escapeHtml(str: string): string
 ```
 
-转义 `&`、`<`、`>`、`"`、`'`,便于把纯文本安全嵌入 HTML。比手写转义更稳。
+转义 `&`、`<`、`>`、`"`、`'`，便于把纯文本安全嵌入 HTML。比手写转义更稳。
 
 ### download
 
@@ -449,11 +449,11 @@ context.performFuzzySearch(
 ): Array<{ item: object, score: number, refIndex: number }>
 ```
 
-在平台已命名的某个索引（`'characters'`、`'groups'`、`'tags'` 等）上跑一次 Fuse.js 模糊匹配,按相关度排序返回 Fuse 风格的结果对象。传入一个 out-cache 对象可在多次调用之间复用构建好的索引。
+在平台已命名的某个索引（`'characters'`、`'groups'`、`'tags'` 等）上跑一次 Fuse.js 模糊匹配，按相关度排序返回 Fuse 风格的结果对象。传入一个 out-cache 对象可在多次调用之间复用构建好的索引。
 
 ## 库捆绑（Lib Bundle）
 
-插件偶尔需要用到核心已经打包进 `lib.core.bundle.js` 的第三方库。比起在每个插件里再打一遍或者依赖全局对象,推荐走 `context.lib`。
+插件偶尔需要用到核心已经打包进 `lib.core.bundle.js` 的第三方库。比起在每个插件里再打一遍或者依赖全局对象，推荐走 `context.lib`。
 
 ### context.lib
 
@@ -519,7 +519,7 @@ context.embeddingService: {
 }
 ```
 
-vectors / memory-graph 子系统共用的向量嵌入服务,会按当前配置的嵌入 provider 走。需要做相似度检索又不想自己复写一遍 provider 装配的插件可以用。
+vectors / memory-graph 子系统共用的向量嵌入服务，会按当前配置的嵌入 provider 走。需要做相似度检索又不想自己复写一遍 provider 装配的插件可以用。
 
 ## 符号与常量
 
@@ -581,7 +581,7 @@ context.CONNECT_API_MAP: Record<string, ConnectApiEntry>
 context.createModelIcon(apiName: string, modelName?: string): string
 ```
 
-返回某 provider 品牌图标的内联 SVG 标记,尺寸适合嵌在下拉框 / chip 里和模型名并排。`apiName` 传 `CONNECT_API_MAP` 的某个 key;可选的 `modelName` 让 helper 挑特定模型的变体（例如 Claude 普通 vs Claude reasoning）。
+返回某 provider 品牌图标的内联 SVG 标记，尺寸适合嵌在下拉框 / chip 里和模型名并排。`apiName` 传 `CONNECT_API_MAP` 的某个 key；可选的 `modelName` 让 helper 挑特定模型的变体（例如 Claude 普通 vs Claude reasoning）。
 
 ### mainApi / maxContext / menuType
 

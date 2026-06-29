@@ -479,7 +479,7 @@ context.openai: {
 }
 ```
 
-處理 chat completion 連線狀態的輔助集合。`proxies` 是使用者設定的反向代理實時清單;`ZAI_ENDPOINT` 列出已知的智譜 / Z.AI 端點 URL;`stripPresetConnectionFields` 回傳去掉連線相關欄位（API source、模型、proxy 等）的預設複本——匯出「不同使用者環境也能用」的預設時使用。
+處理 chat completion 連線狀態的輔助集合。`proxies` 是使用者設定的反向代理實時清單；`ZAI_ENDPOINT` 列出已知的智譜 / Z.AI 端點 URL;`stripPresetConnectionFields` 回傳去掉連線相關欄位（API source、模型、proxy 等）的預設複本——匯出「不同使用者環境也能用」的預設時使用。
 
 ```js
 const ctx = Luker.getContext();
