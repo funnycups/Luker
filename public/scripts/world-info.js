@@ -10318,7 +10318,29 @@ export async function importEmbeddedWorldInfo(skipPopup = false) {
 
     await saveWorldInfo(bookName, convertedBook, true);
     await updateWorldInfoList();
+    // Persist the binding into the in-memory character data BEFORE the
+    // visible select fires its change handler. The legacy code only set
+    // `$('#character_world').val(bookName)` — that updates the dropdown
+    // text but does NOT touch `characters[chid].data.extensions.world`.
+    // Any subsequent `saveCharacterDebounced()` -> `/edit` would then
+    // POST the OLD value of `extensions.world` (e.g. empty for a freshly
+    // replaced card) and silently wipe the binding on disk. That's the
+    // bug behind "I imported the embedded book, button briefly lit up,
+    // then went gray again and reload showed nothing bound". Persist
+    // the new binding via writeExtensionField so the on-disk state
+    // matches the visible select.
+    if (characters[chid] && typeof characters[chid].data === 'object') {
+        if (!characters[chid].data.extensions || typeof characters[chid].data.extensions !== 'object') {
+            characters[chid].data.extensions = {};
+        }
+        characters[chid].data.extensions.world = bookName;
+    }
     $('#character_world').val(bookName).trigger('change');
+    try {
+        await writeExtensionField(chid, 'world', bookName);
+    } catch (error) {
+        console.warn('importEmbeddedWorldInfo: failed to persist character world binding via writeExtensionField', error);
+    }
 
     toastr.success(t`The world '${bookName}' has been imported and linked to the character successfully.`, t`World/Lorebook imported`);
 
