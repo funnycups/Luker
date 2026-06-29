@@ -18,6 +18,12 @@ import { assertSafeRepoName } from '../storage/name-validation.js';
  * flag so the caller can decide whether to write the normalized shape back to
  * disk and avoid hitting this hot path again next read.
  *
+ * Also heals `originalData.entries` items left behind by `convertCharacterBook`:
+ * those carry only `id` (the V2/V3 character_book spec field), but the client
+ * delete/update helpers look up by `uid`. The mismatch means deleted entries
+ * silently linger in `originalData`, and when the user later exports the world
+ * the ghost entries ship along.
+ *
  * @param {unknown} file
  * @returns {{ file: object, changed: boolean }}
  */
@@ -25,18 +31,65 @@ export function normalizeWorldInfoFile(file) {
     if (!_.isObjectLike(file) || Array.isArray(file)) {
         return { file, changed: false };
     }
-    if (!Array.isArray(file.entries)) {
-        return { file, changed: false };
+
+    let workingFile = file;
+    let changed = false;
+
+    if (Array.isArray(workingFile.entries)) {
+        const fixedEntries = {};
+        workingFile.entries.forEach((entry, index) => {
+            if (!_.isObjectLike(entry) || Array.isArray(entry)) return;
+            const rawUid = entry.uid;
+            const numericUid = Number(rawUid);
+            const uid = Number.isFinite(numericUid) ? numericUid : index;
+            fixedEntries[String(uid)] = { ...entry, uid };
+        });
+        workingFile = { ...workingFile, entries: fixedEntries };
+        changed = true;
     }
-    const fixedEntries = {};
-    file.entries.forEach((entry, index) => {
-        if (!_.isObjectLike(entry) || Array.isArray(entry)) return;
-        const rawUid = entry.uid;
-        const numericUid = Number(rawUid);
-        const uid = Number.isFinite(numericUid) ? numericUid : index;
-        fixedEntries[String(uid)] = { ...entry, uid };
-    });
-    return { file: { ...file, entries: fixedEntries }, changed: true };
+
+    const originalEntries = workingFile.originalData?.entries;
+    if (Array.isArray(originalEntries) && originalEntries.some((e) => _.isObjectLike(e) && e?.uid === undefined)) {
+        const fixedOriginal = originalEntries.map((entry, index) => {
+            if (!_.isObjectLike(entry) || Array.isArray(entry)) return entry;
+            if (entry.uid !== undefined) return entry;
+            const fallbackUid = entry.id !== undefined ? entry.id : index;
+            return { ...entry, uid: fallbackUid };
+        });
+        workingFile = {
+            ...workingFile,
+            originalData: { ...workingFile.originalData, entries: fixedOriginal },
+        };
+        changed = true;
+    }
+
+    // Sweep orphans: originalData entries whose uid no longer exists in the
+    // live `entries` map are leftover from pre-fix deletes that only touched
+    // `entries`. Drop them so the next export does not ship ghost entries.
+    // Skipped when the live `entries` map is empty — keeping originalData
+    // intact protects books that legitimately use it as a snapshot.
+    const liveEntries = workingFile.entries;
+    const sweepableOriginal = workingFile.originalData?.entries;
+    if (Array.isArray(sweepableOriginal)
+        && _.isObjectLike(liveEntries) && !Array.isArray(liveEntries)
+        && Object.keys(liveEntries).length > 0) {
+        const liveUids = new Set(Object.keys(liveEntries));
+        const surviving = sweepableOriginal.filter((entry) => {
+            if (!_.isObjectLike(entry) || Array.isArray(entry)) return true;
+            const uid = entry.uid;
+            if (uid === undefined) return true;
+            return liveUids.has(String(uid));
+        });
+        if (surviving.length !== sweepableOriginal.length) {
+            workingFile = {
+                ...workingFile,
+                originalData: { ...workingFile.originalData, entries: surviving },
+            };
+            changed = true;
+        }
+    }
+
+    return { file: workingFile, changed };
 }
 
 /**

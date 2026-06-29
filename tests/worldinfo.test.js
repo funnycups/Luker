@@ -86,4 +86,93 @@ describe('normalizeWorldInfoFile', () => {
         expect(normalizeWorldInfoFile(null)).toEqual({ file: null, changed: false });
         expect(normalizeWorldInfoFile([1, 2])).toEqual({ file: [1, 2], changed: false });
     });
+
+    test('heals originalData.entries items that only carry id (legacy convertCharacterBook output)', () => {
+        const file = {
+            entries: {
+                '0': { uid: 0, content: 'A' },
+                '2': { uid: 2, content: 'C' },
+            },
+            originalData: {
+                entries: [
+                    { id: 0, content: 'A', comment: 'kept' },
+                    { id: 1, content: 'B', comment: 'STALE' },
+                    { id: 2, content: 'C' },
+                ],
+            },
+        };
+        const { file: out, changed } = normalizeWorldInfoFile(file);
+        expect(changed).toBe(true);
+        expect(Array.isArray(out.originalData.entries)).toBe(true);
+        for (const entry of out.originalData.entries) {
+            expect(entry.uid).toBe(entry.id);
+        }
+    });
+
+    test('keeps originalData entries that already carry uid unchanged', () => {
+        const file = {
+            entries: { '0': { uid: 0 } },
+            originalData: {
+                entries: [{ id: 0, uid: 0, comment: 'ok' }],
+            },
+        };
+        const { file: out, changed } = normalizeWorldInfoFile(file);
+        expect(changed).toBe(false);
+        expect(out).toBe(file);
+    });
+
+    test('falls back to array index when an originalData entry lacks both id and uid', () => {
+        const file = {
+            entries: { '0': { uid: 0 }, '5': { uid: 5 } },
+            originalData: {
+                entries: [{ content: 'no id' }, { id: 5, content: 'kept' }],
+            },
+        };
+        const { file: out, changed } = normalizeWorldInfoFile(file);
+        expect(changed).toBe(true);
+        expect(out.originalData.entries[0].uid).toBe(0);
+        expect(out.originalData.entries[1].uid).toBe(5);
+    });
+
+    test('leaves originalData alone when it is not the documented shape', () => {
+        const file = {
+            entries: { '0': { uid: 0 } },
+            originalData: { entries: 'not an array' },
+        };
+        const { file: out, changed } = normalizeWorldInfoFile(file);
+        expect(changed).toBe(false);
+        expect(out).toBe(file);
+    });
+
+    test('drops originalData entries whose uid is absent from the live entries map', () => {
+        const file = {
+            entries: {
+                '0': { uid: 0, comment: 'kept-A' },
+                '2': { uid: 2, comment: 'kept-C' },
+            },
+            originalData: {
+                entries: [
+                    { id: 0, uid: 0, comment: 'kept-A' },
+                    { id: 1, uid: 1, comment: 'ORPHAN-B' },
+                    { id: 2, uid: 2, comment: 'kept-C' },
+                ],
+            },
+        };
+        const { file: out, changed } = normalizeWorldInfoFile(file);
+        expect(changed).toBe(true);
+        const comments = out.originalData.entries.map((e) => e.comment);
+        expect(comments).toEqual(['kept-A', 'kept-C']);
+    });
+
+    test('does not drop originalData entries when the live entries map is missing or empty', () => {
+        const file = {
+            entries: {},
+            originalData: {
+                entries: [{ id: 0, uid: 0, comment: 'lonely' }],
+            },
+        };
+        const { file: out, changed } = normalizeWorldInfoFile(file);
+        expect(changed).toBe(false);
+        expect(out).toBe(file);
+    });
 });

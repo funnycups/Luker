@@ -9969,6 +9969,14 @@ export function convertCharacterBook(characterBook) {
         if (entry.id === undefined) {
             entry.id = index;
         }
+        // `originalData.entries[*]` is looked up by `uid` everywhere else
+        // (deleteWIOriginalDataValue, setWIOriginalDataValue,
+        // restoreDeletedWorldInfoEntries). Without this, deletes silently fail
+        // to clean the originalData copy and the deleted entry resurfaces in
+        // exported world JSON.
+        if (entry.uid === undefined) {
+            entry.uid = entry.id;
+        }
 
         result.entries[entry.id] = {
             ...newWorldInfoEntryTemplate,
