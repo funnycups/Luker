@@ -332,6 +332,16 @@ export async function getGroupChat(groupId, reload = false) {
             await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, (chat.length - 1), 'first_message');
         }
         await saveGroupChat(groupId, false);
+        // saveGroupChat rotates BE's integrity slug and writes the rotated value
+        // back to live chat_metadata via applyIntegrityFromWritePayloadToTarget.
+        // Our local `metadata` is a separate object that still holds the
+        // pre-save client-minted UUID; pull the rotated slug back into it so
+        // the updateChatMetadata stomp below doesn't revert chat_metadata to
+        // a stale integrity (which would then 409 the first user-message
+        // append against BE's rotated value).
+        if (chat_metadata?.integrity) {
+            metadata.integrity = chat_metadata.integrity;
+        }
     } else if (Array.isArray(data) && data.length) {
         chat.splice(0, chat.length, ...data);
         chat.forEach(ensureMessageMediaIsArray);
