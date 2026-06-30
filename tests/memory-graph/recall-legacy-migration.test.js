@@ -178,6 +178,15 @@ describe('normalizeLegacyRecallSettings', () => {
         expect(s).not.toHaveProperty('enableRerank');
     });
 
+    test('strips legacy mainInjectionAssistantTurnsWindow (collapsed into recentRawTurns)', () => {
+        const s = {
+            recallMethod: 'llm',
+            mainInjectionAssistantTurnsWindow: 7,
+        };
+        normalizeLegacyRecallSettings(s);
+        expect(s).not.toHaveProperty('mainInjectionAssistantTurnsWindow');
+    });
+
     test('coerces rag field types', () => {
         const s = {
             recallMethod: 'rag',
