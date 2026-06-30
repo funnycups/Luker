@@ -297,7 +297,7 @@ async function buildRecentChatIndexEntries(request) {
         const value = {
             file_id: name,
             file_name: `${name}.jsonl`,
-            file_size: '0',
+            file_size: formatBytes(info.byteSize),
             chat_items: info.messageCount,
             mes: lastMessage?.mes || '[The chat is empty]',
             last_mes,
@@ -437,7 +437,7 @@ export async function refreshRecentChatIndexEntry(request, filePath, overrides =
     const entry = {
         file_id: name,
         file_name: `${name}.jsonl`,
-        file_size: '0',
+        file_size: formatBytes(info.byteSize),
         chat_items: info.messageCount,
         mes: lastMessage?.mes || '[The chat is empty]',
         last_mes,
@@ -3170,7 +3170,7 @@ router.post('/group/info', async (request, response) => {
         return response.send({
             file_id: id,
             file_name: `${id}.jsonl`,
-            file_size: '0',
+            file_size: formatBytes(info.byteSize),
             chat_items: info.messageCount,
             mes: lastMessage?.mes || '[The chat is empty]',
             last_mes,
@@ -3626,8 +3626,10 @@ router.post('/search', validateAvatarUrlMiddleware, async function (request, res
 
             results.push({
                 file_name: `${entry.key.name}.jsonl`,
-                // file_size is omitted — we no longer have a cheap byte count
-                // and clients show it as a hint only.
+                file_size: formatBytes(Buffer.byteLength(
+                    (chat.header ? JSON.stringify(chat.header) : '') +
+                    (body.length ? '\n' + body.map((m) => JSON.stringify(m)).join('\n') : ''),
+                    'utf8')),
                 message_count: messageCount,
                 last_mes: last?.send_date || new Date(entry.updatedAt).toISOString(),
                 preview_message: getPreviewMessage(last?.mes || ''),

@@ -316,6 +316,13 @@ export class ChatRepo {
         if (chat == null) return null;
         const body = Array.isArray(chat.body) ? chat.body : [];
         const lastMessage = body.length > 0 ? body[body.length - 1] : null;
+        // Approximate jsonl byte size: header line + one line per message,
+        // utf-8 encoded. Within a few percent of the on-disk file (whitespace
+        // and trailing-newline differences) — used only as a UI hint.
+        const headerLine = chat.header ? JSON.stringify(chat.header) : '';
+        const bodyLines = body.map((m) => JSON.stringify(m)).join('\n');
+        const serialized = bodyLines ? `${headerLine}\n${bodyLines}` : headerLine;
+        const byteSize = Buffer.byteLength(serialized, 'utf8');
         return {
             handle,
             charDir,
@@ -323,6 +330,7 @@ export class ChatRepo {
             isGroup: !!isGroup,
             groupId: groupId || undefined,
             messageCount: body.length,
+            byteSize,
             lastMessage,
             chatMetadata: chat.header?.chat_metadata ?? {},
             updatedAt: chat.updatedAt,

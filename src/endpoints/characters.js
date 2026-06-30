@@ -14,7 +14,7 @@ import storage from 'node-persist';
 
 import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
 import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction, forbiddenRegExp } from '../middleware/validateFileName.js';
-import { deepMerge, humanizedDateTime, tryParse, tryReadFileSync, MemoryLimitedMap, getConfigValue, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements } from '../util.js';
+import { deepMerge, humanizedDateTime, tryParse, tryReadFileSync, MemoryLimitedMap, getConfigValue, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements, formatBytes } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
 import { invalidateThumbnail } from './thumbnails.js';
@@ -2308,7 +2308,7 @@ router.post('/chats', validateAvatarUrlMiddleware, async function (request, resp
             const item = {
                 file_id: entry.key.name,
                 file_name: `${entry.key.name}.jsonl`,
-                file_size: '0', // body byte size; UI tolerates absence
+                file_size: formatBytes(info.byteSize),
                 chat_items: info.messageCount,
                 mes: lastMessage?.mes || '[The chat is empty]',
                 last_mes: lastMessage?.send_date || new Date(info.updatedAt).toISOString(),
