@@ -2456,9 +2456,23 @@ function appendMissingModelOptions($select, modelIds) {
         if (!modelId || existing.has(modelId)) {
             continue;
         }
-        $select.append(new Option(modelId, modelId));
+        const option = new Option(modelId, modelId);
+        option.dataset.customModel = '1';
+        $select.append(option);
         existing.add(modelId);
     }
+}
+
+function removeStaleCustomModelOptions($select, keepIds) {
+    if (!$select?.length) {
+        return;
+    }
+    $select.find('option[data-custom-model="1"]').each(function () {
+        const value = String(this.value || '').trim();
+        if (!keepIds.has(value)) {
+            $(this).remove();
+        }
+    });
 }
 
 function applyCustomModelsToCurrentSource({ triggerModelChange = false, includeSelected = true } = {}) {
@@ -2471,10 +2485,13 @@ function applyCustomModelsToCurrentSource({ triggerModelChange = false, includeS
     const customModels = getCustomModelsForSource(source);
     const selectedModel = String(oai_settings[binding.settingKey] || '').trim();
     const allModels = (includeSelected && selectedModel) ? [...customModels, selectedModel] : customModels;
+    const keepIds = new Set(allModels);
 
     const targets = [binding.selector, ...(binding.extraSelectors || [])];
     for (const selector of targets) {
-        appendMissingModelOptions($(selector), allModels);
+        const $select = $(selector);
+        removeStaleCustomModelOptions($select, keepIds);
+        appendMissingModelOptions($select, allModels);
     }
 
     if (includeSelected && selectedModel) {
