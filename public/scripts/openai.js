@@ -6193,6 +6193,57 @@ async function maybeApplyCharacterBoundPreset() {
     }
 }
 
+let syncCharacterBoundPresetFromSettingsInFlight = false;
+let syncCharacterBoundPresetFromSettingsQueued = false;
+
+/**
+ * Mirror the current oai_settings back into the bound character's preset snapshot.
+ * Without this, edits made while a card-bound preset is active (sampler tweaks,
+ * prompt edits, prompt-group changes) live only in settings.json — the next
+ * character switch / reload calls maybeApplyCharacterBoundPreset, which loads
+ * the stale snapshot and overwrites oai_settings.extensions, silently dropping
+ * the user's work.
+ *
+ * Safe to call from SETTINGS_UPDATED: setCharacterBoundPresetValue short-circuits
+ * when the snapshot already matches, so the round-trip after onSettingsPresetChange
+ * does not loop.
+ */
+async function syncCharacterBoundPresetFromSettings() {
+    if (!characterBoundPresetState.active) {
+        return;
+    }
+    const presetName = String(characterBoundPresetState.runtimePresetName || '').trim();
+    if (!presetName) {
+        return;
+    }
+    const characterId = Number(this_chid);
+    if (!Number.isInteger(characterId)) {
+        return;
+    }
+    const character = getCharacterById(characterId);
+    if (!character) {
+        return;
+    }
+
+    if (syncCharacterBoundPresetFromSettingsInFlight) {
+        syncCharacterBoundPresetFromSettingsQueued = true;
+        return;
+    }
+    syncCharacterBoundPresetFromSettingsInFlight = true;
+    try {
+        do {
+            syncCharacterBoundPresetFromSettingsQueued = false;
+            const presetBody = getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
+            await setCharacterBoundPresetValue(characterId, presetName, presetBody);
+            characterBoundPresetState.runtimePresetBody = stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody));
+        } while (syncCharacterBoundPresetFromSettingsQueued);
+    } catch (error) {
+        console.error('Failed to sync character-bound chat completion preset from settings', error);
+    } finally {
+        syncCharacterBoundPresetFromSettingsInFlight = false;
+    }
+}
+
 async function bindCurrentChatCompletionPresetToCharacter(characterId = this_chid) {
     const character = getCharacterById(characterId);
     if (!character) {
@@ -8065,7 +8116,10 @@ async function onModelChange() {
 }
 
 async function onNewPresetClick() {
-    const name = await Popup.show.input(t`Preset name:`, t`Hint: Use a character/group name to bind preset to a specific chat.`, oai_settings.preset_settings_openai);
+    const defaultName = characterBoundPresetState.active && characterBoundPresetState.runtimePresetName
+        ? characterBoundPresetState.runtimePresetName
+        : oai_settings.preset_settings_openai;
+    const name = await Popup.show.input(t`Preset name:`, t`Hint: Use a character/group name to bind preset to a specific chat.`, defaultName);
 
     if (!name) {
         return;
@@ -9428,6 +9482,16 @@ export function initOpenAI() {
     });
 
     $('#update_oai_preset').on('click', async function () {
+        if (characterBoundPresetState.active) {
+            // The "update preset" button targets oai_settings.preset_settings_openai,
+            // which during character-bound mode still points to the pre-bind preset
+            // (onSettingsPresetChange skips updating it). Writing to that name would
+            // silently overwrite an unrelated global preset with the bound body.
+            // Instead, force-flush the snapshot back to the character card.
+            await syncCharacterBoundPresetFromSettings();
+            toastr.success(t`Preset updated`);
+            return;
+        }
         const name = oai_settings.preset_settings_openai;
         await saveOpenAIPreset(name, oai_settings, false);
         saveSettingsDebounced(0, { directSave: true });
@@ -9944,6 +10008,7 @@ export function initOpenAI() {
     $('#openai_proxy_preset').on('change', onProxyPresetChange);
 
     eventSource.makeFirst(event_types.CHAT_CHANGED, onOpenAIChatChanged);
+    eventSource.on(event_types.SETTINGS_UPDATED, syncCharacterBoundPresetFromSettings);
 }
 
 async function onOpenAIChatChanged() {

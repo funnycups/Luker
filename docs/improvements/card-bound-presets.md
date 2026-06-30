@@ -54,9 +54,17 @@ Luker tracks the currently used Persona in chat metadata. Each time the Persona 
 
 When reopening a chat, if the current Persona is detected to differ from the one recorded in the chat history, the user is notified via a prompt to avoid continuing the conversation under the wrong Persona.
 
+## Editing a Card-Bound Preset
+
+While a card-bound preset is active, any edit you make through the normal preset UI — sampler sliders, Prompt Manager entries, prompt groups, extension flags — is automatically mirrored back onto the Character Card. There is no separate "save to card" step: every settings save round-trips the latest preset body through the card's embedded snapshot.
+
+Clicking **Update Preset** while a card-bound preset is active writes to the card snapshot.
+
+To convert your edits into a standalone global preset, use **Save as new preset** instead, which prompts for a new name and registers it in the global preset list.
+
 ## Import and Export with Character Cards
 
-Bound presets and recommended Personas are part of the Character Card data and are automatically carried during Character Card import and export. Preset changes automatically sync to update the Character Card data, with processing executed asynchronously in the background to avoid blocking the interface.
+Bound presets and recommended Personas are part of the Character Card data and are automatically carried during Character Card import and export.
 
 ## Dependencies
 
