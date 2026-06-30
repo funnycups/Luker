@@ -69,12 +69,3 @@ appears in the group's Past Chats list and opens like any other group chat.
   automatically.
 - Works the same way in single-character chats and group chats. Same-source
   only: you cannot merge a character chat with a group chat.
-
-## How it works
-
-The server endpoints `POST /api/chats/merge` and `POST /api/chats/split`
-(and their `/group/*` counterparts) read each source through `ChatRepo`,
-build the new message arrays and chat headers entirely in memory, then
-write the new chats via `ChatRepo.save(...)`. Because both reads and writes
-go through the same repository abstraction, the feature works identically
-whether the storage engine is the filesystem, SQLite, MySQL, or PostgreSQL.
