@@ -84,6 +84,8 @@ import {
     validateVectorConfig,
     syncVectorIndex,
     ensureVectorIndexState,
+    buildCollectionId,
+    purgeVectorCollection,
 } from './vector-index.js';
 import {
     renderProfileSelect,
@@ -14502,6 +14504,14 @@ function bindUi() {
             resetResult = await deleteMemoryStoreByTarget(context, target);
         }
         await clearAllMemoryLorebookProjection(context, settings);
+        try {
+            const vectorConfig = getVectorConfigFromSettings(settings);
+            if (vectorConfig) {
+                await purgeVectorCollection(buildCollectionId(chatKey));
+            }
+        } catch (vectorError) {
+            console.warn(`[${MODULE_NAME}] Failed to purge vector collection on reset`, vectorError);
+        }
         refreshUiStats();
         if (resetResult.ok) {
             notifySuccess(i18n('Current chat memory graph reset.'));
