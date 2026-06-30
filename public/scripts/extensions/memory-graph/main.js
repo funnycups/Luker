@@ -173,8 +173,8 @@ const SUPPORTED_WORLD_INFO_POSITIONS = Object.freeze([
     world_info_position.atDepth,
 ]);
 
-const DEFAULT_EVENT_SUMMARY_COLUMN_HINT = 'Start with "时间：<time>；" using an explicit full in-world date/time or date span, then give a concise event abstraction with causality and outcome.';
-const DEFAULT_EVENT_EXTRACT_HINT = 'Critical plot events, turning points, commitments, betrayals, irreversible outcomes, and their explicit in-world time/time span written at the start of summary.';
+const DEFAULT_EVENT_SUMMARY_COLUMN_HINT = 'A prose body covering event skeleton, key decisions, and causal chains, with the in-world time and place anchors at the top and three optional structured sections at the end (不可逆 / 未结 / 原文摘录, all default empty). See the event summary writing standard for the exact format and section gating.';
+const DEFAULT_EVENT_EXTRACT_HINT = 'Critical plot events, turning points, commitments, betrayals, irreversible outcomes — written as a prose body with an in-world time and place anchor at the top, plus three optional sections at the end (不可逆 / 未结 / 原文摘录, default empty).';
 
 // Built-in node types shipped as the default schema. `thread` is the long-
 // running plotline / foreshadow / mystery tracker — high write threshold,
