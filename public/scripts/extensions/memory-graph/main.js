@@ -14673,13 +14673,7 @@ function bindUi() {
         updateUiStatus(i18nFormat('Downloaded memory graph file: ${0}', fileName));
     });
 
-    root.find('#luker_rpg_memory_import').off('click').on('click', async function () {
-        await ensureMemoryStoreLoaded(context);
-        const store = getMemoryStore(context);
-        if (!store) {
-            notifyError(i18n('No active chat selected.'));
-            return;
-        }
+    root.find('#luker_rpg_memory_import').off('click').on('click', function () {
         if (!importFileInput.length) {
             notifyError(i18n('Memory graph import failed.'));
             return;
