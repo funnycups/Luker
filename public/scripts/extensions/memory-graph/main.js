@@ -7299,9 +7299,15 @@ async function syncPersistentLorebookProjection(context, settings, store) {
     // a separate window. latestOnly types (character_sheet / location_state /
     // thread) are exempt from this offset inside collectAlwaysInjectNodes so
     // their current-truth snapshots still inject.
+    //
+    // The raw-visible region spans seq `[latestSeq - N + 1, latestSeq]`
+    // (N seqs, inclusive on both ends — matches `isNodeInRecentExcludeWindow`
+    // which uses `cutoff = latestSeq - N + 1`). `seqWindowFrom` is that lower
+    // bound; collectAlwaysInjectNodes drops nodes whose seqTo lands at or
+    // above it, keeping only nodes that end strictly before the raw region.
     const recentRawTurns = Math.max(0, Math.floor(Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)));
     const seqWindowFrom = recentRawTurns > 0
-        ? Math.max(0, getLatestSeqIndex(store) - recentRawTurns)
+        ? Math.max(0, getLatestSeqIndex(store) - recentRawTurns + 1)
         : undefined;
     const alwaysInjectNodes = collectAlwaysInjectNodes(
         store,
