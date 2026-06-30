@@ -382,3 +382,58 @@ describe('computeVectorSyncPlan', () => {
         }
     });
 });
+
+describe('computeVectorSyncPlan — rollup event exclusion', () => {
+    const profile = { source: 'openai', model: 'm' };
+
+    test('excludes rollup events (semanticDepth > 0) from toInsert', () => {
+        const store = {
+            nodes: {
+                leaf: { id: 'leaf', type: 'event', seqTo: 1, semanticDepth: 0, fields: { summary: 'leaf summary' } },
+                rollup1: { id: 'rollup1', type: 'event', seqTo: 5, semanticDepth: 1, fields: { summary: 'rollup d1 summary' } },
+                rollup2: { id: 'rollup2', type: 'event', seqTo: 10, semanticDepth: 2, fields: { summary: 'rollup d2 summary' } },
+            },
+        };
+        const plan = computeVectorSyncPlan(store, profile);
+        const ids = plan.toInsert.map(e => e.nodeId).sort();
+        expect(ids).toEqual(['leaf']);
+        expect(ids).not.toContain('rollup1');
+        expect(ids).not.toContain('rollup2');
+    });
+
+    test('excludes rollup events tagged via semanticRollup boolean', () => {
+        const store = {
+            nodes: {
+                leaf: { id: 'leaf', type: 'event', seqTo: 1, fields: { summary: 'leaf summary' } },
+                taggedRollup: { id: 'taggedRollup', type: 'event', seqTo: 5, semanticRollup: true, fields: { summary: 'rollup via flag' } },
+            },
+        };
+        const plan = computeVectorSyncPlan(store, profile);
+        const ids = plan.toInsert.map(e => e.nodeId);
+        expect(ids).toContain('leaf');
+        expect(ids).not.toContain('taggedRollup');
+    });
+
+    test('keeps non-event nodes regardless of depth or rollup flag', () => {
+        const store = {
+            nodes: {
+                charSheet: { id: 'charSheet', type: 'character_sheet', seqTo: 3, semanticDepth: 1, fields: { identity: 'someone' } },
+                loc: { id: 'loc', type: 'location_state', seqTo: 4, semanticRollup: true, fields: { state: 'place' } },
+                thread: { id: 'thread', type: 'thread', seqTo: 5, fields: { note: 'an active thread' } },
+            },
+        };
+        const plan = computeVectorSyncPlan(store, profile);
+        const ids = plan.toInsert.map(e => e.nodeId).sort();
+        expect(ids).toEqual(['charSheet', 'loc', 'thread']);
+    });
+
+    test('semanticDepth=0 leaf events stay eligible (numeric 0 is not > 0)', () => {
+        const store = {
+            nodes: {
+                leafZero: { id: 'leafZero', type: 'event', seqTo: 1, semanticDepth: 0, fields: { summary: 'zero depth leaf' } },
+            },
+        };
+        const plan = computeVectorSyncPlan(store, profile);
+        expect(plan.toInsert.map(e => e.nodeId)).toEqual(['leafZero']);
+    });
+});

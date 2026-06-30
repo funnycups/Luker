@@ -188,7 +188,9 @@ export function ensureVectorIndexState(store) {
 function getEligibleVectorNodes(store, schema) {
     const nodes = store.nodes || {};
     return Object.values(nodes)
-        .filter(node => !node.archived && buildNodeVectorText(node, schema).length > 0);
+        .filter(node => !node.archived)
+        .filter(node => !(node?.type === 'event' && (Number(node.semanticDepth) > 0 || node.semanticRollup)))
+        .filter(node => buildNodeVectorText(node, schema).length > 0);
 }
 
 /**
