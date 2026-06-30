@@ -60,6 +60,8 @@ export const event_types = {
     CHAT_DELETED: 'chat_deleted',
     CHAT_CREATED: 'chat_created',
     CHAT_BRANCH_CREATED: 'chat_branch_created',
+    CHAT_MERGED: 'chat_merged',
+    CHAT_SPLIT: 'chat_split',
     CHAT_RENAMED: 'chat_renamed',
     GROUP_CHAT_DELETED: 'group_chat_deleted',
     GROUP_CHAT_CREATED: 'group_chat_created',

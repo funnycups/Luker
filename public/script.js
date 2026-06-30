@@ -276,6 +276,7 @@ import { loader } from './scripts/action-loader.js';
 import { BulkEditOverlay } from './scripts/BulkEditOverlay.js';
 import { initTextGenModels, initTextGenModelSelects } from './scripts/textgen-models.js';
 import { appendFileContent, hasPendingFileAttachment, populateFileAttachment, decodeStyleTags, encodeStyleTags, hideChatMessageRange, isExternalMediaAllowed, preserveNeutralChat, restoreNeutralChat, formatCreatorNotes, initChatUtilities, addDOMPurifyHooks } from './scripts/chats.js';
+import { wireEntryPoints as wireChatMergeSplit } from './scripts/chat-merge-split.js';
 import { getPresetManager, initPresetManager } from './scripts/preset-manager.js';
 import { evaluateMacros, getLastMessageId, initMacros } from './scripts/macros.js';
 import { initVariableOpLog, extractMessageById, pushFloorVarOp } from './scripts/variable-op-log/index.js';
@@ -20517,6 +20518,8 @@ jQuery(async function () {
     $('#chat_import_button').on('click', function () {
         $('#chat_import_file').trigger('click');
     });
+
+    wireChatMergeSplit();
 
     $('#chat_import_file').on('change', async function (e) {
         const targetElement = e.target;

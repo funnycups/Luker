@@ -594,6 +594,67 @@ export async function branchFromMessageViaUI(page, mesid, { timeoutMs = 30_000 }
 }
 
 /**
+ * Start a fresh empty chat for the active character via the real options
+ * dropdown. Real path: click #options_button → click #option_start_new_chat
+ * → accept the "Start new chat?" confirm popup. ST emits CHAT_CHANGED on
+ * the switch. Returns the new chat id (the value emitted by CHAT_CHANGED).
+ *
+ * Used by merge/split e2e tests that need to set up multiple sibling chats
+ * under the same character.
+ */
+export async function createNewChatViaUI(page, { timeoutMs = 30_000 } = {}) {
+    const chatPromise = page.evaluate((to) => new Promise((resolve, reject) => {
+        const ctx = window.Luker.getContext();
+        const t = setTimeout(() => reject(new Error('new-chat timeout')), to);
+        const off = ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, (id) => {
+            clearTimeout(t);
+            try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_CHANGED, off); } catch {}
+            resolve(id);
+        });
+    }), timeoutMs);
+    await openOptionsAndClick(page, 'option_start_new_chat');
+    // ST always shows a "Start new chat?" confirm popup (see script.js
+    // around line 20036). Accept the topmost popup OK.
+    const popup = page.locator('dialog.popup[open]').last();
+    await popup.waitFor({ state: 'visible', timeout: 5000 });
+    await popup.locator('.popup-button-ok').click();
+    return chatPromise;
+}
+
+/**
+ * Rename the currently-open chat via the Manage Chat Files UI. Mirrors the
+ * gesture sequence used by tests/e2e/chat/13-rename-chat.e2e.js:
+ *   1. Open options → Manage chat files (option_select_chat).
+ *   2. Find the row whose .select_chat_block_filename matches the current
+ *      chat id, click its .renameChatButton pencil.
+ *   3. Fill the popup input with the new name, click OK.
+ *   4. Wait until ctx.getCurrentChatId() flips to the new name.
+ *
+ * Side effect: ST's rename handler re-opens #shadow_select_chat_popup on
+ * a 250ms delay AFTER the rename completes. We deliberately do NOT try
+ * to close that popup here — the close-and-reopen race is hard to win
+ * reliably. Downstream helpers that need the options dropdown should be
+ * popup-aware (e.g. openMergeDialogViaUI detects the popup and skips the
+ * options click), and callers that need a clean state should explicitly
+ * close it themselves.
+ */
+export async function renameCurrentChatViaUI(page, newName) {
+    const originalChatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId());
+    await openOptionsAndClick(page, 'option_select_chat');
+    const row = page.locator('.select_chat_block_wrapper', { has: page.locator('.select_chat_block_filename', { hasText: originalChatId }) }).first();
+    await row.waitFor({ state: 'visible', timeout: 10_000 });
+    await row.locator('.renameChatButton').click();
+    const popup = page.locator('dialog.popup[open]').last();
+    const popupInput = popup.locator('.popup-input').last();
+    await popupInput.waitFor({ state: 'visible', timeout: 5000 });
+    await popupInput.fill(newName);
+    await popup.locator('.popup-button-ok').click();
+    await page.waitForFunction((expected) => {
+        return window.Luker.getContext().getCurrentChatId() === expected;
+    }, newName, { timeout: 15_000 });
+}
+
+/**
  * Abort an in-flight generation by clicking the stop button. Real DOM —
  * no underlying-API fallback. If the stop button is hidden because no
  * generation is in flight, this throws.

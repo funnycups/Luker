@@ -1099,6 +1099,168 @@ function stripJsonlExt(fileName) {
 }
 
 /**
+ * Builds the merged body and header for a chat-merge operation.
+ * Pure function; throws Error with `.status` set to 400/404 on bad input.
+ * @param {Map<string, {header: object, body: object[]}>} sourcesMap Map of source name -> {header, body}.
+ * @param {Array<{source: string, range?: [number, number]}>} segments Ordered segment specs.
+ * @param {string} nowIso ISO timestamp for the merged header's create_date.
+ * @returns {{header: object, body: object[]}} New chat header + body.
+ */
+function buildMergedBodyAndHeader(sourcesMap, segments, nowIso) {
+    if (!Array.isArray(segments) || segments.length === 0) {
+        const e = new Error('segments_required'); e.status = 400; throw e;
+    }
+    const body = [];
+    for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i] || {};
+        const srcName = String(seg.source || '');
+        const src = sourcesMap.get(srcName);
+        if (!src) {
+            const e = new Error(`source_not_found:${srcName}`); e.status = 404; throw e;
+        }
+        const srcBody = Array.isArray(src.body) ? src.body : [];
+        let from = 0;
+        let to = srcBody.length;
+        if (Object.prototype.hasOwnProperty.call(seg, 'range')) {
+            if (!Array.isArray(seg.range) || seg.range.length !== 2) {
+                const e = new Error('range_shape'); e.status = 400; throw e;
+            }
+            from = Number(seg.range[0]);
+            to = Number(seg.range[1]);
+            if (!Number.isInteger(from) || !Number.isInteger(to)
+                || from < 0 || to > srcBody.length || from >= to) {
+                const e = new Error(`range_invalid:${srcName}`); e.status = 400; throw e;
+            }
+        }
+        for (let j = from; j < to; j++) body.push(structuredClone(srcBody[j]));
+    }
+    if (body.length === 0) {
+        const e = new Error('empty_result'); e.status = 400; throw e;
+    }
+    const firstSrc = sourcesMap.get(String(segments[0].source));
+    const baseHeader = structuredClone(firstSrc.header || {});
+    const meta = baseHeader.chat_metadata && typeof baseHeader.chat_metadata === 'object'
+        ? baseHeader.chat_metadata : {};
+    delete meta.main_chat;
+    meta.branches = [];
+    baseHeader.chat_metadata = meta;
+    baseHeader.create_date = nowIso;
+    return { header: baseHeader, body };
+}
+
+/**
+ * Finds the first available chat name by trying `desiredName`, then
+ * `desiredName (2)`, ... up to (99). Throws ConflictError if all slots are
+ * taken.
+ * @param {object} repo ChatRepo instance with .get().
+ * @param {string} handle User handle.
+ * @param {string} charDir Character directory (or group key when isGroup).
+ * @param {string} desiredName Base name without .jsonl.
+ * @param {object} ctx Optional context (e.g. { isGroup, groupId }) forwarded to repo.get.
+ * @returns {Promise<string>} Available name.
+ */
+async function resolveAvailableTargetName(repo, handle, charDir, desiredName, ctx) {
+    const base = String(desiredName);
+    for (let attempt = 1; attempt <= 99; attempt++) {
+        const candidate = attempt === 1 ? base : `${base} (${attempt})`;
+        const existing = await repo.get(handle, charDir, candidate, ctx);
+        if (!existing) return candidate;
+    }
+    const err = new ConflictError('target_name_exhausted');
+    throw err;
+}
+
+/**
+ * Builds the per-segment headers/bodies for a chat-split operation.
+ * Pure function; throws Error with `.status` set to 400 on bad input.
+ * @param {{header: object, body: object[]}} source Source chat to slice.
+ * @param {number[]} splitPoints Strictly ascending cut indexes, each `0 < p < body.length`.
+ * @param {string[]|null|undefined} targetNames Optional per-segment requested names; when omitted defaults to `<sourceName> part N`.
+ * @param {string} nowIso ISO timestamp for the new headers' create_date.
+ * @param {string} sourceName Source chat name used to build default segment names.
+ * @returns {Array<{header: object, body: object[], requestedName: string}>} Ordered segment plans.
+ */
+function buildSplitSegments(source, splitPoints, targetNames, nowIso, sourceName) {
+    if (!Array.isArray(splitPoints) || splitPoints.length === 0) {
+        const e = new Error('split_points_required'); e.status = 400; throw e;
+    }
+    const body = Array.isArray(source.body) ? source.body : [];
+    if (body.length === 0) {
+        const e = new Error('source_empty'); e.status = 400; throw e;
+    }
+    for (let i = 0; i < splitPoints.length; i++) {
+        const p = splitPoints[i];
+        if (!Number.isInteger(p) || p <= 0 || p >= body.length) {
+            const e = new Error('split_point_out_of_range'); e.status = 400; throw e;
+        }
+        if (i > 0 && p <= splitPoints[i - 1]) {
+            const e = new Error('split_points_not_ascending'); e.status = 400; throw e;
+        }
+    }
+    const expectedCount = splitPoints.length + 1;
+    let names;
+    if (targetNames === undefined || targetNames === null) {
+        names = Array.from({ length: expectedCount }, (_, i) => `${sourceName} part ${i + 1}`);
+    } else {
+        if (!Array.isArray(targetNames) || targetNames.length !== expectedCount) {
+            const e = new Error('target_names_length_mismatch'); e.status = 400; throw e;
+        }
+        names = targetNames.map(n => String(n));
+    }
+    const cutPoints = [0, ...splitPoints, body.length];
+    const out = [];
+    for (let i = 0; i < expectedCount; i++) {
+        const slice = body.slice(cutPoints[i], cutPoints[i + 1]).map(m => structuredClone(m));
+        const baseHeader = structuredClone(source.header || {});
+        const meta = baseHeader.chat_metadata && typeof baseHeader.chat_metadata === 'object'
+            ? baseHeader.chat_metadata : {};
+        delete meta.main_chat;
+        meta.branches = [];
+        baseHeader.chat_metadata = meta;
+        baseHeader.create_date = nowIso;
+        out.push({ header: baseHeader, body: slice, requestedName: names[i] });
+    }
+    return out;
+}
+
+export { buildMergedBodyAndHeader, buildSplitSegments, resolveAvailableTargetName };  // for jest tests
+
+/**
+ * Appends new chat names to a group's `chats[]` array via GroupRepo. This is
+ * the post-write hook for /group/merge and /group/split — without it the
+ * client's `openGroupChat(groupId, newName)` silently no-ops, because that
+ * function gates on `group.chats.includes(chatId)` (see
+ * public/scripts/group-chats.js:2381).
+ *
+ * Read-modify-write under a single GroupRepo round-trip. The same hazard
+ * exists in existing client code (createNewGroupChat in group-chats.js does
+ * `group.chats.push(...)` then `editGroup(...)` over HTTP), so we are not
+ * introducing a new race-with-other-writers — just mirroring the existing
+ * convention on the server side.
+ * @param {string} handle User profile handle.
+ * @param {string} parentGroupId Parent group id (URL path id).
+ * @param {string[]} chatNames New chat names already written by repo.save.
+ */
+async function appendChatNamesToGroup(handle, parentGroupId, chatNames) {
+    if (!Array.isArray(chatNames) || chatNames.length === 0) return;
+    const groupRepo = getGroupRepo();
+    const group = await groupRepo.get(handle, parentGroupId);
+    if (!group || typeof group !== 'object') return;
+    const existing = Array.isArray(group.chats) ? group.chats.map(String) : [];
+    const seen = new Set(existing);
+    const merged = [...existing];
+    for (const name of chatNames) {
+        const safe = String(name);
+        if (safe && !seen.has(safe)) {
+            merged.push(safe);
+            seen.add(safe);
+        }
+    }
+    if (merged.length === existing.length) return; // nothing new
+    await groupRepo.save(handle, parentGroupId, { ...group, chats: merged });
+}
+
+/**
  * Resolves avatar directory name from avatar url.
  * @param {string} avatarUrl Avatar url.
  * @returns {string} Sanitized avatar directory name.
@@ -2036,6 +2198,96 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         }
         console.error(error);
         return response.status(500).send({ error: 'An error has occurred, see the console logs for more information.' });
+    }
+});
+
+router.post('/merge', validateAvatarUrlMiddleware, async (request, response) => {
+    try {
+        if (!request.body || typeof request.body !== 'object') return response.sendStatus(400);
+        const avatarUrl = request.body.avatar_url;
+        const segments = request.body.segments;
+        const desiredName = request.body.target_name;
+        if (!avatarUrl || !Array.isArray(segments) || !desiredName) return response.sendStatus(400);
+
+        const handle = request.user.profile.handle;
+        const charDir = String(avatarUrl).replace('.png', '');
+        const repo = getChatRepo();
+
+        const distinctSources = Array.from(new Set(segments.map(s => String(s && s.source || ''))));
+        const sourcesMap = new Map();
+        for (const srcName of distinctSources) {
+            if (!srcName) return response.sendStatus(400);
+            const safeSrc = sanitize(srcName);
+            const src = await repo.get(handle, charDir, safeSrc);
+            if (!src) return response.status(404).send({ ok: false, error: `source_not_found:${srcName}` });
+            sourcesMap.set(srcName, src);
+        }
+
+        let built;
+        try {
+            built = buildMergedBodyAndHeader(sourcesMap, segments, new Date().toISOString());
+        } catch (e) {
+            return response.status(e.status || 400).send({ ok: false, error: e.message });
+        }
+
+        const safeDesired = sanitize(stripJsonlExt(String(desiredName)));
+        let finalName;
+        try {
+            finalName = await resolveAvailableTargetName(repo, handle, charDir, safeDesired, {});
+        } catch {
+            return response.status(409).send({ ok: false, error: 'target_name_exhausted' });
+        }
+
+        await repo.save(handle, charDir, finalName, built.header, built.body, null);
+        return response.send({ ok: true, new_chat: { file_name: finalName } });
+    } catch (err) {
+        console.error('POST /merge', err);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/split', validateAvatarUrlMiddleware, async (request, response) => {
+    try {
+        if (!request.body || typeof request.body !== 'object') return response.sendStatus(400);
+        const avatarUrl = request.body.avatar_url;
+        const sourceFileName = request.body.source_file_name;
+        const splitPoints = request.body.split_points;
+        const targetNames = request.body.target_names;
+        if (!avatarUrl || !sourceFileName || !Array.isArray(splitPoints)) return response.sendStatus(400);
+
+        const handle = request.user.profile.handle;
+        const charDir = String(avatarUrl).replace('.png', '');
+        const repo = getChatRepo();
+        const safeSrc = sanitize(stripJsonlExt(String(sourceFileName)));
+        const source = await repo.get(handle, charDir, safeSrc);
+        if (!source) return response.status(404).send({ ok: false, error: 'source_not_found' });
+
+        let plans;
+        try {
+            plans = buildSplitSegments(source, splitPoints, targetNames, new Date().toISOString(), safeSrc);
+        } catch (e) {
+            return response.status(e.status || 400).send({ ok: false, error: e.message });
+        }
+
+        const newChats = [];
+        const partialWrites = [];
+        for (let i = 0; i < plans.length; i++) {
+            const plan = plans[i];
+            const safeDesired = sanitize(stripJsonlExt(plan.requestedName));
+            try {
+                const finalName = await resolveAvailableTargetName(repo, handle, charDir, safeDesired, {});
+                await repo.save(handle, charDir, finalName, plan.header, plan.body, null);
+                newChats.push({ file_name: finalName });
+                partialWrites.push(finalName);
+            } catch (e) {
+                console.error('POST /split partial failure', e);
+                return response.status(500).send({ ok: false, partial_writes: partialWrites, error: e.message });
+            }
+        }
+        return response.send({ ok: true, new_chats: newChats });
+    } catch (err) {
+        console.error('POST /split', err);
+        return response.sendStatus(500);
     }
 });
 
@@ -3271,6 +3523,125 @@ router.post('/group/save', async function (request, response) {
         }
         console.error(error);
         return response.status(500).send({ error: 'An error has occurred, see the console logs for more information.' });
+    }
+});
+
+router.post('/group/merge', async (request, response) => {
+    try {
+        if (!request.body || !request.body.id) return response.sendStatus(400);
+        const id = String(request.body.id);
+        const segments = request.body.segments;
+        const desiredName = request.body.target_name;
+        if (!Array.isArray(segments) || !desiredName) return response.sendStatus(400);
+
+        const handle = request.user.profile.handle;
+        const repo = getChatRepo();
+
+        // For group chats the storage key is `{ isGroup, groupId }` where
+        // `groupId` is the PER-CHAT file name (engines resolve the on-disk path
+        // as `groupChats/<groupId>.jsonl`). The parent-group id from the URL is
+        // a separate concept used below for `group.chats[]` registration.
+        const distinctSources = Array.from(new Set(segments.map(s => String(s && s.source || ''))));
+        const sourcesMap = new Map();
+        for (const srcName of distinctSources) {
+            if (!srcName) return response.sendStatus(400);
+            const safeSrc = sanitize(srcName);
+            const src = await repo.get(handle, '', safeSrc, { isGroup: true, groupId: safeSrc });
+            if (!src) return response.status(404).send({ ok: false, error: `source_not_found:${srcName}` });
+            sourcesMap.set(srcName, src);
+        }
+
+        let built;
+        try {
+            built = buildMergedBodyAndHeader(sourcesMap, segments, new Date().toISOString());
+        } catch (e) {
+            return response.status(e.status || 400).send({ ok: false, error: e.message });
+        }
+
+        // Inline the available-name loop so each repo.get carries the
+        // per-candidate ctx instead of a stale ctx baked at resolver-call time.
+        const safeDesired = sanitize(stripJsonlExt(String(desiredName)));
+        let finalName = null;
+        for (let attempt = 1; attempt <= 99; attempt++) {
+            const candidate = attempt === 1 ? safeDesired : `${safeDesired} (${attempt})`;
+            const existing = await repo.get(handle, '', candidate, { isGroup: true, groupId: candidate });
+            if (!existing) { finalName = candidate; break; }
+        }
+        if (finalName == null) {
+            return response.status(409).send({ ok: false, error: 'target_name_exhausted' });
+        }
+
+        await repo.save(handle, '', finalName, built.header, built.body, null,
+            { isGroup: true, groupId: finalName });
+        await appendChatNamesToGroup(handle, id, [finalName]);
+        return response.send({ ok: true, new_chat: { file_name: finalName } });
+    } catch (err) {
+        console.error('POST /group/merge', err);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/group/split', async (request, response) => {
+    try {
+        if (!request.body || !request.body.id) return response.sendStatus(400);
+        const id = String(request.body.id);
+        const sourceFileName = request.body.source_file_name;
+        const splitPoints = request.body.split_points;
+        const targetNames = request.body.target_names;
+        if (!sourceFileName || !Array.isArray(splitPoints)) return response.sendStatus(400);
+
+        const handle = request.user.profile.handle;
+        const repo = getChatRepo();
+        // See /group/merge above: the group-chat key uses `groupId === per-chat
+        // name`. `id` here is the parent group id, kept only for the
+        // post-write `group.chats[]` registration.
+        const safeSrc = sanitize(stripJsonlExt(String(sourceFileName)));
+        const source = await repo.get(handle, '', safeSrc, { isGroup: true, groupId: safeSrc });
+        if (!source) return response.status(404).send({ ok: false, error: 'source_not_found' });
+
+        let plans;
+        try {
+            plans = buildSplitSegments(source, splitPoints, targetNames, new Date().toISOString(), safeSrc);
+        } catch (e) {
+            return response.status(e.status || 400).send({ ok: false, error: e.message });
+        }
+
+        const newChats = [];
+        const partialWrites = [];
+        for (let i = 0; i < plans.length; i++) {
+            const plan = plans[i];
+            const safeDesired = sanitize(stripJsonlExt(plan.requestedName));
+            try {
+                // Inline the available-name probe so each lookup carries the
+                // per-candidate ctx.
+                let finalName = null;
+                for (let attempt = 1; attempt <= 99; attempt++) {
+                    const candidate = attempt === 1 ? safeDesired : `${safeDesired} (${attempt})`;
+                    const existing = await repo.get(handle, '', candidate, { isGroup: true, groupId: candidate });
+                    if (!existing) { finalName = candidate; break; }
+                }
+                if (finalName == null) throw new ConflictError('target_name_exhausted');
+                await repo.save(handle, '', finalName, plan.header, plan.body, null,
+                    { isGroup: true, groupId: finalName });
+                newChats.push({ file_name: finalName });
+                partialWrites.push(finalName);
+            } catch (e) {
+                console.error('POST /group/split partial failure', e);
+                return response.status(500).send({ ok: false, partial_writes: partialWrites, error: e.message });
+            }
+        }
+        // Register every new chat in the parent group's chats[] in one
+        // read-modify-write so the dialog's post-split openGroupChat is not a
+        // no-op. Partial writes that made it onto disk above still need to
+        // appear in the group definition.
+        if (partialWrites.length > 0) {
+            try { await appendChatNamesToGroup(handle, id, partialWrites); }
+            catch (e) { console.error('POST /group/split appendChatNamesToGroup', e); }
+        }
+        return response.send({ ok: true, new_chats: newChats });
+    } catch (err) {
+        console.error('POST /group/split', err);
+        return response.sendStatus(500);
     }
 });
 
