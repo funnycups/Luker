@@ -6774,14 +6774,23 @@ export function selectVisibleNodesForType(store, typeNodes, type, compressionMod
 
 function collectAlwaysInjectNodes(store, settings, context = null, options = {}) {
     // `options.seqWindowFrom?: number` — when set, post-filter the picked nodes
-    // to only include those whose `node.seqTo >= seqWindowFrom` (inclusive of the
-    // exact boundary). When unset / non-finite, behavior is unchanged. The window
-    // is applied after per-type selection so type / compression behavior is preserved.
+    // to DROP those whose `node.seqTo >= seqWindowFrom` (boundary exclusive on
+    // the kept side: keep `seqTo < seqWindowFrom` only). When unset / non-finite,
+    // behavior is unchanged. The window is applied after per-type selection so
+    // type / compression behavior is preserved.
     //
-    // latestOnly types (character_sheet / location_state / thread) are intentionally
-    // exempt from the seqWindowFrom filter — their picked nodes are current-truth
-    // snapshots, and offsetting them would inject stale state that contradicts the
-    // raw recent turns already visible in context.
+    // Caller intent: `seqWindowFrom` is the lower bound of the raw-visible
+    // recent-turns window. Nodes whose seqTo lands inside that window are
+    // already covered by raw text in the prompt, so injecting their semantic
+    // summary again is redundant; only nodes that end strictly before the
+    // raw-visible region carry information the main context cannot otherwise
+    // see.
+    //
+    // latestOnly types (character_sheet / location_state / thread) are
+    // intentionally exempt from this filter — their picked nodes are
+    // current-truth snapshots that must inject even when their seqTo overlaps
+    // the raw-visible window, otherwise the main context loses authoritative
+    // state.
     const alwaysSpecs = getEffectiveNodeTypeSchema(context, settings)
         .filter((spec) => {
             const tableName = String(spec?.tableName || '').trim().toLowerCase();
@@ -6823,11 +6832,12 @@ function collectAlwaysInjectNodes(store, settings, context = null, options = {})
     const windowed = Number.isFinite(seqWindowFromRaw)
         ? picked.filter((node) => {
             const nodeType = String(node?.type || '').toLowerCase();
-            // latestOnly types are exempt — their snapshots are current truth, never offset.
+            // latestOnly types are exempt — their snapshots are current truth
+            // and must inject even when seqTo overlaps the raw-visible window.
             if (latestOnlyTypes.has(nodeType)) {
                 return true;
             }
-            return Number.isFinite(Number(node?.seqTo)) && Number(node.seqTo) >= seqWindowFromRaw;
+            return Number.isFinite(Number(node?.seqTo)) && Number(node.seqTo) < seqWindowFromRaw;
         })
         : picked;
 

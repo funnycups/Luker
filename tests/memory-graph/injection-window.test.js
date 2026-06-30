@@ -17,8 +17,11 @@
  *      of that type (compression semantics out of scope here — tests use
  *      mode: 'none' fixtures so `selectVisibleNodesForType` is a no-op pass).
  *   3. POST-filter: if `options.seqWindowFrom` is a finite number, drop
- *      any picked node whose `seqTo < seqWindowFrom`. Boundary inclusive
- *      via `>=` (NOT `>`).
+ *      any picked node whose `seqTo >= seqWindowFrom`. Boundary exclusive
+ *      on the kept side: keep `seqTo < seqWindowFrom` only. `seqWindowFrom`
+ *      is the lower bound of the raw-visible recent-turns window; nodes
+ *      that end inside that window are already covered by raw text in the
+ *      main prompt, so injecting their semantic form is redundant.
  *   4. Sort by `compareNodesByTimeline` semantics (seqTo asc → id asc tiebreak).
  *
  * The point of these tests is to lock the **contract**, not exercise the
@@ -82,7 +85,7 @@ function collectAlwaysInjectNodesRef(store, schema, options = {}) {
     }
     const seqWindowFromRaw = Number(options?.seqWindowFrom);
     const windowed = Number.isFinite(seqWindowFromRaw)
-        ? picked.filter(node => Number.isFinite(Number(node?.seqTo)) && Number(node.seqTo) >= seqWindowFromRaw)
+        ? picked.filter(node => Number.isFinite(Number(node?.seqTo)) && Number(node.seqTo) < seqWindowFromRaw)
         : picked;
     return windowed.sort(_compareNodesByTimeline);
 }
@@ -175,29 +178,29 @@ describe('spec §5.1 — default behavior (window = 0 / unset)', () => {
     });
 });
 
-describe('spec §5.2 — window in effect (node.seqTo >= seqWindowFrom kept)', () => {
-    test('seqWindowFrom = 12 with seqTos {1, 5, 10, 20} → only evt_20 kept', () => {
+describe('window in effect — keep nodes with seqTo < seqWindowFrom', () => {
+    test('seqWindowFrom = 12 with seqTos {1, 5, 10, 20} → evt_1, evt_5, evt_10 kept (raw window covers 12+)', () => {
         const store = buildEventStore([1, 5, 10, 20]);
         const out = collectAlwaysInjectNodesRef(store, eventSchema(), { seqWindowFrom: 12 });
-        expect(out.map(n => n.id)).toEqual(['evt_20']);
+        expect(out.map(n => n.id)).toEqual(['evt_1', 'evt_5', 'evt_10']);
     });
 
-    test('seqWindowFrom = 5 with seqTos {1, 5, 10, 20} → evt_5, evt_10, evt_20 kept (boundary inclusive)', () => {
+    test('seqWindowFrom = 5 with seqTos {1, 5, 10, 20} → only evt_1 kept (boundary exclusive: evt_5 dropped)', () => {
         const store = buildEventStore([1, 5, 10, 20]);
         const out = collectAlwaysInjectNodesRef(store, eventSchema(), { seqWindowFrom: 5 });
-        expect(out.map(n => n.id)).toEqual(['evt_5', 'evt_10', 'evt_20']);
+        expect(out.map(n => n.id)).toEqual(['evt_1']);
     });
 
-    test('seqWindowFrom = 0 → all non-negative-seqTo nodes kept (effectively no filter)', () => {
+    test('seqWindowFrom = 0 → all nodes dropped (every seqTo >= 0)', () => {
         const store = buildEventStore([0, 1, 5, 10]);
         const out = collectAlwaysInjectNodesRef(store, eventSchema(), { seqWindowFrom: 0 });
-        expect(out.map(n => n.id)).toEqual(['evt_0', 'evt_1', 'evt_5', 'evt_10']);
+        expect(out.map(n => n.id)).toEqual([]);
     });
 
-    test('seqWindowFrom larger than max seqTo → empty', () => {
+    test('seqWindowFrom larger than max seqTo → all kept (every node ends before the raw window)', () => {
         const store = buildEventStore([1, 5, 10]);
         const out = collectAlwaysInjectNodesRef(store, eventSchema(), { seqWindowFrom: 100 });
-        expect(out).toEqual([]);
+        expect(out.map(n => n.id)).toEqual(['evt_1', 'evt_5', 'evt_10']);
     });
 
     test('event_table forced inject is also windowed', () => {
@@ -208,26 +211,27 @@ describe('spec §5.2 — window in effect (node.seqTo >= seqWindowFrom kept)', (
         ];
         const store = buildEventStore([1, 5, 10, 20]);
         const out = collectAlwaysInjectNodesRef(store, schema, { seqWindowFrom: 8 });
-        expect(out.map(n => n.id)).toEqual(['evt_10', 'evt_20']);
+        expect(out.map(n => n.id)).toEqual(['evt_1', 'evt_5']);
     });
 });
 
-describe('spec §6 boundary semantics — exact-cutoff node is included (>= not >)', () => {
-    test('node at seqTo = seqWindowFrom is INCLUDED', () => {
+describe('boundary semantics — kept side is strict <, exact-cutoff node is dropped', () => {
+    test('node at seqTo = seqWindowFrom is EXCLUDED (boundary belongs to the raw-visible window)', () => {
         const store = buildEventStore([5, 10, 12, 15]);
         const out = collectAlwaysInjectNodesRef(store, eventSchema(), { seqWindowFrom: 12 });
         const ids = out.map(n => n.id);
-        // evt_12 (exact boundary) must be included; evt_10 must be dropped.
-        expect(ids).toContain('evt_12');
-        expect(ids).toContain('evt_15');
-        expect(ids).not.toContain('evt_10');
-        expect(ids).not.toContain('evt_5');
+        // evt_12 (exact boundary) is dropped — its seqTo lands in the raw window.
+        // evt_5 and evt_10 are kept (they end before the raw window).
+        expect(ids).toContain('evt_5');
+        expect(ids).toContain('evt_10');
+        expect(ids).not.toContain('evt_12');
+        expect(ids).not.toContain('evt_15');
     });
 
-    test('node at seqTo = seqWindowFrom - 1 is EXCLUDED', () => {
+    test('node at seqTo = seqWindowFrom - 1 is INCLUDED', () => {
         const store = buildEventStore([11, 12]);
         const out = collectAlwaysInjectNodesRef(store, eventSchema(), { seqWindowFrom: 12 });
-        expect(out.map(n => n.id)).toEqual(['evt_12']);
+        expect(out.map(n => n.id)).toEqual(['evt_11']);
     });
 });
 
