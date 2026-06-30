@@ -125,7 +125,7 @@ After this turn, Memory Graph runs extraction in the background and produces str
   "level": "semantic",
   "title": "Summary 1",
   "fields": {
-    "summary": "Time: Day 12, late afternoon; The user offered the herbal salve to wounded Eileen. Eileen accepted and explicitly acknowledged the friendship and the debt."
+    "summary": "Time: Day 12, late afternoon\nPlace: Improvised camp by the northern road\n\nThe user handed Eileen the last herbal salve from their pack. After a brief pause Eileen accepted, and in a measured tone explicitly acknowledged both the friendship and the debt she now owed.\n\nIrreversible:\n- User and Eileen are now friends\n- Eileen owes the user one openly-acknowledged favor"
   },
   "floor": 12
 }

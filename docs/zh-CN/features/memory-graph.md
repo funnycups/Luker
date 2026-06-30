@@ -125,7 +125,7 @@ LLM 的上下文窗口是有限的。聊到几百轮以后，早期的重要信�
   "level": "semantic",
   "title": "Summary 1",
   "fields": {
-    "summary": "时间:Day 12, late afternoon; 用户把找到的伤药递给受伤的 Eileen,Eileen 接受并明确认下了朋友关系和这份恩情。"
+    "summary": "时间: 第 12 天傍晚\n地点: 北境驿道旁的临时营地\n\n用户把背包里仅剩的伤药递给受伤的 Eileen, Eileen 短暂迟疑后接下, 并以平稳的语气明确认下了这份恩情和二人之间的朋友关系。\n\n不可逆:\n- 用户与 Eileen 建立朋友关系\n- Eileen 欠用户一份明确承认的恩情"
   },
   "floor": 12
 }

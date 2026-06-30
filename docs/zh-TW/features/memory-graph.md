@@ -125,7 +125,7 @@ LLM 的上下文視窗是有限的。聊到幾百輪以後，早期的重要資�
   "level": "semantic",
   "title": "Summary 1",
   "fields": {
-    "summary": "时间:Day 12, late afternoon; 使用者把找到的傷藥遞給受傷的 Eileen,Eileen 接受並明確認下了朋友關係和這份恩情。"
+    "summary": "時間: 第 12 天傍晚\n地點: 北境驛道旁的臨時營地\n\n使用者把背包裡僅剩的傷藥遞給受傷的 Eileen, Eileen 短暫遲疑後接下, 並以平穩的語氣明確認下了這份恩情和二人之間的朋友關係。\n\n不可逆:\n- 使用者與 Eileen 建立朋友關係\n- Eileen 欠使用者一份明確承認的恩情"
   },
   "floor": 12
 }
