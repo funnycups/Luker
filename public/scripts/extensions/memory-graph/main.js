@@ -214,10 +214,10 @@ const defaultNodeTypeSchema = [
         primaryKeyColumns: [],
         compression: {
             mode: 'hierarchical',
-            threshold: 9,
+            threshold: 5,
             fanIn: 3,
             maxDepth: 10,
-            keepRecentLeaves: 6,
+            keepRecentLeaves: 3,
             summarizeInstruction: DEFAULT_EVENT_COMPRESS_INSTRUCTION,
         },
     },
