@@ -1348,6 +1348,15 @@ function normalizePromptMessages(messages) {
             normalized.signature = signature;
         }
 
+        const reasoning = typeof message.reasoning === 'string' ? message.reasoning : '';
+        if (reasoning) {
+            normalized.reasoning = reasoning;
+        }
+
+        if (Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0) {
+            normalized.reasoning_blocks = structuredClone(message.reasoning_blocks);
+        }
+
         result.push(normalized);
     }
     return result;

@@ -927,6 +927,9 @@ function setOpenAIMessages(chat) {
         const isOtherGroupMember = selected_group && chat[j].name !== name2;
         const signature = isSameModel && !isOtherGroupMember ? chat[j]?.extra?.reasoning_signature : null;
         const reasoning = isSameModel && !isOtherGroupMember ? String(chat[j]?.extra?.reasoning ?? '') : '';
+        const reasoningBlocks = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.reasoning_blocks)
+            ? chat[j].extra.reasoning_blocks
+            : null;
 
         // Remove reasoning metadata from invocations if the API/model don't match
         if (Array.isArray(invocations) && invocations.length > 0) {
@@ -958,7 +961,7 @@ function setOpenAIMessages(chat) {
             continue;
         }
 
-        messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations, 'signature': signature, 'reasoning': reasoning };
+        messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations, 'signature': signature, 'reasoning': reasoning, 'reasoning_blocks': reasoningBlocks };
         j++;
     }
 
@@ -1269,6 +1272,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             const continueMessage = messages.splice(continueMessageIndex, 1)[0];
             const prompt = new Prompt(continueMessage);
             const chatMessage = await Message.fromPromptAsync(promptManager.preparePrompt(prompt));
+            if (Array.isArray(continueMessage.reasoning_blocks) && continueMessage.reasoning_blocks.length > 0) {
+                chatMessage.reasoning_blocks = continueMessage.reasoning_blocks;
+            }
             continueMessageCollection.add(chatMessage);
         }
         const continueNudgePrompt = new Prompt(promptObject);
@@ -1313,6 +1319,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             ? chatPrompt.invocations
             : [];
         const shouldCountSignature = invocations.length > 0 && includeSignature && Boolean(chatPrompt.signature);
+        const reasoningBlocks = Array.isArray(chatPrompt.reasoning_blocks) && chatPrompt.reasoning_blocks.length > 0
+            ? chatPrompt.reasoning_blocks
+            : null;
         const chatMessageDefinition = {
             role: preparedPrompt.role,
             content: preparedPrompt.content,
@@ -1320,6 +1329,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             ...(messageName ? { name: messageName } : {}),
             ...(invocations.length > 0 ? { tool_calls: Message.formatToolCalls(invocations, includeSignature) } : {}),
             ...(shouldCountSignature ? { signature: chatPrompt.signature } : {}),
+            ...(reasoningBlocks ? { reasoning_blocks: reasoningBlocks } : {}),
         };
         const chatMessageIndex = batchedMessageDefinitions.length;
         batchedMessageDefinitions.push(chatMessageDefinition);
@@ -4730,6 +4740,8 @@ class Message {
     signature = null;
     /** @type {string?} */
     reasoning = null;
+    /** @type {object[]?} */
+    reasoning_blocks = null;
 
     /**
      * @constructor
@@ -4766,15 +4778,16 @@ class Message {
 
     /**
      * Create many Message instances and count them in a single batch.
-     * @param {{ role: string, content: string|any[], identifier: string, name?: string, tool_calls?: object[], signature?: string|null }[]} definitions
+     * @param {{ role: string, content: string|any[], identifier: string, name?: string, tool_calls?: object[], signature?: string|null, reasoning_blocks?: object[]|null }[]} definitions
      * @returns {Promise<Message[]>} Message instances
      */
     static async createManyAsync(definitions) {
-        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature }) => {
+        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature, reasoning_blocks }) => {
             const message = new Message(role, content, identifier);
             message.name = name;
             message.tool_calls = tool_calls;
             message.signature = signature ?? null;
+            message.reasoning_blocks = Array.isArray(reasoning_blocks) && reasoning_blocks.length > 0 ? reasoning_blocks : null;
             return message;
         });
 
@@ -5122,6 +5135,7 @@ class MessageCollection {
                     ...(message.role === 'tool' && { tool_call_id: message.identifier }),
                     ...(message.signature && { signature: message.signature }),
                     ...(message.reasoning && { reasoning: message.reasoning }),
+                    ...(Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0 ? { reasoning_blocks: message.reasoning_blocks } : {}),
                 });
             }
             return acc;
@@ -5413,6 +5427,7 @@ export class ChatCompletion {
                     ...(item.role === 'tool' ? { tool_call_id: item.identifier } : {}),
                     ...(item.signature ? { signature: item.signature } : {}),
                     ...(item.reasoning ? { reasoning: item.reasoning } : {}),
+                    ...(Array.isArray(item.reasoning_blocks) && item.reasoning_blocks.length > 0 ? { reasoning_blocks: item.reasoning_blocks } : {}),
                 };
                 chat.push(message);
             } else {
