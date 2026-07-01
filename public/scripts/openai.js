@@ -4191,7 +4191,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, usage: null };
+            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, reasoningBlocks: [], usage: null };
             const plainTextToolCallDetector = runtimeFunctionCallContext
                 ? new PlainTextFunctionCallStreamDetector({ triggerSignal: runtimeFunctionCallContext.triggerSignal })
                 : null;
@@ -4384,6 +4384,26 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
     const show_thoughts = overrideShowThoughts ?? oai_settings.show_thoughts;
 
     if (chat_completion_source === chat_completion_sources.CLAUDE) {
+        // Anthropic streaming events (content_block_start / content_block_delta) preserve
+        // thinking and redacted_thinking blocks with signatures so the assistant turn can
+        // be replayed unchanged on the next request as Extended Thinking requires.
+        if (data?.type === 'content_block_start' && data?.content_block && Number.isInteger(data?.index)) {
+            const block = data.content_block;
+            if (block.type === 'thinking') {
+                state.reasoningBlocks[data.index] = { type: 'thinking', thinking: String(block.thinking || '') };
+            } else if (block.type === 'redacted_thinking') {
+                state.reasoningBlocks[data.index] = { type: 'redacted_thinking', data: String(block.data || '') };
+            }
+        } else if (data?.type === 'content_block_delta' && data?.delta && Number.isInteger(data?.index)) {
+            const existing = state.reasoningBlocks[data.index];
+            if (existing) {
+                if (data.delta.type === 'thinking_delta' && existing.type === 'thinking') {
+                    existing.thinking += String(data.delta.thinking || '');
+                } else if (data.delta.type === 'signature_delta' && existing.type === 'thinking') {
+                    existing.signature = (existing.signature || '') + String(data.delta.signature || '');
+                }
+            }
+        }
         if (show_thoughts) {
             state.reasoning += data?.delta?.thinking || '';
         }

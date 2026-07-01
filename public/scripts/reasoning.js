@@ -148,6 +148,52 @@ export function extractReasoningFromData(data, {
 }
 
 /**
+ * Extracts Anthropic-shape reasoning blocks (thinking / redacted_thinking) from the
+ * non-streaming response payload. These blocks carry the signatures required to replay
+ * the assistant turn on the next request when Extended Thinking + tool_use is active.
+ * @param {object} data Response data
+ * @param {object} [options] Optional parameters
+ * @param {string|null} [options.mainApi] Override for main API
+ * @param {string|null} [options.chatCompletionSource] Override for chat completion source
+ * @returns {object[]?} Ordered reasoning blocks or null when the provider does not emit any
+ */
+export function extractReasoningBlocksFromData(data, {
+    mainApi = null,
+    chatCompletionSource = null,
+} = {}) {
+    if ((mainApi ?? main_api) !== 'openai') {
+        return null;
+    }
+
+    const source = chatCompletionSource ?? oai_settings.chat_completion_source;
+
+    if (source === chat_completion_sources.CLAUDE) {
+        // Server-side normalizeClaudeResponseToOAI copies thinking / redacted_thinking blocks
+        // into choices[0].message.reasoning_blocks so we can retrieve them without touching
+        // the raw Claude content array.
+        const messageBlocks = data?.choices?.[0]?.message?.reasoning_blocks;
+        if (Array.isArray(messageBlocks) && messageBlocks.length > 0) {
+            return messageBlocks;
+        }
+        // Fallback: raw Claude content is preserved on the reply for legacy callers.
+        const rawContent = data?.content;
+        if (Array.isArray(rawContent)) {
+            const blocks = rawContent
+                .filter(block => block && (block.type === 'thinking' || block.type === 'redacted_thinking'))
+                .map(block => (block.type === 'thinking'
+                    ? { type: 'thinking', thinking: String(block.thinking || ''), ...(block.signature ? { signature: String(block.signature) } : {}) }
+                    : { type: 'redacted_thinking', data: String(block.data || '') }));
+            if (blocks.length > 0) {
+                return blocks;
+            }
+        }
+        return null;
+    }
+
+    return null;
+}
+
+/**
  * Extracts encrypted reasoning signature from the response data.
  * These signatures are used to maintain reasoning context across multi-turn conversations.
  * @param {object} data Response data

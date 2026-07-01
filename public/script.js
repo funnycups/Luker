@@ -306,7 +306,7 @@ import { initServerHistory } from './scripts/server-history.js';
 import { initSettingsSearch } from './scripts/setting-search.js';
 import { initBulkEdit } from './scripts/bulk-edit.js';
 import { getContext } from './scripts/st-context.js';
-import { extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
+import { extractReasoningBlocksFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { fetchRecentChatsSnapshot, initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar, openWelcomeScreen, primeRecentChatsSnapshotPromise } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
@@ -6174,6 +6174,8 @@ class StreamingProcessor {
         this.images = [];
         /** @type {string?} */
         this.reasoningSignature = null;
+        /** @type {object[]?} */
+        this.reasoningBlocks = null;
     }
 
     /**
@@ -6382,6 +6384,11 @@ class StreamingProcessor {
             message.extra.reasoning_signature = this.reasoningSignature;
         }
 
+        if (Array.isArray(this.reasoningBlocks) && this.reasoningBlocks.length > 0) {
+            message.extra = message.extra || {};
+            message.extra.reasoning_blocks = this.reasoningBlocks;
+        }
+
         if (unlockUI) {
             this.markUIGenStopped();
         }
@@ -6532,6 +6539,12 @@ class StreamingProcessor {
                 this.reasoningHandler.updateReasoning(this.messageId, state?.reasoning);
                 this.images = state?.images ?? [];
                 this.reasoningSignature = state?.signature ?? null;
+                this.reasoningBlocks = Array.isArray(state?.reasoningBlocks)
+                    ? state.reasoningBlocks.filter(Boolean)
+                    : null;
+                if (Array.isArray(this.reasoningBlocks) && this.reasoningBlocks.length === 0) {
+                    this.reasoningBlocks = null;
+                }
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
             }
@@ -8882,6 +8895,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         let reasoning = extractReasoningFromData(data);
         let imageUrls = extractImagesFromData(data);
         const reasoningSignature = extractReasoningSignatureFromData(data);
+        const reasoningBlocks = extractReasoningBlocksFromData(data);
         kobold_horde_model = title;
 
         const swipes = extractMultiSwipes(data, type);
@@ -8923,9 +8937,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks }));
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
@@ -10180,6 +10194,7 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string} [reasoning] Message reasoning
  * @property {string[]} [imageUrls] Links to images
  * @property {string?} [reasoningSignature] Encrypted signature of the reasoning text
+ * @property {object[]?} [reasoningBlocks] Ordered Anthropic reasoning blocks (thinking / redacted_thinking) preserved for multi-turn replay
  *
  * @typedef {object} SaveReplyResult
  * @property {string} type Type of generation
@@ -10338,11 +10353,11 @@ function applyPostGenerationText(text, isImpersonate, isContinue) {
     return out;
 }
 
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
-        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature] = arguments;
+        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks] = arguments;
     }
 
     const lastMessage = chat[chat.length - 1];
@@ -10381,6 +10396,11 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.reasoning = reasoning;
             lastMessage.extra.reasoning_duration = null;
             lastMessage.extra.reasoning_signature = reasoningSignature;
+            if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
+                lastMessage.extra.reasoning_blocks = reasoningBlocks;
+            } else {
+                delete lastMessage.extra.reasoning_blocks;
+            }
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -10407,6 +10427,11 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.reasoning = reasoning;
         lastMessage.extra.reasoning_duration = null;
         lastMessage.extra.reasoning_signature = reasoningSignature;
+        if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
+            lastMessage.extra.reasoning_blocks = reasoningBlocks;
+        } else {
+            delete lastMessage.extra.reasoning_blocks;
+        }
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -10429,6 +10454,11 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         lastMessage.extra.model = getGeneratingModel();
         lastMessage.extra.reasoning += reasoning;
         lastMessage.extra.reasoning_signature = reasoningSignature;
+        if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
+            lastMessage.extra.reasoning_blocks = reasoningBlocks;
+        } else {
+            delete lastMessage.extra.reasoning_blocks;
+        }
         await processImageAttachment(lastMessage, { imageUrls });
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
@@ -10453,6 +10483,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.extra.reasoning = reasoning;
         newMessage.extra.reasoning_duration = null;
         newMessage.extra.reasoning_signature = reasoningSignature;
+        if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
+            newMessage.extra.reasoning_blocks = reasoningBlocks;
+        }
         if (power_user.trim_spaces) {
             getMessage = getMessage.trim();
         }
@@ -17788,6 +17821,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
                     chat[mesId].extra.reasoning = '';
                     delete chat[mesId].extra.reasoning_duration;
                     delete chat[mesId].extra.reasoning_signature;
+                    delete chat[mesId].extra.reasoning_blocks;
                     delete chat[mesId].extra.token_count;
                 }
                 let run_generate = true;
