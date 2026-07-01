@@ -434,3 +434,169 @@
     opacity: 0.7;
     border-color: color-mix(in srgb, #f44336 20%, transparent);
 }
+
+/* ---- Reasoning Blocks ---- */
+
+.ri-reasoning {
+    margin: 6px 0;
+    border: 1px solid color-mix(in srgb, #9c27b0 45%, transparent);
+    border-radius: 4px;
+    background: color-mix(in srgb, #9c27b0 6%, transparent);
+    overflow: hidden;
+}
+
+.ri-reasoning[open] {
+    border-color: color-mix(in srgb, #9c27b0 65%, transparent);
+}
+
+.ri-reasoning-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    cursor: pointer;
+    user-select: none;
+    background: color-mix(in srgb, #9c27b0 14%, transparent);
+    font-size: 0.85em;
+}
+
+.ri-reasoning-header:hover {
+    background: color-mix(in srgb, #9c27b0 20%, transparent);
+}
+
+.ri-reasoning-badge {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, #9c27b0 55%, transparent);
+    color: #fff;
+    opacity: 0.9;
+    white-space: nowrap;
+}
+
+.ri-reasoning-source {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.75em;
+    opacity: 0.6;
+}
+
+.ri-reasoning-meta {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.75em;
+    opacity: 0.55;
+    margin-left: auto;
+}
+
+.ri-reasoning-body-wrap {
+    padding: 0;
+}
+
+.ri-reasoning-body {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 0.85em;
+    line-height: 1.5;
+    max-height: 260px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 70%, transparent);
+    color: var(--SmartThemeBodyColor, #ccc);
+    border-top: 1px solid color-mix(in srgb, #9c27b0 30%, transparent);
+}
+
+.ri-reasoning-empty {
+    padding: 6px 10px;
+    font-size: 0.8em;
+    font-style: italic;
+    opacity: 0.6;
+    color: var(--SmartThemeBodyColor, #ccc);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 60%, transparent);
+    border-top: 1px solid color-mix(in srgb, #9c27b0 20%, transparent);
+}
+
+.ri-reasoning-sig-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 0.78em;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 55%, transparent);
+    border-top: 1px solid color-mix(in srgb, #9c27b0 20%, transparent);
+}
+
+.ri-reasoning-sig-label {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.85em;
+    opacity: 0.65;
+    padding-top: 2px;
+    white-space: nowrap;
+}
+
+.ri-reasoning-sig {
+    flex: 1;
+    font-family: var(--monoFontFamily, ui-monospace, monospace);
+    font-size: 0.9em;
+    word-break: break-all;
+    opacity: 0.8;
+    max-height: 120px;
+    overflow-y: auto;
+    padding: 2px 4px;
+    background: color-mix(in srgb, #9c27b0 8%, transparent);
+    border-radius: 2px;
+}
+
+.ri-reasoning-detail-row {
+    padding: 6px 10px;
+    border-top: 1px solid color-mix(in srgb, #9c27b0 18%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 55%, transparent);
+}
+
+.ri-reasoning-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8em;
+    margin-bottom: 4px;
+}
+
+.ri-reasoning-detail-type {
+    font-family: var(--monoFontFamily, monospace);
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+.ri-reasoning-detail-format {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.85em;
+    opacity: 0.55;
+    padding: 0 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, #9c27b0 15%, transparent);
+}
+
+.ri-reasoning-detail-row .ri-reasoning-sig {
+    margin-top: 2px;
+    background: color-mix(in srgb, #9c27b0 5%, transparent);
+}
+
+.ri-msg-reasoning-wrap {
+    padding: 6px 8px 0;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 50%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #444) 30%, transparent);
+}
+
+.ri-msg-reasoning-badge {
+    font-size: 0.7em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: color-mix(in srgb, #9c27b0 30%, transparent);
+    color: #ce93d8;
+    opacity: 0.9;
+}

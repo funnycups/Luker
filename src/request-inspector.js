@@ -354,13 +354,13 @@ function extractPartsFromStreamEvents(events, source) {
  if (!Array.isArray(events) || events.length === 0) return [];
 
  if (source === 'claude') {
- /** @type {Map<number, {type:string,text:string,name:string,id:string,inputJson:string}>} */
+ /** @type {Map<number, {type:string,text:string,name:string,id:string,inputJson:string,thinking:string,signature:string,data:string}>} */
  const blocks = new Map();
  const order = [];
  const ensureBlock = (idx) => {
  let b = blocks.get(idx);
  if (!b) {
- b = { type: 'text', text: '', name: '', id: '', inputJson: '' };
+ b = { type: 'text', text: '', name: '', id: '', inputJson: '', thinking: '', signature: '', data: '' };
  blocks.set(idx, b);
  order.push(idx);
  }
@@ -379,6 +379,9 @@ function extractPartsFromStreamEvents(events, source) {
  const b = ensureBlock(idx);
  b.type = cb.type || 'text';
  if (cb.type === 'text' && typeof cb.text === 'string') b.text = cb.text;
+ if (cb.type === 'thinking' && typeof cb.thinking === 'string') b.thinking = cb.thinking;
+ if (cb.type === 'thinking' && typeof cb.signature === 'string') b.signature = cb.signature;
+ if (cb.type === 'redacted_thinking' && typeof cb.data === 'string') b.data = cb.data;
  if (cb.name) b.name = cb.name;
  if (cb.id) b.id = cb.id;
  } else if (parsed?.type === 'content_block_delta') {
@@ -387,6 +390,8 @@ function extractPartsFromStreamEvents(events, source) {
  const d = parsed.delta;
  if (d?.type === 'text_delta' && typeof d.text === 'string') b.text += d.text;
  else if (d?.type === 'input_json_delta' && typeof d.partial_json === 'string') b.inputJson += d.partial_json;
+ else if (d?.type === 'thinking_delta' && typeof d.thinking === 'string') b.thinking += d.thinking;
+ else if (d?.type === 'signature_delta' && typeof d.signature === 'string') b.signature += d.signature;
  }
  }
 
@@ -398,6 +403,10 @@ function extractPartsFromStreamEvents(events, source) {
  if (b.text) parts.push({ type: 'text', text: b.text });
  } else if (b.type === 'tool_use') {
  parts.push({ type: 'tool_call', id: b.id, name: b.name, args: coerceToolArgs(b.inputJson) });
+ } else if (b.type === 'thinking') {
+ parts.push({ type: 'reasoning', kind: 'thinking', text: b.thinking, signature: b.signature });
+ } else if (b.type === 'redacted_thinking') {
+ parts.push({ type: 'reasoning', kind: 'redacted_thinking', data: b.data });
  }
  }
  return parts;
@@ -432,6 +441,10 @@ function extractPartsFromStreamEvents(events, source) {
 
  // OpenAI / OpenAI-compatible
  let textAccum = '';
+ let reasoningTextAccum = '';
+ /** @type {Map<string, object>} keyed by detail.id (fallback ordinal); preserves reasoning_details entries */
+ const reasoningDetails = new Map();
+ const reasoningDetailsOrder = [];
  /** @type {Map<number, {id:string,name:string,argsStr:string}>} */
  const toolCalls = new Map();
  const toolOrder = [];
@@ -443,6 +456,29 @@ function extractPartsFromStreamEvents(events, source) {
  toolOrder.push(idx);
  }
  return t;
+ };
+ const ingestReasoningDetails = (arr) => {
+ if (!Array.isArray(arr)) return;
+ for (const detail of arr) {
+ if (!detail || typeof detail !== 'object') continue;
+ const key = detail.id != null ? String(detail.id) : `__ordinal_${reasoningDetailsOrder.length}`;
+ if (!reasoningDetails.has(key)) {
+ reasoningDetails.set(key, { ...detail });
+ reasoningDetailsOrder.push(key);
+ } else {
+ // Streamed data payloads arrive fragmented across multiple deltas;
+ // append instead of overwrite. Metadata fields (type/id/format/index)
+ // are same-value across increments — last-write-wins is safe.
+ const existing = reasoningDetails.get(key);
+ for (const [k, v] of Object.entries(detail)) {
+ if (k === 'data' && typeof v === 'string' && typeof existing.data === 'string') {
+ existing.data = existing.data + v;
+ } else {
+ existing[k] = v;
+ }
+ }
+ }
+ }
  };
  for (const ev of events) {
  const raw = normalizeEvent(ev);
@@ -457,6 +493,9 @@ function extractPartsFromStreamEvents(events, source) {
  else if (Array.isArray(content)) {
  for (const p of content) if (p?.type === 'text' && typeof p.text === 'string') textAccum += p.text;
  }
+ if (typeof delta.reasoning_content === 'string') reasoningTextAccum += delta.reasoning_content;
+ if (typeof delta.reasoning === 'string') reasoningTextAccum += delta.reasoning;
+ if (Array.isArray(delta.reasoning_details)) ingestReasoningDetails(delta.reasoning_details);
  if (Array.isArray(delta.tool_calls)) {
  for (const tc of delta.tool_calls) {
  const idx = tc?.index ?? 0;
@@ -469,6 +508,14 @@ function extractPartsFromStreamEvents(events, source) {
  }
 
  const parts = [];
+ if (reasoningTextAccum) parts.push({ type: 'reasoning', kind: 'text', text: reasoningTextAccum });
+ if (reasoningDetailsOrder.length) {
+ parts.push({
+ type: 'reasoning',
+ kind: 'details',
+ details: reasoningDetailsOrder.map(k => reasoningDetails.get(k)),
+ });
+ }
  if (textAccum) parts.push({ type: 'text', text: textAccum });
  for (const idx of toolOrder) {
  const t = toolCalls.get(idx);
@@ -538,6 +585,19 @@ function extractPartsFromPayload(payload, source, rawApiResponse) {
  if (p.text) parts.push({ type: 'text', text: p.text });
  } else if (p?.type === 'tool_use') {
  parts.push({ type: 'tool_call', id: p.id || '', name: p.name || '', args: p.input ?? {} });
+ } else if (p?.type === 'thinking') {
+ parts.push({
+ type: 'reasoning',
+ kind: 'thinking',
+ text: typeof p.thinking === 'string' ? p.thinking : '',
+ signature: typeof p.signature === 'string' ? p.signature : '',
+ });
+ } else if (p?.type === 'redacted_thinking') {
+ parts.push({
+ type: 'reasoning',
+ kind: 'redacted_thinking',
+ data: typeof p.data === 'string' ? p.data : '',
+ });
  }
  }
  return parts;
@@ -559,7 +619,34 @@ function extractPartsFromPayload(payload, source, rawApiResponse) {
 
  const choice = payload?.choices?.[0];
  if (choice) {
- const msgContent = choice?.message?.content ?? choice?.text;
+ const msg = choice?.message || {};
+ if (typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
+ parts.push({ type: 'reasoning', kind: 'text', text: msg.reasoning_content });
+ } else if (typeof msg.reasoning === 'string' && msg.reasoning) {
+ parts.push({ type: 'reasoning', kind: 'text', text: msg.reasoning });
+ }
+ if (Array.isArray(msg.reasoning_details) && msg.reasoning_details.length) {
+ parts.push({ type: 'reasoning', kind: 'details', details: msg.reasoning_details });
+ }
+ if (Array.isArray(msg.reasoning_blocks) && msg.reasoning_blocks.length) {
+ for (const b of msg.reasoning_blocks) {
+ if (b?.type === 'thinking') {
+ parts.push({
+ type: 'reasoning',
+ kind: 'thinking',
+ text: typeof b.thinking === 'string' ? b.thinking : '',
+ signature: typeof b.signature === 'string' ? b.signature : '',
+ });
+ } else if (b?.type === 'redacted_thinking') {
+ parts.push({
+ type: 'reasoning',
+ kind: 'redacted_thinking',
+ data: typeof b.data === 'string' ? b.data : '',
+ });
+ }
+ }
+ }
+ const msgContent = msg.content ?? choice?.text;
  if (typeof msgContent === 'string' && msgContent) {
  parts.push({ type: 'text', text: msgContent });
  } else if (Array.isArray(msgContent)) {
@@ -569,7 +656,7 @@ function extractPartsFromPayload(payload, source, rawApiResponse) {
  }
  }
  }
- const tcs = choice?.message?.tool_calls;
+ const tcs = msg.tool_calls;
  if (Array.isArray(tcs)) {
  for (const tc of tcs) {
  parts.push({
@@ -580,7 +667,7 @@ function extractPartsFromPayload(payload, source, rawApiResponse) {
  });
  }
  }
- const fc = choice?.message?.function_call;
+ const fc = msg.function_call;
  if (fc) {
  parts.push({ type: 'tool_call', id: '', name: fc.name || '', args: coerceToolArgs(fc.arguments) });
  }
