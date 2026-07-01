@@ -407,6 +407,10 @@ export function normalizeClaudeResponseToOAI(raw) {
     let text = '';
     let thinking = '';
     const toolCalls = [];
+    // Anthropic requires thinking / redacted_thinking blocks to be echoed verbatim
+    // in subsequent turns (including their signature field). Preserve them here
+    // so downstream can round-trip the full block on the next request.
+    const reasoningBlocks = [];
 
     for (const block of content) {
         if (!block || typeof block !== 'object') continue;
@@ -415,6 +419,13 @@ export function normalizeClaudeResponseToOAI(raw) {
             text += String(block.text || '');
         } else if (type === 'thinking') {
             thinking += String(block.thinking || '');
+            const preserved = { type: 'thinking', thinking: String(block.thinking || '') };
+            if (typeof block.signature === 'string' && block.signature.length > 0) {
+                preserved.signature = block.signature;
+            }
+            reasoningBlocks.push(preserved);
+        } else if (type === 'redacted_thinking') {
+            reasoningBlocks.push({ type: 'redacted_thinking', data: String(block.data || '') });
         } else if (type === 'tool_use') {
             toolCalls.push({
                 id: String(block.id || ''),
@@ -425,11 +436,12 @@ export function normalizeClaudeResponseToOAI(raw) {
                 },
             });
         }
-        // tool_result / redacted_thinking / server_tool_use stay accessible via reply.content.
+        // tool_result / server_tool_use stay accessible via reply.content.
     }
 
     const message = { role: 'assistant', content: text };
     if (thinking) message.reasoning_content = thinking;
+    if (reasoningBlocks.length) message.reasoning_blocks = reasoningBlocks;
     if (toolCalls.length) message.tool_calls = toolCalls;
 
     const finishReason = CLAUDE_STOP_REASON_TO_OAI[String(raw?.stop_reason || '')] ?? 'stop';
@@ -1466,10 +1478,6 @@ async function sendDeepSeekRequest(request, response) {
 
         const processedMessages = addAssistantPrefix(postProcessPrompt(request.body.messages, PROMPT_PROCESSING_TYPE.SEMI, getPromptNames(request)), bodyParams.tools, 'prefix');
         addReasoningContentToToolCalls(processedMessages);
-
-        if (/deepseek-(reasoner|v4)/.test(request.body.model)) {
-            addReasoningContentToToolCalls(processedMessages);
-        }
 
         if (request.body.reasoning_effort) {
             bodyParams['reasoning_effort'] = request.body.reasoning_effort;

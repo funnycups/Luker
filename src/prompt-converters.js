@@ -226,7 +226,33 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
 
     // Now replace all further messages that have the role 'system' with the role 'user'. (or all if we're not using one)
     const parse = (str) => typeof str === 'string' ? JSON.parse(str) : str;
+
+    // Extract and sanitize thinking / redacted_thinking blocks that must be echoed
+    // verbatim before tool_use blocks. Anthropic will 400 if the signature is missing
+    // or blocks are reordered when Extended Thinking + tool_use is in effect.
+    const extractReasoningBlocks = (raw) => {
+        if (!Array.isArray(raw)) return [];
+        const out = [];
+        for (const block of raw) {
+            if (!block || typeof block !== 'object') continue;
+            if (block.type === 'thinking') {
+                const preserved = { type: 'thinking', thinking: String(block.thinking || '') };
+                if (typeof block.signature === 'string' && block.signature.length > 0) {
+                    preserved.signature = block.signature;
+                }
+                out.push(preserved);
+            } else if (block.type === 'redacted_thinking' && typeof block.data === 'string' && block.data.length > 0) {
+                out.push({ type: 'redacted_thinking', data: block.data });
+            }
+        }
+        return out;
+    };
+
     messages.forEach((message) => {
+        const reasoningBlocks = message.role === 'assistant'
+            ? extractReasoningBlocks(message.reasoning_blocks)
+            : [];
+
         if (message.role === 'assistant' && message.tool_calls) {
             message.content = message.tool_calls.map((tc) => ({
                 type: 'tool_use',
@@ -300,10 +326,17 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
             });
         }
 
+        // Prepend reasoning blocks so thinking / redacted_thinking precede tool_use
+        // per Anthropic Extended Thinking contract.
+        if (reasoningBlocks.length > 0 && Array.isArray(message.content)) {
+            message.content = [...reasoningBlocks, ...message.content];
+        }
+
         // Remove offending properties
         delete message.name;
         delete message.tool_calls;
         delete message.tool_call_id;
+        delete message.reasoning_blocks;
     });
 
     // Images in assistant messages should be moved to the next user message
