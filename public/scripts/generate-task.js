@@ -604,6 +604,9 @@ export function dispatchToSenderStreaming({
 
             const finalText = lastText;
             const finalReasoning = lastReasoning;
+            const finalReasoningBlocks = Array.isArray(lastFrame?.state?.reasoningBlocks)
+                ? lastFrame.state.reasoningBlocks.filter(Boolean)
+                : [];
             // openai.js's streamData accumulates tool calls as a 2D array
             // shaped `toolCalls[choiceIndex][toolCallIndex]`. The
             // non-streaming response shape (which `normalizeResponse`
@@ -639,6 +642,7 @@ export function dispatchToSenderStreaming({
                     message: {
                         content: finalText,
                         ...(finalReasoning ? { reasoning_content: finalReasoning } : {}),
+                        ...(finalReasoningBlocks.length > 0 ? { reasoning_blocks: finalReasoningBlocks } : {}),
                         tool_calls: finalToolCalls,
                     },
                     finish_reason: lastFrame?.state?.finishReason || 'stop',
@@ -716,6 +720,7 @@ function emptyResultShape(raw) {
         toolCalls: [],
         jsonData: null,
         reasoning: null,
+        reasoningBlocks: null,
         finishReason: 'stop',
         usage: null,
         raw: raw ?? null,
@@ -751,7 +756,7 @@ function coerceFinishReason(value, fallback = 'stop') {
  * @param {string} args.requestApi
  * @param {'text'|'tool'|'json'} args.mode
  * @param {*} args.raw
- * @returns {object} { assistantText, toolCalls, jsonData, reasoning, finishReason, usage, raw }
+ * @returns {object} { assistantText, toolCalls, jsonData, reasoning, reasoningBlocks, finishReason, usage, raw }
  */
 export function normalizeResponse({ requestApi, mode, raw }) {
     const result = emptyResultShape(raw);
@@ -803,6 +808,9 @@ export function normalizeResponse({ requestApi, mode, raw }) {
         result.reasoning = message.reasoning_content
             ? String(message.reasoning_content)
             : (message.reasoning ? String(message.reasoning) : null);
+        result.reasoningBlocks = Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0
+            ? message.reasoning_blocks
+            : null;
         result.finishReason = coerceFinishReason(choice.finish_reason);
         result.usage = extractOpenAiUsage(raw.usage);
 

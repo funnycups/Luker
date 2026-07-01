@@ -410,6 +410,8 @@ async function processRoundOutcome({
     state,
     roundCalls,
     assistantText,
+    reasoning,
+    reasoningBlocks,
     roundFlags,
     taskMessages,
     context,
@@ -553,6 +555,8 @@ async function processRoundOutcome({
         id: makeMessageId(),
         role: 'assistant',
         content: content || '',
+        reasoning: reasoning || '',
+        reasoningBlocks: Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0 ? reasoningBlocks : null,
         toolCalls: [...persistedToolCalls, ...persistedEditCalls],
         toolResults: [...persistedToolResults, ...editToolResults],
         edits: roundEdits,
@@ -586,6 +590,8 @@ async function processRoundOutcome({
         taskMessages.push({
             role: 'assistant',
             content: String(assistantText || ''),
+            ...(reasoning ? { reasoning: String(reasoning) } : {}),
+            ...(Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0 ? { reasoning_blocks: reasoningBlocks } : {}),
             tool_calls: toolCallsForHistory,
         });
         for (const r of readsForTaskHistory) {
@@ -648,9 +654,15 @@ function buildSeedTaskMessages(state, systemPrompt) {
         const readToolCalls = toolCalls.filter(c => resultCallIds.has(String(c?.id || '')));
 
         if (role === 'assistant' && readToolCalls.length > 0) {
+            const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
+            const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
+                ? m.reasoningBlocks
+                : null;
             messages.push({
                 role: 'assistant',
                 content,
+                ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
+                ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
                 tool_calls: readToolCalls.map(c => ({
                     id: String(c.id || ''),
                     type: 'function',
@@ -864,6 +876,10 @@ async function runIterationTurn(state, opts = {}) {
             state,
             roundCalls: editAndReadCalls,
             assistantText: firstAssistantText,
+            reasoning: String(result?.reasoning || ''),
+            reasoningBlocks: Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
+                ? result.reasoningBlocks
+                : null,
             roundFlags: {
                 hadAnyToolCall,
             },

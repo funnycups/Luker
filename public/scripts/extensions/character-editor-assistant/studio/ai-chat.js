@@ -2499,8 +2499,12 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  throw new Error('Request aborted');
  }
 
- const assistantText = String(result?.assistantText || '').trim();
- const rawCalls = (Array.isArray(result?.toolCalls) ? result.toolCalls : [])
+  const assistantText = String(result?.assistantText || '').trim();
+  const resultReasoning = String(result?.reasoning || '');
+  const resultReasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
+  ? result.reasoningBlocks
+  : null;
+  const rawCalls = (Array.isArray(result?.toolCalls) ? result.toolCalls : [])
  .map(call => ({
  id: String(call?.raw?.id || '').trim() || makeCallId(),
  name: String(call?.name || '').trim(),
@@ -2517,13 +2521,18 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  onAssistantText(assistantText);
  }
 
- // No tool calls — conversation turn is done
- if (rawCalls.length === 0) {
- if (assistantText) {
- conversationMessages.push({ role: 'assistant', content: assistantText });
- }
- break;
- }
+  // No tool calls — conversation turn is done
+  if (rawCalls.length === 0) {
+  if (assistantText) {
+  conversationMessages.push({
+  role: 'assistant',
+  content: assistantText,
+  ...(resultReasoning ? { reasoning: resultReasoning } : {}),
+  ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
+  });
+  }
+  break;
+  }
 
  // Execute tool calls — three phases:
  //  (a) run every tool; file-op tools defer into pendingFileOpItems while
@@ -2707,12 +2716,14 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
  }
  }
 
- // Append assistant message with tool calls
- conversationMessages.push({
- role: 'assistant',
- content: assistantText || '',
- tool_calls: toolCallsForMessage,
- });
+  // Append assistant message with tool calls
+  conversationMessages.push({
+  role: 'assistant',
+  content: assistantText || '',
+  ...(resultReasoning ? { reasoning: resultReasoning } : {}),
+  ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
+  tool_calls: toolCallsForMessage,
+  });
 
  // Append tool results
  for (const result of toolResults) {

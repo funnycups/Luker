@@ -749,6 +749,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             role: 'assistant',
             content: result.assistantText || null,
             reasoning: reasoningAccum || String(result?.reasoning || ''),
+            ...(Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0 ? { reasoning_blocks: result.reasoningBlocks } : {}),
             tool_calls: assistantToolCallEntries,
             _round: round,
         });

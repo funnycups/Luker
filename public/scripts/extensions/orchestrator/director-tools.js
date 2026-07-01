@@ -608,7 +608,10 @@ export function createSubagentDispatcher({
                 : [];
             const roundAssistantText = String(roundResult?.assistantText ?? roundText);
             const roundReasoningText = roundReasoning || String(roundResult?.reasoning ?? '');
-            return { roundAssistantText, roundToolCalls, roundReasoningText };
+            const roundReasoningBlocks = Array.isArray(roundResult?.reasoningBlocks) && roundResult.reasoningBlocks.length > 0
+                ? roundResult.reasoningBlocks
+                : null;
+            return { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks };
         }
     }
 
@@ -910,7 +913,7 @@ export function createSubagentDispatcher({
                     if (childSignal.aborted) {
                         break;
                     }
-                    const { roundAssistantText, roundToolCalls, roundReasoningText } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas);
+                    const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas);
                     if (roundToolCalls.length === 0) {
                         finalText = roundAssistantText;
                         converged = true;
@@ -927,6 +930,7 @@ export function createSubagentDispatcher({
                             role: 'assistant',
                             content: roundAssistantText || '',
                             reasoning: roundReasoningText || '',
+                            ...(roundReasoningBlocks ? { reasoning_blocks: roundReasoningBlocks } : {}),
                             _round: r,
                         });
                         break;
@@ -956,6 +960,7 @@ export function createSubagentDispatcher({
                         role: 'assistant',
                         content: roundAssistantText || null,
                         reasoning: roundReasoningText || '',
+                        ...(roundReasoningBlocks ? { reasoning_blocks: roundReasoningBlocks } : {}),
                         tool_calls: assistantToolCallEntries,
                         _round: r,
                     });

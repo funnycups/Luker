@@ -252,11 +252,14 @@ export async function requestToolCallsWithRetry(context, settings, {
                 : normalizedCalls;
             const assistantText = String(result?.assistantText || '');
             const reasoning = String(result?.reasoning || '');
+            const reasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
+                ? result.reasoningBlocks
+                : null;
             let returnValue;
             if (filteredCalls.length === 0) {
                 if (allowNoToolCalls && assistantText) {
                     returnValue = includeAssistantText
-                        ? { toolCalls: [], assistantText, rawAssistantText: assistantText, reasoning }
+                        ? { toolCalls: [], assistantText, rawAssistantText: assistantText, reasoning, reasoningBlocks }
                         : [];
                 } else {
                     throw new Error('Model response did not contain any matching tool calls.');
@@ -267,7 +270,7 @@ export async function requestToolCallsWithRetry(context, settings, {
                     throw new Error(validationError);
                 }
                 returnValue = includeAssistantText
-                    ? { toolCalls: filteredCalls, assistantText, rawAssistantText: assistantText, reasoning }
+                    ? { toolCalls: filteredCalls, assistantText, rawAssistantText: assistantText, reasoning, reasoningBlocks }
                     : filteredCalls;
             }
 
@@ -531,7 +534,7 @@ export function buildRejectedToolResults(toolCalls = [], summaryText = '') {
     })).filter(item => item.tool_call_id);
 }
 
-export function appendStandardToolRoundMessages(targetMessages, executedCalls, assistantText = '') {
+export function appendStandardToolRoundMessages(targetMessages, executedCalls, assistantText = '', { reasoning = '', reasoningBlocks = null } = {}) {
     if (!Array.isArray(targetMessages) || !Array.isArray(executedCalls) || executedCalls.length === 0) {
         return;
     }
@@ -555,9 +558,14 @@ export function appendStandardToolRoundMessages(targetMessages, executedCalls, a
         return;
     }
 
+    const trimmedReasoning = typeof reasoning === 'string' ? reasoning : '';
+    const trimmedBlocks = Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0 ? reasoningBlocks : null;
+
     targetMessages.push({
         role: 'assistant',
         content: String(assistantText || ''),
+        ...(trimmedReasoning ? { reasoning: trimmedReasoning } : {}),
+        ...(trimmedBlocks ? { reasoning_blocks: trimmedBlocks } : {}),
         tool_calls: toolCalls.map(({ _result, ...toolCall }) => toolCall),
     });
 

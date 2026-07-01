@@ -2241,9 +2241,15 @@ export async function openOrchestratorIterationStudio(deps) {
                         arguments: JSON.stringify(tc?.args || {}),
                     },
                 }));
+                const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
+                const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
+                    ? m.reasoningBlocks
+                    : null;
                 messages.push({
                     role: 'assistant',
                     content,
+                    ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
+                    ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
                     tool_calls: toolCallsForHistory,
                 });
                 const resultById = new Map();
@@ -3001,12 +3007,18 @@ export async function openOrchestratorIterationStudio(deps) {
         // already display each call's friendly label + args, so we leave
         // `content` empty rather than synthesising a redundant one-liner.
         const content = assistantText;
+        const persistedReasoning = String(result?.reasoning || '');
+        const persistedReasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
+            ? result.reasoningBlocks
+            : null;
         const assistantMsg = {
             id: makeMessageId(),
             role: 'assistant',
             content: content || '',
             at: Date.now(),
         };
+        if (persistedReasoning) assistantMsg.reasoning = persistedReasoning;
+        if (persistedReasoningBlocks) assistantMsg.reasoningBlocks = persistedReasoningBlocks;
         const allCallsForPersist = [...readToolCalls, ...editToolCalls];
         if (allCallsForPersist.length > 0 || rejectedResetCalls.length > 0) {
             const fromMain = allCallsForPersist.map(tc => ({

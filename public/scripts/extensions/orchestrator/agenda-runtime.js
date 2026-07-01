@@ -910,6 +910,8 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         runtimeToolMessages.push({
             role: 'assistant',
             content: String(detailed?.assistantText || ''),
+            ...(detailed?.reasoning ? { reasoning: String(detailed.reasoning) } : {}),
+            ...(Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0 ? { reasoning_blocks: detailed.reasoningBlocks } : {}),
             tool_calls: assistantToolCallEntries,
         });
         conversation.messages.push({

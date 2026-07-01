@@ -830,6 +830,8 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 runtimeToolMessages.push({
                     role: 'assistant',
                     content: String(detailed?.assistantText || ''),
+                    ...(Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0 ? { reasoning_blocks: detailed.reasoningBlocks } : {}),
+                    ...(detailed?.reasoning ? { reasoning: String(detailed.reasoning) } : {}),
                     tool_calls: assistantToolCallEntries,
                 });
                 conversation.messages.push({
@@ -1161,7 +1163,12 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                     [ORCH_REVIEW_FEEDBACK_FIELD]: decision.reason,
                 },
                 result: replay.result,
-            }], detailed?.assistantText || '');
+            }], detailed?.assistantText || '', {
+                reasoning: String(detailed?.reasoning || ''),
+                reasoningBlocks: Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0
+                    ? detailed.reasoningBlocks
+                    : null,
+            });
         } catch (error) {
             finishRuntimeNodeAttempt(trace, traceAttempt, {
                 status: 'failed',

@@ -37,6 +37,8 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
     if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) out.toolCalls = m.toolCalls;
     if (Array.isArray(m.toolResults) && m.toolResults.length > 0) out.toolResults = m.toolResults;
     if (Array.isArray(m.edits) && m.edits.length > 0) out.edits = m.edits;
+    if (typeof m.reasoning === 'string' && m.reasoning) out.reasoning = m.reasoning;
+    if (Array.isArray(m.reasoningBlocks) && m.reasoningBlocks.length > 0) out.reasoningBlocks = m.reasoningBlocks;
     if (typeof m.appliedAt === 'number') out.appliedAt = m.appliedAt;
     if (m.appliedTarget) out.appliedTarget = String(m.appliedTarget);
     if (typeof m.rolledBackAt === 'number') out.rolledBackAt = m.rolledBackAt;

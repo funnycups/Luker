@@ -204,12 +204,15 @@ async function defaultSendLlm({ context, settings, messages, tools, runtimeWorld
     if (Array.isArray(result)) {
         // Returned shape when includeAssistantText is false — shouldn't
         // happen here, but normalize defensively.
-        return { toolCalls: result, assistantText: '', reasoning: '' };
+        return { toolCalls: result, assistantText: '', reasoning: '', reasoningBlocks: null };
     }
     return {
         toolCalls: Array.isArray(result?.toolCalls) ? result.toolCalls : [],
         assistantText: String(result?.assistantText || ''),
         reasoning: String(result?.reasoning || ''),
+        reasoningBlocks: Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
+            ? result.reasoningBlocks
+            : null,
     };
 }
 
@@ -1047,6 +1050,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 role: 'assistant',
                 content: assistantText,
                 reasoning,
+                ...(Array.isArray(response?.reasoningBlocks) && response.reasoningBlocks.length > 0 ? { reasoning_blocks: response.reasoningBlocks } : {}),
                 tool_calls: assistantToolCallEntries,
                 _round: round,
             });
