@@ -29,6 +29,7 @@ import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
+import android.webkit.ConsoleMessage
 import android.webkit.MimeTypeMap
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
@@ -299,6 +300,20 @@ class MainActivity : AppCompatActivity() {
         installImeInsetsHandling()
         webView.addJavascriptInterface(LukerAndroidBridge(), "LukerAndroid")
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                if (message != null) {
+                    val level = message.messageLevel()?.name ?: "LOG"
+                    val source = message.sourceId().orEmpty()
+                    val lineNo = message.lineNumber()
+                    val text = message.message().orEmpty()
+                    LukerDebugTrail.append(
+                        "webconsole",
+                        "$level $source:$lineNo $text",
+                    )
+                }
+                return super.onConsoleMessage(message)
+            }
+
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 if (view == null) {
                     callback?.onCustomViewHidden()
@@ -442,17 +457,24 @@ class MainActivity : AppCompatActivity() {
                     (view?.parent as? ViewGroup)?.removeView(view)
                     view?.destroy()
                 }
+                LukerDebugTrail.append("native", "renderProcessGone didCrash=$crashed url=$url")
                 val crash = LukerCrashCapture.captureWebViewCrash(
                     context = applicationContext,
                     webViewUrl = url,
                     didCrash = crashed,
                     rendererPriorityAtExit = rendererPriority,
                 )
+                val enrichedReport = buildString {
+                    append(crash.report)
+                    append("\n\n--- debug-trail ---\n")
+                    append(LukerDebugTrail.dumpAll().ifEmpty { "<empty>" })
+                    appendLogcatTails(this, applicationContext)
+                }
                 window.decorView.post {
                     if (isFinishing || isDestroyed) {
                         return@post
                     }
-                    showWebViewCrashDialog(crash.report, crash.reportFile)
+                    showWebViewCrashDialog(enrichedReport, crash.reportFile)
                 }
                 return true
             }
@@ -905,6 +927,25 @@ class MainActivity : AppCompatActivity() {
         fun setBackgroundKeepAliveEnabled(enabled: Boolean) {
             runOnUiThread {
                 applyBackgroundKeepAlive(enabled)
+            }
+        }
+
+        @JavascriptInterface
+        fun setDebugRecordingEnabled(enabled: Boolean) {
+            LukerAndroidDebugConfig.setEnabled(applicationContext, enabled)
+            LukerLogcatTail.setEnabled(applicationContext, enabled)
+            LukerDebugTrail.append("native", "debug-recording $enabled")
+        }
+
+        @JavascriptInterface
+        fun pushDebugTrail(category: String?, text: String?) {
+            LukerDebugTrail.append(category.orEmpty(), text.orEmpty())
+        }
+
+        @JavascriptInterface
+        fun exportDiagnosticsBundle() {
+            runOnUiThread {
+                exportAndShareDiagnosticsBundle(R.string.debug_export_share_subject)
             }
         }
     }
@@ -2245,14 +2286,6 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
-        val diagnosticsLink = TextView(this).apply {
-            text = getString(R.string.diagnostics_open_link)
-            setTextColor(android.graphics.Color.parseColor("#1976D2"))
-            paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
-            setPadding(0, padding / 2, 0, 0)
-            setOnClickListener { showDiagnosticsDialog() }
-        }
-        container.addView(diagnosticsLink)
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.endpoint_dialog_title)
@@ -2385,39 +2418,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun showDiagnosticsDialog() {
-        if (isFinishing || isDestroyed) {
-            return
-        }
-        val diagnostics = collectRuntimeDiagnosticsSafe()
-        val dataRoot = LukerRuntimeManager.dataRootFor(applicationContext)
-        val intro = getString(R.string.diagnostics_dialog_intro, dataRoot.absolutePath)
-        val reportView = TextView(this).apply {
-            text = diagnostics
-            setTextIsSelectable(true)
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(32, 24, 32, 24)
-        }
-        val scrollView = ScrollView(this).apply {
-            addView(reportView)
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.diagnostics_dialog_title)
-            .setMessage(intro)
-            .setView(scrollView)
-            .setPositiveButton(android.R.string.ok, null)
-            .setNeutralButton(R.string.runtime_error_copy) { _, _ ->
-                val clipboard = getSystemService(ClipboardManager::class.java)
-                clipboard?.setPrimaryClip(ClipData.newPlainText("luker-diagnostics", diagnostics))
-                Toast.makeText(this, getString(R.string.runtime_error_copy_done), Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(R.string.diagnostics_export_bundle) { _, _ ->
-                exportAndShareDiagnosticsBundle(R.string.runtime_error_share_subject)
-            }
-            .show()
-    }
-
     private fun showReportDialog(
         titleRes: Int,
         introRes: Int,
@@ -2440,6 +2440,9 @@ class MainActivity : AppCompatActivity() {
             append(getString(introRes))
             if (reportFile != null) {
                 append('\n').append(getString(R.string.runtime_error_report_saved, reportFile.absolutePath))
+            }
+            if (!LukerAndroidDebugConfig.isEnabled(applicationContext)) {
+                append(getString(R.string.crash_dialog_debug_hint))
             }
         }
 
@@ -2480,6 +2483,41 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.diagnostics_export_failed, t.message ?: t.javaClass.simpleName),
                 Toast.LENGTH_LONG,
             ).show()
+        }
+    }
+
+    private fun appendLogcatTails(sb: StringBuilder, context: Context) {
+        sb.append("\n\n--- logcat tail ---\n")
+        val current = LukerLogcatTail.currentLogFile(context)
+        val last = LukerLogcatTail.lastLogFile(context)
+        if (!current.isFile && !last.isFile) {
+            sb.append("<not recorded>")
+            return
+        }
+        val tailLimit = 64 * 1024L
+        if (last.isFile) {
+            sb.append("--- last ---\n").append(readTailUtf8(last, tailLimit)).append('\n')
+        }
+        if (current.isFile) {
+            sb.append("--- current ---\n").append(readTailUtf8(current, tailLimit))
+        }
+    }
+
+    private fun readTailUtf8(file: File, maxBytes: Long): String {
+        if (!file.isFile) return ""
+        val length = file.length()
+        if (length <= maxBytes) return file.readText(Charsets.UTF_8)
+        return file.inputStream().use { input ->
+            val skip = length - maxBytes
+            var remaining = skip
+            val buf = ByteArray(8192)
+            while (remaining > 0) {
+                val toSkip = minOf(remaining, buf.size.toLong())
+                val skipped = input.read(buf, 0, toSkip.toInt())
+                if (skipped <= 0) break
+                remaining -= skipped
+            }
+            input.readBytes().toString(Charsets.UTF_8)
         }
     }
 

@@ -63,6 +63,18 @@ object LukerDiagnosticsExporter {
             for (file in LukerRuntimeManager.listNodeDiagnosticArtifacts(context)) {
                 writeFileEntry(zip, "node/${file.name}", file)
             }
+
+            val trail = runCatching { LukerDebugTrail.dumpAll() }.getOrDefault("")
+            writeEntry(zip, "debug-trail.txt", trail.toByteArray(Charsets.UTF_8))
+
+            val currentLogcat = LukerLogcatTail.currentLogFile(context)
+            if (currentLogcat.isFile) {
+                writeFileEntry(zip, "logcat/current.log", currentLogcat)
+            }
+            val lastLogcat = LukerLogcatTail.lastLogFile(context)
+            if (lastLogcat.isFile) {
+                writeFileEntry(zip, "logcat/last.log", lastLogcat)
+            }
         }
 
         val authority = context.packageName + FILE_PROVIDER_AUTHORITY_SUFFIX

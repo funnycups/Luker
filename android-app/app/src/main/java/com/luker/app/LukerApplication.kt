@@ -20,6 +20,7 @@ class LukerApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         installUncaughtExceptionHandler()
+        initDebugRecording()
         warmUpWebViewProvider()
     }
 
@@ -60,6 +61,20 @@ class LukerApplication : Application() {
             WebViewCompat.startSafeBrowsing(this) { /* result ignored */ }
         } catch (t: Throwable) {
             Log.w(TAG, "WebView warmup failed", t)
+        }
+    }
+
+    private fun initDebugRecording() {
+        runCatching {
+            LukerDebugTrail.append(
+                "native",
+                "process onCreate pid=${android.os.Process.myPid()} uid=${android.os.Process.myUid()}",
+            )
+            if (LukerAndroidDebugConfig.isEnabled(this)) {
+                LukerLogcatTail.setEnabled(this, true)
+            }
+        }.onFailure {
+            Log.w(TAG, "Debug recording init failed", it)
         }
     }
 

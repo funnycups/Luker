@@ -46,7 +46,57 @@ object LukerCrashCapture {
             null
         }
 
-        return mergeCrashes(context, jvmCrash, platformCrash)
+        val captured = mergeCrashes(context, jvmCrash, platformCrash) ?: return null
+        return enrichCrashReport(context, captured)
+    }
+
+    private fun enrichCrashReport(context: Context, captured: CapturedCrash): CapturedCrash {
+        val enrichedReport = buildString {
+            append(captured.report)
+            append("\n\n--- debug-trail ---\n")
+            val trail = runCatching { LukerDebugTrail.dumpAll() }.getOrDefault("")
+            append(trail.ifEmpty { "<empty>" })
+            appendLogcatTailsForCrash(this, context)
+        }
+        val reportFile = runCatching {
+            captured.reportFile?.also { it.writeText(enrichedReport, Charsets.UTF_8) }
+        }.getOrNull() ?: captured.reportFile
+        return CapturedCrash(report = enrichedReport, reportFile = reportFile, timestamp = captured.timestamp)
+    }
+
+    private fun appendLogcatTailsForCrash(sb: StringBuilder, context: Context) {
+        sb.append("\n\n--- logcat tail ---\n")
+        val current = LukerLogcatTail.currentLogFile(context)
+        val last = LukerLogcatTail.lastLogFile(context)
+        if (!current.isFile && !last.isFile) {
+            sb.append("<not recorded>")
+            return
+        }
+        val tailLimit = 64 * 1024L
+        if (last.isFile) {
+            sb.append("--- last ---\n").append(readTailForCrash(last, tailLimit)).append('\n')
+        }
+        if (current.isFile) {
+            sb.append("--- current ---\n").append(readTailForCrash(current, tailLimit))
+        }
+    }
+
+    private fun readTailForCrash(file: File, maxBytes: Long): String {
+        if (!file.isFile) return ""
+        val length = file.length()
+        if (length <= maxBytes) return file.readText(Charsets.UTF_8)
+        return file.inputStream().use { input ->
+            val skip = length - maxBytes
+            var remaining = skip
+            val buf = ByteArray(8192)
+            while (remaining > 0) {
+                val toSkip = minOf(remaining, buf.size.toLong())
+                val skipped = input.read(buf, 0, toSkip.toInt())
+                if (skipped <= 0) break
+                remaining -= skipped
+            }
+            input.readBytes().toString(Charsets.UTF_8)
+        }
     }
 
     private fun mergeCrashes(
