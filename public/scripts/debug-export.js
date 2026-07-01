@@ -34,6 +34,18 @@ function collectClientPayload() {
 }
 
 export async function downloadDebugBundle() {
+    const bridge = typeof window !== 'undefined' ? window.LukerAndroid : null;
+    if (bridge && typeof bridge.exportDiagnosticsBundle === 'function') {
+        try {
+            bridge.exportDiagnosticsBundle();
+            toastr.success(t`Debug logs export started.`, t`Export started`);
+        } catch (error) {
+            console.error('[debug-export] native export failed', error);
+            toastr.error(t`Failed to export debug logs.`);
+        }
+        return;
+    }
+
     console.log('[debug-export] Requesting debug bundle from server...');
 
     const response = await fetch('/api/debug/export', {

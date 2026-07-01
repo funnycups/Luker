@@ -6975,3 +6975,4 @@ body:not(.movingUI) .drawer-content.maximized {
 .cms-dialog-split .cms-split-segments-list { display: flex; flex-direction: column; gap: 4px; max-height: 30vh; overflow-y: auto; padding: 4px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; }
 .cms-dialog-split .cms-split-segment-row { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 6px; padding: 4px 6px; background-color: var(--SmartThemeBlurTintColor); border-radius: 4px; }
 .cms-dialog-split .cms-split-segment-name { width: 100%; }
+.luker-no-android .luker-android-only { display: none !important; }

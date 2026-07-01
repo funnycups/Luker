@@ -78,6 +78,7 @@ import { DEFAULT_REASONING_TEMPLATE, loadReasoningTemplates } from './reasoning.
 import { bindModelTemplates } from './chat-templates.js';
 import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { setFrontendConsoleDebugLoggingEnabled } from './frontend-log-manager.js';
+import { setAndroidDebugRecordingEnabled, isAndroidDebugTrailAvailable } from './luker-android-debug-trail.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { downloadCurrentSelfProfileReport, setSelfProfilerPreference, syncSelfProfilerEnabled } from './self-profiler.js';
@@ -221,6 +222,7 @@ export const power_user = {
     auto_fix_generated_markdown: true,
     send_on_enter: send_on_enter_options.AUTO,
     frontend_debug_logging: false,
+    android_debug_recording: false,
     self_profiling_enabled: false,
     console_log_prompts: false,
     request_token_probabilities: false,
@@ -2039,6 +2041,7 @@ async function showDebugMenu() {
 
 export function applyPowerUserSettings() {
     setFrontendConsoleDebugLoggingEnabled(power_user.frontend_debug_logging, { announce: false });
+    setAndroidDebugRecordingEnabled(!!power_user.android_debug_recording);
     switchUiMode();
     applyFontScale('forced');
     applyThemeColor();
@@ -2244,6 +2247,10 @@ export async function loadPowerUserSettings(settings, data) {
     $('#context_size_derived').prop('checked', !!power_user.context_size_derived);
 
     $('#frontend_debug_logging').prop('checked', power_user.frontend_debug_logging);
+    $('#android_debug_recording').prop('checked', !!power_user.android_debug_recording);
+    if (!isAndroidDebugTrailAvailable()) {
+        document.documentElement.classList.add('luker-no-android');
+    }
     $('#self_profiling_enabled').prop('checked', power_user.self_profiling_enabled);
     $('#console_log_prompts').prop('checked', power_user.console_log_prompts);
     $('#request_token_probabilities').prop('checked', power_user.request_token_probabilities);
@@ -4228,6 +4235,12 @@ jQuery(() => {
     $('#frontend_debug_logging').on('input', function () {
         power_user.frontend_debug_logging = !!$(this).prop('checked');
         setFrontendConsoleDebugLoggingEnabled(power_user.frontend_debug_logging, { announce: true });
+        saveSettingsDebounced();
+    });
+
+    $('#android_debug_recording').on('input', function () {
+        power_user.android_debug_recording = !!$(this).prop('checked');
+        setAndroidDebugRecordingEnabled(power_user.android_debug_recording);
         saveSettingsDebounced();
     });
 

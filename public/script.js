@@ -284,6 +284,7 @@ import { extractFromText as extractSideEffectMacrosFromText } from './scripts/va
 import { initVarOpsPanelHandler } from './scripts/variable-op-log/panel.js';
 import { installFrontendLogCapture, setFrontendConsoleDebugLoggingEnabled } from './scripts/frontend-log-manager.js';
 import { initDebugExportButton } from './scripts/debug-export.js';
+import { initAndroidDebugTrail } from './scripts/luker-android-debug-trail.js';
 import { currentUser, getConfigValidationMessage, isAdmin, setUserControls } from './scripts/user.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
 import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
@@ -337,6 +338,7 @@ import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
 
 installFrontendLogCapture();
+initAndroidDebugTrail();
 bootSelfProfilerFromStorage();
 
 // API OBJECT FOR EXTERNAL WIRING
