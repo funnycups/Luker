@@ -1022,6 +1022,181 @@ describe('convertClaudeMessages', () => {
         expect(msg.tool_calls).toBeUndefined();
         expect(msg.tool_call_id).toBeUndefined();
     });
+
+    test('prepends thinking blocks with signature ahead of tool_use blocks on assistant', () => {
+        const messages = [
+            { role: 'user', content: 'search please' },
+            {
+                role: 'assistant',
+                content: '',
+                reasoning_blocks: [
+                    { type: 'thinking', thinking: 'let me plan', signature: 'sig-1' },
+                ],
+                tool_calls: [
+                    { id: 'tc1', function: { name: 'search', arguments: '{"q":"cats"}' } },
+                ],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, true, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        expect(assistant.content[0]).toEqual({
+            type: 'thinking',
+            thinking: 'let me plan',
+            signature: 'sig-1',
+        });
+        // tool_use must follow thinking blocks per Anthropic Extended Thinking contract
+        const toolUse = assistant.content.find(c => c.type === 'tool_use');
+        expect(toolUse).toBeDefined();
+        const thinkingIdx = assistant.content.findIndex(c => c.type === 'thinking');
+        const toolUseIdx = assistant.content.findIndex(c => c.type === 'tool_use');
+        expect(thinkingIdx).toBeLessThan(toolUseIdx);
+    });
+
+    test('preserves redacted_thinking data field on assistant content', () => {
+        const messages = [
+            { role: 'user', content: 'ok' },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'reply' }],
+                reasoning_blocks: [
+                    { type: 'redacted_thinking', data: 'encrypted-blob' },
+                ],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        expect(assistant.content[0]).toEqual({ type: 'redacted_thinking', data: 'encrypted-blob' });
+    });
+
+    test('drops thinking block with empty thinking string but keeps type marker', () => {
+        // Anthropic requires the block to be sent back verbatim, including empty thinking.
+        // Signature is what carries the state; the block itself must exist even if thinking is ''.
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'reply' }],
+                reasoning_blocks: [
+                    { type: 'thinking', thinking: '', signature: 'sig-only' },
+                ],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        expect(assistant.content[0]).toEqual({
+            type: 'thinking',
+            thinking: '',
+            signature: 'sig-only',
+        });
+    });
+
+    test('preserves order of multiple reasoning_blocks entries', () => {
+        const messages = [
+            { role: 'user', content: 'x' },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'y' }],
+                reasoning_blocks: [
+                    { type: 'thinking', thinking: 'first', signature: 's1' },
+                    { type: 'redacted_thinking', data: 'blob' },
+                    { type: 'thinking', thinking: 'second', signature: 's2' },
+                ],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        const types = assistant.content.slice(0, 3).map(c => c.type);
+        expect(types).toEqual(['thinking', 'redacted_thinking', 'thinking']);
+        expect(assistant.content[0].thinking).toBe('first');
+        expect(assistant.content[2].thinking).toBe('second');
+    });
+
+    test('deletes reasoning_blocks from output message', () => {
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'a' }],
+                reasoning_blocks: [{ type: 'thinking', thinking: 't', signature: 's' }],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        expect(assistant.reasoning_blocks).toBeUndefined();
+    });
+
+    test('ignores reasoning_blocks on non-assistant messages', () => {
+        // Only assistant turns can carry thinking blocks per Anthropic spec.
+        // User-role reasoning_blocks (nonsensical shape) must not leak into content.
+        const messages = [
+            {
+                role: 'user',
+                content: 'question',
+                reasoning_blocks: [{ type: 'thinking', thinking: 'should-be-ignored', signature: 'x' }],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const user = result.messages.find(m => m.role === 'user');
+        const hasThinking = user.content.some(c => c.type === 'thinking');
+        expect(hasThinking).toBe(false);
+    });
+
+    test('leaves content unchanged when reasoning_blocks is missing or empty', () => {
+        const messages = [
+            { role: 'user', content: 'q' },
+            { role: 'assistant', content: [{ type: 'text', text: 'a' }] },
+            { role: 'user', content: 'q2' },
+            { role: 'assistant', content: [{ type: 'text', text: 'a2' }], reasoning_blocks: [] },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const assistants = result.messages.filter(m => m.role === 'assistant');
+        for (const assistant of assistants) {
+            const types = assistant.content.map(c => c.type);
+            expect(types).not.toContain('thinking');
+            expect(types).not.toContain('redacted_thinking');
+        }
+    });
+
+    test('drops malformed blocks (non-object entries and unknown types)', () => {
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'a' }],
+                reasoning_blocks: [
+                    null,
+                    { type: 'unknown', payload: 'x' },
+                    { type: 'thinking', thinking: 'kept', signature: 'sig' },
+                    'not-an-object',
+                ],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        const thinkingBlocks = assistant.content.filter(c => c.type === 'thinking');
+        expect(thinkingBlocks).toHaveLength(1);
+        expect(thinkingBlocks[0].thinking).toBe('kept');
+    });
+
+    test('drops redacted_thinking block missing data field', () => {
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'a' }],
+                reasoning_blocks: [
+                    { type: 'redacted_thinking' },
+                    { type: 'redacted_thinking', data: '' },
+                    { type: 'redacted_thinking', data: 'valid' },
+                ],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        const redacted = assistant.content.filter(c => c.type === 'redacted_thinking');
+        expect(redacted).toHaveLength(1);
+        expect(redacted[0].data).toBe('valid');
+    });
 });
 
 

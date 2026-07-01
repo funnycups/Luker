@@ -51,6 +51,90 @@ describe('normalizeClaudeResponseToOAI — usage normalization', () => {
     });
 });
 
+describe('normalizeClaudeResponseToOAI — reasoning_blocks preservation', () => {
+    test('preserves thinking block with signature on message.reasoning_blocks', () => {
+        const raw = {
+            content: [
+                { type: 'thinking', thinking: 'plan step one', signature: 'sig-abc' },
+                { type: 'text', text: 'answer' },
+            ],
+            stop_reason: 'end_turn',
+        };
+        const reply = normalizeClaudeResponseToOAI(raw);
+        const message = reply.choices[0].message;
+        expect(message.reasoning_blocks).toEqual([
+            { type: 'thinking', thinking: 'plan step one', signature: 'sig-abc' },
+        ]);
+        expect(message.content).toBe('answer');
+        // reasoning_content text kept as a separate string for legacy consumers
+        expect(message.reasoning_content).toBe('plan step one');
+    });
+
+    test('preserves redacted_thinking block with data field on message.reasoning_blocks', () => {
+        const raw = {
+            content: [
+                { type: 'redacted_thinking', data: 'encrypted-blob' },
+                { type: 'text', text: 'ok' },
+            ],
+            stop_reason: 'end_turn',
+        };
+        const reply = normalizeClaudeResponseToOAI(raw);
+        const message = reply.choices[0].message;
+        expect(message.reasoning_blocks).toEqual([
+            { type: 'redacted_thinking', data: 'encrypted-blob' },
+        ]);
+        // redacted_thinking has no plaintext, so no reasoning_content
+        expect(message.reasoning_content).toBeUndefined();
+    });
+
+    test('keeps thinking and redacted_thinking order and pairs tool_use into tool_calls', () => {
+        const raw = {
+            content: [
+                { type: 'thinking', thinking: 'first thought', signature: 'sig-1' },
+                { type: 'redacted_thinking', data: 'blob-1' },
+                { type: 'thinking', thinking: 'second thought', signature: 'sig-2' },
+                { type: 'tool_use', id: 'toolu_1', name: 'search', input: { q: 'cats' } },
+            ],
+            stop_reason: 'tool_use',
+        };
+        const reply = normalizeClaudeResponseToOAI(raw);
+        const message = reply.choices[0].message;
+        expect(message.reasoning_blocks.map(b => b.type)).toEqual([
+            'thinking', 'redacted_thinking', 'thinking',
+        ]);
+        expect(message.reasoning_blocks[0].signature).toBe('sig-1');
+        expect(message.reasoning_blocks[1].data).toBe('blob-1');
+        expect(message.reasoning_blocks[2].signature).toBe('sig-2');
+        expect(message.tool_calls).toHaveLength(1);
+        expect(message.tool_calls[0].id).toBe('toolu_1');
+        expect(message.tool_calls[0].function.name).toBe('search');
+    });
+
+    test('omits reasoning_blocks entirely when no thinking blocks are present', () => {
+        const raw = {
+            content: [{ type: 'text', text: 'hello' }],
+            stop_reason: 'end_turn',
+        };
+        const reply = normalizeClaudeResponseToOAI(raw);
+        expect(reply.choices[0].message.reasoning_blocks).toBeUndefined();
+    });
+
+    test('omits signature when thinking block has no signature field', () => {
+        const raw = {
+            content: [
+                { type: 'thinking', thinking: 'unsigned thought' },
+                { type: 'text', text: 'ok' },
+            ],
+            stop_reason: 'end_turn',
+        };
+        const reply = normalizeClaudeResponseToOAI(raw);
+        expect(reply.choices[0].message.reasoning_blocks[0]).toEqual({
+            type: 'thinking',
+            thinking: 'unsigned thought',
+        });
+    });
+});
+
 describe('normalizeGeminiResponseToOAI — usage normalization', () => {
     test('maps usageMetadata fields to OpenAI snake_case shape', () => {
         const raw = {
