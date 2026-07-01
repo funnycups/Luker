@@ -930,6 +930,9 @@ function setOpenAIMessages(chat) {
         const reasoningBlocks = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.reasoning_blocks)
             ? chat[j].extra.reasoning_blocks
             : null;
+        const reasoningDetails = isSameModel && !isOtherGroupMember && Array.isArray(chat[j]?.extra?.reasoning_details)
+            ? chat[j].extra.reasoning_details
+            : null;
 
         // Remove reasoning metadata from invocations if the API/model don't match
         if (Array.isArray(invocations) && invocations.length > 0) {
@@ -961,7 +964,7 @@ function setOpenAIMessages(chat) {
             continue;
         }
 
-        messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations, 'signature': signature, 'reasoning': reasoning, 'reasoning_blocks': reasoningBlocks };
+        messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations, 'signature': signature, 'reasoning': reasoning, 'reasoning_blocks': reasoningBlocks, 'reasoning_details': reasoningDetails };
         j++;
     }
 
@@ -1275,6 +1278,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             if (Array.isArray(continueMessage.reasoning_blocks) && continueMessage.reasoning_blocks.length > 0) {
                 chatMessage.reasoning_blocks = continueMessage.reasoning_blocks;
             }
+            if (Array.isArray(continueMessage.reasoning_details) && continueMessage.reasoning_details.length > 0) {
+                chatMessage.reasoning_details = continueMessage.reasoning_details;
+            }
             continueMessageCollection.add(chatMessage);
         }
         const continueNudgePrompt = new Prompt(promptObject);
@@ -1322,6 +1328,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
         const reasoningBlocks = Array.isArray(chatPrompt.reasoning_blocks) && chatPrompt.reasoning_blocks.length > 0
             ? chatPrompt.reasoning_blocks
             : null;
+        const reasoningDetails = Array.isArray(chatPrompt.reasoning_details) && chatPrompt.reasoning_details.length > 0
+            ? chatPrompt.reasoning_details
+            : null;
         const chatMessageDefinition = {
             role: preparedPrompt.role,
             content: preparedPrompt.content,
@@ -1330,6 +1339,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             ...(invocations.length > 0 ? { tool_calls: Message.formatToolCalls(invocations, includeSignature) } : {}),
             ...(shouldCountSignature ? { signature: chatPrompt.signature } : {}),
             ...(reasoningBlocks ? { reasoning_blocks: reasoningBlocks } : {}),
+            ...(reasoningDetails ? { reasoning_details: reasoningDetails } : {}),
         };
         const chatMessageIndex = batchedMessageDefinitions.length;
         batchedMessageDefinitions.push(chatMessageDefinition);
@@ -4201,7 +4211,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, reasoningBlocks: [], usage: null };
+            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, reasoningBlocks: [], reasoningDetails: [], usage: null };
             const plainTextToolCallDetector = runtimeFunctionCallContext
                 ? new PlainTextFunctionCallStreamDetector({ triggerSignal: runtimeFunctionCallContext.triggerSignal })
                 : null;
@@ -4459,21 +4469,28 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
                 data.choices?.filter(x => x?.message?.reasoning_content)?.[0]?.message?.reasoning_content ??
                 '';
         }
-        // Extract thought signatures from OpenRouter streaming.
+        // OpenRouter emits reasoning_details as an ordered array; a single assistant turn
+        // may contain multiple encrypted entries (interleaved thinking blocks on Claude,
+        // multiple reasoning entries on other providers). Preserve each detail verbatim so
+        // the next request can echo the full sequence back to the upstream provider.
         const reasoningDetails = [
             ...(data?.choices?.[0]?.delta?.reasoning_details || []),
             ...(data?.choices?.[0]?.message?.reasoning_details || []),
         ];
         reasoningDetails.forEach((detail) => {
-            if (detail.type === 'reasoning.encrypted' && detail.data) {
-                const isToolLikeId = typeof detail.id === 'string' && /^(tool_|call_)/.test(detail.id);
-                if (typeof detail.id === 'string' && detail.id.length > 0) {
-                    state.toolSignatures[detail.id] = detail.data;
-                }
-                if (!isToolLikeId) {
-                    state.signature = detail.data;
-                }
+            if (!detail || typeof detail !== 'object') {
+                return;
             }
+            const isEncrypted = detail.type === 'reasoning.encrypted' && typeof detail.data === 'string' && detail.data.length > 0;
+            const isToolLikeId = typeof detail.id === 'string' && /^(tool_|call_)/.test(detail.id);
+            if (isEncrypted && isToolLikeId) {
+                state.toolSignatures[detail.id] = detail.data;
+            }
+            const preserved = { ...detail };
+            if (!Number.isInteger(preserved.index)) {
+                preserved.index = state.reasoningDetails.length;
+            }
+            state.reasoningDetails.push(preserved);
         });
         return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
     } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW, chat_completion_sources.CHUTES, chat_completion_sources.WORKERS_AI].includes(chat_completion_source)) {
@@ -4742,6 +4759,8 @@ class Message {
     reasoning = null;
     /** @type {object[]?} */
     reasoning_blocks = null;
+    /** @type {object[]?} */
+    reasoning_details = null;
 
     /**
      * @constructor
@@ -4778,16 +4797,17 @@ class Message {
 
     /**
      * Create many Message instances and count them in a single batch.
-     * @param {{ role: string, content: string|any[], identifier: string, name?: string, tool_calls?: object[], signature?: string|null, reasoning_blocks?: object[]|null }[]} definitions
+     * @param {{ role: string, content: string|any[], identifier: string, name?: string, tool_calls?: object[], signature?: string|null, reasoning_blocks?: object[]|null, reasoning_details?: object[]|null }[]} definitions
      * @returns {Promise<Message[]>} Message instances
      */
     static async createManyAsync(definitions) {
-        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature, reasoning_blocks }) => {
+        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature, reasoning_blocks, reasoning_details }) => {
             const message = new Message(role, content, identifier);
             message.name = name;
             message.tool_calls = tool_calls;
             message.signature = signature ?? null;
             message.reasoning_blocks = Array.isArray(reasoning_blocks) && reasoning_blocks.length > 0 ? reasoning_blocks : null;
+            message.reasoning_details = Array.isArray(reasoning_details) && reasoning_details.length > 0 ? reasoning_details : null;
             return message;
         });
 
@@ -5136,6 +5156,7 @@ class MessageCollection {
                     ...(message.signature && { signature: message.signature }),
                     ...(message.reasoning && { reasoning: message.reasoning }),
                     ...(Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0 ? { reasoning_blocks: message.reasoning_blocks } : {}),
+                    ...(Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0 ? { reasoning_details: message.reasoning_details } : {}),
                 });
             }
             return acc;
@@ -5428,6 +5449,7 @@ export class ChatCompletion {
                     ...(item.signature ? { signature: item.signature } : {}),
                     ...(item.reasoning ? { reasoning: item.reasoning } : {}),
                     ...(Array.isArray(item.reasoning_blocks) && item.reasoning_blocks.length > 0 ? { reasoning_blocks: item.reasoning_blocks } : {}),
+                    ...(Array.isArray(item.reasoning_details) && item.reasoning_details.length > 0 ? { reasoning_details: item.reasoning_details } : {}),
                 };
                 chat.push(message);
             } else {

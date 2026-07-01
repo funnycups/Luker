@@ -831,6 +831,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                     role: 'assistant',
                     content: String(detailed?.assistantText || ''),
                     ...(Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0 ? { reasoning_blocks: detailed.reasoningBlocks } : {}),
+                    ...(Array.isArray(detailed?.reasoningDetails) && detailed.reasoningDetails.length > 0 ? { reasoning_details: detailed.reasoningDetails } : {}),
                     ...(detailed?.reasoning ? { reasoning: String(detailed.reasoning) } : {}),
                     tool_calls: assistantToolCallEntries,
                 });
@@ -1167,6 +1168,9 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
                 reasoning: String(detailed?.reasoning || ''),
                 reasoningBlocks: Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0
                     ? detailed.reasoningBlocks
+                    : null,
+                reasoningDetails: Array.isArray(detailed?.reasoningDetails) && detailed.reasoningDetails.length > 0
+                    ? detailed.reasoningDetails
                     : null,
             });
         } catch (error) {

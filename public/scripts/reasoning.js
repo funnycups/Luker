@@ -194,6 +194,35 @@ export function extractReasoningBlocksFromData(data, {
 }
 
 /**
+ * Extracts OpenRouter reasoning_details entries so callers can round-trip encrypted reasoning
+ * (multi-block, per-detail id / format) back to OpenRouter in subsequent turns.
+ * @param {object} data Response data
+ * @param {object} [options] Optional parameters
+ * @param {string|null} [options.mainApi] Override for main API
+ * @param {string|null} [options.chatCompletionSource] Override for chat completion source
+ * @returns {object[]?} Ordered reasoning_details entries or null when not present
+ */
+export function extractReasoningDetailsFromData(data, {
+    mainApi = null,
+    chatCompletionSource = null,
+} = {}) {
+    if ((mainApi ?? main_api) !== 'openai') {
+        return null;
+    }
+
+    const source = chatCompletionSource ?? oai_settings.chat_completion_source;
+    if (source !== chat_completion_sources.OPENROUTER) {
+        return null;
+    }
+
+    const details = data?.choices?.[0]?.message?.reasoning_details;
+    if (!Array.isArray(details) || details.length === 0) {
+        return null;
+    }
+    return details.filter(detail => detail && typeof detail === 'object');
+}
+
+/**
  * Extracts encrypted reasoning signature from the response data.
  * These signatures are used to maintain reasoning context across multi-turn conversations.
  * @param {object} data Response data

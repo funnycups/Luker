@@ -306,7 +306,7 @@ import { initServerHistory } from './scripts/server-history.js';
 import { initSettingsSearch } from './scripts/setting-search.js';
 import { initBulkEdit } from './scripts/bulk-edit.js';
 import { getContext } from './scripts/st-context.js';
-import { extractReasoningBlocksFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
+import { extractReasoningBlocksFromData, extractReasoningDetailsFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { fetchRecentChatsSnapshot, initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar, openWelcomeScreen, primeRecentChatsSnapshotPromise } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
@@ -6176,6 +6176,8 @@ class StreamingProcessor {
         this.reasoningSignature = null;
         /** @type {object[]?} */
         this.reasoningBlocks = null;
+        /** @type {object[]?} */
+        this.reasoningDetails = null;
     }
 
     /**
@@ -6389,6 +6391,11 @@ class StreamingProcessor {
             message.extra.reasoning_blocks = this.reasoningBlocks;
         }
 
+        if (Array.isArray(this.reasoningDetails) && this.reasoningDetails.length > 0) {
+            message.extra = message.extra || {};
+            message.extra.reasoning_details = this.reasoningDetails;
+        }
+
         if (unlockUI) {
             this.markUIGenStopped();
         }
@@ -6544,6 +6551,12 @@ class StreamingProcessor {
                     : null;
                 if (Array.isArray(this.reasoningBlocks) && this.reasoningBlocks.length === 0) {
                     this.reasoningBlocks = null;
+                }
+                this.reasoningDetails = Array.isArray(state?.reasoningDetails)
+                    ? state.reasoningDetails.filter(Boolean)
+                    : null;
+                if (Array.isArray(this.reasoningDetails) && this.reasoningDetails.length === 0) {
+                    this.reasoningDetails = null;
                 }
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
@@ -8896,6 +8909,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         let imageUrls = extractImagesFromData(data);
         const reasoningSignature = extractReasoningSignatureFromData(data);
         const reasoningBlocks = extractReasoningBlocksFromData(data);
+        const reasoningDetails = extractReasoningDetailsFromData(data);
         kobold_horde_model = title;
 
         const swipes = extractMultiSwipes(data, type);
@@ -8937,9 +8951,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         } else {
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails }));
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
@@ -10195,6 +10209,7 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string[]} [imageUrls] Links to images
  * @property {string?} [reasoningSignature] Encrypted signature of the reasoning text
  * @property {object[]?} [reasoningBlocks] Ordered Anthropic reasoning blocks (thinking / redacted_thinking) preserved for multi-turn replay
+ * @property {object[]?} [reasoningDetails] Ordered OpenRouter reasoning_details entries (opaque encrypted payloads) preserved for multi-turn replay
  *
  * @typedef {object} SaveReplyResult
  * @property {string} type Type of generation
@@ -10353,11 +10368,11 @@ function applyPostGenerationText(text, isImpersonate, isContinue) {
     return out;
 }
 
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null, reasoningDetails = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
-        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks] = arguments;
+        [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails] = arguments;
     }
 
     const lastMessage = chat[chat.length - 1];
@@ -10401,6 +10416,11 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             } else {
                 delete lastMessage.extra.reasoning_blocks;
             }
+            if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
+                lastMessage.extra.reasoning_details = reasoningDetails;
+            } else {
+                delete lastMessage.extra.reasoning_details;
+            }
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -10432,6 +10452,11 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         } else {
             delete lastMessage.extra.reasoning_blocks;
         }
+        if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
+            lastMessage.extra.reasoning_details = reasoningDetails;
+        } else {
+            delete lastMessage.extra.reasoning_details;
+        }
         await processImageAttachment(lastMessage, { imageUrls });
         if (power_user.message_token_count_enabled) {
             const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -10459,6 +10484,11 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         } else {
             delete lastMessage.extra.reasoning_blocks;
         }
+        if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
+            lastMessage.extra.reasoning_details = reasoningDetails;
+        } else {
+            delete lastMessage.extra.reasoning_details;
+        }
         await processImageAttachment(lastMessage, { imageUrls });
         // We don't know if the reasoning duration extended, so we don't update it here on purpose.
         if (power_user.message_token_count_enabled) {
@@ -10485,6 +10515,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         newMessage.extra.reasoning_signature = reasoningSignature;
         if (Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0) {
             newMessage.extra.reasoning_blocks = reasoningBlocks;
+        }
+        if (Array.isArray(reasoningDetails) && reasoningDetails.length > 0) {
+            newMessage.extra.reasoning_details = reasoningDetails;
         }
         if (power_user.trim_spaces) {
             getMessage = getMessage.trim();
@@ -17822,6 +17855,7 @@ export async function swipe(event, direction, { source, repeated, message = chat
                     delete chat[mesId].extra.reasoning_duration;
                     delete chat[mesId].extra.reasoning_signature;
                     delete chat[mesId].extra.reasoning_blocks;
+                    delete chat[mesId].extra.reasoning_details;
                     delete chat[mesId].extra.token_count;
                 }
                 let run_generate = true;

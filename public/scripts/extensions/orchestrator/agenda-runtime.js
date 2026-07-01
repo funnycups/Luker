@@ -912,6 +912,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             content: String(detailed?.assistantText || ''),
             ...(detailed?.reasoning ? { reasoning: String(detailed.reasoning) } : {}),
             ...(Array.isArray(detailed?.reasoningBlocks) && detailed.reasoningBlocks.length > 0 ? { reasoning_blocks: detailed.reasoningBlocks } : {}),
+            ...(Array.isArray(detailed?.reasoningDetails) && detailed.reasoningDetails.length > 0 ? { reasoning_details: detailed.reasoningDetails } : {}),
             tool_calls: assistantToolCallEntries,
         });
         conversation.messages.push({

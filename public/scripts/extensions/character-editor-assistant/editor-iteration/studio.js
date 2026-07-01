@@ -412,6 +412,7 @@ async function processRoundOutcome({
     assistantText,
     reasoning,
     reasoningBlocks,
+    reasoningDetails,
     roundFlags,
     taskMessages,
     context,
@@ -557,6 +558,7 @@ async function processRoundOutcome({
         content: content || '',
         reasoning: reasoning || '',
         reasoningBlocks: Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0 ? reasoningBlocks : null,
+        reasoningDetails: Array.isArray(reasoningDetails) && reasoningDetails.length > 0 ? reasoningDetails : null,
         toolCalls: [...persistedToolCalls, ...persistedEditCalls],
         toolResults: [...persistedToolResults, ...editToolResults],
         edits: roundEdits,
@@ -592,6 +594,7 @@ async function processRoundOutcome({
             content: String(assistantText || ''),
             ...(reasoning ? { reasoning: String(reasoning) } : {}),
             ...(Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0 ? { reasoning_blocks: reasoningBlocks } : {}),
+            ...(Array.isArray(reasoningDetails) && reasoningDetails.length > 0 ? { reasoning_details: reasoningDetails } : {}),
             tool_calls: toolCallsForHistory,
         });
         for (const r of readsForTaskHistory) {
@@ -658,11 +661,15 @@ function buildSeedTaskMessages(state, systemPrompt) {
             const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
                 ? m.reasoningBlocks
                 : null;
+            const persistedReasoningDetails = Array.isArray(m?.reasoningDetails) && m.reasoningDetails.length > 0
+                ? m.reasoningDetails
+                : null;
             messages.push({
                 role: 'assistant',
                 content,
                 ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
                 ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
+                ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
                 tool_calls: readToolCalls.map(c => ({
                     id: String(c.id || ''),
                     type: 'function',
@@ -879,6 +886,9 @@ async function runIterationTurn(state, opts = {}) {
             reasoning: String(result?.reasoning || ''),
             reasoningBlocks: Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
                 ? result.reasoningBlocks
+                : null,
+            reasoningDetails: Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length > 0
+                ? result.reasoningDetails
                 : null,
             roundFlags: {
                 hadAnyToolCall,

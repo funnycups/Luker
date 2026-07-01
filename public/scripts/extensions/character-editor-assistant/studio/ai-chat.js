@@ -2504,6 +2504,9 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
   const resultReasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
   ? result.reasoningBlocks
   : null;
+  const resultReasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length > 0
+  ? result.reasoningDetails
+  : null;
   const rawCalls = (Array.isArray(result?.toolCalls) ? result.toolCalls : [])
  .map(call => ({
  id: String(call?.raw?.id || '').trim() || makeCallId(),
@@ -2529,6 +2532,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
   content: assistantText,
   ...(resultReasoning ? { reasoning: resultReasoning } : {}),
   ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
+  ...(resultReasoningDetails ? { reasoning_details: resultReasoningDetails } : {}),
   });
   }
   break;
@@ -2722,6 +2726,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
   content: assistantText || '',
   ...(resultReasoning ? { reasoning: resultReasoning } : {}),
   ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
+  ...(resultReasoningDetails ? { reasoning_details: resultReasoningDetails } : {}),
   tool_calls: toolCallsForMessage,
   });
 

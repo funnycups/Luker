@@ -611,7 +611,10 @@ export function createSubagentDispatcher({
             const roundReasoningBlocks = Array.isArray(roundResult?.reasoningBlocks) && roundResult.reasoningBlocks.length > 0
                 ? roundResult.reasoningBlocks
                 : null;
-            return { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks };
+            const roundReasoningDetails = Array.isArray(roundResult?.reasoningDetails) && roundResult.reasoningDetails.length > 0
+                ? roundResult.reasoningDetails
+                : null;
+            return { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails };
         }
     }
 
@@ -913,7 +916,7 @@ export function createSubagentDispatcher({
                     if (childSignal.aborted) {
                         break;
                     }
-                    const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas);
+                    const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas);
                     if (roundToolCalls.length === 0) {
                         finalText = roundAssistantText;
                         converged = true;
@@ -931,6 +934,7 @@ export function createSubagentDispatcher({
                             content: roundAssistantText || '',
                             reasoning: roundReasoningText || '',
                             ...(roundReasoningBlocks ? { reasoning_blocks: roundReasoningBlocks } : {}),
+                            ...(roundReasoningDetails ? { reasoning_details: roundReasoningDetails } : {}),
                             _round: r,
                         });
                         break;
@@ -961,6 +965,7 @@ export function createSubagentDispatcher({
                         content: roundAssistantText || null,
                         reasoning: roundReasoningText || '',
                         ...(roundReasoningBlocks ? { reasoning_blocks: roundReasoningBlocks } : {}),
+                        ...(roundReasoningDetails ? { reasoning_details: roundReasoningDetails } : {}),
                         tool_calls: assistantToolCallEntries,
                         _round: r,
                     });

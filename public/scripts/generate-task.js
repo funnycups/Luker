@@ -607,6 +607,9 @@ export function dispatchToSenderStreaming({
             const finalReasoningBlocks = Array.isArray(lastFrame?.state?.reasoningBlocks)
                 ? lastFrame.state.reasoningBlocks.filter(Boolean)
                 : [];
+            const finalReasoningDetails = Array.isArray(lastFrame?.state?.reasoningDetails)
+                ? lastFrame.state.reasoningDetails.filter(Boolean)
+                : [];
             // openai.js's streamData accumulates tool calls as a 2D array
             // shaped `toolCalls[choiceIndex][toolCallIndex]`. The
             // non-streaming response shape (which `normalizeResponse`
@@ -643,6 +646,7 @@ export function dispatchToSenderStreaming({
                         content: finalText,
                         ...(finalReasoning ? { reasoning_content: finalReasoning } : {}),
                         ...(finalReasoningBlocks.length > 0 ? { reasoning_blocks: finalReasoningBlocks } : {}),
+                        ...(finalReasoningDetails.length > 0 ? { reasoning_details: finalReasoningDetails } : {}),
                         tool_calls: finalToolCalls,
                     },
                     finish_reason: lastFrame?.state?.finishReason || 'stop',
@@ -721,6 +725,7 @@ function emptyResultShape(raw) {
         jsonData: null,
         reasoning: null,
         reasoningBlocks: null,
+        reasoningDetails: null,
         finishReason: 'stop',
         usage: null,
         raw: raw ?? null,
@@ -756,7 +761,7 @@ function coerceFinishReason(value, fallback = 'stop') {
  * @param {string} args.requestApi
  * @param {'text'|'tool'|'json'} args.mode
  * @param {*} args.raw
- * @returns {object} { assistantText, toolCalls, jsonData, reasoning, reasoningBlocks, finishReason, usage, raw }
+ * @returns {object} { assistantText, toolCalls, jsonData, reasoning, reasoningBlocks, reasoningDetails, finishReason, usage, raw }
  */
 export function normalizeResponse({ requestApi, mode, raw }) {
     const result = emptyResultShape(raw);
@@ -810,6 +815,9 @@ export function normalizeResponse({ requestApi, mode, raw }) {
             : (message.reasoning ? String(message.reasoning) : null);
         result.reasoningBlocks = Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0
             ? message.reasoning_blocks
+            : null;
+        result.reasoningDetails = Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0
+            ? message.reasoning_details
             : null;
         result.finishReason = coerceFinishReason(choice.finish_reason);
         result.usage = extractOpenAiUsage(raw.usage);

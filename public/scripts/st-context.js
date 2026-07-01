@@ -1357,6 +1357,10 @@ function normalizePromptMessages(messages) {
             normalized.reasoning_blocks = structuredClone(message.reasoning_blocks);
         }
 
+        if (Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0) {
+            normalized.reasoning_details = structuredClone(message.reasoning_details);
+        }
+
         result.push(normalized);
     }
     return result;

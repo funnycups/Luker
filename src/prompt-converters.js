@@ -1464,6 +1464,25 @@ export function addOpenRouterSignatures(messages, model) {
     }
 
     for (const message of messages) {
+        // OpenRouter's opaque encrypted-signature contract preserves the full multi-block
+        // ordering only via reasoning_details. When the response we're replaying already
+        // carries reasoning_details (populated by client-side streaming/non-streaming
+        // extract), pass it through verbatim so multi-thinking-block Claude/GPT/Grok
+        // routes don't collapse to a single signature.
+        if (Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0) {
+            if (typeof message.signature === 'string') {
+                delete message.signature;
+            }
+            if (Array.isArray(message.tool_calls)) {
+                message.tool_calls.forEach((toolCall) => {
+                    if (typeof toolCall.signature === 'string') {
+                        delete toolCall.signature;
+                    }
+                });
+            }
+            continue;
+        }
+
         const details = [];
         const addDetail = (data, id) => {
             if (typeof data !== 'string' || data.length === 0) {

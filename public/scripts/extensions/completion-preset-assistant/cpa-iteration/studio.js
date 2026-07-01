@@ -1535,11 +1535,15 @@ export async function openCpaIterationStudio(deps) {
                 const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
                     ? m.reasoningBlocks
                     : null;
+                const persistedReasoningDetails = Array.isArray(m?.reasoningDetails) && m.reasoningDetails.length > 0
+                    ? m.reasoningDetails
+                    : null;
                 messages.push({
                     role: 'assistant',
                     content,
                     ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
                     ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
+                    ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
                     tool_calls: readToolCalls.map(c => ({
                         id: String(c.id || ''),
                         type: 'function',
@@ -2095,6 +2099,9 @@ export async function openCpaIterationStudio(deps) {
         const persistedReasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
             ? result.reasoningBlocks
             : null;
+        const persistedReasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length > 0
+            ? result.reasoningDetails
+            : null;
         const assistantMsg = {
             id: makeMessageId(),
             role: 'assistant',
@@ -2103,6 +2110,7 @@ export async function openCpaIterationStudio(deps) {
         };
         if (persistedReasoning) assistantMsg.reasoning = persistedReasoning;
         if (persistedReasoningBlocks) assistantMsg.reasoningBlocks = persistedReasoningBlocks;
+        if (persistedReasoningDetails) assistantMsg.reasoningDetails = persistedReasoningDetails;
         const allCallsForMsg = [...readCalls, ...skillCalls, ...editToolCalls];
         if (allCallsForMsg.length > 0) {
             assistantMsg.toolCalls = allCallsForMsg.map(tc => ({

@@ -1670,11 +1670,15 @@ export async function openSchemaIterationStudio(deps) {
                     const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
                         ? m.reasoningBlocks
                         : null;
+                    const persistedReasoningDetails = Array.isArray(m?.reasoningDetails) && m.reasoningDetails.length > 0
+                        ? m.reasoningDetails
+                        : null;
                     messages.push({
                         role: 'assistant',
                         content,
                         ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
                         ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
+                        ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
                         tool_calls: toolCallsForHistory,
                     });
                     const resultById = new Map();
@@ -1987,6 +1991,9 @@ export async function openSchemaIterationStudio(deps) {
         const persistedReasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
             ? result.reasoningBlocks
             : null;
+        const persistedReasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length > 0
+            ? result.reasoningDetails
+            : null;
         const assistantMsg = {
             id: makeMessageId(),
             role: 'assistant',
@@ -1995,6 +2002,7 @@ export async function openSchemaIterationStudio(deps) {
         };
         if (persistedReasoning) assistantMsg.reasoning = persistedReasoning;
         if (persistedReasoningBlocks) assistantMsg.reasoningBlocks = persistedReasoningBlocks;
+        if (persistedReasoningDetails) assistantMsg.reasoningDetails = persistedReasoningDetails;
         const allCallsForPersist = [...readToolCalls, ...editToolCalls];
         if (allCallsForPersist.length > 0) {
             assistantMsg.toolCalls = allCallsForPersist.map(tc => ({
