@@ -717,6 +717,66 @@ describe('addOpenRouterSignatures', () => {
         mod.addOpenRouterSignatures(messages, 'anthropic/claude-sonnet-4');
         expect(messages[0].tool_calls[0].signature).toBeUndefined();
     });
+
+    test('passes through message.reasoning_details verbatim when present', () => {
+        const preExisting = [
+            { index: 0, id: 'r0', type: 'reasoning.encrypted', data: 'block1data', format: 'anthropic-claude-v1' },
+            { index: 1, id: 'r1', type: 'reasoning.encrypted', data: 'block2data', format: 'anthropic-claude-v1' },
+        ];
+        const messages = [{
+            role: 'assistant',
+            content: 'hi',
+            reasoning_details: preExisting,
+        }];
+        mod.addOpenRouterSignatures(messages, 'anthropic/claude-sonnet-4');
+        expect(messages[0].reasoning_details).toBe(preExisting);
+        expect(messages[0].reasoning_details).toHaveLength(2);
+        expect(messages[0].reasoning_details[0].data).toBe('block1data');
+        expect(messages[0].reasoning_details[1].data).toBe('block2data');
+    });
+
+    test('does not overwrite multi-block reasoning_details with single-signature build', () => {
+        const preExisting = [
+            { index: 0, id: 'r0', type: 'reasoning.encrypted', data: 'realblock', format: 'anthropic-claude-v1' },
+        ];
+        const messages = [{
+            role: 'assistant',
+            content: 'hi',
+            signature: 'shouldbestripped',
+            reasoning_details: preExisting,
+        }];
+        mod.addOpenRouterSignatures(messages, 'anthropic/claude-sonnet-4');
+        expect(messages[0].reasoning_details).toBe(preExisting);
+        expect(messages[0].signature).toBeUndefined();
+    });
+
+    test('strips tool_calls[].signature when reasoning_details already present', () => {
+        const preExisting = [
+            { index: 0, id: 'r0', type: 'reasoning.encrypted', data: 'block1', format: 'anthropic-claude-v1' },
+        ];
+        const messages = [{
+            role: 'assistant',
+            content: '',
+            reasoning_details: preExisting,
+            tool_calls: [{ id: 'tc1', function: { name: 'f' }, signature: 'shouldalsostrip' }],
+        }];
+        mod.addOpenRouterSignatures(messages, 'anthropic/claude-sonnet-4');
+        expect(messages[0].tool_calls[0].signature).toBeUndefined();
+        expect(messages[0].reasoning_details).toBe(preExisting);
+    });
+
+    test('legacy single-signature build still runs when reasoning_details absent', () => {
+        const messages = [{
+            role: 'assistant',
+            content: 'hi',
+            signature: 'legacysig',
+        }];
+        mod.addOpenRouterSignatures(messages, 'anthropic/claude-sonnet-4');
+        expect(messages[0].reasoning_details).toBeDefined();
+        expect(messages[0].reasoning_details).toHaveLength(1);
+        expect(messages[0].reasoning_details[0].data).toBe('legacysig');
+        expect(messages[0].signature).toBeUndefined();
+    });
 });
 
 
