@@ -58,6 +58,7 @@
 const __ctx = Luker.getContext();
 const Popup = __ctx.Popup;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
+const POPUP_RESULT = __ctx.POPUP_RESULT;
 const stripOpenAIConnectionFieldsFromPreset = __ctx.openai.stripPresetConnectionFields;
 import {
     applyEdits,
@@ -380,6 +381,7 @@ function buildPopupHtml({
     historyLabel,
     newSessionLabel,
     clearAllLabel,
+    importChatLabel,
     sendLabel,
     composerPlaceholder,
     referenceLabel,
@@ -403,6 +405,7 @@ function buildPopupHtml({
         <div class="cpa_it_history_actions">
             <button class="menu_button menu_button_small" data-cpa-it-action="new-session">${escapeHtmlLocal(newSessionLabel)}</button>
             <button class="menu_button menu_button_small" data-cpa-it-action="clear-history">${escapeHtmlLocal(clearAllLabel)}</button>
+            <button class="menu_button menu_button_small" data-cpa-it-action="import-chat">${escapeHtmlLocal(importChatLabel)}</button>
         </div>
     </details>
 
@@ -944,6 +947,105 @@ export async function openCpaIterationStudio(deps) {
             await sessionStore.delete(meta.id);
         }
         await startNewSession();
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Import messages from the currently open main chat.
+    // ──────────────────────────────────────────────────────────────────
+    async function importFromMainChat() {
+        const ctx = getContext();
+        const chat = ctx.chat;
+        if (!Array.isArray(chat) || chat.length === 0) {
+            try { toastr.warning(t('No chat is currently open.')); } catch { /* ignore */ }
+            return;
+        }
+
+        const dialogMessages = chat
+            .map((m, idx) => ({ ...m, _chatIdx: idx }))
+            .filter(m => !m.is_system);
+
+        if (dialogMessages.length === 0) {
+            try { toastr.warning(t('The current chat has no user or character messages to import.')); } catch { /* ignore */ }
+            return;
+        }
+
+        const listHtml = dialogMessages.map((m, i) => {
+            const role = m.is_user ? 'user' : 'assistant';
+            const name = escapeHtmlLocal(String(m.name || role));
+            const preview = escapeHtmlLocal(String(m.mes || '').slice(0, 120));
+            return `<label class="cpa_it_import_row" style="display:flex;align-items:flex-start;gap:6px;padding:4px 0;cursor:pointer;">
+                <input type="checkbox" data-cpa-import-idx="${i}" checked style="margin-top:3px;flex-shrink:0;" />
+                <span><b>${name}</b>: ${preview}${(m.mes || '').length > 120 ? '…' : ''}</span>
+            </label>`;
+        }).join('');
+
+        const html = `
+            <div class="cpa_it_import_dialog" style="max-height:60vh;display:flex;flex-direction:column;">
+                <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+                    <label style="cursor:pointer;font-weight:bold;">
+                        <input type="checkbox" data-cpa-import-select-all checked /> ${escapeHtmlLocal(t('Select all'))}
+                    </label>
+                    <span style="color:var(--SmartThemeQuoteColor);font-size:0.85em;">
+                        (${dialogMessages.length} ${escapeHtmlLocal(t('messages'))})
+                    </span>
+                </div>
+                <div style="overflow-y:auto;flex:1;border:1px solid var(--SmartThemeBorderColor);border-radius:4px;padding:6px;">
+                    ${listHtml}
+                </div>
+            </div>`;
+
+        const importPopup = new Popup(html, POPUP_TYPE.CONFIRM, '', {
+            okButton: t('Import selected'),
+            cancelButton: t('Cancel'),
+            wider: true,
+            allowVerticalScrolling: true,
+        });
+
+        const $dialog = jQuery('.cpa_it_import_dialog');
+        $dialog.on('change', '[data-cpa-import-select-all]', function () {
+            const checked = this.checked;
+            $dialog.find('[data-cpa-import-idx]').prop('checked', checked);
+        });
+        $dialog.on('change', '[data-cpa-import-idx]', function () {
+            const allBoxes = $dialog.find('[data-cpa-import-idx]');
+            const allChecked = allBoxes.length === allBoxes.filter(':checked').length;
+            $dialog.find('[data-cpa-import-select-all]').prop('checked', allChecked);
+        });
+
+        const result = await importPopup.show();
+        if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+
+        const checkedIndices = new Set();
+        $dialog.find('[data-cpa-import-idx]:checked').each(function () {
+            checkedIndices.add(Number(this.getAttribute('data-cpa-import-idx')));
+        });
+        if (checkedIndices.size === 0) {
+            try { toastr.info(t('No messages selected.')); } catch { /* ignore */ }
+            return;
+        }
+
+        const selected = dialogMessages.filter((_, i) => checkedIndices.has(i));
+
+        if (state.session._transient && state.session.messages.length === 0) {
+            state.session = createNewSession();
+            state.session._transient = false;
+        }
+
+        for (const m of selected) {
+            const role = m.is_user ? 'user' : 'assistant';
+            const at = m.send_date ? new Date(m.send_date).getTime() : Date.now();
+            state.session.messages.push(normalizeMessageShape({
+                id: makeMessageId(),
+                role,
+                content: String(m.mes || ''),
+                at: isNaN(at) ? Date.now() : at,
+            }, Date.now()));
+        }
+
+        state.session.updatedAt = Date.now();
+        await persistSession();
+        await render();
+        try { toastr.success(tf('Imported ${0} message(s).', String(checkedIndices.size))); } catch { /* ignore */ }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -2583,6 +2685,7 @@ export async function openCpaIterationStudio(deps) {
         historyLabel: t('History'),
         newSessionLabel: t('New session'),
         clearAllLabel: t('Clear all'),
+        importChatLabel: t('Import chat'),
         sendLabel: t('Send'),
         composerPlaceholder: t('Describe what to change in the preset...'),
         referenceLabel: t('Reference preset:'),
@@ -2741,6 +2844,10 @@ export async function openCpaIterationStudio(deps) {
     $root.on('click.cpaIt', '[data-cpa-it-action="clear-history"]', async (e) => {
         e.preventDefault();
         await clearAllHistory();
+    });
+    $root.on('click.cpaIt', '[data-cpa-it-action="import-chat"]', async (e) => {
+        e.preventDefault();
+        await importFromMainChat();
     });
     $root.on('click.cpaIt', '[data-cpa-it-action="load-session"]', async (e) => {
         // The delete button is a child of the load row — stop the row's
