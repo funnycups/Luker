@@ -121,7 +121,8 @@ export function createCpaIterationSessionStore({ getContext, getTargetRef }) {
     async function readStore() {
         const ref = getTargetRef();
         const ctx = getContext();
-        const store = await ctx.presets.state.get(SESSION_NAMESPACE, { target: ref });
+        const result = await ctx.presets.state.get(SESSION_NAMESPACE, { target: ref });
+        const store = result?.ok ? result.state : null;
         return store && Array.isArray(store.sessions)
             ? store
             : { version: 1, currentSessionId: null, sessions: [] };
