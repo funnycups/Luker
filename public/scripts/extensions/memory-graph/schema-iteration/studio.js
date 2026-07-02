@@ -1666,19 +1666,9 @@ export async function openSchemaIterationStudio(deps) {
                             arguments: JSON.stringify(tc?.args || {}),
                         },
                     }));
-                    const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
-                    const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
-                        ? m.reasoningBlocks
-                        : null;
-                    const persistedReasoningDetails = Array.isArray(m?.reasoningDetails) && m.reasoningDetails.length > 0
-                        ? m.reasoningDetails
-                        : null;
                     messages.push({
                         role: 'assistant',
                         content,
-                        ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
-                        ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
-                        ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
                         tool_calls: toolCallsForHistory,
                     });
                     const resultById = new Map();

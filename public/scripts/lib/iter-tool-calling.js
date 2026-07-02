@@ -537,7 +537,7 @@ export function buildRejectedToolResults(toolCalls = [], summaryText = '') {
     })).filter(item => item.tool_call_id);
 }
 
-export function appendStandardToolRoundMessages(targetMessages, executedCalls, assistantText = '', { reasoning = '', reasoningBlocks = null, reasoningDetails = null } = {}) {
+export function appendStandardToolRoundMessages(targetMessages, executedCalls, assistantText = '') {
     if (!Array.isArray(targetMessages) || !Array.isArray(executedCalls) || executedCalls.length === 0) {
         return;
     }
@@ -561,16 +561,9 @@ export function appendStandardToolRoundMessages(targetMessages, executedCalls, a
         return;
     }
 
-    const trimmedReasoning = typeof reasoning === 'string' ? reasoning : '';
-    const trimmedBlocks = Array.isArray(reasoningBlocks) && reasoningBlocks.length > 0 ? reasoningBlocks : null;
-    const trimmedDetails = Array.isArray(reasoningDetails) && reasoningDetails.length > 0 ? reasoningDetails : null;
-
     targetMessages.push({
         role: 'assistant',
         content: String(assistantText || ''),
-        ...(trimmedReasoning ? { reasoning: trimmedReasoning } : {}),
-        ...(trimmedBlocks ? { reasoning_blocks: trimmedBlocks } : {}),
-        ...(trimmedDetails ? { reasoning_details: trimmedDetails } : {}),
         tool_calls: toolCalls.map(({ _result, ...toolCall }) => toolCall),
     });
 

@@ -657,19 +657,9 @@ function buildSeedTaskMessages(state, systemPrompt) {
         const readToolCalls = toolCalls.filter(c => resultCallIds.has(String(c?.id || '')));
 
         if (role === 'assistant' && readToolCalls.length > 0) {
-            const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
-            const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
-                ? m.reasoningBlocks
-                : null;
-            const persistedReasoningDetails = Array.isArray(m?.reasoningDetails) && m.reasoningDetails.length > 0
-                ? m.reasoningDetails
-                : null;
             messages.push({
                 role: 'assistant',
                 content,
-                ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
-                ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
-                ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
                 tool_calls: readToolCalls.map(c => ({
                     id: String(c.id || ''),
                     type: 'function',
