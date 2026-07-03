@@ -168,6 +168,7 @@ import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_sett
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
 import * as EDITS_API from './lib/edits/index.js';
 import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
+import * as LUKER_TABS_API from './extensions/luker-tabs.js';
 import { skillsApi } from './skills/api.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
 import { EmbeddingService } from './embedding-service.js';
@@ -2290,6 +2291,7 @@ export function getContext() {
         saveSettingsDebounced,
         iterationLibrary: ITERATION_LIBRARY_API,
         edits: EDITS_API,
+        renderLukerTabs: LUKER_TABS_API.renderLukerTabs,
         skills: skillsApi,
         get onlineStatus() { return online_status; },
         get maxContext() { return Number(max_context); },

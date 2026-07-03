@@ -1,0 +1,39 @@
+.luker-tabs { display: flex; flex-direction: column; gap: 8px; }
+.luker-tabs-bar {
+    display: flex; flex-direction: row; gap: 4px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.15));
+    padding-bottom: 0;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+}
+.luker-tabs-tab {
+    background: transparent;
+    border: 0;
+    color: var(--SmartThemeBodyColor, currentColor);
+    padding: 6px 12px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    scroll-snap-align: start;
+    font-size: 0.95em;
+    opacity: 0.75;
+    transition: opacity 0.15s, border-color 0.15s;
+}
+.luker-tabs-tab:hover { opacity: 1; }
+.luker-tabs-tab.active {
+    opacity: 1;
+    border-bottom-color: var(--SmartThemeQuoteColor, #6ea3ff);
+    font-weight: 600;
+}
+.luker-tabs-panes { display: block; }
+.luker-tabs-pane { display: block; }
+.luker-tabs-pane[hidden] { display: none !important; }
+
+@media (max-width: 720px) {
+    .luker-tabs-bar {
+        -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+                mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+    }
+}
