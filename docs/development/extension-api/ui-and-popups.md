@@ -279,3 +279,97 @@ toastr.success('Imported successfully');
 toastr.warning('Some entries skipped', 'Import Warning', { timeOut: 5000 });
 toastr.error('Import failed: ' + error.message);
 ```
+
+## Shared Components
+
+Reusable HTML-string builders for common extension-drawer / popup UI patterns. Each is exposed on all three API layers.
+
+### renderLukerTabs
+
+```ts
+renderLukerTabs(options: {
+    id: string,
+    scope: string,
+    tabs: Array<{ key: string, label: string, contentHtml: string }>,
+    defaultTab?: string,
+    moduleName: string,
+}): string
+```
+
+Renders a tabbed panel for extension drawer or popup UIs. Returns a complete HTML string; visibility is toggled by a delegated click handler installed on module load, so callers only need to insert the returned markup. Tab selection persists to `extension_settings[moduleName].tabState[scope]` — distinct `scope` values get independent persisted selections within the same module.
+
+All three layers expose the same function:
+
+```js
+// Layer 1 — ESM
+import { renderLukerTabs } from '/scripts/extensions/luker-tabs.js';
+
+// Layer 2 — lukerContext
+const { renderLukerTabs } = lukerContext;
+
+// Layer 3 — getContext
+const { renderLukerTabs } = SillyTavern.getContext();
+```
+
+| Field | Type | Description |
+|------|------|------|
+| `id` | `string` | Unique DOM id for the tabs root element |
+| `scope` | `string` | Panel scope key; distinct scopes get independent persisted selections |
+| `tabs` | `Array<{key,label,contentHtml}>` | Tab definitions in display order |
+| `defaultTab` | `string?` | Initial tab key when no persisted state exists |
+| `moduleName` | `string` | `extension_settings` bucket key (e.g. `'memory_graph'`) |
+
+```js
+const ctx = Luker.getContext();
+
+const html = ctx.renderLukerTabs({
+    id: 'my_ext_tabs',
+    scope: 'my-ext-drawer',
+    moduleName: 'my_extension',
+    defaultTab: 'general',
+    tabs: [
+        { key: 'general',  label: 'General',  contentHtml: '<div>…</div>' },
+        { key: 'advanced', label: 'Advanced', contentHtml: '<div>…</div>' },
+    ],
+});
+```
+
+### renderFieldHelpButton
+
+```ts
+renderFieldHelpButton(options: {
+    title: string,
+    bodyHtml: string,
+    targetSelectId?: string,
+}): string
+```
+
+Renders a small "?" icon button that opens a title + body popup on click. Use it for generic field explanations attached to labels or headings. For preset-slot help (which needs preset-scoped resolution), use `renderPresetHelpButton` instead.
+
+All three layers expose the same function:
+
+```js
+// Layer 1 — ESM
+import { renderFieldHelpButton } from '/scripts/extensions/field-help.js';
+
+// Layer 2 — lukerContext
+const { renderFieldHelpButton } = lukerContext;
+
+// Layer 3 — getContext
+const { renderFieldHelpButton } = SillyTavern.getContext();
+```
+
+| Field | Type | Description |
+|------|------|------|
+| `title` | `string` | Popup title |
+| `bodyHtml` | `string` | Popup body HTML — sanitize untrusted content before passing |
+| `targetSelectId` | `string?` | Optional id of a nearby `<select>` used for context-sensitive help |
+
+```js
+const ctx = Luker.getContext();
+
+const labelHtml = `<label>Query rewrite ${ctx.renderFieldHelpButton({
+    title: 'About query rewrite',
+    bodyHtml: escapeHtml('Rewrites the raw query for better vector search…'),
+})}</label>`;
+```

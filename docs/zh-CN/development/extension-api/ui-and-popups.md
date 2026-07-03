@@ -279,3 +279,97 @@ toastr.success('Imported successfully');
 toastr.warning('Some entries skipped', 'Import Warning', { timeOut: 5000 });
 toastr.error('Import failed: ' + error.message);
 ```
+
+## 共享组件
+
+用于常见扩展抽屉 / 弹窗 UI 模式的可复用 HTML 字符串生成器。每个组件都在三层 API 上暴露。
+
+### renderLukerTabs
+
+```ts
+renderLukerTabs(options: {
+    id: string,
+    scope: string,
+    tabs: Array<{ key: string, label: string, contentHtml: string }>,
+    defaultTab?: string,
+    moduleName: string,
+}): string
+```
+
+为扩展抽屉或弹窗 UI 渲染一个分页面板。返回完整的 HTML 字符串；显隐由模块加载时挂载的委托点击处理器负责切换，调用方只需把返回的标记插入 DOM 即可。分页选择会持久化到 `extension_settings[moduleName].tabState[scope]`——同一个模块下不同的 `scope` 各自保存独立的选择。
+
+三层暴露同一个函数：
+
+```js
+// Layer 1 — ESM
+import { renderLukerTabs } from '/scripts/extensions/luker-tabs.js';
+
+// Layer 2 — lukerContext
+const { renderLukerTabs } = lukerContext;
+
+// Layer 3 — getContext
+const { renderLukerTabs } = SillyTavern.getContext();
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | `string` | 分页根元素的唯一 DOM id |
+| `scope` | `string` | 面板 scope 键；不同 scope 各自保存独立的持久化选择 |
+| `tabs` | `Array<{key,label,contentHtml}>` | 按显示顺序排列的分页定义 |
+| `defaultTab` | `string?` | 无持久化状态时的初始分页 key |
+| `moduleName` | `string` | `extension_settings` 的 bucket 键（如 `'memory_graph'`） |
+
+```js
+const ctx = Luker.getContext();
+
+const html = ctx.renderLukerTabs({
+    id: 'my_ext_tabs',
+    scope: 'my-ext-drawer',
+    moduleName: 'my_extension',
+    defaultTab: 'general',
+    tabs: [
+        { key: 'general',  label: 'General',  contentHtml: '<div>…</div>' },
+        { key: 'advanced', label: 'Advanced', contentHtml: '<div>…</div>' },
+    ],
+});
+```
+
+### renderFieldHelpButton
+
+```ts
+renderFieldHelpButton(options: {
+    title: string,
+    bodyHtml: string,
+    targetSelectId?: string,
+}): string
+```
+
+渲染一个小小的「?」图标按钮，点击后弹出标题 + 正文的弹窗。用于挂在标签或标题旁的通用字段说明。若需要基于预设槽位解析的帮助文本（preset-slot help），请使用 `renderPresetHelpButton`。
+
+三层暴露同一个函数：
+
+```js
+// Layer 1 — ESM
+import { renderFieldHelpButton } from '/scripts/extensions/field-help.js';
+
+// Layer 2 — lukerContext
+const { renderFieldHelpButton } = lukerContext;
+
+// Layer 3 — getContext
+const { renderFieldHelpButton } = SillyTavern.getContext();
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `title` | `string` | 弹窗标题 |
+| `bodyHtml` | `string` | 弹窗正文 HTML——传入前请对不受信任的内容做转义 |
+| `targetSelectId` | `string?` | 可选，附近 `<select>` 的 id，用于上下文相关的帮助 |
+
+```js
+const ctx = Luker.getContext();
+
+const labelHtml = `<label>Query rewrite ${ctx.renderFieldHelpButton({
+    title: 'About query rewrite',
+    bodyHtml: escapeHtml('Rewrites the raw query for better vector search…'),
+})}</label>`;
+```
