@@ -231,3 +231,32 @@
 }
 .luker_lib_apply_applied     { color: var(--SmartThemeQuoteColor, #4a90e2); }
 .luker_lib_apply_rolledback  { opacity: 0.7; font-style: italic; }
+
+/* ── reasoning / thinking chain ───────────────────────────────── */
+.luker_lib_reasoning_details {
+    margin-bottom: 8px;
+    border-left: 2px solid var(--reasoning-body-color, color-mix(in oklab, var(--SmartThemeBodyColor, #ccc) 50%, transparent));
+    border-radius: 2px;
+    padding-left: 12px;
+}
+.luker_lib_reasoning_summary {
+    cursor: pointer;
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor, #ccc) 12%, transparent);
+    font-size: 0.85em;
+    opacity: 0.75;
+    user-select: none;
+}
+.luker_lib_reasoning_summary:hover {
+    opacity: 1;
+}
+.luker_lib_reasoning_body {
+    margin-top: 6px;
+    font-size: 0.9em;
+    opacity: 0.7;
+    line-height: 1.5;
+}
+.luker_lib_reasoning_body p:first-child { margin-top: 0; }
+.luker_lib_reasoning_body p:last-child  { margin-bottom: 0; }
