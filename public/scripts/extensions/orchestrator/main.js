@@ -1645,9 +1645,6 @@ function buildLatestOrchestrationStateSummary(context) {
 function renderDynamicPanels(root, context) {
     const settings = getSettings();
     const executionMode = getExecutionMode(settings);
-    const singleModeEnabled = executionMode === ORCH_EXECUTION_MODE_SINGLE;
-    const agendaModeEnabled = executionMode === ORCH_EXECUTION_MODE_AGENDA;
-    const loopModeEnabled = executionMode === ORCH_EXECUTION_MODE_LOOP;
     const directorModeEnabled = executionMode === ORCH_EXECUTION_MODE_DIRECTOR;
     syncCharacterEditorWithActiveAvatar(context);
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
@@ -1718,20 +1715,32 @@ function renderDynamicPanels(root, context) {
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
-    root.find('#luker_orch_spec_board').toggle(!singleModeEnabled && !agendaModeEnabled && !loopModeEnabled && !directorModeEnabled);
-    root.find('#luker_orch_agenda_board').toggle(agendaModeEnabled);
-    root.find('#luker_orch_loop_board').toggle(loopModeEnabled);
-    root.find('#luker_orch_director_board').toggle(directorModeEnabled);
+    // Attribute-based mode visibility: every node carrying `data-orch-mode`
+    // is shown when its value equals the current executionMode, hidden
+    // otherwise. Untagged nodes are not touched. Replaces the four
+    // hard-coded `_board` id toggles and the single-mode helper toggles.
+    root.find('[data-orch-mode]').each(function () {
+        const modeAttr = String(jQuery(this).attr('data-orch-mode') || '');
+        jQuery(this).toggle(modeAttr === executionMode);
+    });
     // Capsule settings (injection position/depth/role + custom result
     // instruction) only apply to modes that produce a capsule for the
     // main LLM to consume. Director writes the message body directly
     // and never produces a capsule, so this whole group is irrelevant
-    // there.
-    root.find('#luker_orch_capsule_settings').toggle(!directorModeEnabled);
-    root.find('#luker_orch_single_mode_runtime_tools').toggle(singleModeEnabled);
-    root.find('#luker_orch_single_mode_hint').toggle(singleModeEnabled);
-    root.find('#luker_orch_single_agent_fields').toggle(singleModeEnabled);
+    // there. Fieldset is tagged `data-orch-mode-block="capsule"` so the
+    // hide-in-director rule is a single line here.
+    root.find('[data-orch-mode-block="capsule"]').toggle(!directorModeEnabled);
     root.find('#luker_orch_execution_mode').val(executionMode);
+    // Re-inject the workspace HTML into the drawer's Agents / Tools &
+    // Skills tab hosts for the new mode. Every state transition that
+    // matters (mode change, chat switch, character switch, override
+    // toggle) routes through `renderDynamicPanels`, so a single tail
+    // call here is the funnel — no need to sprinkle it at every caller.
+    // Single mode has no workspace HTML (its Agents-tab content is the
+    // two static single-agent textareas emitted at build time).
+    if (executionMode && executionMode !== ORCH_EXECUTION_MODE_SINGLE) {
+        injectWorkspaceIntoTabHost(root, executionMode, getOrchestratorUiTemplateDeps(), context, settings, '');
+    }
     refreshOrchestrationEditorPopup(context, settings);
 }
 
@@ -6410,23 +6419,42 @@ function bindUi() {
     root.find('#luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
     root.find('#luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
     root.find('#luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
-    refreshOpenAIPresetSelectors(root, context, settings);
-    // Populate the current mode's Agents + Tools & Skills tab hosts with
-    // the actual workspace HTML. Task 9's `buildOrchestratorSettingsHtml`
-    // emits empty `[data-orch-tab-host]` slots; the injector splits the
-    // legacy 2-column workspace into an agents part and a tools part
-    // and drops each half into its host.
-    //
-    // Single mode is skipped — its Agents-tab content is emitted at
-    // build time (two static textareas) and it has no shared tools.
-    //
-    // TODO Task 11: hook mode-change / profile-switch to re-inject; for
-    // now the first-paint call here covers the initial mode, and popup
-    // refresh handles the popup path via `refreshOrchestrationEditorPopup`.
-    const currentMode = getExecutionMode(settings);
-    if (currentMode && currentMode !== ORCH_EXECUTION_MODE_SINGLE) {
-        injectWorkspaceIntoTabHost(root, currentMode, getOrchestratorUiTemplateDeps(), context, settings, '');
+    // Drawer canonical Runtime-limits fields (General tab). The workspace-
+    // side duplicates were removed alongside this bindUi, so these are
+    // now the only editor-writable copies for director/agenda/loop caps.
+    // Popup hydration is not covered here — `refreshOrchestrationEditorPopup`
+    // rebuilds the popup HTML from templates without editor initial values
+    // (a pre-existing General-tab gap that spans other settings-level
+    // inputs too, e.g. luker_orch_max_recent_messages).
+    {
+        const directorEditor = getDirectorEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR));
+        ensureDirectorEditorIntegrity(directorEditor);
+        root.find('#luker_orch_director_max_rounds').val(String(Number(directorEditor.maxRounds) > 0 ? directorEditor.maxRounds : 40));
+        root.find('#luker_orch_director_max_concurrent_subagents').val(String(Number(directorEditor.maxConcurrentSubagents) > 0 ? directorEditor.maxConcurrentSubagents : 4));
+        root.find('#luker_orch_director_max_total_subagent_runs').val(String(Number(directorEditor.maxTotalSubagentRuns) > 0 ? directorEditor.maxTotalSubagentRuns : 16));
+        root.find('#luker_orch_director_discard_on_abort').prop('checked', Boolean(directorEditor.discardOnAbort));
     }
+    {
+        const agendaEditor = getAgendaEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA));
+        ensureAgendaEditorIntegrity(agendaEditor);
+        root.find('#luker_orch_agenda_planner_max_rounds').val(String(agendaEditor.limits?.plannerMaxRounds || 6));
+        root.find('#luker_orch_agenda_max_concurrent_agents').val(String(agendaEditor.limits?.maxConcurrentAgents || 3));
+        root.find('#luker_orch_agenda_max_total_runs').val(String(agendaEditor.limits?.maxTotalRuns || 24));
+    }
+    {
+        const loopEditor = getLoopEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP));
+        ensureLoopEditorIntegrity(loopEditor);
+        root.find('#luker_orch_loop_max_rounds').val(String(loopEditor.max_rounds || 40));
+        // Stored as ms, edited in seconds. Floor 10s matches
+        // LOOP_WALL_CLOCK_FLOOR_MS / 1000 in persistence.js.
+        const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
+        root.find('#luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
+    }
+    refreshOpenAIPresetSelectors(root, context, settings);
+    // `renderDynamicPanels` runs the mode-visibility loop AND calls
+    // `injectWorkspaceIntoTabHost` at its tail for the current mode, so
+    // first-paint of the drawer's Agents / Tools & Skills tab hosts
+    // (previously done here in bindUi) is now covered by the funnel.
     renderDynamicPanels(root, context);
 
     root.off('.lukerOrch');
@@ -6641,21 +6669,21 @@ function bindUi() {
         renderDynamicPanels(root, context);
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_rounds, .luker_orch_editor_popup #luker_orch_agenda_planner_rounds`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_planner_max_rounds`, function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
         editor.limits.plannerMaxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_concurrent, .luker_orch_editor_popup #luker_orch_agenda_max_concurrent`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_concurrent_agents, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_concurrent_agents`, function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
         editor.limits.maxConcurrentAgents = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_total_runs, .luker_orch_editor_popup #luker_orch_agenda_max_total_runs`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_total_runs, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_total_runs`, function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
@@ -6689,7 +6717,7 @@ function bindUi() {
         editor.system_prompt = String(jQuery(this).val() || '');
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_max_rounds, .luker_orch_editor_popup #luker_orch_loop_max_rounds`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_loop_max_rounds`, function () {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
         const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
@@ -6697,7 +6725,7 @@ function bindUi() {
         ensureLoopEditorIntegrity(editor);
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_wall_clock, .luker_orch_editor_popup #luker_orch_loop_wall_clock`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_wall_clock_budget, .luker_orch_editor_popup #orch-popup-luker_orch_loop_wall_clock_budget`, function () {
         // Stored as ms but edited in seconds; the floor (10s) matches
         // `LOOP_WALL_CLOCK_FLOOR_MS / 1000` in persistence.js.
         const seconds = Math.max(10, Math.floor(Number(jQuery(this).val()) || 300));
@@ -6706,6 +6734,43 @@ function bindUi() {
         ensureLoopEditorIntegrity(editor);
         editor.wall_clock_budget_ms = seconds * 1000;
         ensureLoopEditorIntegrity(editor);
+    });
+
+    // ─── Director drawer canonical Runtime-limits handlers ────────────
+    // The `[data-orch-director-field]` delegator further below only
+    // matches inputs carrying that attribute, and is popup-scoped. The
+    // drawer canonical inputs in the General tab have neither the
+    // attribute nor `data-scope`, so scope falls through to
+    // `getScopeFromElementOrMode`'s `getDisplayedScopeForMode(director)`
+    // fallback — the same source of truth `renderDynamicPanels` uses to
+    // pick which director editor to hydrate. Popup mirror ids are
+    // `orch-popup-` prefixed.
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_rounds`, function () {
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
+        const editor = getDirectorEditorByScope(scope);
+        ensureDirectorEditorIntegrity(editor);
+        editor.maxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+    });
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_concurrent_subagents, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_concurrent_subagents`, function () {
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
+        const editor = getDirectorEditorByScope(scope);
+        ensureDirectorEditorIntegrity(editor);
+        editor.maxConcurrentSubagents = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+    });
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_total_subagent_runs, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_total_subagent_runs`, function () {
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
+        const editor = getDirectorEditorByScope(scope);
+        ensureDirectorEditorIntegrity(editor);
+        editor.maxTotalSubagentRuns = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+    });
+
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_discard_on_abort, .luker_orch_editor_popup #orch-popup-luker_orch_director_discard_on_abort`, function () {
+        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
+        const editor = getDirectorEditorByScope(scope);
+        ensureDirectorEditorIntegrity(editor);
+        editor.discardOnAbort = Boolean(jQuery(this).prop('checked'));
     });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-loop-tool], .luker_orch_editor_popup [data-luker-loop-tool]`, function () {

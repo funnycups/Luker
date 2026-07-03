@@ -599,12 +599,6 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
         <textarea id="luker_orch_agenda_planner_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="16">${escapeHtml(String(planner?.userPromptTemplate || DEFAULT_AGENDA_PLANNER_PROMPT))}</textarea>
         <label for="luker_orch_agenda_final_agent">${escapeHtml(i18n('Final Agent'))}</label>
         <select id="luker_orch_agenda_final_agent" data-scope="${safeScope}" class="text_pole">${renderAgendaAgentSelectOptions(deps, editor, editor?.finalAgentId)}</select>
-        <label for="luker_orch_agenda_planner_rounds">${escapeHtml(i18n('Planner max rounds'))}</label>
-        <input id="luker_orch_agenda_planner_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.plannerMaxRounds || 6))}" />
-        <label for="luker_orch_agenda_max_concurrent">${escapeHtml(i18n('Max concurrent agents'))}</label>
-        <input id="luker_orch_agenda_max_concurrent" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxConcurrentAgents || 3))}" />
-        <label for="luker_orch_agenda_max_total_runs">${escapeHtml(i18n('Max total agent runs'))}</label>
-        <input id="luker_orch_agenda_max_total_runs" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxTotalRuns || 24))}" />
         <details class="luker_orch_skills_section">
             <summary>${escapeHtml(i18n('Planner skills'))}</summary>
             ${renderSkillChipsPlaceholder(deps, safeScope, {
@@ -728,7 +722,6 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
     // sanitizeAgentToolFlags into tools.custom.<full_name>); the Custom
     // Tools section below renders them. No legacy memory/search fieldsets
     // here.
-    const wallClockSeconds = Math.max(10, Math.round(Number(editor?.wall_clock_budget_ms || 300000) / 1000));
     const checkbox = (id, field, label, disabled = false, checked = null) => {
         const isChecked = checked === null ? Boolean(field) : Boolean(checked);
         return `<label class="checkbox_label">
@@ -747,10 +740,6 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
         <select id="luker_orch_loop_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, editor?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
         <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
         <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
-        <label for="luker_orch_loop_max_rounds">${escapeHtml(i18n('Loop max rounds'))}</label>
-        <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.max_rounds || 40))}" />
-        <label for="luker_orch_loop_wall_clock">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
-        <input id="luker_orch_loop_wall_clock" data-scope="${safeScope}" class="text_pole" type="number" min="10" step="1" value="${escapeHtml(String(wallClockSeconds))}" />
     </div>
 </div>`;
     const toolsHtml = `
@@ -1295,7 +1284,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
     // left, action button row on the right. Copy-spec/agenda buttons
     // only for spec+agenda; view-last-run omitted for director.
     const specBoard = `
-        <div id="${s('luker_orch_spec_board')}" class="luker_orch_board" data-orch-mode="spec">
+        <div class="luker_orch_board" data-orch-mode="spec" style="display:none">
             <div>
                 <small>${escapeHtml(i18n('Current card:'))} <span id="${s('luker_orch_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                 <small>${escapeHtml(i18n('Editing:'))} <span id="${s('luker_orch_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
@@ -1309,7 +1298,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
             </div>
         </div>`;
     const agendaBoard = `
-        <div id="${s('luker_orch_agenda_board')}" class="luker_orch_board" style="display:none" data-orch-mode="agenda">
+        <div class="luker_orch_board" style="display:none" data-orch-mode="agenda">
             <div>
                 <small>${escapeHtml(i18n('Current card:'))} <span id="${s('luker_orch_agenda_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                 <small>${escapeHtml(i18n('Editing:'))} <span id="${s('luker_orch_agenda_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
@@ -1323,7 +1312,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
             </div>
         </div>`;
     const loopBoard = `
-        <div id="${s('luker_orch_loop_board')}" class="luker_orch_board" style="display:none" data-orch-mode="loop">
+        <div class="luker_orch_board" style="display:none" data-orch-mode="loop">
             <div>
                 <small>${escapeHtml(i18n('Current card:'))} <span id="${s('luker_orch_loop_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                 <small>${escapeHtml(i18n('Editing:'))} <span id="${s('luker_orch_loop_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
@@ -1338,7 +1327,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
             <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
         </div>`;
     const directorBoard = `
-        <div id="${s('luker_orch_director_board')}" class="luker_orch_board" style="display:none" data-orch-mode="director">
+        <div class="luker_orch_board" style="display:none" data-orch-mode="director">
             <div>
                 <small><span>${escapeHtml(i18n('Current card:'))}</span> <span id="${s('luker_orch_director_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
                 <small><span>${escapeHtml(i18n('Editing:'))}</span> <span id="${s('luker_orch_director_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
@@ -1475,11 +1464,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
                 <label for="${s('luker_orch_review_reruns')}">${escapeHtml(i18n('Review rerun max rounds (N)'))}</label>
                 <input id="${s('luker_orch_review_reruns')}" class="text_pole" type="number" min="0" step="1" />
             </div>
-            <!-- Task 11 removes workspace duplicates of the mode-scoped
-                 limits below; until then the workspace copies stay and
-                 bindUi binds to the first matched id (drawer canonical
-                 vs workspace copy). Ids that already collide with
-                 workspace ids are marked inline. -->
             <div data-orch-mode="director" style="display:none">
                 <label for="${s('luker_orch_director_max_rounds')}">${escapeHtml(i18n('Maximum tool-calling rounds'))}</label>
                 <input id="${s('luker_orch_director_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
@@ -1497,16 +1481,12 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
                 <input id="${s('luker_orch_agenda_planner_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
                 <label for="${s('luker_orch_agenda_max_concurrent_agents')}">${escapeHtml(i18n('Max concurrent agents'))}</label>
                 <input id="${s('luker_orch_agenda_max_concurrent_agents')}" class="text_pole" type="number" min="1" step="1" />
-                <!-- id collides with workspace luker_orch_agenda_max_total_runs; Task 11 removes the workspace copy -->
                 <label for="${s('luker_orch_agenda_max_total_runs')}">${escapeHtml(i18n('Max total agent runs'))}</label>
                 <input id="${s('luker_orch_agenda_max_total_runs')}" class="text_pole" type="number" min="1" step="1" />
             </div>
             <div data-orch-mode="loop" style="display:none">
-                <!-- id collides with workspace luker_orch_loop_max_rounds; Task 11 removes the workspace copy -->
                 <label for="${s('luker_orch_loop_max_rounds')}">${escapeHtml(i18n('Loop max rounds'))}</label>
                 <input id="${s('luker_orch_loop_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
-                <!-- Reuses existing "Loop wall-clock budget (seconds)" i18n key; Task 11 decides
-                     whether the drawer canonical field switches to raw ms and adds a new key. -->
                 <label for="${s('luker_orch_loop_wall_clock_budget')}">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
                 <input id="${s('luker_orch_loop_wall_clock_budget')}" class="text_pole" type="number" min="10" step="1" />
             </div>
