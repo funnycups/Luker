@@ -47,16 +47,39 @@ object LukerCrashCapture {
         }
 
         val captured = mergeCrashes(context, jvmCrash, platformCrash) ?: return null
-        return enrichCrashReport(context, captured)
+        // If a CDP snapshot happens to sit on disk from a prior render-process
+        // crash (or from a still-unread jvm-crash-with-webview-alive path),
+        // surface its path in the enriched jvm-crash report too so both crash
+        // paths get the same treatment. onRenderProcessGone freshly harvests
+        // and calls enrichCrashReport directly with its returned path.
+        val cdpSnapshot = File(context.filesDir, LukerCdpCollector.CRASH_SNAPSHOT_FILE_NAME)
+        val cdpSnapshotPath = if (cdpSnapshot.isFile) cdpSnapshot.absolutePath else null
+        return enrichCrashReport(context, captured, cdpSnapshotPath)
     }
 
-    private fun enrichCrashReport(context: Context, captured: CapturedCrash): CapturedCrash {
+    /**
+     * Appends debug-trail, logcat tail, and (if a snapshot exists) the CDP
+     * snapshot path to the crash report body, and persists the result back
+     * to the report file. Public so MainActivity.onRenderProcessGone can
+     * share the same enrichment shape as the jvm-crash path — the two used
+     * to have parallel implementations that drifted.
+     */
+    fun enrichCrashReport(
+        context: Context,
+        captured: CapturedCrash,
+        cdpSnapshotPath: String? = null,
+    ): CapturedCrash {
         val enrichedReport = buildString {
             append(captured.report)
             append("\n\n--- debug-trail ---\n")
             val trail = runCatching { LukerDebugTrail.dumpAll() }.getOrDefault("")
             append(trail.ifEmpty { "<empty>" })
             appendLogcatTailsForCrash(this, context)
+            if (cdpSnapshotPath != null) {
+                append("\n\n--- cdp snapshot ---\n")
+                append(cdpSnapshotPath).append('\n')
+                append("(complete event stream in diagnostics zip crashes/luker-last-crash-cdp.jsonl)")
+            }
         }
         val reportFile = runCatching {
             captured.reportFile?.also { it.writeText(enrichedReport, Charsets.UTF_8) }

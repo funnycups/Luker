@@ -461,17 +461,20 @@ class MainActivity : AppCompatActivity() {
                     didCrash = crashed,
                     rendererPriorityAtExit = rendererPriority,
                 )
-                val enrichedReport = buildString {
-                    append(crash.report)
-                    append("\n\n--- debug-trail ---\n")
-                    append(LukerDebugTrail.dumpAll().ifEmpty { "<empty>" })
-                    appendLogcatTails(this, applicationContext)
-                }
+                val cdpSnapshot = LukerCdpCollector.harvestForCrash(applicationContext)
+                // Go through the shared enrichment helper instead of
+                // duplicating debug-trail + logcat + cdp-snapshot append
+                // logic here — the two paths were drifting.
+                val enriched = LukerCrashCapture.enrichCrashReport(
+                    applicationContext,
+                    crash,
+                    cdpSnapshot?.absolutePath,
+                )
                 window.decorView.post {
                     if (isFinishing || isDestroyed) {
                         return@post
                     }
-                    showWebViewCrashDialog(enrichedReport, crash.reportFile)
+                    showWebViewCrashDialog(enriched.report, enriched.reportFile)
                 }
                 return true
             }
@@ -2469,41 +2472,6 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.diagnostics_export_failed, t.message ?: t.javaClass.simpleName),
                 Toast.LENGTH_LONG,
             ).show()
-        }
-    }
-
-    private fun appendLogcatTails(sb: StringBuilder, context: Context) {
-        sb.append("\n\n--- logcat tail ---\n")
-        val current = LukerLogcatTail.currentLogFile(context)
-        val last = LukerLogcatTail.lastLogFile(context)
-        if (!current.isFile && !last.isFile) {
-            sb.append("<not recorded>")
-            return
-        }
-        val tailLimit = 64 * 1024L
-        if (last.isFile) {
-            sb.append("--- last ---\n").append(readTailUtf8(last, tailLimit)).append('\n')
-        }
-        if (current.isFile) {
-            sb.append("--- current ---\n").append(readTailUtf8(current, tailLimit))
-        }
-    }
-
-    private fun readTailUtf8(file: File, maxBytes: Long): String {
-        if (!file.isFile) return ""
-        val length = file.length()
-        if (length <= maxBytes) return file.readText(Charsets.UTF_8)
-        return file.inputStream().use { input ->
-            val skip = length - maxBytes
-            var remaining = skip
-            val buf = ByteArray(8192)
-            while (remaining > 0) {
-                val toSkip = minOf(remaining, buf.size.toLong())
-                val skipped = input.read(buf, 0, toSkip.toInt())
-                if (skipped <= 0) break
-                remaining -= skipped
-            }
-            input.readBytes().toString(Charsets.UTF_8)
         }
     }
 

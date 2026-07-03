@@ -24,6 +24,7 @@ object LukerCdpCollector {
     private const val MAX_CLIENTS = 32
     private const val FAIL_THRESHOLD = 3
     const val CDP_DIR_NAME = "cdp"
+    const val CRASH_SNAPSHOT_FILE_NAME = "luker-last-crash-cdp.jsonl"
 
     private val startedFlag = AtomicBoolean(false)
     val started: Boolean get() = startedFlag.get()
@@ -90,8 +91,12 @@ object LukerCdpCollector {
         // would fill to capacity and then queue.put would have blocked the
         // caller (LukerCdpClient reader thread) forever — offer() below also
         // fixes that, but skipping the offer entirely on a dead writer keeps
-        // the queue drainable if the writer is ever restarted.
-        if (!w.hasWriter()) return
+        // the queue drainable if the writer is ever restarted. Gate on
+        // isDrainAlive() rather than hasWriter() so that events arriving
+        // mid-harvest (when the BufferedWriter field is transiently null
+        // between flushAndCloseUnderLock and reopenUnderLock) queue up
+        // instead of being falsely dropped as a dead-drain signal.
+        if (!w.isDrainAlive()) return
         if (!w.queue.offer(entry)) {
             // Queue full: drop this event and emit a rate-limited marker so
             // the debug trail records that we're losing events rather than
@@ -101,6 +106,69 @@ object LukerCdpCollector {
             val prev = lastDropLogAtMs.get()
             if (now - prev > 1_000L && lastDropLogAtMs.compareAndSet(prev, now)) {
                 LukerDebugTrail.append("native", "cdp-collector state=writer-dropped queue-full")
+            }
+        }
+    }
+
+    /**
+     * Atomically flushes the current ring, renames it to
+     * filesDir/luker-last-crash-cdp.jsonl (overwriting any previous file),
+     * and reopens a fresh empty current for the writer to keep appending.
+     *
+     * Called from the main thread inside MainActivity.onRenderProcessGone —
+     * worst-case wait is a single BufferedWriter flush (few hundred µs),
+     * far below the 5-second ANR threshold.
+     *
+     * Returns the crash snapshot File, or null on any failure (no ring
+     * yet / collector not started / disk error / rename fallback all failed).
+     */
+    fun harvestForCrash(context: Context): File? {
+        if (!startedFlag.get()) return null
+        val w = writer ?: return null
+        val target = File(context.filesDir, CRASH_SNAPSHOT_FILE_NAME)
+        return synchronized(rotateLock) {
+            try {
+                w.flushAndCloseUnderLock()
+                val src = w.currentFileForExport()
+                if (target.isFile) target.delete()
+                val renamed = src.renameTo(target)
+                val finalFile = if (renamed) {
+                    target
+                } else {
+                    runCatching {
+                        src.inputStream().use { input ->
+                            target.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        src.delete()
+                        target
+                    }.getOrElse {
+                        LukerDebugTrail.append("native", "cdp-collector state=harvest-copy-fail err=${it.message ?: it.javaClass.simpleName}")
+                        null
+                    }
+                }
+                // Only reopen if the drain thread is still alive to
+                // consume from the queue. Gate on isDrainAlive() rather
+                // than hasWriter() because flushAndCloseUnderLock above
+                // legitimately nulls the writer field on a healthy
+                // drain — using hasWriter() here would always skip the
+                // reopen and permanently silence the ring.
+                if (w.isDrainAlive()) {
+                    w.reopenUnderLock()
+                } else {
+                    LukerDebugTrail.append("native", "cdp-collector state=harvest skip-reopen reason=drain-dead")
+                }
+                LukerDebugTrail.append("native", "cdp-collector state=harvest saved=${finalFile?.name ?: "<none>"}")
+                finalFile
+            } catch (t: Throwable) {
+                LukerDebugTrail.append("native", "cdp-collector state=harvest-fail err=${t.message ?: t.javaClass.simpleName}")
+                if (w.isDrainAlive()) {
+                    runCatching { w.reopenUnderLock() }.onFailure {
+                        LukerDebugTrail.append("native", "cdp-collector state=harvest-reopen-fail err=${it.message ?: it.javaClass.simpleName}")
+                    }
+                } else {
+                    LukerDebugTrail.append("native", "cdp-collector state=harvest skip-reopen reason=drain-dead")
+                }
+                null
             }
         }
     }

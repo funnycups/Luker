@@ -120,6 +120,7 @@ object LukerDiagnosticsExporter {
             "luker-last-native-tombstone.pb",
             "luker-runtime-last-error.txt",
             "luker-last-crash-full-report.txt",
+            "luker-last-crash-cdp.jsonl",
         )
         return candidates.mapNotNull { name ->
             val f = File(context.filesDir, name)
