@@ -82,6 +82,19 @@ export function renderMessageCard(message, opts = {}) {
     const content = String(message.content || '');
     const bodyHtml = renderMd ? renderMd(content) : escapeHtml(content).replace(/\n/g, '<br>');
 
+    // Reasoning / thinking chain — display only, never sent back to API
+    const reasoningText = String(message.reasoning || '');
+    let reasoningHtml = '';
+    if (reasoningText.length > 0) {
+        const reasoningBody = renderMd
+            ? renderMd(reasoningText)
+            : escapeHtml(reasoningText).replace(/\n/g, '<br>');
+        reasoningHtml = `<details class="luker_lib_reasoning_details">
+            <summary class="luker_lib_reasoning_summary">${escapeHtml(i18n('Thinking'))}</summary>
+            <div class="luker_lib_reasoning_body">${reasoningBody}</div>
+        </details>`;
+    }
+
     const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
     const toolResults = Array.isArray(message.toolResults) ? message.toolResults : [];
     const resultById = new Map();
@@ -98,10 +111,11 @@ export function renderMessageCard(message, opts = {}) {
     // when content + tools + edits are all empty (e.g. an old assistant
     // turn whose tools were stripped on regen).
     const hasContent = content.length > 0;
+    const hasReasoning = reasoningText.length > 0;
     const hasTools = toolCalls.length > 0 || toolResults.length > 0;
     const hasEdits = edits.length > 0;
     const hasStatus = Boolean(message.appliedAt) || Boolean(message.rolledBackAt);
-    if (!hasContent && !hasTools && !hasEdits && !hasStatus) {
+    if (!hasContent && !hasReasoning && !hasTools && !hasEdits && !hasStatus) {
         return '';
     }
 
@@ -149,6 +163,7 @@ export function renderMessageCard(message, opts = {}) {
         : '';
 
     return `<div class="luker_lib_message luker_lib_message_assistant" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
+        ${reasoningHtml}
         ${bodyHtml}
         ${readOnlyHint}
         ${toolsHtml}
