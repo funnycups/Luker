@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.FileProvider
+import androidx.webkit.WebViewCompat
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -75,6 +76,11 @@ object LukerDiagnosticsExporter {
             if (lastLogcat.isFile) {
                 writeFileEntry(zip, "logcat/last.log", lastLogcat)
             }
+
+            runCatching { addCdpEntries(zip) }
+                .onFailure {
+                    writeEntry(zip, "cdp/error.txt", ("CDP snapshot error: ${it.message ?: it.javaClass.simpleName}").toByteArray(Charsets.UTF_8))
+                }
         }
 
         val authority = context.packageName + FILE_PROVIDER_AUTHORITY_SUFFIX
@@ -106,6 +112,25 @@ object LukerDiagnosticsExporter {
                 ).append('\n')
         }
         sb.append('\n')
+        runCatching {
+            val webViewPkg = WebViewCompat.getCurrentWebViewPackage(context)
+            if (webViewPkg != null) {
+                sb.append("webViewPackage=").append(webViewPkg.packageName)
+                    .append(" (version=").append(webViewPkg.versionName ?: "<unknown>").append(")\n")
+            } else {
+                sb.append("webViewPackage=<unresolved>\n")
+            }
+        }.onFailure {
+            sb.append("webViewPackage=<error: ").append(it.message ?: it.javaClass.simpleName).append(">\n")
+        }
+        sb.append("cdpCollectorEnabled=").append(LukerCdpCollector.started).append('\n')
+        val current = LukerCdpCollector.currentRingFile()
+        val last = LukerCdpCollector.lastRingFile()
+        sb.append("cdpRingCurrentSize=").append(if (current?.isFile == true) current.length() else 0L).append('\n')
+        sb.append("cdpRingLastSize=").append(if (last?.isFile == true) last.length() else 0L).append('\n')
+        val crashSnap = File(context.filesDir, LukerCdpCollector.CRASH_SNAPSHOT_FILE_NAME)
+        sb.append("cdpCrashSnapshots=").append(if (crashSnap.isFile) 1 else 0).append('\n')
+        sb.append('\n')
         sb.append("--- runtime diagnostics ---\n")
         runCatching { sb.append(LukerRuntimeManager.collectDiagnostics(context)) }
             .onFailure { sb.append("<failed: ").append(it.message).append('>') }
@@ -132,6 +157,29 @@ object LukerDiagnosticsExporter {
         zip.putNextEntry(ZipEntry(name))
         zip.write(bytes)
         zip.closeEntry()
+    }
+
+    private fun addCdpEntries(zip: ZipOutputStream) {
+        val (current, bytesLimit) = LukerCdpCollector.snapshotForExport()
+        if (current != null && current.isFile && bytesLimit > 0L) {
+            zip.putNextEntry(ZipEntry("cdp/current.jsonl"))
+            FileInputStream(current).use { input ->
+                val buf = ByteArray(32 * 1024)
+                var remaining = bytesLimit
+                while (remaining > 0) {
+                    val toRead = minOf(remaining, buf.size.toLong()).toInt()
+                    val n = input.read(buf, 0, toRead)
+                    if (n <= 0) break
+                    zip.write(buf, 0, n)
+                    remaining -= n
+                }
+            }
+            zip.closeEntry()
+        }
+        val last = LukerCdpCollector.lastRingFile()
+        if (last != null && last.isFile) {
+            writeFileEntry(zip, "cdp/last.jsonl", last)
+        }
     }
 
     private fun writeFileEntry(

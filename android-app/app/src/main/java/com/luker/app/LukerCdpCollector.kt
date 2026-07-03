@@ -173,6 +173,24 @@ object LukerCdpCollector {
         }
     }
 
+    /**
+     * Called by LukerDiagnosticsExporter. Flushes the current ring under
+     * rotateLock and returns the current file plus the byte-limit valid at
+     * the flush point. Writer keeps appending after we release the lock;
+     * exporter must read only the first `bytesLimit` bytes to avoid a
+     * partial-line torn read at end.
+     *
+     * Returns (null, 0) if the collector never started.
+     */
+    fun snapshotForExport(): Pair<File?, Long> {
+        if (!startedFlag.get()) return null to 0L
+        val w = writer ?: return null to 0L
+        return synchronized(rotateLock) {
+            val bytes = w.flushUnderLock()
+            w.currentFileForExport() to bytes
+        }
+    }
+
     // Return the on-disk paths regardless of drain-thread state — if the
     // writer thread has crashed the ring files still exist and the
     // exporter should surface their real size instead of reporting 0.
