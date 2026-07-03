@@ -722,6 +722,15 @@ export function registerLocaleData() {
             '取消本次 Director',
         'Director cancelled: resolve unsaved preset changes first.':
             'Director 已取消：请先处理预设的未保存改动。',
+        'Agents': 'Agents',
+        'Tools & Skills': '工具与技能',
+        'General': '通用',
+        'Default API and prompt preset': '默认 API 与预设',
+        'Used when a specific agent has no preset filled in': '未在具体 agent 上填写时使用',
+        'Runtime limits': '运行上限',
+        'Capsule injection': 'Capsule 注入',
+        'AI Iteration Studio configuration': 'AI 迭代工作台配置',
+        'Open in Popup': '在弹窗中打开',
     });
     _addLocaleData('zh-tw', {
         'Orchestrator': '多智能體編排',
@@ -1402,5 +1411,14 @@ export function registerLocaleData() {
             '取消本次 Director',
         'Director cancelled: resolve unsaved preset changes first.':
             'Director 已取消：請先處理預設的未儲存改動。',
+        'Agents': 'Agents',
+        'Tools & Skills': '工具與技能',
+        'General': '通用',
+        'Default API and prompt preset': '預設 API 與提示詞預設',
+        'Used when a specific agent has no preset filled in': '未在具體 agent 上填寫時使用',
+        'Runtime limits': '運行上限',
+        'Capsule injection': 'Capsule 注入',
+        'AI Iteration Studio configuration': 'AI 迭代工作台配置',
+        'Open in Popup': '在彈窗中開啟',
     });
 }
