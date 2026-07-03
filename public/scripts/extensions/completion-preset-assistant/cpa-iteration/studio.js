@@ -1002,26 +1002,27 @@ export async function openCpaIterationStudio(deps) {
             wider: true,
             allowVerticalScrolling: true,
         });
+        const $dlg = jQuery(importPopup.dlg);
 
-        jQuery(document).on('change.cpaImport', '[data-cpa-import-select-all]', function () {
+        $dlg.on('change.cpaImport', '[data-cpa-import-select-all]', function () {
             const checked = this.checked;
-            jQuery('[data-cpa-import-idx]').prop('checked', checked);
+            $dlg.find('[data-cpa-import-idx]').prop('checked', checked);
             if (checked) {
                 dialogMessages.forEach((_, i) => selectedSet.add(i));
             } else {
                 selectedSet.clear();
             }
         });
-        jQuery(document).on('change.cpaImport', '[data-cpa-import-idx]', function () {
+        $dlg.on('change.cpaImport', '[data-cpa-import-idx]', function () {
             const idx = Number(this.getAttribute('data-cpa-import-idx'));
             if (this.checked) selectedSet.add(idx); else selectedSet.delete(idx);
-            const allBoxes = jQuery('[data-cpa-import-idx]');
+            const allBoxes = $dlg.find('[data-cpa-import-idx]');
             const allChecked = allBoxes.length === allBoxes.filter(':checked').length;
-            jQuery('[data-cpa-import-select-all]').prop('checked', allChecked);
+            $dlg.find('[data-cpa-import-select-all]').prop('checked', allChecked);
         });
 
         const result = await importPopup.show();
-        jQuery(document).off('.cpaImport');
+        $dlg.off('.cpaImport');
 
         if (result !== POPUP_RESULT.AFFIRMATIVE) return;
         if (selectedSet.size === 0) {
