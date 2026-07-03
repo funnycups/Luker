@@ -256,24 +256,25 @@ function buildExtractTabHtml(deps) {
 
 function buildGraphTabHtml(deps) {
     const { escapeHtml, i18n } = deps;
+    const helpBtn = (titleKey, bodyKey) => renderFieldHelpButton({
+        title: i18n(titleKey),
+        bodyHtml: escapeHtml(i18n(bodyKey)),
+    });
+    const btnRow = (id, labelKey, titleKey, bodyKey) => `
+                <div class="flex-container alignItemsCenter" style="gap:6px">
+                    <div id="${id}" class="menu_button">${escapeHtml(i18n(labelKey))}</div>
+                    ${helpBtn(titleKey, bodyKey)}
+                </div>`;
     return `
-            <div class="flex-container">
-                <div id="luker_rpg_memory_view_graph" class="menu_button">${escapeHtml(i18n('View Graph'))}</div>
-                <div id="luker_rpg_memory_fill" class="menu_button">${escapeHtml(i18n('Fill Graph (Incremental)'))}</div>
-                <div id="luker_rpg_memory_rebuild" class="menu_button">${escapeHtml(i18n('Rebuild From Chat'))}</div>
-                <div id="luker_rpg_memory_rebuild_recent" class="menu_button">${escapeHtml(i18n('Rebuild Recent N Assistant Turns'))}</div>
-            </div>
-            <div class="flex-container">
-                <div id="luker_rpg_memory_manual_compress" class="menu_button">${escapeHtml(i18n('Manual Compress'))}</div>
-                <div id="luker_rpg_memory_reset" class="menu_button">${escapeHtml(i18n('Reset Current Chat'))}</div>
-            </div>
-            <div class="flex-container">
-                <div id="luker_rpg_memory_recompute_vectors" class="menu_button">${escapeHtml(i18n('Recompute Vector Index'))}</div>
-            </div>
-            <div class="flex-container">
-                <div id="luker_rpg_memory_export" class="menu_button">${escapeHtml(i18n('Export Current Chat Graph'))}</div>
-                <div id="luker_rpg_memory_import" class="menu_button">${escapeHtml(i18n('Import Current Chat Graph'))}</div>
-            </div>
+            ${btnRow('luker_rpg_memory_view_graph', 'View Graph', 'About View Graph', 'View Graph help body')}
+            ${btnRow('luker_rpg_memory_fill', 'Fill Graph', 'About Fill Graph', 'Fill Graph help body')}
+            ${btnRow('luker_rpg_memory_rebuild', 'Rebuild Graph', 'About Rebuild Graph', 'Rebuild Graph help body')}
+            ${btnRow('luker_rpg_memory_rebuild_recent', 'Rebuild Recent', 'About Rebuild Recent', 'Rebuild Recent help body')}
+            ${btnRow('luker_rpg_memory_manual_compress', 'Manual Compress', 'About Manual Compress', 'Manual Compress help body')}
+            ${btnRow('luker_rpg_memory_reset', 'Reset Chat', 'About Reset Chat', 'Reset Chat help body')}
+            ${btnRow('luker_rpg_memory_recompute_vectors', 'Rebuild Vectors', 'About Rebuild Vectors', 'Rebuild Vectors help body')}
+            ${btnRow('luker_rpg_memory_export', 'Export Graph', 'About Export Graph', 'Export Graph help body')}
+            ${btnRow('luker_rpg_memory_import', 'Import Graph', 'About Import Graph', 'Import Graph help body')}
             <input id="luker_rpg_memory_import_file" type="file" accept=".json,application/json" hidden />`;
 }
 
