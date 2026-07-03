@@ -956,7 +956,7 @@ export async function openCpaIterationStudio(deps) {
         const ctx = getContext();
         const chat = ctx.chat;
         if (!Array.isArray(chat) || chat.length === 0) {
-            try { toastr.warning(t('No chat is currently open.')); } catch { /* ignore */ }
+            try { toastr.warning('当前没有打开的聊天'); } catch { /* ignore */ }
             return;
         }
 
@@ -965,9 +965,11 @@ export async function openCpaIterationStudio(deps) {
             .filter(m => !m.is_system);
 
         if (dialogMessages.length === 0) {
-            try { toastr.warning(t('The current chat has no user or character messages to import.')); } catch { /* ignore */ }
+            try { toastr.warning('当前聊天没有可导入的消息'); } catch { /* ignore */ }
             return;
         }
+
+        const selectedSet = new Set(dialogMessages.map((_, i) => i));
 
         const listHtml = dialogMessages.map((m, i) => {
             const role = m.is_user ? 'user' : 'assistant';
@@ -983,10 +985,10 @@ export async function openCpaIterationStudio(deps) {
             <div class="cpa_it_import_dialog" style="max-height:60vh;display:flex;flex-direction:column;">
                 <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
                     <label style="cursor:pointer;font-weight:bold;">
-                        <input type="checkbox" data-cpa-import-select-all checked /> ${escapeHtmlLocal(t('Select all'))}
+                        <input type="checkbox" data-cpa-import-select-all checked /> 全选
                     </label>
                     <span style="color:var(--SmartThemeQuoteColor);font-size:0.85em;">
-                        (${dialogMessages.length} ${escapeHtmlLocal(t('messages'))})
+                        (共 ${dialogMessages.length} 条消息)
                     </span>
                 </div>
                 <div style="overflow-y:auto;flex:1;border:1px solid var(--SmartThemeBorderColor);border-radius:4px;padding:6px;">
@@ -995,36 +997,39 @@ export async function openCpaIterationStudio(deps) {
             </div>`;
 
         const importPopup = new Popup(html, POPUP_TYPE.CONFIRM, '', {
-            okButton: t('Import selected'),
-            cancelButton: t('Cancel'),
+            okButton: '导入选中',
+            cancelButton: '取消',
             wider: true,
             allowVerticalScrolling: true,
         });
 
-        const $dialog = jQuery('.cpa_it_import_dialog');
-        $dialog.on('change', '[data-cpa-import-select-all]', function () {
+        jQuery(document).on('change.cpaImport', '[data-cpa-import-select-all]', function () {
             const checked = this.checked;
-            $dialog.find('[data-cpa-import-idx]').prop('checked', checked);
+            jQuery('[data-cpa-import-idx]').prop('checked', checked);
+            if (checked) {
+                dialogMessages.forEach((_, i) => selectedSet.add(i));
+            } else {
+                selectedSet.clear();
+            }
         });
-        $dialog.on('change', '[data-cpa-import-idx]', function () {
-            const allBoxes = $dialog.find('[data-cpa-import-idx]');
+        jQuery(document).on('change.cpaImport', '[data-cpa-import-idx]', function () {
+            const idx = Number(this.getAttribute('data-cpa-import-idx'));
+            if (this.checked) selectedSet.add(idx); else selectedSet.delete(idx);
+            const allBoxes = jQuery('[data-cpa-import-idx]');
             const allChecked = allBoxes.length === allBoxes.filter(':checked').length;
-            $dialog.find('[data-cpa-import-select-all]').prop('checked', allChecked);
+            jQuery('[data-cpa-import-select-all]').prop('checked', allChecked);
         });
 
         const result = await importPopup.show();
-        if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+        jQuery(document).off('.cpaImport');
 
-        const checkedIndices = new Set();
-        $dialog.find('[data-cpa-import-idx]:checked').each(function () {
-            checkedIndices.add(Number(this.getAttribute('data-cpa-import-idx')));
-        });
-        if (checkedIndices.size === 0) {
-            try { toastr.info(t('No messages selected.')); } catch { /* ignore */ }
+        if (result !== POPUP_RESULT.AFFIRMATIVE) return;
+        if (selectedSet.size === 0) {
+            try { toastr.info('没有选中任何消息'); } catch { /* ignore */ }
             return;
         }
 
-        const selected = dialogMessages.filter((_, i) => checkedIndices.has(i));
+        const selected = dialogMessages.filter((_, i) => selectedSet.has(i));
 
         if (state.session._transient && state.session.messages.length === 0) {
             state.session = createNewSession();
@@ -1045,7 +1050,7 @@ export async function openCpaIterationStudio(deps) {
         state.session.updatedAt = Date.now();
         await persistSession();
         await render();
-        try { toastr.success(tf('Imported ${0} message(s).', String(checkedIndices.size))); } catch { /* ignore */ }
+        try { toastr.success(`已导入 ${selectedSet.size} 条消息`); } catch { /* ignore */ }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -2685,7 +2690,7 @@ export async function openCpaIterationStudio(deps) {
         historyLabel: t('History'),
         newSessionLabel: t('New session'),
         clearAllLabel: t('Clear all'),
-        importChatLabel: t('Import chat'),
+        importChatLabel: t('导入对话'),
         sendLabel: t('Send'),
         composerPlaceholder: t('Describe what to change in the preset...'),
         referenceLabel: t('Reference preset:'),
