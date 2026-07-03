@@ -1883,6 +1883,16 @@ function refreshOrchestrationEditorPopup(context, settings) {
         return;
     }
     mount.html(buildOrchestrationEditorPopupPanelHtml(getOrchestratorUiTemplateDeps(), context, settings));
+    // Task 10a extracted `injectWorkspaceIntoTabHost` so the popup's
+    // Agents / Tools & Skills tabs receive the same runtime-scoped
+    // workspace HTML that the drawer gets. Without this call the popup
+    // opens with empty tab hosts — every action inside the popup that
+    // touches the workspace (preset switch, override toggle, tool
+    // flag) is broken until this call fires.
+    const currentMode = getExecutionMode(settings);
+    if (currentMode && currentMode !== ORCH_EXECUTION_MODE_SINGLE) {
+        injectWorkspaceIntoTabHost(mount, currentMode, getOrchestratorUiTemplateDeps(), context, settings, 'orch-popup-');
+    }
     // Hydrate per-agent / mode-level skill chips. The renderers above emit
     // `[data-luker-skill-chips-mount]` placeholders; the hydrate step loads
     // the inventory once (with a brief cache), resolves each placeholder's
@@ -8190,7 +8200,7 @@ function bindUi() {
             return;
         }
 
-        if (action === 'open-orch-editor') {
+        if (action === 'open-orch-editor-popup') {
             await openOrchestrationEditorPopup(context, settings);
             return;
         }

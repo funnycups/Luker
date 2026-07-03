@@ -1,6 +1,5 @@
 import { renderPresetHelpButton } from '../preset-help.js';
 import { renderLukerTabs } from '../luker-tabs.js';
-import { renderFieldHelpButton } from '../field-help.js';
 import { listExtensionTools } from './register-custom-tool.js';
 import { listPresets } from './preset-library.js';
 import { uiState } from './editor-state.js';
@@ -588,7 +587,6 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
     const agentsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title || i18n('Agenda Orchestration'))}</div>
-    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'agenda', safeScope))}
     <div class="luker-studio-workspace-col">
         <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Planner Prompt'))}</div>
         <label for="luker_orch_agenda_planner_api_preset">${escapeHtml(i18n('Planner API preset (Connection profile, empty = global orchestration API preset)'))}</label>
@@ -657,7 +655,6 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
     const agentsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${scope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title)}</div>
-    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'spec', safeScope))}
     <div class="luker-studio-workspace-col">
         <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Workflow'))}</div>
         <div>${renderWorkflowBoard(scope, editor)}</div>
@@ -742,7 +739,6 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
     const agentsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title || i18n('Loop Orchestration'))}</div>
-    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'loop', safeScope))}
     <div class="luker-studio-workspace-col">
         <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop Agent'))}</div>
         <label for="luker_orch_loop_api_preset">${escapeHtml(i18n('Loop API preset (Connection profile, empty = global orchestration API preset)'))}</label>
@@ -933,7 +929,6 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
     const agentsHtml = `
 <div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}" data-orch-mode-block="director">
     <div class="luker-studio-workspace-title" data-i18n="Director Orchestration">${escapeHtml(title || i18n('Director Orchestration'))}</div>
-    ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'director', safeScope))}
     <div class="luker-studio-workspace-col">
         <h4 data-i18n="Main agent">${escapeHtml(i18n('Main agent'))}</h4>
         <label>
@@ -1092,35 +1087,12 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         modeChipLabel = i18n('Spec workflow');
     }
 
-    // Actions bar: spec + agenda modes get the two Copy buttons; other
-    // modes hide them via `data-orch-mode` wrappers so the mode-toggle
-    // logic in Task 11 can flip visibility without rebuilding.
-    //
-    // Task 11 (mode-toggle rewrite) will unify initial-visibility with
-    // dynamic toggling; until then this builder sets `display:none` on
-    // wrappers whose mode is not the current one, so first paint matches
-    // the effective mode.
-    const modeStyle = wrapperMode => (currentMode === wrapperMode ? '' : ' style="display:none"');
-    const modeStyleAnyOf = allowedModes => (allowedModes.includes(currentMode) ? '' : ' style="display:none"');
-    const copyButtons = `
-        <span data-orch-mode="spec"${modeStyle(ORCH_EXECUTION_MODE_SPEC)}>
-            <div class="menu_button" data-luker-action="agenda-copy-from-spec" data-scope="${scope}">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-            <div class="menu_button" data-luker-action="spec-copy-from-agenda" data-scope="${scope}">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-        </span>
-        <span data-orch-mode="agenda"${modeStyle(ORCH_EXECUTION_MODE_AGENDA)}>
-            <div class="menu_button" data-luker-action="agenda-copy-from-spec" data-scope="${scope}">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-            <div class="menu_button" data-luker-action="spec-copy-from-agenda" data-scope="${scope}">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-        </span>`;
-
-    // View Last Run + Show Run Panel hidden in director mode (director
-    // does not produce a capsule / prior-run history entry). Wrapped in
-    // a `data-orch-mode` span so mode-toggle logic flips visibility.
-    const viewLastRunButton = `
-        <span data-orch-mode="spec agenda loop single"${modeStyleAnyOf([
-        ORCH_EXECUTION_MODE_SPEC, ORCH_EXECUTION_MODE_AGENDA, ORCH_EXECUTION_MODE_LOOP, ORCH_EXECUTION_MODE_SINGLE,
-    ])}>
-            <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-        </span>`;
+    // Actions bar + per-mode copy buttons + view-last-run were previously
+    // emitted inline here; Task 10b promotes them into `buildOrchTopbarHtml`
+    // so drawer + popup share exactly one topbar renderer. The popup keeps
+    // its own title+chips row for the "Orchestration Editor" heading; the
+    // per-mode boards, preset selector bar, and actions bar all come
+    // from the shared topbar helper below.
 
     const tabsHtml = renderLukerTabs({
         id: s('luker_orch_tabs'),
@@ -1145,22 +1117,8 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
                 <span class="luker-studio-editor-chip">${escapeHtml(i18n('Execution mode'))} <b>${escapeHtml(modeChipLabel)}</b></span>
             </div>
         </div>
-        <div class="luker-studio-editor-topbar-right">
-            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-        </div>
     </div>
-    <div class="luker-studio-actions-bar">
-        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
-        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
-        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
-        ${copyButtons}
-        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
-        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
-        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
-        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
-        ${viewLastRunButton}
-        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-    </div>
+    ${buildOrchTopbarHtml(deps, { context, settings }, IDPREFIX)}
     ${tabsHtml}
 </div>`;
 }
@@ -1289,14 +1247,53 @@ export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, 
  * for popup callers; passed through `scopeId()` for every element that
  * needs a mirror in the popup.
  */
-function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
+/**
+ * Shared action-button row for each per-mode board in the topbar.
+ * Factored out of the four near-identical `<div class="flex-container">`
+ * blocks in `buildOrchTopbarHtml`; toggles the two mode-specific
+ * variations (copy-spec/agenda rows for spec+agenda; view-last-run for
+ * every non-director mode).
+ *
+ * `idPrefix` gates the "Open in Popup" launcher — drawer callers pass
+ * '' and get the launcher; popup callers pass 'orch-popup-' and the
+ * launcher is omitted (already inside the popup).
+ */
+function commonActions(deps, idPrefix, { includeViewLastRun = true, includeCopyRows = false } = {}) {
     const { escapeHtml, i18n } = deps;
+    const copyRows = includeCopyRows
+        ? `<div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
+                <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>`
+        : '';
+    const viewLastRun = includeViewLastRun
+        ? `<div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>`
+        : '';
+    const openInPopup = idPrefix
+        ? ''
+        : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`;
+    return `${copyRows}
+                ${viewLastRun}
+                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+                <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
+                ${openInPopup}`;
+}
+
+function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
+    const { escapeHtml, i18n, getExecutionMode, getDisplayedScope, getCurrentAvatar, getContext } = deps;
     const s = baseId => scopeId(baseId, idPrefix);
-    // Common actions rendered for every non-single mode. Copy-Spec/Agenda
-    // buttons are wrapped in `data-orch-mode` spans so the mode-visibility
-    // logic (renderDynamicPanels / Task 11) hides them outside spec+agenda.
-    // `view-last-run` is intentionally omitted from the director-mode
-    // wrapper (director doesn't produce a capsule / prior-run entry).
+    // Self-source context/settings so the drawer callsite can pass an
+    // empty `ctx` and let the topbar resolve state; popup callers pass
+    // `{context, settings}` explicitly.
+    const context = ctx.context || getContext();
+    const settings = ctx.settings || getSettings();
+    const currentMode = getExecutionMode ? getExecutionMode(settings) : '';
+    const safeScope = getDisplayedScope ? getDisplayedScope(context, settings) : 'global';
+    const activeAvatar = String((getCurrentAvatar && getCurrentAvatar(context)) || '').trim();
+    const hasActiveCharacter = Boolean(activeAvatar);
+    const isCharacterScope = safeScope === 'character';
+    // Per-mode board layout: card indicator + override toggle on the
+    // left, action button row on the right. Copy-spec/agenda buttons
+    // only for spec+agenda; view-last-run omitted for director.
     const specBoard = `
         <div id="${s('luker_orch_spec_board')}" class="luker_orch_board" data-orch-mode="spec">
             <div>
@@ -1308,13 +1305,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
                 </label>
             </div>
             <div class="flex-container">
-                <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-                <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-                <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+                ${commonActions(deps, idPrefix, { includeViewLastRun: true, includeCopyRows: true })}
             </div>
         </div>`;
     const agendaBoard = `
@@ -1328,13 +1319,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
                 </label>
             </div>
             <div class="flex-container">
-                <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-                <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-                <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+                ${commonActions(deps, idPrefix, { includeViewLastRun: true, includeCopyRows: true })}
             </div>
         </div>`;
     const loopBoard = `
@@ -1348,31 +1333,24 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
                 </label>
             </div>
             <div class="flex-container">
-                <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+                ${commonActions(deps, idPrefix, { includeViewLastRun: true, includeCopyRows: false })}
             </div>
             <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
         </div>`;
     const directorBoard = `
         <div id="${s('luker_orch_director_board')}" class="luker_orch_board" style="display:none" data-orch-mode="director">
             <div>
-                <small><span data-i18n="Current card:">${escapeHtml(i18n('Current card:'))}</span> <span id="${s('luker_orch_director_profile_target')}" data-i18n="(No character card)">${escapeHtml(i18n('(No character card)'))}</span></small><br />
-                <small><span data-i18n="Editing:">${escapeHtml(i18n('Editing:'))}</span> <span id="${s('luker_orch_director_profile_mode')}" data-i18n="Global profile">${escapeHtml(i18n('Global profile'))}</span></small>
-                <label id="${s('luker_orch_director_override_toggle')}" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}" data-i18n="[title]Off uses the global profile and keeps the override stored on the card.">
+                <small><span>${escapeHtml(i18n('Current card:'))}</span> <span id="${s('luker_orch_director_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
+                <small><span>${escapeHtml(i18n('Editing:'))}</span> <span id="${s('luker_orch_director_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
+                <label id="${s('luker_orch_director_override_toggle')}" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
                     <input type="checkbox" id="${s('luker_orch_director_override_enabled')}" />
-                    <small data-i18n="Use this card's override">${escapeHtml(i18n('Use this card\'s override'))}</small>
+                    <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
                 </label>
             </div>
             <div class="flex-container">
-                <div class="menu_button" data-luker-action="show-run-panel" data-i18n="Show Run Panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                <div class="menu_button" data-luker-action="ai-iterate-open" data-i18n="Open AI Iteration Studio">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                <div class="menu_button" data-luker-action="manage-skills" data-i18n="Manage skills...">${escapeHtml(i18n('Manage skills...'))}</div>
-                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+                ${commonActions(deps, idPrefix, { includeViewLastRun: false, includeCopyRows: false })}
             </div>
-            <small class="luker_orch_director_board_hint" data-i18n="Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.">${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
+            <small class="luker_orch_director_board_hint">${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
         </div>`;
     // Single-mode topbar block hosts the runtime tools row (view-last-run,
     // show-run-panel, manage-skills) and the descriptive hint. Kept in
@@ -1387,7 +1365,34 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
                 ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
             </div>
         </div>`;
-    return `<div class="luker_orch_topbar">${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}</div>`;
+
+    // Preset selector bar — one wrapper per mode, mode-visibility gated
+    // by `data-orch-mode` so mode-toggle logic reveals only the current
+    // mode's bar. Promoted here from the four workspace helpers so both
+    // drawer and popup render exactly one preset bar.
+    const presetBarModes = ['spec', 'agenda', 'loop', 'director'];
+    const presetBars = presetBarModes.map(mode => {
+        const modeVisible = currentMode === mode ? '' : ' style="display:none"';
+        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}>${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, safeScope))}</div>`;
+    }).join('');
+
+    // Actions bar — profile-management actions promoted from the popup
+    // workspace. `data-orch-mode-scope` marks the reload button as
+    // mode-scoped for Task 11's dispatch. Save-to-character /
+    // clear-character are conditional on the active character and
+    // scope (matches popup semantics).
+    const actionsBar = `
+        <div class="luker-studio-actions-bar">
+            <div class="menu_button" data-luker-action="reload-current" data-orch-mode-scope>${escapeHtml(i18n('Reload Current'))}</div>
+            <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
+            <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
+            <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
+            <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
+            ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
+            ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
+        </div>`;
+
+    return `<div class="luker_orch_topbar">${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}${presetBars}${actionsBar}</div>`;
 }
 
 /**
@@ -1470,15 +1475,40 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
                 <label for="${s('luker_orch_review_reruns')}">${escapeHtml(i18n('Review rerun max rounds (N)'))}</label>
                 <input id="${s('luker_orch_review_reruns')}" class="text_pole" type="number" min="0" step="1" />
             </div>
-            <div data-orch-mode="agenda" style="display:none">
-                <small style="opacity:0.8">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}</small>
-                <small style="opacity:0.6">${escapeHtml(i18n('Agenda planner and per-agent limits are configured in the Agents tab.'))}</small>
-            </div>
+            <!-- Task 11 removes workspace duplicates of the mode-scoped
+                 limits below; until then the workspace copies stay and
+                 bindUi binds to the first matched id (drawer canonical
+                 vs workspace copy). Ids that already collide with
+                 workspace ids are marked inline. -->
             <div data-orch-mode="director" style="display:none">
-                <small style="opacity:0.6">${escapeHtml(i18n('Director limits are configured in the Agents tab (main agent card).'))}</small>
+                <label for="${s('luker_orch_director_max_rounds')}">${escapeHtml(i18n('Maximum tool-calling rounds'))}</label>
+                <input id="${s('luker_orch_director_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
+                <label for="${s('luker_orch_director_max_concurrent_subagents')}">${escapeHtml(i18n('Maximum concurrent sub-agents'))}</label>
+                <input id="${s('luker_orch_director_max_concurrent_subagents')}" class="text_pole" type="number" min="1" step="1" />
+                <label for="${s('luker_orch_director_max_total_subagent_runs')}">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}</label>
+                <input id="${s('luker_orch_director_max_total_subagent_runs')}" class="text_pole" type="number" min="1" step="1" />
+                <label class="checkbox_label">
+                    <input id="${s('luker_orch_director_discard_on_abort')}" type="checkbox" />
+                    <span>${escapeHtml(i18n('Discard partial message on abort'))}</span>
+                </label>
+            </div>
+            <div data-orch-mode="agenda" style="display:none">
+                <label for="${s('luker_orch_agenda_planner_max_rounds')}">${escapeHtml(i18n('Planner max rounds'))}</label>
+                <input id="${s('luker_orch_agenda_planner_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
+                <label for="${s('luker_orch_agenda_max_concurrent_agents')}">${escapeHtml(i18n('Max concurrent agents'))}</label>
+                <input id="${s('luker_orch_agenda_max_concurrent_agents')}" class="text_pole" type="number" min="1" step="1" />
+                <!-- id collides with workspace luker_orch_agenda_max_total_runs; Task 11 removes the workspace copy -->
+                <label for="${s('luker_orch_agenda_max_total_runs')}">${escapeHtml(i18n('Max total agent runs'))}</label>
+                <input id="${s('luker_orch_agenda_max_total_runs')}" class="text_pole" type="number" min="1" step="1" />
             </div>
             <div data-orch-mode="loop" style="display:none">
-                <small style="opacity:0.6">${escapeHtml(i18n('Loop limits are configured in the Agents tab (loop agent card).'))}</small>
+                <!-- id collides with workspace luker_orch_loop_max_rounds; Task 11 removes the workspace copy -->
+                <label for="${s('luker_orch_loop_max_rounds')}">${escapeHtml(i18n('Loop max rounds'))}</label>
+                <input id="${s('luker_orch_loop_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
+                <!-- Reuses existing "Loop wall-clock budget (seconds)" i18n key; Task 11 decides
+                     whether the drawer canonical field switches to raw ms and adds a new key. -->
+                <label for="${s('luker_orch_loop_wall_clock_budget')}">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
+                <input id="${s('luker_orch_loop_wall_clock_budget')}" class="text_pole" type="number" min="10" step="1" />
             </div>
             <div data-orch-mode="single" style="display:none">
                 <small style="opacity:0.6">${escapeHtml(i18n('Single-agent mode has no per-mode runtime limits; cross-mode caps below apply.'))}</small>
