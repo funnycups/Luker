@@ -3,6 +3,14 @@ import { listExtensionTools } from './register-custom-tool.js';
 import { listPresets } from './preset-library.js';
 import { uiState } from './editor-state.js';
 
+/**
+ * Scope a base DOM id with an optional prefix so drawer + popup can co-exist.
+ * Drawer callers pass '', popup callers pass 'orch-popup-'.
+ */
+export function scopeId(baseId, idPrefix = '') {
+    return idPrefix ? `${idPrefix}${baseId}` : baseId;
+}
+
 const MODULE_NAME = 'orchestrator';
 
 // Tiny duplicate of editor-state's closure-private helper. Reads the
