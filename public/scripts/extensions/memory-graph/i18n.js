@@ -453,6 +453,12 @@ export function registerLocaleData() {
         'View raw record': '查看原始记录',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '会话「${0}」无法迁移到新格式，已跳过，该会话不可用。',
+        'Recall': '召回',
+        'Extract': '提取',
+        'Graph': '图谱',
+        'Advanced': '高级',
+        'About query rewrite': '关于查询改写',
+        'Query rewrite sends the raw user query to a small LLM to rewrite it into a phrasing that vector search retrieves more relevant memory events. Costs one extra LLM call per recall.': '查询改写会把原始用户查询发送给一个小型 LLM，将其改写为更适合向量检索的表述，从而召回更相关的记忆事件。每次召回额外发起一次 LLM 请求。',
     });
     addLocaleData('zh-tw', {
         'Memory': '記憶',
@@ -885,5 +891,11 @@ export function registerLocaleData() {
         'View raw record': '檢視原始記錄',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '會話「${0}」無法遷移到新格式，已跳過，該會話不可用。',
+        'Recall': '召回',
+        'Extract': '提取',
+        'Graph': '圖譜',
+        'Advanced': '高級',
+        'About query rewrite': '關於查詢改寫',
+        'Query rewrite sends the raw user query to a small LLM to rewrite it into a phrasing that vector search retrieves more relevant memory events. Costs one extra LLM call per recall.': '查詢改寫會把原始使用者查詢傳送給一個小型 LLM，將其改寫為更適合向量檢索的表述，從而召回更相關的記憶事件。每次召回會額外發起一次 LLM 請求。',
     });
 }
