@@ -1,3 +1,5 @@
+import { renderInlineTextDiffHtml, ensureStylesheetInjected } from '../text-diff.js';
+
 /**
  * Render one tool call as a CardApp-Studio-style one-liner with optional
  * `<details>` expansion that shows friendly per-arg breakdown (not raw JSON).
@@ -116,7 +118,63 @@ function renderFieldRows(obj) {
     return rowLines.join('\n');
 }
 
+/**
+ * Detect string-edit tool args (replace/delete/insert) and render a
+ * proper red/green diff instead of dumping raw oldString/newString text.
+ * Returns HTML string if a diff pattern was found, empty string otherwise.
+ */
+function tryRenderArgsDiff(args, i18n) {
+    if (!args || typeof args !== 'object') return '';
+
+    const diffTextKeys = new Set([
+        'oldString', 'newString', 'find', 'after_text', 'insert_text', 'replaceAll', 'expected_count',
+    ]);
+
+    let beforeText = null;
+    let afterText = null;
+
+    if (typeof args.oldString === 'string' && typeof args.newString === 'string') {
+        beforeText = args.oldString;
+        afterText = args.newString;
+    } else if (typeof args.find === 'string' && !('newString' in args)) {
+        beforeText = args.find;
+        afterText = '';
+    } else if (typeof args.after_text === 'string' && typeof args.insert_text === 'string') {
+        beforeText = args.after_text;
+        afterText = args.after_text + args.insert_text;
+    } else {
+        return '';
+    }
+
+    const metaArgs = {};
+    for (const k of Object.keys(args)) {
+        if (!diffTextKeys.has(k)) metaArgs[k] = args[k];
+    }
+    const metaRows = renderFieldRows(metaArgs);
+    const metaHtml = metaRows
+        ? `<div class="luker_lib_toolcall_arg_rows">${metaRows}</div>`
+        : '';
+
+    ensureStylesheetInjected();
+    const diffBlock = renderInlineTextDiffHtml(beforeText, afterText, {
+        i18n,
+        forceOpen: false,
+        expandAffordance: true,
+    });
+
+    return [
+        `<details class="luker_lib_toolcall_details" open>`,
+        `<summary>${escapeHtml(i18n('Arguments'))}</summary>`,
+        metaHtml,
+        diffBlock,
+        `</details>`,
+    ].join('\n');
+}
+
 function renderArgsDetails(args, i18n) {
+    const diffHtml = tryRenderArgsDiff(args, i18n);
+    if (diffHtml) return diffHtml;
+
     const rows = renderFieldRows(args);
     if (!rows) return '';
     return [
