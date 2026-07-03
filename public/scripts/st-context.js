@@ -169,6 +169,7 @@ import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting
 import * as EDITS_API from './lib/edits/index.js';
 import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
 import * as LUKER_TABS_API from './extensions/luker-tabs.js';
+import * as FIELD_HELP_API from './extensions/field-help.js';
 import { skillsApi } from './skills/api.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
 import { EmbeddingService } from './embedding-service.js';
@@ -2292,6 +2293,7 @@ export function getContext() {
         iterationLibrary: ITERATION_LIBRARY_API,
         edits: EDITS_API,
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,
+        renderFieldHelpButton: FIELD_HELP_API.renderFieldHelpButton,
         skills: skillsApi,
         get onlineStatus() { return online_status; },
         get maxContext() { return Number(max_context); },
