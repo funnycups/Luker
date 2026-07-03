@@ -7,6 +7,7 @@ import android.app.Application
 import android.os.Build
 import android.os.Process
 import android.util.Log
+import android.webkit.WebView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.io.File
@@ -70,11 +71,27 @@ class LukerApplication : Application() {
                 "native",
                 "process onCreate pid=${android.os.Process.myPid()} uid=${android.os.Process.myUid()}",
             )
-            if (LukerAndroidDebugConfig.isEnabled(this)) {
+            val enabled = LukerAndroidDebugConfig.isEnabled(this)
+            if (enabled) {
                 LukerLogcatTail.setEnabled(this, true)
+                armWebViewCdp()
             }
         }.onFailure {
             Log.w(TAG, "Debug recording init failed", it)
+        }
+    }
+
+    private fun armWebViewCdp() {
+        val debugArmed = runCatching {
+            WebView.setWebContentsDebuggingEnabled(true)
+            true
+        }.getOrElse { t ->
+            LukerDebugTrail.append("native", "cdp-collector state=abort-webview-debug err=${t.message ?: t.javaClass.simpleName}")
+            false
+        }
+        if (debugArmed) {
+            LukerDebugTrail.append("native", "cdp-collector state=arm debug-enabled=true")
+            LukerCdpCollector.start(this)
         }
     }
 
