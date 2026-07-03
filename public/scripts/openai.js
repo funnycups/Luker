@@ -5145,6 +5145,17 @@ class MessageCollection {
      * @returns {Array} Array of objects with role, name, and content properties.
      */
     getChat() {
+        // Anthropic's /v1/messages rejects any property outside its message schema
+        // (role, content, name-inside-tool-blocks). Root-level `reasoning`,
+        // `reasoning_details`, and `signature` are not accepted; Extended Thinking
+        // signatures travel inside the `thinking` content block, which the server-side
+        // Claude converter reconstructs from `reasoning_blocks` alone. So for CLAUDE
+        // we emit `reasoning_blocks` only and drop the OAI/OpenRouter/Gemini-shaped
+        // sidecars. All other providers still consume them: DeepSeek/Doubao read
+        // root `reasoning` (prompt-converters.js addReasoningContentToToolCalls),
+        // Gemini 2.5/3 read root `signature` (convertGooglePrompt), OpenRouter reads
+        // `reasoning_details` (prompt-converters.js addOpenRouterSignatures).
+        const isClaude = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE;
         return this.collection.reduce((acc, message) => {
             if (message.content || message.tool_calls) {
                 acc.push({
@@ -5153,10 +5164,10 @@ class MessageCollection {
                     ...(message.name && { name: message.name }),
                     ...(message.tool_calls && { tool_calls: message.tool_calls }),
                     ...(message.role === 'tool' && { tool_call_id: message.identifier }),
-                    ...(message.signature && { signature: message.signature }),
-                    ...(message.reasoning && { reasoning: message.reasoning }),
+                    ...(!isClaude && message.signature && { signature: message.signature }),
+                    ...(!isClaude && message.reasoning && { reasoning: message.reasoning }),
                     ...(Array.isArray(message.reasoning_blocks) && message.reasoning_blocks.length > 0 ? { reasoning_blocks: message.reasoning_blocks } : {}),
-                    ...(Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0 ? { reasoning_details: message.reasoning_details } : {}),
+                    ...(!isClaude && Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0 ? { reasoning_details: message.reasoning_details } : {}),
                 });
             }
             return acc;
