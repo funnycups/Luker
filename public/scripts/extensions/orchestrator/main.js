@@ -13,6 +13,7 @@ const world_info_position = __ctx.constants.wiPosition;
 import {
     buildOrchestrationEditorPopupPanelHtml,
     buildOrchestratorSettingsHtml,
+    injectWorkspaceIntoTabHost,
     renderInheritOrOverridePanel,
     renderSkillChipsPlaceholder,
 } from './ui-templates.js';
@@ -6400,6 +6401,22 @@ function bindUi() {
     root.find('#luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
     root.find('#luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
     refreshOpenAIPresetSelectors(root, context, settings);
+    // Populate the current mode's Agents + Tools & Skills tab hosts with
+    // the actual workspace HTML. Task 9's `buildOrchestratorSettingsHtml`
+    // emits empty `[data-orch-tab-host]` slots; the injector splits the
+    // legacy 2-column workspace into an agents part and a tools part
+    // and drops each half into its host.
+    //
+    // Single mode is skipped — its Agents-tab content is emitted at
+    // build time (two static textareas) and it has no shared tools.
+    //
+    // TODO Task 11: hook mode-change / profile-switch to re-inject; for
+    // now the first-paint call here covers the initial mode, and popup
+    // refresh handles the popup path via `refreshOrchestrationEditorPopup`.
+    const currentMode = getExecutionMode(settings);
+    if (currentMode && currentMode !== ORCH_EXECUTION_MODE_SINGLE) {
+        injectWorkspaceIntoTabHost(root, currentMode, getOrchestratorUiTemplateDeps(), context, settings, '');
+    }
     renderDynamicPanels(root, context);
 
     root.off('.lukerOrch');

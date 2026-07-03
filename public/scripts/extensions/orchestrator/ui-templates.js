@@ -559,6 +559,16 @@ function renderAgendaAgentBoard(deps, scope, editor) {
 </div>`).join('');
 }
 
+/**
+ * Split-return form used by the tab-host injector. Returns an
+ * `{agentsHtml, toolsHtml}` pair: `agentsHtml` = the per-agent config
+ * (planner card + planner skills + agenda agent board + add row), which
+ * lives in the Agents tab; `toolsHtml` = mode-level default tools, custom
+ * tools, and mode-level skills, which lives in the Tools & Skills tab.
+ *
+ * Kept in the same file as the legacy 2-column `renderAgendaWorkspace`
+ * so the tab-host injector can call it directly.
+ */
 export function renderAgendaWorkspace(deps, scope, editor, title = '') {
     const {
         DEFAULT_AGENDA_PLANNER_PROMPT,
@@ -575,112 +585,116 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
     ensureAgendaEditorIntegrity(editor);
     const planner = createAgendaPlannerDraft(editor?.planner);
     const context = getContext();
-    return `
+    const agentsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title || i18n('Agenda Orchestration'))}</div>
     ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'agenda', safeScope))}
-    <div class="luker-studio-workspace-grid">
-        <div class="luker-studio-workspace-col">
-            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Planner Prompt'))}</div>
-            <label for="luker_orch_agenda_planner_api_preset">${escapeHtml(i18n('Planner API preset (Connection profile, empty = global orchestration API preset)'))}</label>
-            <select id="luker_orch_agenda_planner_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(planner?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
-            <label for="luker_orch_agenda_planner_prompt_preset">${escapeHtml(i18n('Planner preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'non-director', targetSelectId: 'luker_orch_agenda_planner_prompt_preset' })}</label>
-            <select id="luker_orch_agenda_planner_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, planner?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
-            <label for="luker_orch_agenda_planner_system_prompt">${escapeHtml(i18n('Planner system prompt'))}</label>
-            <textarea id="luker_orch_agenda_planner_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="5">${escapeHtml(String(planner?.systemPrompt || DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT))}</textarea>
-            <label for="luker_orch_agenda_planner_prompt">${escapeHtml(i18n('Planner Prompt'))}</label>
-            <textarea id="luker_orch_agenda_planner_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="16">${escapeHtml(String(planner?.userPromptTemplate || DEFAULT_AGENDA_PLANNER_PROMPT))}</textarea>
-            <label for="luker_orch_agenda_final_agent">${escapeHtml(i18n('Final Agent'))}</label>
-            <select id="luker_orch_agenda_final_agent" data-scope="${safeScope}" class="text_pole">${renderAgendaAgentSelectOptions(deps, editor, editor?.finalAgentId)}</select>
-            <label for="luker_orch_agenda_planner_rounds">${escapeHtml(i18n('Planner max rounds'))}</label>
-            <input id="luker_orch_agenda_planner_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.plannerMaxRounds || 6))}" />
-            <label for="luker_orch_agenda_max_concurrent">${escapeHtml(i18n('Max concurrent agents'))}</label>
-            <input id="luker_orch_agenda_max_concurrent" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxConcurrentAgents || 3))}" />
-            <label for="luker_orch_agenda_max_total_runs">${escapeHtml(i18n('Max total agent runs'))}</label>
-            <input id="luker_orch_agenda_max_total_runs" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxTotalRuns || 24))}" />
-            <details class="luker_orch_skills_section">
-                <summary>${escapeHtml(i18n('Planner skills'))}</summary>
-                ${renderSkillChipsPlaceholder(deps, safeScope, {
+    <div class="luker-studio-workspace-col">
+        <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Planner Prompt'))}</div>
+        <label for="luker_orch_agenda_planner_api_preset">${escapeHtml(i18n('Planner API preset (Connection profile, empty = global orchestration API preset)'))}</label>
+        <select id="luker_orch_agenda_planner_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(planner?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
+        <label for="luker_orch_agenda_planner_prompt_preset">${escapeHtml(i18n('Planner preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'non-director', targetSelectId: 'luker_orch_agenda_planner_prompt_preset' })}</label>
+        <select id="luker_orch_agenda_planner_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, planner?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
+        <label for="luker_orch_agenda_planner_system_prompt">${escapeHtml(i18n('Planner system prompt'))}</label>
+        <textarea id="luker_orch_agenda_planner_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="5">${escapeHtml(String(planner?.systemPrompt || DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT))}</textarea>
+        <label for="luker_orch_agenda_planner_prompt">${escapeHtml(i18n('Planner Prompt'))}</label>
+        <textarea id="luker_orch_agenda_planner_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="16">${escapeHtml(String(planner?.userPromptTemplate || DEFAULT_AGENDA_PLANNER_PROMPT))}</textarea>
+        <label for="luker_orch_agenda_final_agent">${escapeHtml(i18n('Final Agent'))}</label>
+        <select id="luker_orch_agenda_final_agent" data-scope="${safeScope}" class="text_pole">${renderAgendaAgentSelectOptions(deps, editor, editor?.finalAgentId)}</select>
+        <label for="luker_orch_agenda_planner_rounds">${escapeHtml(i18n('Planner max rounds'))}</label>
+        <input id="luker_orch_agenda_planner_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.plannerMaxRounds || 6))}" />
+        <label for="luker_orch_agenda_max_concurrent">${escapeHtml(i18n('Max concurrent agents'))}</label>
+        <input id="luker_orch_agenda_max_concurrent" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxConcurrentAgents || 3))}" />
+        <label for="luker_orch_agenda_max_total_runs">${escapeHtml(i18n('Max total agent runs'))}</label>
+        <input id="luker_orch_agenda_max_total_runs" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.limits?.maxTotalRuns || 24))}" />
+        <details class="luker_orch_skills_section">
+            <summary>${escapeHtml(i18n('Planner skills'))}</summary>
+            ${renderSkillChipsPlaceholder(deps, safeScope, {
         mode: 'agenda',
         level: 'agent',
         agentRef: 'planner',
     }, i18n('Skills visible to the planner. + inherits mode default.'))}
-            </details>
-        </div>
-        <div class="luker-studio-workspace-col">
-            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agenda Agents'))}</div>
-            <details class="luker_orch_tools_section">
-                <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
-                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. Leave empty to keep tools off for all agents.'))}</div>
-                ${editor?.defaultTools
-        ? `${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool', {}, { profileCustomTools: editor?.customTools || null })}
-                <div class="luker-studio-actions-row">
-                    <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
-                    <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
-                </div>`
-        : `<div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
-            </details>
-            <div>${renderAgendaAgentBoard(deps, safeScope, editor)}</div>
-            <div class="luker-studio-add-row">
-                <input class="text_pole" data-luker-agenda-new-agent="${safeScope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />
-                <div class="menu_button menu_button_small" data-luker-action="agenda-agent-add" data-scope="${safeScope}">${escapeHtml(i18n('Add Preset'))}</div>
-            </div>
-            ${renderCustomToolsSection(deps, safeScope, 'agenda', editor?.customTools || [], (editor?.defaultTools && editor.defaultTools.custom) || {})}
-            <details class="luker_orch_skills_section" open>
-                <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
-                ${renderSkillChipsPlaceholder(deps, safeScope, {
-        mode: 'agenda',
-        level: 'mode',
-    }, i18n('These visible/deny chips form the baseline every agent sees unless its own chips replace them.'))}
-            </details>
+        </details>
+    </div>
+    <div class="luker-studio-workspace-col">
+        <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agenda Agents'))}</div>
+        <div>${renderAgendaAgentBoard(deps, safeScope, editor)}</div>
+        <div class="luker-studio-add-row">
+            <input class="text_pole" data-luker-agenda-new-agent="${safeScope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />
+            <div class="menu_button menu_button_small" data-luker-action="agenda-agent-add" data-scope="${safeScope}">${escapeHtml(i18n('Add Preset'))}</div>
         </div>
     </div>
 </div>`;
+    const toolsHtml = `
+<div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
+    <details class="luker_orch_tools_section">
+        <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
+        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. Leave empty to keep tools off for all agents.'))}</div>
+        ${editor?.defaultTools
+        ? `${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool', {}, { profileCustomTools: editor?.customTools || null })}
+        <div class="luker-studio-actions-row">
+            <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
+            <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
+        </div>`
+        : `<div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
+    </details>
+    ${renderCustomToolsSection(deps, safeScope, 'agenda', editor?.customTools || [], (editor?.defaultTools && editor.defaultTools.custom) || {})}
+    <details class="luker_orch_skills_section" open>
+        <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
+        ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'agenda',
+        level: 'mode',
+    }, i18n('These visible/deny chips form the baseline every agent sees unless its own chips replace them.'))}
+    </details>
+</div>`;
+    return { agentsHtml, toolsHtml };
 }
 
 export function renderEditorWorkspace(deps, scope, editor, title) {
     const { escapeHtml, i18n, renderPresetBoard, renderWorkflowBoard } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
     const specDefaultTools = editor?.spec?.defaultTools || null;
-    return `
+    const agentsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${scope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title)}</div>
     ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'spec', safeScope))}
-    <div class="luker-studio-workspace-grid">
-        <div class="luker-studio-workspace-col">
-            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Workflow'))}</div>
-            <details class="luker_orch_tools_section">
-                <summary>${escapeHtml(i18n('Default tools for all nodes'))}</summary>
-                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each node can override these defaults below. Leave empty to keep tools off for all nodes.'))}</div>
-                ${specDefaultTools
-        ? `${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool', {}, { profileCustomTools: editor?.spec?.customTools || null })}
-                <div class="luker-studio-actions-row">
-                    <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
-                    <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
-                </div>`
-        : `<div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
-            </details>
-            <div>${renderWorkflowBoard(scope, editor)}</div>
-            <div class="menu_button menu_button_small" data-luker-action="stage-add" data-scope="${scope}">${escapeHtml(i18n('Add Stage'))}</div>
-        </div>
-        <div class="luker-studio-workspace-col">
-            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agent Presets'))}</div>
-            <div>${renderPresetBoard(scope, editor)}</div>
-            <div class="luker-studio-add-row">
-                <input class="text_pole" data-luker-new-preset="${scope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />
-                <div class="menu_button menu_button_small" data-luker-action="preset-add" data-scope="${scope}">${escapeHtml(i18n('Add Preset'))}</div>
-            </div>
-            ${renderCustomToolsSection(deps, safeScope, 'spec', editor?.spec?.customTools || [], (editor?.spec?.defaultTools && editor.spec.defaultTools.custom) || {})}
-            <details class="luker_orch_skills_section" open>
-                <summary>${escapeHtml(i18n('Mode-level skills (baseline for every node)'))}</summary>
-                ${renderSkillChipsPlaceholder(deps, safeScope, {
-        mode: 'spec',
-        level: 'mode',
-    }, i18n('These visible/deny chips form the baseline every spec node sees unless its own chips replace them.'))}
-            </details>
+    <div class="luker-studio-workspace-col">
+        <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Workflow'))}</div>
+        <div>${renderWorkflowBoard(scope, editor)}</div>
+        <div class="menu_button menu_button_small" data-luker-action="stage-add" data-scope="${scope}">${escapeHtml(i18n('Add Stage'))}</div>
+    </div>
+    <div class="luker-studio-workspace-col">
+        <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agent Presets'))}</div>
+        <div>${renderPresetBoard(scope, editor)}</div>
+        <div class="luker-studio-add-row">
+            <input class="text_pole" data-luker-new-preset="${scope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />
+            <div class="menu_button menu_button_small" data-luker-action="preset-add" data-scope="${scope}">${escapeHtml(i18n('Add Preset'))}</div>
         </div>
     </div>
 </div>`;
+    const toolsHtml = `
+<div class="luker-studio-workspace" data-luker-scope-root="${scope}">
+    <details class="luker_orch_tools_section">
+        <summary>${escapeHtml(i18n('Default tools for all nodes'))}</summary>
+        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each node can override these defaults below. Leave empty to keep tools off for all nodes.'))}</div>
+        ${specDefaultTools
+        ? `${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool', {}, { profileCustomTools: editor?.spec?.customTools || null })}
+        <div class="luker-studio-actions-row">
+            <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
+            <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
+        </div>`
+        : `<div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
+    </details>
+    ${renderCustomToolsSection(deps, safeScope, 'spec', editor?.spec?.customTools || [], (editor?.spec?.defaultTools && editor.spec.defaultTools.custom) || {})}
+    <details class="luker_orch_skills_section" open>
+        <summary>${escapeHtml(i18n('Mode-level skills (baseline for every node)'))}</summary>
+        ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'spec',
+        level: 'mode',
+    }, i18n('These visible/deny chips form the baseline every spec node sees unless its own chips replace them.'))}
+    </details>
+</div>`;
+    return { agentsHtml, toolsHtml };
 }
 
 /**
@@ -725,59 +739,59 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
             ${escapeHtml(label)}
         </label>`;
     };
-    return `
+    const agentsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
     <div class="luker-studio-workspace-title">${escapeHtml(title || i18n('Loop Orchestration'))}</div>
     ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'loop', safeScope))}
-    <div class="luker-studio-workspace-grid">
-        <div class="luker-studio-workspace-col">
-            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop Agent'))}</div>
-            <label for="luker_orch_loop_api_preset">${escapeHtml(i18n('Loop API preset (Connection profile, empty = global orchestration API preset)'))}</label>
-            <select id="luker_orch_loop_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(editor?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
-            <label for="luker_orch_loop_prompt_preset">${escapeHtml(i18n('Loop preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'non-director', targetSelectId: 'luker_orch_loop_prompt_preset' })}</label>
-            <select id="luker_orch_loop_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, editor?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
-            <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
-            <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
-            <label for="luker_orch_loop_max_rounds">${escapeHtml(i18n('Loop max rounds'))}</label>
-            <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.max_rounds || 40))}" />
-            <label for="luker_orch_loop_wall_clock">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
-            <input id="luker_orch_loop_wall_clock" data-scope="${safeScope}" class="text_pole" type="number" min="10" step="1" value="${escapeHtml(String(wallClockSeconds))}" />
-        </div>
-        <div class="luker-studio-workspace-col">
-            <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop tools'))}</div>
-            <fieldset class="luker_orch_loop_tools_group">
-                <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
-                ${checkbox('note.open', note.open, 'note_open')}
-                ${checkbox('note.close', note.close, 'note_close')}
-            </fieldset>
-            <fieldset class="luker_orch_loop_tools_group">
-                <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>
-                ${checkbox('chat.read_range', chat.read_range, 'chat_read_range')}
-                ${checkbox('chat.search', chat.search, 'chat_search')}
-            </fieldset>
-            <fieldset class="luker_orch_loop_tools_group">
-                <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
-                ${checkbox('lorebook.world_book_list', lorebook.world_book_list, 'world_book_list')}
-                ${checkbox('lorebook.list', lorebook.list, 'lorebook_list')}
-                ${checkbox('lorebook.search', lorebook.search, 'lorebook_search')}
-                ${checkbox('lorebook.get', lorebook.get, 'lorebook_get')}
-                ${checkbox('lorebook.force_activate', lorebook.force_activate, 'lorebook_force_activate')}
-            </fieldset>
-            <fieldset class="luker_orch_loop_tools_group">
-                <legend>${escapeHtml(i18n('terminator'))}</legend>
-                ${checkbox('finalize', true, `finalize  ${i18n('(forced on)')}`, true, true)}
-            </fieldset>
-            ${renderCustomToolsSection(deps, safeScope, 'loop', editor?.customTools || [], (editor?.tools && editor.tools.custom) || {})}
-            <details class="luker_orch_skills_section">
-                <summary>${escapeHtml(i18n('Skills'))}</summary>
-                ${renderSkillChipsPlaceholder(deps, safeScope, {
+    <div class="luker-studio-workspace-col">
+        <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop Agent'))}</div>
+        <label for="luker_orch_loop_api_preset">${escapeHtml(i18n('Loop API preset (Connection profile, empty = global orchestration API preset)'))}</label>
+        <select id="luker_orch_loop_api_preset" data-scope="${safeScope}" class="text_pole">${renderConnectionProfileOptions(editor?.apiPresetName, i18n('(Global orchestration API preset)'))}</select>
+        <label for="luker_orch_loop_prompt_preset">${escapeHtml(i18n('Loop preset (params + prompt, empty = global orchestration preset)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'non-director', targetSelectId: 'luker_orch_loop_prompt_preset' })}</label>
+        <select id="luker_orch_loop_prompt_preset" data-scope="${safeScope}" class="text_pole">${renderOpenAIPresetOptions(context, editor?.promptPresetName, i18n('(Global orchestration prompt preset)'))}</select>
+        <label for="luker_orch_loop_system_prompt">${escapeHtml(i18n('Loop system prompt'))}</label>
+        <textarea id="luker_orch_loop_system_prompt" data-scope="${safeScope}" class="text_pole textarea_compact" rows="14">${escapeHtml(String(editor?.system_prompt || ''))}</textarea>
+        <label for="luker_orch_loop_max_rounds">${escapeHtml(i18n('Loop max rounds'))}</label>
+        <input id="luker_orch_loop_max_rounds" data-scope="${safeScope}" class="text_pole" type="number" min="1" step="1" value="${escapeHtml(String(editor?.max_rounds || 40))}" />
+        <label for="luker_orch_loop_wall_clock">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
+        <input id="luker_orch_loop_wall_clock" data-scope="${safeScope}" class="text_pole" type="number" min="10" step="1" value="${escapeHtml(String(wallClockSeconds))}" />
+    </div>
+</div>`;
+    const toolsHtml = `
+<div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
+    <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Loop tools'))}</div>
+    <fieldset class="luker_orch_loop_tools_group">
+        <legend>${escapeHtml(i18n('note (persistent notes)'))}</legend>
+        ${checkbox('note.open', note.open, 'note_open')}
+        ${checkbox('note.close', note.close, 'note_close')}
+    </fieldset>
+    <fieldset class="luker_orch_loop_tools_group">
+        <legend>${escapeHtml(i18n('chat (in-chat history)'))}</legend>
+        ${checkbox('chat.read_range', chat.read_range, 'chat_read_range')}
+        ${checkbox('chat.search', chat.search, 'chat_search')}
+    </fieldset>
+    <fieldset class="luker_orch_loop_tools_group">
+        <legend>${escapeHtml(i18n('lorebook (world info)'))}</legend>
+        ${checkbox('lorebook.world_book_list', lorebook.world_book_list, 'world_book_list')}
+        ${checkbox('lorebook.list', lorebook.list, 'lorebook_list')}
+        ${checkbox('lorebook.search', lorebook.search, 'lorebook_search')}
+        ${checkbox('lorebook.get', lorebook.get, 'lorebook_get')}
+        ${checkbox('lorebook.force_activate', lorebook.force_activate, 'lorebook_force_activate')}
+    </fieldset>
+    <fieldset class="luker_orch_loop_tools_group">
+        <legend>${escapeHtml(i18n('terminator'))}</legend>
+        ${checkbox('finalize', true, `finalize  ${i18n('(forced on)')}`, true, true)}
+    </fieldset>
+    ${renderCustomToolsSection(deps, safeScope, 'loop', editor?.customTools || [], (editor?.tools && editor.tools.custom) || {})}
+    <details class="luker_orch_skills_section">
+        <summary>${escapeHtml(i18n('Skills'))}</summary>
+        ${renderSkillChipsPlaceholder(deps, safeScope, {
         mode: 'loop',
         level: 'mode',
     }, i18n('Skills visible to the loop agent.'))}
-            </details>
-        </div>
-    </div>
+    </details>
 </div>`;
+    return { agentsHtml, toolsHtml };
 }
 
 /**
@@ -916,32 +930,31 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
     const subAgentRows = subAgents.length === 0
         ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No sub-agents yet.'))}</div>`
         : subAgents.map((subagent, index) => renderDirectorSubAgentRow(deps, safeScope, subagent, index, directorDefaultTools, profile)).join('');
-    return `
+    const agentsHtml = `
 <div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}" data-orch-mode-block="director">
     <div class="luker-studio-workspace-title" data-i18n="Director Orchestration">${escapeHtml(title || i18n('Director Orchestration'))}</div>
     ${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'director', safeScope))}
-    <div class="luker-studio-workspace-grid">
-        <div class="luker-studio-workspace-col">
-            <h4 data-i18n="Main agent">${escapeHtml(i18n('Main agent'))}</h4>
-            <label>
-                <span data-i18n="API preset (Connection profile)">${escapeHtml(i18n('API preset (Connection profile)'))}</span>
-                <select class="text_pole" data-orch-director-field="mainAgent.apiPresetName" data-scope="${safeScope}">${renderConnectionProfileOptions(String(mainAgent.apiPresetName || ''), i18n('(Global orchestration API preset)'))}</select>
-            </label>
-            <label>
-                <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>${renderPresetHelpButton({ kind: 'agent', agentMode: 'director' })}
-                <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''), i18n('(Global orchestration prompt preset)'))}</select>
-                <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
-            </label>
-            <label>
-                <span data-i18n="Main system prompt">${escapeHtml(i18n('Main system prompt'))}</span>
-                <textarea class="text_pole textarea_compact" rows="6" data-orch-director-field="mainAgent.systemPrompt" data-scope="${safeScope}">${escapeHtml(String(mainAgent.systemPrompt || ''))}</textarea>
-            </label>
-            <div class="flex-container">
-                <div class="menu_button menu_button_small" data-luker-action="director-reset-main-prompt" data-scope="${safeScope}" data-i18n="Reset to default">${escapeHtml(i18n('Reset to default'))}</div>
-            </div>
-            <details class="luker_orch_tools_section">
-                <summary>${escapeHtml(i18n('Main agent tools'))}</summary>
-                ${renderInheritOrOverridePanel(deps, safeScope, mainAgentTools, {
+    <div class="luker-studio-workspace-col">
+        <h4 data-i18n="Main agent">${escapeHtml(i18n('Main agent'))}</h4>
+        <label>
+            <span data-i18n="API preset (Connection profile)">${escapeHtml(i18n('API preset (Connection profile)'))}</span>
+            <select class="text_pole" data-orch-director-field="mainAgent.apiPresetName" data-scope="${safeScope}">${renderConnectionProfileOptions(String(mainAgent.apiPresetName || ''), i18n('(Global orchestration API preset)'))}</select>
+        </label>
+        <label>
+            <span data-i18n="Prompt preset">${escapeHtml(i18n('Prompt preset'))}</span>${renderPresetHelpButton({ kind: 'agent', agentMode: 'director' })}
+            <select class="text_pole" data-orch-director-field="mainAgent.promptPresetName" data-scope="${safeScope}">${renderOpenAIPresetOptions(context, String(mainAgent.promptPresetName || ''), i18n('(Global orchestration prompt preset)'))}</select>
+            <div class="director-preset-help" data-i18n="director_preset_help_pure_instruction">${escapeHtml(i18n('Pick a pure-instruction preset. Typical RP presets that prescribe an output format (forced CoT, mandatory schema blocks) will block the agent\'s tool calls.'))}</div>
+        </label>
+        <label>
+            <span data-i18n="Main system prompt">${escapeHtml(i18n('Main system prompt'))}</span>
+            <textarea class="text_pole textarea_compact" rows="6" data-orch-director-field="mainAgent.systemPrompt" data-scope="${safeScope}">${escapeHtml(String(mainAgent.systemPrompt || ''))}</textarea>
+        </label>
+        <div class="flex-container">
+            <div class="menu_button menu_button_small" data-luker-action="director-reset-main-prompt" data-scope="${safeScope}" data-i18n="Reset to default">${escapeHtml(i18n('Reset to default'))}</div>
+        </div>
+        <details class="luker_orch_tools_section">
+            <summary>${escapeHtml(i18n('Main agent tools'))}</summary>
+            ${renderInheritOrOverridePanel(deps, safeScope, mainAgentTools, {
         dataAttrName: 'luker-director-mainagent-tool',
         overrideAction: 'director-mainagent-tools-override',
         resetAction: 'director-mainagent-tools-reset',
@@ -950,61 +963,64 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         includeCollab: true,
         profileCustomTools: profile?.customTools || null,
     })}
-            </details>
-            <details class="luker_orch_skills_section">
-                <summary>${escapeHtml(i18n('Main agent skills'))}</summary>
-                ${renderSkillChipsPlaceholder(deps, safeScope, {
+        </details>
+        <details class="luker_orch_skills_section">
+            <summary>${escapeHtml(i18n('Main agent skills'))}</summary>
+            ${renderSkillChipsPlaceholder(deps, safeScope, {
         mode: 'director',
         level: 'agent',
         agentRef: 'main',
     }, i18n('Skills visible to the main agent. + inherits mode default.'))}
-            </details>
+        </details>
 
-            <h4 data-i18n="Limits">${escapeHtml(i18n('Limits'))}</h4>
-            <label>
-                <span data-i18n="Maximum tool-calling rounds">${escapeHtml(i18n('Maximum tool-calling rounds'))}</span>
-                <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxRounds" data-scope="${safeScope}" value="${escapeHtml(String(maxRounds))}" />
-            </label>
-            <label>
-                <span data-i18n="Maximum concurrent sub-agents">${escapeHtml(i18n('Maximum concurrent sub-agents'))}</span>
-                <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxConcurrentSubagents" data-scope="${safeScope}" value="${escapeHtml(String(maxConcurrentSubagents))}" />
-            </label>
-            <label>
-                <span data-i18n="Maximum total sub-agent runs per turn">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}</span>
-                <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxTotalSubagentRuns" data-scope="${safeScope}" value="${escapeHtml(String(maxTotalSubagentRuns))}" />
-            </label>
+        <h4 data-i18n="Limits">${escapeHtml(i18n('Limits'))}</h4>
+        <label>
+            <span data-i18n="Maximum tool-calling rounds">${escapeHtml(i18n('Maximum tool-calling rounds'))}</span>
+            <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxRounds" data-scope="${safeScope}" value="${escapeHtml(String(maxRounds))}" />
+        </label>
+        <label>
+            <span data-i18n="Maximum concurrent sub-agents">${escapeHtml(i18n('Maximum concurrent sub-agents'))}</span>
+            <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxConcurrentSubagents" data-scope="${safeScope}" value="${escapeHtml(String(maxConcurrentSubagents))}" />
+        </label>
+        <label>
+            <span data-i18n="Maximum total sub-agent runs per turn">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}</span>
+            <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxTotalSubagentRuns" data-scope="${safeScope}" value="${escapeHtml(String(maxTotalSubagentRuns))}" />
+        </label>
 
-            <label class="checkbox_label">
-                <input type="checkbox" data-orch-director-field="discardOnAbort" data-scope="${safeScope}" ${discardOnAbort ? 'checked' : ''} />
-                <span data-i18n="Discard partial message on abort">${escapeHtml(i18n('Discard partial message on abort'))}</span>
-            </label>
-        </div>
-        <div class="luker-studio-workspace-col">
-            <h4 data-i18n="Sub-agents">${escapeHtml(i18n('Sub-agents'))}</h4>
-            <details class="luker_orch_tools_section">
-                <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
-                <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. The main agent inherits unless it has its own override.'))}</div>
-                ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true, profileCustomTools: profile?.customTools || null })}
-                <div class="luker-studio-actions-row">
-                    <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
-                    <div class="menu_button menu_button_small" data-luker-action="director-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
-                </div>
-            </details>
-            <details class="luker_orch_skills_section" open>
-                <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
-                ${renderSkillChipsPlaceholder(deps, safeScope, {
-        mode: 'director',
-        level: 'mode',
-    }, i18n('These visible/deny chips form the baseline every agent sees unless its own chips replace them. Per-agent chips can start with [+ inherit mode default] to extend rather than replace.'))}
-            </details>
-            <div data-orch-subagent-list>${subAgentRows}</div>
-            <div class="luker-studio-add-row">
-                <button class="menu_button menu_button_small" type="button" data-orch-add-subagent="1" data-scope="${safeScope}" data-i18n="Add sub-agent">${escapeHtml(i18n('Add sub-agent'))}</button>
-            </div>
-            ${renderCustomToolsSection(deps, safeScope, 'director', profile?.customTools || [], (profile?.tools && profile.tools.custom) || {})}
+        <label class="checkbox_label">
+            <input type="checkbox" data-orch-director-field="discardOnAbort" data-scope="${safeScope}" ${discardOnAbort ? 'checked' : ''} />
+            <span data-i18n="Discard partial message on abort">${escapeHtml(i18n('Discard partial message on abort'))}</span>
+        </label>
+    </div>
+    <div class="luker-studio-workspace-col">
+        <h4 data-i18n="Sub-agents">${escapeHtml(i18n('Sub-agents'))}</h4>
+        <div data-orch-subagent-list>${subAgentRows}</div>
+        <div class="luker-studio-add-row">
+            <button class="menu_button menu_button_small" type="button" data-orch-add-subagent="1" data-scope="${safeScope}" data-i18n="Add sub-agent">${escapeHtml(i18n('Add sub-agent'))}</button>
         </div>
     </div>
 </div>`;
+    const toolsHtml = `
+<div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
+    <details class="luker_orch_tools_section">
+        <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
+        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. The main agent inherits unless it has its own override.'))}</div>
+        ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true, profileCustomTools: profile?.customTools || null })}
+        <div class="luker-studio-actions-row">
+            <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
+            <div class="menu_button menu_button_small" data-luker-action="director-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
+        </div>
+    </details>
+    ${renderCustomToolsSection(deps, safeScope, 'director', profile?.customTools || [], (profile?.tools && profile.tools.custom) || {})}
+    <details class="luker_orch_skills_section" open>
+        <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
+        ${renderSkillChipsPlaceholder(deps, safeScope, {
+        mode: 'director',
+        level: 'mode',
+    }, i18n('These visible/deny chips form the baseline every agent sees unless its own chips replace them. Per-agent chips can start with [+ inherit mode default] to extend rather than replace.'))}
+    </details>
+</div>`;
+    return { agentsHtml, toolsHtml };
 }
 
 export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) {
@@ -1012,9 +1028,9 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         ORCH_EXECUTION_MODE_AGENDA,
         ORCH_EXECUTION_MODE_DIRECTOR,
         ORCH_EXECUTION_MODE_LOOP,
-        createDefaultDirectorProfile,
+        ORCH_EXECUTION_MODE_SINGLE,
+        ORCH_EXECUTION_MODE_SPEC,
         escapeHtml,
-        getAgendaEditorByScope,
         getCharacterAgendaOverrideByAvatar,
         getCharacterDirectorOverrideByAvatar,
         getCharacterDisplayNameByAvatar,
@@ -1022,8 +1038,168 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         getCharacterOverrideByAvatar,
         getCurrentAvatar,
         getDisplayedScope,
+        getExecutionMode,
+        getPopupEditingLabel,
+        hasCharacterAgendaOverride,
+        hasCharacterDirectorOverride,
+        hasCharacterLoopOverride,
+        hasCharacterSpecOverride,
+        i18n,
+        syncCharacterEditorWithActiveAvatar,
+    } = deps;
+
+    const IDPREFIX = 'orch-popup-';
+    const s = baseId => scopeId(baseId, IDPREFIX);
+
+    // Compute per-render context ONCE (was duplicated across four branches
+    // in the pre-Task-10a builder). The topbar chip, actions bar
+    // visibility, and editing-label all depend on the (scope, avatar,
+    // active-mode) triple, not on which workspace renders.
+    syncCharacterEditorWithActiveAvatar(context);
+    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+    const hasActiveCharacter = Boolean(activeAvatar);
+    const scope = getDisplayedScope(context, settings);
+    const isCharacterScope = scope === 'character';
+    const currentMode = settings && getExecutionMode ? getExecutionMode(settings) : '';
+
+    // Resolve the per-mode "Editing:" label + execution-mode chip label
+    // by mode. Falls through to spec-defaults so the (rare) case where
+    // getExecutionMode returns an unknown value still renders.
+    let editingLabel;
+    let modeChipLabel;
+    if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+        const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
+        const hasDirectorCharacterOverride = hasCharacterDirectorOverride(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasDirectorCharacterOverride, Boolean(directorOverride?.enabled));
+        modeChipLabel = i18n('Director (multi-agent)');
+    } else if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
+        const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
+        const hasLoopCharacterOverride = hasCharacterLoopOverride(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasLoopCharacterOverride, Boolean(loopOverride?.enabled));
+        modeChipLabel = i18n('Loop (single-agent loop)');
+    } else if (currentMode === ORCH_EXECUTION_MODE_AGENDA) {
+        const agendaOverride = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
+        const hasAgendaCharacterOverride = hasCharacterAgendaOverride(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasAgendaCharacterOverride, Boolean(agendaOverride?.enabled));
+        modeChipLabel = i18n('Agenda planner');
+    } else if (currentMode === ORCH_EXECUTION_MODE_SINGLE) {
+        editingLabel = getPopupEditingLabel(isCharacterScope, false, false);
+        modeChipLabel = i18n('Single agent');
+    } else {
+        const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
+        const hasSpecCharacterOverride = hasCharacterSpecOverride(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasSpecCharacterOverride, Boolean(override?.enabled));
+        modeChipLabel = i18n('Spec workflow');
+    }
+
+    // Actions bar: spec + agenda modes get the two Copy buttons; other
+    // modes hide them via `data-orch-mode` wrappers so the mode-toggle
+    // logic in Task 11 can flip visibility without rebuilding.
+    //
+    // Task 11 (mode-toggle rewrite) will unify initial-visibility with
+    // dynamic toggling; until then this builder sets `display:none` on
+    // wrappers whose mode is not the current one, so first paint matches
+    // the effective mode.
+    const modeStyle = wrapperMode => (currentMode === wrapperMode ? '' : ' style="display:none"');
+    const modeStyleAnyOf = allowedModes => (allowedModes.includes(currentMode) ? '' : ' style="display:none"');
+    const copyButtons = `
+        <span data-orch-mode="spec"${modeStyle(ORCH_EXECUTION_MODE_SPEC)}>
+            <div class="menu_button" data-luker-action="agenda-copy-from-spec" data-scope="${scope}">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
+            <div class="menu_button" data-luker-action="spec-copy-from-agenda" data-scope="${scope}">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
+        </span>
+        <span data-orch-mode="agenda"${modeStyle(ORCH_EXECUTION_MODE_AGENDA)}>
+            <div class="menu_button" data-luker-action="agenda-copy-from-spec" data-scope="${scope}">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
+            <div class="menu_button" data-luker-action="spec-copy-from-agenda" data-scope="${scope}">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
+        </span>`;
+
+    // View Last Run + Show Run Panel hidden in director mode (director
+    // does not produce a capsule / prior-run history entry). Wrapped in
+    // a `data-orch-mode` span so mode-toggle logic flips visibility.
+    const viewLastRunButton = `
+        <span data-orch-mode="spec agenda loop single"${modeStyleAnyOf([
+        ORCH_EXECUTION_MODE_SPEC, ORCH_EXECUTION_MODE_AGENDA, ORCH_EXECUTION_MODE_LOOP, ORCH_EXECUTION_MODE_SINGLE,
+    ])}>
+            <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+        </span>`;
+
+    const tabsHtml = renderLukerTabs({
+        id: s('luker_orch_tabs'),
+        scope: 'orchestrator-popup',
+        moduleName: 'orchestrator',
+        defaultTab: 'agents',
+        tabs: [
+            { key: 'agents',       label: i18n('Agents'),         contentHtml: buildAgentsTabHtml(deps, IDPREFIX) },
+            { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: buildToolsSkillsTabHtml(deps, IDPREFIX) },
+            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, IDPREFIX) },
+        ],
+    });
+
+    return `
+<div class="luker-studio luker_orch_editor_popup">
+    <div class="luker-studio-editor-topbar">
+        <div class="luker-studio-editor-topbar-left">
+            <div class="luker-studio-editor-topbar-title">${escapeHtml(i18n('Orchestration Editor'))}</div>
+            <div class="luker-studio-editor-topbar-meta">
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Current card:'))} <b>${escapeHtml(activeAvatar ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar) : i18n('(No character card)'))}</b></span>
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b>${escapeHtml(editingLabel)}</b></span>
+                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Execution mode'))} <b>${escapeHtml(modeChipLabel)}</b></span>
+            </div>
+        </div>
+        <div class="luker-studio-editor-topbar-right">
+            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+        </div>
+    </div>
+    <div class="luker-studio-actions-bar">
+        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
+        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
+        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
+        ${copyButtons}
+        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
+        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
+        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
+        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
+        ${viewLastRunButton}
+        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+    </div>
+    ${tabsHtml}
+</div>`;
+}
+
+/**
+ * Populate the drawer's (or popup's) tab hosts with the runtime-scoped
+ * workspace HTML for `mode`. Task 9 emitted empty tab-host divs
+ * (`[data-orch-mode="X"][data-orch-tab-host="Y"]`) inside the Agents
+ * and Tools & Skills tabs. This helper resolves the current editor
+ * draft for `mode`, splits the legacy 2-column workspace into
+ * `{agentsHtml, toolsHtml}`, and jQuery-injects each half into its
+ * matching host.
+ *
+ * Single mode is NOT handled here: its Agents-tab content is emitted
+ * statically at build time (the two single-agent textareas), and single
+ * mode has no shared tools. Callers must not pass `'single'`.
+ *
+ * `idPrefix` is passed to the workspace renderers only for the popup
+ * mirror (`'orch-popup-'`); drawer callers pass `''`. Workspace-level
+ * legacy ids (e.g. `#luker_orch_agenda_planner_prompt`) are unscoped
+ * for now — the popup handlers currently target the unscoped id via a
+ * `#UI_BLOCK_ID #luker_orch_x, .luker_orch_editor_popup #luker_orch_x`
+ * compound selector, so drawer + popup can share the same id string
+ * without a per-handler rewrite. The parameter exists so that the
+ * scoping migration is a mechanical thread-through, not a re-signature.
+ *
+ * @param {JQuery} root jQuery root of the drawer/popup container
+ * @param {string} mode 'director' | 'agenda' | 'loop' | 'spec'
+ * @param {Object} deps standard ui-templates deps bag (from `getOrchestratorUiTemplateDeps`)
+ * @param {Object} context SillyTavern getContext() return
+ * @param {Object} settings extension_settings.orchestrator
+ * @param {string} [idPrefix] '' for drawer, 'orch-popup-' for popup
+ */
+export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, idPrefix = '') {
+    const {
+        getAgendaEditorByScope,
+        getCurrentAvatar,
         getDirectorEditorByScope,
-        getDirectorProfileFromSettings,
+        getDisplayedScope,
         getEditorByScope,
         getLoopEditorByScope,
         getPopupEditingLabel,
@@ -1032,179 +1208,71 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         hasCharacterDirectorOverride,
         hasCharacterLoopOverride,
         hasCharacterSpecOverride,
-        i18n,
         syncCharacterEditorWithActiveAvatar,
-        uiState,
     } = deps;
 
-    if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
-        // Director popup mirrors loop / agenda's scope plumbing: edits go
-        // to uiState.{global,character}DirectorEditor (working state),
-        // Save To Global / Save To Character Override commits.
-        syncCharacterEditorWithActiveAvatar(context);
-        const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-        const hasActiveCharacter = Boolean(activeAvatar);
-        const scope = deps.getDisplayedScope(context, settings);
-        const editor = deps.getDirectorEditorByScope(scope);
-        const directorOverride = activeAvatar && deps.getCharacterDirectorOverrideByAvatar
-            ? deps.getCharacterDirectorOverrideByAvatar(context, activeAvatar)
-            : null;
-        const isCharacterScope = scope === 'character';
-        const hasDirectorCharacterOverride = activeAvatar && deps.hasCharacterDirectorOverride
-            ? deps.hasCharacterDirectorOverride(context, activeAvatar)
-            : false;
-        const editingLabel = getPopupEditingLabel(isCharacterScope, hasDirectorCharacterOverride, Boolean(directorOverride?.enabled));
-        const profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasDirectorCharacterOverride);
-        return `
-<div class="luker-studio luker_orch_editor_popup">
-    <div class="luker-studio-editor-topbar">
-        <div class="luker-studio-editor-topbar-left">
-            <div class="luker-studio-editor-topbar-title">${escapeHtml(i18n('Orchestration Editor'))}</div>
-            <div class="luker-studio-editor-topbar-meta">
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Current card:'))} <b>${escapeHtml(activeAvatar ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar) : i18n('(No character card)'))}</b></span>
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b>${escapeHtml(editingLabel)}</b></span>
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Execution mode'))} <b>${escapeHtml(i18n('Director (multi-agent)'))}</b></span>
-            </div>
-        </div>
-        <div class="luker-studio-editor-topbar-right">
-            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-        </div>
-    </div>
-    <div class="luker-studio-actions-bar">
-        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
-        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
-        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
-        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
-        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
-        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
-        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
-        <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-    </div>
-    ${renderDirectorWorkspace(deps, scope, editor, profileTitle)}
-</div>`;
-    }
-
-    if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-        syncCharacterEditorWithActiveAvatar(context);
-        const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-        const hasActiveCharacter = Boolean(activeAvatar);
-        const scope = getDisplayedScope(context, settings);
-        const editor = getLoopEditorByScope(scope);
-        const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
-        const isCharacterScope = scope === 'character';
-        const hasLoopCharacterOverride = hasCharacterLoopOverride(context, activeAvatar);
-        const editingLabel = getPopupEditingLabel(isCharacterScope, hasLoopCharacterOverride, Boolean(loopOverride?.enabled));
-        const profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasLoopCharacterOverride);
-        return `
-<div class="luker-studio luker_orch_editor_popup">
-    <div class="luker-studio-editor-topbar">
-        <div class="luker-studio-editor-topbar-left">
-            <div class="luker-studio-editor-topbar-title">${escapeHtml(i18n('Orchestration Editor'))}</div>
-            <div class="luker-studio-editor-topbar-meta">
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Current card:'))} <b>${escapeHtml(activeAvatar ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar) : i18n('(No character card)'))}</b></span>
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b>${escapeHtml(editingLabel)}</b></span>
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Execution mode'))} <b>${escapeHtml(i18n('Loop (single-agent loop)'))}</b></span>
-            </div>
-        </div>
-        <div class="luker-studio-editor-topbar-right">
-            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-        </div>
-    </div>
-    <div class="luker-studio-actions-bar">
-        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
-        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
-        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
-        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
-        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
-        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
-        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
-        <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-    </div>
-    ${renderLoopWorkspace(deps, scope, editor, profileTitle)}
-</div>`;
-    }
-
-    if (settings && deps.getExecutionMode && deps.getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
-        syncCharacterEditorWithActiveAvatar(context);
-        const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-        const hasActiveCharacter = Boolean(activeAvatar);
-        const scope = getDisplayedScope(context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        const agendaOverride = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
-        const isCharacterScope = scope === 'character';
-        const hasAgendaCharacterOverride = hasCharacterAgendaOverride(context, activeAvatar);
-        const editingLabel = getPopupEditingLabel(isCharacterScope, hasAgendaCharacterOverride, Boolean(agendaOverride?.enabled));
-        const profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasAgendaCharacterOverride);
-        return `
-<div class="luker-studio luker_orch_editor_popup">
-    <div class="luker-studio-editor-topbar">
-        <div class="luker-studio-editor-topbar-left">
-            <div class="luker-studio-editor-topbar-title">${escapeHtml(i18n('Orchestration Editor'))}</div>
-            <div class="luker-studio-editor-topbar-meta">
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Current card:'))} <b>${escapeHtml(activeAvatar ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar) : i18n('(No character card)'))}</b></span>
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b>${escapeHtml(editingLabel)}</b></span>
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Execution mode'))} <b>${escapeHtml(i18n('Agenda planner'))}</b></span>
-            </div>
-        </div>
-        <div class="luker-studio-editor-topbar-right">
-            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-        </div>
-    </div>
-    <div class="luker-studio-actions-bar">
-        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
-        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
-        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
-        <div class="menu_button" data-luker-action="agenda-copy-from-spec" data-scope="${scope}">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-        <div class="menu_button" data-luker-action="spec-copy-from-agenda" data-scope="${scope}">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
-        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
-        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
-        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
-        <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-        <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-    </div>
-    ${renderAgendaWorkspace(deps, scope, editor, profileTitle)}
-</div>`;
-    }
-
+    // Belt-and-braces: keep the character-scope draft synced with the
+    // active avatar before rendering. Popup + drawer both call this on
+    // every re-render so an avatar swap between renders reflects.
     syncCharacterEditorWithActiveAvatar(context);
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    const hasActiveCharacter = Boolean(activeAvatar);
     const scope = getDisplayedScope(context, settings);
-    const editor = getEditorByScope(scope);
     const isCharacterScope = scope === 'character';
-    const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
-    const hasSpecCharacterOverride = hasCharacterSpecOverride(context, activeAvatar);
-    const profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasSpecCharacterOverride);
-    return `
-<div class="luker-studio luker_orch_editor_popup">
-    <div class="luker-studio-editor-topbar">
-        <div class="luker-studio-editor-topbar-left">
-            <div class="luker-studio-editor-topbar-title">${escapeHtml(i18n('Orchestration Editor'))}</div>
-            <div class="luker-studio-editor-topbar-meta">
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Current card:'))} <b>${escapeHtml(activeAvatar ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar) : i18n('(No character card)'))}</b></span>
-                <span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b>${escapeHtml(getPopupEditingLabel(isCharacterScope, hasSpecCharacterOverride, Boolean(override?.enabled)))}</b></span>
-            </div>
-        </div>
-        <div class="luker-studio-editor-topbar-right">
-            <div class="menu_button menu_button_small" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-        </div>
-    </div>
-    <div class="luker-studio-actions-bar">
-        <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
-        <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
-        <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
-        <div class="menu_button" data-luker-action="agenda-copy-from-spec" data-scope="${scope}">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-        <div class="menu_button" data-luker-action="spec-copy-from-agenda" data-scope="${scope}">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-        <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
-        <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
-        ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
-        ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
-    </div>
-    <div id="luker_orch_effective_visual">${renderEditorWorkspace(deps, scope, editor, profileTitle)}</div>
-</div>`;
+
+    let editor;
+    let profileTitle;
+    if (mode === 'director') {
+        editor = getDirectorEditorByScope(scope);
+        const hasOverride = hasCharacterDirectorOverride(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+    } else if (mode === 'agenda') {
+        editor = getAgendaEditorByScope(scope);
+        const hasOverride = hasCharacterAgendaOverride(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+    } else if (mode === 'loop') {
+        editor = getLoopEditorByScope(scope);
+        const hasOverride = hasCharacterLoopOverride(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+    } else if (mode === 'spec') {
+        editor = getEditorByScope(scope);
+        const hasOverride = hasCharacterSpecOverride(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+    } else {
+        // 'single' has no per-agent workspace — its Agents-tab content
+        // is emitted at build time by buildAgentsTabHtml. Anything else
+        // is a caller bug.
+        console.warn(`[${MODULE_NAME}] injectWorkspaceIntoTabHost: unsupported mode "${mode}"`);
+        return;
+    }
+
+    let split;
+    if (mode === 'director') {
+        split = renderDirectorWorkspace(deps, scope, editor, profileTitle);
+    } else if (mode === 'agenda') {
+        split = renderAgendaWorkspace(deps, scope, editor, profileTitle);
+    } else if (mode === 'loop') {
+        split = renderLoopWorkspace(deps, scope, editor, profileTitle);
+    } else {
+        split = renderEditorWorkspace(deps, scope, editor, profileTitle);
+    }
+
+    // The `idPrefix` parameter is threaded through so that Task 10b (or a
+    // later touch) can flip the workspace renderers to scoped ids without
+    // changing this function's signature or its callers. Right now the
+    // workspace renderers ignore it (their ids are unscoped legacy).
+    void idPrefix;
+
+    const $agentsHost = root.find(`[data-orch-mode="${mode}"][data-orch-tab-host="agents"]`);
+    const $toolsHost = root.find(`[data-orch-mode="${mode}"][data-orch-tab-host="tools-skills"]`);
+    if ($agentsHost.length === 0 || $toolsHost.length === 0) {
+        console.warn(`[${MODULE_NAME}] injectWorkspaceIntoTabHost: missing hosts for mode "${mode}" (agents=${$agentsHost.length}, tools=${$toolsHost.length})`);
+        return;
+    }
+    // .html() replaces existing content, so repeated calls (mode change,
+    // profile switch, override toggle) refresh the pane without accreting
+    // stale DOM.
+    $agentsHost.html(split.agentsHtml);
+    $toolsHost.html(split.toolsHtml);
 }
 
 /**
