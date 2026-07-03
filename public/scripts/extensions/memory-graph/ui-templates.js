@@ -1,4 +1,6 @@
 import { renderPresetHelpButton } from '../preset-help.js';
+import { renderLukerTabs } from '../luker-tabs.js';
+import { renderFieldHelpButton } from '../field-help.js';
 
 export function buildSchemaEditorPopupHtml(deps, popupId, scopeInfo) {
     const {
@@ -168,28 +170,14 @@ export function buildManualCompressionPopupHtml(deps, popupId, settings, compres
 </div>`;
 }
 
-export function buildMemoryGraphSettingsHtml(deps) {
-    const {
-        escapeHtml,
-        extension_prompt_roles,
-        i18n,
-        UI_BLOCK_ID,
-        world_info_position,
-    } = deps;
+function buildRecallTabHtml(deps) {
+    const { escapeHtml, i18n, world_info_position, extension_prompt_roles } = deps;
+    const rewriteHelpBody = escapeHtml(i18n('Query rewrite sends the raw user query to a small LLM to rewrite it into a phrasing that vector search retrieves more relevant memory events. Costs one extra LLM call per recall.'));
+    const rewriteHelpBtn = renderFieldHelpButton({
+        title: i18n('About query rewrite'),
+        bodyHtml: rewriteHelpBody,
+    });
     return `
-<div id="${UI_BLOCK_ID}" class="extension_container">
-    <div class="inline-drawer">
-        <div class="inline-drawer-toggle inline-drawer-header">
-            <b>${escapeHtml(i18n('Memory'))}</b>
-            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-        </div>
-        <div class="inline-drawer-content">
-            <label class="checkbox_label"><input id="luker_rpg_memory_enabled" type="checkbox" /> ${escapeHtml(i18n('Enabled'))}</label>
-            <label class="checkbox_label"><input id="luker_rpg_memory_auto_extraction_enabled" type="checkbox" /> ${escapeHtml(i18n('Auto extraction'))}</label>
-            <small style="opacity:0.8">${escapeHtml(i18n('Auto extraction help'))}</small>
-            <label class="checkbox_label"><input id="luker_rpg_memory_auto_compression_enabled" type="checkbox" /> ${escapeHtml(i18n('Auto compression'))}</label>
-            <small style="opacity:0.8">${escapeHtml(i18n('Auto compression help'))}</small>
-            <label class="checkbox_label"><input id="luker_rpg_memory_recall_enabled" type="checkbox" /> ${escapeHtml(i18n('Enable recall injection'))}</label>
             <label for="luker_rpg_memory_recall_method">${escapeHtml(i18n('Recall method'))}</label>
             <select id="luker_rpg_memory_recall_method" class="text_pole">
                 <option value="llm">${escapeHtml(i18n('LLM Recall (default)'))}</option>
@@ -206,7 +194,7 @@ export function buildMemoryGraphSettingsHtml(deps) {
                     <label>${escapeHtml(i18n('Rerank profile'))}</label>
                     <select id="luker_rpg_memory_rerank_profile" class="text_pole flex1"></select>
                 </div>
-                <label class="checkbox_label"><input id="luker_rpg_memory_rag_use_query_rewrite" type="checkbox" /> ${escapeHtml(i18n('Enable query rewrite (extra LLM call)'))}</label>
+                <label class="checkbox_label"><input id="luker_rpg_memory_rag_use_query_rewrite" type="checkbox" /><span>${escapeHtml(i18n('Enable query rewrite (extra LLM call)'))}</span>${rewriteHelpBtn}</label>
                 <div id="luker_rpg_memory_rag_rewrite_block" style="display:none;padding-left:18px">
                     <label for="luker_rpg_memory_rag_rewrite_api_preset">${escapeHtml(i18n('Query rewrite API preset (Connection profile)'))}</label>
                     <select id="luker_rpg_memory_rag_rewrite_api_preset" class="text_pole"></select>
@@ -236,6 +224,18 @@ export function buildMemoryGraphSettingsHtml(deps) {
             <select id="luker_rpg_memory_recall_api_preset" class="text_pole"></select>
             <label for="luker_rpg_memory_recall_preset">${escapeHtml(i18n('Recall preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'luker_rpg_memory_recall_preset' })}</label>
             <select id="luker_rpg_memory_recall_preset" class="text_pole"></select>
+
+            <label for="luker_rpg_memory_debug_query">${escapeHtml(i18n('Recall debug query'))}</label>
+            <input id="luker_rpg_memory_debug_query" class="text_pole" type="text" placeholder="${escapeHtml(i18n('e.g. what happened at the ruins with Mira?'))}" />
+            <div class="flex-container">
+                <div id="luker_rpg_memory_recall_debug" class="menu_button">${escapeHtml(i18n('Run Recall Debug'))}</div>
+                <div id="luker_rpg_memory_view_last_injection" class="menu_button">${escapeHtml(i18n('View Last Injection'))}</div>
+            </div>`;
+}
+
+function buildExtractTabHtml(deps) {
+    const { escapeHtml, i18n } = deps;
+    return `
             <label for="luker_rpg_memory_extract_api_preset">${escapeHtml(i18n('Extract API preset (Connection profile)'))}</label>
             <select id="luker_rpg_memory_extract_api_preset" class="text_pole"></select>
             <label for="luker_rpg_memory_extract_preset">${escapeHtml(i18n('Extract preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'luker_rpg_memory_extract_preset' })}</label>
@@ -251,24 +251,12 @@ export function buildMemoryGraphSettingsHtml(deps) {
 
             <div class="flex-container">
                 <label style="flex:1">${escapeHtml(i18n('Update every N assistant turns'))} <input id="luker_rpg_memory_update_every" class="text_pole" type="number" min="1" step="1" /></label>
-            </div>
+            </div>`;
+}
 
-            <label>${escapeHtml(i18n('Node Type Schema (Visual Editor)'))}</label>
-            <small style="opacity:0.8">${escapeHtml(i18n('Configure memory table types, extraction hints, and compression strategy in a popup editor.'))}</small>
-            <small id="luker_rpg_memory_schema_scope" style="opacity:0.85"></small>
-            <small id="luker_rpg_memory_schema_summary" style="opacity:0.85"></small>
-            <div class="flex-container">
-                <div id="luker_rpg_memory_open_schema_editor" class="menu_button">${escapeHtml(i18n('Open Schema Editor'))}</div>
-                <div id="luker_rpg_memory_open_advanced" class="menu_button">${escapeHtml(i18n('Open Advanced Settings'))}</div>
-                <div id="luker_rpg_memory_open_schema_studio" class="menu_button">${escapeHtml(i18n('AI Iterate Schema'))}</div>
-            </div>
-            <small id="luker_rpg_memory_advanced_scope" style="opacity:0.85"></small>
-            <div class="flex-container">
-                <div id="luker_rpg_memory_advanced_save_global" class="menu_button">${escapeHtml(i18n('Save Advanced to Global'))}</div>
-                <div id="luker_rpg_memory_advanced_save_character" class="menu_button">${escapeHtml(i18n('Save Advanced to Character'))}</div>
-                <div id="luker_rpg_memory_advanced_clear_character_override" class="menu_button">${escapeHtml(i18n('Clear Character Advanced Override'))}</div>
-            </div>
-
+function buildGraphTabHtml(deps) {
+    const { escapeHtml, i18n } = deps;
+    return `
             <div class="flex-container">
                 <div id="luker_rpg_memory_view_graph" class="menu_button">${escapeHtml(i18n('View Graph'))}</div>
                 <div id="luker_rpg_memory_fill" class="menu_button">${escapeHtml(i18n('Fill Graph (Incremental)'))}</div>
@@ -286,17 +274,67 @@ export function buildMemoryGraphSettingsHtml(deps) {
                 <div id="luker_rpg_memory_export" class="menu_button">${escapeHtml(i18n('Export Current Chat Graph'))}</div>
                 <div id="luker_rpg_memory_import" class="menu_button">${escapeHtml(i18n('Import Current Chat Graph'))}</div>
             </div>
-            <input id="luker_rpg_memory_import_file" type="file" accept=".json,application/json" hidden />
+            <input id="luker_rpg_memory_import_file" type="file" accept=".json,application/json" hidden />`;
+}
 
-            <label for="luker_rpg_memory_debug_query">${escapeHtml(i18n('Recall debug query'))}</label>
-            <input id="luker_rpg_memory_debug_query" class="text_pole" type="text" placeholder="${escapeHtml(i18n('e.g. what happened at the ruins with Mira?'))}" />
+function buildAdvancedTabHtml(deps) {
+    const { escapeHtml, i18n } = deps;
+    return `
+            <label>${escapeHtml(i18n('Node Type Schema (Visual Editor)'))}</label>
+            <small style="opacity:0.8">${escapeHtml(i18n('Configure memory table types, extraction hints, and compression strategy in a popup editor.'))}</small>
+            <small id="luker_rpg_memory_schema_scope" style="opacity:0.85"></small>
+            <small id="luker_rpg_memory_schema_summary" style="opacity:0.85"></small>
             <div class="flex-container">
-                <div id="luker_rpg_memory_recall_debug" class="menu_button">${escapeHtml(i18n('Run Recall Debug'))}</div>
-                <div id="luker_rpg_memory_view_last_injection" class="menu_button">${escapeHtml(i18n('View Last Injection'))}</div>
+                <div id="luker_rpg_memory_open_schema_editor" class="menu_button">${escapeHtml(i18n('Open Schema Editor'))}</div>
+                <div id="luker_rpg_memory_open_schema_studio" class="menu_button">${escapeHtml(i18n('AI Iterate Schema'))}</div>
             </div>
+            <small id="luker_rpg_memory_advanced_scope" style="opacity:0.85"></small>
+            <div class="flex-container">
+                <div id="luker_rpg_memory_open_advanced" class="menu_button">${escapeHtml(i18n('Open Advanced Settings'))}</div>
+                <div id="luker_rpg_memory_advanced_save_global" class="menu_button">${escapeHtml(i18n('Save Advanced to Global'))}</div>
+                <div id="luker_rpg_memory_advanced_save_character" class="menu_button">${escapeHtml(i18n('Save Advanced to Character'))}</div>
+                <div id="luker_rpg_memory_advanced_clear_character_override" class="menu_button">${escapeHtml(i18n('Clear Character Advanced Override'))}</div>
+            </div>`;
+}
 
+export function buildMemoryGraphSettingsHtml(deps) {
+    const { escapeHtml, i18n, UI_BLOCK_ID } = deps;
+    const enableSectionHtml = `
+            <label class="checkbox_label"><input id="luker_rpg_memory_enabled" type="checkbox" /><span>${escapeHtml(i18n('Enabled'))}</span></label>
+            <label class="checkbox_label"><input id="luker_rpg_memory_auto_extraction_enabled" type="checkbox" /><span>${escapeHtml(i18n('Auto extraction'))}</span></label>
+            <small style="opacity:0.8">${escapeHtml(i18n('Auto extraction help'))}</small>
+            <label class="checkbox_label"><input id="luker_rpg_memory_auto_compression_enabled" type="checkbox" /><span>${escapeHtml(i18n('Auto compression'))}</span></label>
+            <small style="opacity:0.8">${escapeHtml(i18n('Auto compression help'))}</small>
+            <label class="checkbox_label"><input id="luker_rpg_memory_recall_enabled" type="checkbox" /><span>${escapeHtml(i18n('Enable recall injection'))}</span></label>`;
+
+    const tabsHtml = renderLukerTabs({
+        id: 'luker_rpg_memory_tabs',
+        scope: 'memory-graph-drawer',
+        moduleName: 'memory_graph',
+        defaultTab: 'recall',
+        tabs: [
+            { key: 'recall',   label: i18n('Recall'),   contentHtml: buildRecallTabHtml(deps) },
+            { key: 'extract',  label: i18n('Extract'),  contentHtml: buildExtractTabHtml(deps) },
+            { key: 'graph',    label: i18n('Graph'),    contentHtml: buildGraphTabHtml(deps) },
+            { key: 'advanced', label: i18n('Advanced'), contentHtml: buildAdvancedTabHtml(deps) },
+        ],
+    });
+
+    const footerHtml = `
             <small id="luker_rpg_memory_stats" style="opacity:0.8"></small>
-            <small id="luker_rpg_memory_status" style="opacity:0.8"></small>
+            <small id="luker_rpg_memory_status" style="opacity:0.8"></small>`;
+
+    return `
+<div id="${UI_BLOCK_ID}" class="extension_container">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>${escapeHtml(i18n('Memory'))}</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+${enableSectionHtml}
+${tabsHtml}
+${footerHtml}
         </div>
     </div>
 </div>`;
