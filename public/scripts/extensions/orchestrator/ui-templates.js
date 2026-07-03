@@ -1,4 +1,6 @@
 import { renderPresetHelpButton } from '../preset-help.js';
+import { renderLukerTabs } from '../luker-tabs.js';
+import { renderFieldHelpButton } from '../field-help.js';
 import { listExtensionTools } from './register-custom-tool.js';
 import { listPresets } from './preset-library.js';
 import { uiState } from './editor-state.js';
@@ -1205,10 +1207,290 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
 </div>`;
 }
 
+/**
+ * Build the topbar shown above the tabs in the drawer (and mirrored by
+ * the popup — Task 10). Merges the four previous per-mode board
+ * variants (`#luker_orch_{spec,agenda,loop,director}_board`) into one
+ * host with mode-conditional card indicator + override toggle blocks
+ * plus a unified action bar. Each mode wrapper keeps its legacy id so
+ * `renderDynamicPanels` (main.js) can continue toggling visibility via
+ * `#luker_orch_<mode>_board` until Task 11 rewrites that logic to use
+ * `data-orch-mode`.
+ *
+ * `idPrefix` is `''` for drawer callers and (Task 10) `'orch-popup-'`
+ * for popup callers; passed through `scopeId()` for every element that
+ * needs a mirror in the popup.
+ */
+function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
+    const { escapeHtml, i18n } = deps;
+    const s = baseId => scopeId(baseId, idPrefix);
+    // Common actions rendered for every non-single mode. Copy-Spec/Agenda
+    // buttons are wrapped in `data-orch-mode` spans so the mode-visibility
+    // logic (renderDynamicPanels / Task 11) hides them outside spec+agenda.
+    // `view-last-run` is intentionally omitted from the director-mode
+    // wrapper (director doesn't produce a capsule / prior-run entry).
+    const specBoard = `
+        <div id="${s('luker_orch_spec_board')}" class="luker_orch_board" data-orch-mode="spec">
+            <div>
+                <small>${escapeHtml(i18n('Current card:'))} <span id="${s('luker_orch_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
+                <small>${escapeHtml(i18n('Editing:'))} <span id="${s('luker_orch_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
+                <label id="${s('luker_orch_spec_override_toggle')}" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
+                    <input type="checkbox" id="${s('luker_orch_spec_override_enabled')}" />
+                    <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
+                </label>
+            </div>
+            <div class="flex-container">
+                <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
+                <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
+                <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+                <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
+                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+            </div>
+        </div>`;
+    const agendaBoard = `
+        <div id="${s('luker_orch_agenda_board')}" class="luker_orch_board" style="display:none" data-orch-mode="agenda">
+            <div>
+                <small>${escapeHtml(i18n('Current card:'))} <span id="${s('luker_orch_agenda_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
+                <small>${escapeHtml(i18n('Editing:'))} <span id="${s('luker_orch_agenda_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
+                <label id="${s('luker_orch_agenda_override_toggle')}" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
+                    <input type="checkbox" id="${s('luker_orch_agenda_override_enabled')}" />
+                    <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
+                </label>
+            </div>
+            <div class="flex-container">
+                <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
+                <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
+                <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+                <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
+                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+            </div>
+        </div>`;
+    const loopBoard = `
+        <div id="${s('luker_orch_loop_board')}" class="luker_orch_board" style="display:none" data-orch-mode="loop">
+            <div>
+                <small>${escapeHtml(i18n('Current card:'))} <span id="${s('luker_orch_loop_profile_target')}">${escapeHtml(i18n('(No character card)'))}</span></small><br />
+                <small>${escapeHtml(i18n('Editing:'))} <span id="${s('luker_orch_loop_profile_mode')}">${escapeHtml(i18n('Global profile'))}</span></small>
+                <label id="${s('luker_orch_loop_override_toggle')}" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
+                    <input type="checkbox" id="${s('luker_orch_loop_override_enabled')}" />
+                    <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
+                </label>
+            </div>
+            <div class="flex-container">
+                <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+                <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
+                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+            </div>
+            <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
+        </div>`;
+    const directorBoard = `
+        <div id="${s('luker_orch_director_board')}" class="luker_orch_board" style="display:none" data-orch-mode="director">
+            <div>
+                <small><span data-i18n="Current card:">${escapeHtml(i18n('Current card:'))}</span> <span id="${s('luker_orch_director_profile_target')}" data-i18n="(No character card)">${escapeHtml(i18n('(No character card)'))}</span></small><br />
+                <small><span data-i18n="Editing:">${escapeHtml(i18n('Editing:'))}</span> <span id="${s('luker_orch_director_profile_mode')}" data-i18n="Global profile">${escapeHtml(i18n('Global profile'))}</span></small>
+                <label id="${s('luker_orch_director_override_toggle')}" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}" data-i18n="[title]Off uses the global profile and keeps the override stored on the card.">
+                    <input type="checkbox" id="${s('luker_orch_director_override_enabled')}" />
+                    <small data-i18n="Use this card's override">${escapeHtml(i18n('Use this card\'s override'))}</small>
+                </label>
+            </div>
+            <div class="flex-container">
+                <div class="menu_button" data-luker-action="show-run-panel" data-i18n="Show Run Panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+                <div class="menu_button" data-luker-action="ai-iterate-open" data-i18n="Open AI Iteration Studio">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
+                <div class="menu_button" data-luker-action="manage-skills" data-i18n="Manage skills...">${escapeHtml(i18n('Manage skills...'))}</div>
+                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+            </div>
+            <small class="luker_orch_director_board_hint" data-i18n="Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.">${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
+        </div>`;
+    // Single-mode topbar block hosts the runtime tools row (view-last-run,
+    // show-run-panel, manage-skills) and the descriptive hint. Kept in
+    // the topbar because single mode has no per-agent board.
+    const singleBlock = `
+        <small id="${s('luker_orch_single_mode_hint')}" style="opacity:0.8" data-orch-mode="single">${escapeHtml(i18n('Single-agent mode is enabled. Workflow board is hidden and runtime uses the simplified single node profile.'))}</small>
+        <div id="${s('luker_orch_single_mode_runtime_tools')}" class="luker_orch_board luker_orch_single_mode_tools" data-orch-mode="single">
+            <div class="flex-container">
+                <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+                <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+                <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
+                ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+            </div>
+        </div>`;
+    return `<div class="luker_orch_topbar">${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}</div>`;
+}
+
+/**
+ * Agents tab content — a wrapper containing one `data-orch-mode`
+ * subtree per execution mode. Task 9 emits placeholder hosts; Task 11
+ * populates them with the mode-specific workspace editors (mainAgent /
+ * sub-agents / planner / loop-agent / single-agent) on mode change and
+ * profile switch. The single-mode variant hosts the single-agent
+ * system-prompt + user-prompt textareas moved out of the drawer's top
+ * level (single mode has no per-agent list).
+ */
+function buildAgentsTabHtml(deps, idPrefix = '') {
+    const { escapeHtml, i18n } = deps;
+    const s = baseId => scopeId(baseId, idPrefix);
+    return `<div class="luker_orch_agents_tab">
+        <div data-orch-mode="spec" data-orch-tab-host="agents"></div>
+        <div data-orch-mode="agenda" data-orch-tab-host="agents" style="display:none"></div>
+        <div data-orch-mode="loop" data-orch-tab-host="agents" style="display:none"></div>
+        <div data-orch-mode="director" data-orch-tab-host="agents" style="display:none"></div>
+        <div id="${s('luker_orch_single_agent_fields')}" data-orch-mode="single" data-orch-tab-host="agents" style="display:none">
+            <label for="${s('luker_orch_single_agent_system_prompt')}">${escapeHtml(i18n('Single-agent system prompt'))}</label>
+            <textarea id="${s('luker_orch_single_agent_system_prompt')}" class="text_pole textarea_compact" rows="4"></textarea>
+            <label for="${s('luker_orch_single_agent_user_prompt')}">${escapeHtml(i18n('Single-agent user prompt template'))}</label>
+            <textarea id="${s('luker_orch_single_agent_user_prompt')}" class="text_pole textarea_compact" rows="6"></textarea>
+        </div>
+    </div>`;
+}
+
+/**
+ * Tools & Skills tab content — placeholder hosts for mode-conditional
+ * subtrees (default tool grid + mode-level skills + custom tools).
+ * Task 11 will populate these hosts with the sections currently inline
+ * in the workspace renderers. Single-mode variant is intentionally
+ * empty (single mode has no shared tools).
+ */
+function buildToolsSkillsTabHtml(deps, idPrefix = '') {
+    const { escapeHtml, i18n } = deps;
+    return `<div class="luker_orch_tools_skills_tab">
+        <div data-orch-mode="spec" data-orch-tab-host="tools-skills"></div>
+        <div data-orch-mode="agenda" data-orch-tab-host="tools-skills" style="display:none"></div>
+        <div data-orch-mode="loop" data-orch-tab-host="tools-skills" style="display:none"></div>
+        <div data-orch-mode="director" data-orch-tab-host="tools-skills" style="display:none"></div>
+        <div data-orch-mode="single" data-orch-tab-host="tools-skills" style="display:none">
+            <small style="opacity:0.7">${escapeHtml(i18n('Single-agent mode has no shared tools.'))}</small>
+        </div>
+    </div>`;
+}
+
+/**
+ * General tab content — 4 fieldsets:
+ *  1. Default API and prompt preset (LLM node global fallback)
+ *  2. Runtime limits (mode-conditional: nodeIterationMaxRounds for
+ *     agenda+spec, reviewRerunMaxRounds for spec only; director-only
+ *     and loop-only mode-specific limits live in their workspace
+ *     editors and are populated by Task 11)
+ *  3. Capsule injection (`data-orch-mode-block="capsule"` — hidden in
+ *     director mode by existing `renderDynamicPanels` toggle on
+ *     `#luker_orch_capsule_settings`)
+ *  4. AI Iteration Studio configuration (iteration AI presets, base
+ *     system prompt, and one iter-mode-prompt textarea per mode with
+ *     `data-orch-mode` visibility)
+ */
+function buildGeneralTabHtml(deps, idPrefix = '') {
+    const { escapeHtml, extension_prompt_roles, i18n, world_info_position } = deps;
+    const s = baseId => scopeId(baseId, idPrefix);
+    return `<div class="luker_orch_general_tab">
+        <fieldset class="luker_orch_general_fieldset">
+            <legend>${escapeHtml(i18n('Default API and prompt preset'))}</legend>
+            <label for="${s('luker_orch_llm_api_preset')}">${escapeHtml(i18n('LLM node API preset (Connection profile)'))}</label>
+            <select id="${s('luker_orch_llm_api_preset')}" class="text_pole"></select>
+            <label for="${s('luker_orch_llm_preset')}">${escapeHtml(i18n('LLM node preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'dynamic', targetSelectId: s('luker_orch_llm_preset') })}</label>
+            <select id="${s('luker_orch_llm_preset')}" class="text_pole"></select>
+            <small style="opacity:0.8">${escapeHtml(i18n('Used when a specific agent has no preset filled in'))}</small>
+        </fieldset>
+        <fieldset class="luker_orch_general_fieldset">
+            <legend>${escapeHtml(i18n('Runtime limits'))}</legend>
+            <div data-orch-mode="spec">
+                <label for="${s('luker_orch_node_iterations')}">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}</label>
+                <input id="${s('luker_orch_node_iterations')}" class="text_pole" type="number" min="1" step="1" />
+                <label for="${s('luker_orch_review_reruns')}">${escapeHtml(i18n('Review rerun max rounds (N)'))}</label>
+                <input id="${s('luker_orch_review_reruns')}" class="text_pole" type="number" min="0" step="1" />
+            </div>
+            <div data-orch-mode="agenda" style="display:none">
+                <small style="opacity:0.8">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}</small>
+                <small style="opacity:0.6">${escapeHtml(i18n('Agenda planner and per-agent limits are configured in the Agents tab.'))}</small>
+            </div>
+            <div data-orch-mode="director" style="display:none">
+                <small style="opacity:0.6">${escapeHtml(i18n('Director limits are configured in the Agents tab (main agent card).'))}</small>
+            </div>
+            <div data-orch-mode="loop" style="display:none">
+                <small style="opacity:0.6">${escapeHtml(i18n('Loop limits are configured in the Agents tab (loop agent card).'))}</small>
+            </div>
+            <div data-orch-mode="single" style="display:none">
+                <small style="opacity:0.6">${escapeHtml(i18n('Single-agent mode has no per-mode runtime limits; cross-mode caps below apply.'))}</small>
+            </div>
+        </fieldset>
+        <fieldset class="luker_orch_general_fieldset" data-orch-mode-block="capsule">
+            <legend>${escapeHtml(i18n('Capsule injection'))}</legend>
+            <div id="${s('luker_orch_capsule_settings')}">
+                <label for="${s('luker_orch_capsule_position')}">${escapeHtml(i18n('Injection position'))}</label>
+                <select id="${s('luker_orch_capsule_position')}" class="text_pole">
+                    <option value="${world_info_position.before}">${escapeHtml(i18n('Before Character Definitions'))}</option>
+                    <option value="${world_info_position.after}">${escapeHtml(i18n('After Character Definitions'))}</option>
+                    <option value="${world_info_position.ANTop}">${escapeHtml(i18n('Before Author\'s Note'))}</option>
+                    <option value="${world_info_position.ANBottom}">${escapeHtml(i18n('After Author\'s Note'))}</option>
+                    <option value="${world_info_position.EMTop}">${escapeHtml(i18n('Before Example Messages'))}</option>
+                    <option value="${world_info_position.EMBottom}">${escapeHtml(i18n('After Example Messages'))}</option>
+                    <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
+                </select>
+                <label for="${s('luker_orch_capsule_depth')}">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}</label>
+                <input id="${s('luker_orch_capsule_depth')}" class="text_pole" type="number" min="0" step="1" />
+                <label for="${s('luker_orch_capsule_role')}">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}</label>
+                <select id="${s('luker_orch_capsule_role')}" class="text_pole">
+                    <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
+                    <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
+                    <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
+                </select>
+                <label for="${s('luker_orch_capsule_custom_instruction')}">${escapeHtml(i18n('Custom orchestration result instruction (prepended before analysis)'))}</label>
+                <textarea id="${s('luker_orch_capsule_custom_instruction')}" class="text_pole textarea_compact" rows="2" placeholder="${escapeHtml(i18n('e.g. Follow this guidance first, then write final reply in-character.'))}"></textarea>
+            </div>
+        </fieldset>
+        <fieldset class="luker_orch_general_fieldset">
+            <legend>${escapeHtml(i18n('AI Iteration Studio configuration'))}</legend>
+            <label for="${s('luker_orch_request_api_preset')}">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
+            <select id="${s('luker_orch_request_api_preset')}" class="text_pole"></select>
+            <label for="${s('luker_orch_request_llm_preset')}">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: s('luker_orch_request_llm_preset') })}</label>
+            <select id="${s('luker_orch_request_llm_preset')}" class="text_pole"></select>
+            <label class="checkbox_label">
+                <input id="${s('luker_orch_include_world_info')}" type="checkbox" />
+                ${escapeHtml(i18n('Include world info'))}
+            </label>
+            <label for="${s('luker_orch_request_system_prompt')}">${escapeHtml(i18n('Iteration AI base system prompt'))}</label>
+            <textarea id="${s('luker_orch_request_system_prompt')}" class="text_pole textarea_compact" rows="6"></textarea>
+            <div class="flex-container">
+                <div id="${s('luker_orch_reset_ai_prompt')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset AI build prompt'))}</div>
+            </div>
+            <div data-orch-mode="spec">
+                <label for="${s('luker_orch_iter_mode_prompt_spec')}">${escapeHtml(i18n('Spec mode iteration prompt'))}</label>
+                <textarea id="${s('luker_orch_iter_mode_prompt_spec')}" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="${s('luker_orch_reset_iter_mode_spec')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+            </div>
+            <div data-orch-mode="loop" style="display:none">
+                <label for="${s('luker_orch_iter_mode_prompt_loop')}">${escapeHtml(i18n('Loop mode iteration prompt'))}</label>
+                <textarea id="${s('luker_orch_iter_mode_prompt_loop')}" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="${s('luker_orch_reset_iter_mode_loop')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+            </div>
+            <div data-orch-mode="director" style="display:none">
+                <label for="${s('luker_orch_iter_mode_prompt_director')}">${escapeHtml(i18n('Director mode iteration prompt'))}</label>
+                <textarea id="${s('luker_orch_iter_mode_prompt_director')}" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="${s('luker_orch_reset_iter_mode_director')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+            </div>
+            <div data-orch-mode="agenda" style="display:none">
+                <label for="${s('luker_orch_iter_mode_prompt_agenda')}">${escapeHtml(i18n('Agenda mode iteration prompt'))}</label>
+                <textarea id="${s('luker_orch_iter_mode_prompt_agenda')}" class="text_pole textarea_compact" rows="10"></textarea>
+                <div class="flex-container">
+                    <div id="${s('luker_orch_reset_iter_mode_agenda')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
+                </div>
+            </div>
+        </fieldset>
+    </div>`;
+}
+
 export function buildOrchestratorSettingsHtml(deps) {
     const {
         escapeHtml,
-        extension_prompt_roles,
         i18n,
         ORCH_EXECUTION_MODE_AGENDA,
         ORCH_EXECUTION_MODE_DIRECTOR,
@@ -1216,8 +1498,18 @@ export function buildOrchestratorSettingsHtml(deps) {
         ORCH_EXECUTION_MODE_SINGLE,
         ORCH_EXECUTION_MODE_SPEC,
         UI_BLOCK_ID,
-        world_info_position,
     } = deps;
+    const tabsHtml = renderLukerTabs({
+        id: 'luker_orch_tabs',
+        scope: 'orchestrator-drawer',
+        moduleName: 'orchestrator',
+        defaultTab: 'agents',
+        tabs: [
+            { key: 'agents',       label: i18n('Agents'),         contentHtml: buildAgentsTabHtml(deps, '') },
+            { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: buildToolsSkillsTabHtml(deps, '') },
+            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, '') },
+        ],
+    });
     return `
 <div id="${UI_BLOCK_ID}" class="extension_container">
     <div class="inline-drawer">
@@ -1235,171 +1527,15 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <option value="${ORCH_EXECUTION_MODE_LOOP}">${escapeHtml(i18n('Loop (single-agent loop)'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_DIRECTOR}" data-i18n="Director (multi-agent)">${escapeHtml(i18n('Director (multi-agent)'))}</option>
             </select>
-            <div id="luker_orch_single_agent_fields">
-                <label for="luker_orch_single_agent_system_prompt">${escapeHtml(i18n('Single-agent system prompt'))}</label>
-                <textarea id="luker_orch_single_agent_system_prompt" class="text_pole textarea_compact" rows="4"></textarea>
-                <label for="luker_orch_single_agent_user_prompt">${escapeHtml(i18n('Single-agent user prompt template'))}</label>
-                <textarea id="luker_orch_single_agent_user_prompt" class="text_pole textarea_compact" rows="6"></textarea>
-            </div>
-            <label for="luker_orch_llm_api_preset">${escapeHtml(i18n('LLM node API preset (Connection profile)'))}</label>
-            <select id="luker_orch_llm_api_preset" class="text_pole"></select>
-            <label for="luker_orch_llm_preset">${escapeHtml(i18n('LLM node preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'dynamic', targetSelectId: 'luker_orch_llm_preset' })}</label>
-            <select id="luker_orch_llm_preset" class="text_pole"></select>
-            <label for="luker_orch_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
-            <select id="luker_orch_request_api_preset" class="text_pole"></select>
-            <label for="luker_orch_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'luker_orch_request_llm_preset' })}</label>
-            <select id="luker_orch_request_llm_preset" class="text_pole"></select>
-            <label class="checkbox_label">
-                <input id="luker_orch_include_world_info" type="checkbox" />
-                ${escapeHtml(i18n('Include world info'))}
-            </label>
-            <label for="luker_orch_request_system_prompt">${escapeHtml(i18n('Iteration AI base system prompt'))}</label>
-            <textarea id="luker_orch_request_system_prompt" class="text_pole textarea_compact" rows="6"></textarea>
-            <div class="flex-container">
-                <div id="luker_orch_reset_ai_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset AI build prompt'))}</div>
-            </div>
-            <details class="luker_orch_iter_mode_prompts">
-                <summary>${escapeHtml(i18n('Iteration mode prompts (by execution mode)'))}</summary>
-                <label for="luker_orch_iter_mode_prompt_spec">${escapeHtml(i18n('Spec mode iteration prompt'))}</label>
-                <textarea id="luker_orch_iter_mode_prompt_spec" class="text_pole textarea_compact" rows="10"></textarea>
-                <div class="flex-container">
-                    <div id="luker_orch_reset_iter_mode_spec" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
-                </div>
-                <label for="luker_orch_iter_mode_prompt_loop">${escapeHtml(i18n('Loop mode iteration prompt'))}</label>
-                <textarea id="luker_orch_iter_mode_prompt_loop" class="text_pole textarea_compact" rows="10"></textarea>
-                <div class="flex-container">
-                    <div id="luker_orch_reset_iter_mode_loop" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
-                </div>
-                <label for="luker_orch_iter_mode_prompt_director">${escapeHtml(i18n('Director mode iteration prompt'))}</label>
-                <textarea id="luker_orch_iter_mode_prompt_director" class="text_pole textarea_compact" rows="10"></textarea>
-                <div class="flex-container">
-                    <div id="luker_orch_reset_iter_mode_director" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
-                </div>
-                <label for="luker_orch_iter_mode_prompt_agenda">${escapeHtml(i18n('Agenda mode iteration prompt'))}</label>
-                <textarea id="luker_orch_iter_mode_prompt_agenda" class="text_pole textarea_compact" rows="10"></textarea>
-                <div class="flex-container">
-                    <div id="luker_orch_reset_iter_mode_agenda" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
-                </div>
-            </details>
+            ${buildOrchTopbarHtml(deps, {}, '')}
+            ${tabsHtml}
+            <hr />
             <label for="luker_orch_max_recent_messages">${escapeHtml(i18n('Recent assistant turns for orchestration (N)'))}</label>
             <input id="luker_orch_max_recent_messages" class="text_pole" type="number" min="1" step="1" />
-            <label for="luker_orch_node_iterations">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}</label>
-            <input id="luker_orch_node_iterations" class="text_pole" type="number" min="1" step="1" />
-            <label for="luker_orch_review_reruns">${escapeHtml(i18n('Review rerun max rounds (N)'))}</label>
-            <input id="luker_orch_review_reruns" class="text_pole" type="number" min="0" step="1" />
             <label for="luker_orch_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
             <input id="luker_orch_tool_retries" class="text_pole" type="number" min="0" step="1" />
             <label for="luker_orch_rpm_limit">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}</label>
             <input id="luker_orch_rpm_limit" class="text_pole" type="number" min="0" step="1" />
-            <div id="luker_orch_capsule_settings">
-                <label for="luker_orch_capsule_position">${escapeHtml(i18n('Injection position'))}</label>
-                <select id="luker_orch_capsule_position" class="text_pole">
-                    <option value="${world_info_position.before}">${escapeHtml(i18n('Before Character Definitions'))}</option>
-                    <option value="${world_info_position.after}">${escapeHtml(i18n('After Character Definitions'))}</option>
-                    <option value="${world_info_position.ANTop}">${escapeHtml(i18n('Before Author\'s Note'))}</option>
-                    <option value="${world_info_position.ANBottom}">${escapeHtml(i18n('After Author\'s Note'))}</option>
-                    <option value="${world_info_position.EMTop}">${escapeHtml(i18n('Before Example Messages'))}</option>
-                    <option value="${world_info_position.EMBottom}">${escapeHtml(i18n('After Example Messages'))}</option>
-                    <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
-                </select>
-                <label for="luker_orch_capsule_depth">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}</label>
-                <input id="luker_orch_capsule_depth" class="text_pole" type="number" min="0" step="1" />
-                <label for="luker_orch_capsule_role">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}</label>
-                <select id="luker_orch_capsule_role" class="text_pole">
-                    <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
-                    <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
-                    <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
-                </select>
-                <label for="luker_orch_capsule_custom_instruction">${escapeHtml(i18n('Custom orchestration result instruction (prepended before analysis)'))}</label>
-                <textarea id="luker_orch_capsule_custom_instruction" class="text_pole textarea_compact" rows="2" placeholder="${escapeHtml(i18n('e.g. Follow this guidance first, then write final reply in-character.'))}"></textarea>
-            </div>
-            <small id="luker_orch_single_mode_hint" style="opacity:0.8">${escapeHtml(i18n('Single-agent mode is enabled. Workflow board is hidden and runtime uses the simplified single node profile.'))}</small>
-            <div id="luker_orch_single_mode_runtime_tools" class="luker_orch_board luker_orch_single_mode_tools">
-                <div class="flex-container">
-                    <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-                </div>
-            </div>
-
-            <hr>
-            <div id="luker_orch_spec_board" class="luker_orch_board">
-                <div>
-                    <small>${escapeHtml(i18n('Current card:'))} <span id="luker_orch_profile_target">${escapeHtml(i18n('(No character card)'))}</span></small><br />
-                    <small>${escapeHtml(i18n('Editing:'))} <span id="luker_orch_profile_mode">${escapeHtml(i18n('Global profile'))}</span></small>
-                    <label id="luker_orch_spec_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
-                        <input type="checkbox" id="luker_orch_spec_override_enabled" />
-                        <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
-                    </label>
-                </div>
-                <div class="flex-container">
-                    <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
-                    <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-                    <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-                    <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                    <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-                </div>
-            </div>
-
-            <div id="luker_orch_agenda_board" class="luker_orch_board" style="display:none">
-                <div>
-                    <small>${escapeHtml(i18n('Current card:'))} <span id="luker_orch_agenda_profile_target">${escapeHtml(i18n('(No character card)'))}</span></small><br />
-                    <small>${escapeHtml(i18n('Editing:'))} <span id="luker_orch_agenda_profile_mode">${escapeHtml(i18n('Global profile'))}</span></small>
-                    <label id="luker_orch_agenda_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
-                        <input type="checkbox" id="luker_orch_agenda_override_enabled" />
-                        <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
-                    </label>
-                </div>
-                <div class="flex-container">
-                    <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
-                    <div class="menu_button" data-luker-action="agenda-copy-from-spec">${escapeHtml(i18n('Copy Spec Agents To Agenda'))}</div>
-                    <div class="menu_button" data-luker-action="spec-copy-from-agenda">${escapeHtml(i18n('Copy Agenda Agents To Spec'))}</div>
-                    <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                    <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-                </div>
-            </div>
-
-            <div id="luker_orch_loop_board" class="luker_orch_board" style="display:none">
-                <div>
-                    <small>${escapeHtml(i18n('Current card:'))} <span id="luker_orch_loop_profile_target">${escapeHtml(i18n('(No character card)'))}</span></small><br />
-                    <small>${escapeHtml(i18n('Editing:'))} <span id="luker_orch_loop_profile_mode">${escapeHtml(i18n('Global profile'))}</span></small>
-                    <label id="luker_orch_loop_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
-                        <input type="checkbox" id="luker_orch_loop_override_enabled" />
-                        <small>${escapeHtml(i18n('Use this card\'s override'))}</small>
-                    </label>
-                </div>
-                <div class="flex-container">
-                    <div class="menu_button" data-luker-action="open-orch-editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
-                    <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-                    <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                    <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                    <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-                </div>
-                <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
-            </div>
-
-            <div id="luker_orch_director_board" class="luker_orch_board" style="display:none">
-                <div>
-                    <small><span data-i18n="Current card:">${escapeHtml(i18n('Current card:'))}</span> <span id="luker_orch_director_profile_target" data-i18n="(No character card)">${escapeHtml(i18n('(No character card)'))}</span></small><br />
-                    <small><span data-i18n="Editing:">${escapeHtml(i18n('Editing:'))}</span> <span id="luker_orch_director_profile_mode" data-i18n="Global profile">${escapeHtml(i18n('Global profile'))}</span></small>
-                    <label id="luker_orch_director_override_toggle" class="checkbox_label luker_orch_override_toggle" style="display:none;margin-top:4px" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}" data-i18n="[title]Off uses the global profile and keeps the override stored on the card.">
-                        <input type="checkbox" id="luker_orch_director_override_enabled" />
-                        <small data-i18n="Use this card's override">${escapeHtml(i18n('Use this card\'s override'))}</small>
-                    </label>
-                </div>
-                <div class="flex-container">
-                    <div class="menu_button" data-luker-action="open-orch-editor" data-i18n="Open Orchestration Editor">${escapeHtml(i18n('Open Orchestration Editor'))}</div>
-                    <div class="menu_button" data-luker-action="show-run-panel" data-i18n="Show Run Panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-                    <div class="menu_button" data-luker-action="ai-iterate-open" data-i18n="Open AI Iteration Studio">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
-                    <div class="menu_button" data-luker-action="manage-skills" data-i18n="Manage skills...">${escapeHtml(i18n('Manage skills...'))}</div>
-                </div>
-                <small class="luker_orch_director_board_hint" data-i18n="Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.">${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
-            </div>
-
             <small id="luker_orch_last_run_state" class="luker_orch_state_summary"></small>
             <small id="luker_orch_status" style="opacity:0.8"></small>
         </div>
