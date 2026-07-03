@@ -57,7 +57,7 @@ const DIRECTOR_LIMIT_BOUNDS = Object.freeze({
     maxConcurrentSubagents: { min: 1, default: 4 },
     maxTotalSubagentRuns: { min: 1, default: 16 },
     // Per-sub-agent tool-call floor. Default (`null`) inherits the runtime
-    // hardcoded `SUB_AGENT_MAX_ROUNDS = 16`; explicit numeric values are
+    // hardcoded `SUB_AGENT_MAX_ROUNDS = 40`; explicit numeric values are
     // floored at 1 like the main agent's cap. No upper bound — users who
     // want a 9999-round runaway window get it.
     subAgentMaxRounds: { min: 1 },

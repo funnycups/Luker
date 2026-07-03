@@ -2771,7 +2771,7 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '- The same loop tools enabled in this profile (chat / memory / lorebook / note / search), gated identically.',
     '- The `get_draft` tool — they call it themselves if they need the in-flight draft body.',
     '',
-    'Sub-agents do NOT see: each other, each other\'s outputs, the main agent\'s reasoning or prior tool calls, mid-turn state changes (their chat context is frozen). They cannot dispatch other sub-agents (no recursion), cannot write the message body, cannot finalize. Each runs its own tool-call mini-loop (capped at 16 internal rounds) and terminates by emitting a no-tool-call round — that round\'s text becomes the output returned via `await_subagents`. The sub-agent runtime wraps every dispatch with an anti-RP meta-frame (top of prompt) and a post-`</story_context>` reminder, so the sub-agent reads the chat history as background but never continues the scene. When you write a sub-agent\'s systemPrompt, remind it that its final no-tool-call reply is a structured report to the main agent — not in-character roleplay prose, dialogue, or narration.',
+    'Sub-agents do NOT see: each other, each other\'s outputs, the main agent\'s reasoning or prior tool calls, mid-turn state changes (their chat context is frozen). They cannot dispatch other sub-agents (no recursion), cannot write the message body, cannot finalize. Each runs its own tool-call mini-loop (capped at 40 internal rounds) and terminates by emitting a no-tool-call round — that round\'s text becomes the output returned via `await_subagents`. The sub-agent runtime wraps every dispatch with an anti-RP meta-frame (top of prompt) and a post-`</story_context>` reminder, so the sub-agent reads the chat history as background but never continues the scene. When you write a sub-agent\'s systemPrompt, remind it that its final no-tool-call reply is a structured report to the main agent — not in-character roleplay prose, dialogue, or narration.',
     '',
     '## Description writing convention (CRITICAL)',
     '',
@@ -3436,7 +3436,7 @@ function buildAiIterationToolSet(session = null) {
                 type: 'function',
                 function: {
                     name: 'luker_orch_set_director_subagent',
-                    description: 'Create or update one director sub-agent by id. id is required; other fields patch the existing sub-agent or initialize a new one. Leave apiPresetName and promptPresetName empty unless the user explicitly requests per-sub-agent routing. maxRounds caps that sub-agent\'s own tool-call loop (>= 1); omit / null to inherit the runtime default (16) — only set when the user asks for a tighter or looser cap.',
+                    description: 'Create or update one director sub-agent by id. id is required; other fields patch the existing sub-agent or initialize a new one. Leave apiPresetName and promptPresetName empty unless the user explicitly requests per-sub-agent routing. maxRounds caps that sub-agent\'s own tool-call loop (>= 1); omit / null to inherit the runtime default (40) — only set when the user asks for a tighter or looser cap.',
                     parameters: {
                         type: 'object',
                         properties: {

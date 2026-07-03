@@ -795,7 +795,7 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
     const promptPresetName = String(safe.promptPresetName ?? '');
     const subagentTools = (safe.tools && typeof safe.tools === 'object') ? safe.tools : null;
     // Per-sub-agent runaway cap. `null` (default) means "inherit the
-    // runtime default (16)"; the input shows the placeholder and renders
+    // runtime default (40)"; the input shows the placeholder and renders
     // empty so the user can leave it alone. An explicit integer >= 1
     // pins the cap for that one sub-agent.
     const maxRoundsRaw = safe.maxRounds;
@@ -834,8 +834,8 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
     </label>
     <label>
         <span data-i18n="Max tool-call rounds (this sub-agent)">${escapeHtml(i18n('Max tool-call rounds (this sub-agent)'))}</span>
-        <input class="text_pole" type="number" min="1" step="1" placeholder="${escapeHtml(i18n('Inherit default (16)'))}" data-orch-subagent-field="maxRounds" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" value="${escapeHtml(maxRoundsValue)}" />
-        <div class="director-preset-help">${escapeHtml(i18n('Per-sub-agent runaway cap. Leave empty to inherit the default (16).'))}</div>
+        <input class="text_pole" type="number" min="1" step="1" placeholder="${escapeHtml(i18n('Inherit default (40)'))}" data-orch-subagent-field="maxRounds" data-subagent-index="${subagentIndex}" data-scope="${safeScope}" value="${escapeHtml(maxRoundsValue)}" />
+        <div class="director-preset-help">${escapeHtml(i18n('Per-sub-agent runaway cap. Leave empty to inherit the default (40).'))}</div>
     </label>
     <details class="luker_orch_tools_section">
         <summary>${escapeHtml(i18n('Tools'))}</summary>

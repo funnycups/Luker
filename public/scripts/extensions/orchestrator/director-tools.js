@@ -355,12 +355,13 @@ export async function executeDraftSearchTool(handle, args) {
  * cap is a runaway safety net; in practice a short critic finishes in
  * 1-3 rounds, and a recall-style sub-agent (memory_scout /
  * memory_curator) doing schema + a few find_by_name + brief + 1-2 drill
- * calls fits in ~10-12 rounds. 16 gives those a comfortable headroom
- * without letting a runaway burn the whole turn. Users / AI iteration
- * can override per sub-agent via `subAgents[].maxRounds` (any integer
- * >= 1 after the sanitizer); `null` keeps this default.
+ * calls fits in ~10-12 rounds. 40 gives even long-running recall +
+ * multi-step edit workflows comfortable headroom without letting a
+ * runaway burn the whole turn. Users / AI iteration can override per
+ * sub-agent via `subAgents[].maxRounds` (any integer >= 1 after the
+ * sanitizer); `null` keeps this default.
  */
-const SUB_AGENT_MAX_ROUNDS = 16;
+const SUB_AGENT_MAX_ROUNDS = 40;
 
 /**
  * Creates the per-turn sub-agent dispatcher used by director-runtime.
