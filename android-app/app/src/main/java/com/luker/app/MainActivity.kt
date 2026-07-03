@@ -7,8 +7,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -42,7 +40,6 @@ import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -499,12 +496,13 @@ class MainActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) {
                 return@post
             }
+            val fullReportFile = writeFullReportFile(crash.report) ?: crash.reportFile
             showReportDialog(
                 titleRes = R.string.crash_report_dialog_title,
                 introRes = R.string.crash_report_dialog_intro,
                 shareSubjectRes = R.string.crash_report_share_subject,
-                report = crash.report,
-                reportFile = crash.reportFile,
+                summary = buildCrashSummary(crash.report),
+                fullReportFile = fullReportFile,
             )
         }
     }
@@ -2394,22 +2392,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showRuntimeFailureDialog(report: String, reportFile: File?) {
+        val fullReportFile = writeFullReportFile(report) ?: reportFile
         showReportDialog(
             titleRes = R.string.runtime_error_dialog_title,
             introRes = R.string.runtime_error_dialog_intro,
             shareSubjectRes = R.string.runtime_error_share_subject,
-            report = report,
-            reportFile = reportFile,
+            summary = buildCrashSummary(report),
+            fullReportFile = fullReportFile,
         )
     }
 
     private fun showWebViewCrashDialog(report: String, reportFile: File?) {
+        val fullReportFile = writeFullReportFile(report) ?: reportFile
         showReportDialog(
             titleRes = R.string.webview_crash_dialog_title,
             introRes = R.string.webview_crash_dialog_intro,
             shareSubjectRes = R.string.webview_crash_share_subject,
-            report = report,
-            reportFile = reportFile,
+            summary = buildCrashSummary(report),
+            fullReportFile = fullReportFile,
             onDismiss = {
                 if (!isFinishing && !isDestroyed) {
                     recreate()
@@ -2422,24 +2422,16 @@ class MainActivity : AppCompatActivity() {
         titleRes: Int,
         introRes: Int,
         shareSubjectRes: Int,
-        report: String,
-        reportFile: File?,
+        summary: String,
+        fullReportFile: File?,
         onDismiss: (() -> Unit)? = null,
     ) {
-        val reportView = TextView(this).apply {
-            text = report
-            setTextIsSelectable(true)
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(32, 24, 32, 24)
-        }
-        val scrollView = ScrollView(this).apply {
-            addView(reportView)
-        }
-
-        val intro = buildString {
+        val message = buildString {
             append(getString(introRes))
-            if (reportFile != null) {
-                append('\n').append(getString(R.string.runtime_error_report_saved, reportFile.absolutePath))
+            append("\n\n")
+            append(summary)
+            if (fullReportFile != null) {
+                append('\n').append(getString(R.string.runtime_error_report_saved, fullReportFile.absolutePath))
             }
             if (!LukerAndroidDebugConfig.isEnabled(applicationContext)) {
                 append(getString(R.string.crash_dialog_debug_hint))
@@ -2448,17 +2440,11 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(titleRes)
-            .setMessage(intro)
-            .setView(scrollView)
-            .setPositiveButton(android.R.string.ok, null)
-            .setNeutralButton(R.string.runtime_error_copy) { _, _ ->
-                val clipboard = getSystemService(ClipboardManager::class.java)
-                clipboard?.setPrimaryClip(ClipData.newPlainText("luker-runtime-error", report))
-                Toast.makeText(this, getString(R.string.runtime_error_copy_done), Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(R.string.diagnostics_export_bundle) { _, _ ->
+            .setMessage(message)
+            .setPositiveButton(R.string.diagnostics_export_bundle) { _, _ ->
                 exportAndShareDiagnosticsBundle(shareSubjectRes)
             }
+            .setNegativeButton(R.string.crash_dialog_close, null)
             .setOnDismissListener { onDismiss?.invoke() }
             .setCancelable(false)
             .show()
@@ -2521,6 +2507,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun writeFullReportFile(enriched: String): File? {
+        val target = File(filesDir, FULL_REPORT_FILE_NAME)
+        val direct = runCatching { target.writeText(enriched, Charsets.UTF_8); target }.getOrNull()
+        if (direct != null) return direct
+        return runCatching {
+            target.writeText("full report write failed: <see logcat>", Charsets.UTF_8)
+            target
+        }.getOrNull()
+    }
+
     override fun onDestroy() {
         if (this::webView.isInitialized) {
             webView.removeCallbacks(forceWebViewVisibleRunnable)
@@ -2549,6 +2545,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_OPEN_ENDPOINT_SETTINGS = "com.luker.app.action.OPEN_ENDPOINT_SETTINGS"
         const val ACTION_RELOAD_WEBVIEW = "com.luker.app.action.RELOAD_WEBVIEW"
+        const val FULL_REPORT_FILE_NAME = "luker-last-crash-full-report.txt"
         private const val SERVER_READY_TOTAL_BUDGET_MS: Long = 240_000L
         private const val SERVER_READY_POLL_DELAY_MS: Long = 100L
     }
