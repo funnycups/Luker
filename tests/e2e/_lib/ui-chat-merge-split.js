@@ -16,10 +16,23 @@ export const SCREENSHOTS_DIR = path.resolve(__dirname, '../../../docs/public/scr
 
 /**
  * Take a step screenshot under docs/public/screenshots/chat-merge-split/.
- * Lazily creates the directory on first call so the helper is safe to
- * import even when the docs tree has not been generated yet.
+ *
+ * DEFAULT: no-op. The chat merge/split e2e specs are regression tests,
+ * not a docs screenshot generator. Writing into docs/ on every
+ * regression run means:
+ *   - CI leaves the working tree dirty,
+ *   - a subtle mock-LLM wording change silently rewrites doc images,
+ *   - the in-tree docs screenshots (which the /features/chat-merge-split
+ *     doc references) can be overwritten by a partial / failing run.
+ *
+ * To rebuild the doc screenshots deliberately, opt-in:
+ *   LUKER_UPDATE_DOC_SCREENSHOTS=1 npx playwright test e2e/chat/{15,16,18,19,20}*.e2e.js
+ *
+ * The current in-tree images under docs/public/screenshots/chat-merge-split/
+ * remain the canonical set and are committed to git.
  */
 export async function takeStepScreenshot(page, slug) {
+    if (!process.env.LUKER_UPDATE_DOC_SCREENSHOTS) return null;
     mkdirSync(SCREENSHOTS_DIR, { recursive: true });
     const file = path.join(SCREENSHOTS_DIR, `${slug}.png`);
     await page.screenshot({ path: file, fullPage: false });

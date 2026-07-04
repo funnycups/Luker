@@ -5,6 +5,7 @@
     "scripts": {
         "test": "npm run test:unit && npm run test:e2e",
         "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json",
+        "test:unit:serial": "NODE_OPTIONS=--max-old-space-size=8192 node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json --runInBand --forceExit",
         "test:e2e": "playwright test --project=e2e",
         "test:integration": "PW_INCLUDE_INTEGRATION=1 playwright test",
         "test:e2e:skills:smoke": "PW_INCLUDE_INTEGRATION=1 playwright test --project=skills-ui",

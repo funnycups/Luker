@@ -46,7 +46,7 @@ describe('MacroParser', () => {
             // {{}}
             test('[Error] should throw an error for empty macro', async () => {
                 const input = '{{}}';
-                const { macroCst, errors } = await runParserAndGetErrors(page, input);
+                const { macroCst, errors } = await runParserAndGetErrors(input);
 
                 const expectedErrors = [
                     { name: 'NoViableAltException' },
@@ -60,7 +60,7 @@ describe('MacroParser', () => {
             // {{§%€blah}}
             test('[Error] should throw an error for invalid identifier', async () => {
                 const input = '{{§%€blah}}';
-                const { macroCst, errors } = await runParserAndGetErrors(page, input);
+                const { macroCst, errors } = await runParserAndGetErrors(input);
 
                 const expectedErrors = [
                     { name: 'NoViableAltException' },
@@ -74,7 +74,7 @@ describe('MacroParser', () => {
             // {{user
             test('[Error] should throw an error for incomplete macro', async () => {
                 const input = '{{user';
-                const { macroCst, errors } = await runParserAndGetErrors(page, input);
+                const { macroCst, errors } = await runParserAndGetErrors(input);
 
                 const expectedErrors = [
                     { name: 'MismatchedTokenException', message: 'Expecting token of type --> Macro.End <-- but found --> \'\' <--' },
@@ -87,7 +87,7 @@ describe('MacroParser', () => {
             // something{{user}}
             test('[Error] for testing purposes, macros need to start at the beginning of the string', async () => {
                 const input = 'something{{user}}';
-                const { macroCst, errors } = await runParserAndGetErrors(page, input);
+                const { macroCst, errors } = await runParserAndGetErrors(input);
 
                 const expectedErrors = [
                     { name: 'MismatchedTokenException', message: 'Expecting token of type --> Macro.Start <-- but found --> \'something\' <--' },
@@ -535,7 +535,7 @@ This is the second line
             // {{{{macroindentifier}}::value}}
             test('[Error] should throw when there is a nested macro instead of an identifier', async () => {
                 const input = '{{{{macroindentifier}}::value}}';
-                const { macroCst, errors } = await runParserAndGetErrors(page, input);
+                const { macroCst, errors } = await runParserAndGetErrors(input);
 
                 expect(macroCst).toBeUndefined();
                 expect(errors).toHaveLength(1); // error doesn't really matter. Just don't parse it pls.
@@ -544,7 +544,7 @@ This is the second line
             // {{inside{{macro}}me}}
             test('[Error] should throw when there is a macro inside an identifier', async () => {
                 const input = '{{inside{{macro}}me}}';
-                const { macroCst, errors } = await runParserAndGetErrors(page, input);
+                const { macroCst, errors } = await runParserAndGetErrors(input);
 
                 expect(macroCst).toBeUndefined();
                 expect(errors).toHaveLength(1); // error doesn't really matter. Just don't parse it pls.

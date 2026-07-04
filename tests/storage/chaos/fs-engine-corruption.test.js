@@ -20,10 +20,19 @@ describe('FS engine corruption recovery', () => {
     beforeEach(async () => { h = await makeFs(); });
     afterEach(() => h.cleanup());
 
-    test('chat with garbage JSON line in body propagates a parse error', async () => {
-        // chat handler reads file as JSONL and JSON.parses every line; per-line
-        // failures are not swallowed (corruption should not look like data
-        // loss). Document that the call rejects.
+    test('chat with garbage JSON line in body returns null (corruption is masked, no throw)', async () => {
+        // Contract (ae48dcab6 "chat.get returns null on corrupt/non-conformant
+        // docs across all engines"): the chat handler parses the JSONL file
+        // line by line; any per-line parse failure collapses the whole
+        // record to `null` rather than throwing. Handler-side try/catch
+        // in fs-engine-transaction.js masks the SyntaxError so callers
+        // uniformly see "no chat" instead of an exception that varies by
+        // corruption type.
+        //
+        // Downstream ChatRepo.append/patch treats null the same as a
+        // deleted / never-existed record, which is the correct failure
+        // mode for a partially-corrupted file — the alternative (bubble
+        // SyntaxError) makes every read path defensive.
         const repo = new ChatRepo({ engine: h.engine });
         await repo.save(
             h.handle, 'TestChar', 'chat1',
@@ -38,8 +47,7 @@ describe('FS engine corruption recovery', () => {
         lines.splice(1, 0, '{not valid json');
         fs.writeFileSync(fp, lines.join('\n') + '\n');
 
-        await expect(repo.get(h.handle, 'TestChar', 'chat1'))
-            .rejects.toThrow(SyntaxError);
+        expect(await repo.get(h.handle, 'TestChar', 'chat1')).toBeNull();
     });
 
     test('settings.json containing literal "null" round-trips to JS null', async () => {

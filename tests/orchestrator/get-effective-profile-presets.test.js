@@ -136,6 +136,7 @@ jest.unstable_mockModule('../../public/scripts/slash-commands.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/ui-templates.js', () => ({
     buildOrchestrationEditorPopupPanelHtml: () => '',
     buildOrchestratorSettingsHtml: () => '',
+    injectWorkspaceIntoTabHost: () => {},
     renderInheritOrOverridePanel: () => '',
     renderSkillChipsPlaceholder: () => '',
 }));
@@ -160,7 +161,15 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/output-fo
     toReadableYamlText: (v) => String(v ?? ''),
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/pure-preset-body.js', () => ({
+    // Only the large BODY blob is stubbed (this suite doesn't exercise its
+    // contents). Keep every other export mirrored here — main.js and its
+    // link graph reference DIRECTOR_PURE_PRESET_NAME by identifier and ESM
+    // link errors out with "does not provide an export named ..." if a
+    // future constant is added to pure-preset-body.js and forgotten here.
+    // Mock can't `await import(...)` the same specifier — that would loop
+    // through the same mock and OOM.
     DIRECTOR_PURE_PRESET_BODY: {},
+    DIRECTOR_PURE_PRESET_NAME: 'orchestrator:director-pure',
 }));
 // snapshot-cache: getCurrentAvatar is the load-bearing one for this test.
 // Routing it through the closure `currentAvatar` lets each test simulate a

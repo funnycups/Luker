@@ -2,8 +2,14 @@ import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import { MockServer } from './util/mock-server.js';
 
 describe('MockServer tests', () => {
+    // Port 0 = OS-assigned ephemeral port. The literal 3000 raced against
+    // any other process (or a lingering test-run) that already grabbed
+    // 3000, surfacing as intermittent EADDRINUSE flakes under jest's
+    // default multi-worker execution. MockServer.start() populates
+    // `port` from server.address() after bind so the fetch URL below
+    // targets the actual bound port.
     /** @type {MockServer} */
-    const mockServer = new MockServer({ port: 3000, host: '127.0.0.1' });
+    const mockServer = new MockServer({ port: 0, host: '127.0.0.1' });
 
     beforeAll(async () => {
         await mockServer.start();
@@ -21,7 +27,7 @@ describe('MockServer tests', () => {
                 { role: 'user', content: 'Hello, world!' },
             ],
         };
-        const response = await fetch('http://127.0.0.1:3000/v1/chat/completions', {
+        const response = await fetch(`http://127.0.0.1:${mockServer.port}/v1/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody),

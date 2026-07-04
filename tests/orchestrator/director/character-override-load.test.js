@@ -224,10 +224,16 @@ describe('loadCharacterDirectorEditorState — override merge', () => {
         expect(loaded.enabled).toBe(true);
     });
 
-    test('an empty override (no mainAgent prompt, no sub-agents) still inherits global', () => {
-        // Defensive: the "fall back to global when override is empty"
-        // ergonomic in loadCharacterDirectorEditorState should keep working
-        // after the preset-library refactor.
+    test('an empty override (no mainAgent prompt, no sub-agents) is treated as explicit clear', () => {
+        // Contract (see loadCharacterDirectorEditorState comment in
+        // editor-state.js): empty subAgents [] and empty
+        // mainAgent.systemPrompt '' are treated as explicit user/AI
+        // intent, NOT silently rehydrated from global — otherwise
+        // iter-studio's "delete all sub-agents on this card" or "blank
+        // the main prompt" edits would appear to persist but
+        // rematerialize the global content the next time the editor
+        // reads. Numeric per-agent overrides (maxRounds etc.) still
+        // win over global whether or not other fields are cleared.
         const globalProfile = createDefaultDirectorProfile();
         globalProfile.mainAgent.systemPrompt = 'GLOBAL_PROMPT';
         globalProfile.subAgents = [
@@ -250,10 +256,11 @@ describe('loadCharacterDirectorEditorState — override merge', () => {
         const ctx = makeContextWithOverride(overrideDirector);
         const loaded = loadCharacterDirectorEditorState(ctx, 'default_Seraphina.png');
 
-        // mainAgent + subAgents fall back to global (existing ergonomic).
-        expect(loaded.mainAgent.systemPrompt).toBe('GLOBAL_PROMPT');
-        expect(loaded.subAgents).toHaveLength(1);
-        expect(loaded.subAgents[0].id).toBe('global_sub');
+        // Explicit empty override sticks — global is NOT rehydrated over
+        // it. This is what makes "clear the prompt" / "delete all
+        // sub-agents on this card" actually persist through a reload.
+        expect(loaded.mainAgent.systemPrompt).toBe('');
+        expect(loaded.subAgents).toHaveLength(0);
         // But explicit numeric overrides like maxRounds DO win over global.
         expect(loaded.maxRounds).toBe(9);
     });

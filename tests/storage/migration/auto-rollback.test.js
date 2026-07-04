@@ -152,11 +152,15 @@ describe('MigrationRunner: auto-rollback on copy failure', () => {
         // user dir to simulate the in-place upgrade case the rollback exists
         // for. Without restoreFromSnapshot, the source tree stays mutated and
         // the post-failure tree comparison diverges from preState.
-        const origSave = dst.repos.chat.save.bind(dst.repos.chat);
+        //
+        // NOTE: the migration runner writes chats via saveRaw() (not save())
+        // so source integrity/createdAt/updatedAt round-trip. Fault-injecting
+        // on save() would never fire during migration.
+        const origSaveRaw = dst.repos.chat.saveRaw.bind(dst.repos.chat);
         let saveCount = 0;
-        dst.repos.chat.save = async (...args) => {
+        dst.repos.chat.saveRaw = async (...args) => {
             saveCount++;
-            if (saveCount === 1) return origSave(...args);  // let one succeed first
+            if (saveCount === 1) return origSaveRaw(...args);  // let one succeed first
             // Wreck the source dir before throwing, to model a partial in-place
             // migration that needs rollback to recover.
             fs.writeFileSync(path.join(src.dirs.root, 'settings.json'), '{"corrupted":true}');

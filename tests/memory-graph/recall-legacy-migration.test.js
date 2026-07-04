@@ -11,10 +11,24 @@
 import { describe, test, expect, jest, beforeAll } from '@jest/globals';
 
 // ---- Browser shims ----
+// Chainable jQuery stub so top-level init like
+// `jQuery(document).off('click.foo').on('click.foo', fn)` in
+// public/scripts/extensions/luker-tabs.js (transitively imported via
+// memory-graph/ui-templates.js) doesn't blow up at module-load time.
+// Any prop access returns a callable that returns the same chain.
 globalThis.jQuery = (cb) => {
-    if (typeof cb === 'function') { /* swallow */ }
-    return { ready: () => {}, on: () => {}, off: () => {} };
+    if (typeof cb === 'function') { /* swallow DOM-ready callback */ }
+    const chain = new Proxy(function () {}, {
+        get(_t, prop) {
+            if (prop === 'then') return undefined;
+            if (prop === 'length') return 0;
+            return () => chain;
+        },
+        apply() { return chain; },
+    });
+    return chain;
 };
+globalThis.jQuery.escapeSelector = (s) => String(s);
 globalThis.$ = globalThis.jQuery;
 globalThis.window = globalThis.window || globalThis;
 globalThis.document = globalThis.document || {

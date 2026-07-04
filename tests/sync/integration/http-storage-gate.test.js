@@ -31,18 +31,40 @@ import request from 'supertest';
 
 let currentEngineKind = 'fs';
 
-jest.unstable_mockModule('../../../src/storage/index.js', () => ({
-    // Materialize/dematerialize call `engine.withTransaction(handle, fn)`
-    // before reading the enabled-category set; with an empty categories
-    // array nothing actually runs inside the txn, but the type guard at
-    // the top of materializeUserDataIntoWorkdir still demands the
-    // function exist. Hand back the tx-callable shape with a stub
-    // that's never invoked under empty `categories: []`.
-    getStorageEngine: () => ({
-        kind: currentEngineKind,
-        withTransaction: async (_handle, fn) => fn({}),
-    }),
-}));
+jest.unstable_mockModule('../../../src/storage/index.js', () => {
+    // Static reject stub for repo accessors that aren't exercised by this
+    // suite but ARE imported transitively (sync.js → users.js →
+    // endpoints/content-manager.js pulls getNamedDocRepo/getWorldInfoRepo/
+    // getPresetRepo/getSettingsRepo at module-load). Keep the mock complete
+    // so ESM link doesn't fail with `does not provide an export named ...`
+    // whenever a new getXxxRepo joins storage/index.js.
+    const notWiredForThisSuite = (name) => () => {
+        throw new Error(`${name}() is not wired in http-storage-gate.test.js mock; the /session/offer + /availability handlers under test don't touch it.`);
+    };
+    return {
+        // Materialize/dematerialize call `engine.withTransaction(handle, fn)`
+        // before reading the enabled-category set; with an empty categories
+        // array nothing actually runs inside the txn, but the type guard at
+        // the top of materializeUserDataIntoWorkdir still demands the
+        // function exist. Hand back the tx-callable shape with a stub
+        // that's never invoked under empty `categories: []`.
+        getStorageEngine: () => ({
+            kind: currentEngineKind,
+            withTransaction: async (_handle, fn) => fn({}),
+        }),
+        getChatRepo: notWiredForThisSuite('getChatRepo'),
+        getSettingsRepo: notWiredForThisSuite('getSettingsRepo'),
+        getPresetRepo: notWiredForThisSuite('getPresetRepo'),
+        getWorldInfoRepo: notWiredForThisSuite('getWorldInfoRepo'),
+        getNamedDocRepo: notWiredForThisSuite('getNamedDocRepo'),
+        getGroupRepo: notWiredForThisSuite('getGroupRepo'),
+        getStatsRepo: notWiredForThisSuite('getStatsRepo'),
+        initStorage: notWiredForThisSuite('initStorage'),
+        setReadOnly: () => {},
+        isReadOnly: () => false,
+        withReadOnlyBypass: async (fn) => fn(),
+    };
+});
 
 /** @type {import('express').Router} */
 let syncRouter;

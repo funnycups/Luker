@@ -167,16 +167,20 @@ describe.each(DB_HARNESSES)(
                 tx.getResource({ kind: 'chat', handle: src.handle, charDir: 'Alice', name: 'c1' }));
             expect(seeded.body).toEqual(ORIGINAL_BODY);
 
-            // Fault-inject the dest's ChatRepo.save: after one successful write,
-            // the second call (a) corrupts the SOURCE engine row, then (b)
-            // throws. This models a partial in-place upgrade that left source
-            // rows in a corrupted half-state and forces rollback to recover
-            // them — the exact scenario spec §4.4 calls out.
-            const origSave = dst.repos.chat.save.bind(dst.repos.chat);
+            // Fault-inject the dest's ChatRepo.saveRaw: after one successful
+            // write, the second call (a) corrupts the SOURCE engine row,
+            // then (b) throws. This models a partial in-place upgrade that
+            // left source rows in a corrupted half-state and forces rollback
+            // to recover them.
+            //
+            // NOTE: the migration runner writes chats via saveRaw() (not
+            // save()) so source integrity/createdAt/updatedAt round-trip.
+            // Fault-injecting on save() would never fire during migration.
+            const origSaveRaw = dst.repos.chat.saveRaw.bind(dst.repos.chat);
             let saveCount = 0;
-            dst.repos.chat.save = async (...args) => {
+            dst.repos.chat.saveRaw = async (...args) => {
                 saveCount++;
-                if (saveCount === 1) return origSave(...args);
+                if (saveCount === 1) return origSaveRaw(...args);
                 // Corrupt the source engine row before throwing.
                 await src.engine.withTransaction(src.handle, async (tx) => {
                     await tx.putResource(

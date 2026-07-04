@@ -1,4 +1,6 @@
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { getConfigFilePath, reloadConfigCache, setConfigFilePath } from '../src/util.js';
@@ -14,9 +16,23 @@ if (!getConfigFilePath()) {
 
 // Mirror what server.js sets so middleware that reads files under
 // `globalThis.DATA_ROOT` (e.g. basicAuth's unauthorized.html lookup) does not
-// blow up under jest. Resolves to the repo's bundled default data dir.
+// blow up under jest.
+//
+// IMPORTANT: point DATA_ROOT at an out-of-tree scratch dir, NOT the repo's
+// public/ folder. Several code paths under src/endpoints/{characters,
+// tokenizers}.js and src/transformers.js create `${DATA_ROOT}/_cache/...`
+// on module load or first cache lookup. Aiming DATA_ROOT at `public/` used
+// to leak a runtime `public/_cache/` tree into the working directory
+// during every jest run (untracked but visible in `git status`). Using a
+// per-process scratch dir keeps the repo clean and matches server.js
+// convention of DATA_ROOT being disjoint from the source tree. The
+// scratch dir is also seeded with the small default assets those
+// endpoints look for (currently just an empty structure — tests that
+// need real seed data build their own dataRoot with startServer /
+// makeEndpointHarness / makeTempFsEngineHarness).
 if (!globalThis.DATA_ROOT) {
-    globalThis.DATA_ROOT = path.resolve(__dirname, '../public');
+    const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-jest-data-'));
+    globalThis.DATA_ROOT = scratchRoot;
 }
 
 if (typeof globalThis.Luker === 'undefined') {

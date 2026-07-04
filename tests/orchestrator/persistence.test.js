@@ -47,7 +47,7 @@ function makeStore() {
             const k = String(ns ?? '').trim().toLowerCase();
             const part = partitionFor(options?.target);
             const v = part.get(k);
-            return v == null ? null : structuredClone(v);
+            return { ok: true, state: v == null ? null : structuredClone(v) };
         },
         async patchChatState(ns, ops, options) {
             const k = String(ns ?? '').trim().toLowerCase();
@@ -150,14 +150,11 @@ function makeContext(chatRef) {
     const context = {
         chat: chatRef.value,
         // Context-level wrappers expose the state-API envelope shape
-        // (`{ok, state, ...}` / `{ok, reason, hint}`). Extension code
-        // consumes them this way after the state-error-reasons migration.
-        // The dep-level callbacks above (`fsDeps.*`) keep returning raw
-        // payloads because `floor-state.js` internally reads them as raw.
-        getChatState: async (ns, options) => {
-            const state = await fsDeps.getChatState(ns, options);
-            return { ok: true, state };
-        },
+        // (`{ok, state, ...}` / `{ok, reason, hint}`). The dep-level
+        // callbacks above (`fsDeps.*`) already return the same envelope
+        // (floor-state.js reads `result?.ok`), so the context wrapper is
+        // now a straight pass-through.
+        getChatState: fsDeps.getChatState,
         patchChatState: fsDeps.patchChatState,
         updateChatState: fsDeps.updateChatState,
         deleteChatState: async (ns) => {

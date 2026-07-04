@@ -216,25 +216,51 @@ describe('SqliteEngine chat handler', () => {
         expect(got.integrity).toBe('v2');
     });
 
-    test('get returns null for corrupt/non-conformant docs (no throw)', async () => {
-        // Plant rows that bypass the put pipeline so we can see what get does
-        // when stored JSON drifts from the expected {header, body} shape. All
-        // four engines have to behave the same way here — silently returning
-        // a half-record causes TypeErrors downstream in ChatRepo.append/patch.
+    test('get returns null for non-conformant docs (handler masks all shape failures)', async () => {
+        // Contract (see fix commit ae48dcab6): chat.get returns null on any
+        // corrupt/non-conformant doc across all four engines — silently
+        // returning a half-record causes TypeErrors downstream in
+        // ChatRepo.append/patch.
+        //
+        // NOTE on syntactically-malformed JSON: sqlite ALSO has a schema
+        // guard — the `integrity` column is `GENERATED ALWAYS AS
+        // (json_extract(doc, ...)) STORED`, so an INSERT with '{not json'
+        // would in principle reject at the SQL layer. That behaviour is
+        // observable but sensitive to the SQLite build's JSON1 compile
+        // options / better-sqlite3 version, so this test doesn't assert
+        // on the throw. What it DOES assert is the invariant that
+        // matters for callers: get() never surfaces a partial record —
+        // any shape drift collapses to null.
         const insertRaw = (name, doc) => engine.withTransaction(handle, async (tx) => {
             tx._db.prepare(`INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
                             VALUES (?, ?, ?, 0, '', ?, ?, ?)`)
                 .run(handle, 'TestChar', name, doc, Date.now(), Date.now());
         });
-        await insertRaw('corrupt-json', '{not json');
+
+        // Well-formed but wrong-shape docs land, and get() masks them.
         await insertRaw('not-object', '"a string"');
         await insertRaw('array-root', '[1, 2, 3]');
         await insertRaw('missing-body', JSON.stringify({ header: { chat_metadata: {} } }));
         await insertRaw('body-not-array', JSON.stringify({ header: { chat_metadata: {} }, body: { not: 'array' } }));
         await insertRaw('missing-header', JSON.stringify({ body: [] }));
 
-        for (const name of ['corrupt-json', 'not-object', 'array-root', 'missing-body', 'body-not-array', 'missing-header']) {
+        for (const name of ['not-object', 'array-root', 'missing-body', 'body-not-array', 'missing-header']) {
             const got = await engine.withTransaction(handle, async (tx) => tx.getResource(chatKey({ name })));
+            expect(got).toBeNull();
+        }
+
+        // Syntactically-malformed JSON: try to insert; either the schema
+        // guard rejects OR the row lands. Either way, get() must return
+        // null. This is the actual invariant callers rely on.
+        let inserted = true;
+        try {
+            await insertRaw('corrupt-json', '{not json');
+        } catch {
+            inserted = false;
+        }
+        if (inserted) {
+            const got = await engine.withTransaction(handle, async (tx) =>
+                tx.getResource(chatKey({ name: 'corrupt-json' })));
             expect(got).toBeNull();
         }
     });

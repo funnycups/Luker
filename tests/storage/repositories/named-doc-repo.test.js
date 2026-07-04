@@ -1,6 +1,6 @@
 import { CONTRACT_HARNESSES, makeTempFsEngineHarness } from '../harness/contract-harness.js';
 import { NamedDocRepo } from '../../../src/storage/repositories/named-doc-repo.js';
-import { NotFoundError } from '../../../src/storage/errors.js';
+import { NotFoundError, InvalidArgumentError } from '../../../src/storage/errors.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -79,14 +79,24 @@ describe('NamedDocRepo — FS-only observation', () => {
         expect(fs.existsSync(path.join(h.dirs.themes, 'X.json'))).toBe(false);
     });
 
-    test('save sanitizes name (path traversal blocked)', async () => {
-        await repo.save(h.handle, 'themes', '../../escaped', { v: 1 });
-        // sanitize-filename strips slashes (parent-traversal segments collapse to dots), so the
-        // file must land inside the bucket dir with no path separator in its name.
-        const entries = fs.readdirSync(h.dirs.themes);
-        expect(entries.length).toBe(1);
-        expect(entries[0]).not.toContain('/');
-        expect(entries[0]).not.toContain(path.sep);
-        expect(entries[0].endsWith('.json')).toBe(true);
+    test('save rejects unsafe name outright (path traversal blocked at the validator)', async () => {
+        // Contract change (fail-fast, not sanitize): the validator now
+        // throws InvalidArgumentError instead of silently rewriting the
+        // name. This is stronger — the caller learns the input was
+        // rejected instead of getting back a `save()` that succeeded
+        // against a mangled key they can't reconstruct.
+        //
+        // Concrete guarantees:
+        //   * save() throws InvalidArgumentError,
+        //   * the error message identifies the invalid character class,
+        //   * nothing lands on disk under the target bucket.
+        await expect(repo.save(h.handle, 'themes', '../../escaped', { v: 1 }))
+            .rejects.toBeInstanceOf(InvalidArgumentError);
+        // Rethrow-then-inspect: also verify the message includes the
+        // sanitized-form hint so callers can debug the rejection.
+        await expect(repo.save(h.handle, 'themes', '../../escaped', { v: 1 }))
+            .rejects.toThrow(/sanitize-filename would rewrite/);
+        const entries = fs.existsSync(h.dirs.themes) ? fs.readdirSync(h.dirs.themes) : [];
+        expect(entries).toEqual([]);
     });
 });

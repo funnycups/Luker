@@ -75,6 +75,13 @@ export class MockServer {
             });
 
             this.server.listen(this.port, this.host, () => {
+                // Capture the OS-assigned port when the caller passed port=0.
+                // Without this, tests requesting an ephemeral port would have
+                // no way to reach the server they just started.
+                const addr = this.server.address();
+                if (addr && typeof addr === 'object') {
+                    this.port = addr.port;
+                }
                 resolve();
             });
         });

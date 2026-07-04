@@ -68,6 +68,11 @@ describe('requestToolCallsWithRetry — reasoning propagation', () => {
             assistantText: 'hi',
             rawAssistantText: 'hi',
             reasoning: 'I was thinking...',
+            // Absent reasoningBlocks / reasoningDetails on the generateTask
+            // result default to null (per iter-tool-calling contract). Pin
+            // the default so we notice if it drifts to `[]` or `undefined`.
+            reasoningBlocks: null,
+            reasoningDetails: null,
         });
     });
 
@@ -87,9 +92,50 @@ describe('requestToolCallsWithRetry — reasoning propagation', () => {
             assistantText: 'hi',
             rawAssistantText: 'hi',
             reasoning: '',
+            reasoningBlocks: null,
+            reasoningDetails: null,
         });
         // Explicit string-ness check — downstream consumers shouldn't
         // need to defend against undefined / null.
         expect(typeof returned.reasoning).toBe('string');
+    });
+
+    test('propagates non-empty reasoningBlocks / reasoningDetails arrays', async () => {
+        // Claude multi-block reasoning + OpenRouter reasoning_details are
+        // piped through generateTask → iter-tool-calling verbatim so
+        // downstream consumers can replay them on later turns. Empty
+        // arrays or non-array values collapse to null so consumers only
+        // ever see "real array with data" or "null".
+        const blocks = [{ type: 'thinking', text: 'step 1', signature: 'sig' }];
+        const details = [{ type: 'reasoning.summary', summary: [{ type: 'text', text: 'sum' }] }];
+        const context = makeContext({
+            assistantText: 'hi',
+            toolCalls: [],
+            reasoningBlocks: blocks,
+            reasoningDetails: details,
+        });
+        const returned = await runner.requestToolCallsWithRetry(context, { rpmLimit: 0 }, {
+            tools: dummyTools,
+            allowNoToolCalls: true,
+            includeAssistantText: true,
+        });
+        expect(returned.reasoningBlocks).toEqual(blocks);
+        expect(returned.reasoningDetails).toEqual(details);
+    });
+
+    test('collapses empty reasoningBlocks / reasoningDetails arrays to null', async () => {
+        const context = makeContext({
+            assistantText: 'hi',
+            toolCalls: [],
+            reasoningBlocks: [],
+            reasoningDetails: [],
+        });
+        const returned = await runner.requestToolCallsWithRetry(context, { rpmLimit: 0 }, {
+            tools: dummyTools,
+            allowNoToolCalls: true,
+            includeAssistantText: true,
+        });
+        expect(returned.reasoningBlocks).toBeNull();
+        expect(returned.reasoningDetails).toBeNull();
     });
 });

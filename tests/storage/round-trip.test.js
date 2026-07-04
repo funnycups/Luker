@@ -233,13 +233,19 @@ describe('round-trip: GroupRepo', () => {
         };
         await fsRepo.save(fsh.handle, 'grp-1', original);
         const fromFs = await fsRepo.get(fsh.handle, 'grp-1');
+        // fromFs carries the fields the repo actually persists (e.g.
+        // GroupRepo.save stamps `date_added` on first write). Round-trip
+        // asserts the SQLite side reads back the SAME payload that FS
+        // stored — not the pre-save literal, which would silently lose
+        // repo-added fields.
+        expect(fromFs).toEqual({ ...original, date_added: expect.any(Number) });
 
         const sqh = await makeSqlite();
         try {
             const sqRepo = new GroupRepo({ engine: sqh.engine });
             await sqRepo.save(sqh.handle, 'grp-1', fromFs);
             const fromSqlite = await sqRepo.get(sqh.handle, 'grp-1');
-            expect(fromSqlite).toEqual(original);
+            expect(fromSqlite).toEqual(fromFs);
         } finally {
             fsh.cleanup();
             sqh.cleanup();

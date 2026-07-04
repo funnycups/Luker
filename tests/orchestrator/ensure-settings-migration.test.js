@@ -146,6 +146,7 @@ jest.unstable_mockModule('../../public/scripts/slash-commands.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/ui-templates.js', () => ({
     buildOrchestrationEditorPopupPanelHtml: () => '',
     buildOrchestratorSettingsHtml: () => '',
+    injectWorkspaceIntoTabHost: () => {},
     renderInheritOrOverridePanel: () => '',
     renderSkillChipsPlaceholder: () => '',
 }));
@@ -175,7 +176,15 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/output-fo
 // world-info.js (orchestrator-local, not the ST one) is leaf-pure and
 // re-exported elsewhere; load the real module.
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/pure-preset-body.js', () => ({
+    // Only the large BODY blob is stubbed (this suite doesn't exercise its
+    // contents). Keep every other export mirrored here — main.js and its
+    // link graph reference DIRECTOR_PURE_PRESET_NAME by identifier and ESM
+    // link errors out with "does not provide an export named ..." if a
+    // future constant is added to pure-preset-body.js and forgotten here.
+    // Mock can't `await import(...)` the same specifier — that would loop
+    // through the same mock and OOM.
     DIRECTOR_PURE_PRESET_BODY: {},
+    DIRECTOR_PURE_PRESET_NAME: 'orchestrator:director-pure',
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/snapshot-cache.js', () => ({
     canReuseLatestOrchestrationSnapshot: () => false,

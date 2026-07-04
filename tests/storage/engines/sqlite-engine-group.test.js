@@ -43,8 +43,14 @@ describe('SqliteEngine group handler', () => {
     });
 
     test('put rejects empty id', async () => {
+        // Contract: put with an empty `id` MUST reject before writing.
+        // Message wording is an implementation detail (the shared
+        // name-validation layer says "id is required" for empty, "invalid
+        // id" for other reasons); accept either so a future wording tweak
+        // in name-validation.js doesn't break this parity test.
         await expect(engine.withTransaction(handle, async (tx) =>
-            tx.putResource({ kind: 'group', handle, id: '' }, { doc: {} }))).rejects.toThrow(/invalid id/);
+            tx.putResource({ kind: 'group', handle, id: '' }, { doc: {} })))
+            .rejects.toThrow(/invalid id|(^|\W)id\W.*required/i);
     });
 
     test('put preserves created_at on overwrite, re-stamps updated_at', async () => {

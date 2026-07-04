@@ -1,9 +1,23 @@
 import { RuleTester } from 'eslint';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const requireCjs = createRequire(import.meta.url);
 const rule = requireCjs('../../eslint-rules/no-raw-fs-in-endpoint.cjs');
+
+// The rule anchors its allowlist paths against `path.resolve(__dirname,
+// '..', entry)` — i.e. the repo root, one level above eslint-rules/.
+// This suite's `filename` fields have to resolve against the SAME
+// anchor or the allowlist match silently fails (and the "avatars.js is
+// allowlisted" valid case turns into a bogus rule report). Anchoring
+// against `process.cwd()` here would resolve into `<repo>/tests/src/...`
+// when the suite runs from tests/, which mismatches the rule's
+// `<repo>/src/...` anchor. Use the test-file directory (`tests/lint/`)
+// walked up two levels to get the repo root deterministically.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const endpointPath = (rel) => path.resolve(REPO_ROOT, rel);
 
 const ruleTester = new RuleTester({
     parserOptions: { ecmaVersion: 'latest', sourceType: 'module' },
@@ -17,7 +31,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        return getChatRepo().get(request.user.profile.handle, 'x');
                    }`,
-            filename: path.resolve('src/endpoints/test-clean.js'),
+            filename: endpointPath('src/endpoints/test-clean.js'),
         },
         // Allowlisted file — uses fs.* and request.user.directories together, but exempt.
         {
@@ -25,7 +39,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        fs.writeFileSync(request.user.directories.chats + '/x', 'data');
                    }`,
-            filename: path.resolve('src/endpoints/avatars.js'),
+            filename: endpointPath('src/endpoints/avatars.js'),
         },
         // Non-endpoint file (rule scoped to src/endpoints/). Same code, outside scope.
         {
@@ -33,25 +47,25 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        fs.writeFileSync(request.user.directories.chats + '/x', 'data');
                    }`,
-            filename: path.resolve('src/users.js'),
+            filename: endpointPath('src/users.js'),
         },
         // Same file uses fs and req.user.directories but not in the same function — OK.
         {
             code: `import fs from 'fs';
                    function a(request) { return request.user.directories.chats; }
                    function b() { fs.writeFileSync('/tmp/x', 'data'); }`,
-            filename: path.resolve('src/endpoints/clean-split.js'),
+            filename: endpointPath('src/endpoints/clean-split.js'),
         },
         // fs.* without request.user.directories — OK (e.g. writing to /tmp).
         {
             code: `import fs from 'fs';
                    function h() { fs.writeFileSync('/tmp/x', 'data'); }`,
-            filename: path.resolve('src/endpoints/tmp-only.js'),
+            filename: endpointPath('src/endpoints/tmp-only.js'),
         },
         // request.user.directories without fs.* — OK (e.g. read-only path inspection).
         {
             code: `function h(request) { return request.user.directories.chats; }`,
-            filename: path.resolve('src/endpoints/path-only.js'),
+            filename: endpointPath('src/endpoints/path-only.js'),
         },
         // Outer reads request.user.directories.* but the fs.* call lives in a
         // nested helper that does NOT touch req.user.dirs. Each function gets
@@ -65,7 +79,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                        logToTmp();
                        return dir;
                    }`,
-            filename: path.resolve('src/endpoints/nested-helper.js'),
+            filename: endpointPath('src/endpoints/nested-helper.js'),
         },
         // Allowlisted file uses fs.promises.* with request.user.directories.* — exempt.
         {
@@ -73,7 +87,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        await fs.promises.writeFile(request.user.directories.backups + '/x', 'data');
                    }`,
-            filename: path.resolve('src/endpoints/backups.js'),
+            filename: endpointPath('src/endpoints/backups.js'),
         },
         // Allowlisted file uses fsPromises alias with request.user.directories.* — exempt.
         {
@@ -81,19 +95,19 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        await fsPromises.readdir(request.user.directories.avatars);
                    }`,
-            filename: path.resolve('src/endpoints/avatars.js'),
+            filename: endpointPath('src/endpoints/avatars.js'),
         },
         // fs.promises.* without request.user.directories — OK (e.g. writing to /tmp).
         {
             code: `import fs from 'fs';
                    async function h() { await fs.promises.writeFile('/tmp/x', 'data'); }`,
-            filename: path.resolve('src/endpoints/tmp-only-async.js'),
+            filename: endpointPath('src/endpoints/tmp-only-async.js'),
         },
         // fsPromises.* alias without request.user.directories — OK.
         {
             code: `import { promises as fsPromises } from 'node:fs';
                    async function h() { await fsPromises.readdir('/tmp'); }`,
-            filename: path.resolve('src/endpoints/tmp-only-async2.js'),
+            filename: endpointPath('src/endpoints/tmp-only-async2.js'),
         },
     ],
     invalid: [
@@ -103,7 +117,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        fs.writeFileSync(request.user.directories.chats + '/x', 'data');
                    }`,
-            filename: path.resolve('src/endpoints/regression.js'),
+            filename: endpointPath('src/endpoints/regression.js'),
             errors: [{ messageId: 'rawFsInEndpoint' }],
         },
         // req alias + readdirSync — flagged.
@@ -112,7 +126,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(req) {
                        fs.readdirSync(req.user.directories.worlds);
                    }`,
-            filename: path.resolve('src/endpoints/regression2.js'),
+            filename: endpointPath('src/endpoints/regression2.js'),
             errors: [{ messageId: 'rawFsInEndpoint' }],
         },
         // fsPromises alias also caught.
@@ -121,7 +135,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        fsPromises.unlinkSync(request.user.directories.chats + '/x');
                    }`,
-            filename: path.resolve('src/endpoints/regression3.js'),
+            filename: endpointPath('src/endpoints/regression3.js'),
             errors: [{ messageId: 'rawFsInEndpoint' }],
         },
         // Inner IIFE is the real offender — fs.* and request.user.directories
@@ -136,7 +150,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                            fs.writeFileSync(request.user.directories.chats + '/x', 'data');
                        })();
                    }`,
-            filename: path.resolve('src/endpoints/inner-offender.js'),
+            filename: endpointPath('src/endpoints/inner-offender.js'),
             errors: [{ messageId: 'rawFsInEndpoint' }],
         },
         // Non-allowlisted endpoint uses fs.promises.writeFile with request.user.directories.* — flagged.
@@ -145,7 +159,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(request) {
                        await fs.promises.writeFile(request.user.directories.chats + '/x', 'data');
                    }`,
-            filename: path.resolve('src/endpoints/regression-async1.js'),
+            filename: endpointPath('src/endpoints/regression-async1.js'),
             errors: [{ messageId: 'rawFsInEndpoint' }],
         },
         // Non-allowlisted endpoint uses fsPromises.readdir with req.user.directories.* — flagged.
@@ -154,7 +168,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
                    async function h(req) {
                        await fsPromises.readdir(req.user.directories.worlds);
                    }`,
-            filename: path.resolve('src/endpoints/regression-async2.js'),
+            filename: endpointPath('src/endpoints/regression-async2.js'),
             errors: [{ messageId: 'rawFsInEndpoint' }],
         },
     ],

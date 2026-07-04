@@ -387,10 +387,15 @@ describe('MigrationRunner: FS to SQLite', () => {
 
     test('REGRESSION: inline verify reports the first divergent key and short-circuits', async () => {
         // Seed two per-character chats. Fault-inject the dest chat repo so the
-        // FIRST chat.save() commits the wrong body — the second chat must
+        // FIRST chat.saveRaw() commits the wrong body — the second chat must
         // never be written under inline-verify (the runner short-circuits the
         // copy loop). Under the legacy standalone-verify model, BOTH chats
         // get written first and verify catches the divergence afterward.
+        //
+        // Note: the runner writes chats via saveRaw() (not save()) so
+        // source integrity/createdAt/updatedAt round-trip. Fault-injecting
+        // on save() would never fire during migration — the test would
+        // silently succeed against the un-tampered saveRaw path.
         await src.repos.chat.save(
             src.handle, 'TestChar', 'c1',
             { chat_metadata: {}, user_name: 'U' },
@@ -404,7 +409,7 @@ describe('MigrationRunner: FS to SQLite', () => {
             null,
         );
 
-        const origSave = dst.repos.chat.save.bind(dst.repos.chat);
+        const origSaveRaw = dst.repos.chat.saveRaw.bind(dst.repos.chat);
         let writeCount = 0;
         const writtenNames = [];
         let firstWrittenName = null;
@@ -412,7 +417,7 @@ describe('MigrationRunner: FS to SQLite', () => {
             ...dst.repos,
             chat: {
                 ...dst.repos.chat,
-                save: async (handle, charDir, name, header, body, attachments, opts) => {
+                saveRaw: async (handle, charDir, name, record) => {
                     writeCount++;
                     writtenNames.push(name);
                     if (writeCount === 1) {
@@ -420,18 +425,24 @@ describe('MigrationRunner: FS to SQLite', () => {
                         // inline verify trips immediately. The runner must
                         // not proceed to the second chat.
                         firstWrittenName = name;
-                        return origSave(
-                            handle, charDir, name, header,
-                            [{ name: 'U', mes: 'WRONG' }], attachments, opts,
-                        );
+                        return origSaveRaw(handle, charDir, name, {
+                            ...record,
+                            body: [{ name: 'U', mes: 'WRONG' }],
+                        });
                     }
-                    return origSave(handle, charDir, name, header, body, attachments, opts);
+                    return origSaveRaw(handle, charDir, name, record);
                 },
                 get: dst.repos.chat.get.bind(dst.repos.chat),
                 getState: dst.repos.chat.getState.bind(dst.repos.chat),
                 setState: dst.repos.chat.setState.bind(dst.repos.chat),
                 listStateNamespaces: dst.repos.chat.listStateNamespaces.bind(dst.repos.chat),
                 listRecent: dst.repos.chat.listRecent.bind(dst.repos.chat),
+                // Bind every prototype method the migration runner calls
+                // through this handle. Spreading `...dst.repos.chat`
+                // copies own props only, so prototype methods like
+                // save fall out. (The runner touches save via
+                // rollback / snapshot restore paths.)
+                save: dst.repos.chat.save.bind(dst.repos.chat),
             },
         };
 

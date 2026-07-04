@@ -52,7 +52,7 @@ function makeStore() {
         async getChatState(ns, options) {
             const k = String(ns ?? '').trim().toLowerCase();
             const v = partitionFor(options?.target).get(k);
-            return v == null ? null : structuredClone(v);
+            return { ok: true, state: v == null ? null : structuredClone(v) };
         },
         async updateChatState(ns, updater, options) {
             const k = String(ns ?? '').trim().toLowerCase();

@@ -90,6 +90,11 @@ async function seedPayload(harness) {
         members: ['a.png', 'b.png'], chats: ['gc-1'],
     };
     await group.save(handle, 'grp-1', groupDoc);
+    // Read back post-save so `expected.group` reflects the fields the repo
+    // actually persists (GroupRepo.save stamps `date_added` on first write
+    // so FS↔DB migration preserves it). Asserting round-trip against the
+    // pre-save literal would silently lose any repo-added field.
+    const savedGroupDoc = await group.get(handle, 'grp-1');
     await chat.save(
         handle, null, 'gc-1',
         { user_name: 'U', chat_metadata: { variables: {} } },
@@ -123,7 +128,7 @@ async function seedPayload(harness) {
         presets: { openaiCreative, textgenLocal },
         presetState,
         world: worldDoc,
-        group: groupDoc,
+        group: savedGroupDoc,
         groupChat: await chat.get(handle, null, 'gc-1', { isGroup: true, groupId: 'gc-1' }),
         chatAliceC1: await chat.get(handle, 'Alice', 'c1'),
         chatAliceC1Mg: await chat.getState(handle, 'Alice', 'c1', 'memory-graph'),

@@ -57,6 +57,12 @@ function screenshotPath(step) {
  * panel is long enough to scroll under its modal container; capturing
  * mid-form would crop the banner out of frame even though it's
  * technically in the DOM.
+ *
+ * DEFAULT: skips the actual `page.screenshot()` write. Regression runs
+ * shouldn't rewrite in-tree docs images. The scroll/wait side effects
+ * still run so the banner-text assertions below observe the same
+ * post-scroll DOM state they did before. Opt-in to regenerate via
+ * `LUKER_UPDATE_DOC_SCREENSHOTS=1`.
  */
 async function shootPanel(page, step) {
     const panel = page.locator('.userLanSync').first();
@@ -69,13 +75,18 @@ async function shootPanel(page, step) {
         // care about the tab strip (01, 02, 06, 08) frame cleanly.
         await panel.evaluate((el) => { el.scrollIntoView({ block: 'start' }); });
     }
+    if (!process.env.LUKER_UPDATE_DOC_SCREENSHOTS) return;
     await page.screenshot({ path: screenshotPath(step), fullPage: false });
 }
 
 let A, B;
 
 test.beforeAll(async () => {
-    fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+    // Only create the docs screenshots dir when a regen was requested.
+    // Regression runs skip the screenshot writes entirely (see shootPanel).
+    if (process.env.LUKER_UPDATE_DOC_SCREENSHOTS) {
+        fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+    }
 
     A = await startServer({
         batchKey: 'sync',
