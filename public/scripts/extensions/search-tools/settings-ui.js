@@ -39,6 +39,20 @@ export function createSearchToolsSettingsUi(deps) {
 
     let activeAgentRunInfoToast = null;
 
+    // Toggle the depth/role input blocks based on the current position
+    // select — these settings only apply when position === atDepth
+    // (`applyManagedEntriesToLorebook` writes them unconditionally to
+    // the entry, but the ST world-info engine ignores non-atDepth entries'
+    // depth/role at inject time). Showing the fields for other positions
+    // implied they had an effect. Root-scoped so the helper works from
+    // both the init hydrate step and the position change handler.
+    function updateLorebookPositionVisibility(root) {
+        const positionVal = Number(root.find('#search_tools_lorebook_position').val());
+        const isAtDepth = positionVal === Number(world_info_position.atDepth);
+        root.find('#search_tools_lorebook_depth_block').toggle(isAtDepth);
+        root.find('#search_tools_lorebook_role_block').toggle(isAtDepth);
+    }
+
     function renderSearchProviderOptions(selectedProvider = '') {
         const selected = normalizeProvider(selectedProvider);
         return getAvailableSearchProviders()
@@ -146,14 +160,18 @@ export function createSearchToolsSettingsUi(deps) {
             <option value="${world_info_position.EMBottom}">${escapeHtml(i18n('After Example Messages'))}</option>
             <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
         </select>
-        <label for="search_tools_lorebook_depth">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}</label>
-        <input id="search_tools_lorebook_depth" class="text_pole" type="number" min="0" max="9999" step="1" />
-        <label for="search_tools_lorebook_role">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}</label>
-        <select id="search_tools_lorebook_role" class="text_pole">
-            <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
-            <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
-            <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
-        </select>
+        <div id="search_tools_lorebook_depth_block" style="display:none">
+            <label for="search_tools_lorebook_depth">${escapeHtml(i18n('Injection depth'))}</label>
+            <input id="search_tools_lorebook_depth" class="text_pole" type="number" min="0" max="9999" step="1" />
+        </div>
+        <div id="search_tools_lorebook_role_block" style="display:none">
+            <label for="search_tools_lorebook_role">${escapeHtml(i18n('Injection role'))}</label>
+            <select id="search_tools_lorebook_role" class="text_pole">
+                <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
+                <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
+                <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
+            </select>
+        </div>
         <label for="search_tools_lorebook_entry_order">${escapeHtml(i18n('Injection order'))}</label>
         <input id="search_tools_lorebook_entry_order" class="text_pole" type="number" min="0" max="20000" step="1" />
         <label for="search_tools_agent_system_prompt">${escapeHtml(i18n('Search-stage agent system prompt'))}</label>
@@ -564,6 +582,7 @@ export function createSearchToolsSettingsUi(deps) {
         root.find('#search_tools_lorebook_depth').val(String(settings.lorebookDepth));
         root.find('#search_tools_lorebook_role').val(String(settings.lorebookRole));
         root.find('#search_tools_lorebook_entry_order').val(String(settings.lorebookEntryOrder));
+        updateLorebookPositionVisibility(root);
         root.find('#search_tools_agent_system_prompt').val(String(settings.agentSystemPrompt || DEFAULT_SETTINGS.agentSystemPrompt));
         root.find('#search_tools_agent_final_stage_prompt').val(String(settings.agentFinalStagePrompt || DEFAULT_SETTINGS.agentFinalStagePrompt));
 
@@ -638,6 +657,7 @@ export function createSearchToolsSettingsUi(deps) {
         root.on('change.searchTools', '#search_tools_lorebook_position', function () {
             settings.lorebookPosition = normalizeLorebookPosition(jQuery(this).val());
             jQuery(this).val(String(settings.lorebookPosition));
+            updateLorebookPositionVisibility(root);
             void syncSharedLorebookForLoadedChat(getContext());
             saveSettingsDebounced();
         });
