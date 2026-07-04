@@ -1482,6 +1482,10 @@ async function sendDeepSeekRequest(request, response) {
         if (request.body.reasoning_effort) {
             bodyParams['reasoning_effort'] = request.body.reasoning_effort;
             bodyParams['thinking'] = { type: 'enabled' };
+            // DeepSeek thinking mode rejects `tool_choice` (returns 400). Strip it here
+            // so the frontend patch is not the only line of defense; `tools` stays and
+            // the service falls back to auto behavior. Forced-function callers rely on retry.
+            delete bodyParams['tool_choice'];
         }
 
         const requestBody = {

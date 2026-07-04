@@ -3657,6 +3657,13 @@ export async function createGenerationParameters(settings, model, type, messages
     // https://api-docs.deepseek.com/api/create-chat-completion
     if (settings.chat_completion_source === chat_completion_sources.DEEPSEEK) {
         generate_data.top_p = generate_data.top_p || Number.EPSILON;
+        // DeepSeek thinking mode rejects `tool_choice` (returns 400). When reasoning_effort
+        // is set the backend enables thinking, so strip tool_choice here. `tools` stays,
+        // service falls back to auto behavior; callers that forced a named function
+        // (e.g. orchestrator agenda planner) must handle non-call via retry.
+        if (generate_data.reasoning_effort) {
+            delete generate_data.tool_choice;
+        }
     }
 
     if (settings.chat_completion_source === chat_completion_sources.XAI) {
