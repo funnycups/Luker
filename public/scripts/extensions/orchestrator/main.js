@@ -1959,6 +1959,15 @@ function refreshOrchestrationEditorPopup(context, settings) {
     mount.find('#orch-popup-luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
     mount.find('#orch-popup-luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
     mount.find('#orch-popup-luker_orch_rpm_limit').val(String(settings.rpmLimit || 0));
+    // Capsule injection fields (same fieldset as drawer). Popup change
+    // handlers for these are not yet wired (a broader popup-capsule gap;
+    // see bindUi comment), but at minimum the values open in sync with
+    // settings and the depth/role visibility toggles correctly on open.
+    mount.find('#orch-popup-luker_orch_capsule_position').val(String(Number(settings.capsuleInjectPosition)));
+    mount.find('#orch-popup-luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
+    mount.find('#orch-popup-luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
+    mount.find('#orch-popup-luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
+    updateCapsulePositionVisibility(mount);
     // Hydrate per-agent / mode-level skill chips. The renderers above emit
     // `[data-luker-skill-chips-mount]` placeholders; the hydrate step loads
     // the inventory once (with a brief cache), resolves each placeholder's
@@ -6443,6 +6452,25 @@ async function openAiIterationStudio(context, settings, root) {
     });
 }
 
+// Toggle capsule-injection depth/role fields based on the current
+// position select. The depth/role settings only apply when position ===
+// atDepth (`injectCapsuleToPayload` in capsule-injection.js reads them
+// only in the atDepth branch); showing them for other positions confused
+// users into thinking they had an effect. Root-scoped so it works on
+// drawer (`#luker_orch`) and popup (`.luker_orch_editor_popup`) alike;
+// the popup capsule fields are currently unwired for change events (see
+// the pre-existing gap comment near `luker_orch_capsule_position`
+// hydration in bindUi), but the popup's initial render still passes
+// through here so the fields at least open in the correct state.
+function updateCapsulePositionVisibility($root) {
+    const $sel = $root.find('[id$="luker_orch_capsule_position"]').first();
+    if (!$sel.length) return;
+    const positionVal = Number($sel.val());
+    const isAtDepth = positionVal === Number(world_info_position.atDepth);
+    $root.find('[id$="luker_orch_capsule_depth_block"]').toggle(isAtDepth);
+    $root.find('[id$="luker_orch_capsule_role_block"]').toggle(isAtDepth);
+}
+
 function bindUi() {
     const context = getContext();
     const settings = getSettings();
@@ -6476,6 +6504,7 @@ function bindUi() {
     root.find('#luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
     root.find('#luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
     root.find('#luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
+    updateCapsulePositionVisibility(root);
     // Drawer canonical Runtime-limits fields (General tab). The workspace-
     // side duplicates were removed alongside this bindUi, so these are
     // now the only editor-writable copies for director/agenda/loop caps.
@@ -7530,6 +7559,7 @@ function bindUi() {
     root.on('change.lukerOrch', '#luker_orch_capsule_position', function () {
         settings.capsuleInjectPosition = normalizeCapsuleInjectPosition(jQuery(this).val());
         jQuery(this).val(String(settings.capsuleInjectPosition));
+        updateCapsulePositionVisibility(root);
         saveSettingsDebounced();
     });
 

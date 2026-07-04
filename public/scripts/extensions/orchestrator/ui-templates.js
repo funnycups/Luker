@@ -1620,14 +1620,18 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
                     <option value="${world_info_position.EMBottom}">${escapeHtml(i18n('After Example Messages'))}</option>
                     <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
                 </select>
-                <label for="${s('luker_orch_capsule_depth')}">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}${fh('About injection depth', 'Injection depth help body')}</label>
-                <input id="${s('luker_orch_capsule_depth')}" class="text_pole" type="number" min="0" step="1" />
-                <label for="${s('luker_orch_capsule_role')}">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}${fh('About injection role', 'Injection role help body')}</label>
-                <select id="${s('luker_orch_capsule_role')}" class="text_pole">
-                    <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
-                    <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
-                    <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
-                </select>
+                <div id="${s('luker_orch_capsule_depth_block')}" style="display:none">
+                    <label for="${s('luker_orch_capsule_depth')}">${escapeHtml(i18n('Injection depth'))}${fh('About injection depth', 'Injection depth help body')}</label>
+                    <input id="${s('luker_orch_capsule_depth')}" class="text_pole" type="number" min="0" step="1" />
+                </div>
+                <div id="${s('luker_orch_capsule_role_block')}" style="display:none">
+                    <label for="${s('luker_orch_capsule_role')}">${escapeHtml(i18n('Injection role'))}${fh('About injection role', 'Injection role help body')}</label>
+                    <select id="${s('luker_orch_capsule_role')}" class="text_pole">
+                        <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
+                        <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
+                        <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
+                    </select>
+                </div>
                 <label for="${s('luker_orch_capsule_custom_instruction')}">${escapeHtml(i18n('Custom orchestration result instruction (prepended before analysis)'))}${fh('About custom capsule instruction', 'Custom capsule instruction help body')}</label>
                 <textarea id="${s('luker_orch_capsule_custom_instruction')}" class="text_pole textarea_compact" rows="2" placeholder="${escapeHtml(i18n('e.g. Follow this guidance first, then write final reply in-character.'))}"></textarea>
             </div>
