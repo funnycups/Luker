@@ -3987,6 +3987,7 @@
     "Frontend debug logs": "前端调试日志",
     "Android debug recording": "Android 调试记录",
     "Record additional Android-side diagnostics for crash reports. Off by default. Turn on and reproduce to get more details.": "为崩溃报告记录额外的 Android 端诊断信息。默认关闭。打开后复现问题以获得更详细的信息。",
+    "Takes effect after the next app restart. Also enables in-app WebView CDP diagnostics collection while on.": "开关切换后需重启应用才会生效。开启期间同时启用应用内 WebView CDP 诊断采集。",
     "Debug logs export started.": "调试日志导出已开始。",
     "Export started": "导出已开始",
     "Failed to export debug logs.": "导出调试日志失败。",
