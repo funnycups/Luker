@@ -578,6 +578,19 @@ function cancelAudioDeactivateTimer() {
 }
 
 function syncMobileKeepAliveUi() {
+    // isMobile() gates the entire subsystem, not just UI visibility. The
+    // audio-mode setting persists in settings.json across devices; if a user
+    // enables it on their phone and then loads the same account on a desktop
+    // browser, initKeepAlive() would report platform === 'web' (AudioContext
+    // exists everywhere) and the GENERATION_STARTED listener would enter
+    // audio mode on every generation — pausing the user's Spotify/YouTube
+    // and showing a MediaSession card, with no UI to turn it off. Skip init
+    // entirely on non-mobile so the persisted flag is inert off-device.
+    if (!isMobile()) {
+        $('#luker_mobile_keep_alive').closest('label.checkbox_label').hide();
+        return;
+    }
+
     if (!syncMobileKeepAliveUi._initialized) {
         initKeepAlive();
         eventSource.on(event_types.GENERATION_STARTED, onAudioActivationStarted);
@@ -597,7 +610,7 @@ function syncMobileKeepAliveUi() {
         });
         syncMobileKeepAliveUi._initialized = true;
     }
-    const supported = isKeepAliveSupported() && isMobile();
+    const supported = isKeepAliveSupported();
     const $row = $('#luker_mobile_keep_alive').closest('label.checkbox_label');
     $row.toggle(supported);
     syncMobileKeepAliveCheckbox();
