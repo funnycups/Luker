@@ -1902,6 +1902,36 @@ function refreshOrchestrationEditorPopup(context, settings) {
     if (currentMode && currentMode !== ORCH_EXECUTION_MODE_SINGLE) {
         injectWorkspaceIntoTabHost(mount, currentMode, getOrchestratorUiTemplateDeps(), context, settings, 'orch-popup-');
     }
+    // Hydrate popup General-tab canonical Runtime-limits fields. Mirrors
+    // the drawer bindUi block at ~6431-6452: same value sources (director /
+    // agenda / loop editor drafts resolved via getDisplayedScopeForMode),
+    // just scoped to popup ids (`orch-popup-...`). Without this the popup
+    // General tab renders these 9 inputs empty and typing into them clobbers
+    // real values with defaults on the first change.
+    {
+        const directorEditor = getDirectorEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR));
+        ensureDirectorEditorIntegrity(directorEditor);
+        mount.find('#orch-popup-luker_orch_director_max_rounds').val(String(Number(directorEditor.maxRounds) > 0 ? directorEditor.maxRounds : 40));
+        mount.find('#orch-popup-luker_orch_director_max_concurrent_subagents').val(String(Number(directorEditor.maxConcurrentSubagents) > 0 ? directorEditor.maxConcurrentSubagents : 4));
+        mount.find('#orch-popup-luker_orch_director_max_total_subagent_runs').val(String(Number(directorEditor.maxTotalSubagentRuns) > 0 ? directorEditor.maxTotalSubagentRuns : 16));
+        mount.find('#orch-popup-luker_orch_director_discard_on_abort').prop('checked', Boolean(directorEditor.discardOnAbort));
+    }
+    {
+        const agendaEditor = getAgendaEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA));
+        ensureAgendaEditorIntegrity(agendaEditor);
+        mount.find('#orch-popup-luker_orch_agenda_planner_max_rounds').val(String(agendaEditor.limits?.plannerMaxRounds || 6));
+        mount.find('#orch-popup-luker_orch_agenda_max_concurrent_agents').val(String(agendaEditor.limits?.maxConcurrentAgents || 3));
+        mount.find('#orch-popup-luker_orch_agenda_max_total_runs').val(String(agendaEditor.limits?.maxTotalRuns || 24));
+    }
+    {
+        const loopEditor = getLoopEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP));
+        ensureLoopEditorIntegrity(loopEditor);
+        mount.find('#orch-popup-luker_orch_loop_max_rounds').val(String(loopEditor.max_rounds || 40));
+        // Stored as ms, edited in seconds. Floor 10s matches
+        // LOOP_WALL_CLOCK_FLOOR_MS / 1000 in persistence.js.
+        const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
+        mount.find('#orch-popup-luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
+    }
     // Hydrate per-agent / mode-level skill chips. The renderers above emit
     // `[data-luker-skill-chips-mount]` placeholders; the hydrate step loads
     // the inventory once (with a brief cache), resolves each placeholder's
@@ -6799,8 +6829,9 @@ function bindUi() {
 
     // ─── Custom tools (Layer-2 / Layer-3) handlers ────────────────────
     // Custom tools live alongside the builtin tool flags but are routed
-    // by `data-orch-mode` since each mode stores them at a different
-    // path:
+    // by `data-orch-mode-tag` (the CT template's own routing attribute,
+    // distinct from the workspace wrapper's `data-orch-mode` visibility
+    // attribute) since each mode stores them at a different path:
     //   loop      → editor.tools.custom        + editor.customTools[]
     //   director  → editor.tools.custom        + editor.customTools[]
     //   agenda    → editor.defaultTools.custom + editor.customTools[]
@@ -6808,7 +6839,12 @@ function bindUi() {
     // The handler mutates the in-memory editor draft only; the user
     // commits via the existing Save To Global / Save To Character buttons.
     function resolveCustomToolsHost(element, modeAttr) {
-        const explicitMode = String(modeAttr || jQuery(element).attr('data-orch-mode') || '').toLowerCase();
+        // Read routing mode from the CT template's own `data-orch-mode-tag`
+        // (renamed from `data-orch-mode` to disambiguate from the workspace
+        // wrapper's visibility attribute). Falls back to the ancestor
+        // `[data-orch-mode]` wrapper injected by `injectWorkspaceIntoTabHost`
+        // when the click originated on a nested control without the tag.
+        const explicitMode = String(modeAttr || jQuery(element).attr('data-orch-mode-tag') || '').toLowerCase();
         const mode = explicitMode
             || String(jQuery(element).closest('[data-orch-mode]').attr('data-orch-mode') || '').toLowerCase();
         let executionMode = mode;

@@ -165,8 +165,11 @@ function listCustomToolsForFlagUi(customTools, flagBucket) {
  * grouped checkbox list (Profile / Extension / From SillyTavern), and
  * the per-row Edit / Duplicate / Remove buttons for handwritten entries.
  *
- * The outer wrapper carries `data-orch-mode="<mode>"` so the click
+ * The outer wrapper carries `data-orch-mode-tag="<mode>"` so the click
  * handlers in main.js can route to the correct editor accessor.
+ * (Kept distinct from the workspace-level `data-orch-mode` attribute so
+ * `renderDynamicPanels`'s visibility loop and `resolveCustomToolsHost`'s
+ * routing lookup don't step on each other.)
  *
  * `customTools` is the profile-owned definitions array (`editor.customTools`
  * for loop/director/agenda, `editor.spec.customTools` for spec).
@@ -182,23 +185,23 @@ function renderCustomToolsSection(deps, safeScope, mode, customTools, flagBucket
         byGroup[it.source].push(it);
     }
     const renderProfileRow = (it, idx) => `
-        <div class="luker_orch_ct_row" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">
+        <div class="luker_orch_ct_row" data-orch-ct-idx="${idx}" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}">
             <label class="checkbox_label luker_orch_ct_row_label">
-                <input type="checkbox" data-orch-tool-flag="${escapeHtml(it.name)}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}" ${it.enabled ? 'checked' : ''} />
+                <input type="checkbox" data-orch-tool-flag="${escapeHtml(it.name)}" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}" ${it.enabled ? 'checked' : ''} />
                 <span class="luker_orch_ct_name">${escapeHtml(it.displayName)}</span>
                 <span class="luker_orch_ct_mode">[${escapeHtml(it.mode)}]</span>
                 ${it.description ? `<span class="luker_orch_ct_desc">${escapeHtml(it.description)}</span>` : ''}
             </label>
             <div class="luker_orch_ct_actions_inline">
-                <button class="menu_button menu_button_small" type="button" data-orch-action="edit-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Edit'))}</button>
-                <button class="menu_button menu_button_small" type="button" data-orch-action="duplicate-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Duplicate'))}</button>
-                <button class="menu_button menu_button_small" type="button" data-orch-action="remove-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Remove'))}</button>
+                <button class="menu_button menu_button_small" type="button" data-orch-action="edit-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Edit'))}</button>
+                <button class="menu_button menu_button_small" type="button" data-orch-action="duplicate-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Duplicate'))}</button>
+                <button class="menu_button menu_button_small" type="button" data-orch-action="remove-custom-tool" data-orch-ct-idx="${idx}" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Remove'))}</button>
             </div>
         </div>
     `;
     const renderExtRow = (it) => `
         <label class="checkbox_label luker_orch_ct_row_label">
-            <input type="checkbox" data-orch-tool-flag="${escapeHtml(it.name)}" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}" ${it.enabled ? 'checked' : ''} />
+            <input type="checkbox" data-orch-tool-flag="${escapeHtml(it.name)}" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}" ${it.enabled ? 'checked' : ''} />
             <span class="luker_orch_ct_name">${escapeHtml(it.displayName)}</span>
             <span class="luker_orch_ct_mode">[${escapeHtml(it.mode)}]</span>
             ${it.description ? `<span class="luker_orch_ct_desc">${escapeHtml(it.description)}</span>` : ''}
@@ -231,12 +234,12 @@ function renderCustomToolsSection(deps, safeScope, mode, customTools, flagBucket
         </div>
     `;
     return `
-<details class="luker_orch_tools_section luker_orch_ct_section" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">
+<details class="luker_orch_tools_section luker_orch_ct_section" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}">
     <summary>${escapeHtml(i18n('Custom Tools'))}</summary>
     <div class="luker_orch_ct_actions">
-        <button class="menu_button menu_button_small" type="button" data-orch-action="add-custom-tool" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Add custom tool'))}</button>
-        <button class="menu_button menu_button_small" type="button" data-orch-action="import-default-custom-tools" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}" title="${escapeHtml(i18n('Re-add the default custom tools shipped with the orchestrator. Existing tools with the same name are skipped unless you confirm overwrite.'))}">${escapeHtml(i18n('Import defaults'))}</button>
-        <button class="menu_button menu_button_small" type="button" data-orch-action="open-bridge-st-tools" data-orch-mode="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Bridge SillyTavern tools...'))}</button>
+        <button class="menu_button menu_button_small" type="button" data-orch-action="add-custom-tool" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Add custom tool'))}</button>
+        <button class="menu_button menu_button_small" type="button" data-orch-action="import-default-custom-tools" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}" title="${escapeHtml(i18n('Re-add the default custom tools shipped with the orchestrator. Existing tools with the same name are skipped unless you confirm overwrite.'))}">${escapeHtml(i18n('Import defaults'))}</button>
+        <button class="menu_button menu_button_small" type="button" data-orch-action="open-bridge-st-tools" data-orch-mode-tag="${escapeHtml(mode)}" data-scope="${safeScope}">${escapeHtml(i18n('Bridge SillyTavern tools...'))}</button>
     </div>
     <div class="luker_orch_ct_subgroup">
         <div class="luker_orch_ct_subgroup_title">${escapeHtml(i18n('Profile (defined in this profile)'))}</div>
@@ -1324,7 +1327,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
             <div class="flex-container">
                 ${commonActions(deps, idPrefix, { includeViewLastRun: true, includeCopyRows: false })}
             </div>
-            <small class="luker_orch_loop_board_hint">${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
+            <small>${escapeHtml(i18n('Loop mode runs a single agent that calls tools in a loop and finalizes when ready.'))}</small>
         </div>`;
     const directorBoard = `
         <div class="luker_orch_board" style="display:none" data-orch-mode="director">
@@ -1339,7 +1342,7 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
             <div class="flex-container">
                 ${commonActions(deps, idPrefix, { includeViewLastRun: false, includeCopyRows: false })}
             </div>
-            <small class="luker_orch_director_board_hint">${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
+            <small>${escapeHtml(i18n('Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.'))}</small>
         </div>`;
     // Single-mode topbar block hosts the runtime tools row (view-last-run,
     // show-run-panel, manage-skills) and the descriptive hint. Kept in
