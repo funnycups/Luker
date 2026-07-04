@@ -8698,6 +8698,18 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                         await saveChatConditional();
                     }
 
+                    // Unblock the UI (and fire GENERATION_ENDED via
+                    // activateSendButtons → hideStopButton) BEFORE emitting
+                    // MESSAGE_RECEIVED, mirroring onFinishStreaming's
+                    // `markUIGenStopped`-first ordering. Listeners of
+                    // GENERATION_ENDED that arm debounced work now run in
+                    // parallel with async MESSAGE_RECEIVED handlers instead
+                    // of strictly after them — matching streaming semantics
+                    // so extensions see the same relative timing as the core
+                    // streaming path. Persistence still happens above, so
+                    // the write race fixed in 497a767824 stays fixed.
+                    unblockGeneration(type);
+
                     await eventSource.emit(event_types.MESSAGE_RECEIVED, placeholderId, type);
                     await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, placeholderId, type);
 
@@ -8713,7 +8725,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     // the prior bookkeeping that created the slot.
 
                     triggerAutoContinue?.(cleanedText, false);
-                    unblockGeneration(type);
                     // Wrap with `fromTakeover` so onSuccess short-circuits
                     // (otherwise it would re-run saveReply on the returned
                     // text and duplicate the entry).
