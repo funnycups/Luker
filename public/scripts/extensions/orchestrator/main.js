@@ -1747,6 +1747,15 @@ function renderDynamicPanels(root, context) {
     if (executionMode && executionMode !== ORCH_EXECUTION_MODE_SINGLE) {
         injectWorkspaceIntoTabHost(root, executionMode, getOrchestratorUiTemplateDeps(), context, settings, '');
     }
+    // Hydrate skill-chip mounts inside the drawer. The workspace renderers
+    // emit `[data-luker-skill-chips-mount]` placeholders whose "loading"
+    // text is only replaced when this call runs; `refreshOrchestrationEditorPopup`
+    // runs the same step for the popup mount, but the drawer needs its own
+    // pass since `renderDynamicPanels` is the drawer's re-render funnel.
+    const drawerRootEl = root.get(0);
+    if (drawerRootEl instanceof HTMLElement) {
+        void hydrateSkillChips(drawerRootEl, context, settings);
+    }
     refreshOrchestrationEditorPopup(context, settings);
 }
 
