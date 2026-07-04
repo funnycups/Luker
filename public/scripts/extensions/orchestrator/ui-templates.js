@@ -908,10 +908,6 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         : {};
     const mainAgent = director.mainAgent && typeof director.mainAgent === 'object' ? director.mainAgent : {};
     const subAgents = Array.isArray(director.subAgents) ? director.subAgents : [];
-    const maxRounds = Number.isFinite(Number(director.maxRounds)) ? Number(director.maxRounds) : 40;
-    const maxConcurrentSubagents = Number.isFinite(Number(director.maxConcurrentSubagents)) ? Number(director.maxConcurrentSubagents) : 4;
-    const maxTotalSubagentRuns = Number.isFinite(Number(director.maxTotalSubagentRuns)) ? Number(director.maxTotalSubagentRuns) : 16;
-    const discardOnAbort = Boolean(director.discardOnAbort);
     const directorDefaultTools = (director.tools && typeof director.tools === 'object') ? director.tools : null;
     const mainAgentTools = (mainAgent.tools && typeof mainAgent.tools === 'object') ? mainAgent.tools : null;
     const context = getContext();
@@ -919,7 +915,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No sub-agents yet.'))}</div>`
         : subAgents.map((subagent, index) => renderDirectorSubAgentRow(deps, safeScope, subagent, index, directorDefaultTools, profile)).join('');
     const agentsHtml = `
-<div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}" data-orch-mode-block="director">
+<div class="luker-studio-workspace luker_orch_director_block" data-luker-scope-root="${safeScope}">
     <div class="luker-studio-workspace-title" data-i18n="Director Orchestration">${escapeHtml(title || i18n('Director Orchestration'))}</div>
     <div class="luker-studio-workspace-col">
         <h4 data-i18n="Main agent">${escapeHtml(i18n('Main agent'))}</h4>
@@ -959,25 +955,6 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         agentRef: 'main',
     }, i18n('Skills visible to the main agent. + inherits mode default.'))}
         </details>
-
-        <h4 data-i18n="Limits">${escapeHtml(i18n('Limits'))}</h4>
-        <label>
-            <span data-i18n="Maximum tool-calling rounds">${escapeHtml(i18n('Maximum tool-calling rounds'))}</span>
-            <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxRounds" data-scope="${safeScope}" value="${escapeHtml(String(maxRounds))}" />
-        </label>
-        <label>
-            <span data-i18n="Maximum concurrent sub-agents">${escapeHtml(i18n('Maximum concurrent sub-agents'))}</span>
-            <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxConcurrentSubagents" data-scope="${safeScope}" value="${escapeHtml(String(maxConcurrentSubagents))}" />
-        </label>
-        <label>
-            <span data-i18n="Maximum total sub-agent runs per turn">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}</span>
-            <input class="text_pole" type="number" min="1" step="1" data-orch-director-field="maxTotalSubagentRuns" data-scope="${safeScope}" value="${escapeHtml(String(maxTotalSubagentRuns))}" />
-        </label>
-
-        <label class="checkbox_label">
-            <input type="checkbox" data-orch-director-field="discardOnAbort" data-scope="${safeScope}" ${discardOnAbort ? 'checked' : ''} />
-            <span data-i18n="Discard partial message on abort">${escapeHtml(i18n('Discard partial message on abort'))}</span>
-        </label>
     </div>
     <div class="luker-studio-workspace-col">
         <h4 data-i18n="Sub-agents">${escapeHtml(i18n('Sub-agents'))}</h4>
@@ -1348,8 +1325,8 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
     // show-run-panel, manage-skills) and the descriptive hint. Kept in
     // the topbar because single mode has no per-agent board.
     const singleBlock = `
-        <small id="${s('luker_orch_single_mode_hint')}" style="opacity:0.8" data-orch-mode="single">${escapeHtml(i18n('Single-agent mode is enabled. Workflow board is hidden and runtime uses the simplified single node profile.'))}</small>
-        <div id="${s('luker_orch_single_mode_runtime_tools')}" class="luker_orch_board luker_orch_single_mode_tools" data-orch-mode="single">
+        <small id="${s('luker_orch_single_mode_hint')}" style="display:none;opacity:0.8" data-orch-mode="single">${escapeHtml(i18n('Single-agent mode is enabled. Workflow board is hidden and runtime uses the simplified single node profile.'))}</small>
+        <div id="${s('luker_orch_single_mode_runtime_tools')}" class="luker_orch_board luker_orch_single_mode_tools" style="display:none" data-orch-mode="single">
             <div class="flex-container">
                 <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
                 <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
@@ -1369,13 +1346,11 @@ function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
     }).join('');
 
     // Actions bar — profile-management actions promoted from the popup
-    // workspace. `data-orch-mode-scope` marks the reload button as
-    // mode-scoped for Task 11's dispatch. Save-to-character /
-    // clear-character are conditional on the active character and
-    // scope (matches popup semantics).
+    // workspace. Save-to-character / clear-character are conditional on
+    // the active character and scope (matches popup semantics).
     const actionsBar = `
         <div class="luker-studio-actions-bar">
-            <div class="menu_button" data-luker-action="reload-current" data-orch-mode-scope>${escapeHtml(i18n('Reload Current'))}</div>
+            <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
             <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
             <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
             <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>

@@ -1642,10 +1642,26 @@ function buildLatestOrchestrationStateSummary(context) {
     return i18n('Last run state: none');
 }
 
+// Apply mode-based visibility across an orchestrator UI scope. Every node
+// carrying `data-orch-mode` is shown when its value equals the current
+// executionMode and hidden otherwise; untagged nodes are not touched.
+// The capsule settings fieldset (`data-orch-mode-block="capsule"`) is
+// hidden in director mode because director writes the message body
+// directly and never emits a capsule. Called from `renderDynamicPanels`
+// (drawer) and `refreshOrchestrationEditorPopup` (popup) so both surfaces
+// share the same toggle path.
+function applyOrchestratorModeVisibility($scope, executionMode) {
+    const directorModeEnabled = executionMode === ORCH_EXECUTION_MODE_DIRECTOR;
+    $scope.find('[data-orch-mode]').each(function () {
+        const modeAttr = String(jQuery(this).attr('data-orch-mode') || '');
+        jQuery(this).toggle(modeAttr === executionMode);
+    });
+    $scope.find('[data-orch-mode-block="capsule"]').toggle(!directorModeEnabled);
+}
+
 function renderDynamicPanels(root, context) {
     const settings = getSettings();
     const executionMode = getExecutionMode(settings);
-    const directorModeEnabled = executionMode === ORCH_EXECUTION_MODE_DIRECTOR;
     syncCharacterEditorWithActiveAvatar(context);
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
@@ -1715,21 +1731,11 @@ function renderDynamicPanels(root, context) {
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
-    // Attribute-based mode visibility: every node carrying `data-orch-mode`
-    // is shown when its value equals the current executionMode, hidden
-    // otherwise. Untagged nodes are not touched. Replaces the four
-    // hard-coded `_board` id toggles and the single-mode helper toggles.
-    root.find('[data-orch-mode]').each(function () {
-        const modeAttr = String(jQuery(this).attr('data-orch-mode') || '');
-        jQuery(this).toggle(modeAttr === executionMode);
-    });
-    // Capsule settings (injection position/depth/role + custom result
-    // instruction) only apply to modes that produce a capsule for the
-    // main LLM to consume. Director writes the message body directly
-    // and never produces a capsule, so this whole group is irrelevant
-    // there. Fieldset is tagged `data-orch-mode-block="capsule"` so the
-    // hide-in-director rule is a single line here.
-    root.find('[data-orch-mode-block="capsule"]').toggle(!directorModeEnabled);
+    // Attribute-based mode visibility (see `applyOrchestratorModeVisibility`
+    // for the toggle semantics): shows nodes matching the current mode and
+    // hides the capsule fieldset in director. Same helper is called from
+    // `refreshOrchestrationEditorPopup` so drawer + popup share the loop.
+    applyOrchestratorModeVisibility(root, executionMode);
     root.find('#luker_orch_execution_mode').val(executionMode);
     // Re-inject the workspace HTML into the drawer's Agents / Tools &
     // Skills tab hosts for the new mode. Every state transition that
@@ -1902,6 +1908,11 @@ function refreshOrchestrationEditorPopup(context, settings) {
     if (currentMode && currentMode !== ORCH_EXECUTION_MODE_SINGLE) {
         injectWorkspaceIntoTabHost(mount, currentMode, getOrchestratorUiTemplateDeps(), context, settings, 'orch-popup-');
     }
+    // Mirror the drawer's mode-visibility toggle so the popup topbar
+    // boards, per-mode workspace, single-mode hint, and capsule fieldset
+    // reflect the current mode. Without this the popup always shows
+    // spec-mode UI regardless of the actual execution mode.
+    applyOrchestratorModeVisibility(mount, currentMode);
     // Hydrate popup General-tab canonical Runtime-limits fields. Mirrors
     // the drawer bindUi block at ~6431-6452: same value sources (director /
     // agenda / loop editor drafts resolved via getDisplayedScopeForMode),
@@ -7077,7 +7088,7 @@ function bindUi() {
         return { scope, editor: getDirectorEditorByScope(scope) };
     }
 
-    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-director-field]', function (event) {
+    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-director-field], .luker_orch_editor_popup [data-orch-director-field]`, function (event) {
         const $el = jQuery(this);
         const type = String($el.attr('type') || '').toLowerCase();
         // Avoid double-firing for checkbox: only consume `change`.
@@ -7094,7 +7105,7 @@ function bindUi() {
         setDirectorFieldByDotPath(editor, dotPath, value);
     });
 
-    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-subagent-field]', function (event) {
+    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-subagent-field], .luker_orch_editor_popup [data-orch-subagent-field]`, function (event) {
         const $el = jQuery(this);
         const type = String($el.attr('type') || '').toLowerCase();
         if (type === 'checkbox' && event.type === 'input') return;
@@ -7123,7 +7134,7 @@ function bindUi() {
         subAgents[index][field] = value;
     });
 
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-add-subagent]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-add-subagent], .luker_orch_editor_popup [data-orch-add-subagent]`, function () {
         const { editor } = getDirectorEditorForElement(this);
         if (!editor) return;
         if (!Array.isArray(editor.subAgents)) {
@@ -7142,7 +7153,7 @@ function bindUi() {
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-orch-remove-subagent]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-remove-subagent], .luker_orch_editor_popup [data-orch-remove-subagent]`, function () {
         const $el = jQuery(this);
         const index = Number($el.attr('data-subagent-index'));
         if (!Number.isInteger(index) || index < 0) return;
@@ -7161,7 +7172,7 @@ function bindUi() {
     // runtime falls back to the same default for an empty textarea
     // (director-runtime.js) — the button's job is purely UX (give the
     // user something to read and modify), not behavioral.
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-reset-main-prompt"]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-reset-main-prompt"], .luker_orch_editor_popup [data-luker-action="director-reset-main-prompt"]`, function () {
         if (!window.confirm(i18n('Reset main-agent system prompt to default? This overwrites the current text.'))) {
             return;
         }
@@ -7332,7 +7343,7 @@ function bindUi() {
     // tools. "Override" copies the current default snapshot so the user
     // starts from what they were inheriting; "reset" sets the field to
     // null so cascade-resolver falls back to the next layer.
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-default-tools-enable-all"]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-default-tools-enable-all"], .luker_orch_editor_popup [data-luker-action="director-default-tools-enable-all"]`, function () {
         const { editor } = getDirectorEditorForElement(this);
         if (!editor) return;
         editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: true, forceFinalize: false });
@@ -7340,7 +7351,7 @@ function bindUi() {
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-default-tools-disable-all"]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-default-tools-disable-all"], .luker_orch_editor_popup [data-luker-action="director-default-tools-disable-all"]`, function () {
         const { editor } = getDirectorEditorForElement(this);
         if (!editor) return;
         editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: false, forceFinalize: false });
@@ -7348,7 +7359,7 @@ function bindUi() {
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-mainagent-tools-override"]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-mainagent-tools-override"], .luker_orch_editor_popup [data-luker-action="director-mainagent-tools-override"]`, function () {
         const { editor } = getDirectorEditorForElement(this);
         if (!editor) return;
         if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
@@ -7364,14 +7375,14 @@ function bindUi() {
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-mainagent-tools-reset"]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-mainagent-tools-reset"], .luker_orch_editor_popup [data-luker-action="director-mainagent-tools-reset"]`, function () {
         const { editor } = getDirectorEditorForElement(this);
         if (!editor?.mainAgent) return;
         editor.mainAgent.tools = null;
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-subagent-tools-override"]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-subagent-tools-override"], .luker_orch_editor_popup [data-luker-action="director-subagent-tools-override"]`, function () {
         const index = Number(jQuery(this).attr('data-subagent-index'));
         if (!Number.isInteger(index) || index < 0) return;
         const { editor } = getDirectorEditorForElement(this);
@@ -7386,7 +7397,7 @@ function bindUi() {
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
-    jQuery(document).on('click.lukerOrchEditor', '.luker_orch_editor_popup [data-luker-action="director-subagent-tools-reset"]', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-subagent-tools-reset"], .luker_orch_editor_popup [data-luker-action="director-subagent-tools-reset"]`, function () {
         const index = Number(jQuery(this).attr('data-subagent-index'));
         if (!Number.isInteger(index) || index < 0) return;
         const { editor } = getDirectorEditorForElement(this);
