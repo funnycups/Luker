@@ -1508,6 +1508,7 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
             <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
             <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
             <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
+            <div class="menu_button" data-luker-action="reset-single">${escapeHtml(i18n('Reset Prompts to Defaults'))}</div>
             ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
         </div>`;
 
@@ -1519,8 +1520,14 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}>${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, safeScope))}</div>`;
     }).join('');
 
-    // Actions bar — profile-management actions.
-    const actionsBar = `
+    // Actions bar — profile-management actions. Single mode has no
+    // preset library / character override / draft-based editor (its
+    // prompts bind straight to settings), so these buttons don't apply
+    // in single mode. Wrap per non-single mode so the existing
+    // `[data-orch-mode]` visibility loop hides the bar when
+    // executionMode === 'single'; single mode's reset-to-defaults button
+    // lives inside `singleBlock` above.
+    const profileActionsBarHtml = `
         <div class="luker-studio-actions-bar">
             <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
             <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
@@ -1530,6 +1537,10 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
             ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
             ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
         </div>`;
+    const actionsBar = ['spec', 'agenda', 'loop', 'director'].map(mode => {
+        const modeVisible = currentMode === mode ? '' : ' style="display:none"';
+        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}>${profileActionsBarHtml}</div>`;
+    }).join('');
 
     return `<div class="luker_orch_general_tab">
         <fieldset class="luker_orch_general_fieldset">

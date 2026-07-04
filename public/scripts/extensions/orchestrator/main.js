@@ -7986,6 +7986,25 @@ function bindUi() {
             return;
         }
 
+        if (action === 'reset-single') {
+            // Single mode does not participate in the preset library —
+            // its runtime profile is synthesized from `settings.singleAgentSystemPrompt`
+            // and `settings.singleAgentUserPromptTemplate` (see `getActivePreset`),
+            // so `reset-global`'s `writeActivePreset('single', ...)` path
+            // has no slot to write into. Reset for single mode restores
+            // both settings fields to their module defaults instead.
+            if (!window.confirm(i18n('Reset the single-agent system prompt and user prompt template to defaults? This will overwrite the current values.'))) {
+                return;
+            }
+            settings.singleAgentSystemPrompt = DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT;
+            settings.singleAgentUserPromptTemplate = DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE;
+            await saveSettings();
+            renderDynamicPanels(root, context);
+            notifySuccess(i18n('Single-agent prompts reset to defaults.'));
+            updateUiStatus(i18n('Single-agent prompts reset to defaults.'));
+            return;
+        }
+
         if (action === 'reset-global') {
             // Reset writes the factory payload into the CURRENTLY ACTIVE
             // preset slot via `writeActivePreset`, so the same path the
