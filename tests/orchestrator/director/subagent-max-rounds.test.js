@@ -1,12 +1,14 @@
 // Per-sub-agent maxRounds contract.
 //
 // Background: sub-agents used to share a single hardcoded cap
-// (`SUB_AGENT_MAX_ROUNDS = 16` in director-tools.js). That cap is the
-// runaway safety net for the sub-agent's own tool-call loop. Different
-// sub-agents have different convergence profiles — a single-shot critic
-// finishes in 1–3 rounds while a recall-style memory scout doing schema
-// + several drills wants more headroom — so the cap is now per-agent
-// configurable on the sub-agent profile (`subAgents[].maxRounds`).
+// (`SUB_AGENT_MAX_ROUNDS` in director-tools.js — historically 16, now
+// 40; imported here so the test tracks any future raise). That cap is
+// the runaway safety net for the sub-agent's own tool-call loop.
+// Different sub-agents have different convergence profiles — a
+// single-shot critic finishes in 1–3 rounds while a recall-style
+// memory scout doing schema + several drills wants more headroom —
+// so the cap is now per-agent configurable on the sub-agent profile
+// (`subAgents[].maxRounds`).
 //
 // Sanitizer contract for the new field:
 //   - omitted / null / invalid → inherit the legacy default (null kept
@@ -19,7 +21,10 @@ import {
     createDefaultDirectorProfile,
     sanitizeDirectorProfile,
 } from '../../../public/scripts/extensions/orchestrator/director-defaults.js';
-import { createSubagentDispatcher } from '../../../public/scripts/extensions/orchestrator/director-tools.js';
+import {
+    createSubagentDispatcher,
+    SUB_AGENT_MAX_ROUNDS,
+} from '../../../public/scripts/extensions/orchestrator/director-tools.js';
 
 function makeSubAgent(overrides = {}) {
     return {
@@ -148,9 +153,10 @@ describe('director sub-agent maxRounds — runtime dispatcher honors per-agent c
     });
 
     test('sub-agent with maxRounds=null falls back to the module-default cap', async () => {
-        // No per-agent override → use SUB_AGENT_MAX_ROUNDS (16). With a
-        // never-converging stub, the loop must iterate 16 times before
-        // erroring.
+        // No per-agent override → use SUB_AGENT_MAX_ROUNDS. With a
+        // never-converging stub, the loop must iterate SUB_AGENT_MAX_ROUNDS
+        // times before erroring — the imported constant tracks any
+        // future raise.
         const fakeGenerate = jest.fn(async () => ({
             assistantText: '',
             toolCalls: [{ id: 't', name: 'chat_read_range', args: { start: -1, end: -1 } }],
@@ -181,7 +187,7 @@ describe('director sub-agent maxRounds — runtime dispatcher honors per-agent c
         const handleId = await dispatcher.dispatch({ subagentId: 'inherit', task: 'go' });
         const [result] = await dispatcher.awaitAll([handleId]);
 
-        expect(fakeGenerate).toHaveBeenCalledTimes(16);
-        expect(result.error).toMatch(/did not converge within 16 rounds/);
+        expect(fakeGenerate).toHaveBeenCalledTimes(SUB_AGENT_MAX_ROUNDS);
+        expect(result.error).toMatch(new RegExp(`did not converge within ${SUB_AGENT_MAX_ROUNDS} rounds`));
     });
 });

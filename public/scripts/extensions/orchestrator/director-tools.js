@@ -363,6 +363,14 @@ export async function executeDraftSearchTool(handle, args) {
  */
 const SUB_AGENT_MAX_ROUNDS = 40;
 
+// Re-export so the value is a single source of truth. Tests
+// (tests/orchestrator/director/subagent-max-rounds.test.js) and any
+// future consumers that want the "default cap" number should read it
+// from here rather than duplicating the literal — a raise (16→40 in
+// commit 488505cb2 shipped without the test picking it up; export
+// prevents that class of drift).
+export { SUB_AGENT_MAX_ROUNDS };
+
 /**
  * Creates the per-turn sub-agent dispatcher used by director-runtime.
  *
