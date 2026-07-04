@@ -210,28 +210,34 @@
 
 .popup .luker-studio-toolbar,
 .popup .luker-studio-actions-bar,
-.popup .luker-studio-actions-row {
+.popup .luker-studio-actions-row,
+.luker_orch_general_tab .luker-studio-toolbar,
+.luker_orch_general_tab .luker-studio-actions-bar,
+.luker_orch_general_tab .luker-studio-actions-row {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
     align-items: center;
 }
 
-.popup .luker-studio-actions-bar {
+.popup .luker-studio-actions-bar,
+.luker_orch_general_tab .luker-studio-actions-bar {
     padding: var(--ls-space-xs) var(--ls-space-sm);
     border-radius: var(--ls-radius-md);
     background: var(--ls-panel-bg);
     border: var(--ls-border-soft);
 }
 
-.popup .luker-studio-toolbar-field {
+.popup .luker-studio-toolbar-field,
+.luker_orch_general_tab .luker-studio-toolbar-field {
     display: grid;
     gap: 4px;
     flex: 1 1 240px;
     min-width: 0;
 }
 
-.popup .luker-studio-toolbar-actions {
+.popup .luker-studio-toolbar-actions,
+.luker_orch_general_tab .luker-studio-toolbar-actions {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
@@ -243,7 +249,13 @@
    ═════════════════════════════════════════════════════════════════════ */
 
 .popup .luker-studio .menu_button,
-.popup .luker-studio .menu_button_small {
+.popup .luker-studio .menu_button_small,
+.luker_orch_general_tab .menu_button,
+.luker_orch_general_tab .menu_button_small,
+.luker_orch_agents_tab .menu_button,
+.luker_orch_agents_tab .menu_button_small,
+.luker_orch_tools_skills_tab .menu_button,
+.luker_orch_tools_skills_tab .menu_button_small {
     display: inline-flex;
     flex: 0 0 auto;
     width: fit-content;
@@ -261,18 +273,32 @@
 }
 
 .popup .luker-studio .menu_button:not(.disabled):hover,
-.popup .luker-studio .menu_button_small:not(.disabled):hover {
+.popup .luker-studio .menu_button_small:not(.disabled):hover,
+.luker_orch_general_tab .menu_button:not(.disabled):hover,
+.luker_orch_general_tab .menu_button_small:not(.disabled):hover,
+.luker_orch_agents_tab .menu_button:not(.disabled):hover,
+.luker_orch_agents_tab .menu_button_small:not(.disabled):hover,
+.luker_orch_tools_skills_tab .menu_button:not(.disabled):hover,
+.luker_orch_tools_skills_tab .menu_button_small:not(.disabled):hover {
     transform: translateY(-1px);
 }
 
 .popup .luker-studio .menu_button:not(.disabled):active,
-.popup .luker-studio .menu_button_small:not(.disabled):active {
+.popup .luker-studio .menu_button_small:not(.disabled):active,
+.luker_orch_general_tab .menu_button:not(.disabled):active,
+.luker_orch_general_tab .menu_button_small:not(.disabled):active,
+.luker_orch_agents_tab .menu_button:not(.disabled):active,
+.luker_orch_agents_tab .menu_button_small:not(.disabled):active,
+.luker_orch_tools_skills_tab .menu_button:not(.disabled):active,
+.luker_orch_tools_skills_tab .menu_button_small:not(.disabled):active {
     transform: translateY(0);
 }
 
 /* Primary button — used for the dominant CTA in a popup (e.g. Send) */
 .popup .luker-studio .menu_button.luker-studio-primary,
-.popup .luker-studio .menu_button_small.luker-studio-primary {
+.popup .luker-studio .menu_button_small.luker-studio-primary,
+.luker_orch_general_tab .menu_button.luker-studio-primary,
+.luker_orch_general_tab .menu_button_small.luker-studio-primary {
     background: color-mix(in oklab, var(--ls-accent-primary) 18%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-primary) 55%, transparent);
     color: var(--SmartThemeBodyColor);
@@ -280,13 +306,17 @@
 }
 
 .popup .luker-studio .menu_button.luker-studio-primary:not(.disabled):hover,
-.popup .luker-studio .menu_button_small.luker-studio-primary:not(.disabled):hover {
+.popup .luker-studio .menu_button_small.luker-studio-primary:not(.disabled):hover,
+.luker_orch_general_tab .menu_button.luker-studio-primary:not(.disabled):hover,
+.luker_orch_general_tab .menu_button_small.luker-studio-primary:not(.disabled):hover {
     background: color-mix(in oklab, var(--ls-accent-primary) 28%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-primary) 75%, transparent);
 }
 
 .popup .luker-studio .menu_button.luker-studio-danger,
-.popup .luker-studio .menu_button_small.luker-studio-danger {
+.popup .luker-studio .menu_button_small.luker-studio-danger,
+.luker_orch_general_tab .menu_button.luker-studio-danger,
+.luker_orch_general_tab .menu_button_small.luker-studio-danger {
     background: color-mix(in oklab, var(--ls-accent-danger) 14%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-danger) 50%, transparent);
 }
@@ -335,7 +365,9 @@
     min-height: 0;
 }
 
-.popup .luker-studio-workspace {
+.popup .luker-studio-workspace ,
+.luker_orch_agents_tab .luker-studio-workspace ,
+.luker_orch_tools_skills_tab .luker-studio-workspace {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-md);
@@ -345,26 +377,34 @@
     background: var(--ls-panel-bg);
 }
 
-.popup .luker-studio-workspace-title {
+.popup .luker-studio-workspace-title ,
+.luker_orch_agents_tab .luker-studio-workspace-title ,
+.luker_orch_tools_skills_tab .luker-studio-workspace-title {
     font-size: 1.05rem;
     font-weight: 700;
     line-height: 1.25;
 }
 
-.popup .luker-studio-workspace-grid {
+.popup .luker-studio-workspace-grid ,
+.luker_orch_agents_tab .luker-studio-workspace-grid ,
+.luker_orch_tools_skills_tab .luker-studio-workspace-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: var(--ls-space-md);
 }
 
-.popup .luker-studio-workspace-col {
+.popup .luker-studio-workspace-col ,
+.luker_orch_agents_tab .luker-studio-workspace-col ,
+.luker_orch_tools_skills_tab .luker-studio-workspace-col {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     min-width: 0;
 }
 
-.popup .luker-studio-workspace-col-title {
+.popup .luker-studio-workspace-col-title ,
+.luker_orch_agents_tab .luker-studio-workspace-col-title ,
+.luker_orch_tools_skills_tab .luker-studio-workspace-col-title {
     font-weight: 700;
     font-size: 0.95rem;
     opacity: var(--ls-text-strong);
@@ -377,7 +417,9 @@
    8 · CARD
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-card {
+.popup .luker-studio-card ,
+.luker_orch_agents_tab .luker-studio-card ,
+.luker_orch_tools_skills_tab .luker-studio-card {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -388,11 +430,15 @@
     transition: background-color var(--ls-motion-fast), border-color var(--ls-motion-fast);
 }
 
-.popup .luker-studio-card:hover {
+.popup .luker-studio-card:hover ,
+.luker_orch_agents_tab .luker-studio-card:hover ,
+.luker_orch_tools_skills_tab .luker-studio-card:hover {
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 24%, transparent);
 }
 
-.popup .luker-studio-card-header {
+.popup .luker-studio-card-header,
+.luker_orch_agents_tab .luker-studio-card-header,
+.luker_orch_tools_skills_tab .luker-studio-card-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -400,36 +446,48 @@
     flex-wrap: wrap;
 }
 
-.popup .luker-studio-card-actions {
+.popup .luker-studio-card-actions,
+.luker_orch_agents_tab .luker-studio-card-actions,
+.luker_orch_tools_skills_tab .luker-studio-card-actions {
     display: inline-flex;
     gap: 6px;
     flex-wrap: wrap;
 }
 
-.popup .luker-studio-card-label {
+.popup .luker-studio-card-label ,
+.luker_orch_agents_tab .luker-studio-card-label ,
+.luker_orch_tools_skills_tab .luker-studio-card-label {
     font-weight: 600;
     opacity: var(--ls-text-strong);
     line-height: 1.3;
 }
 
-.popup .luker-studio-card-meta {
+.popup .luker-studio-card-meta ,
+.luker_orch_agents_tab .luker-studio-card-meta ,
+.luker_orch_tools_skills_tab .luker-studio-card-meta {
     font-size: 0.86rem;
     opacity: var(--ls-text-muted);
 }
 
-.popup .luker-studio-add-row {
+.popup .luker-studio-add-row ,
+.luker_orch_agents_tab .luker-studio-add-row ,
+.luker_orch_tools_skills_tab .luker-studio-add-row {
     display: flex;
     gap: var(--ls-space-xs);
     align-items: center;
     flex-wrap: wrap;
 }
 
-.popup .luker-studio-add-row .text_pole {
+.popup .luker-studio-add-row .text_pole ,
+.luker_orch_agents_tab .luker-studio-add-row .text_pole ,
+.luker_orch_tools_skills_tab .luker-studio-add-row .text_pole {
     flex: 1 1 200px;
     min-width: 0;
 }
 
 .popup .luker-studio-empty-hint,
+.luker_orch_agents_tab .luker-studio-empty-hint,
+.luker_orch_tools_skills_tab .luker-studio-empty-hint,
 .popup .luker-studio-empty {
     opacity: var(--ls-text-muted);
     font-size: 0.92rem;
@@ -1376,7 +1434,9 @@
    footer with the +Node button.
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-pipeline {
+.popup .luker-studio-pipeline ,
+.luker_orch_agents_tab .luker-studio-pipeline ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -1384,7 +1444,9 @@
     min-width: 0;
 }
 
-.popup .luker-studio-pipeline-stage {
+.popup .luker-studio-pipeline-stage ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-sm);
@@ -1396,19 +1458,27 @@
     position: relative;
 }
 
-.popup .luker-studio-pipeline-stage:hover {
+.popup .luker-studio-pipeline-stage:hover ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage:hover ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage:hover {
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 24%, transparent);
 }
 
-.popup .luker-studio-pipeline-stage[data-mode="parallel"] {
+.popup .luker-studio-pipeline-stage[data-mode="parallel"] ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage[data-mode="parallel"] ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage[data-mode="parallel"] {
     border-left: 4px solid color-mix(in oklab, var(--ls-accent-user) 65%, transparent);
 }
 
-.popup .luker-studio-pipeline-stage[data-mode="serial"] {
+.popup .luker-studio-pipeline-stage[data-mode="serial"] ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage[data-mode="serial"] ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage[data-mode="serial"] {
     border-left: 4px solid color-mix(in oklab, var(--ls-accent-assistant) 65%, transparent);
 }
 
-.popup .luker-studio-pipeline-stage-head {
+.popup .luker-studio-pipeline-stage-head ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage-head ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-head {
     display: flex;
     align-items: center;
     gap: var(--ls-space-xs);
@@ -1417,17 +1487,23 @@
     border-bottom: 1px dashed var(--ls-divider);
 }
 
-.popup .luker-studio-pipeline-stage-id {
+.popup .luker-studio-pipeline-stage-id ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage-id ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-id {
     flex: 1 1 220px;
     min-width: 0;
 }
 
-.popup .luker-studio-pipeline-stage-id .text_pole {
+.popup .luker-studio-pipeline-stage-id .text_pole ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage-id .text_pole ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-id .text_pole {
     font-weight: 600;
     width: 100%;
 }
 
-.popup .luker-studio-pipeline-mode-pill {
+.popup .luker-studio-pipeline-mode-pill ,
+.luker_orch_agents_tab .luker-studio-pipeline-mode-pill ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-mode-pill {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -1440,32 +1516,42 @@
     border: var(--ls-border-soft);
 }
 
-.popup .luker-studio-pipeline-mode-pill.parallel {
+.popup .luker-studio-pipeline-mode-pill.parallel ,
+.luker_orch_agents_tab .luker-studio-pipeline-mode-pill.parallel ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-mode-pill.parallel {
     background: color-mix(in oklab, var(--ls-accent-user) 16%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-user) 45%, transparent);
     color: color-mix(in oklab, var(--ls-accent-user) 85%, var(--SmartThemeBodyColor));
 }
 
-.popup .luker-studio-pipeline-mode-pill.serial {
+.popup .luker-studio-pipeline-mode-pill.serial ,
+.luker_orch_agents_tab .luker-studio-pipeline-mode-pill.serial ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-mode-pill.serial {
     background: color-mix(in oklab, var(--ls-accent-assistant) 16%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-assistant) 45%, transparent);
     color: color-mix(in oklab, var(--ls-accent-assistant) 85%, var(--SmartThemeBodyColor));
 }
 
-.popup .luker-studio-pipeline-nodes {
+.popup .luker-studio-pipeline-nodes ,
+.luker_orch_agents_tab .luker-studio-pipeline-nodes ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-nodes {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     min-width: 0;
 }
 
-.popup .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes {
+.popup .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: var(--ls-space-xs);
 }
 
-.popup .luker-studio-pipeline-stage-footer {
+.popup .luker-studio-pipeline-stage-footer ,
+.luker_orch_agents_tab .luker-studio-pipeline-stage-footer ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-footer {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
@@ -1473,7 +1559,9 @@
     padding-top: var(--ls-space-2xs);
 }
 
-.popup .luker-studio-pipeline-node {
+.popup .luker-studio-pipeline-node ,
+.luker_orch_agents_tab .luker-studio-pipeline-node ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node {
     border: var(--ls-border-soft);
     border-radius: var(--ls-radius-md);
     background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 88%, transparent);
@@ -1481,16 +1569,22 @@
     transition: border-color var(--ls-motion-fast), box-shadow var(--ls-motion-fast);
 }
 
-.popup .luker-studio-pipeline-node:hover {
+.popup .luker-studio-pipeline-node:hover ,
+.luker_orch_agents_tab .luker-studio-pipeline-node:hover ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node:hover {
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 28%, transparent);
 }
 
-.popup .luker-studio-pipeline-node[open] {
+.popup .luker-studio-pipeline-node[open] ,
+.luker_orch_agents_tab .luker-studio-pipeline-node[open] ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node[open] {
     border-color: color-mix(in oklab, var(--ls-accent-primary) 45%, transparent);
     box-shadow: 0 0 0 1px color-mix(in oklab, var(--ls-accent-primary) 25%, transparent);
 }
 
-.popup .luker-studio-pipeline-node > summary {
+.popup .luker-studio-pipeline-node > summary ,
+.luker_orch_agents_tab .luker-studio-pipeline-node > summary ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node > summary {
     cursor: pointer;
     list-style: none;
     padding: 8px 12px;
@@ -1500,15 +1594,21 @@
     transition: background-color var(--ls-motion-fast);
 }
 
-.popup .luker-studio-pipeline-node > summary::-webkit-details-marker {
+.popup .luker-studio-pipeline-node > summary::-webkit-details-marker ,
+.luker_orch_agents_tab .luker-studio-pipeline-node > summary::-webkit-details-marker ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node > summary::-webkit-details-marker {
     display: none;
 }
 
-.popup .luker-studio-pipeline-node > summary:hover {
+.popup .luker-studio-pipeline-node > summary:hover ,
+.luker_orch_agents_tab .luker-studio-pipeline-node > summary:hover ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node > summary:hover {
     background: var(--ls-hover-bg);
 }
 
-.popup .luker-studio-pipeline-node-summary {
+.popup .luker-studio-pipeline-node-summary ,
+.luker_orch_agents_tab .luker-studio-pipeline-node-summary ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node-summary {
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -1516,7 +1616,9 @@
     min-width: 0;
 }
 
-.popup .luker-studio-pipeline-node-icon {
+.popup .luker-studio-pipeline-node-icon ,
+.luker_orch_agents_tab .luker-studio-pipeline-node-icon ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1530,7 +1632,9 @@
     opacity: var(--ls-text-muted);
 }
 
-.popup .luker-studio-pipeline-node-name {
+.popup .luker-studio-pipeline-node-name ,
+.luker_orch_agents_tab .luker-studio-pipeline-node-name ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node-name {
     font-weight: 600;
     line-height: 1.3;
     overflow: hidden;
@@ -1539,7 +1643,9 @@
     min-width: 0;
 }
 
-.popup .luker-studio-pipeline-node-type {
+.popup .luker-studio-pipeline-node-type ,
+.luker_orch_agents_tab .luker-studio-pipeline-node-type ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node-type {
     padding: 1px 8px;
     border-radius: var(--ls-radius-pill);
     background: var(--ls-chip-bg);
@@ -1551,7 +1657,9 @@
     flex-shrink: 0;
 }
 
-.popup .luker-studio-pipeline-node-chevron {
+.popup .luker-studio-pipeline-node-chevron ,
+.luker_orch_agents_tab .luker-studio-pipeline-node-chevron ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node-chevron {
     margin-left: auto;
     opacity: var(--ls-text-muted);
     font-size: 0.82em;
@@ -1559,11 +1667,15 @@
     flex-shrink: 0;
 }
 
-.popup .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron {
+.popup .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron ,
+.luker_orch_agents_tab .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron {
     transform: rotate(90deg);
 }
 
-.popup .luker-studio-pipeline-node-body {
+.popup .luker-studio-pipeline-node-body ,
+.luker_orch_agents_tab .luker-studio-pipeline-node-body ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node-body {
     padding: var(--ls-space-sm) var(--ls-space-md);
     border-top: 1px solid var(--ls-divider);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 3%, transparent);
@@ -1572,26 +1684,34 @@
     gap: 6px;
 }
 
-.popup .luker-studio-pipeline-node-body label {
+.popup .luker-studio-pipeline-node-body label ,
+.luker_orch_agents_tab .luker-studio-pipeline-node-body label ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-node-body label {
     font-weight: 600;
     font-size: 0.86rem;
     opacity: var(--ls-text-muted);
 }
 
-.popup .luker-studio-pipeline-connector {
+.popup .luker-studio-pipeline-connector ,
+.luker_orch_agents_tab .luker-studio-pipeline-connector ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-connector {
     display: flex;
     justify-content: center;
     padding: 2px 0;
 }
 
-.popup .luker-studio-pipeline-connector-arrow {
+.popup .luker-studio-pipeline-connector-arrow ,
+.luker_orch_agents_tab .luker-studio-pipeline-connector-arrow ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-connector-arrow {
     width: 2px;
     height: 24px;
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent);
     position: relative;
 }
 
-.popup .luker-studio-pipeline-connector-arrow i {
+.popup .luker-studio-pipeline-connector-arrow i ,
+.luker_orch_agents_tab .luker-studio-pipeline-connector-arrow i ,
+.luker_orch_tools_skills_tab .luker-studio-pipeline-connector-arrow i {
     position: absolute;
     bottom: -4px;
     left: 50%;

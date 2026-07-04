@@ -1943,6 +1943,13 @@ function refreshOrchestrationEditorPopup(context, settings) {
         const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
         mount.find('#orch-popup-luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
     }
+    // Cross-mode caps live in the General tab in both drawer and popup
+    // after the tab-refactor. Hydrate the popup copies from live
+    // settings so switching modes / re-opening popup doesn't render
+    // stale (default-valued) inputs.
+    mount.find('#orch-popup-luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
+    mount.find('#orch-popup-luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
+    mount.find('#orch-popup-luker_orch_rpm_limit').val(String(settings.rpmLimit || 0));
     // Hydrate per-agent / mode-level skill chips. The renderers above emit
     // `[data-luker-skill-chips-mount]` placeholders; the hydrate step loads
     // the inventory once (with a brief cache), resolves each placeholder's
@@ -7486,7 +7493,7 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_max_recent_messages', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_max_recent_messages, .luker_orch_editor_popup #orch-popup-luker_orch_max_recent_messages`, function () {
         settings.maxRecentMessages = Math.max(1, Math.floor(Number(jQuery(this).val()) || 14));
         saveSettingsDebounced();
     });
@@ -7501,12 +7508,12 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_tool_retries', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_tool_retries, .luker_orch_editor_popup #orch-popup-luker_orch_tool_retries`, function () {
         settings.toolCallRetryMax = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_rpm_limit', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_rpm_limit, .luker_orch_editor_popup #orch-popup-luker_orch_rpm_limit`, function () {
         settings.rpmLimit = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
         saveSettingsDebounced();
     });

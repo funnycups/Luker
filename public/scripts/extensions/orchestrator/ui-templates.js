@@ -1056,22 +1056,20 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         modeChipLabel = i18n('Spec workflow');
     }
 
-    // Actions bar + per-mode copy buttons + view-last-run were previously
-    // emitted inline here; Task 10b promotes them into `buildOrchTopbarHtml`
-    // so drawer + popup share exactly one topbar renderer. The popup keeps
-    // its own title+chips row for the "Orchestration Editor" heading; the
-    // per-mode boards, preset selector bar, and actions bar all come
-    // from the shared topbar helper below.
+    // Actions bar + per-mode boards + preset selector bar previously
+    // rendered here via `buildOrchTopbarHtml`; scheme A (m0509)
+    // dissolved that helper into the General tab so nothing lives
+    // outside the tabs except the popup's own title+chips row.
 
     const tabsHtml = renderLukerTabs({
         id: s('luker_orch_tabs'),
         scope: 'orchestrator-popup',
         moduleName: 'orchestrator',
-        defaultTab: 'agents',
+        defaultTab: 'general',
         tabs: [
+            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, IDPREFIX) },
             { key: 'agents',       label: i18n('Agents'),         contentHtml: buildAgentsTabHtml(deps, IDPREFIX) },
             { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: buildToolsSkillsTabHtml(deps, IDPREFIX) },
-            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, IDPREFIX) },
         ],
     });
 
@@ -1087,7 +1085,6 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
             </div>
         </div>
     </div>
-    ${buildOrchTopbarHtml(deps, { context, settings }, IDPREFIX)}
     ${tabsHtml}
 </div>`;
 }
@@ -1403,23 +1400,142 @@ function buildToolsSkillsTabHtml(deps, idPrefix = '') {
 }
 
 /**
- * General tab content — 4 fieldsets:
- *  1. Default API and prompt preset (LLM node global fallback)
- *  2. Runtime limits (mode-conditional: nodeIterationMaxRounds for
- *     agenda+spec, reviewRerunMaxRounds for spec only; director-only
- *     and loop-only mode-specific limits live in their workspace
- *     editors and are populated by Task 11)
- *  3. Capsule injection (`data-orch-mode-block="capsule"` — hidden in
- *     director mode by existing `renderDynamicPanels` toggle on
+ * General tab content — the "most-used configuration" tab per user
+ * m0464. All configuration lives here (learning from memory-graph tab
+ * layout — nothing outside tabs except the master enable + mode
+ * select + status footer). Fieldset order (top to bottom):
+ *  1. Current profile — per-mode card chip + editing chip + override
+ *     toggle + run/observe action buttons (was buildOrchTopbarHtml)
+ *  2. Preset management — per-mode preset selector bar + profile
+ *     actions bar (Save/Reset/Export/Import etc.)
+ *  3. Default API and prompt preset (LLM node global fallback)
+ *  4. Runtime limits — mode-conditional per-mode limits
+ *  5. Cross-mode limits — Recent turns / Retries / RPM (was
+ *     drawer-level after tabs)
+ *  6. Capsule injection (`data-orch-mode-block="capsule"` — hidden
+ *     in director mode by existing `renderDynamicPanels` toggle on
  *     `#luker_orch_capsule_settings`)
- *  4. AI Iteration Studio configuration (iteration AI presets, base
- *     system prompt, and one iter-mode-prompt textarea per mode with
- *     `data-orch-mode` visibility)
+ *  7. AI Iteration Studio configuration
  */
 function buildGeneralTabHtml(deps, idPrefix = '') {
-    const { escapeHtml, extension_prompt_roles, i18n, world_info_position } = deps;
+    const {
+        escapeHtml,
+        extension_prompt_roles,
+        i18n,
+        world_info_position,
+        getExecutionMode,
+        getDisplayedScope,
+        getCurrentAvatar,
+        getContext,
+    } = deps;
     const s = baseId => scopeId(baseId, idPrefix);
+
+    // Resolve mode-scoped state for preset bars and character-scope
+    // action buttons. Popup and drawer callers both hit this path so
+    // self-source from context if the caller did not thread state in.
+    const context = getContext ? getContext() : {};
+    const settings = getSettings();
+    const currentMode = getExecutionMode ? getExecutionMode(settings) : '';
+    const safeScope = getDisplayedScope ? getDisplayedScope(context, settings) : 'global';
+    const activeAvatar = String((getCurrentAvatar && getCurrentAvatar(context)) || '').trim();
+    const hasActiveCharacter = Boolean(activeAvatar);
+    const isCharacterScope = safeScope === 'character';
+
+    // Per-mode "current profile" row builders — chip + override + buttons
+    // laid out flat with no wrapper card. Chips reuse
+    // .luker-studio-editor-chip pill styling. `data-orch-mode` is the
+    // sole visibility hook.
+    const cardChip = (idKey, textKey) => `<span class="luker-studio-editor-chip">${escapeHtml(i18n(textKey))} <b id="${s(idKey)}">${escapeHtml(i18n('(No character card)'))}</b></span>`;
+    const editingChip = (idKey) => `<span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b id="${s(idKey)}">${escapeHtml(i18n('Global profile'))}</b></span>`;
+    const overrideToggle = (toggleIdKey, checkboxIdKey) => `<label id="${s(toggleIdKey)}" class="checkbox_label luker_orch_override_toggle" style="display:none" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
+                <input type="checkbox" id="${s(checkboxIdKey)}" />
+                <span>${escapeHtml(i18n('Use this card\'s override'))}</span>
+            </label>`;
+    const modeRow = ({ mode, targetIdKey, modeIdKey, toggleIdKey, checkboxIdKey, includeViewLastRun, includeCopyRows, hintKey }) => `
+        <div data-orch-mode="${mode}" class="luker_orch_mode_row" style="display:none">
+            ${cardChip(targetIdKey, 'Current card:')}
+            ${editingChip(modeIdKey)}
+            ${overrideToggle(toggleIdKey, checkboxIdKey)}
+            ${commonActions(deps, idPrefix, { includeViewLastRun, includeCopyRows })}
+            ${hintKey ? `<small class="luker_orch_mode_hint">${escapeHtml(i18n(hintKey))}</small>` : ''}
+        </div>`;
+    const specBoard = modeRow({
+        mode: 'spec',
+        targetIdKey: 'luker_orch_profile_target',
+        modeIdKey: 'luker_orch_profile_mode',
+        toggleIdKey: 'luker_orch_spec_override_toggle',
+        checkboxIdKey: 'luker_orch_spec_override_enabled',
+        includeViewLastRun: true,
+        includeCopyRows: true,
+    });
+    const agendaBoard = modeRow({
+        mode: 'agenda',
+        targetIdKey: 'luker_orch_agenda_profile_target',
+        modeIdKey: 'luker_orch_agenda_profile_mode',
+        toggleIdKey: 'luker_orch_agenda_override_toggle',
+        checkboxIdKey: 'luker_orch_agenda_override_enabled',
+        includeViewLastRun: true,
+        includeCopyRows: true,
+    });
+    const loopBoard = modeRow({
+        mode: 'loop',
+        targetIdKey: 'luker_orch_loop_profile_target',
+        modeIdKey: 'luker_orch_loop_profile_mode',
+        toggleIdKey: 'luker_orch_loop_override_toggle',
+        checkboxIdKey: 'luker_orch_loop_override_enabled',
+        includeViewLastRun: true,
+        includeCopyRows: false,
+        hintKey: 'Loop mode runs a single agent that calls tools in a loop and finalizes when ready.',
+    });
+    const directorBoard = modeRow({
+        mode: 'director',
+        targetIdKey: 'luker_orch_director_profile_target',
+        modeIdKey: 'luker_orch_director_profile_mode',
+        toggleIdKey: 'luker_orch_director_override_toggle',
+        checkboxIdKey: 'luker_orch_director_override_enabled',
+        includeViewLastRun: false,
+        includeCopyRows: false,
+        hintKey: 'Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.',
+    });
+    const singleBlock = `
+        <div data-orch-mode="single" class="luker_orch_mode_row" style="display:none">
+            <small id="${s('luker_orch_single_mode_hint')}" class="luker_orch_mode_hint" style="opacity:0.8">${escapeHtml(i18n('Single-agent mode is enabled. Workflow board is hidden and runtime uses the simplified single node profile.'))}</small>
+            <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
+            <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
+            <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
+            ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
+        </div>`;
+
+    // Preset selector bar — one wrapper per mode, mode-visibility gated
+    // by `data-orch-mode`. Single mode has no preset library.
+    const presetBarModes = ['spec', 'agenda', 'loop', 'director'];
+    const presetBars = presetBarModes.map(mode => {
+        const modeVisible = currentMode === mode ? '' : ' style="display:none"';
+        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}>${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, safeScope))}</div>`;
+    }).join('');
+
+    // Actions bar — profile-management actions.
+    const actionsBar = `
+        <div class="luker-studio-actions-bar">
+            <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
+            <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
+            <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
+            <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
+            <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
+            ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
+            ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
+        </div>`;
+
     return `<div class="luker_orch_general_tab">
+        <fieldset class="luker_orch_general_fieldset">
+            <legend>${escapeHtml(i18n('Current profile'))}</legend>
+            ${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}
+        </fieldset>
+        <fieldset class="luker_orch_general_fieldset">
+            <legend>${escapeHtml(i18n('Preset management'))}</legend>
+            ${presetBars}
+            ${actionsBar}
+        </fieldset>
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('Default API and prompt preset'))}</legend>
             <label for="${s('luker_orch_llm_api_preset')}">${escapeHtml(i18n('LLM node API preset (Connection profile)'))}</label>
@@ -1465,6 +1581,15 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
             <div data-orch-mode="single" style="display:none">
                 <small style="opacity:0.6">${escapeHtml(i18n('Single-agent mode has no per-mode runtime limits; cross-mode caps below apply.'))}</small>
             </div>
+        </fieldset>
+        <fieldset class="luker_orch_general_fieldset">
+            <legend>${escapeHtml(i18n('Cross-mode limits'))}</legend>
+            <label for="${s('luker_orch_max_recent_messages')}">${escapeHtml(i18n('Recent assistant turns for orchestration (N)'))}</label>
+            <input id="${s('luker_orch_max_recent_messages')}" class="text_pole" type="number" min="1" step="1" />
+            <label for="${s('luker_orch_tool_retries')}">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
+            <input id="${s('luker_orch_tool_retries')}" class="text_pole" type="number" min="0" step="1" />
+            <label for="${s('luker_orch_rpm_limit')}">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}</label>
+            <input id="${s('luker_orch_rpm_limit')}" class="text_pole" type="number" min="0" step="1" />
         </fieldset>
         <fieldset class="luker_orch_general_fieldset" data-orch-mode-block="capsule">
             <legend>${escapeHtml(i18n('Capsule injection'))}</legend>
@@ -1553,11 +1678,11 @@ export function buildOrchestratorSettingsHtml(deps) {
         id: 'luker_orch_tabs',
         scope: 'orchestrator-drawer',
         moduleName: 'orchestrator',
-        defaultTab: 'agents',
+        defaultTab: 'general',
         tabs: [
+            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, '') },
             { key: 'agents',       label: i18n('Agents'),         contentHtml: buildAgentsTabHtml(deps, '') },
             { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: buildToolsSkillsTabHtml(deps, '') },
-            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, '') },
         ],
     });
     return `
@@ -1577,15 +1702,8 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <option value="${ORCH_EXECUTION_MODE_LOOP}">${escapeHtml(i18n('Loop (single-agent loop)'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_DIRECTOR}" data-i18n="Director (multi-agent)">${escapeHtml(i18n('Director (multi-agent)'))}</option>
             </select>
-            ${buildOrchTopbarHtml(deps, {}, '')}
             ${tabsHtml}
             <hr />
-            <label for="luker_orch_max_recent_messages">${escapeHtml(i18n('Recent assistant turns for orchestration (N)'))}</label>
-            <input id="luker_orch_max_recent_messages" class="text_pole" type="number" min="1" step="1" />
-            <label for="luker_orch_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
-            <input id="luker_orch_tool_retries" class="text_pole" type="number" min="0" step="1" />
-            <label for="luker_orch_rpm_limit">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}</label>
-            <input id="luker_orch_rpm_limit" class="text_pole" type="number" min="0" step="1" />
             <small id="luker_orch_last_run_state" class="luker_orch_state_summary"></small>
             <small id="luker_orch_status" style="opacity:0.8"></small>
         </div>
