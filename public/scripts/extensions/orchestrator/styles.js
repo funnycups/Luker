@@ -24,18 +24,21 @@ export function ensureStyles(uiBlockId) {
     min-width: max-content;
     white-space: nowrap;
 }
-#${uiBlockId} .luker_orch_board {
-    border: 1px solid var(--SmartThemeBorderColor, rgba(130,130,130,0.5));
-    border-radius: 10px;
-    padding: 10px;
-    background: linear-gradient(160deg, rgba(29,46,39,0.28), rgba(21,31,43,0.2));
+#${uiBlockId} .luker_orch_mode_row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0;
+}
+#${uiBlockId} .luker_orch_mode_hint {
+    flex-basis: 100%;
+    opacity: 0.75;
+    margin-top: 2px;
 }
 #${uiBlockId} .luker_orch_button_disabled {
     opacity: 0.45;
     pointer-events: none;
-}
-#${uiBlockId} .luker_orch_single_mode_tools {
-    margin-top: 8px;
 }
 #${uiBlockId} .luker_orch_state_summary {
     display: block;

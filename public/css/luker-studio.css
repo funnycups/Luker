@@ -961,7 +961,7 @@
     gap: var(--ls-space-xs);
 }
 
-.popup .luker-studio-editor-chip {
+.luker-studio-editor-chip {
     display: inline-flex;
     align-items: baseline;
     gap: 4px;
@@ -973,7 +973,7 @@
     line-height: 1.45;
 }
 
-.popup .luker-studio-editor-chip b {
+.luker-studio-editor-chip b {
     font-weight: 600;
     opacity: var(--ls-text-strong);
 }
