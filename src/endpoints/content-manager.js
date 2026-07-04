@@ -677,8 +677,7 @@ async function downloadChubCharacter(id) {
         spec_version: '2.0',
     };
 
-    const defaultAvatarPath = path.join(serverDirectory, DEFAULT_AVATAR_PATH);
-    const defaultAvatarBuffer = fs.readFileSync(defaultAvatarPath);
+    const defaultAvatarBuffer = fs.readFileSync(DEFAULT_AVATAR_PATH);
 
     let imageBuffer = defaultAvatarBuffer;
 
@@ -1083,8 +1082,7 @@ async function extractPerchanceCharacterFromGz(result) {
  * @returns {Promise<Buffer>} Buffer containing the avatar image
  */
 async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
-    const defaultAvatarPath = path.join(serverDirectory, DEFAULT_AVATAR_PATH);
-    const defaultAvatarBuffer = fs.readFileSync(defaultAvatarPath);
+    const defaultAvatarBuffer = fs.readFileSync(DEFAULT_AVATAR_PATH);
 
     if (!avatarUrl || (!isAvatarBase64 && !isValidUrl(avatarUrl))) {
         console.warn('Perchance character does not have an avatar, it is not base64, or it is an invalid url, using default avatar');
