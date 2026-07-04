@@ -1,4 +1,5 @@
 import { renderPresetHelpButton } from '../preset-help.js';
+import { renderFieldHelpButton } from '../field-help.js';
 import { renderLukerTabs } from '../luker-tabs.js';
 import { listExtensionTools } from './register-custom-tool.js';
 import { listPresets } from './preset-library.js';
@@ -1035,12 +1036,12 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
         const hasDirectorCharacterOverride = hasCharacterDirectorOverride(context, activeAvatar);
         editingLabel = getPopupEditingLabel(isCharacterScope, hasDirectorCharacterOverride, Boolean(directorOverride?.enabled));
-        modeChipLabel = i18n('Director (multi-agent)');
+        modeChipLabel = i18n('Director');
     } else if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
         const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
         const hasLoopCharacterOverride = hasCharacterLoopOverride(context, activeAvatar);
         editingLabel = getPopupEditingLabel(isCharacterScope, hasLoopCharacterOverride, Boolean(loopOverride?.enabled));
-        modeChipLabel = i18n('Loop (single-agent loop)');
+        modeChipLabel = i18n('Loop');
     } else if (currentMode === ORCH_EXECUTION_MODE_AGENDA) {
         const agendaOverride = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
         const hasAgendaCharacterOverride = hasCharacterAgendaOverride(context, activeAvatar);
@@ -1067,9 +1068,9 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         moduleName: 'orchestrator',
         defaultTab: 'general',
         tabs: [
-            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, IDPREFIX) },
-            { key: 'agents',       label: i18n('Agents'),         contentHtml: buildAgentsTabHtml(deps, IDPREFIX) },
-            { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: buildToolsSkillsTabHtml(deps, IDPREFIX) },
+            { key: 'general',      label: i18n('General'),        contentHtml: `<div class="luker-studio">${buildGeneralTabHtml(deps, IDPREFIX)}</div>` },
+            { key: 'agents',       label: i18n('Agents'),         contentHtml: `<div class="luker-studio">${buildAgentsTabHtml(deps, IDPREFIX)}</div>` },
+            { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: `<div class="luker-studio">${buildToolsSkillsTabHtml(deps, IDPREFIX)}</div>` },
         ],
     });
 
@@ -1430,6 +1431,10 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
     } = deps;
     const s = baseId => scopeId(baseId, idPrefix);
 
+    // Compact helper for rendering field-help question marks after labels.
+    // title/body are English source keys, i18n resolves per active locale.
+    const fh = (titleKey, bodyKey) => renderFieldHelpButton({ title: i18n(titleKey), bodyHtml: escapeHtml(i18n(bodyKey)) });
+
     // Resolve mode-scoped state for preset bars and character-scope
     // action buttons. Popup and drawer callers both hit this path so
     // self-source from context if the caller did not thread state in.
@@ -1532,13 +1537,13 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
             ${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}
         </fieldset>
         <fieldset class="luker_orch_general_fieldset">
-            <legend>${escapeHtml(i18n('Preset management'))}</legend>
+            <legend>${escapeHtml(i18n('Orchestrator preset management'))}</legend>
             ${presetBars}
             ${actionsBar}
         </fieldset>
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('Default API and prompt preset'))}</legend>
-            <label for="${s('luker_orch_llm_api_preset')}">${escapeHtml(i18n('LLM node API preset (Connection profile)'))}</label>
+            <label for="${s('luker_orch_llm_api_preset')}">${escapeHtml(i18n('LLM node API preset (Connection profile)'))}${fh('About LLM API preset', 'LLM API preset help body')}</label>
             <select id="${s('luker_orch_llm_api_preset')}" class="text_pole"></select>
             <label for="${s('luker_orch_llm_preset')}">${escapeHtml(i18n('LLM node preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'dynamic', targetSelectId: s('luker_orch_llm_preset') })}</label>
             <select id="${s('luker_orch_llm_preset')}" class="text_pole"></select>
@@ -1547,17 +1552,17 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('Runtime limits'))}</legend>
             <div data-orch-mode="spec">
-                <label for="${s('luker_orch_node_iterations')}">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}</label>
+                <label for="${s('luker_orch_node_iterations')}">${escapeHtml(i18n('Node tool iteration max rounds (N)'))}${fh('About node iterations', 'Node iterations help body')}</label>
                 <input id="${s('luker_orch_node_iterations')}" class="text_pole" type="number" min="1" step="1" />
-                <label for="${s('luker_orch_review_reruns')}">${escapeHtml(i18n('Review rerun max rounds (N)'))}</label>
+                <label for="${s('luker_orch_review_reruns')}">${escapeHtml(i18n('Review rerun max rounds (N)'))}${fh('About review reruns', 'Review reruns help body')}</label>
                 <input id="${s('luker_orch_review_reruns')}" class="text_pole" type="number" min="0" step="1" />
             </div>
             <div data-orch-mode="director" style="display:none">
-                <label for="${s('luker_orch_director_max_rounds')}">${escapeHtml(i18n('Maximum tool-calling rounds'))}</label>
+                <label for="${s('luker_orch_director_max_rounds')}">${escapeHtml(i18n('Maximum tool-calling rounds'))}${fh('About director max rounds', 'Director max rounds help body')}</label>
                 <input id="${s('luker_orch_director_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
-                <label for="${s('luker_orch_director_max_concurrent_subagents')}">${escapeHtml(i18n('Maximum concurrent sub-agents'))}</label>
+                <label for="${s('luker_orch_director_max_concurrent_subagents')}">${escapeHtml(i18n('Maximum concurrent sub-agents'))}${fh('About director max concurrent sub-agents', 'Director max concurrent sub-agents help body')}</label>
                 <input id="${s('luker_orch_director_max_concurrent_subagents')}" class="text_pole" type="number" min="1" step="1" />
-                <label for="${s('luker_orch_director_max_total_subagent_runs')}">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}</label>
+                <label for="${s('luker_orch_director_max_total_subagent_runs')}">${escapeHtml(i18n('Maximum total sub-agent runs per turn'))}${fh('About director max total sub-agent runs', 'Director max total sub-agent runs help body')}</label>
                 <input id="${s('luker_orch_director_max_total_subagent_runs')}" class="text_pole" type="number" min="1" step="1" />
                 <label class="checkbox_label">
                     <input id="${s('luker_orch_director_discard_on_abort')}" type="checkbox" />
@@ -1565,17 +1570,17 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
                 </label>
             </div>
             <div data-orch-mode="agenda" style="display:none">
-                <label for="${s('luker_orch_agenda_planner_max_rounds')}">${escapeHtml(i18n('Planner max rounds'))}</label>
+                <label for="${s('luker_orch_agenda_planner_max_rounds')}">${escapeHtml(i18n('Planner max rounds'))}${fh('About agenda planner max rounds', 'Agenda planner max rounds help body')}</label>
                 <input id="${s('luker_orch_agenda_planner_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
-                <label for="${s('luker_orch_agenda_max_concurrent_agents')}">${escapeHtml(i18n('Max concurrent agents'))}</label>
+                <label for="${s('luker_orch_agenda_max_concurrent_agents')}">${escapeHtml(i18n('Max concurrent agents'))}${fh('About agenda max concurrent agents', 'Agenda max concurrent agents help body')}</label>
                 <input id="${s('luker_orch_agenda_max_concurrent_agents')}" class="text_pole" type="number" min="1" step="1" />
-                <label for="${s('luker_orch_agenda_max_total_runs')}">${escapeHtml(i18n('Max total agent runs'))}</label>
+                <label for="${s('luker_orch_agenda_max_total_runs')}">${escapeHtml(i18n('Max total agent runs'))}${fh('About agenda max total runs', 'Agenda max total runs help body')}</label>
                 <input id="${s('luker_orch_agenda_max_total_runs')}" class="text_pole" type="number" min="1" step="1" />
             </div>
             <div data-orch-mode="loop" style="display:none">
-                <label for="${s('luker_orch_loop_max_rounds')}">${escapeHtml(i18n('Loop max rounds'))}</label>
+                <label for="${s('luker_orch_loop_max_rounds')}">${escapeHtml(i18n('Loop max rounds'))}${fh('About loop max rounds', 'Loop max rounds help body')}</label>
                 <input id="${s('luker_orch_loop_max_rounds')}" class="text_pole" type="number" min="1" step="1" />
-                <label for="${s('luker_orch_loop_wall_clock_budget')}">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}</label>
+                <label for="${s('luker_orch_loop_wall_clock_budget')}">${escapeHtml(i18n('Loop wall-clock budget (seconds)'))}${fh('About loop wall-clock budget', 'Loop wall-clock budget help body')}</label>
                 <input id="${s('luker_orch_loop_wall_clock_budget')}" class="text_pole" type="number" min="10" step="1" />
             </div>
             <div data-orch-mode="single" style="display:none">
@@ -1584,17 +1589,17 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         </fieldset>
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('Cross-mode limits'))}</legend>
-            <label for="${s('luker_orch_max_recent_messages')}">${escapeHtml(i18n('Recent assistant turns for orchestration (N)'))}</label>
+            <label for="${s('luker_orch_max_recent_messages')}">${escapeHtml(i18n('Recent assistant turns for orchestration (N)'))}${fh('About max recent messages', 'Max recent messages help body')}</label>
             <input id="${s('luker_orch_max_recent_messages')}" class="text_pole" type="number" min="1" step="1" />
-            <label for="${s('luker_orch_tool_retries')}">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
+            <label for="${s('luker_orch_tool_retries')}">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}${fh('About tool-call retries', 'Tool-call retries help body')}</label>
             <input id="${s('luker_orch_tool_retries')}" class="text_pole" type="number" min="0" step="1" />
-            <label for="${s('luker_orch_rpm_limit')}">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}</label>
+            <label for="${s('luker_orch_rpm_limit')}">${escapeHtml(i18n('RPM limit (0 = unlimited)'))}${fh('About RPM limit', 'RPM limit help body')}</label>
             <input id="${s('luker_orch_rpm_limit')}" class="text_pole" type="number" min="0" step="1" />
         </fieldset>
         <fieldset class="luker_orch_general_fieldset" data-orch-mode-block="capsule">
             <legend>${escapeHtml(i18n('Capsule injection'))}</legend>
             <div id="${s('luker_orch_capsule_settings')}">
-                <label for="${s('luker_orch_capsule_position')}">${escapeHtml(i18n('Injection position'))}</label>
+                <label for="${s('luker_orch_capsule_position')}">${escapeHtml(i18n('Injection position'))}${fh('About injection position', 'Injection position help body')}</label>
                 <select id="${s('luker_orch_capsule_position')}" class="text_pole">
                     <option value="${world_info_position.before}">${escapeHtml(i18n('Before Character Definitions'))}</option>
                     <option value="${world_info_position.after}">${escapeHtml(i18n('After Character Definitions'))}</option>
@@ -1604,56 +1609,56 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
                     <option value="${world_info_position.EMBottom}">${escapeHtml(i18n('After Example Messages'))}</option>
                     <option value="${world_info_position.atDepth}">${escapeHtml(i18n('At Chat Depth'))}</option>
                 </select>
-                <label for="${s('luker_orch_capsule_depth')}">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}</label>
+                <label for="${s('luker_orch_capsule_depth')}">${escapeHtml(i18n('Injection depth (At Chat Depth only)'))}${fh('About injection depth', 'Injection depth help body')}</label>
                 <input id="${s('luker_orch_capsule_depth')}" class="text_pole" type="number" min="0" step="1" />
-                <label for="${s('luker_orch_capsule_role')}">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}</label>
+                <label for="${s('luker_orch_capsule_role')}">${escapeHtml(i18n('Injection role (At Chat Depth only)'))}${fh('About injection role', 'Injection role help body')}</label>
                 <select id="${s('luker_orch_capsule_role')}" class="text_pole">
                     <option value="${extension_prompt_roles.SYSTEM}">${escapeHtml(i18n('System'))}</option>
                     <option value="${extension_prompt_roles.USER}">${escapeHtml(i18n('User'))}</option>
                     <option value="${extension_prompt_roles.ASSISTANT}">${escapeHtml(i18n('Assistant'))}</option>
                 </select>
-                <label for="${s('luker_orch_capsule_custom_instruction')}">${escapeHtml(i18n('Custom orchestration result instruction (prepended before analysis)'))}</label>
+                <label for="${s('luker_orch_capsule_custom_instruction')}">${escapeHtml(i18n('Custom orchestration result instruction (prepended before analysis)'))}${fh('About custom capsule instruction', 'Custom capsule instruction help body')}</label>
                 <textarea id="${s('luker_orch_capsule_custom_instruction')}" class="text_pole textarea_compact" rows="2" placeholder="${escapeHtml(i18n('e.g. Follow this guidance first, then write final reply in-character.'))}"></textarea>
             </div>
         </fieldset>
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('AI Iteration Studio configuration'))}</legend>
-            <label for="${s('luker_orch_request_api_preset')}">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
+            <label for="${s('luker_orch_request_api_preset')}">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}${fh('About iteration API preset', 'Iteration API preset help body')}</label>
             <select id="${s('luker_orch_request_api_preset')}" class="text_pole"></select>
             <label for="${s('luker_orch_request_llm_preset')}">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: s('luker_orch_request_llm_preset') })}</label>
             <select id="${s('luker_orch_request_llm_preset')}" class="text_pole"></select>
             <label class="checkbox_label">
                 <input id="${s('luker_orch_include_world_info')}" type="checkbox" />
-                ${escapeHtml(i18n('Include world info'))}
+                ${escapeHtml(i18n('Include world info'))}${fh('About include world info', 'Include world info help body')}
             </label>
-            <label for="${s('luker_orch_request_system_prompt')}">${escapeHtml(i18n('Iteration AI base system prompt'))}</label>
+            <label for="${s('luker_orch_request_system_prompt')}">${escapeHtml(i18n('Iteration AI base system prompt'))}${fh('About iteration system prompt', 'Iteration system prompt help body')}</label>
             <textarea id="${s('luker_orch_request_system_prompt')}" class="text_pole textarea_compact" rows="6"></textarea>
             <div class="flex-container">
                 <div id="${s('luker_orch_reset_ai_prompt')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset AI build prompt'))}</div>
             </div>
             <div data-orch-mode="spec">
-                <label for="${s('luker_orch_iter_mode_prompt_spec')}">${escapeHtml(i18n('Spec mode iteration prompt'))}</label>
+                <label for="${s('luker_orch_iter_mode_prompt_spec')}">${escapeHtml(i18n('Spec mode iteration prompt'))}${fh('About iteration mode prompt', 'Iteration mode prompt help body')}</label>
                 <textarea id="${s('luker_orch_iter_mode_prompt_spec')}" class="text_pole textarea_compact" rows="10"></textarea>
                 <div class="flex-container">
                     <div id="${s('luker_orch_reset_iter_mode_spec')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
                 </div>
             </div>
             <div data-orch-mode="loop" style="display:none">
-                <label for="${s('luker_orch_iter_mode_prompt_loop')}">${escapeHtml(i18n('Loop mode iteration prompt'))}</label>
+                <label for="${s('luker_orch_iter_mode_prompt_loop')}">${escapeHtml(i18n('Loop mode iteration prompt'))}${fh('About iteration mode prompt', 'Iteration mode prompt help body')}</label>
                 <textarea id="${s('luker_orch_iter_mode_prompt_loop')}" class="text_pole textarea_compact" rows="10"></textarea>
                 <div class="flex-container">
                     <div id="${s('luker_orch_reset_iter_mode_loop')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
                 </div>
             </div>
             <div data-orch-mode="director" style="display:none">
-                <label for="${s('luker_orch_iter_mode_prompt_director')}">${escapeHtml(i18n('Director mode iteration prompt'))}</label>
+                <label for="${s('luker_orch_iter_mode_prompt_director')}">${escapeHtml(i18n('Director mode iteration prompt'))}${fh('About iteration mode prompt', 'Iteration mode prompt help body')}</label>
                 <textarea id="${s('luker_orch_iter_mode_prompt_director')}" class="text_pole textarea_compact" rows="10"></textarea>
                 <div class="flex-container">
                     <div id="${s('luker_orch_reset_iter_mode_director')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
                 </div>
             </div>
             <div data-orch-mode="agenda" style="display:none">
-                <label for="${s('luker_orch_iter_mode_prompt_agenda')}">${escapeHtml(i18n('Agenda mode iteration prompt'))}</label>
+                <label for="${s('luker_orch_iter_mode_prompt_agenda')}">${escapeHtml(i18n('Agenda mode iteration prompt'))}${fh('About iteration mode prompt', 'Iteration mode prompt help body')}</label>
                 <textarea id="${s('luker_orch_iter_mode_prompt_agenda')}" class="text_pole textarea_compact" rows="10"></textarea>
                 <div class="flex-container">
                     <div id="${s('luker_orch_reset_iter_mode_agenda')}" class="menu_button menu_button_small">${escapeHtml(i18n('Reset to default'))}</div>
@@ -1680,9 +1685,9 @@ export function buildOrchestratorSettingsHtml(deps) {
         moduleName: 'orchestrator',
         defaultTab: 'general',
         tabs: [
-            { key: 'general',      label: i18n('General'),        contentHtml: buildGeneralTabHtml(deps, '') },
-            { key: 'agents',       label: i18n('Agents'),         contentHtml: buildAgentsTabHtml(deps, '') },
-            { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: buildToolsSkillsTabHtml(deps, '') },
+            { key: 'general',      label: i18n('General'),        contentHtml: `<div class="luker-studio">${buildGeneralTabHtml(deps, '')}</div>` },
+            { key: 'agents',       label: i18n('Agents'),         contentHtml: `<div class="luker-studio">${buildAgentsTabHtml(deps, '')}</div>` },
+            { key: 'tools-skills', label: i18n('Tools & Skills'), contentHtml: `<div class="luker-studio">${buildToolsSkillsTabHtml(deps, '')}</div>` },
         ],
     });
     return `
@@ -1699,8 +1704,8 @@ export function buildOrchestratorSettingsHtml(deps) {
                 <option value="${ORCH_EXECUTION_MODE_SPEC}">${escapeHtml(i18n('Spec workflow'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_SINGLE}">${escapeHtml(i18n('Single agent'))}</option>
                 <option value="${ORCH_EXECUTION_MODE_AGENDA}">${escapeHtml(i18n('Agenda planner'))}</option>
-                <option value="${ORCH_EXECUTION_MODE_LOOP}">${escapeHtml(i18n('Loop (single-agent loop)'))}</option>
-                <option value="${ORCH_EXECUTION_MODE_DIRECTOR}" data-i18n="Director (multi-agent)">${escapeHtml(i18n('Director (multi-agent)'))}</option>
+                <option value="${ORCH_EXECUTION_MODE_LOOP}">${escapeHtml(i18n('Loop'))}</option>
+                <option value="${ORCH_EXECUTION_MODE_DIRECTOR}" data-i18n="Director">${escapeHtml(i18n('Director'))}</option>
             </select>
             ${tabsHtml}
             <hr />

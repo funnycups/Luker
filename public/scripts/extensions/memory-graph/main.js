@@ -72,7 +72,6 @@ import {
     validateParsedToolCalls,
 } from '../function-call-runtime.js';
 import {
-    buildAdvancedSettingsPopupHtml,
     buildManualCompressionPopupHtml,
     buildMemoryGraphSettingsHtml,
     buildSchemaEditorPopupHtml,
@@ -957,6 +956,11 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
         recallRouteSystemPrompt: String(input.recallRouteSystemPrompt || '').trim() || String(base.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
         recallFinalizeSystemPrompt: String(input.recallFinalizeSystemPrompt || '').trim() || String(base.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
         ragRewriteSystemPrompt: String(input.ragRewriteSystemPrompt || '').trim() || String(base.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT),
+        includeWorldInfoWithPreset: (
+            typeof input.includeWorldInfoWithPreset === 'boolean'
+                ? input.includeWorldInfoWithPreset
+                : (typeof base.includeWorldInfoWithPreset === 'boolean' ? base.includeWorldInfoWithPreset : true)
+        ),
     };
 }
 
@@ -979,6 +983,7 @@ function applyAdvancedSettings(target, values) {
     target.recallRouteSystemPrompt = normalized.recallRouteSystemPrompt;
     target.recallFinalizeSystemPrompt = normalized.recallFinalizeSystemPrompt;
     target.ragRewriteSystemPrompt = normalized.ragRewriteSystemPrompt;
+    target.includeWorldInfoWithPreset = normalized.includeWorldInfoWithPreset;
 }
 
 
@@ -13480,231 +13485,69 @@ async function openSchemaEditorPopup(context, settings, root) {
     }
 }
 
-async function openAdvancedSettingsPopup(context, settings, root) {
-    const popupId = `luker_rpg_memory_advanced_popup_${Date.now()}`;
-    const currentScopeInfo = getAdvancedScopeInfo(context, settings);
-    const html = buildAdvancedSettingsPopupHtml({
-        DEFAULT_EXTRACT_SYSTEM_PROMPT,
-        DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
-        DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
-        DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
-        DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
-        defaultSettings,
-        escapeHtml,
-        i18n,
-        i18nFormat,
-        normalizeExtractExcludeRecentTurns,
-    }, popupId, currentScopeInfo);
-    const namespace = `.lukerAdvancedPopup_${popupId}`;
-    const selector = `#${popupId}`;
-    const getPopupRoot = () => jQuery(selector);
-    const getSaveGlobalButton = () => jQuery(`#${popupId}_advanced_save_global`);
-    const getSaveCharacterButton = () => jQuery(`#${popupId}_advanced_save_character`);
-    const getClearCharacterOverrideButton = () => jQuery(`#${popupId}_advanced_clear_character_override`);
-    const applyValuesToPopup = (popupRoot, source) => {
-        if (!popupRoot?.length) {
-            return;
-        }
-        popupRoot.find(`#${popupId}_recent_raw_turns`).val(String(Math.max(0, Number(source.recentRawTurns ?? defaultSettings.recentRawTurns))));
-        popupRoot.find(`#${popupId}_recall_iterations`).val(String(Math.max(2, Math.min(6, Number(source.recallMaxIterations ?? defaultSettings.recallMaxIterations)))));
-        popupRoot.find(`#${popupId}_tool_retries`).val(String(Math.max(0, Math.min(10, Number(source.toolCallRetryMax ?? defaultSettings.toolCallRetryMax)))));
-        popupRoot.find(`#${popupId}_extract_context_turns`).val(String(Math.max(1, Math.min(32, Number(source.extractContextTurns ?? defaultSettings.extractContextTurns)))));
-        popupRoot.find(`#${popupId}_extract_exclude_recent_turns`).val(String(normalizeExtractExcludeRecentTurns(source.extractExcludeRecentTurns ?? defaultSettings.extractExcludeRecentTurns)));
-        popupRoot.find(`#${popupId}_recall_query_messages`).val(String(Math.max(1, Math.min(64, Number(source.recallQueryMessages ?? defaultSettings.recallQueryMessages)))));
-        popupRoot.find(`#${popupId}_llm_visible_recent_messages`).val(String(Math.max(0, Math.min(200, Number(source.llmVisibleRecentMessages ?? defaultSettings.llmVisibleRecentMessages)))));
-        popupRoot.find(`#${popupId}_extract_batch_turns`).val(String(Math.max(1, Number(source.extractBatchTurns ?? defaultSettings.extractBatchTurns))));
-        popupRoot.find(`#${popupId}_extract_system_prompt`).val(String(source.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT));
-        popupRoot.find(`#${popupId}_recall_route_prompt`).val(String(source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT));
-        popupRoot.find(`#${popupId}_recall_finalize_prompt`).val(String(source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT));
-        popupRoot.find(`#${popupId}_rag_rewrite_prompt`).val(String(source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT));
-        const ragRewriteVisible = String(settings.recallMethod || 'llm') === 'rag' && Boolean(settings.ragUseQueryRewrite);
-        popupRoot.find(`#${popupId}_rag_rewrite_prompt_block`).toggle(ragRewriteVisible);
-        popupRoot.find(`#${popupId}_schema_iter_system_prompt`).val(String(source.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT));
-    };
-    const setPopupScopeUi = (nextScopeInfo) => {
-        const popupRoot = getPopupRoot();
-        if (!popupRoot.length) {
-            return;
-        }
-        const hasAvatar = Boolean(nextScopeInfo?.hasAvatar);
-        const hasOverride = Boolean(nextScopeInfo?.hasAvatar && nextScopeInfo?.hasOverride);
-        const scopeText = nextScopeInfo?.hasOverride
-            ? i18nFormat('Advanced scope: character override (${0})', nextScopeInfo.characterName || nextScopeInfo.avatar || i18n('(unset)'))
-            : i18n('Advanced scope: global');
-        popupRoot.find(`#${popupId}_advanced_scope`).text(scopeText);
-        getSaveCharacterButton()
-            .toggle(hasAvatar)
-            .prop('disabled', !hasAvatar);
-        getClearCharacterOverrideButton()
-            .toggle(hasAvatar)
-            .prop('disabled', !hasOverride);
-    };
-    const syncRootScopeUi = () => {
-        if (!root?.length) {
-            return;
-        }
-        const schemaScopeInfo = getSchemaScopeInfo(context, settings);
-        const advancedScopeInfo = getAdvancedScopeInfo(context, settings);
-        updateSchemaSummary(root, schemaScopeInfo.schema);
-        updateSchemaScopeIndicator(root, schemaScopeInfo);
-        updateAdvancedScopeIndicator(root, advancedScopeInfo);
-        root.find('#luker_rpg_memory_advanced_save_character').prop('disabled', !advancedScopeInfo.hasAvatar);
-        root.find('#luker_rpg_memory_advanced_clear_character_override').prop('disabled', !(advancedScopeInfo.hasAvatar && advancedScopeInfo.hasOverride));
-    };
-    const readAdvancedValues = () => {
-        const popupRoot = getPopupRoot();
-        if (!popupRoot.length) {
-            return null;
-        }
-        return {
-            recentRawTurnsValue: Number(popupRoot.find(`#${popupId}_recent_raw_turns`).val()),
-            recallIterationsValue: Number(popupRoot.find(`#${popupId}_recall_iterations`).val()),
-            toolRetriesValue: Number(popupRoot.find(`#${popupId}_tool_retries`).val()),
-            rpmLimitValue: Number(popupRoot.find(`#${popupId}_rpm_limit`).val()),
-            extractContextTurnsValue: Number(popupRoot.find(`#${popupId}_extract_context_turns`).val()),
-            extractExcludeRecentTurnsValue: Number(popupRoot.find(`#${popupId}_extract_exclude_recent_turns`).val()),
-            recallQueryMessagesValue: Number(popupRoot.find(`#${popupId}_recall_query_messages`).val()),
-            llmVisibleRecentMessagesValue: Number(popupRoot.find(`#${popupId}_llm_visible_recent_messages`).val()),
-            extractBatchTurnsValue: Number(popupRoot.find(`#${popupId}_extract_batch_turns`).val()),
-            extractSystemPromptValue: String(popupRoot.find(`#${popupId}_extract_system_prompt`).val() || '').trim(),
-            recallRoutePromptValue: String(popupRoot.find(`#${popupId}_recall_route_prompt`).val() || '').trim(),
-            recallFinalizePromptValue: String(popupRoot.find(`#${popupId}_recall_finalize_prompt`).val() || '').trim(),
-            ragRewriteSystemPromptValue: String(popupRoot.find(`#${popupId}_rag_rewrite_prompt`).val() || '').trim(),
-            schemaIterSystemPromptValue: String(popupRoot.find(`#${popupId}_schema_iter_system_prompt`).val() || '').trim(),
-        };
-    };
-    const buildAdvancedSettingsFromValues = (values, fallbackSettings) => normalizeAdvancedSettings({
-        recentRawTurns: values.recentRawTurnsValue,
-        recallMaxIterations: values.recallIterationsValue,
-        toolCallRetryMax: values.toolRetriesValue,
-        rpmLimit: values.rpmLimitValue,
-        extractContextTurns: values.extractContextTurnsValue,
-        extractExcludeRecentTurns: values.extractExcludeRecentTurnsValue,
-        recallQueryMessages: values.recallQueryMessagesValue,
-        llmVisibleRecentMessages: values.llmVisibleRecentMessagesValue,
-        extractBatchTurns: values.extractBatchTurnsValue,
-        extractSystemPrompt: values.extractSystemPromptValue,
-        recallRouteSystemPrompt: values.recallRoutePromptValue,
-        recallFinalizeSystemPrompt: values.recallFinalizePromptValue,
-        ragRewriteSystemPrompt: values.ragRewriteSystemPromptValue,
-        schemaIterSystemPrompt: values.schemaIterSystemPromptValue,
-    }, fallbackSettings);
 
-    const popupPromise = context.callGenericPopup(
-        html,
-        context.POPUP_TYPE.TEXT,
-        '',
-        {
-            okButton: i18n('Cancel'),
-            cancelButton: false,
-            wide: true,
-            large: false,
-            allowVerticalScrolling: true,
-            onOpen: (popup) => {
-                const controls = popup?.buttonControls instanceof HTMLElement ? popup.buttonControls : null;
-                if (controls) {
-                    const okButton = popup?.okButton instanceof HTMLElement ? popup.okButton : null;
-                    const saveGlobalButton = getSaveGlobalButton().get(0);
-                    const saveCharacterButton = getSaveCharacterButton().get(0);
-                    for (const button of [saveGlobalButton, saveCharacterButton]) {
-                        if (!(button instanceof HTMLElement)) {
-                            continue;
-                        }
-                        button.classList.add('popup-button-custom');
-                        controls.insertBefore(button, okButton);
-                    }
-                }
-                setPopupScopeUi(getAdvancedScopeInfo(context, settings));
-            },
-        },
-    );
-    const popupScopeSyncEvents = [
-        context?.eventTypes?.CHAT_CHANGED,
-        context?.eventTypes?.CHARACTER_REPLACED,
-        context?.eventTypes?.CHARACTER_EDITED,
-    ].filter(Boolean);
-    const handlePopupScopeSync = () => setPopupScopeUi(getAdvancedScopeInfo(context, settings));
-    for (const eventName of popupScopeSyncEvents) {
-        context?.eventSource?.on?.(eventName, handlePopupScopeSync);
-    }
+// ---- Advanced tab (in-drawer) helpers -----------------------------------
+// The Advanced tab embeds all 14 advanced settings + Schema controls
+// directly in the drawer. Semantics: form changes take effect immediately
+// (write to `settings` in memory + normalized) but are NOT persisted to
+// settings.json or character override until user clicks Save to Global /
+// Save to Character. Reset only restores defaults into the form; user
+// must click Save Global to persist.
 
-    jQuery(document).off(namespace);
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_reset_advanced`, function () {
-        if (!window.confirm(i18n('Reset advanced settings editor to default? This will overwrite current unsaved advanced edits.'))) {
-            return;
-        }
-        applyValuesToPopup(getPopupRoot(), defaultSettings);
-        notifySuccess(i18n('Advanced settings reset to defaults in editor.'));
-    });
-    jQuery(document).on(`click${namespace}`, `#${popupId}_advanced_save_global`, async function () {
-        const values = readAdvancedValues();
-        if (!values) {
-            notifyError(i18n('Failed to read advanced settings.'));
-            return;
-        }
-        const nextAdvancedSettings = buildAdvancedSettingsFromValues(values, getAdvancedScopeInfo(context, settings).settings);
-        await persistAdvancedToGlobal(settings, nextAdvancedSettings);
-        syncGenerationVisibleHistoryRuntimeRegexScripts();
-        const nextScopeInfo = getAdvancedScopeInfo(context, settings);
-        setPopupScopeUi(nextScopeInfo);
-        syncRootScopeUi();
-        notifySuccess(i18n('Advanced settings saved to global settings.'));
-        updateUiStatus(i18n('Advanced settings saved to global settings.'));
-    });
-    jQuery(document).on(`click${namespace}`, `#${popupId}_advanced_save_character`, async function () {
-        const nextScopeInfo = getAdvancedScopeInfo(context, settings);
-        if (!nextScopeInfo.hasAvatar) {
-            notifyError(i18n('No active character selected.'));
-            return;
-        }
-        const values = readAdvancedValues();
-        if (!values) {
-            notifyError(i18n('Failed to read advanced settings.'));
-            return;
-        }
-        const nextAdvancedSettings = buildAdvancedSettingsFromValues(values, nextScopeInfo.settings);
-        const ok = await persistAdvancedToCharacter(context, nextScopeInfo.avatar, nextAdvancedSettings);
-        if (!ok) {
-            notifyError(i18n('Failed to persist character advanced override.'));
-            return;
-        }
-        syncGenerationVisibleHistoryRuntimeRegexScripts();
-        const refreshedScopeInfo = getAdvancedScopeInfo(context, settings);
-        setPopupScopeUi(refreshedScopeInfo);
-        syncRootScopeUi();
-        notifySuccess(i18nFormat('Advanced settings saved to character override: ${0}.', refreshedScopeInfo.characterName || nextScopeInfo.characterName || nextScopeInfo.avatar));
-        updateUiStatus(i18nFormat('Advanced settings saved to character override: ${0}.', refreshedScopeInfo.characterName || nextScopeInfo.characterName || nextScopeInfo.avatar));
-    });
-    jQuery(document).on(`click${namespace}`, `${selector} #${popupId}_advanced_clear_character_override`, async function () {
-        const nextScopeInfo = getAdvancedScopeInfo(context, settings);
-        if (!nextScopeInfo.hasAvatar) {
-            notifyError(i18n('No active character selected.'));
-            return;
-        }
-        const ok = await removeCharacterAdvancedOverride(context, nextScopeInfo.avatar);
-        if (!ok) {
-            notifyError(i18n('Failed to clear character advanced override.'));
-            return;
-        }
-        syncGenerationVisibleHistoryRuntimeRegexScripts();
-        const refreshedScopeInfo = getAdvancedScopeInfo(context, settings);
-        applyValuesToPopup(getPopupRoot(), refreshedScopeInfo.settings);
-        setPopupScopeUi(refreshedScopeInfo);
-        syncRootScopeUi();
-        notifySuccess(i18nFormat('Cleared character advanced override: ${0}.', nextScopeInfo.characterName || nextScopeInfo.avatar));
-        updateUiStatus(i18nFormat('Cleared character advanced override: ${0}.', nextScopeInfo.characterName || nextScopeInfo.avatar));
-    });
-
-    try {
-        await popupPromise;
-    } finally {
-        jQuery(document).off(namespace);
-        for (const eventName of popupScopeSyncEvents) {
-            context?.eventSource?.removeListener?.(eventName, handlePopupScopeSync);
-        }
-        bindUi();
-    }
+function hydrateAdvancedTabFields(root, source) {
+    if (!root?.length || !source) return;
+    root.find('#luker_rpg_memory_advanced_include_world_info').prop('checked', source.includeWorldInfoWithPreset !== false);
+    root.find('#luker_rpg_memory_advanced_recent_raw_turns').val(String(Math.max(0, Number(source.recentRawTurns ?? defaultSettings.recentRawTurns))));
+    root.find('#luker_rpg_memory_advanced_recall_iterations').val(String(Math.max(2, Math.min(6, Number(source.recallMaxIterations ?? defaultSettings.recallMaxIterations)))));
+    root.find('#luker_rpg_memory_advanced_tool_retries').val(String(Math.max(0, Math.min(10, Number(source.toolCallRetryMax ?? defaultSettings.toolCallRetryMax)))));
+    root.find('#luker_rpg_memory_advanced_rpm_limit').val(String(Math.max(0, Math.min(600, Number(source.rpmLimit ?? defaultSettings.rpmLimit)))));
+    root.find('#luker_rpg_memory_advanced_extract_context_turns').val(String(Math.max(1, Math.min(32, Number(source.extractContextTurns ?? defaultSettings.extractContextTurns)))));
+    root.find('#luker_rpg_memory_advanced_extract_exclude_recent_turns').val(String(normalizeExtractExcludeRecentTurns(source.extractExcludeRecentTurns ?? defaultSettings.extractExcludeRecentTurns)));
+    root.find('#luker_rpg_memory_advanced_recall_query_messages').val(String(Math.max(1, Math.min(64, Number(source.recallQueryMessages ?? defaultSettings.recallQueryMessages)))));
+    root.find('#luker_rpg_memory_advanced_llm_visible_recent_messages').val(String(Math.max(0, Math.min(200, Number(source.llmVisibleRecentMessages ?? defaultSettings.llmVisibleRecentMessages)))));
+    root.find('#luker_rpg_memory_advanced_extract_batch_turns').val(String(Math.max(1, Number(source.extractBatchTurns ?? defaultSettings.extractBatchTurns))));
+    root.find('#luker_rpg_memory_advanced_extract_system_prompt').val(String(source.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_recall_route_prompt').val(String(source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val(String(source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val(String(source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_schema_iter_system_prompt').val(String(source.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT));
+    const ragRewriteVisible = String(source.recallMethod || 'llm') === 'rag' && Boolean(source.ragUseQueryRewrite);
+    root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt_block').toggle(ragRewriteVisible);
 }
+
+function readAdvancedTabFields(root) {
+    if (!root?.length) return null;
+    return {
+        includeWorldInfoWithPreset: Boolean(root.find('#luker_rpg_memory_advanced_include_world_info').prop('checked')),
+        recentRawTurns: Number(root.find('#luker_rpg_memory_advanced_recent_raw_turns').val()),
+        recallMaxIterations: Number(root.find('#luker_rpg_memory_advanced_recall_iterations').val()),
+        toolCallRetryMax: Number(root.find('#luker_rpg_memory_advanced_tool_retries').val()),
+        rpmLimit: Number(root.find('#luker_rpg_memory_advanced_rpm_limit').val()),
+        extractContextTurns: Number(root.find('#luker_rpg_memory_advanced_extract_context_turns').val()),
+        extractExcludeRecentTurns: Number(root.find('#luker_rpg_memory_advanced_extract_exclude_recent_turns').val()),
+        recallQueryMessages: Number(root.find('#luker_rpg_memory_advanced_recall_query_messages').val()),
+        llmVisibleRecentMessages: Number(root.find('#luker_rpg_memory_advanced_llm_visible_recent_messages').val()),
+        extractBatchTurns: Number(root.find('#luker_rpg_memory_advanced_extract_batch_turns').val()),
+        extractSystemPrompt: String(root.find('#luker_rpg_memory_advanced_extract_system_prompt').val() || '').trim(),
+        recallRouteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_route_prompt').val() || '').trim(),
+        recallFinalizeSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val() || '').trim(),
+        ragRewriteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val() || '').trim(),
+        schemaIterSystemPrompt: String(root.find('#luker_rpg_memory_advanced_schema_iter_system_prompt').val() || '').trim(),
+    };
+}
+
+function markAdvancedTabDirty(root, dirty) {
+    root.find('#luker_rpg_memory_advanced_dirty_note').toggle(Boolean(dirty));
+}
+
+function applyAdvancedTabToLiveSettings(root, settings) {
+    const values = readAdvancedTabFields(root);
+    if (!values) return;
+    const normalized = normalizeAdvancedSettings(values, settings);
+    applyAdvancedSettings(settings, normalized);
+    markAdvancedTabDirty(root, true);
+}
+
 
 function getCompressibleTypeSpecs(settings, context = null) {
     const schema = getEffectiveNodeTypeSchema(context, settings);
@@ -14025,7 +13868,6 @@ function bindUi() {
     root.find('#luker_rpg_memory_extract_preset').val(String(settings.extractPresetName || ''));
     root.find('#luker_rpg_memory_request_api_preset').val(String(settings.requestApiPresetName || ''));
     root.find('#luker_rpg_memory_request_llm_preset').val(String(settings.requestLlmPresetName || ''));
-    root.find('#luker_rpg_memory_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
     root.find('#luker_rpg_memory_update_every').val(String(settings.updateEvery));
     const schemaScopeInfo = getSchemaScopeInfo(context, settings);
     updateSchemaSummary(root, schemaScopeInfo.schema);
@@ -14034,6 +13876,8 @@ function bindUi() {
     updateAdvancedScopeIndicator(root, advancedScopeInfo);
     root.find('#luker_rpg_memory_advanced_save_character').prop('disabled', !advancedScopeInfo.hasAvatar);
     root.find('#luker_rpg_memory_advanced_clear_character_override').prop('disabled', !(advancedScopeInfo.hasAvatar && advancedScopeInfo.hasOverride));
+    hydrateAdvancedTabFields(root, advancedScopeInfo.settings);
+    markAdvancedTabDirty(root, false);
     refreshOpenAIPresetSelectors(root, context, settings);
 
     ensureMemoryStoreLoaded(context)
@@ -14099,18 +13943,32 @@ function bindUi() {
     refreshMemoryEmbeddingSelect();
     refreshMemoryRerankSelect();
 
-    function updateRagSettingsVisibility() {
+    function updateRecallMethodVisibility() {
         const method = String(root.find('#luker_rpg_memory_recall_method').val() || 'llm');
         const isRag = method === 'rag';
+        const isLlm = method === 'llm';
+        // RAG-only blocks
         root.find('#luker_rpg_memory_rag_settings').toggle(isRag);
         root.find('#luker_rpg_memory_rag_rerank_block').toggle(isRag && Boolean(settings.ragUseRerank));
         root.find('#luker_rpg_memory_rag_rewrite_block').toggle(isRag && Boolean(settings.ragUseQueryRewrite));
+        // Advanced tab's rag rewrite system prompt textarea follows the same gate.
+        root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt_block').toggle(isRag && Boolean(settings.ragUseQueryRewrite));
+        // LLM-only fields: preset row + iterations + stage prompts. Hidden when RAG.
+        root.find('#luker_rpg_memory_recall_llm_settings').toggle(isLlm);
+        root.find('#luker_rpg_memory_advanced_recall_iterations_row').toggle(isLlm);
+        root.find('#luker_rpg_memory_advanced_recall_route_prompt_row').toggle(isLlm);
+        root.find('#luker_rpg_memory_advanced_recall_finalize_prompt_row').toggle(isLlm);
+        // Chat-depth-only injection controls: shown only when position === atDepth.
+        const positionVal = Number(root.find('#luker_rpg_memory_recall_inject_position').val());
+        const isAtDepth = positionVal === Number(world_info_position.atDepth);
+        root.find('#luker_rpg_memory_recall_inject_depth_block').toggle(isAtDepth);
+        root.find('#luker_rpg_memory_recall_inject_role_block').toggle(isAtDepth);
     }
-    updateRagSettingsVisibility();
+    updateRecallMethodVisibility();
 
     root.find('#luker_rpg_memory_recall_method').off('change').on('change', function () {
         settings.recallMethod = String(jQuery(this).val() || 'llm').trim();
-        updateRagSettingsVisibility();
+        updateRecallMethodVisibility();
         saveSettingsDebounced();
     });
 
@@ -14137,13 +13995,13 @@ function bindUi() {
 
     root.find('#luker_rpg_memory_rag_use_rerank').off('input').on('input', function () {
         settings.ragUseRerank = Boolean(jQuery(this).prop('checked'));
-        updateRagSettingsVisibility();
+        updateRecallMethodVisibility();
         saveSettingsDebounced();
     });
 
     root.find('#luker_rpg_memory_rag_use_query_rewrite').off('input').on('input', function () {
         settings.ragUseQueryRewrite = Boolean(jQuery(this).prop('checked'));
-        updateRagSettingsVisibility();
+        updateRecallMethodVisibility();
         saveSettingsDebounced();
     });
 
@@ -14167,6 +14025,7 @@ function bindUi() {
     root.find('#luker_rpg_memory_recall_inject_position').off('change').on('change', function () {
         settings.recallInjectPosition = normalizeRecallInjectPosition(jQuery(this).val());
         jQuery(this).val(String(settings.recallInjectPosition));
+        updateRecallMethodVisibility();
         void syncPersistentProjectionForCurrentChat(getContext());
         saveSettingsDebounced();
     });
@@ -14217,11 +14076,6 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    root.find('#luker_rpg_memory_include_world_info').off('input').on('input', function () {
-        settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
-        saveSettingsDebounced();
-    });
-
     root.find('#luker_rpg_memory_update_every').off('change input').on('change input', function () {
         const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || defaultSettings.updateEvery));
         settings.updateEvery = nextValue;
@@ -14231,9 +14085,6 @@ function bindUi() {
 
     root.find('#luker_rpg_memory_open_schema_editor').off('click').on('click', async function () {
         await openSchemaEditorPopup(context, settings, root);
-    });
-    root.find('#luker_rpg_memory_open_advanced').off('click').on('click', async function () {
-        await openAdvancedSettingsPopup(context, settings, root);
     });
     root.find('#luker_rpg_memory_open_schema_studio').off('click').on('click', async function () {
         await openSchemaIterationStudio({
@@ -14258,16 +14109,52 @@ function bindUi() {
             },
         });
     });
+    // Advanced tab: change handlers on the 14 fields — apply to live settings
+    // immediately (in-memory) but do NOT persist. Dirty note appears until a
+    // scope save button is clicked (or a fresh bindUi() clears the note).
+    const advancedFieldSelectors = [
+        '#luker_rpg_memory_advanced_include_world_info',
+        '#luker_rpg_memory_advanced_recent_raw_turns',
+        '#luker_rpg_memory_advanced_recall_iterations',
+        '#luker_rpg_memory_advanced_tool_retries',
+        '#luker_rpg_memory_advanced_rpm_limit',
+        '#luker_rpg_memory_advanced_extract_context_turns',
+        '#luker_rpg_memory_advanced_extract_exclude_recent_turns',
+        '#luker_rpg_memory_advanced_recall_query_messages',
+        '#luker_rpg_memory_advanced_llm_visible_recent_messages',
+        '#luker_rpg_memory_advanced_extract_batch_turns',
+        '#luker_rpg_memory_advanced_extract_system_prompt',
+        '#luker_rpg_memory_advanced_recall_route_prompt',
+        '#luker_rpg_memory_advanced_recall_finalize_prompt',
+        '#luker_rpg_memory_advanced_rag_rewrite_prompt',
+        '#luker_rpg_memory_advanced_schema_iter_system_prompt',
+    ].join(', ');
+    root.find(advancedFieldSelectors).off('input change').on('input change', function () {
+        applyAdvancedTabToLiveSettings(root, settings);
+    });
+
+    root.find('#luker_rpg_memory_advanced_reset').off('click').on('click', function () {
+        if (!window.confirm(i18n('Reset advanced settings editor to default? This will overwrite current unsaved advanced edits.'))) {
+            return;
+        }
+        hydrateAdvancedTabFields(root, defaultSettings);
+        applyAdvancedTabToLiveSettings(root, settings);
+        notifySuccess(i18n('Advanced settings reset to defaults in editor.'));
+    });
+
     root.find('#luker_rpg_memory_advanced_save_global').off('click').on('click', async function () {
+        // Ensure form values are applied to memory first, then persist to global.
+        applyAdvancedTabToLiveSettings(root, settings);
         const info = getAdvancedScopeInfo(context, settings);
         await persistAdvancedToGlobal(settings, info.settings);
+        syncGenerationVisibleHistoryRuntimeRegexScripts();
         const nextScopeInfo = getAdvancedScopeInfo(context, settings);
         updateAdvancedScopeIndicator(root, nextScopeInfo);
         root.find('#luker_rpg_memory_advanced_save_character').prop('disabled', !nextScopeInfo.hasAvatar);
         root.find('#luker_rpg_memory_advanced_clear_character_override').prop('disabled', !(nextScopeInfo.hasAvatar && nextScopeInfo.hasOverride));
+        markAdvancedTabDirty(root, false);
         notifySuccess(i18n('Advanced settings saved to global settings.'));
         updateUiStatus(i18n('Advanced settings saved to global settings.'));
-        bindUi();
     });
     root.find('#luker_rpg_memory_advanced_save_character').off('click').on('click', async function () {
         const info = getAdvancedScopeInfo(context, settings);
@@ -14275,18 +14162,21 @@ function bindUi() {
             notifyError(i18n('No active character selected.'));
             return;
         }
-        const ok = await persistAdvancedToCharacter(context, info.avatar, info.settings);
+        applyAdvancedTabToLiveSettings(root, settings);
+        const refreshedInfo = getAdvancedScopeInfo(context, settings);
+        const ok = await persistAdvancedToCharacter(context, refreshedInfo.avatar, refreshedInfo.settings);
         if (!ok) {
             notifyError(i18n('Failed to persist character advanced override.'));
             return;
         }
+        syncGenerationVisibleHistoryRuntimeRegexScripts();
         const nextScopeInfo = getAdvancedScopeInfo(context, settings);
         updateAdvancedScopeIndicator(root, nextScopeInfo);
         root.find('#luker_rpg_memory_advanced_save_character').prop('disabled', !nextScopeInfo.hasAvatar);
         root.find('#luker_rpg_memory_advanced_clear_character_override').prop('disabled', !(nextScopeInfo.hasAvatar && nextScopeInfo.hasOverride));
-        notifySuccess(i18nFormat('Advanced settings saved to character override: ${0}.', nextScopeInfo.characterName || info.characterName || info.avatar));
-        updateUiStatus(i18nFormat('Advanced settings saved to character override: ${0}.', nextScopeInfo.characterName || info.characterName || info.avatar));
-        bindUi();
+        markAdvancedTabDirty(root, false);
+        notifySuccess(i18nFormat('Advanced settings saved to character override: ${0}.', nextScopeInfo.characterName || refreshedInfo.characterName || refreshedInfo.avatar));
+        updateUiStatus(i18nFormat('Advanced settings saved to character override: ${0}.', nextScopeInfo.characterName || refreshedInfo.characterName || refreshedInfo.avatar));
     });
     root.find('#luker_rpg_memory_advanced_clear_character_override').off('click').on('click', async function () {
         const info = getAdvancedScopeInfo(context, settings);
@@ -14299,13 +14189,18 @@ function bindUi() {
             notifyError(i18n('Failed to clear character advanced override.'));
             return;
         }
+        syncGenerationVisibleHistoryRuntimeRegexScripts();
         const nextScopeInfo = getAdvancedScopeInfo(context, settings);
         updateAdvancedScopeIndicator(root, nextScopeInfo);
         root.find('#luker_rpg_memory_advanced_save_character').prop('disabled', !nextScopeInfo.hasAvatar);
         root.find('#luker_rpg_memory_advanced_clear_character_override').prop('disabled', !(nextScopeInfo.hasAvatar && nextScopeInfo.hasOverride));
+        // After clearing, form should reflect the freshly-effective settings (global values).
+        hydrateAdvancedTabFields(root, nextScopeInfo.settings);
+        // Also apply back to live settings so any dirty in-memory state is discarded.
+        applyAdvancedSettings(settings, nextScopeInfo.settings);
+        markAdvancedTabDirty(root, false);
         notifySuccess(i18nFormat('Cleared character advanced override: ${0}.', info.characterName || info.avatar));
         updateUiStatus(i18nFormat('Cleared character advanced override: ${0}.', info.characterName || info.avatar));
-        bindUi();
     });
 
     root.find('#luker_rpg_memory_view_graph').off('click').on('click', async function () {
@@ -14429,9 +14324,58 @@ function bindUi() {
             forceWorldInfoResimulate: true,
         };
 
-        const result = await runLLMDrivenRecall(context, store, payload);
-        store.lastRecallTrace = result.trace;
-        updateUiStatus(i18nFormat('Recall ready. selected=${0}', result.selectedNodes.length));
+        const recallMethod = String(effectiveSettings.recallMethod || 'llm').trim().toLowerCase();
+        let selectedNodes = [];
+        let trace = [];
+
+        if (recallMethod === 'rag') {
+            const chatKey = getChatKey(context);
+            const queryBundle = getRecallQueryBundle(payload, context, effectiveSettings);
+            const queryText = normalizeText(queryBundle.fullText || '');
+
+            let rewrittenQuery = null;
+            if (effectiveSettings.ragUseQueryRewrite && String(effectiveSettings.ragRewriteApiPresetName || '').trim()) {
+                rewrittenQuery = await runQueryRewrite(context, effectiveSettings, queryBundle, {
+                    abortSignal: null,
+                    recallRunToken: null,
+                });
+            }
+
+            const useRerank = Boolean(effectiveSettings.ragUseRerank);
+            const rerankProfile = useRerank ? getRerankProfileFromSettings(effectiveSettings) : null;
+
+            const ragResult = await runRagRecall(store, queryText, chatKey, effectiveSettings, {
+                maxResults: Number(effectiveSettings.hybridMaxResults) || 15,
+                vectorTopK: Number(effectiveSettings.vectorTopK) || 20,
+                useRerank,
+                rerankProfile,
+                rewrittenQuery,
+                signal: null,
+            });
+
+            const latestSeqIndex = getLatestSeqIndex(store);
+            const excludeMessages = Math.max(0, Number(effectiveSettings.recentRawTurns ?? defaultSettings.recentRawTurns));
+
+            selectedNodes = ragResult.candidates
+                .map(c => store.nodes?.[c.nodeId])
+                .filter(node => node && !node.archived)
+                .filter(node => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages))
+                .sort(compareNodesByTimeline);
+
+            trace = [{
+                step: 'rag_recall',
+                method: 'rag',
+                meta: ragResult.meta,
+                selected_ids: selectedNodes.map(n => n.id),
+            }];
+        } else {
+            const result = await runLLMDrivenRecall(context, store, payload);
+            selectedNodes = result.selectedNodes;
+            trace = result.trace;
+        }
+
+        store.lastRecallTrace = trace;
+        updateUiStatus(i18nFormat('Recall ready. selected=${0}', selectedNodes.length));
         refreshUiStats();
     });
 

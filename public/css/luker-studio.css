@@ -1,11 +1,16 @@
 /**
  * Luker Studio — Shared popup design system
  *
- * Used by: Character Editor Assistant, Orchestrator, Completion Preset
- * Assistant, conflict-ui — any popup that opens a chat/workspace surface.
+ * Used by: Character Editor Assistant,
+Orchestrator,
+Completion Preset
+ * Assistant,
+conflict-ui — any popup that opens a chat/workspace surface.
  *
  * Class convention: .luker-studio-*
- * All colors flow through color-mix(in oklab, var(--SmartTheme...) X%, …)
+ * All colors flow through color-mix(in oklab,
+var(--SmartTheme...) X%,
+…)
  * so themes carry through automatically.
  */
 
@@ -58,12 +63,11 @@
     --ls-motion: 180ms var(--ls-ease);
     --ls-motion-slow: 260ms var(--ls-ease);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    2 · SHELL CONTAINER
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio {
+.luker-studio {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-md);
@@ -71,48 +75,56 @@
     min-width: 0;
     color: var(--SmartThemeBodyColor);
 }
-
 /* Killing the popup's default centered alignment for every descendant
    text node — every CEA / orchestrator subcomponent assumes left flow. */
-.popup .luker-studio,
-.popup .luker-studio :is(p, ul, ol, li, h1, h2, h3, h4, pre, code, table, th, td, summary, label) {
+.luker-studio,
+.luker-studio :is(p,
+ul,
+ol,
+li,
+h1,
+h2,
+h3,
+h4,
+pre,
+code,
+table,
+th,
+td,
+summary,
+label) {
     text-align: start;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    3 · HEADER + META
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-header {
+.luker-studio .luker-studio-header {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     padding-bottom: var(--ls-space-sm);
     border-bottom: 1px solid var(--ls-divider);
 }
-
-.popup .luker-studio-title {
+.luker-studio .luker-studio-title {
     font-size: 1.18rem;
     font-weight: 700;
     line-height: 1.25;
     letter-spacing: -0.005em;
     opacity: var(--ls-text-strong);
 }
-
-.popup .luker-studio-subtitle {
+.luker-studio .luker-studio-subtitle {
     font-size: 0.92rem;
     line-height: 1.4;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-meta {
+.luker-studio .luker-studio-meta {
     display: flex;
     flex-wrap: wrap;
     gap: var(--ls-space-xs);
     margin-top: var(--ls-space-xs);
 }
-
-.popup .luker-studio-meta-item {
+.luker-studio .luker-studio-meta-item {
     display: inline-flex;
     align-items: baseline;
     gap: 6px;
@@ -125,35 +137,29 @@
     opacity: var(--ls-text-default);
     transition: background-color var(--ls-motion-fast), border-color var(--ls-motion-fast);
 }
-
-.popup .luker-studio-meta-item:hover {
+.luker-studio .luker-studio-meta-item:hover {
     background: var(--ls-hover-bg);
 }
-
-.popup .luker-studio-meta-item b {
+.luker-studio .luker-studio-meta-item b {
     font-weight: 600;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-meta-grid {
+.luker-studio .luker-studio-meta-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: var(--ls-space-xs);
     margin-bottom: var(--ls-space-md);
 }
-
-.popup .luker-studio-notice {
+.luker-studio .luker-studio-notice {
     font-size: 0.86rem;
     line-height: 1.5;
     opacity: var(--ls-text-muted);
     margin-bottom: var(--ls-space-sm);
 }
-
-.popup .luker-studio-notice:empty {
+.luker-studio .luker-studio-notice:empty {
     display: none;
 }
-
-.popup .luker-studio-meta-card {
+.luker-studio .luker-studio-meta-card {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -163,16 +169,14 @@
     background: var(--ls-chip-bg);
     min-width: 0;
 }
-
-.popup .luker-studio-meta-card b {
+.luker-studio .luker-studio-meta-card b {
     font-weight: 600;
     font-size: 0.78rem;
     letter-spacing: 0.4px;
     text-transform: uppercase;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-meta-card span {
+.luker-studio .luker-studio-meta-card span {
     font-weight: 600;
     font-size: 0.92rem;
     opacity: var(--ls-text-default);
@@ -180,82 +184,62 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-
-.popup .luker-studio-reasoning-details {
+.luker-studio .luker-studio-reasoning-details {
     margin-top: var(--ls-space-xs);
     padding: var(--ls-space-xs) var(--ls-space-sm);
     border-left: 3px solid color-mix(in oklab, var(--ls-accent-system) 60%, transparent);
     background: color-mix(in oklab, var(--ls-accent-system) 7%, transparent);
     border-radius: var(--ls-radius-sm);
 }
-
-.popup .luker-studio-reasoning-details > summary {
+.luker-studio .luker-studio-reasoning-details > summary {
     cursor: pointer;
     font-weight: 600;
     font-size: 0.86rem;
     opacity: var(--ls-text-muted);
     user-select: none;
 }
-
-.popup .luker-studio-reasoning-pre {
+.luker-studio .luker-studio-reasoning-pre {
     margin-top: var(--ls-space-xs);
     opacity: 0.92;
     font-size: 0.86rem;
     line-height: 1.5;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    4 · TOOLBAR + ACTIONS BAR
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-toolbar,
-.popup .luker-studio-actions-bar,
-.popup .luker-studio-actions-row,
-.luker_orch_general_tab .luker-studio-toolbar,
-.luker_orch_general_tab .luker-studio-actions-bar,
-.luker_orch_general_tab .luker-studio-actions-row {
+.luker-studio .luker-studio-toolbar,
+.luker-studio .luker-studio-actions-bar,
+.luker-studio .luker-studio-actions-row {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
     align-items: center;
 }
-
-.popup .luker-studio-actions-bar,
-.luker_orch_general_tab .luker-studio-actions-bar {
+.luker-studio .luker-studio-actions-bar {
     padding: var(--ls-space-xs) var(--ls-space-sm);
     border-radius: var(--ls-radius-md);
     background: var(--ls-panel-bg);
     border: var(--ls-border-soft);
 }
-
-.popup .luker-studio-toolbar-field,
-.luker_orch_general_tab .luker-studio-toolbar-field {
+.luker-studio .luker-studio-toolbar-field {
     display: grid;
     gap: 4px;
     flex: 1 1 240px;
     min-width: 0;
 }
-
-.popup .luker-studio-toolbar-actions,
-.luker_orch_general_tab .luker-studio-toolbar-actions {
+.luker-studio .luker-studio-toolbar-actions {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
     align-items: center;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    5 · BUTTONS — local overrides for menu_button inside studio popups
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio .menu_button,
-.popup .luker-studio .menu_button_small,
-.luker_orch_general_tab .menu_button,
-.luker_orch_general_tab .menu_button_small,
-.luker_orch_agents_tab .menu_button,
-.luker_orch_agents_tab .menu_button_small,
-.luker_orch_tools_skills_tab .menu_button,
-.luker_orch_tools_skills_tab .menu_button_small {
+.luker-studio .menu_button,
+.luker-studio .menu_button_small {
     display: inline-flex;
     flex: 0 0 auto;
     width: fit-content;
@@ -271,75 +255,49 @@
     line-height: 1.2;
     transition: background-color var(--ls-motion-fast), border-color var(--ls-motion-fast), transform var(--ls-motion-fast);
 }
-
-.popup .luker-studio .menu_button:not(.disabled):hover,
-.popup .luker-studio .menu_button_small:not(.disabled):hover,
-.luker_orch_general_tab .menu_button:not(.disabled):hover,
-.luker_orch_general_tab .menu_button_small:not(.disabled):hover,
-.luker_orch_agents_tab .menu_button:not(.disabled):hover,
-.luker_orch_agents_tab .menu_button_small:not(.disabled):hover,
-.luker_orch_tools_skills_tab .menu_button:not(.disabled):hover,
-.luker_orch_tools_skills_tab .menu_button_small:not(.disabled):hover {
+.luker-studio .menu_button:not(.disabled):hover,
+.luker-studio .menu_button_small:not(.disabled):hover {
     transform: translateY(-1px);
 }
-
-.popup .luker-studio .menu_button:not(.disabled):active,
-.popup .luker-studio .menu_button_small:not(.disabled):active,
-.luker_orch_general_tab .menu_button:not(.disabled):active,
-.luker_orch_general_tab .menu_button_small:not(.disabled):active,
-.luker_orch_agents_tab .menu_button:not(.disabled):active,
-.luker_orch_agents_tab .menu_button_small:not(.disabled):active,
-.luker_orch_tools_skills_tab .menu_button:not(.disabled):active,
-.luker_orch_tools_skills_tab .menu_button_small:not(.disabled):active {
+.luker-studio .menu_button:not(.disabled):active,
+.luker-studio .menu_button_small:not(.disabled):active {
     transform: translateY(0);
 }
-
 /* Primary button — used for the dominant CTA in a popup (e.g. Send) */
-.popup .luker-studio .menu_button.luker-studio-primary,
-.popup .luker-studio .menu_button_small.luker-studio-primary,
-.luker_orch_general_tab .menu_button.luker-studio-primary,
-.luker_orch_general_tab .menu_button_small.luker-studio-primary {
+.luker-studio .menu_button.luker-studio-primary,
+.luker-studio .menu_button_small.luker-studio-primary {
     background: color-mix(in oklab, var(--ls-accent-primary) 18%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-primary) 55%, transparent);
     color: var(--SmartThemeBodyColor);
     font-weight: 600;
 }
-
-.popup .luker-studio .menu_button.luker-studio-primary:not(.disabled):hover,
-.popup .luker-studio .menu_button_small.luker-studio-primary:not(.disabled):hover,
-.luker_orch_general_tab .menu_button.luker-studio-primary:not(.disabled):hover,
-.luker_orch_general_tab .menu_button_small.luker-studio-primary:not(.disabled):hover {
+.luker-studio .menu_button.luker-studio-primary:not(.disabled):hover,
+.luker-studio .menu_button_small.luker-studio-primary:not(.disabled):hover {
     background: color-mix(in oklab, var(--ls-accent-primary) 28%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-primary) 75%, transparent);
 }
-
-.popup .luker-studio .menu_button.luker-studio-danger,
-.popup .luker-studio .menu_button_small.luker-studio-danger,
-.luker_orch_general_tab .menu_button.luker-studio-danger,
-.luker_orch_general_tab .menu_button_small.luker-studio-danger {
+.luker-studio .menu_button.luker-studio-danger,
+.luker-studio .menu_button_small.luker-studio-danger {
     background: color-mix(in oklab, var(--ls-accent-danger) 14%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-danger) 50%, transparent);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    6 · STATUS LINE
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-status {
+.luker-studio .luker-studio-status {
     min-height: 1.2em;
     opacity: var(--ls-text-muted);
     font-size: 0.88rem;
 }
-
-.popup .luker-studio-status i {
+.luker-studio .luker-studio-status i {
     margin-right: 6px;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    7 · PANEL + WORKSPACE GRID
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-panel {
+.luker-studio .luker-studio-panel {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-sm);
@@ -350,24 +308,19 @@
     padding: var(--ls-space-md);
     background: var(--ls-panel-bg);
 }
-
-.popup .luker-studio-panel-title {
+.luker-studio .luker-studio-panel-title {
     font-weight: 700;
     font-size: 0.95rem;
     line-height: 1.3;
     opacity: var(--ls-text-strong);
 }
-
-.popup .luker-studio-columns {
+.luker-studio .luker-studio-columns {
     display: grid;
     grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
     gap: var(--ls-space-md);
     min-height: 0;
 }
-
-.popup .luker-studio-workspace ,
-.luker_orch_agents_tab .luker-studio-workspace ,
-.luker_orch_tools_skills_tab .luker-studio-workspace {
+.luker-studio .luker-studio-workspace {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-md);
@@ -376,35 +329,23 @@
     border-radius: var(--ls-radius-lg);
     background: var(--ls-panel-bg);
 }
-
-.popup .luker-studio-workspace-title ,
-.luker_orch_agents_tab .luker-studio-workspace-title ,
-.luker_orch_tools_skills_tab .luker-studio-workspace-title {
+.luker-studio .luker-studio-workspace-title {
     font-size: 1.05rem;
     font-weight: 700;
     line-height: 1.25;
 }
-
-.popup .luker-studio-workspace-grid ,
-.luker_orch_agents_tab .luker-studio-workspace-grid ,
-.luker_orch_tools_skills_tab .luker-studio-workspace-grid {
+.luker-studio .luker-studio-workspace-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: var(--ls-space-md);
 }
-
-.popup .luker-studio-workspace-col ,
-.luker_orch_agents_tab .luker-studio-workspace-col ,
-.luker_orch_tools_skills_tab .luker-studio-workspace-col {
+.luker-studio .luker-studio-workspace-col {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     min-width: 0;
 }
-
-.popup .luker-studio-workspace-col-title ,
-.luker_orch_agents_tab .luker-studio-workspace-col-title ,
-.luker_orch_tools_skills_tab .luker-studio-workspace-col-title {
+.luker-studio .luker-studio-workspace-col-title {
     font-weight: 700;
     font-size: 0.95rem;
     opacity: var(--ls-text-strong);
@@ -412,14 +353,11 @@
     border-bottom: 1px solid var(--ls-divider);
     margin-bottom: var(--ls-space-2xs);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    8 · CARD
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-card ,
-.luker_orch_agents_tab .luker-studio-card ,
-.luker_orch_tools_skills_tab .luker-studio-card {
+.luker-studio .luker-studio-card {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -429,76 +367,51 @@
     background: var(--ls-card-bg);
     transition: background-color var(--ls-motion-fast), border-color var(--ls-motion-fast);
 }
-
-.popup .luker-studio-card:hover ,
-.luker_orch_agents_tab .luker-studio-card:hover ,
-.luker_orch_tools_skills_tab .luker-studio-card:hover {
+.luker-studio .luker-studio-card:hover {
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 24%, transparent);
 }
-
-.popup .luker-studio-card-header,
-.luker_orch_agents_tab .luker-studio-card-header,
-.luker_orch_tools_skills_tab .luker-studio-card-header {
+.luker-studio .luker-studio-card-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--ls-space-sm);
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-card-actions,
-.luker_orch_agents_tab .luker-studio-card-actions,
-.luker_orch_tools_skills_tab .luker-studio-card-actions {
+.luker-studio .luker-studio-card-actions {
     display: inline-flex;
     gap: 6px;
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-card-label ,
-.luker_orch_agents_tab .luker-studio-card-label ,
-.luker_orch_tools_skills_tab .luker-studio-card-label {
+.luker-studio .luker-studio-card-label {
     font-weight: 600;
     opacity: var(--ls-text-strong);
     line-height: 1.3;
 }
-
-.popup .luker-studio-card-meta ,
-.luker_orch_agents_tab .luker-studio-card-meta ,
-.luker_orch_tools_skills_tab .luker-studio-card-meta {
+.luker-studio .luker-studio-card-meta {
     font-size: 0.86rem;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-add-row ,
-.luker_orch_agents_tab .luker-studio-add-row ,
-.luker_orch_tools_skills_tab .luker-studio-add-row {
+.luker-studio .luker-studio-add-row {
     display: flex;
     gap: var(--ls-space-xs);
     align-items: center;
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-add-row .text_pole ,
-.luker_orch_agents_tab .luker-studio-add-row .text_pole ,
-.luker_orch_tools_skills_tab .luker-studio-add-row .text_pole {
+.luker-studio .luker-studio-add-row .text_pole {
     flex: 1 1 200px;
     min-width: 0;
 }
-
-.popup .luker-studio-empty-hint,
-.luker_orch_agents_tab .luker-studio-empty-hint,
-.luker_orch_tools_skills_tab .luker-studio-empty-hint,
-.popup .luker-studio-empty {
+.luker-studio .luker-studio-empty-hint,
+.luker-studio .luker-studio-empty {
     opacity: var(--ls-text-muted);
     font-size: 0.92rem;
     padding: var(--ls-space-xs) 0;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    9 · CHAT MESSAGE LIST + MESSAGES
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-chat {
+.luker-studio .luker-studio-chat {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-sm);
@@ -514,9 +427,8 @@
     touch-action: pan-y;
     scroll-behavior: smooth;
 }
-
 /* Generic message used by orchestrator / iter-studio popups */
-.popup .luker-studio-msg {
+.luker-studio .luker-studio-msg {
     position: relative;
     padding: 10px 14px;
     border-radius: var(--ls-radius-md);
@@ -528,27 +440,22 @@
     word-break: break-word;
     overflow-wrap: anywhere;
 }
-
-.popup .luker-studio-msg[data-role="user"] {
+.luker-studio .luker-studio-msg[data-role="user"] {
     border-left-color: color-mix(in oklab, var(--ls-accent-user) 70%, transparent);
     background: color-mix(in oklab, var(--ls-accent-user) 8%, transparent);
 }
-
-.popup .luker-studio-msg[data-role="assistant"] {
+.luker-studio .luker-studio-msg[data-role="assistant"] {
     border-left-color: color-mix(in oklab, var(--ls-accent-assistant) 70%, transparent);
     background: color-mix(in oklab, var(--ls-accent-assistant) 7%, transparent);
 }
-
-.popup .luker-studio-msg[data-role="system"] {
+.luker-studio .luker-studio-msg[data-role="system"] {
     border-left-color: color-mix(in oklab, var(--ls-accent-system) 65%, transparent);
     background: color-mix(in oklab, var(--ls-accent-system) 8%, transparent);
 }
-
-.popup .luker-studio-msg.loading {
+.luker-studio .luker-studio-msg.loading {
     opacity: 0.88;
 }
-
-.popup .luker-studio-msg-head {
+.luker-studio .luker-studio-msg-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -557,60 +464,61 @@
     font-size: 0.85rem;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-msg-head-group {
+.luker-studio .luker-studio-msg-head-group {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     min-width: 0;
 }
-
-.popup .luker-studio-msg-body {
+.luker-studio .luker-studio-msg-body {
     white-space: pre-wrap;
     word-break: break-word;
     overflow-wrap: anywhere;
 }
-
-.popup .luker-studio-msg-body :is(p, ul, ol, pre, table, h1, h2, h3, h4) {
+.luker-studio .luker-studio-msg-body :is(p,
+ul,
+ol,
+pre,
+table,
+h1,
+h2,
+h3,
+h4) {
     margin: 0 0 8px;
 }
-
-.popup .luker-studio-msg-body :is(pre, code) {
+.luker-studio .luker-studio-msg-body :is(pre,
+code) {
     white-space: pre-wrap;
     word-break: break-word;
     overflow-wrap: anywhere;
 }
-
-.popup .luker-studio-msg-body table {
+.luker-studio .luker-studio-msg-body table {
     display: block;
     width: 100%;
     overflow: auto;
     border-collapse: collapse;
 }
-
-.popup .luker-studio-msg-body :is(th, td) {
+.luker-studio .luker-studio-msg-body :is(th,
+td) {
     border: 1px solid var(--ls-divider);
     padding: 4px 6px;
     vertical-align: top;
 }
-
-.popup .luker-studio-msg-meta {
+.luker-studio .luker-studio-msg-meta {
     margin-top: var(--ls-space-xs);
     padding-top: var(--ls-space-xs);
     border-top: 1px dashed var(--ls-divider);
     font-size: 0.88rem;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-msg-actions {
+.luker-studio .luker-studio-msg-actions {
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
     justify-content: flex-end;
     margin-top: var(--ls-space-xs);
 }
-
-.popup .luker-studio-msg-badge {
+.luker-studio .luker-studio-msg-badge {
     display: inline-flex;
     align-items: center;
     padding: 1px 8px;
@@ -618,13 +526,12 @@
     font-size: 0.8em;
     background: color-mix(in oklab, var(--ls-accent-assistant) 18%, transparent);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    10 · TOOL SUMMARY / TOOL TRACE
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-tool-summary,
-.popup .luker-studio-tool-trace-item {
+.luker-studio .luker-studio-tool-summary,
+.luker-studio .luker-studio-tool-trace-item {
     margin-top: var(--ls-space-xs);
     padding: 8px 10px;
     border-radius: var(--ls-radius-sm);
@@ -636,32 +543,27 @@
     font-size: 0.9rem;
     line-height: 1.45;
 }
-
-.popup .luker-studio-tool-trace {
+.luker-studio .luker-studio-tool-trace {
     margin-top: var(--ls-space-xs);
 }
-
-.popup .luker-studio-tool-trace > summary {
+.luker-studio .luker-studio-tool-trace > summary {
     cursor: pointer;
     font-size: 0.88rem;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-tool-trace-list {
+.luker-studio .luker-studio-tool-trace-list {
     display: grid;
     gap: var(--ls-space-xs);
     margin-top: var(--ls-space-xs);
 }
-
-.popup .luker-studio-tool-trace-name {
+.luker-studio .luker-studio-tool-trace-name {
     font-weight: 700;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    11 · COMPOSER
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-composer {
+.luker-studio .luker-studio-composer {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -670,20 +572,17 @@
     border-radius: var(--ls-radius-lg);
     background: var(--ls-panel-bg);
 }
-
-.popup .luker-studio-composer textarea {
+.luker-studio .luker-studio-composer textarea {
     min-height: 88px;
     resize: vertical;
     background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 90%, transparent);
     border-radius: var(--ls-radius-md);
     transition: border-color var(--ls-motion-fast), background-color var(--ls-motion-fast);
 }
-
-.popup .luker-studio-composer textarea:focus {
+.luker-studio .luker-studio-composer textarea:focus {
     border-color: color-mix(in oklab, var(--ls-accent-primary) 60%, transparent);
 }
-
-.popup .luker-studio-composer-actions {
+.luker-studio .luker-studio-composer-actions {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
@@ -691,8 +590,7 @@
     align-items: center;
     width: 100%;
 }
-
-.popup .luker-studio-composer-meta {
+.luker-studio .luker-studio-composer-meta {
     display: grid;
     gap: 4px;
     min-width: 0;
@@ -700,8 +598,7 @@
     font-size: 0.85rem;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-composer-buttons {
+.luker-studio .luker-studio-composer-buttons {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
@@ -709,9 +606,8 @@
     align-items: center;
     margin-top: var(--ls-space-2xs);
 }
-
 /* Slide toggle for studio popups */
-.popup .luker-studio-switch {
+.luker-studio .luker-studio-switch {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -719,16 +615,14 @@
     user-select: none;
     line-height: 1;
 }
-
-.popup .luker-studio-switch input {
+.luker-studio .luker-studio-switch input {
     position: absolute;
     opacity: 0;
     pointer-events: none;
     width: 0;
     height: 0;
 }
-
-.popup .luker-studio-switch-track {
+.luker-studio .luker-studio-switch-track {
     position: relative;
     display: inline-block;
     width: 30px;
@@ -738,8 +632,7 @@
     transition: background-color var(--ls-motion-fast);
     flex-shrink: 0;
 }
-
-.popup .luker-studio-switch-knob {
+.luker-studio .luker-studio-switch-knob {
     position: absolute;
     top: 2px;
     left: 2px;
@@ -750,30 +643,25 @@
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
     transition: transform var(--ls-motion-fast);
 }
-
-.popup .luker-studio-switch input:checked + .luker-studio-switch-track {
+.luker-studio .luker-studio-switch input:checked + .luker-studio-switch-track {
     background: color-mix(in oklab, var(--ls-accent-primary) 75%, transparent);
 }
-
-.popup .luker-studio-switch input:checked + .luker-studio-switch-track .luker-studio-switch-knob {
+.luker-studio .luker-studio-switch input:checked + .luker-studio-switch-track .luker-studio-switch-knob {
     transform: translateX(14px);
 }
-
-.popup .luker-studio-switch input:focus-visible + .luker-studio-switch-track {
+.luker-studio .luker-studio-switch input:focus-visible + .luker-studio-switch-track {
     outline: 2px solid color-mix(in oklab, var(--ls-accent-primary) 55%, transparent);
     outline-offset: 1px;
 }
-
-.popup .luker-studio-switch-label {
+.luker-studio .luker-studio-switch-label {
     font-size: 0.88em;
     opacity: var(--ls-text-default);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    12 · PENDING APPROVAL BLOCK
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-pending,
+.luker-studio .luker-studio-pending,
 .popup .cea_editor_pending {
     margin-top: var(--ls-space-xs);
     padding: var(--ls-space-md);
@@ -784,14 +672,12 @@
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-pending-hint,
+.luker-studio .luker-studio-pending-hint,
 .popup .cea_editor_pending_hint {
     font-weight: 600;
     opacity: var(--ls-text-strong);
 }
-
-.popup .luker-studio-pending-text {
+.luker-studio .luker-studio-pending-text {
     white-space: pre-wrap;
     word-break: break-word;
     text-align: left;
@@ -800,38 +686,33 @@
     padding: 6px 8px;
     background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 85%, transparent);
 }
-
-.popup .luker-studio-pending-actions,
+.luker-studio .luker-studio-pending-actions,
 .popup .cea_editor_pending_actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--ls-space-xs);
     justify-content: flex-end;
 }
-
-.popup .luker-studio-pending-diff {
+.luker-studio .luker-studio-pending-diff {
     margin-top: var(--ls-space-2xs);
     border-top: 1px dashed var(--ls-divider);
     padding-top: var(--ls-space-xs);
 }
-
-.popup .luker-studio-pending-diff > summary {
+.luker-studio .luker-studio-pending-diff > summary {
     cursor: pointer;
     font-weight: 600;
     opacity: var(--ls-text-strong);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    13 · SESSION HISTORY
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-history {
+.luker-studio .luker-studio-history {
     margin-top: var(--ls-space-xs);
     border-top: 1px solid var(--ls-divider);
     padding-top: var(--ls-space-sm);
 }
-
-.popup .luker-studio-history > summary {
+.luker-studio .luker-studio-history > summary {
     cursor: pointer;
     font-weight: 600;
     opacity: var(--ls-text-default);
@@ -841,8 +722,7 @@
     align-items: center;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-history > summary::before {
+.luker-studio .luker-studio-history > summary::before {
     content: '\f078';
     font-family: 'Font Awesome 6 Free';
     font-weight: 900;
@@ -851,31 +731,26 @@
     transition: transform var(--ls-motion-fast);
     display: inline-block;
 }
-
-.popup .luker-studio-history[open] > summary::before {
+.luker-studio .luker-studio-history[open] > summary::before {
     transform: rotate(180deg);
 }
-
-.popup .luker-studio-history > summary::-webkit-details-marker {
+.luker-studio .luker-studio-history > summary::-webkit-details-marker {
     display: none;
 }
-
-.popup .luker-studio-history-toolbar {
+.luker-studio .luker-studio-history-toolbar {
     display: flex;
     justify-content: flex-end;
     gap: var(--ls-space-xs);
     margin: var(--ls-space-xs) 0;
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-history-list {
+.luker-studio .luker-studio-history-list {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     margin-top: var(--ls-space-xs);
 }
-
-.popup .luker-studio-history-item {
+.luker-studio .luker-studio-history-item {
     display: flex;
     justify-content: space-between;
     gap: var(--ls-space-sm);
@@ -886,29 +761,24 @@
     background: var(--ls-card-bg);
     transition: border-color var(--ls-motion-fast), background-color var(--ls-motion-fast);
 }
-
-.popup .luker-studio-history-item:hover {
+.luker-studio .luker-studio-history-item:hover {
     background: var(--ls-hover-bg);
 }
-
-.popup .luker-studio-history-item.active {
+.luker-studio .luker-studio-history-item.active {
     border-color: color-mix(in oklab, var(--ls-accent-primary) 55%, transparent);
     background: color-mix(in oklab, var(--ls-accent-primary) 10%, transparent);
 }
-
-.popup .luker-studio-history-item-main {
+.luker-studio .luker-studio-history-item-main {
     min-width: 0;
     flex: 1;
 }
-
-.popup .luker-studio-history-item-summary {
+.luker-studio .luker-studio-history-item-summary {
     font-weight: 600;
     line-height: 1.35;
     word-break: break-word;
     opacity: var(--ls-text-strong);
 }
-
-.popup .luker-studio-history-item-current {
+.luker-studio .luker-studio-history-item-current {
     display: inline-flex;
     align-items: center;
     margin-left: 6px;
@@ -917,29 +787,26 @@
     font-size: 0.78em;
     background: color-mix(in oklab, var(--ls-accent-primary) 22%, transparent);
 }
-
-.popup .luker-studio-history-item-time {
+.luker-studio .luker-studio-history-item-time {
     opacity: var(--ls-text-muted);
     font-size: 0.86em;
     margin-top: 2px;
 }
-
-.popup .luker-studio-history-item-actions {
+.luker-studio .luker-studio-history-item-actions {
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-history-empty {
+.luker-studio .luker-studio-history-empty {
     opacity: var(--ls-text-muted);
     padding: var(--ls-space-xs) 0;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
-   14 · BADGES (run state, etc.)
+   14 · BADGES (run state,
+etc.)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-badge {
+.luker-studio .luker-studio-badge {
     display: inline-flex;
     align-items: center;
     padding: 2px 9px;
@@ -950,37 +817,31 @@
     background: var(--ls-chip-bg);
     border: var(--ls-border-soft);
 }
-
-.popup .luker-studio-badge-running {
+.luker-studio .luker-studio-badge-running {
     background: color-mix(in oklab, var(--ls-accent-primary) 18%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-primary) 50%, transparent);
 }
-
-.popup .luker-studio-badge-completed {
+.luker-studio .luker-studio-badge-completed {
     background: color-mix(in oklab, var(--ls-accent-success) 18%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-success) 50%, transparent);
 }
-
-.popup .luker-studio-badge-failed {
+.luker-studio .luker-studio-badge-failed {
     background: color-mix(in oklab, var(--ls-accent-danger) 18%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-danger) 50%, transparent);
 }
-
-.popup .luker-studio-badge-cancelled {
+.luker-studio .luker-studio-badge-cancelled {
     background: color-mix(in oklab, var(--ls-accent-system) 14%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-system) 45%, transparent);
 }
-
-.popup .luker-studio-badge-reused {
+.luker-studio .luker-studio-badge-reused {
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 30%, transparent);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    15 · EDITOR TOPBAR (orchestrator)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-editor-topbar {
+.luker-studio .luker-studio-editor-topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--ls-space-md);
@@ -990,15 +851,13 @@
     border-radius: var(--ls-radius-lg);
     background: var(--ls-panel-bg);
 }
-
-.popup .luker-studio-editor-topbar-left {
+.luker-studio .luker-studio-editor-topbar-left {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     min-width: 0;
 }
-
-.popup .luker-studio-editor-topbar-right {
+.luker-studio .luker-studio-editor-topbar-right {
     display: flex;
     flex-wrap: wrap;
     gap: var(--ls-space-xs);
@@ -1006,20 +865,17 @@
     justify-content: flex-end;
     min-width: 0;
 }
-
-.popup .luker-studio-editor-topbar-title {
+.luker-studio .luker-studio-editor-topbar-title {
     font-size: 1.05rem;
     font-weight: 700;
     line-height: 1.25;
 }
-
-.popup .luker-studio-editor-topbar-meta {
+.luker-studio .luker-studio-editor-topbar-meta {
     display: flex;
     flex-wrap: wrap;
     gap: var(--ls-space-xs);
 }
-
-.luker-studio-editor-chip {
+.luker-studio .luker-studio-editor-chip {
     display: inline-flex;
     align-items: baseline;
     gap: 4px;
@@ -1030,32 +886,29 @@
     font-size: 0.84rem;
     line-height: 1.45;
 }
-
-.luker-studio-editor-chip b {
+.luker-studio .luker-studio-editor-chip b {
     font-weight: 600;
     opacity: var(--ls-text-strong);
 }
-
 @media (max-width: 720px) {
-    .popup .luker-studio-editor-topbar {
+.luker-studio .luker-studio-editor-topbar {
         grid-template-columns: minmax(0, 1fr);
     }
-    .popup .luker-studio-editor-topbar-right {
+.luker-studio .luker-studio-editor-topbar-right {
         justify-content: flex-start;
     }
 }
-
 /* ═════════════════════════════════════════════════════════════════════
-   16 · CONVO (orchestrator runtime trace, attempts)
+   16 · CONVO (orchestrator runtime trace,
+attempts)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-convo {
+.luker-studio .luker-studio-convo {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-convo-head {
+.luker-studio .luker-studio-convo-head {
     display: flex;
     align-items: center;
     gap: var(--ls-space-xs);
@@ -1063,101 +916,85 @@
     opacity: var(--ls-text-muted);
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-convo-count {
+.luker-studio .luker-studio-convo-count {
     padding: 1px 8px;
     border-radius: var(--ls-radius-pill);
     background: var(--ls-chip-bg);
     border: var(--ls-border-soft);
     font-size: 0.78em;
 }
-
-.popup .luker-studio-convo-empty {
+.luker-studio .luker-studio-convo-empty {
     opacity: var(--ls-text-muted);
     padding: var(--ls-space-xs) 0;
 }
-
-.popup .luker-studio-convo-msg {
+.luker-studio .luker-studio-convo-msg {
     padding: var(--ls-space-xs) var(--ls-space-sm);
     border-radius: var(--ls-radius-sm);
     border: var(--ls-border-soft);
     background: var(--ls-card-bg);
     line-height: 1.5;
 }
-
-.popup .luker-studio-convo-msg-user {
+.luker-studio .luker-studio-convo-msg-user {
     border-left: 3px solid color-mix(in oklab, var(--ls-accent-user) 65%, transparent);
 }
-
-.popup .luker-studio-convo-msg-assistant {
+.luker-studio .luker-studio-convo-msg-assistant {
     border-left: 3px solid color-mix(in oklab, var(--ls-accent-assistant) 65%, transparent);
 }
-
-.popup .luker-studio-convo-msg-system {
+.luker-studio .luker-studio-convo-msg-system {
     border-left: 3px solid color-mix(in oklab, var(--ls-accent-system) 65%, transparent);
 }
-
-.popup .luker-studio-convo-msg-tool {
+.luker-studio .luker-studio-convo-msg-tool {
     border-left: 3px solid color-mix(in oklab, var(--SmartThemeBodyColor) 40%, transparent);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
 }
-
-.popup .luker-studio-convo-role {
+.luker-studio .luker-studio-convo-role {
     font-weight: 600;
     font-size: 0.82rem;
     opacity: var(--ls-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
 }
-
-.popup .luker-studio-convo-name {
+.luker-studio .luker-studio-convo-name {
     margin-left: 6px;
     font-weight: 600;
     opacity: var(--ls-text-strong);
 }
-
-.popup .luker-studio-convo-round {
+.luker-studio .luker-studio-convo-round {
     margin-left: 6px;
     padding: 0 6px;
     font-size: 0.76em;
     border-radius: var(--ls-radius-pill);
     background: var(--ls-chip-bg);
 }
-
-.popup .luker-studio-convo-toolcalls {
+.luker-studio .luker-studio-convo-toolcalls {
     display: grid;
     gap: 4px;
     margin-top: 4px;
 }
-
-.popup .luker-studio-convo-toolcall {
+.luker-studio .luker-studio-convo-toolcall {
     padding: 4px 8px;
     border-radius: var(--ls-radius-sm);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 9%, transparent);
     font-size: 0.86em;
 }
-
-.popup .luker-studio-convo-toolname {
+.luker-studio .luker-studio-convo-toolname {
     font-weight: 700;
 }
-
-.popup .luker-studio-convo-callid {
+.luker-studio .luker-studio-convo-callid {
     margin-left: 6px;
     opacity: var(--ls-text-muted);
     font-size: 0.86em;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    17 · ATTEMPT (orchestrator runtime trace)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-attempts {
+.luker-studio .luker-studio-attempts {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-sm);
 }
-
-.popup .luker-studio-attempt {
+.luker-studio .luker-studio-attempt {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -1166,33 +1003,28 @@
     border-radius: var(--ls-radius-md);
     background: var(--ls-card-bg);
 }
-
-.popup .luker-studio-attempt-title {
+.luker-studio .luker-studio-attempt-title {
     font-weight: 700;
     display: flex;
     align-items: center;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-attempt-meta {
+.luker-studio .luker-studio-attempt-meta {
     font-size: 0.86rem;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-attempt-label {
+.luker-studio .luker-studio-attempt-label {
     font-weight: 600;
     margin-bottom: 4px;
 }
-
-.popup .luker-studio-attempt-badges {
+.luker-studio .luker-studio-attempt-badges {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
     margin-left: auto;
 }
-
-.popup .luker-studio-attempt-pre {
+.luker-studio .luker-studio-attempt-pre {
     margin: 0;
     padding: 6px 8px;
     border-radius: var(--ls-radius-sm);
@@ -1207,49 +1039,42 @@
     font-size: 0.82rem;
     line-height: 1.5;
 }
-
-.popup .luker-studio-attempt-dual {
+.luker-studio .luker-studio-attempt-dual {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: var(--ls-space-xs);
 }
-
 @media (max-width: 720px) {
-    .popup .luker-studio-attempt-dual {
+.luker-studio .luker-studio-attempt-dual {
         grid-template-columns: minmax(0, 1fr);
     }
 }
-
-.popup .luker-studio-attempt-dual-col {
+.luker-studio .luker-studio-attempt-dual-col {
     display: flex;
     flex-direction: column;
     gap: 4px;
     min-width: 0;
 }
-
-.popup .luker-studio-attempt-tool-list {
+.luker-studio .luker-studio-attempt-tool-list {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
 }
-
-.popup .luker-studio-attempt-convo {
+.luker-studio .luker-studio-attempt-convo {
     margin-top: var(--ls-space-xs);
     padding-top: var(--ls-space-xs);
     border-top: 1px dashed var(--ls-divider);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    18 · AGENDA (orchestrator)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-agenda-rounds {
+.luker-studio .luker-studio-agenda-rounds {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-sm);
 }
-
-.popup .luker-studio-agenda-round {
+.luker-studio .luker-studio-agenda-round {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -1258,49 +1083,46 @@
     border-radius: var(--ls-radius-md);
     background: var(--ls-card-bg);
 }
-
-.popup .luker-studio-agenda-round-head {
+.luker-studio .luker-studio-agenda-round-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-agenda-round-title {
+.luker-studio .luker-studio-agenda-round-title {
     font-weight: 700;
 }
-
-.popup .luker-studio-agenda-round-body {
+.luker-studio .luker-studio-agenda-round-body {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-agenda-round-planner,
-.popup .luker-studio-agenda-attempt-planner {
+.luker-studio .luker-studio-agenda-round-planner,
+.luker-studio .luker-studio-agenda-attempt-planner {
     padding: var(--ls-space-xs) var(--ls-space-sm);
     border-radius: var(--ls-radius-sm);
     border-left: 3px solid color-mix(in oklab, var(--ls-accent-system) 55%, transparent);
     background: color-mix(in oklab, var(--ls-accent-system) 7%, transparent);
     font-size: 0.9rem;
 }
-
-/* `pre-wrap` is only meaningful for the agenda planner block, which
+/* `pre-wrap` is only meaningful for the agenda planner block,
+which
    wraps raw planner text. The attempt-planner reuses the visual accent
-   for a `<details>` structure, where preserving template whitespace
+   for a `<details>` structure,
+where preserving template whitespace
    blows up the layout (newlines between summary/body render as blank
    gaps). Keep the visual treatment but normalize whitespace. */
-.popup .luker-studio-agenda-round-planner {
+.luker-studio .luker-studio-agenda-round-planner {
     white-space: pre-wrap;
 }
-
 /* Agenda + director round/sub-agent cards: the <summary> contents are
    one or two inline pieces (title + status/count badges). Lay them out
    inline with a small gap so the disclosure widget + title + badges
-   sit on a single row, instead of the browser default which can stack
+   sit on a single row,
+instead of the browser default which can stack
    the marker on its own line and leave loud whitespace around badges. */
-.popup .luker-studio-agenda-attempt > summary {
+.luker-studio .luker-studio-agenda-attempt > summary {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -1308,14 +1130,12 @@
     cursor: pointer;
     user-select: none;
 }
-
-.popup .luker-studio-agenda-round-agents {
+.luker-studio .luker-studio-agenda-round-agents {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-agenda-attempt {
+.luker-studio .luker-studio-agenda-attempt {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -1324,34 +1144,29 @@
     border-radius: var(--ls-radius-sm);
     background: var(--ls-panel-bg);
 }
-
-.popup .luker-studio-agenda-attempt-title {
+.luker-studio .luker-studio-agenda-attempt-title {
     font-weight: 600;
 }
-
-.popup .luker-studio-agenda-attempt-agent {
+.luker-studio .luker-studio-agenda-attempt-agent {
     font-weight: 700;
 }
-
-.popup .luker-studio-agenda-final {
+.luker-studio .luker-studio-agenda-final {
     padding: var(--ls-space-sm) var(--ls-space-md);
     border-radius: var(--ls-radius-md);
     border: 1px solid color-mix(in oklab, var(--ls-accent-success) 45%, transparent);
     background: color-mix(in oklab, var(--ls-accent-success) 9%, transparent);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    19 · FLOW (orchestrator pipeline visualization)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-flow {
+.luker-studio .luker-studio-flow {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-sm);
     align-items: stretch;
 }
-
-.popup .luker-studio-flow-stage {
+.luker-studio .luker-studio-flow-stage {
     padding: var(--ls-space-sm) var(--ls-space-md);
     border: var(--ls-border);
     border-radius: var(--ls-radius-md);
@@ -1360,20 +1175,17 @@
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-flow-stage-head {
+.luker-studio .luker-studio-flow-stage-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-flow-stage-title {
+.luker-studio .luker-studio-flow-stage-title {
     font-weight: 700;
 }
-
-.popup .luker-studio-flow-stage-mode {
+.luker-studio .luker-studio-flow-stage-mode {
     font-size: 0.78em;
     padding: 1px 8px;
     border-radius: var(--ls-radius-pill);
@@ -1381,72 +1193,61 @@
     border: var(--ls-border-soft);
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-flow-stage-nodes {
+.luker-studio .luker-studio-flow-stage-nodes {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-flow-node {
+.luker-studio .luker-studio-flow-node {
     padding: var(--ls-space-xs) var(--ls-space-sm);
     border-radius: var(--ls-radius-sm);
     border: var(--ls-border-soft);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent);
 }
-
-.popup .luker-studio-flow-node-head {
+.luker-studio .luker-studio-flow-node-head {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
 }
-
-.popup .luker-studio-flow-node-title {
+.luker-studio .luker-studio-flow-node-title {
     font-weight: 600;
 }
-
-.popup .luker-studio-flow-node-meta {
+.luker-studio .luker-studio-flow-node-meta {
     font-size: 0.82em;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-flow-node-preview {
+.luker-studio .luker-studio-flow-node-preview {
     margin-top: 4px;
     font-size: 0.86rem;
     opacity: var(--ls-text-default);
     white-space: pre-wrap;
 }
-
-.popup .luker-studio-flow-arrow {
+.luker-studio .luker-studio-flow-arrow {
     display: flex;
     justify-content: center;
     opacity: var(--ls-text-muted);
     font-size: 1rem;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    19b · PIPELINE (orchestrator workflow editor — main.js renderWorkflowBoard)
    Stage/node card layout used inside the orchestrator editor popup. The
    .luker-studio-pipeline root holds vertically stacked .luker-studio-pipeline-stage
    blocks connected by .luker-studio-pipeline-connector arrows. Each stage
-   contains a head row, an N-node grid (parallel) or column (serial), and a
+   contains a head row,
+an N-node grid (parallel) or column (serial),
+and a
    footer with the +Node button.
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-pipeline ,
-.luker_orch_agents_tab .luker-studio-pipeline ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline {
+.luker-studio .luker-studio-pipeline {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     align-items: stretch;
     min-width: 0;
 }
-
-.popup .luker-studio-pipeline-stage ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage {
+.luker-studio .luker-studio-pipeline-stage {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-sm);
@@ -1457,28 +1258,16 @@
     transition: border-color var(--ls-motion-fast);
     position: relative;
 }
-
-.popup .luker-studio-pipeline-stage:hover ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage:hover ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage:hover {
+.luker-studio .luker-studio-pipeline-stage:hover {
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 24%, transparent);
 }
-
-.popup .luker-studio-pipeline-stage[data-mode="parallel"] ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage[data-mode="parallel"] ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage[data-mode="parallel"] {
+.luker-studio .luker-studio-pipeline-stage[data-mode="parallel"] {
     border-left: 4px solid color-mix(in oklab, var(--ls-accent-user) 65%, transparent);
 }
-
-.popup .luker-studio-pipeline-stage[data-mode="serial"] ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage[data-mode="serial"] ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage[data-mode="serial"] {
+.luker-studio .luker-studio-pipeline-stage[data-mode="serial"] {
     border-left: 4px solid color-mix(in oklab, var(--ls-accent-assistant) 65%, transparent);
 }
-
-.popup .luker-studio-pipeline-stage-head ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage-head ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-head {
+.luker-studio .luker-studio-pipeline-stage-head {
     display: flex;
     align-items: center;
     gap: var(--ls-space-xs);
@@ -1486,24 +1275,15 @@
     padding-bottom: var(--ls-space-xs);
     border-bottom: 1px dashed var(--ls-divider);
 }
-
-.popup .luker-studio-pipeline-stage-id ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage-id ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-id {
+.luker-studio .luker-studio-pipeline-stage-id {
     flex: 1 1 220px;
     min-width: 0;
 }
-
-.popup .luker-studio-pipeline-stage-id .text_pole ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage-id .text_pole ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-id .text_pole {
+.luker-studio .luker-studio-pipeline-stage-id .text_pole {
     font-weight: 600;
     width: 100%;
 }
-
-.popup .luker-studio-pipeline-mode-pill ,
-.luker_orch_agents_tab .luker-studio-pipeline-mode-pill ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-mode-pill {
+.luker-studio .luker-studio-pipeline-mode-pill {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -1515,76 +1295,49 @@
     background: var(--ls-chip-bg);
     border: var(--ls-border-soft);
 }
-
-.popup .luker-studio-pipeline-mode-pill.parallel ,
-.luker_orch_agents_tab .luker-studio-pipeline-mode-pill.parallel ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-mode-pill.parallel {
+.luker-studio .luker-studio-pipeline-mode-pill.parallel {
     background: color-mix(in oklab, var(--ls-accent-user) 16%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-user) 45%, transparent);
     color: color-mix(in oklab, var(--ls-accent-user) 85%, var(--SmartThemeBodyColor));
 }
-
-.popup .luker-studio-pipeline-mode-pill.serial ,
-.luker_orch_agents_tab .luker-studio-pipeline-mode-pill.serial ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-mode-pill.serial {
+.luker-studio .luker-studio-pipeline-mode-pill.serial {
     background: color-mix(in oklab, var(--ls-accent-assistant) 16%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-assistant) 45%, transparent);
     color: color-mix(in oklab, var(--ls-accent-assistant) 85%, var(--SmartThemeBodyColor));
 }
-
-.popup .luker-studio-pipeline-nodes ,
-.luker_orch_agents_tab .luker-studio-pipeline-nodes ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-nodes {
+.luker-studio .luker-studio-pipeline-nodes {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
     min-width: 0;
 }
-
-.popup .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes {
+.luker-studio .luker-studio-pipeline-stage[data-mode="parallel"] .luker-studio-pipeline-nodes {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-pipeline-stage-footer ,
-.luker_orch_agents_tab .luker-studio-pipeline-stage-footer ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-stage-footer {
+.luker-studio .luker-studio-pipeline-stage-footer {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
     justify-content: flex-end;
     padding-top: var(--ls-space-2xs);
 }
-
-.popup .luker-studio-pipeline-node ,
-.luker_orch_agents_tab .luker-studio-pipeline-node ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node {
+.luker-studio .luker-studio-pipeline-node {
     border: var(--ls-border-soft);
     border-radius: var(--ls-radius-md);
     background: color-mix(in oklab, var(--SmartThemeBlurTintColor) 88%, transparent);
     overflow: hidden;
     transition: border-color var(--ls-motion-fast), box-shadow var(--ls-motion-fast);
 }
-
-.popup .luker-studio-pipeline-node:hover ,
-.luker_orch_agents_tab .luker-studio-pipeline-node:hover ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node:hover {
+.luker-studio .luker-studio-pipeline-node:hover {
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 28%, transparent);
 }
-
-.popup .luker-studio-pipeline-node[open] ,
-.luker_orch_agents_tab .luker-studio-pipeline-node[open] ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node[open] {
+.luker-studio .luker-studio-pipeline-node[open] {
     border-color: color-mix(in oklab, var(--ls-accent-primary) 45%, transparent);
     box-shadow: 0 0 0 1px color-mix(in oklab, var(--ls-accent-primary) 25%, transparent);
 }
-
-.popup .luker-studio-pipeline-node > summary ,
-.luker_orch_agents_tab .luker-studio-pipeline-node > summary ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node > summary {
+.luker-studio .luker-studio-pipeline-node > summary {
     cursor: pointer;
     list-style: none;
     padding: 8px 12px;
@@ -1593,32 +1346,20 @@
     gap: var(--ls-space-xs);
     transition: background-color var(--ls-motion-fast);
 }
-
-.popup .luker-studio-pipeline-node > summary::-webkit-details-marker ,
-.luker_orch_agents_tab .luker-studio-pipeline-node > summary::-webkit-details-marker ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node > summary::-webkit-details-marker {
+.luker-studio .luker-studio-pipeline-node > summary::-webkit-details-marker {
     display: none;
 }
-
-.popup .luker-studio-pipeline-node > summary:hover ,
-.luker_orch_agents_tab .luker-studio-pipeline-node > summary:hover ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node > summary:hover {
+.luker-studio .luker-studio-pipeline-node > summary:hover {
     background: var(--ls-hover-bg);
 }
-
-.popup .luker-studio-pipeline-node-summary ,
-.luker_orch_agents_tab .luker-studio-pipeline-node-summary ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node-summary {
+.luker-studio .luker-studio-pipeline-node-summary {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     flex: 1 1 auto;
     min-width: 0;
 }
-
-.popup .luker-studio-pipeline-node-icon ,
-.luker_orch_agents_tab .luker-studio-pipeline-node-icon ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node-icon {
+.luker-studio .luker-studio-pipeline-node-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1631,10 +1372,7 @@
     flex-shrink: 0;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-pipeline-node-name ,
-.luker_orch_agents_tab .luker-studio-pipeline-node-name ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node-name {
+.luker-studio .luker-studio-pipeline-node-name {
     font-weight: 600;
     line-height: 1.3;
     overflow: hidden;
@@ -1642,10 +1380,7 @@
     white-space: nowrap;
     min-width: 0;
 }
-
-.popup .luker-studio-pipeline-node-type ,
-.luker_orch_agents_tab .luker-studio-pipeline-node-type ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node-type {
+.luker-studio .luker-studio-pipeline-node-type {
     padding: 1px 8px;
     border-radius: var(--ls-radius-pill);
     background: var(--ls-chip-bg);
@@ -1656,26 +1391,17 @@
     opacity: var(--ls-text-muted);
     flex-shrink: 0;
 }
-
-.popup .luker-studio-pipeline-node-chevron ,
-.luker_orch_agents_tab .luker-studio-pipeline-node-chevron ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node-chevron {
+.luker-studio .luker-studio-pipeline-node-chevron {
     margin-left: auto;
     opacity: var(--ls-text-muted);
     font-size: 0.82em;
     transition: transform var(--ls-motion);
     flex-shrink: 0;
 }
-
-.popup .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron ,
-.luker_orch_agents_tab .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron {
+.luker-studio .luker-studio-pipeline-node[open] .luker-studio-pipeline-node-chevron {
     transform: rotate(90deg);
 }
-
-.popup .luker-studio-pipeline-node-body ,
-.luker_orch_agents_tab .luker-studio-pipeline-node-body ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node-body {
+.luker-studio .luker-studio-pipeline-node-body {
     padding: var(--ls-space-sm) var(--ls-space-md);
     border-top: 1px solid var(--ls-divider);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 3%, transparent);
@@ -1683,35 +1409,23 @@
     flex-direction: column;
     gap: 6px;
 }
-
-.popup .luker-studio-pipeline-node-body label ,
-.luker_orch_agents_tab .luker-studio-pipeline-node-body label ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-node-body label {
+.luker-studio .luker-studio-pipeline-node-body label {
     font-weight: 600;
     font-size: 0.86rem;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-pipeline-connector ,
-.luker_orch_agents_tab .luker-studio-pipeline-connector ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-connector {
+.luker-studio .luker-studio-pipeline-connector {
     display: flex;
     justify-content: center;
     padding: 2px 0;
 }
-
-.popup .luker-studio-pipeline-connector-arrow ,
-.luker_orch_agents_tab .luker-studio-pipeline-connector-arrow ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-connector-arrow {
+.luker-studio .luker-studio-pipeline-connector-arrow {
     width: 2px;
     height: 24px;
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent);
     position: relative;
 }
-
-.popup .luker-studio-pipeline-connector-arrow i ,
-.luker_orch_agents_tab .luker-studio-pipeline-connector-arrow i ,
-.luker_orch_tools_skills_tab .luker-studio-pipeline-connector-arrow i {
+.luker-studio .luker-studio-pipeline-connector-arrow i {
     position: absolute;
     bottom: -4px;
     left: 50%;
@@ -1721,18 +1435,16 @@
     background: var(--SmartThemeBlurTintColor);
     padding: 0 2px;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    20 · KANBAN (orchestrator agenda)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-kanban {
+.luker-studio .luker-studio-kanban {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: var(--ls-space-sm);
 }
-
-.popup .luker-studio-kanban-col {
+.luker-studio .luker-studio-kanban-col {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
@@ -1741,36 +1453,31 @@
     border-radius: var(--ls-radius-md);
     background: var(--ls-panel-bg);
 }
-
-.popup .luker-studio-kanban-cards {
+.luker-studio .luker-studio-kanban-cards {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
-.popup .luker-studio-kanban-card {
+.luker-studio .luker-studio-kanban-card {
     padding: var(--ls-space-xs) var(--ls-space-sm);
     border-radius: var(--ls-radius-sm);
     border: var(--ls-border-soft);
     background: var(--ls-card-bg);
 }
-
-.popup .luker-studio-kanban-card-id {
+.luker-studio .luker-studio-kanban-card-id {
     font-family: var(--monoFontFamily);
     font-size: 0.78em;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-kanban-card-goal {
+.luker-studio .luker-studio-kanban-card-goal {
     margin-top: 2px;
     font-size: 0.9rem;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    21 · OBJECT DIFF (re-uses luker_object_diff_* core classes)
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-diff {
+.luker-studio .luker-studio-diff {
     border: var(--ls-border);
     border-radius: var(--ls-radius-md);
     padding: var(--ls-space-sm);
@@ -1778,13 +1485,11 @@
     overflow: auto;
     background: var(--ls-panel-bg);
 }
-
-.popup .luker-studio-diff .luker_object_diff {
+.luker-studio .luker-studio-diff .luker_object_diff {
     display: grid;
     gap: var(--ls-space-sm);
 }
-
-.popup .luker-studio-diff .luker_object_diff_item {
+.luker-studio .luker-studio-diff .luker_object_diff_item {
     display: grid;
     gap: 6px;
     padding: var(--ls-space-xs) var(--ls-space-sm);
@@ -1792,19 +1497,16 @@
     border-radius: var(--ls-radius-sm);
     background: var(--ls-card-bg);
 }
-
-.popup .luker-studio-diff .luker_object_diff_path {
+.luker-studio .luker-studio-diff .luker_object_diff_path {
     font-weight: 700;
     word-break: break-word;
 }
-
-.popup .luker-studio-diff .luker_object_diff_grid {
+.luker-studio .luker-studio-diff .luker_object_diff_grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
 }
-
-.popup .luker-studio-diff .luker_object_diff_col {
+.luker-studio .luker-studio-diff .luker_object_diff_col {
     display: grid;
     gap: 4px;
     min-width: 0;
@@ -1813,85 +1515,74 @@
     border-left: 3px solid transparent;
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 6%, transparent);
 }
-
-.popup .luker-studio-diff .luker_object_diff_col.before {
+.luker-studio .luker-studio-diff .luker_object_diff_col.before {
     border-left-color: color-mix(in oklab, var(--ls-accent-danger) 65%, transparent);
     background: color-mix(in oklab, var(--ls-accent-danger) 8%, transparent);
 }
-
-.popup .luker-studio-diff .luker_object_diff_col.after {
+.luker-studio .luker-studio-diff .luker_object_diff_col.after {
     border-left-color: color-mix(in oklab, var(--ls-accent-success) 68%, transparent);
     background: color-mix(in oklab, var(--ls-accent-success) 9%, transparent);
 }
-
-.popup .luker-studio-diff .luker_object_diff_col_title {
+.luker-studio .luker-studio-diff .luker_object_diff_col_title {
     font-size: 0.86em;
     font-weight: 700;
     opacity: var(--ls-text-muted);
 }
-
-.popup .luker-studio-diff .luker_object_diff_col pre {
+.luker-studio .luker-studio-diff .luker_object_diff_col pre {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
 }
-
-.popup .luker-studio-diff .luker_object_diff_missing {
+.luker-studio .luker-studio-diff .luker_object_diff_missing {
     opacity: var(--ls-text-muted);
     font-style: italic;
 }
-
 @media (max-width: 720px) {
-    .popup .luker-studio-diff .luker_object_diff_grid {
+.luker-studio .luker-studio-diff .luker_object_diff_grid {
         grid-template-columns: minmax(0, 1fr);
     }
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    22 · DRAFT SUMMARY
    ═════════════════════════════════════════════════════════════════════ */
 
-.popup .luker-studio-draft-summary {
+.luker-studio .luker-studio-draft-summary {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
     align-items: center;
 }
-
-.popup .luker-studio-draft-badge {
+.luker-studio .luker-studio-draft-badge {
     padding: 3px 9px;
     border-radius: var(--ls-radius-pill);
     background: var(--ls-chip-bg);
     border: var(--ls-border-soft);
     font-size: 0.86em;
 }
-
-.popup .luker-studio-draft-actions {
+.luker-studio .luker-studio-draft-actions {
     display: flex;
     gap: var(--ls-space-xs);
     flex-wrap: wrap;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    23 · COMPACTION FOR NARROW VIEWPORTS
    ═════════════════════════════════════════════════════════════════════ */
 
 @media (max-width: 720px) {
-    .popup .luker-studio-columns {
+.luker-studio .luker-studio-columns {
         grid-template-columns: minmax(0, 1fr);
     }
-    .popup .luker-studio-meta {
+.luker-studio .luker-studio-meta {
         gap: 4px;
     }
-    .popup .luker-studio-meta-item {
+.luker-studio .luker-studio-meta-item {
         padding: 3px 8px;
         font-size: 0.82rem;
     }
-    .popup .luker-studio-title {
+.luker-studio .luker-studio-title {
         font-size: 1.08rem;
     }
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    24 · ITER WORKSPACE — split layout for iter-studio popups
    Used by: CPA / MG schema / Orchestrator / CEA char iter / CEA editor.
@@ -1906,7 +1597,6 @@
     min-width: 0;
     box-sizing: border-box;
 }
-
 .popup .luker-iter-workspace-grid {
     display: grid;
     grid-template-columns:
@@ -1918,7 +1608,6 @@
     min-height: 360px;
     align-items: stretch;
 }
-
 .popup .luker-iter-workspace-chat,
 .popup .luker-iter-workspace-preview {
     display: flex;
@@ -1928,7 +1617,6 @@
     min-height: 0;
     overflow: hidden;
 }
-
 .popup .luker-iter-workspace-preview {
     padding: var(--ls-space-md, 14px);
     border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 16%, transparent);
@@ -1936,7 +1624,6 @@
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 4%, transparent);
     overflow-y: auto;
 }
-
 .popup .luker-iter-workspace-resizer {
     position: relative;
     cursor: col-resize;
@@ -1959,20 +1646,17 @@
 .popup .luker-iter-workspace-resizer.active::before {
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 38%, transparent);
 }
-
 .popup .luker-iter-workspace-preview-empty,
 .popup .luker-iter-workspace-preview-loading {
     opacity: 0.74;
     padding: var(--ls-space-md, 14px);
     text-align: center;
 }
-
 .popup .luker-iter-workspace-preview-section {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs, 6px);
 }
-
 .popup .luker-iter-workspace-preview-section-title {
     font-weight: 700;
     font-size: 0.95rem;
@@ -1980,14 +1664,12 @@
     padding-bottom: 4px;
     border-bottom: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
 }
-
 .popup .luker-iter-workspace-preview-row {
     padding: 6px 10px;
     border-radius: 8px;
     border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 10%, transparent);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent);
 }
-
 .popup .luker-iter-workspace-preview-row-head {
     display: flex;
     align-items: center;
@@ -1995,16 +1677,13 @@
     font-size: 0.9rem;
     flex-wrap: wrap;
 }
-
 .popup .luker-iter-workspace-preview-row-label {
     font-weight: 600;
 }
-
 .popup .luker-iter-workspace-preview-row-meta {
     opacity: 0.74;
     font-size: 0.82em;
 }
-
 .popup .luker-iter-workspace-preview-row-body {
     margin-top: 4px;
     white-space: pre-wrap;
@@ -2013,22 +1692,18 @@
     line-height: 1.5;
     color: color-mix(in oklab, var(--SmartThemeBodyColor) 90%, transparent);
 }
-
 .popup .luker-iter-workspace-preview-row-body.muted {
     opacity: 0.6;
     font-style: italic;
 }
-
 .popup .luker-iter-workspace-preview-row.changed {
     border-color: color-mix(in oklab, #5b8def 50%, transparent);
     background: color-mix(in oklab, #5b8def 8%, transparent);
 }
-
 .popup .luker-iter-workspace-preview-row.pending-change {
     border-color: color-mix(in oklab, #d99c3a 55%, transparent);
     background: color-mix(in oklab, #d99c3a 10%, transparent);
 }
-
 .popup .luker-iter-workspace-aside {
     display: flex;
     flex-direction: column;
@@ -2037,19 +1712,16 @@
     padding-top: var(--ls-space-md, 14px);
     border-top: 1px dashed color-mix(in oklab, var(--SmartThemeBodyColor) 18%, transparent);
 }
-
 .popup .luker-iter-workspace-aside-title {
     font-size: 0.86rem;
     font-weight: 600;
     opacity: 0.85;
 }
-
 /* Clickable saved-preset rows in the aside (CPA "Reference" picker). */
 
 .popup .luker-iter-workspace-preview-row[data-cpa-it-preview-action] {
     cursor: pointer;
 }
-
 /* Mobile tab bar (only < 900px; desktop two-column stays mounted) */
 
 .popup .luker-iter-workspace-tabs {
@@ -2060,7 +1732,6 @@
     border-radius: 999px;
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
 }
-
 .popup .luker-iter-workspace-tab {
     flex: 1 1 0;
     min-width: 0;
@@ -2079,16 +1750,13 @@
     transition: background 120ms ease, color 120ms ease;
     min-height: 44px;
 }
-
 .popup .luker-iter-workspace-tab.active {
     background: color-mix(in oklab, var(--SmartThemeQuoteColor, #5b8def) 22%, transparent);
     color: var(--SmartThemeBodyColor);
 }
-
 .popup .luker-iter-workspace-tab:active {
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
 }
-
 .popup .luker-iter-workspace-tab-badge {
     display: inline-flex;
     align-items: center;
@@ -2103,11 +1771,9 @@
     font-weight: 700;
     line-height: 1;
 }
-
 .popup .luker-iter-workspace-tab-badge[hidden] {
     display: none;
 }
-
 /* Composer-row auto-apply visual rules (both underscore and hyphen naming) */
 
 .popup .luker-iter-workspace [class*="_composer_actions"],
@@ -2119,7 +1785,6 @@
     justify-content: space-between;
     margin-top: var(--ls-space-xs, 6px);
 }
-
 .popup .luker-iter-workspace [class*="_composer_auto_apply"],
 .popup .luker-iter-workspace [class*="-composer-auto-apply"] {
     display: inline-flex;
@@ -2131,7 +1796,6 @@
     font-size: 0.92rem;
     opacity: 0.92;
 }
-
 .popup .luker-iter-workspace [class*="_composer_buttons"],
 .popup .luker-iter-workspace [class*="-composer-buttons"] {
     display: inline-flex;
@@ -2139,40 +1803,40 @@
     flex-wrap: wrap;
     margin-left: auto;
 }
-
 @media (max-width: 900px) {
-    .popup .luker-iter-workspace-tabs {
+.popup .luker-iter-workspace-tabs {
         display: flex;
     }
-    .popup .luker-iter-workspace-grid {
+.popup .luker-iter-workspace-grid {
         grid-template-columns: minmax(0, 1fr);
         grid-auto-rows: auto;
         min-height: 0;
     }
-    .popup .luker-iter-workspace-resizer {
+.popup .luker-iter-workspace-resizer {
         display: none;
     }
-    .popup .luker-iter-workspace[data-iter-active-tab="chat"] .luker-iter-workspace-preview {
+.popup .luker-iter-workspace[data-iter-active-tab="chat"] .luker-iter-workspace-preview {
         display: none;
     }
-    .popup .luker-iter-workspace[data-iter-active-tab="preview"] .luker-iter-workspace-chat {
+.popup .luker-iter-workspace[data-iter-active-tab="preview"] .luker-iter-workspace-chat {
         display: none;
     }
-    .popup .luker-iter-workspace-preview {
+.popup .luker-iter-workspace-preview {
         max-height: none;
     }
-    .popup .luker-iter-workspace [class*="_composer_actions"],
-    .popup .luker-iter-workspace [class*="-composer-actions"] {
+.popup .luker-iter-workspace [class*="_composer_actions"],
+.popup .luker-iter-workspace [class*="-composer-actions"] {
         flex-direction: column;
         align-items: stretch;
         gap: 8px;
     }
-    .popup .luker-iter-workspace [class*="_composer_buttons"],
-    .popup .luker-iter-workspace [class*="-composer-buttons"] {
+.popup .luker-iter-workspace [class*="_composer_buttons"],
+.popup .luker-iter-workspace [class*="-composer-buttons"] {
         margin-left: 0;
         justify-content: flex-end;
     }
-    /* On mobile, the Preview tab is a dedicated viewport — hide the
+/* On mobile,
+the Preview tab is a dedicated viewport — hide the
        chat-side history and toolbar that belong to the Chat tab so the
        preview gets the full popup width. Class names mirror the actual
        render output of each popup (verified before adding):
@@ -2181,31 +1845,32 @@
        Orch → details.orch_it_history
        Only CPA renders a toolbar inside the workspace (.cpa_it_toolbar). */
     .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.cpa_it_history,
-    .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.mg_schema_it_history,
-    .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.orch_it_history,
-    .popup .luker-iter-workspace[data-iter-active-tab="preview"] .cpa_it_toolbar {
+.popup .luker-iter-workspace[data-iter-active-tab="preview"] details.mg_schema_it_history,
+.popup .luker-iter-workspace[data-iter-active-tab="preview"] details.orch_it_history,
+.popup .luker-iter-workspace[data-iter-active-tab="preview"] .cpa_it_toolbar {
         display: none;
     }
-
-    /* Mobile composer-clip prevention: in the collapsed (single-column)
-       grid, the chat pane's row often ends up shorter than its content
+/* Mobile composer-clip prevention: in the collapsed (single-column)
+       grid,
+the chat pane's row often ends up shorter than its content
        (per-popup `.xxx_messages { min-height: 260 }` + composer ≈ 180).
-       Default `overflow: hidden` on the chat pane would clip the composer
+Default `overflow: hidden` on the chat pane would clip the composer
        at the bottom with no signal for popup-content's `overflow-y: auto`
        to scroll — leaving Send unreachable. `overflow: visible` lets the
        residual overflow propagate so popup-content scrolls it into view.
-       Messages keeps its `min-height: 260` + `overflow-y: auto`, so the
+       Messages keeps its `min-height: 260` + `overflow-y: auto`,
+so the
        in-bubble scroll + auto-scroll-to-bottom on new turns still work. */
     .popup .luker-iter-workspace-chat {
         overflow: visible;
     }
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    PRESET HELP BUTTON — inline "?" next to prompt-preset selectors
    ═════════════════════════════════════════════════════════════════════ */
 
-.luker-preset-help {
+.luker-preset-help,
+.luker-field-help {
     flex: 0 0 auto;
     padding: 0 4px;
     margin-left: 4px;
@@ -2221,32 +1886,29 @@
     transition: opacity 0.15s ease, color 0.15s ease;
     vertical-align: middle;
 }
-
 .luker-preset-help:hover,
-.luker-preset-help:focus-visible {
+.luker-preset-help:focus-visible,
+.luker-field-help:hover,
+.luker-field-help:focus-visible {
     opacity: 1;
     color: var(--SmartThemeQuoteColor);
     outline: none;
 }
-
-.luker-preset-help i {
+.luker-preset-help i,
+.luker-field-help i {
     font-size: 0.95em;
 }
-
 .luker-preset-help-body p,
 .luker-preset-help-body ul {
     margin: 0.5em 0;
     text-align: left;
 }
-
 .luker-preset-help-body ul {
     padding-left: 1.5em;
 }
-
 .luker-preset-help-body li + li {
     margin-top: 0.35em;
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    N · SKILL MANAGER PANEL
    ═════════════════════════════════════════════════════════════════════ */
@@ -2258,7 +1920,6 @@
     min-width: 0;
     color: var(--SmartThemeBodyColor);
 }
-
 /* Tabs ────────────────────────────────────────────────────────────── */
 
 .popup .luker_skill_manager_tabs {
@@ -2270,7 +1931,6 @@
     border-radius: var(--ls-radius-md);
     align-self: flex-start;
 }
-
 .popup .luker_skill_tab {
     padding: 6px 14px;
     border-radius: var(--ls-radius-sm);
@@ -2280,22 +1940,18 @@
     transition: background var(--ls-motion-fast), opacity var(--ls-motion-fast);
     user-select: none;
 }
-
 .popup .luker_skill_tab:hover {
     background: var(--ls-hover-bg);
     opacity: var(--ls-text-default);
 }
-
 .popup .luker_skill_tab_active {
     background: color-mix(in oklab, var(--ls-accent-primary) 18%, transparent);
     opacity: var(--ls-text-strong);
     font-weight: 500;
 }
-
 .popup .luker_skill_tab_active:hover {
     background: color-mix(in oklab, var(--ls-accent-primary) 24%, transparent);
 }
-
 /* Toolbar ─────────────────────────────────────────────────────────── */
 
 .popup .luker_skill_manager_toolbar {
@@ -2309,7 +1965,6 @@
     border-radius: var(--ls-radius-md);
     flex-wrap: wrap;
 }
-
 .popup .luker_skill_filter_label {
     display: inline-flex;
     align-items: center;
@@ -2317,27 +1972,23 @@
     margin: 0;
     flex-wrap: nowrap;
 }
-
 .popup .luker_skill_filter_label_text {
     font-size: 0.88rem;
     opacity: var(--ls-text-muted);
     white-space: nowrap;
 }
-
 .popup .luker_skill_filter_select {
     height: 1.9rem;
     padding: 1px 8px;
     font-size: 0.85rem;
     min-width: 10em;
 }
-
 .popup .luker_skill_manager_toolbar_actions {
     display: inline-flex;
     align-items: center;
     gap: var(--ls-space-sm);
     flex-wrap: wrap;
 }
-
 .popup .luker_skill_toolbar_group {
     display: inline-flex;
     align-items: center;
@@ -2346,20 +1997,16 @@
     border-radius: var(--ls-radius-sm);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent);
 }
-
 .popup .luker_skill_toolbar_btn {
     font-size: 0.84rem !important;
 }
-
 .popup .luker_skill_toolbar_btn_primary {
     background: color-mix(in oklab, var(--ls-accent-primary) 28%, transparent) !important;
     border-color: color-mix(in oklab, var(--ls-accent-primary) 50%, transparent) !important;
 }
-
 .popup .luker_skill_toolbar_btn_primary:hover {
     background: color-mix(in oklab, var(--ls-accent-primary) 42%, transparent) !important;
 }
-
 /* Body + groups ───────────────────────────────────────────────────── */
 
 .popup .luker_skill_manager_body {
@@ -2367,13 +2014,11 @@
     flex-direction: column;
     gap: var(--ls-space-lg);
 }
-
 .popup .luker_skill_group {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
 .popup .luker_skill_group_header {
     display: flex;
     align-items: center;
@@ -2382,18 +2027,15 @@
     padding: 0 4px;
     flex-wrap: wrap;
 }
-
 .popup .luker_skill_group_count {
     font-size: 0.82rem;
     opacity: var(--ls-text-hint);
 }
-
 .popup .luker_skill_group_rows {
     display: flex;
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
 /* Scope badge — color-coded per kind ──────────────────────────────── */
 
 .popup .luker_skill_scope_badge {
@@ -2408,7 +2050,6 @@
     border: 1px solid;
     user-select: none;
 }
-
 .popup .luker_skill_scope_badge_kind {
     text-transform: uppercase;
     font-size: 0.7rem;
@@ -2416,32 +2057,26 @@
     font-weight: 700;
     opacity: 0.85;
 }
-
 .popup .luker_skill_scope_badge_sep {
     opacity: 0.4;
 }
-
 .popup .luker_skill_scope_badge_id {
     font-family: var(--monoFontFamily, monospace);
     font-size: 0.78rem;
     opacity: var(--ls-text-default);
 }
-
 .popup .luker_skill_scope_badge_global {
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent);
 }
-
 .popup .luker_skill_scope_badge_preset {
     background: color-mix(in oklab, var(--ls-accent-user) 14%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-user) 38%, transparent);
 }
-
 .popup .luker_skill_scope_badge_character {
     background: color-mix(in oklab, var(--ls-accent-system) 14%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-system) 38%, transparent);
 }
-
 /* Skill row card ──────────────────────────────────────────────────── */
 
 .popup .luker_skill_row {
@@ -2455,12 +2090,10 @@
     align-items: flex-start;
     flex-wrap: wrap;
 }
-
 .popup .luker_skill_row:hover {
     border-color: color-mix(in oklab, var(--SmartThemeBodyColor) 28%, transparent);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 9%, transparent);
 }
-
 .popup .luker_skill_row_main {
     flex: 1 1 320px;
     min-width: 0;
@@ -2468,7 +2101,6 @@
     flex-direction: column;
     gap: 4px;
 }
-
 .popup .luker_skill_row_head {
     display: flex;
     align-items: center;
@@ -2476,7 +2108,6 @@
     gap: var(--ls-space-sm);
     flex-wrap: wrap;
 }
-
 .popup .luker_skill_row_name {
     font-weight: 600;
     font-size: 1rem;
@@ -2484,21 +2115,18 @@
     color: var(--SmartThemeBodyColor);
     overflow-wrap: anywhere;
 }
-
 .popup .luker_skill_row_desc {
     font-size: 0.9rem;
     line-height: 1.45;
     opacity: var(--ls-text-default);
     overflow-wrap: anywhere;
 }
-
 .popup .luker_skill_row_meta {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     flex-wrap: wrap;
 }
-
 .popup .luker_skill_meta_chip {
     display: inline-flex;
     align-items: center;
@@ -2510,14 +2138,12 @@
     border: 1px solid transparent;
     line-height: 1.4;
 }
-
 .popup .luker_skill_meta_chip_warn {
     background: color-mix(in oklab, var(--ls-accent-danger) 14%, transparent);
     border-color: color-mix(in oklab, var(--ls-accent-danger) 30%, transparent);
     color: color-mix(in oklab, var(--ls-accent-danger) 80%, var(--SmartThemeBodyColor));
     opacity: 1;
 }
-
 /* Row actions ─────────────────────────────────────────────────────── */
 
 .popup .luker_skill_row_actions {
@@ -2527,7 +2153,6 @@
     flex-wrap: wrap;
     align-self: center;
 }
-
 .popup .luker_skill_row_actions_group {
     display: inline-flex;
     align-items: center;
@@ -2536,31 +2161,25 @@
     border-radius: var(--ls-radius-sm);
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 4%, transparent);
 }
-
 .popup .luker_skill_row_btn {
     font-size: 0.82rem !important;
     min-width: auto;
 }
-
 .popup .luker_skill_row_btn_primary {
     background: color-mix(in oklab, var(--ls-accent-primary) 22%, transparent) !important;
     border-color: color-mix(in oklab, var(--ls-accent-primary) 42%, transparent) !important;
 }
-
 .popup .luker_skill_row_btn_primary:hover {
     background: color-mix(in oklab, var(--ls-accent-primary) 36%, transparent) !important;
 }
-
 .popup .luker_skill_row_btn_danger {
     color: color-mix(in oklab, var(--ls-accent-danger) 88%, var(--SmartThemeBodyColor)) !important;
 }
-
 .popup .luker_skill_row_btn_danger:hover {
     background: color-mix(in oklab, var(--ls-accent-danger) 22%, transparent) !important;
     border-color: color-mix(in oklab, var(--ls-accent-danger) 50%, transparent) !important;
     color: var(--SmartThemeBodyColor) !important;
 }
-
 /* Empty states ────────────────────────────────────────────────────── */
 
 .popup .luker_skill_empty {
@@ -2569,7 +2188,6 @@
     padding: var(--ls-space-sm) var(--ls-space-md);
     font-style: italic;
 }
-
 .popup .luker_skill_empty_root {
     text-align: center;
     padding: var(--ls-space-xl) var(--ls-space-md);
@@ -2580,17 +2198,14 @@
     flex-direction: column;
     gap: var(--ls-space-xs);
 }
-
 .popup .luker_skill_empty_title {
     font-size: 1.05rem;
     opacity: var(--ls-text-default);
 }
-
 .popup .luker_skill_empty_hint {
     font-size: 0.88rem;
     opacity: var(--ls-text-hint);
 }
-
 /* Bundled tab mount — its own component owns inner styling. We just
    give the mount itself enough breathing room when it's the active tab. */
 .popup .luker_skill_manager_bundled_mount {
@@ -2598,33 +2213,33 @@
     flex-direction: column;
     gap: var(--ls-space-md);
 }
-
 /* Compact responsive: stack row actions under the main block on
    narrow popups so the buttons don't push name/desc into a single
    cramped column. */
 @media (max-width: 640px) {
-    .popup .luker_skill_row {
+.popup .luker_skill_row {
         flex-direction: column;
     }
-    .popup .luker_skill_row_actions {
+.popup .luker_skill_row_actions {
         align-self: stretch;
         justify-content: flex-end;
     }
-    .popup .luker_skill_manager_toolbar {
+.popup .luker_skill_manager_toolbar {
         flex-direction: column;
         align-items: stretch;
     }
-    .popup .luker_skill_manager_toolbar_actions {
+.popup .luker_skill_manager_toolbar_actions {
         justify-content: stretch;
     }
 }
-
 /* ───────────────────────────────────────────────────────────────────
    O · SKILL EDITOR — inline editor popup (file tree + textarea pane)
 
    Replaces the un-styled stacked layout (which made SKILL.md appear
-   "twice" — once as a tree row, once as the pane header path) with a
-   proper two-column shell: file tree as a sidebar on the left, editor
+   "twice" — once as a tree row,
+once as the pane header path) with a
+   proper two-column shell: file tree as a sidebar on the left,
+editor
    pane filling the remaining width on the right.
 
    Responsive: stacks vertically on narrow popups (<720px).
@@ -2635,7 +2250,7 @@
 
 .popup .luker_skill_editor {
     display: flex;
-    /* Explicit row direction overrides `.popup .luker-studio`'s default
+    /* Explicit row direction overrides `.luker-studio`'s default
        `flex-direction: column` — that base rule was authored for stacked
        studio popups (CardApp, Iter Workspace), but the inline skill
        editor wants a sidebar + main-pane shell. Same selector specificity,
@@ -2653,7 +2268,6 @@
     width: 100%;
     box-sizing: border-box;
 }
-
 /* File tree — left sidebar ─────────────────────────────────────────── */
 
 .popup .luker_skill_editor_tree {
@@ -2666,7 +2280,6 @@
     overflow: hidden;
     min-width: 0;
 }
-
 .popup .luker_skill_editor_tree_header {
     display: flex;
     justify-content: space-between;
@@ -2679,20 +2292,17 @@
     font-weight: 600;
     opacity: var(--ls-text-default);
 }
-
 .popup .luker_skill_editor_tree_header > span:first-child {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-size: 0.78rem;
     opacity: var(--ls-text-muted);
 }
-
 .popup .luker_skill_editor_tree_header [data-editor-action="new-file"] {
     font-size: 0.78rem !important;
     min-width: auto;
     padding: 3px var(--ls-space-sm) !important;
 }
-
 .popup .luker_skill_editor_tree_body {
     flex: 1;
     overflow-y: auto;
@@ -2701,7 +2311,6 @@
     flex-direction: column;
     gap: 2px;
 }
-
 .popup .luker_skill_editor_file {
     display: flex;
     align-items: center;
@@ -2713,20 +2322,16 @@
     transition: background var(--ls-motion-fast);
     min-width: 0;
 }
-
 .popup .luker_skill_editor_file:hover {
     background: var(--ls-hover-bg);
 }
-
 .popup .luker_skill_editor_file[data-file-active="true"] {
     background: color-mix(in oklab, var(--ls-accent-primary) 22%, transparent);
     box-shadow: inset 2px 0 0 var(--ls-accent-primary);
 }
-
 .popup .luker_skill_editor_file[data-file-active="true"] .luker_skill_editor_file_name {
     font-weight: 600;
 }
-
 .popup .luker_skill_editor_file_name {
     flex: 1;
     min-width: 0;
@@ -2737,7 +2342,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-
 .popup .luker_skill_editor_binary {
     display: inline-block;
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent);
@@ -2752,14 +2356,12 @@
     opacity: var(--ls-text-muted);
     vertical-align: middle;
 }
-
 .popup .luker_skill_editor_file_actions {
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     gap: 2px;
 }
-
 .popup .luker_skill_editor_file_action {
     flex: 0 0 auto;
     width: 22px;
@@ -2775,24 +2377,19 @@
     opacity: 0.55;
     transition: opacity var(--ls-motion-fast), background var(--ls-motion-fast), color var(--ls-motion-fast);
 }
-
 .popup .luker_skill_editor_file:hover .luker_skill_editor_file_action {
     opacity: 0.85;
 }
-
 .popup .luker_skill_editor_file_action:hover {
     opacity: 1 !important;
     background: var(--ls-hover-bg);
 }
-
 .popup .luker_skill_editor_file_rename {
     color: color-mix(in oklab, var(--ls-accent-primary) 80%, var(--SmartThemeBodyColor));
 }
-
 .popup .luker_skill_editor_file_rename:hover {
     background: color-mix(in oklab, var(--ls-accent-primary) 18%, transparent);
 }
-
 .popup .luker_skill_editor_file_delete {
     color: color-mix(in oklab, var(--ls-accent-danger) 80%, var(--SmartThemeBodyColor));
     /* Reset the legacy stand-alone .luker_skill_editor_file_delete rule
@@ -2803,11 +2400,9 @@
     height: 22px;
     font-size: 1rem;
 }
-
 .popup .luker_skill_editor_file_delete:hover {
     background: color-mix(in oklab, var(--ls-accent-danger) 22%, transparent);
 }
-
 /* Editor pane — right ────────────────────────────────────────────── */
 
 .popup .luker_skill_editor_pane {
@@ -2820,7 +2415,6 @@
     background: var(--ls-card-bg);
     overflow: hidden;
 }
-
 .popup .luker_skill_editor_pane_header {
     display: flex;
     align-items: center;
@@ -2830,7 +2424,6 @@
     background: color-mix(in oklab, var(--SmartThemeBodyColor) 8%, transparent);
     border-bottom: var(--ls-border-soft);
 }
-
 .popup .luker_skill_editor_pane_path {
     flex: 1;
     min-width: 0;
@@ -2842,22 +2435,18 @@
     white-space: nowrap;
     opacity: var(--ls-text-strong);
 }
-
 .popup .luker_skill_editor_pane_sha {
     /* Stash for the JS layer; not visible. */
     display: none;
 }
-
 .popup .luker_skill_editor_pane_header [data-editor-save] {
     font-size: 0.85rem !important;
     background: color-mix(in oklab, var(--ls-accent-primary) 24%, transparent) !important;
     border-color: color-mix(in oklab, var(--ls-accent-primary) 44%, transparent) !important;
 }
-
 .popup .luker_skill_editor_pane_header [data-editor-save]:hover {
     background: color-mix(in oklab, var(--ls-accent-primary) 38%, transparent) !important;
 }
-
 .popup textarea.text_pole.luker_skill_editor_textarea {
     flex: 1;
     min-height: 360px;
@@ -2876,12 +2465,10 @@
     tab-size: 4;
     -moz-tab-size: 4;
 }
-
 .popup textarea.text_pole.luker_skill_editor_textarea:focus {
     outline: none;
     box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ls-accent-primary) 38%, transparent);
 }
-
 .popup .luker_skill_editor_pane_footer {
     display: flex;
     justify-content: space-between;
@@ -2894,12 +2481,10 @@
     opacity: var(--ls-text-muted);
     min-height: 28px;
 }
-
 .popup .luker_skill_editor_hint {
     font-family: var(--monoFontFamily, 'JetBrains Mono', 'Fira Code', Consolas, monospace);
     font-size: 0.78rem;
 }
-
 /* Empty states (no file selected; empty tree body) ─────────────── */
 
 .popup .luker_skill_editor_pane.luker_skill_editor_empty {
@@ -2910,7 +2495,6 @@
     color: color-mix(in oklab, var(--SmartThemeBodyColor) 60%, transparent);
     font-style: italic;
 }
-
 .popup .luker_skill_editor_tree_body .luker_skill_editor_empty {
     padding: var(--ls-space-md) var(--ls-space-sm);
     text-align: center;
@@ -2918,36 +2502,37 @@
     opacity: var(--ls-text-hint);
     font-style: italic;
 }
-
 /* Compact responsive: stack tree on top of editor on narrow popups. */
 @media (max-width: 720px) {
-    .popup .luker_skill_editor {
+.popup .luker_skill_editor {
         flex-direction: column;
         min-height: auto;
         gap: var(--ls-space-sm);
     }
-    .popup .luker_skill_editor_tree {
+.popup .luker_skill_editor_tree {
         flex: 0 0 auto;
         max-height: 35vh;
     }
-    .popup textarea.text_pole.luker_skill_editor_textarea {
+.popup textarea.text_pole.luker_skill_editor_textarea {
         min-height: 280px;
     }
-    /* On narrow screens, always show action buttons (no hover-on-touch) */
+/* On narrow screens,
+always show action buttons (no hover-on-touch) */
     .popup .luker_skill_editor_file_action {
         opacity: 0.85;
     }
 }
-
 /* ───────────────────────────────────────────────────────────────────
    P · SKILL VIEW POPUP — read-only "View" surface for SKILL.md
 
    `handleView` in skill-manager-panel.js renders the manifest as a
    bare `<pre>` inside the generic popup. Without styling the browser
    default `white-space: pre` keeps newlines but never breaks long
-   lines, so paragraph-length descriptions overflow the popup width.
+   lines,
+so paragraph-length descriptions overflow the popup width.
    pre-wrap + break-word lets the text reflow within the popup box;
-   overflow-x:auto keeps non-wrappable runs (URLs, hashes) reachable
+   overflow-x:auto keeps non-wrappable runs (URLs,
+hashes) reachable
    via scroll instead of clipping silently.
    ─────────────────────────────────────────────────────────────────── */
 
@@ -2973,10 +2558,10 @@
     tab-size: 4;
     -moz-tab-size: 4;
 }
-
 /* The h3 sibling rendered by handleView gets the same center-align
    treatment from `.popup`. Left-align it too so the manifest reads as
-   a document header, not a banner. */
+   a document header,
+not a banner. */
 .popup .luker_skill_view_pre + h3,
 .popup h3 + .luker_skill_view_pre,
 .popup:has(.luker_skill_view_pre) h3 {
@@ -2986,16 +2571,17 @@
     padding: var(--ls-space-xs) 0;
     border-bottom: var(--ls-border-soft);
 }
-
 /* ═════════════════════════════════════════════════════════════════════
    Q · SCOPE PICKER
    ─────────────────────────────────────────────────────────────────────
    Drives the "Move to / Choose scope" dialog. The legacy markup was a
    plain vertical stack of free-text inputs that ignored the radio
    selection; the new version renders dropdowns sourced from the
-   connection-manager / preset-manager / character list, and toggles the
+   connection-manager / preset-manager / character list,
+and toggles the
    sub-rows via the `hidden` attribute set by scope-picker.js. We just
-   need the layout to look like a form, not a wall of unlabeled inputs.
+   need the layout to look like a form,
+not a wall of unlabeled inputs.
    ─────────────────────────────────────────────────────────────────── */
 
 .popup .luker_skill_scope_picker {
@@ -3005,19 +2591,16 @@
     text-align: start;
     min-width: min(420px, 90vw);
 }
-
 .popup .luker_skill_scope_picker_title {
     font-weight: 600;
     color: var(--SmartThemeBodyColor);
     text-align: start;
 }
-
 .popup .luker_skill_scope_picker_kinds {
     display: flex;
     flex-wrap: wrap;
     gap: var(--ls-space-md);
 }
-
 .popup .luker_skill_scope_kind_option {
     display: inline-flex;
     align-items: center;
@@ -3025,7 +2608,6 @@
     cursor: pointer;
     user-select: none;
 }
-
 .popup .luker_skill_scope_preset_fields,
 .popup .luker_skill_scope_character_fields {
     display: flex;
@@ -3036,7 +2618,6 @@
     border-radius: var(--ls-radius-md);
     background: var(--ls-card-bg);
 }
-
 /* The `hidden` attribute is the source of truth driven by the radio
    change handler. Add a flex-friendly fallback in case a global rule
    reasserts `display: flex` on the row. */
@@ -3044,19 +2625,16 @@
 .popup .luker_skill_scope_character_fields[hidden] {
     display: none !important;
 }
-
 .popup .luker_skill_scope_field {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
 }
-
 .popup .luker_skill_scope_field_label {
     font-size: 0.85rem;
     color: var(--SmartThemeQuoteColor, var(--SmartThemeBodyColor));
     opacity: 0.85;
 }
-
 .popup .luker_skill_scope_field select.text_pole {
     width: 100%;
 }

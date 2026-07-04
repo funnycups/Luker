@@ -24,7 +24,7 @@ export function renderFieldHelpButton({ title, bodyHtml, targetSelectId = '' }) 
     const t = String(title || '');
     const b = String(bodyHtml || '');
     const target = targetSelectId ? ` data-luker-field-help-target="${escapeHtml(targetSelectId)}"` : '';
-    return `<button type="button" class="luker-field-help menu_button menu_button_small" title="${escapeHtml(t)}" data-luker-field-help-title="${escapeHtml(t)}" data-luker-field-help-body="${escapeHtml(b)}"${target}><i class="fa-solid fa-circle-question"></i></button>`;
+    return `<button type="button" class="luker-field-help" title="${escapeHtml(t)}" data-luker-field-help-title="${escapeHtml(t)}" data-luker-field-help-body="${escapeHtml(b)}"${target}><i class="fa-solid fa-circle-question"></i></button>`;
 }
 
 // One-shot delegated click handler
