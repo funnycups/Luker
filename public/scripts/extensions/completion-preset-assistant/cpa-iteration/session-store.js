@@ -36,6 +36,18 @@ import { notifyMigrationFailed } from '/scripts/iteration-library/storage/migrat
 const SESSION_NAMESPACE = 'completion_preset_assistant_session';
 
 /**
+ * ctx.presets.state.get returns a `{ ok, state, reason, hint }` envelope;
+ * the actual bucket lives on `.state`. Every state.get call in this module
+ * needs the payload, not the envelope. Reading `.sessions` off the envelope
+ * silently returns undefined and falls through to the empty default
+ * (readStore) or a missing:true report (moveSessionTo), both of which look
+ * like data loss / silently-broken clones to users.
+ */
+function unwrapPresetState(result) {
+    return result?.ok ? result.state : null;
+}
+
+/**
  * Generate a stable per-message id. The studio renders messages keyed by
  * id (so React-style diff updates work), and persisted messages keep
  * their id across reloads. The shape — `cpa_msg_<timestamp36>_<rand>` —
@@ -121,7 +133,7 @@ export function createCpaIterationSessionStore({ getContext, getTargetRef }) {
     async function readStore() {
         const ref = getTargetRef();
         const ctx = getContext();
-        const store = await ctx.presets.state.get(SESSION_NAMESPACE, { target: ref });
+        const store = unwrapPresetState(await ctx.presets.state.get(SESSION_NAMESPACE, { target: ref }));
         return store && Array.isArray(store.sessions)
             ? store
             : { version: 1, currentSessionId: null, sessions: [] };
@@ -234,7 +246,7 @@ export function createCpaIterationSessionStore({ getContext, getTargetRef }) {
             const sameRef = fromRef.collection === toRef.collection && fromRef.name === toRef.name;
             const ctx = getContext();
 
-            const fromStore = (await ctx.presets.state.get(SESSION_NAMESPACE, { target: fromRef }))
+            const fromStore = unwrapPresetState(await ctx.presets.state.get(SESSION_NAMESPACE, { target: fromRef }))
                 || { version: 1, currentSessionId: null, sessions: [] };
             const session = (fromStore.sessions || []).find(s => s.id === id);
             if (!session) {
@@ -261,7 +273,7 @@ export function createCpaIterationSessionStore({ getContext, getTargetRef }) {
             // shouldn't happen (clone creates a brand-new preset, so its
             // bucket starts empty), but guard against it explicitly so
             // a corrupt store doesn't get silently merged.
-            const toStore = (await ctx.presets.state.get(SESSION_NAMESPACE, { target: toRef }))
+            const toStore = unwrapPresetState(await ctx.presets.state.get(SESSION_NAMESPACE, { target: toRef }))
                 || { version: 1, currentSessionId: null, sessions: [] };
             const existsIdx = (toStore.sessions || []).findIndex(s => s.id === id);
             if (existsIdx >= 0) {
