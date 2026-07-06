@@ -39,6 +39,7 @@ import { runEmbedImportFlow, getEmbeddedSkillsSource } from './embed-import-dial
 
 const CHARACTER_PROMPT_KEY = (avatar) => `AlertSkills_${avatar}`;
 const PRESET_PROMPT_KEY = (name) => `AlertSkills_preset_${name}`;
+const ORCH_PRESET_PROMPT_KEY = (mode, name) => `AlertSkills_orch_preset_${mode}_${name}`;
 
 /**
  * Pluck the embedded_skills_source payloads from a character object. Returns
@@ -247,6 +248,73 @@ export async function onPresetDeletedCascade(event, { context } = {}) {
     });
 }
 
+/**
+ * Cascade-delete orch-preset-scope skills when the corresponding
+ * orchestrator preset (mode, name) is removed. Uses the atomic scope-level
+ * DELETE endpoint (Task 2's `deleteScope` client method), which is
+ * one round-trip vs the per-skill loop `cascadeDeleteSkillsInScope`
+ * uses for the older OAI-preset path.
+ *
+ * @param {{mode: string, name: string}} event
+ * @param {{context: object}} deps
+ */
+export async function onOrchPresetDeletedCascade(event, { context } = {}) {
+    const mode = String(event?.mode || '').trim();
+    const name = String(event?.name || '').trim();
+    if (!mode || !name || !context) return;
+    const accountStorage = context.accountStorage || globalThis.accountStorage;
+    if (accountStorage && accountStorage.removeItem) {
+        accountStorage.removeItem(ORCH_PRESET_PROMPT_KEY(mode, name));
+    }
+    if (!context.skills?.deleteScope) return;
+    try {
+        await context.skills.deleteScope({ kind: 'orch-preset', mode, name });
+    } catch (e) {
+        // 404 = scope directory doesn't exist (no skills were ever
+        // bound). Any other error logs but doesn't rethrow — cascade
+        // is best-effort by design.
+        if (e?.status !== 404) {
+            // eslint-disable-next-line no-console
+            console.warn('[skill-embed-lifecycle] orch-preset cascade-delete failed:', e?.message || e);
+        }
+    }
+}
+
+/**
+ * On orch-preset import, look for embedded skills payload and prompt
+ * the extract-embed dialog. Prompts once per (mode, name) via
+ * accountStorage flag so re-importing the same preset doesn't nag.
+ *
+ * @param {{data: object, mode: string, name: string}} event
+ * @param {{context: object, t?: (s:string)=>string}} deps
+ */
+export async function checkOrchPresetEmbeddedSkills(event, { context, t = (s) => s } = {}) {
+    const data = event?.data;
+    const mode = String(event?.mode || '').trim();
+    const name = String(event?.name || '').trim();
+    if (!data || !mode || !name) return;
+
+    const payload = getEmbeddedSkillsSource(data);
+    if (!payload) return;
+
+    const accountStorage = context?.accountStorage || globalThis.accountStorage;
+    const promptKey = ORCH_PRESET_PROMPT_KEY(mode, name);
+    if (accountStorage && accountStorage.getItem && accountStorage.getItem(promptKey)) {
+        return;
+    }
+    if (accountStorage && accountStorage.setItem) {
+        accountStorage.setItem(promptKey, 'true');
+    }
+
+    const targetScope = { kind: 'orch-preset', mode, name };
+    try {
+        await runEmbedImportFlow({ context, payload, targetScope, t });
+    } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[skill-embed-lifecycle] orch-preset embed import failed:', e?.message || e);
+    }
+}
+
 const REGISTERED = Symbol.for('luker_skill_embed_lifecycle_registered');
 
 /**
@@ -293,6 +361,21 @@ export function registerSkillEmbedLifecycle({ context, t = (s) => s } = {}) {
                 // eslint-disable-next-line no-console
                 console.warn('[skill-embed-lifecycle] PRESET_DELETED cascade failed:', err?.message || err);
             }
+        });
+    }
+    if (et.ORCH_PRESET_DELETED) {
+        ev.on(et.ORCH_PRESET_DELETED, async (event) => {
+            try {
+                await onOrchPresetDeletedCascade(event, { context });
+            } catch (err) {
+                // eslint-disable-next-line no-console
+                console.warn('[skill-embed-lifecycle] ORCH_PRESET_DELETED cascade failed:', err?.message || err);
+            }
+        });
+    }
+    if (et.ORCH_PRESET_IMPORT_READY) {
+        ev.on(et.ORCH_PRESET_IMPORT_READY, (event) => {
+            void checkOrchPresetEmbeddedSkills(event, { context, t });
         });
     }
 }

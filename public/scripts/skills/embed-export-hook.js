@@ -77,6 +77,85 @@ export async function maybeAttachSkillsToPresetExport({ context, presetBody, t =
     return false;
 }
 
+/**
+ * Confirm-then-attach for orchestrator preset export. Mirrors
+ * `maybeAttachSkillsToPresetExport` but for the orch-preset scope
+ * (Task 7 lifecycle). Reads (mode, name) from `payload.mode` and
+ * `payload.profile.name` — see `buildPortablePayloadForMode` in the
+ * orchestrator main.js for the payload shape.
+ *
+ * @param {object} opts
+ * @param {object} opts.context - SillyTavern context
+ * @param {object} opts.payload - the outgoing preset JSON payload
+ *   (mutated in place when the user opts in)
+ * @param {(s:string)=>string} [opts.t]
+ * @returns {Promise<boolean>}
+ */
+export async function maybeAttachSkillsToOrchPresetExport({ context, payload, t = (s) => s } = {}) {
+    if (!context || !context.skills) return false;
+    if (!payload || typeof payload !== 'object') return false;
+
+    const mode = String(payload.mode || '').trim();
+    const name = String(payload.profile?.name || '').trim();
+    if (!mode || !name) return false;
+    const targetScope = { kind: 'orch-preset', mode, name };
+
+    let list;
+    try {
+        list = await context.skills.list({ scope: targetScope });
+    } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[embed-export-hook] orch-preset list failed:', e?.message || e);
+        return false;
+    }
+    if (!Array.isArray(list) || list.length === 0) return false;
+
+    const ok = await confirmIncludeOrchPresetSkills({ context, t, list, targetScope });
+    if (!ok) return false;
+
+    try {
+        const attached = await packAndAttachSkillsForExport({
+            context,
+            targetScope,
+            attachTo: payload,
+        });
+        if (attached) {
+            toast(t('Bundled ${0} skill(s) with this preset.').replace('${0}', String(list.length)), 'success');
+            return true;
+        }
+    } catch (e) {
+        toast(t('Failed to bundle skills with preset: ${0}').replace('${0}', e?.message || String(e)), 'error');
+    }
+    return false;
+}
+
+// NOTE: `confirmIncludeOrchPresetSkills` is a near-duplicate of
+// `confirmIncludeSkills` below — they differ only in the scope_label
+// prefix and header text. Kept as a near-clone to keep the diff
+// surgical; a future DRY pass can extract a shared
+// `confirmIncludeSkillsForScope({header, scopeLabelPrefix, ...})` helper.
+async function confirmIncludeOrchPresetSkills({ context, t, list, targetScope }) {
+    if (!context.callGenericPopup || !context.POPUP_TYPE) return false;
+    const names = list.map(s => s?.name).filter(Boolean);
+    const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
+    })[c]);
+    const list_html = names.map(n => `<li>${escHtml(n)}</li>`).join('');
+    const scope_label = `orchestrator preset (${escHtml(targetScope.mode)}): ${escHtml(targetScope.name)}`;
+    const html = `
+<div class="luker_skill_export_confirm">
+    <div>${escHtml(t('Include orchestrator preset skills in this export?'))}</div>
+    <div class="luker_skill_export_confirm_scope"><b>${scope_label}</b></div>
+    <ul class="luker_skill_export_confirm_list">${list_html}</ul>
+</div>
+    `;
+    const result = await context.callGenericPopup(html, context.POPUP_TYPE.CONFIRM, '', {
+        okButton: t('Include'),
+        cancelButton: t('Skip'),
+    });
+    return isAffirmative(result);
+}
+
 async function confirmIncludeSkills({ context, t, list, targetScope }) {
     if (!context.callGenericPopup || !context.POPUP_TYPE) return false;
     const names = list.map(s => s?.name).filter(Boolean);

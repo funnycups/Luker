@@ -281,6 +281,7 @@ jest.unstable_mockModule('../../public/scripts/skills/embed-lifecycle.js', () =>
 }));
 jest.unstable_mockModule('../../public/scripts/skills/embed-export-hook.js', () => ({
     maybeAttachSkillsToPresetExport: () => {},
+    maybeAttachSkillsToOrchPresetExport: () => {},
 }));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/profile-projection.js', () => ({
     sanitizeProfileForAiPrompt: (v) => v,

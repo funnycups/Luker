@@ -223,7 +223,7 @@ const skillsApi = __ctx.skills;
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
 import { mountSkillChips } from '../../skills/skill-chips.js';
 import { registerSkillEmbedLifecycle } from '../../skills/embed-lifecycle.js';
-import { maybeAttachSkillsToPresetExport } from '../../skills/embed-export-hook.js';
+import { maybeAttachSkillsToOrchPresetExport, maybeAttachSkillsToPresetExport } from '../../skills/embed-export-hook.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
 // (alongside the other mode literals) and re-exported by persistence.js
 // for callers that want it bundled with `sanitizeLoopProfile`. We import
@@ -8543,6 +8543,18 @@ jQuery(() => {
                 await maybeAttachSkillsToPresetExport({ context, presetBody, t: i18n });
             } catch (err) {
                 console.warn(`[${MODULE_NAME}] preset export skills attachment failed:`, err);
+            }
+        });
+    }
+    // Hook orch-preset export: analogous to the OAI hook above but keyed
+    // by (mode, preset name) derived from the payload's `mode` +
+    // `profile.name`. Fires on ORCH_PRESET_EXPORT_READY from Task 6.
+    if (context.eventTypes?.ORCH_PRESET_EXPORT_READY) {
+        context.eventSource.on(context.eventTypes.ORCH_PRESET_EXPORT_READY, async (payload) => {
+            try {
+                await maybeAttachSkillsToOrchPresetExport({ context, payload, t: i18n });
+            } catch (err) {
+                console.warn(`[${MODULE_NAME}] orch-preset export skills attachment failed:`, err);
             }
         });
     }
