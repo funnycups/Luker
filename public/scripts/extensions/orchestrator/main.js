@@ -248,6 +248,13 @@ import {
     writePresetByName,
 } from './preset-library.js';
 import {
+    copyOrchPresetSkills,
+    emitOrchPresetDeleted,
+    emitOrchPresetExportReady,
+    emitOrchPresetImportReady,
+    renameOrchPresetSkills,
+} from './preset-lifecycle-hooks.js';
+import {
     LOOP_ITERATION_CONTRACT_LINES,
     applyLoopProfilePatchArgs,
 } from './loop-iteration.js';
@@ -1940,6 +1947,11 @@ async function triggerExportActivePreset(mode, scope) {
         return;
     }
     const payload = buildPortablePayloadForMode(mode, active);
+    // Skills subsystem may mutate `payload` in place to attach embedded
+    // skill content under `payload.extensions.luker.embedded_skills_source`
+    // BEFORE the file lands on disk. Fire-and-swallow — export proceeds
+    // even if subscriber throws.
+    await emitOrchPresetExportReady(ctx, payload);
     const safeName = sanitizeIdentifierToken(active.name || 'preset', 'preset');
     const fileName = `luker-orchestrator-${mode}-${scope}-${safeName}.json`;
     downloadJsonFile(fileName, payload);
@@ -1976,7 +1988,8 @@ async function triggerImportPresetIntoLibrary(mode, scope, root, context) {
             return;
         }
         setActivePresetId(settings, mode, scope, id, { context: ctx, avatar });
-        const writeResult = writeActivePreset(settings, mode, scope, extractImportedProfileForMode(imported),
+        const importedProfile = extractImportedProfileForMode(imported);
+        const writeResult = writeActivePreset(settings, mode, scope, importedProfile,
             { context: ctx, avatar });
         if (!writeResult.ok) {
             notifyError(i18nFormat('Import failed: ${0}', writeResult.hint || writeResult.reason));
@@ -1991,6 +2004,14 @@ async function triggerImportPresetIntoLibrary(mode, scope, root, context) {
         } else {
             await saveSettings();
         }
+        // Fire the post-import hook AFTER the preset is persisted so the
+        // skills subsystem can prompt the extract-embed dialog against a
+        // preset that's already on disk. Mirrors OAI import semantics.
+        await emitOrchPresetImportReady(ctx, {
+            data: importedProfile,
+            mode,
+            name: String(name).trim(),
+        });
         reloadOrchestratorEditor(root, context);
         notifySuccess(i18n('Imported preset.'));
     } catch (error) {
@@ -6647,43 +6668,52 @@ function bindUi() {
             setActivePresetId(settingsRef, mode, scope, id, { context: ctx, avatar });
         } else if (action === 'duplicate') {
             const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
+            const lib = scope === 'character'
+                ? getCharacterPresetLibrary(ctx, avatar, mode)
+                : (settingsRef.presetLibraries?.[mode] || {});
+            const oldPresetName = String(lib[currentId]?.name || '').trim();
             const name = await ctx.callGenericPopup(
                 i18n('Enter a name for the new preset'),
                 ctx.POPUP_TYPE.INPUT,
                 '',
             );
             if (!name) return;
-            const id = duplicatePreset(settingsRef, mode, scope, currentId, { name: String(name) },
+            const newPresetName = String(name).trim();
+            const id = duplicatePreset(settingsRef, mode, scope, currentId, { name: newPresetName },
                 { context: ctx, avatar });
             setActivePresetId(settingsRef, mode, scope, id, { context: ctx, avatar });
+            await copyOrchPresetSkills(ctx, { mode, oldName: oldPresetName, newName: newPresetName });
         } else if (action === 'rename') {
             const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
             const lib = scope === 'character'
                 ? getCharacterPresetLibrary(ctx, avatar, mode)
                 : (settingsRef.presetLibraries?.[mode] || {});
-            const oldName = lib[currentId]?.name || '';
+            const oldPresetName = String(lib[currentId]?.name || '').trim();
             const name = await ctx.callGenericPopup(
                 i18n('Enter a name for the new preset'),
                 ctx.POPUP_TYPE.INPUT,
-                oldName,
+                oldPresetName,
             );
             if (!name) return;
-            renamePreset(settingsRef, mode, scope, currentId, { name: String(name) },
+            const newPresetName = String(name).trim();
+            renamePreset(settingsRef, mode, scope, currentId, { name: newPresetName },
                 { context: ctx, avatar });
+            await renameOrchPresetSkills(ctx, { mode, oldName: oldPresetName, newName: newPresetName });
         } else if (action === 'delete') {
             const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
             const lib = scope === 'character'
                 ? getCharacterPresetLibrary(ctx, avatar, mode)
                 : (settingsRef.presetLibraries?.[mode] || {});
-            const name = lib[currentId]?.name || '';
+            const deletedPresetName = String(lib[currentId]?.name || '').trim();
             const confirmed = await ctx.callGenericPopup(
-                i18nFormat('Delete preset "${0}"?', name),
+                i18nFormat('Delete preset "${0}"?', deletedPresetName),
                 ctx.POPUP_TYPE.CONFIRM,
                 '',
                 { okButton: i18n('Delete'), cancelButton: i18n('Cancel') },
             );
             if (!confirmed) return;
             deletePreset(settingsRef, mode, scope, currentId, { context: ctx, avatar });
+            await emitOrchPresetDeleted(ctx, { mode, name: deletedPresetName });
         }
         if (scope === 'character') {
             const idx = getCharacterIndexByAvatar(ctx, avatar);
