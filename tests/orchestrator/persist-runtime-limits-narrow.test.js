@@ -110,6 +110,8 @@ beforeEach(() => {
                     agents: [{ id: 'ag-1', systemPrompt: 'AG-1-DRAFT-UNCHANGED' }],
                     finalAgentId: 'ag-1',
                     limits: { plannerMaxRounds: 6, maxConcurrentAgents: 3, maxTotalRuns: 24 },
+                    customTools: [{ name: 'kept_agenda_tool', description: 'was-here' }],
+                    defaultTools: { custom: { some_flag: true } },
                 },
             },
             spec: {},
@@ -157,6 +159,12 @@ describe('persistRuntimeLimitsPatch — global scope', () => {
         expect(p.limits.maxTotalRuns).toBe(24); // untouched
         expect(p.agents[0].systemPrompt).toBe('AG-1-DRAFT-UNCHANGED');
         expect(p.planner.systemPrompt).toBe('AGENDA-PLANNER-DRAFT-UNCHANGED');
+        // Sibling non-limits agenda fields (customTools / defaultTools) must
+        // survive the narrow limits patch — writeActivePreset funnels the
+        // payload through sanitizePresetEntry which historically dropped
+        // them by explicit-field projection on the agenda branch.
+        expect(p.customTools[0].name).toBe('kept_agenda_tool');
+        expect(p.defaultTools.custom.some_flag).toBe(true);
     });
 });
 

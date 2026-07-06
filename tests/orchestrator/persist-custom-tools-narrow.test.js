@@ -91,7 +91,17 @@ beforeEach(() => {
                 },
             },
             director: {},
-            agenda: {},
+            agenda: {
+                a1: {
+                    name: 'A1',
+                    planner: { systemPrompt: 'AGENDA-PLANNER-DRAFT-UNCHANGED' },
+                    agents: { 'ag-1': { systemPrompt: 'AG-1-DRAFT-UNCHANGED' } },
+                    finalAgentId: 'ag-1',
+                    limits: { plannerMaxRounds: 6, maxConcurrentAgents: 3, maxTotalRuns: 24 },
+                    customTools: [{ name: 'existing_agenda_tool', description: 'was-here' }],
+                    defaultTools: { custom: { some_flag: true } },
+                },
+            },
             spec: {
                 s1: {
                     name: 'S1',
@@ -104,7 +114,7 @@ beforeEach(() => {
                 },
             },
         },
-        activePresetIds: { spec: 's1', agenda: '', loop: 'p1', director: '' },
+        activePresetIds: { spec: 's1', agenda: 'a1', loop: 'p1', director: '' },
     };
     writes.length = 0;
     saveSettingsCalls.length = 0;
@@ -133,6 +143,20 @@ describe('persistCustomToolsPatch — shape guarantees', () => {
         expect(p.spec.customTools.map(t => t.name)).toEqual(['new_spec_tool']);
         // Top-level customTools stays absent (spec never had one).
         expect(p.customTools).toBeUndefined();
+    });
+
+    test('agenda mode replaces top-level customTools; planner / agents / finalAgentId / defaultTools / limits preserved', async () => {
+        const newTools = [{ name: 'agenda_new_tool', description: 'X' }];
+        await persist.persistCustomToolsPatch(null, extensionSettings.orchestrator, 'agenda', 'global', newTools);
+        const p = extensionSettings.orchestrator.presetLibraries.agenda.a1;
+        expect(p.customTools.map(t => t.name)).toEqual(['agenda_new_tool']);
+        // Sibling agenda fields must survive the narrow patch even though
+        // writeActivePreset funnels the payload through sanitizePresetEntry.
+        expect(p.planner.systemPrompt).toBe('AGENDA-PLANNER-DRAFT-UNCHANGED');
+        expect(p.agents['ag-1'].systemPrompt).toBe('AG-1-DRAFT-UNCHANGED');
+        expect(p.finalAgentId).toBe('ag-1');
+        expect(p.defaultTools.custom.some_flag).toBe(true);
+        expect(p.limits).toEqual({ plannerMaxRounds: 6, maxConcurrentAgents: 3, maxTotalRuns: 24 });
     });
 
     test('character scope writes customTools patch to character extension', async () => {

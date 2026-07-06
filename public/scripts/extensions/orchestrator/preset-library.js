@@ -102,14 +102,7 @@ function sanitizePresetEntry(mode, entry) {
         return { name, ...sanitizeDirectorProfile(raw) };
     }
     if (mode === ORCH_EXECUTION_MODE_AGENDA) {
-        const p = sanitizeAgendaWorkingProfile(raw);
-        return {
-            name,
-            planner: p.planner,
-            agents: p.agents,
-            finalAgentId: p.finalAgentId,
-            limits: p.limits,
-        };
+        return { name, ...sanitizeAgendaWorkingProfile(raw) };
     }
     // spec
     const spec = sanitizeSpec(raw.spec || {});
