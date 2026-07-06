@@ -305,6 +305,7 @@ import {
     persistGlobalEditorFrom,
     persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
+    persistRuntimeLimitsPatch,
     setCharacterAgendaOverrideEnabled,
     setCharacterDirectorOverrideEnabled,
     setCharacterLoopOverrideEnabled,
@@ -6728,25 +6729,34 @@ function bindUi() {
         renderDynamicPanels(root, context);
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_planner_max_rounds`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_planner_max_rounds`, async function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
-        editor.limits.plannerMaxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        editor.limits.plannerMaxRounds = nextValue;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_AGENDA, scope, { plannerMaxRounds: nextValue }, { avatar });
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_concurrent_agents, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_concurrent_agents`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_concurrent_agents, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_concurrent_agents`, async function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
-        editor.limits.maxConcurrentAgents = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        editor.limits.maxConcurrentAgents = nextValue;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_AGENDA, scope, { maxConcurrentAgents: nextValue }, { avatar });
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_total_runs, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_total_runs`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_total_runs, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_total_runs`, async function () {
         const scope = getAgendaScopeFromElement(this, context, settings);
         const editor = getAgendaEditorByScope(scope);
         ensureAgendaEditorIntegrity(editor);
-        editor.limits.maxTotalRuns = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        editor.limits.maxTotalRuns = nextValue;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_AGENDA, scope, { maxTotalRuns: nextValue }, { avatar });
     });
 
     // ─── Loop-mode editor handlers ─────────────────────────────────────
@@ -6776,23 +6786,29 @@ function bindUi() {
         editor.system_prompt = String(jQuery(this).val() || '');
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_loop_max_rounds`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_loop_max_rounds`, async function () {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
         const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
-        editor.max_rounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 40));
+        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 40));
+        editor.max_rounds = nextValue;
         ensureLoopEditorIntegrity(editor);
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_LOOP, scope, { max_rounds: nextValue }, { avatar });
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_wall_clock_budget, .luker_orch_editor_popup #orch-popup-luker_orch_loop_wall_clock_budget`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_wall_clock_budget, .luker_orch_editor_popup #orch-popup-luker_orch_loop_wall_clock_budget`, async function () {
         // Stored as ms but edited in seconds; the floor (10s) matches
         // `LOOP_WALL_CLOCK_FLOOR_MS / 1000` in persistence.js.
         const seconds = Math.max(10, Math.floor(Number(jQuery(this).val()) || 300));
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
         const editor = getLoopEditorByScope(scope);
         ensureLoopEditorIntegrity(editor);
-        editor.wall_clock_budget_ms = seconds * 1000;
+        const nextMs = seconds * 1000;
+        editor.wall_clock_budget_ms = nextMs;
         ensureLoopEditorIntegrity(editor);
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_LOOP, scope, { wall_clock_budget_ms: nextMs }, { avatar });
     });
 
     // ─── Director drawer canonical Runtime-limits handlers ────────────
@@ -6804,32 +6820,44 @@ function bindUi() {
     // fallback — the same source of truth `renderDynamicPanels` uses to
     // pick which director editor to hydrate. Popup mirror ids are
     // `orch-popup-` prefixed.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_rounds`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_rounds`, async function () {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
         const editor = getDirectorEditorByScope(scope);
         ensureDirectorEditorIntegrity(editor);
-        editor.maxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        editor.maxRounds = nextValue;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { maxRounds: nextValue }, { avatar });
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_concurrent_subagents, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_concurrent_subagents`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_concurrent_subagents, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_concurrent_subagents`, async function () {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
         const editor = getDirectorEditorByScope(scope);
         ensureDirectorEditorIntegrity(editor);
-        editor.maxConcurrentSubagents = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        editor.maxConcurrentSubagents = nextValue;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { maxConcurrentSubagents: nextValue }, { avatar });
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_total_subagent_runs, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_total_subagent_runs`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_total_subagent_runs, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_total_subagent_runs`, async function () {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
         const editor = getDirectorEditorByScope(scope);
         ensureDirectorEditorIntegrity(editor);
-        editor.maxTotalSubagentRuns = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
+        editor.maxTotalSubagentRuns = nextValue;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { maxTotalSubagentRuns: nextValue }, { avatar });
     });
 
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_discard_on_abort, .luker_orch_editor_popup #orch-popup-luker_orch_director_discard_on_abort`, function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_discard_on_abort, .luker_orch_editor_popup #orch-popup-luker_orch_director_discard_on_abort`, async function () {
         const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
         const editor = getDirectorEditorByScope(scope);
         ensureDirectorEditorIntegrity(editor);
-        editor.discardOnAbort = Boolean(jQuery(this).prop('checked'));
+        const nextValue = Boolean(jQuery(this).prop('checked'));
+        editor.discardOnAbort = nextValue;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { discardOnAbort: nextValue }, { avatar });
     });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-loop-tool], .luker_orch_editor_popup [data-luker-loop-tool]`, function () {

@@ -57,7 +57,7 @@ import {
 } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { ensureDirectorEditorIntegrity, ensureEditorIntegrity } from './editor-state.js';
-import { writeActivePreset } from './preset-library.js';
+import { getActivePresetId, getPreset, writeActivePreset } from './preset-library.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -447,4 +447,76 @@ export function createPortableDirectorProfileFromEditor(editor) {
  */
 export function createPortableLoopProfileFromEditor(editor) {
     return sanitizeLoopProfile(editor);
+}
+
+/**
+ * Narrowly persist a Runtime-limits patch to the active preset for `mode`.
+ * Reads the currently persisted preset, overlays only the fields present
+ * in `limitsPatch`, and writes back. NEVER uses the editor draft — the
+ * write is grounded in what's on disk, so unsaved mainAgent / subAgents /
+ * tool-flag / skill-chip edits in the editor stay untouched and can only
+ * be flushed by the explicit "Save To Global / Save To Character" button.
+ *
+ * Shape by mode:
+ *   loop     — merge top-level fields (max_rounds, wall_clock_budget_ms)
+ *   director — merge top-level fields (maxRounds, maxConcurrentSubagents,
+ *                                      maxTotalSubagentRuns, discardOnAbort)
+ *   agenda   — merge under `.limits` (plannerMaxRounds, maxConcurrentAgents,
+ *                                     maxTotalRuns)
+ * Spec is NOT supported here — spec's node_iterations / review_reruns are
+ * top-level `settings` fields, not per-preset, and auto-save via
+ * `saveSettingsDebounced()` directly from their change handlers.
+ *
+ * @param {object} context — SillyTavern context; may be null for scope='global'
+ * @param {object} settings — extensionSettings.orchestrator
+ * @param {'loop'|'director'|'agenda'} mode
+ * @param {'global'|'character'} scope
+ * @param {object} limitsPatch — subset of the mode's canonical limits fields
+ * @param {object} [opts]
+ * @param {string} [opts.avatar] — required when scope='character'
+ * @returns {Promise<boolean>} true when the patch landed, false on failure
+ */
+export async function persistRuntimeLimitsPatch(context, settings, mode, scope, limitsPatch, { avatar } = {}) {
+    if (!limitsPatch || typeof limitsPatch !== 'object') return false;
+    if (mode !== ORCH_EXECUTION_MODE_LOOP
+        && mode !== ORCH_EXECUTION_MODE_DIRECTOR
+        && mode !== ORCH_EXECUTION_MODE_AGENDA) {
+        return false;
+    }
+
+    const activePresetId = getActivePresetId(settings, mode, { scope, context, avatar });
+    if (!activePresetId) return false;
+
+    const current = getPreset(settings, mode, scope, activePresetId, { context, avatar });
+    if (!current) return false;
+    const { name: _ignoredName, ...currentFields } = current;
+
+    let merged;
+    if (mode === ORCH_EXECUTION_MODE_AGENDA) {
+        const currentLimits = (currentFields.limits && typeof currentFields.limits === 'object')
+            ? currentFields.limits
+            : {};
+        merged = { ...currentFields, limits: { ...currentLimits, ...limitsPatch } };
+    } else {
+        merged = { ...currentFields, ...limitsPatch };
+    }
+
+    const writeResult = writeActivePreset(settings, mode, scope, merged, { context, avatar });
+    if (!writeResult.ok) {
+        console.warn('[orchestrator] persistRuntimeLimitsPatch: writeActivePreset failed',
+            writeResult.reason, writeResult.hint);
+        return false;
+    }
+
+    if (scope === 'global') {
+        await saveSettings();
+        return true;
+    }
+    // scope === 'character' — writeActivePreset mutated character.data.extensions.orchestrator
+    // in place; now flush the whole ext to the card on disk.
+    const characterIndex = getCharacterIndexByAvatar(context, String(avatar || ''));
+    if (characterIndex < 0) return false;
+    const ext = getCharacterExtensionDataByAvatar(context, String(avatar || ''));
+    if (!ext || typeof ext !== 'object') return false;
+    return await persistOrchestratorCharacterExtension(context, characterIndex, ext);
 }

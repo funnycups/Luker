@@ -333,6 +333,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-pe
     persistGlobalEditorFrom: async () => {},
     persistGlobalLoopEditorFrom: async () => {},
     persistOrchestratorCharacterExtension: async () => {},
+    persistRuntimeLimitsPatch: async () => {},
     setCharacterAgendaOverrideEnabled: async () => {},
     setCharacterDirectorOverrideEnabled: async () => {},
     setCharacterLoopOverrideEnabled: async () => {},
