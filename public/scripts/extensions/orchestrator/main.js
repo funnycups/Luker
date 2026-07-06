@@ -2016,8 +2016,29 @@ async function triggerImportPresetIntoLibrary(mode, scope, root, context) {
         // Fire the post-import hook AFTER the preset is persisted so the
         // skills subsystem can prompt the extract-embed dialog against a
         // preset that's already on disk. Mirrors OAI import semantics.
+        //
+        // Envelope extensions must be lifted onto the event data before
+        // emit. `embedded_skills_source` lives on the envelope
+        // (`payload.extensions.luker.embedded_skills_source`, attached by
+        // `maybeAttachSkillsToOrchPresetExport` at export time), not on
+        // the mode-specific profile slice — every mode's sanitizer
+        // whitelists profile fields and strips `.extensions`.
+        // Subscribers to `ORCH_PRESET_IMPORT_READY` (notably
+        // `checkOrchPresetEmbeddedSkills`) read
+        // `data.extensions.luker.embedded_skills_source` to detect an
+        // embed payload; without this lift they see stripped data and
+        // silently bail out, so imported presets never re-install their
+        // bundled skills. Re-parsing `fileText` is safe: it was already
+        // validated by `parseImportedProfilePayload` above.
+        const dataForEvent = { ...importedProfile };
+        try {
+            const rawEnvelope = JSON.parse(fileText);
+            if (rawEnvelope && typeof rawEnvelope === 'object' && rawEnvelope.extensions) {
+                dataForEvent.extensions = rawEnvelope.extensions;
+            }
+        } catch (_) { /* fileText already parsed successfully by parseImportedProfilePayload */ }
         await emitOrchPresetImportReady(ctx, {
-            data: importedProfile,
+            data: dataForEvent,
             mode,
             name: String(name).trim(),
         });
