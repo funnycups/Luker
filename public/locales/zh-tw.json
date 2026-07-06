@@ -5926,4 +5926,8 @@
     ,"Chat is too short to split.": "聊天太短，無法拆分。"
     ,"Split Chat": "拆分聊天"
     ,"Need at least 2 messages to split.": "至少需要 2 條訊息才能拆分。"
+    ,"Start time": "起始時間"
+    ,"End time": "結束時間"
+    ,"Invalid log filter": "無效的日誌篩選"
+    ,"Start time must be earlier than end time.": "起始時間必須早於結束時間。"
 }

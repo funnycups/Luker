@@ -6087,4 +6087,8 @@
     ,"Chat is too short to split.": "聊天太短，无法拆分。"
     ,"Split Chat": "拆分聊天"
     ,"Need at least 2 messages to split.": "至少需要 2 条消息才能拆分。"
+    ,"Start time": "起始时间"
+    ,"End time": "结束时间"
+    ,"Invalid log filter": "无效的日志筛选"
+    ,"Start time must be earlier than end time.": "起始时间必须早于结束时间。"
 }
