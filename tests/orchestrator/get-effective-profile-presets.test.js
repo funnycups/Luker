@@ -316,6 +316,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-pe
     persistCharacterDirectorEditor: async () => {},
     persistCharacterEditor: async () => {},
     persistCharacterLoopEditor: async () => {},
+    persistCustomToolsPatch: async () => {},
     persistGlobalAgendaEditorFrom: async () => {},
     persistGlobalDirectorEditorFrom: async () => {},
     persistGlobalEditorFrom: async () => {},

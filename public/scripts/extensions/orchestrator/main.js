@@ -300,6 +300,7 @@ import {
     persistCharacterDirectorEditor,
     persistCharacterEditor,
     persistCharacterLoopEditor,
+    persistCustomToolsPatch,
     persistGlobalAgendaEditorFrom,
     persistGlobalDirectorEditorFrom,
     persistGlobalEditorFrom,
@@ -6959,8 +6960,10 @@ function bindUi() {
     });
 
     // Add custom tool — opens the editor popup, appends to `customTools[]`
-    // on the resolved per-mode editor draft, then re-renders the panel so
-    // the new row appears immediately. Persist still requires Save.
+    // on the resolved per-mode editor draft, narrow-patches the persisted
+    // preset via persistCustomToolsPatch (mainAgent / tool-flag / skill-chip
+    // edits on the same draft are NOT flushed — those still require Save),
+    // then re-renders the panel so the new row appears immediately.
     jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="add-custom-tool"], .luker_orch_editor_popup [data-orch-action="add-custom-tool"]`, async function () {
         const host = resolveCustomToolsHost(this);
         if (!host) return;
@@ -6974,6 +6977,8 @@ function bindUi() {
         });
         if (!entry) return;
         tools.push(entry);
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
         refreshOrchestrationEditorPopup(context, settings);
     });
 
@@ -7014,6 +7019,8 @@ function bindUi() {
         // the reference changed.
         host.tools.length = 0;
         for (const t of profileDraft.customTools) host.tools.push(t);
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistCustomToolsPatch(context, settings, host.mode, host.scope, host.tools, { avatar });
         const summary = [
             result.added.length ? i18nFormat('added: ${0}', result.added.join(', ')) : '',
             result.overwritten.length ? i18nFormat('overwritten: ${0}', result.overwritten.join(', ')) : '',
@@ -7040,10 +7047,12 @@ function bindUi() {
         });
         if (!entry) return;
         tools[idx] = entry;
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
         refreshOrchestrationEditorPopup(context, settings);
     });
 
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="duplicate-custom-tool"], .luker_orch_editor_popup [data-orch-action="duplicate-custom-tool"]`, function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="duplicate-custom-tool"], .luker_orch_editor_popup [data-orch-action="duplicate-custom-tool"]`, async function () {
         const host = resolveCustomToolsHost(this);
         if (!host) return;
         const idx = Number(jQuery(this).attr('data-orch-ct-idx'));
@@ -7058,6 +7067,8 @@ function bindUi() {
             newName = `${src.name}_copy${n}`;
         }
         tools.push({ ...src, name: newName });
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
         refreshOrchestrationEditorPopup(context, settings);
     });
 
@@ -7076,6 +7087,8 @@ function bindUi() {
         );
         if (!confirmed) return;
         tools.splice(idx, 1);
+        const avatar = String(getCurrentAvatar(context) || '');
+        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
         refreshOrchestrationEditorPopup(context, settings);
     });
 

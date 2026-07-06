@@ -520,3 +520,71 @@ export async function persistRuntimeLimitsPatch(context, settings, mode, scope, 
     if (!ext || typeof ext !== 'object') return false;
     return await persistOrchestratorCharacterExtension(context, characterIndex, ext);
 }
+
+/**
+ * Narrowly persist customTools[] into the active preset for `mode`.
+ * Reads the persisted preset, replaces ONLY the customTools slot,
+ * writes back through `writeActivePreset`, then flushes to disk.
+ * NEVER uses the editor draft — so unsaved mainAgent / subAgents /
+ * agents / planner / tool-flag / skill-chip edits are preserved intact.
+ *
+ * Shape by mode:
+ *   loop / director / agenda — top-level `customTools`
+ *   spec                     — `spec.customTools`
+ *
+ * @param {object} context — SillyTavern context; may be null for scope='global'
+ * @param {object} settings — extensionSettings.orchestrator
+ * @param {'loop'|'director'|'agenda'|'spec'} mode
+ * @param {'global'|'character'} scope
+ * @param {Array<object>} customTools — the full replacement array
+ * @param {object} [opts]
+ * @param {string} [opts.avatar] — required when scope='character'
+ * @returns {Promise<boolean>}
+ */
+export async function persistCustomToolsPatch(context, settings, mode, scope, customTools, { avatar } = {}) {
+    if (!Array.isArray(customTools)) return false;
+    if (mode !== ORCH_EXECUTION_MODE_LOOP
+        && mode !== ORCH_EXECUTION_MODE_DIRECTOR
+        && mode !== ORCH_EXECUTION_MODE_AGENDA
+        && mode !== ORCH_EXECUTION_MODE_SPEC) {
+        return false;
+    }
+
+    const activePresetId = getActivePresetId(settings, mode, { scope, context, avatar });
+    if (!activePresetId) return false;
+
+    const current = getPreset(settings, mode, scope, activePresetId, { context, avatar });
+    if (!current) return false;
+    const { name: _ignoredName, ...currentFields } = current;
+
+    // Deep-clone the customTools array so downstream mutations to the
+    // editor's array don't retroactively mutate the persisted slot.
+    const clonedTools = customTools.map(t => (t && typeof t === 'object') ? { ...t } : t);
+
+    let merged;
+    if (mode === ORCH_EXECUTION_MODE_SPEC) {
+        const currentSpec = (currentFields.spec && typeof currentFields.spec === 'object')
+            ? currentFields.spec
+            : {};
+        merged = { ...currentFields, spec: { ...currentSpec, customTools: clonedTools } };
+    } else {
+        merged = { ...currentFields, customTools: clonedTools };
+    }
+
+    const writeResult = writeActivePreset(settings, mode, scope, merged, { context, avatar });
+    if (!writeResult.ok) {
+        console.warn('[orchestrator] persistCustomToolsPatch: writeActivePreset failed',
+            writeResult.reason, writeResult.hint);
+        return false;
+    }
+
+    if (scope === 'global') {
+        await saveSettings();
+        return true;
+    }
+    const characterIndex = getCharacterIndexByAvatar(context, String(avatar || ''));
+    if (characterIndex < 0) return false;
+    const ext = getCharacterExtensionDataByAvatar(context, String(avatar || ''));
+    if (!ext || typeof ext !== 'object') return false;
+    return await persistOrchestratorCharacterExtension(context, characterIndex, ext);
+}
