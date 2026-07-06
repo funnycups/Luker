@@ -15,6 +15,11 @@
  * of skill subsystem state.
  */
 
+import { getExecutionMode } from './character-overrides.js';
+import { getDisplayedScope } from './editor-display.js';
+import { getCurrentAvatar } from './snapshot-cache.js';
+import { getActivePresetId } from './preset-library.js';
+
 const MODULE_NAME = 'orchestrator';
 
 /**
@@ -132,4 +137,51 @@ export async function emitOrchPresetImportReady(context, { data, mode, name } = 
     } catch (e) {
         console.warn(`[${MODULE_NAME}] ORCH_PRESET_IMPORT_READY emit failed:`, e?.message || e);
     }
+}
+
+/**
+ * Resolve the currently-active orchestrator preset (mode, name) for the
+ * user's current UI context. Used by the manage-skills entry point to
+ * pre-select the correct orch-preset scope in the skill manager panel.
+ *
+ * Reads `settings.executionMode` for the active mode, uses
+ * `getDisplayedScope` to pick between global-scope and character-scope
+ * (matching what the editor currently displays), then reads the raw
+ * library entry's name directly (not through `getActivePreset`, which
+ * seeds factory defaults on empty libraries and folds empty names to
+ * DEFAULT_PRESET_NAME — both would mask "nothing meaningfully active"
+ * as if a Default preset were selected). Returns null on any
+ * resolution gap (no active id, empty name, no library, missing
+ * character extension data for character scope).
+ *
+ * @param {object} context — SillyTavern context
+ * @param {object} settings — extensionSettings.orchestrator
+ * @returns {{kind: 'orch-preset', mode: string, name: string} | null}
+ */
+export function computeActiveOrchPresetScope(context, settings) {
+    if (!settings || typeof settings !== 'object') return null;
+    const mode = String(getExecutionMode(settings) || '').trim();
+    if (!mode) return null;
+    const scope = getDisplayedScope(context, settings) || 'global';
+    const avatar = String(getCurrentAvatar(context) || '').trim();
+    let id;
+    try {
+        id = String(getActivePresetId(settings, mode, { scope, context, avatar }) || '').trim();
+    } catch (_) {
+        return null;
+    }
+    if (!id) return null;
+    let library;
+    if (scope === 'character') {
+        if (!avatar) return null;
+        const character = (context?.characters || []).find(
+            c => String(c?.avatar || '') === avatar,
+        );
+        library = character?.data?.extensions?.[MODULE_NAME]?.presetLibraries?.[mode];
+    } else {
+        library = settings?.presetLibraries?.[mode];
+    }
+    const name = String(library?.[id]?.name || '').trim();
+    if (!name) return null;
+    return { kind: 'orch-preset', mode, name };
 }

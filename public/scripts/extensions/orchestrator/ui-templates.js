@@ -1436,13 +1436,9 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
     // lives inside `singleBlock` above.
     const profileActionsBarHtml = `
         <div class="luker-studio-actions-bar">
-            <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
-            <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
-            <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
-            <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
             <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
             <div class="menu_button" data-luker-action="save-character" style="display:none">${escapeHtml(i18n('Save To Character Override'))}</div>
-            <div class="menu_button" data-luker-action="clear-character" style="display:none">${escapeHtml(i18n('Clear Character Override'))}</div>
+            <div class="menu_button" data-luker-action="clear-character" style="display:none">${escapeHtml(i18n('Clear preset from this card'))}</div>
         </div>`;
     const actionsBar = ['spec', 'agenda', 'loop', 'director'].map(mode => {
         const modeVisible = currentMode === mode ? '' : ' style="display:none"';

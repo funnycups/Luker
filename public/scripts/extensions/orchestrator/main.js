@@ -46,7 +46,6 @@ import {
     PORTABLE_PROFILE_FORMAT_V3,
     PORTABLE_PROFILE_FORMAT_V4,
     createDefaultDirectorProfile,
-    createFactoryPresetForMode,
     sanitizeDirectorProfile,
     defaultAgendaAgents,
     defaultLoopProfile,
@@ -163,7 +162,6 @@ import {
     hasCharacterAgendaOverride,
     hasCharacterDirectorOverride,
     hasCharacterLoopOverride,
-    hasCharacterOverride,
     hasCharacterSpecOverride,
     isCharacterPresetActiveOverrideEnabled,
     normalizeExecutionMode,
@@ -248,6 +246,7 @@ import {
     writePresetByName,
 } from './preset-library.js';
 import {
+    computeActiveOrchPresetScope,
     copyOrchPresetSkills,
     emitOrchPresetDeleted,
     emitOrchPresetExportReady,
@@ -2493,17 +2492,6 @@ async function pickJsonFileText() {
         document.body.appendChild(input);
         input.click();
     });
-}
-
-function chooseProfileScopeByConfirm(context, confirmKey) {
-    const avatar = String(getCurrentAvatar(context) || '').trim();
-    if (avatar) {
-        return window.confirm(i18n(confirmKey)) ? 'global' : 'character';
-    }
-    if (!window.confirm(i18n('No character selected. Use global profile?'))) {
-        return null;
-    }
-    return 'global';
 }
 
 function isPresetUsed(editor, presetId) {
@@ -8043,75 +8031,6 @@ function bindUi() {
             return;
         }
 
-        if (action === 'reload-current') {
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-                syncCharacterEditorWithActiveAvatar(context);
-                const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-                if (hasCharacterLoopOverride(context, activeAvatar)) {
-                    uiState.characterLoopEditor = loadCharacterLoopEditorState(context, activeAvatar);
-                    ensureLoopEditorIntegrity(uiState.characterLoopEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'character');
-                    updateUiStatus(i18nFormat('Reloaded character override for ${0}.', getCharacterDisplayNameByAvatar(context, activeAvatar) || 'N/A'));
-                } else {
-                    uiState.globalLoopEditor = loadGlobalLoopEditorState();
-                    ensureLoopEditorIntegrity(uiState.globalLoopEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'global');
-                    updateUiStatus(i18n('Reloaded global profile from settings.'));
-                }
-                renderDynamicPanels(root, context);
-                return;
-            }
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
-                syncCharacterEditorWithActiveAvatar(context);
-                const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-                if (hasCharacterAgendaOverride(context, activeAvatar)) {
-                    uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, activeAvatar);
-                    ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'character');
-                    updateUiStatus(i18nFormat('Reloaded character override for ${0}.', getCharacterDisplayNameByAvatar(context, activeAvatar) || 'N/A'));
-                } else {
-                    uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
-                    ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'global');
-                    updateUiStatus(i18n('Reloaded global profile from settings.'));
-                }
-                renderDynamicPanels(root, context);
-                return;
-            }
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
-                syncCharacterEditorWithActiveAvatar(context);
-                const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-                if (hasCharacterDirectorOverride(context, activeAvatar)) {
-                    uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, activeAvatar);
-                    ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
-                    updateUiStatus(i18nFormat('Reloaded character override for ${0}.', getCharacterDisplayNameByAvatar(context, activeAvatar) || 'N/A'));
-                } else {
-                    uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
-                    ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
-                    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global');
-                    updateUiStatus(i18n('Reloaded global profile from settings.'));
-                }
-                renderDynamicPanels(root, context);
-                return;
-            }
-            syncCharacterEditorWithActiveAvatar(context);
-            const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-            if (hasCharacterOverride(context, activeAvatar)) {
-                uiState.characterEditor = loadCharacterEditorState(context, activeAvatar);
-                ensureEditorIntegrity(uiState.characterEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'character');
-                updateUiStatus(i18nFormat('Reloaded character override for ${0}.', getCharacterDisplayNameByAvatar(context, activeAvatar) || 'N/A'));
-            } else {
-                uiState.globalEditor = loadGlobalEditorState();
-                ensureEditorIntegrity(uiState.globalEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'global');
-                updateUiStatus(i18n('Reloaded global profile from settings.'));
-            }
-            renderDynamicPanels(root, context);
-            return;
-        }
-
         if (action === 'reset-single') {
             // Single mode does not participate in the preset library —
             // its runtime profile is synthesized from `settings.singleAgentSystemPrompt`
@@ -8128,99 +8047,6 @@ function bindUi() {
             renderDynamicPanels(root, context);
             notifySuccess(i18n('Single-agent prompts reset to defaults.'));
             updateUiStatus(i18n('Single-agent prompts reset to defaults.'));
-            return;
-        }
-
-        if (action === 'reset-global') {
-            // Reset writes the factory payload into the CURRENTLY ACTIVE
-            // preset slot via `writeActivePreset`, so the same path the
-            // editor reads from (`getActivePreset` → `presetLibraries.<mode>
-            // .<activeId>`) shows the freshly reset profile. Writing to
-            // legacy fields like `settings.loopProfile` / `directorProfile`
-            // / `agendaPlanner` / `orchestrationSpec` would no-op since
-            // those slots are stripped by `migrateGlobalLegacyToLibraries`
-            // and never read at runtime — the active preset would keep
-            // showing the pre-reset content until the user reopened the
-            // popup (and even then only because of the migration deleting
-            // legacy fields).
-            //
-            // Director mode ships TWO factory variants (Full vs Minimal,
-            // see B3 / fa0c5d5db): `createFactoryPresetForMode(director)`
-            // returns an array, not a single object. Ask the user which
-            // variant to restore via a three-button popup. Other modes
-            // keep the existing single-confirm path since their factory
-            // is still a single object.
-            const currentMode = getExecutionMode(settings);
-            let factoryPayload;
-            if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                const FULL_RESULT = context.POPUP_RESULT?.AFFIRMATIVE ?? 1;
-                const MINIMAL_RESULT = context.POPUP_RESULT?.CUSTOM1 ?? 1001;
-                const CANCEL_RESULT = context.POPUP_RESULT?.NEGATIVE ?? 0;
-                const choice = await context.callGenericPopup(
-                    i18n('Reset global director profile to which factory default? This overwrites the currently active director preset.'),
-                    context.POPUP_TYPE.TEXT,
-                    i18n('Reset Director Profile'),
-                    {
-                        okButton: i18n('Default (记忆图 + 搜索)'),
-                        cancelButton: i18n('Cancel'),
-                        customButtons: [
-                            { text: i18n('Default (无记忆图，无搜索)'), result: MINIMAL_RESULT, appendAtEnd: true },
-                        ],
-                    },
-                );
-                if (choice === CANCEL_RESULT || choice === undefined || choice === null) {
-                    return;
-                }
-                let targetId = null;
-                if (choice === FULL_RESULT) targetId = 'default-full';
-                else if (choice === MINIMAL_RESULT) targetId = 'default';
-                else {
-                    // Unexpected popup result value — treat as cancel.
-                    return;
-                }
-                const entries = createFactoryPresetForMode(currentMode);
-                const entry = Array.isArray(entries) ? entries.find(e => e.id === targetId) : null;
-                if (!entry) {
-                    console.warn(`[orchestrator] reset-global director: no factory entry for id=${targetId}`);
-                    return;
-                }
-                // Drop the factory's `id` field; the active slot's id is
-                // already owned by `writeActivePreset` via the preset
-                // library, and `sanitizeDirectorProfile` should not see
-                // a stray top-level `id`. Mirrors the B4 destructure-and-
-                // delete pattern in `seedFactoryEntries`.
-                const payload = { ...entry };
-                delete payload.id;
-                factoryPayload = payload;
-            } else {
-                if (!window.confirm(i18n('Reset global orchestration profile to defaults? This will overwrite current global workflow and presets.'))) {
-                    return;
-                }
-                factoryPayload = createFactoryPresetForMode(currentMode);
-            }
-            const resetWriteResult = writeActivePreset(settings, currentMode, 'global', factoryPayload);
-            if (!resetWriteResult.ok) {
-                notifyError(i18nFormat('Failed to reset global profile: ${0}',
-                    resetWriteResult.hint || resetWriteResult.reason));
-                return;
-            }
-            await saveSettings();
-            if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
-                uiState.globalLoopEditor = loadGlobalLoopEditorState();
-                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
-            } else if (currentMode === ORCH_EXECUTION_MODE_AGENDA) {
-                uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
-                ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
-            } else if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
-                ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
-            } else {
-                uiState.globalEditor = loadGlobalEditorState();
-                ensureEditorIntegrity(uiState.globalEditor);
-            }
-            renderDynamicPanels(root, context);
-            notifySuccess(i18n('Global orchestration profile reset to defaults.'));
-            updateUiStatus(i18n('Reset global profile to defaults.'));
             return;
         }
 
@@ -8267,92 +8093,6 @@ function bindUi() {
             notifySuccess(i18n('Global orchestration profile saved.'));
             updateUiStatus(i18n('Saved to global profile.'));
             renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'export-profile') {
-            syncCharacterEditorWithActiveAvatar(context);
-            const currentMode = getExecutionMode(settings);
-            const targetMode = currentMode === ORCH_EXECUTION_MODE_AGENDA
-                ? ORCH_EXECUTION_MODE_AGENDA
-                : currentMode === ORCH_EXECUTION_MODE_DIRECTOR
-                    ? ORCH_EXECUTION_MODE_DIRECTOR
-                    : ORCH_EXECUTION_MODE_SPEC;
-            const scope = chooseProfileScopeByConfirm(context, 'Select export source: OK = global profile, Cancel = character override.');
-            if (!scope) {
-                return;
-            }
-            const avatar = String(getCurrentAvatar(context) || '').trim();
-            const safeName = sanitizeIdentifierToken(getCharacterDisplayNameByAvatar(context, avatar) || 'character', 'character');
-            let payload;
-            let fileName;
-            if (targetMode === ORCH_EXECUTION_MODE_AGENDA) {
-                payload = {
-                    format: PORTABLE_PROFILE_FORMAT_V2,
-                    mode: ORCH_EXECUTION_MODE_AGENDA,
-                    scope,
-                    exportedAt: new Date().toISOString(),
-                    profile: createPortableAgendaProfileFromEditor(scope === 'global'
-                        ? uiState.globalAgendaEditor
-                        : uiState.characterAgendaEditor),
-                };
-                fileName = scope === 'global'
-                    ? 'luker-orchestrator-agenda-global.json'
-                    : `luker-orchestrator-agenda-character-${safeName}.json`;
-            } else if (targetMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                payload = {
-                    format: PORTABLE_PROFILE_FORMAT_V3,
-                    mode: ORCH_EXECUTION_MODE_DIRECTOR,
-                    scope,
-                    exportedAt: new Date().toISOString(),
-                    profile: createPortableDirectorProfileFromEditor(scope === 'global'
-                        ? uiState.globalDirectorEditor
-                        : uiState.characterDirectorEditor),
-                };
-                fileName = scope === 'global'
-                    ? 'luker-orchestrator-director-global.json'
-                    : `luker-orchestrator-director-character-${safeName}.json`;
-            } else {
-                payload = {
-                    format: PORTABLE_PROFILE_FORMAT_V1,
-                    scope,
-                    exportedAt: new Date().toISOString(),
-                    profile: createPortableProfileFromEditor(scope === 'global'
-                        ? uiState.globalEditor
-                        : uiState.characterEditor),
-                };
-                fileName = scope === 'global'
-                    ? 'luker-orchestrator-global.json'
-                    : `luker-orchestrator-character-${safeName}.json`;
-            }
-            downloadJsonFile(fileName, payload);
-            if (scope === 'global') {
-                notifySuccess(i18n('Exported global profile.'));
-                updateUiStatus(i18n('Exported global profile.'));
-            } else {
-                notifySuccess(i18nFormat('Exported character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-                updateUiStatus(i18nFormat('Exported character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-            }
-            return;
-        }
-
-        if (action === 'import-profile') {
-            // Legacy toolbar Import button. Post-preset-library it would
-            // write to legacy `settings.orchestrationSpec` / `directorProfile`
-            // / `agendaPlanner` etc., which the next `ensureSettings` strips
-            // out via `migrateGlobalLegacyToLibraries`. Redirect to the new
-            // preset bar's import flow, which creates a fresh slot in the
-            // active mode's library, marks it active, then loads it into the
-            // editor — same UX as the per-mode "Import" affordance in the
-            // preset selector. Scope is picked the same way the legacy
-            // path picked it (Confirm dialog: OK = global, Cancel = character).
-            syncCharacterEditorWithActiveAvatar(context);
-            const currentMode = getExecutionMode(settings);
-            const scope = chooseProfileScopeByConfirm(context, 'Select import target: OK = global profile, Cancel = character override.');
-            if (!scope) {
-                return;
-            }
-            await triggerImportPresetIntoLibrary(currentMode, scope, root, context);
             return;
         }
 
@@ -8480,7 +8220,8 @@ function bindUi() {
 
         if (action === 'manage-skills') {
             try {
-                await openSkillManagerPanel({ context, t: i18n });
+                const initialScope = computeActiveOrchPresetScope(context, settings);
+                await openSkillManagerPanel({ context, initialScope, t: i18n });
             } catch (e) {
                 notifyError(i18nFormat('Skill manager failed: ${0}', e?.message || String(e)));
             }
