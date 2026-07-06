@@ -1881,19 +1881,26 @@ function reloadOrchestratorEditor(root, context) {
     renderDynamicPanels(root, context);
 }
 
-// Build the portable {format, mode, exportedAt, profile} envelope for a
-// single preset entry. Mirrors the legacy per-mode export shape exactly:
-// V1 for spec, V2 for agenda, V3 for director, V4 for loop. The `entry`
-// is the already-sanitized preset object as returned by `getActivePreset`
-// (which routes through `sanitizePresetEntry`), so we just project its
-// mode-specific fields back into the legacy profile shape that external
-// tooling and `parseImportedProfilePayload` already understand.
+// Build the portable {format, mode, name, exportedAt, profile} envelope
+// for a single preset entry. Mirrors the legacy per-mode export shape
+// exactly: V1 for spec, V2 for agenda, V3 for director, V4 for loop. The
+// `entry` is the already-sanitized preset object as returned by
+// `getActivePreset` (which routes through `sanitizePresetEntry`), so we
+// just project its mode-specific fields back into the legacy profile
+// shape that external tooling and `parseImportedProfilePayload` already
+// understand. Envelope-level `name` is stamped for all 4 modes so
+// downstream consumers (e.g. the skill embed-export hook) can read the
+// preset identity uniformly — only director's `sanitizeDirectorProfile`
+// passes `.name` through into `profile`; agenda/loop/spec sanitizers
+// return fresh literals without it.
 function buildPortablePayloadForMode(mode, entry) {
     const exportedAt = new Date().toISOString();
+    const name = String(entry?.name || '').trim();
     if (mode === ORCH_EXECUTION_MODE_AGENDA) {
         return {
             format: PORTABLE_PROFILE_FORMAT_V2,
             mode: ORCH_EXECUTION_MODE_AGENDA,
+            name,
             exportedAt,
             profile: createPortableAgendaProfileFromEditor(entry),
         };
@@ -1902,6 +1909,7 @@ function buildPortablePayloadForMode(mode, entry) {
         return {
             format: PORTABLE_PROFILE_FORMAT_V3,
             mode: ORCH_EXECUTION_MODE_DIRECTOR,
+            name,
             exportedAt,
             profile: createPortableDirectorProfileFromEditor(entry),
         };
@@ -1910,6 +1918,7 @@ function buildPortablePayloadForMode(mode, entry) {
         return {
             format: PORTABLE_PROFILE_FORMAT_V4,
             mode: ORCH_EXECUTION_MODE_LOOP,
+            name,
             exportedAt,
             profile: createPortableLoopProfileFromEditor(entry),
         };
@@ -1920,6 +1929,7 @@ function buildPortablePayloadForMode(mode, entry) {
     return {
         format: PORTABLE_PROFILE_FORMAT_V1,
         mode: ORCH_EXECUTION_MODE_SPEC,
+        name,
         exportedAt,
         profile: createPortableProfileFromEditor(entry),
     };

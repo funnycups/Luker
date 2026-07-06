@@ -103,4 +103,36 @@ describe('maybeAttachSkillsToOrchPresetExport', () => {
         expect(result2).toBe(false);
         expect(context.skills.list).not.toHaveBeenCalled();
     });
+
+    // Regression: agenda/loop/spec sanitizers return profile literals WITHOUT
+    // `.name` (only director's `sanitizeDirectorProfile` passes it through).
+    // `buildPortablePayloadForMode` stamps the preset name on the envelope
+    // itself so the hook can read it uniformly for all 4 modes. Prior to
+    // that emitter fix, the hook silently early-bailed on the `!name` gate
+    // for spec/agenda/loop presets even when their scope had skills.
+    test('reads name from payload envelope for agenda/spec/loop shapes without profile.name', async () => {
+        const context = makeContext({ listReturns: [{ name: 'skillA' }] });
+        const payload = {
+            format: 'PORTABLE_PROFILE_V2',
+            mode: 'agenda',
+            name: 'PlanA',
+            exportedAt: '2026-01-01T00:00:00.000Z',
+            // Agenda profile shape as returned by sanitizeAgendaWorkingProfile:
+            // no `.name` field (see agenda-profile.js:104-143).
+            profile: { planner: {}, agents: [], finalAgentId: '', limits: {}, defaultTools: {}, customTools: [] },
+        };
+        const result = await embedExportHook.maybeAttachSkillsToOrchPresetExport({
+            context, payload, t: (s) => s,
+        });
+        expect(result).toBe(true);
+        expect(context.skills.list).toHaveBeenCalledWith({
+            scope: { kind: 'orch-preset', mode: 'agenda', name: 'PlanA' },
+        });
+        expect(packAndAttachSkillsForExport).toHaveBeenCalledWith({
+            context,
+            targetScope: { kind: 'orch-preset', mode: 'agenda', name: 'PlanA' },
+            attachTo: payload,
+        });
+        expect(payload.extensions?.luker?.embedded_skills_source).toBeDefined();
+    });
 });

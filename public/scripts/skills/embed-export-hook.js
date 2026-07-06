@@ -81,8 +81,11 @@ export async function maybeAttachSkillsToPresetExport({ context, presetBody, t =
  * Confirm-then-attach for orchestrator preset export. Mirrors
  * `maybeAttachSkillsToPresetExport` but for the orch-preset scope
  * (Task 7 lifecycle). Reads (mode, name) from `payload.mode` and
- * `payload.profile.name` — see `buildPortablePayloadForMode` in the
- * orchestrator main.js for the payload shape.
+ * `payload.name` — see `buildPortablePayloadForMode` in the orchestrator
+ * main.js for the payload shape. Envelope-level `.name` is the canonical
+ * source (stamped for all 4 modes); `payload.profile?.name` is kept as a
+ * defensive fallback for payloads shaped by callers that only populate
+ * the profile field (e.g. legacy external tooling).
  *
  * @param {object} opts
  * @param {object} opts.context - SillyTavern context
@@ -96,7 +99,7 @@ export async function maybeAttachSkillsToOrchPresetExport({ context, payload, t 
     if (!payload || typeof payload !== 'object') return false;
 
     const mode = String(payload.mode || '').trim();
-    const name = String(payload.profile?.name || '').trim();
+    const name = String(payload.name || payload.profile?.name || '').trim();
     if (!mode || !name) return false;
     const targetScope = { kind: 'orch-preset', mode, name };
 
