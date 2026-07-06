@@ -1030,11 +1030,6 @@ export async function openCpaIterationStudio(deps) {
 
         const selected = dialogMessages.filter((_, i) => selectedSet.has(i));
 
-        if (state.session._transient && state.session.messages.length === 0) {
-            state.session = createNewSession();
-            state.session._transient = false;
-        }
-
         for (const m of selected) {
             const role = m.is_user ? 'user' : 'assistant';
             const at = m.send_date ? new Date(m.send_date).getTime() : Date.now();
