@@ -922,7 +922,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
             runtimeContext: skillRes.buildSkillRuntimeContext(
                 context,
                 profile,
-                { mode: 'loop', name: String(profile?.name || '').trim() },
+                { mode: 'loop', name: String(deps?.activeOrchPresetName || '').trim() },
             ),
         });
         const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForLoop);

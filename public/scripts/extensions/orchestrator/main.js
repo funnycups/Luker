@@ -852,6 +852,30 @@ export function getEffectiveProfile(context) {
 }
 
 async function runOrchestration(context, payload, messages, profile) {
+    // Capture the active orch-preset name once per orchestration run so
+    // the mode runtime can hand it to buildSkillRuntimeContext for
+    // orch-preset scope filtering. The per-agent / per-node preset
+    // variables inside the mode runtimes reference INNER configs (per-agent
+    // configs in agenda, per-node presets in spec, sanitized loop profile
+    // in loop) that don't carry the top-level orchestrator preset's name.
+    //
+    // `profile.source` from `getEffectiveProfile` is 'global' | 'character'
+    // | 'chat' | 'single'. chat-override agenda + single-agent mode aren't
+    // backed by a preset library entry — no orch-preset scope applies.
+    let activeOrchPresetName = '';
+    if (profile?.source === 'global' || profile?.source === 'character') {
+        try {
+            const settings = extension_settings[MODULE_NAME];
+            const avatar = getCurrentAvatar(context);
+            const presetResult = getActivePreset(settings, profile.mode, {
+                scope: profile.source,
+                context,
+                avatar,
+            });
+            activeOrchPresetName = String(presetResult?.state?.name || '').trim();
+        } catch (_) { /* leave empty — orch-preset scope simply omits */ }
+    }
+
     if (String(profile?.mode || '') === ORCH_EXECUTION_MODE_LOOP) {
         // Loop mode: single-agent tool-call loop. The dispatcher sanitizes
         // here (rather than in the upstream `getEffectiveProfile` pipeline)
@@ -864,6 +888,7 @@ async function runOrchestration(context, payload, messages, profile) {
         const loopProfile = sanitizeLoopProfile(profile);
         const loopRun = await runLoopOrchestration(context, payload, loopProfile, {
             settings: extension_settings[MODULE_NAME],
+            activeOrchPresetName,
         });
         const capsuleText = String(loopRun?.capsule || '').trim();
         const stageOutputs = capsuleText
@@ -881,9 +906,9 @@ async function runOrchestration(context, payload, messages, profile) {
         };
     }
     if (String(profile?.mode || '') === ORCH_EXECUTION_MODE_AGENDA || String(profile?.source || '') === 'agenda') {
-        return runAgendaOrchestration(context, payload, messages, profile);
+        return runAgendaOrchestration(context, payload, messages, profile, { activeOrchPresetName });
     }
-    return runSpecOrchestration(context, payload, messages, profile);
+    return runSpecOrchestration(context, payload, messages, profile, { activeOrchPresetName });
 }
 
 function getFinalStageSnapshot(stageOutputs) {

@@ -703,7 +703,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             runtimeContext: skillRes.buildSkillRuntimeContext(
                 context,
                 preset,
-                { mode: 'spec', name: String(preset?.name || '').trim() },
+                { mode: 'spec', name: String(options?.runtime?.activeOrchPresetName || '').trim() },
             ),
         });
         nodeSystemSuffix = skillRes.buildAvailableSkillsBlock(visibleSkillsForNode);
@@ -1416,7 +1416,7 @@ export async function executeStage(context, payload, messages, profile, runtime,
     }
 }
 
-export async function runSpecOrchestration(context, payload, messages, profile) {
+export async function runSpecOrchestration(context, payload, messages, profile, deps = {}) {
     const spec = sanitizeSpec(profile.spec);
     const stages = Array.isArray(spec?.stages) ? spec.stages : [];
     const trace = createRuntimeTrace(context, payload, stages);
@@ -1451,6 +1451,12 @@ export async function runSpecOrchestration(context, payload, messages, profile) 
         // `runtime.customToolRegistry`. runWorkerNode forwards it to
         // both getEnabledToolSchemas and the per-call executeLoopTool ctx.
         customToolRegistry: buildPerRunCustomToolRegistry(profile, trace, recordRuntimeEvent),
+        // Active orch-preset name captured at main.js runOrchestration
+        // entry. runWorkerNode threads it to buildSkillRuntimeContext so
+        // orch-preset scope filtering activates for spec worker nodes.
+        // Per-node `preset` at runWorkerNode is the per-NODE preset from
+        // profile.presets[nodeSpec.preset] — not the top-level orch preset.
+        activeOrchPresetName: String(deps?.activeOrchPresetName || '').trim(),
     };
     let previousNodeOutputs = new Map();
     throwIfAborted(abortSignal, 'Orchestration aborted.');

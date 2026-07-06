@@ -665,6 +665,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     finalReason = '',
     customToolRegistry = null,
     panelRunId = null,
+    activeOrchPresetName = '',
 }, abortSignal = null) {
     const settings = extension_settings[MODULE_NAME];
     const planner = createAgendaPlannerDraft(profile?.planner);
@@ -756,7 +757,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             runtimeContext: skillRes.buildSkillRuntimeContext(
                 context,
                 preset,
-                { mode: 'agenda', name: String(preset?.name || '').trim() },
+                { mode: 'agenda', name: String(activeOrchPresetName || '').trim() },
             ),
         });
         const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForAgent);
@@ -986,8 +987,9 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     };
 }
 
-export async function runAgendaOrchestration(context, payload, messages, profile) {
+export async function runAgendaOrchestration(context, payload, messages, profile, deps = {}) {
     const settings = extension_settings[MODULE_NAME];
+    const activeOrchPresetName = String(deps?.activeOrchPresetName || '').trim();
     const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;
     const trace = createRuntimeTrace(context, payload, { mode: ORCH_EXECUTION_MODE_AGENDA, note: 'Agenda mode runtime' });
     const chatKey = String(trace.chatKey || '');
@@ -1086,7 +1088,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                 const workerRoundId = `node-${dispatch.agent}-${dispatch.todoId}-${round}`;
                 appendRound({ runId, round: { id: workerRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', `${dispatch.agent}:${dispatch.todoId}`, round) } });
                 try {
-                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry, panelRunId: runId }, abortSignal);
+                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry, panelRunId: runId, activeOrchPresetName }, abortSignal);
                     finishRuntimeNodeAttempt(trace, attempt, {
                         status: 'completed',
                         output: result.outputText,
@@ -1144,6 +1146,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
             finalReason: finalizeReason,
             customToolRegistry,
             panelRunId: runId,
+            activeOrchPresetName,
         }, abortSignal);
         if (!String(finalRun?.outputText || '').trim()) {
             finishRuntimeNodeAttempt(trace, finalAttempt, {
