@@ -119,17 +119,51 @@ export function listCharacters(context) {
 }
 
 /**
+ * Enumerate every orchestrator-preset scope currently defined across all
+ * 4 orchestrator modes (spec / agenda / loop / director). Reads directly
+ * from `context.extensionSettings.orchestrator.presetLibraries[mode]`,
+ * which is populated by the orchestrator plugin at init time; null-safe
+ * so the picker still works when orchestrator isn't loaded (empty array).
+ *
+ * Returned tuples are sorted by (mode, name) so the picker dropdown
+ * shows a stable order.
+ *
+ * @param {object} context
+ * @returns {Array<{mode:string, name:string}>}
+ */
+export function listAllOrchPresetScopes(context) {
+    const libs = context?.extensionSettings?.orchestrator?.presetLibraries;
+    if (!libs || typeof libs !== 'object') return [];
+    const MODES = ['spec', 'agenda', 'loop', 'director'];
+    const out = [];
+    for (const mode of MODES) {
+        const table = libs[mode];
+        if (!table || typeof table !== 'object') continue;
+        for (const id of Object.keys(table)) {
+            const entry = table[id];
+            const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
+            if (!name) continue;
+            out.push({ mode, name });
+        }
+    }
+    out.sort((a, b) => a.mode.localeCompare(b.mode) || a.name.localeCompare(b.name));
+    return out;
+}
+
+/**
  * Build the picker body HTML. Exported so the unit tests can assert
  * dropdown contents without instantiating the popup.
  *
  * @param {object} opts
  * @param {string} opts.title
  * @param {(s:string) => string} opts.t
- * @param {string} opts.suggestKind - 'global'|'preset'|'character'
+ * @param {string} opts.suggestKind - 'global'|'preset'|'orch-preset'|'character'
  * @param {string} opts.suggestPreset - default preset name
  * @param {string} opts.suggestChar - default character file
+ * @param {{mode:string,name:string}|null} opts.suggestOrchPreset - default orch-preset tuple
  * @param {Array<{name:string, api:string}>} opts.presets
  * @param {Array<{value:string, label:string}>} opts.characters
+ * @param {Array<{mode:string, name:string}>} opts.orchPresetScopes
  * @returns {string}
  */
 export function buildScopePickerHtml({
@@ -138,8 +172,10 @@ export function buildScopePickerHtml({
     suggestKind,
     suggestPreset,
     suggestChar,
+    suggestOrchPreset,
     presets,
     characters,
+    orchPresetScopes,
 } = {}) {
     const kindRadio = (value, label) => {
         const checked = suggestKind === value ? ' checked' : '';
@@ -165,23 +201,42 @@ export function buildScopePickerHtml({
             return `<option value="${esc(c.value)}"${sel}>${esc(c.label)}</option>`;
         }).join('')
         : `<option value="" disabled selected>${esc(t('(no characters loaded)'))}</option>`;
+    const orchPresetList = Array.isArray(orchPresetScopes) ? orchPresetScopes : [];
+    const suggestOrchValue = suggestOrchPreset
+        ? `orch-preset/${suggestOrchPreset.mode}/${suggestOrchPreset.name}`
+        : '';
+    const orchPresetOptions = orchPresetList.length > 0
+        ? orchPresetList.map(s => {
+            const value = `orch-preset/${s.mode}/${s.name}`;
+            const sel = value === suggestOrchValue ? ' selected' : '';
+            return `<option value="${esc(value)}"${sel}>${esc(`${s.mode} / ${s.name}`)}</option>`;
+        }).join('')
+        : `<option value="" disabled selected>${esc(t('(no orchestrator presets)'))}</option>`;
     const presetHidden = suggestKind !== 'preset';
     const charHidden = suggestKind !== 'character';
+    const orchPresetHidden = suggestKind !== 'orch-preset';
     return `
 <div class="luker_skill_scope_picker">
     <div class="luker_skill_scope_picker_title">${esc(title)}</div>
     <div class="luker_skill_scope_picker_kinds">
         ${kindRadio('global', 'Global')}
         ${kindRadio('preset', 'Preset')}
+        ${kindRadio('orch-preset', 'Orchestrator preset')}
         ${kindRadio('character', 'Character')}
     </div>
-    <div class="luker_skill_scope_preset_fields"${presetHidden ? ' hidden' : ''} data-skill-scope-row="preset">
+    <div class="luker_skill_scope_preset_fields" data-skill-scope-row="preset"${presetHidden ? ' hidden' : ''}>
         <label class="luker_skill_scope_field">
             <span class="luker_skill_scope_field_label">${esc(t('Chat completion preset'))}</span>
             <select class="text_pole" data-skill-scope-preset>${presetOptions}</select>
         </label>
     </div>
-    <div class="luker_skill_scope_character_fields"${charHidden ? ' hidden' : ''} data-skill-scope-row="character">
+    <div class="luker_skill_scope_orch_preset_fields" data-skill-scope-row="orch-preset"${orchPresetHidden ? ' hidden' : ''}>
+        <label class="luker_skill_scope_field">
+            <span class="luker_skill_scope_field_label">${esc(t('Orchestrator preset'))}</span>
+            <select class="text_pole" data-skill-scope-orch-preset>${orchPresetOptions}</select>
+        </label>
+    </div>
+    <div class="luker_skill_scope_character_fields" data-skill-scope-row="character"${charHidden ? ' hidden' : ''}>
         <label class="luker_skill_scope_field">
             <span class="luker_skill_scope_field_label">${esc(t('Character'))}</span>
             <select class="text_pole" data-skill-scope-character>${characterOptions}</select>
@@ -225,6 +280,13 @@ export async function pickTargetScope(context, t = (s) => s, title = '', suggest
     const suggestChar = (suggestScope?.characterFile && characters.some(c => c.value === suggestScope.characterFile))
         ? suggestScope.characterFile
         : (characters[0]?.value || '');
+    const orchPresetScopes = listAllOrchPresetScopes(context);
+    const suggestOrchPreset = (suggestScope?.kind === 'orch-preset'
+            && suggestScope.mode
+            && suggestScope.name
+            && orchPresetScopes.some(s => s.mode === suggestScope.mode && s.name === suggestScope.name))
+        ? { mode: suggestScope.mode, name: suggestScope.name }
+        : (orchPresetScopes[0] || null);
 
     const html = buildScopePickerHtml({
         title,
@@ -232,8 +294,10 @@ export async function pickTargetScope(context, t = (s) => s, title = '', suggest
         suggestKind,
         suggestPreset,
         suggestChar,
+        suggestOrchPreset,
         presets,
         characters,
+        orchPresetScopes,
     });
 
     let chosen = null;
@@ -260,6 +324,21 @@ export async function pickTargetScope(context, t = (s) => s, title = '', suggest
                 chosen = { kind: 'preset', name: presetName };
                 return true;
             }
+            if (kind === 'orch-preset') {
+                const raw = String(dlg.querySelector('[data-skill-scope-orch-preset]')?.value || '').trim();
+                // Value shape is `orch-preset/<mode>/<name>` — matches the
+                // canonical encoding in src/skills/scope.js so we can just
+                // split on the first two '/' and reject anything malformed.
+                const parts = raw.split('/');
+                if (parts.length !== 3 || parts[0] !== 'orch-preset' || !parts[1] || !parts[2]) {
+                    if (typeof toastr !== 'undefined') {
+                        toastr.error(String(t('Orchestrator preset scope requires picking a preset.')));
+                    }
+                    return false;
+                }
+                chosen = { kind: 'orch-preset', mode: parts[1], name: parts[2] };
+                return true;
+            }
             if (kind === 'character') {
                 const characterFile = String(dlg.querySelector('[data-skill-scope-character]')?.value || '').trim();
                 if (!characterFile) {
@@ -281,9 +360,11 @@ export async function pickTargetScope(context, t = (s) => s, title = '', suggest
     const dlg = popup.dlg;
     if (dlg) {
         const presetRow = dlg.querySelector('[data-skill-scope-row="preset"]');
+        const orchPresetRow = dlg.querySelector('[data-skill-scope-row="orch-preset"]');
         const charRow = dlg.querySelector('[data-skill-scope-row="character"]');
         const applyKindVisibility = (kind) => {
             if (presetRow) presetRow.hidden = kind !== 'preset';
+            if (orchPresetRow) orchPresetRow.hidden = kind !== 'orch-preset';
             if (charRow) charRow.hidden = kind !== 'character';
         };
         dlg.querySelectorAll('input[name="luker_skill_scope_kind"]').forEach(radio => {
