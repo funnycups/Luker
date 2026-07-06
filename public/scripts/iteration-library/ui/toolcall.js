@@ -1,4 +1,4 @@
-import { renderInlineTextDiffHtml, ensureStylesheetInjected } from '../text-diff.js';
+import { renderInlineTextDiffHtml } from '../text-diff.js';
 
 /**
  * Render one tool call as a CardApp-Studio-style one-liner with optional
@@ -176,7 +176,6 @@ function tryRenderArgsDiff(name, args, i18n) {
         ? `<div class="luker_lib_toolcall_arg_rows">${metaRows}</div>`
         : '';
 
-    ensureStylesheetInjected();
     const diffBlock = renderInlineTextDiffHtml(beforeText, afterText, {
         i18n,
         forceOpen: false,
