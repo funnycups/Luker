@@ -173,20 +173,20 @@ export function renderConnectionProfileOptions(selectedName = '', emptyLabel = i
     return options.join('');
 }
 
-export function refreshOpenAIPresetSelectors(root, context, settings) {
+export function refreshOpenAIPresetSelectors(root, context, settings, prefix = '') {
     const selectorValues = [
-        ['#luker_orch_llm_api_preset', settings.llmNodeApiPresetName],
-        ['#luker_orch_llm_preset', settings.llmNodePresetName],
-        ['#luker_orch_request_api_preset', settings.requestApiPresetName],
-        ['#luker_orch_request_llm_preset', settings.requestLlmPresetName],
+        ['luker_orch_llm_api_preset', settings.llmNodeApiPresetName],
+        ['luker_orch_llm_preset', settings.llmNodePresetName],
+        ['luker_orch_request_api_preset', settings.requestApiPresetName],
+        ['luker_orch_request_llm_preset', settings.requestLlmPresetName],
     ];
 
-    for (const [selector, value] of selectorValues) {
-        const select = root.find(selector);
+    for (const [baseId, value] of selectorValues) {
+        const select = root.find(`#${prefix}${baseId}`);
         if (!select.length) {
             continue;
         }
-        const isConnectionSelector = selector.endsWith('_api_preset');
+        const isConnectionSelector = baseId.endsWith('_api_preset');
         select.html(isConnectionSelector ? renderConnectionProfileOptions(value) : renderOpenAIPresetOptions(context, value));
         select.val(String(value || '').trim());
     }
