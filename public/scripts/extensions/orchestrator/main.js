@@ -1659,75 +1659,140 @@ function applyOrchestratorModeVisibility($scope, executionMode) {
     $scope.find('[data-orch-mode-block="capsule"]').toggle(!directorModeEnabled);
 }
 
+/**
+ * Hydrate General-tab fields shared by drawer and popup. Reads live
+ * `settings` and the per-mode editor drafts, populating every input
+ * that exists in both surfaces. Drawer callers pass `prefix=''`; popup
+ * callers pass `prefix='orch-popup-'`. Uses jQuery `.find()` scoped to
+ * `mount`, so callers control the surface via the DOM subtree they
+ * pass in.
+ *
+ * Drawer-only fields (enabled / execution_mode / single_agent_*) are
+ * NOT covered here — they remain in `bindUi`'s drawer-only prologue.
+ */
+function hydrateGeneralTabFields(mount, context, settings, prefix = '') {
+    const p = String(prefix || '');
+    const $ = (baseId) => mount.find(`#${p}${baseId}`);
+    // Cross-mode settings-level inputs.
+    $('luker_orch_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
+    $('luker_orch_request_system_prompt').val(String(settings.requestSystemPrompt || ''));
+    $('luker_orch_iter_mode_prompt_spec').val(String(settings.iterModePromptSpec || ''));
+    $('luker_orch_iter_mode_prompt_loop').val(String(settings.iterModePromptLoop || ''));
+    $('luker_orch_iter_mode_prompt_director').val(String(settings.iterModePromptDirector || ''));
+    $('luker_orch_iter_mode_prompt_agenda').val(String(settings.iterModePromptAgenda || ''));
+    $('luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
+    $('luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 40));
+    $('luker_orch_review_reruns').val(String(settings.reviewRerunMaxRounds ?? 2));
+    $('luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
+    $('luker_orch_rpm_limit').val(settings.rpmLimit || 0);
+    // Capsule fields — same fieldset both surfaces.
+    $('luker_orch_capsule_position').val(String(Number(settings.capsuleInjectPosition)));
+    $('luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
+    $('luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
+    $('luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
+    updateCapsulePositionVisibility(mount);
+    // API preset dropdowns — Task 1 threaded `prefix` through.
+    refreshOpenAIPresetSelectors(mount, context, settings, p);
+    // Per-mode Runtime-limits inputs. These read from the editor draft
+    // (not from persisted state) so unsaved edits in the mode workspace
+    // stay in sync with the General-tab display.
+    {
+        const directorEditor = getDirectorEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR));
+        ensureDirectorEditorIntegrity(directorEditor);
+        $('luker_orch_director_max_rounds').val(String(Number(directorEditor.maxRounds) > 0 ? directorEditor.maxRounds : 40));
+        $('luker_orch_director_max_concurrent_subagents').val(String(Number(directorEditor.maxConcurrentSubagents) > 0 ? directorEditor.maxConcurrentSubagents : 4));
+        $('luker_orch_director_max_total_subagent_runs').val(String(Number(directorEditor.maxTotalSubagentRuns) > 0 ? directorEditor.maxTotalSubagentRuns : 16));
+        $('luker_orch_director_discard_on_abort').prop('checked', Boolean(directorEditor.discardOnAbort));
+    }
+    {
+        const agendaEditor = getAgendaEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA));
+        ensureAgendaEditorIntegrity(agendaEditor);
+        $('luker_orch_agenda_planner_max_rounds').val(String(agendaEditor.limits?.plannerMaxRounds || 6));
+        $('luker_orch_agenda_max_concurrent_agents').val(String(agendaEditor.limits?.maxConcurrentAgents || 3));
+        $('luker_orch_agenda_max_total_runs').val(String(agendaEditor.limits?.maxTotalRuns || 24));
+    }
+    {
+        const loopEditor = getLoopEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP));
+        ensureLoopEditorIntegrity(loopEditor);
+        $('luker_orch_loop_max_rounds').val(String(loopEditor.max_rounds || 40));
+        // Stored as ms, edited in seconds. Floor 10s matches
+        // LOOP_WALL_CLOCK_FLOOR_MS / 1000 in persistence.js.
+        const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
+        $('luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
+    }
+}
+
+/**
+ * Hydrate the 4 per-mode profile-chip blocks (spec / agenda / loop /
+ * director) shared by drawer and popup. Reads the active-avatar's
+ * character-override state and the per-mode displayed scope, then sets
+ * chip label text, override-toggle visibility, and override-enabled
+ * checkbox state. Extracted from `renderDynamicPanels` so the popup
+ * can share the same source of truth without re-running the whole
+ * drawer-only render (which also touches action-button state and mode
+ * visibility).
+ */
+function hydratePerModeChips(mount, context, settings, prefix = '') {
+    const p = String(prefix || '');
+    const $ = (baseId) => mount.find(`#${p}${baseId}`);
+    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+    const targetLabel = activeAvatar
+        ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
+        : i18n('(No character card)');
+
+    // Spec mode uses legacy `luker_orch_profile_*` (no `spec_` prefix) for
+    // target + mode labels, but `luker_orch_spec_override_*` for the toggle.
+    {
+        const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
+        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC);
+        const isCharacterScope = scope === 'character';
+        const hasOverride = hasCharacterSpecOverride(context, activeAvatar);
+        const isEnabled = Boolean(override?.enabled);
+        $('luker_orch_profile_target').text(targetLabel);
+        $('luker_orch_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasOverride, isEnabled));
+        $('luker_orch_spec_override_toggle').toggle(isCharacterScope && hasOverride);
+        $('luker_orch_spec_override_enabled').prop('checked', isEnabled);
+    }
+    {
+        const override = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
+        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA);
+        const isCharacterScope = scope === 'character';
+        const hasOverride = hasCharacterAgendaOverride(context, activeAvatar);
+        const isEnabled = Boolean(override?.enabled);
+        $('luker_orch_agenda_profile_target').text(targetLabel);
+        $('luker_orch_agenda_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasOverride, isEnabled));
+        $('luker_orch_agenda_override_toggle').toggle(isCharacterScope && hasOverride);
+        $('luker_orch_agenda_override_enabled').prop('checked', isEnabled);
+    }
+    {
+        const override = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
+        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);
+        const isCharacterScope = scope === 'character';
+        const hasOverride = hasCharacterLoopOverride(context, activeAvatar);
+        const isEnabled = Boolean(override?.enabled);
+        $('luker_orch_loop_profile_target').text(targetLabel);
+        $('luker_orch_loop_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasOverride, isEnabled));
+        $('luker_orch_loop_override_toggle').toggle(isCharacterScope && hasOverride);
+        $('luker_orch_loop_override_enabled').prop('checked', isEnabled);
+    }
+    {
+        const override = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
+        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
+        const isCharacterScope = scope === 'character';
+        const hasOverride = hasCharacterDirectorOverride(context, activeAvatar);
+        const isEnabled = Boolean(override?.enabled);
+        $('luker_orch_director_profile_target').text(targetLabel);
+        $('luker_orch_director_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasOverride, isEnabled));
+        $('luker_orch_director_override_toggle').toggle(isCharacterScope && hasOverride);
+        $('luker_orch_director_override_enabled').prop('checked', isEnabled);
+    }
+}
+
 function renderDynamicPanels(root, context) {
     const settings = getSettings();
     const executionMode = getExecutionMode(settings);
     syncCharacterEditorWithActiveAvatar(context);
-    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
-    const agendaOverride = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
-    const specScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC);
-    const agendaScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA);
-    const isSpecCharacterScope = specScope === 'character';
-    const isAgendaCharacterScope = agendaScope === 'character';
-    const hasSpecCharacterOverride = hasCharacterSpecOverride(context, activeAvatar);
-    const hasAgendaCharacterOverride = hasCharacterAgendaOverride(context, activeAvatar);
-    const isOverrideEnabled = Boolean(override?.enabled);
-    const isAgendaOverrideEnabled = Boolean(agendaOverride?.enabled);
-    root.find('#luker_orch_profile_target').text(
-        activeAvatar
-            ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
-            : i18n('(No character card)'),
-    );
-    root.find('#luker_orch_profile_mode').text(
-        getDisplayedScopeLabel(isSpecCharacterScope, hasSpecCharacterOverride, isOverrideEnabled),
-    );
-    const specToggleVisible = isSpecCharacterScope && hasSpecCharacterOverride;
-    root.find('#luker_orch_spec_override_toggle').toggle(specToggleVisible);
-    root.find('#luker_orch_spec_override_enabled').prop('checked', isOverrideEnabled);
-    root.find('#luker_orch_agenda_profile_target').text(
-        activeAvatar
-            ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
-            : i18n('(No character card)'),
-    );
-    root.find('#luker_orch_agenda_profile_mode').text(
-        getDisplayedScopeLabel(isAgendaCharacterScope, hasAgendaCharacterOverride, isAgendaOverrideEnabled),
-    );
-    const agendaToggleVisible = isAgendaCharacterScope && hasAgendaCharacterOverride;
-    root.find('#luker_orch_agenda_override_toggle').toggle(agendaToggleVisible);
-    root.find('#luker_orch_agenda_override_enabled').prop('checked', isAgendaOverrideEnabled);
-    const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
-    const loopScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);
-    const isLoopCharacterScope = loopScope === 'character';
-    const hasLoopCharacterOverride = hasCharacterLoopOverride(context, activeAvatar);
-    const isLoopOverrideEnabled = Boolean(loopOverride?.enabled);
-    root.find('#luker_orch_loop_profile_target').text(
-        activeAvatar
-            ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
-            : i18n('(No character card)'),
-    );
-    root.find('#luker_orch_loop_profile_mode').text(
-        getDisplayedScopeLabel(isLoopCharacterScope, hasLoopCharacterOverride, isLoopOverrideEnabled),
-    );
-    const loopToggleVisible = isLoopCharacterScope && hasLoopCharacterOverride;
-    root.find('#luker_orch_loop_override_toggle').toggle(loopToggleVisible);
-    root.find('#luker_orch_loop_override_enabled').prop('checked', isLoopOverrideEnabled);
-    const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
-    const directorScope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
-    const isDirectorCharacterScope = directorScope === 'character';
-    const hasDirectorCharacterOverride = hasCharacterDirectorOverride(context, activeAvatar);
-    const isDirectorOverrideEnabled = Boolean(directorOverride?.enabled);
-    root.find('#luker_orch_director_profile_target').text(
-        activeAvatar
-            ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
-            : i18n('(No character card)'),
-    );
-    root.find('#luker_orch_director_profile_mode').text(
-        getDisplayedScopeLabel(isDirectorCharacterScope, hasDirectorCharacterOverride, isDirectorOverrideEnabled),
-    );
-    const directorToggleVisible = isDirectorCharacterScope && hasDirectorCharacterOverride;
-    root.find('#luker_orch_director_override_toggle').toggle(directorToggleVisible);
-    root.find('#luker_orch_director_override_enabled').prop('checked', isDirectorOverrideEnabled);
+    hydratePerModeChips(root, context, settings, '');
     const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
     root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
     root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
@@ -1922,52 +1987,8 @@ function refreshOrchestrationEditorPopup(context, settings) {
     // reflect the current mode. Without this the popup always shows
     // spec-mode UI regardless of the actual execution mode.
     applyOrchestratorModeVisibility(mount, currentMode);
-    // Hydrate popup General-tab canonical Runtime-limits fields. Mirrors
-    // the drawer bindUi block at ~6431-6452: same value sources (director /
-    // agenda / loop editor drafts resolved via getDisplayedScopeForMode),
-    // just scoped to popup ids (`orch-popup-...`). Without this the popup
-    // General tab renders these 9 inputs empty and typing into them clobbers
-    // real values with defaults on the first change.
-    {
-        const directorEditor = getDirectorEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR));
-        ensureDirectorEditorIntegrity(directorEditor);
-        mount.find('#orch-popup-luker_orch_director_max_rounds').val(String(Number(directorEditor.maxRounds) > 0 ? directorEditor.maxRounds : 40));
-        mount.find('#orch-popup-luker_orch_director_max_concurrent_subagents').val(String(Number(directorEditor.maxConcurrentSubagents) > 0 ? directorEditor.maxConcurrentSubagents : 4));
-        mount.find('#orch-popup-luker_orch_director_max_total_subagent_runs').val(String(Number(directorEditor.maxTotalSubagentRuns) > 0 ? directorEditor.maxTotalSubagentRuns : 16));
-        mount.find('#orch-popup-luker_orch_director_discard_on_abort').prop('checked', Boolean(directorEditor.discardOnAbort));
-    }
-    {
-        const agendaEditor = getAgendaEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA));
-        ensureAgendaEditorIntegrity(agendaEditor);
-        mount.find('#orch-popup-luker_orch_agenda_planner_max_rounds').val(String(agendaEditor.limits?.plannerMaxRounds || 6));
-        mount.find('#orch-popup-luker_orch_agenda_max_concurrent_agents').val(String(agendaEditor.limits?.maxConcurrentAgents || 3));
-        mount.find('#orch-popup-luker_orch_agenda_max_total_runs').val(String(agendaEditor.limits?.maxTotalRuns || 24));
-    }
-    {
-        const loopEditor = getLoopEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP));
-        ensureLoopEditorIntegrity(loopEditor);
-        mount.find('#orch-popup-luker_orch_loop_max_rounds').val(String(loopEditor.max_rounds || 40));
-        // Stored as ms, edited in seconds. Floor 10s matches
-        // LOOP_WALL_CLOCK_FLOOR_MS / 1000 in persistence.js.
-        const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
-        mount.find('#orch-popup-luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
-    }
-    // Cross-mode caps live in the General tab in both drawer and popup
-    // after the tab-refactor. Hydrate the popup copies from live
-    // settings so switching modes / re-opening popup doesn't render
-    // stale (default-valued) inputs.
-    mount.find('#orch-popup-luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
-    mount.find('#orch-popup-luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
-    mount.find('#orch-popup-luker_orch_rpm_limit').val(String(settings.rpmLimit || 0));
-    // Capsule injection fields (same fieldset as drawer). Popup change
-    // handlers for these are not yet wired (a broader popup-capsule gap;
-    // see bindUi comment), but at minimum the values open in sync with
-    // settings and the depth/role visibility toggles correctly on open.
-    mount.find('#orch-popup-luker_orch_capsule_position').val(String(Number(settings.capsuleInjectPosition)));
-    mount.find('#orch-popup-luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
-    mount.find('#orch-popup-luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
-    mount.find('#orch-popup-luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
-    updateCapsulePositionVisibility(mount);
+    hydrateGeneralTabFields(mount, context, settings, 'orch-popup-');
+    hydratePerModeChips(mount, context, settings, 'orch-popup-');
     // Hydrate per-agent / mode-level skill chips. The renderers above emit
     // `[data-luker-skill-chips-mount]` placeholders; the hydrate step loads
     // the inventory once (with a brief cache), resolves each placeholder's
@@ -6486,62 +6507,14 @@ function bindUi() {
     root.find('#luker_orch_execution_mode').val(getExecutionMode(settings));
     root.find('#luker_orch_single_agent_system_prompt').val(String(settings.singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT));
     root.find('#luker_orch_single_agent_user_prompt').val(String(settings.singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE));
-    root.find('#luker_orch_llm_api_preset').val(String(settings.llmNodeApiPresetName || ''));
-    root.find('#luker_orch_llm_preset').val(String(settings.llmNodePresetName || ''));
-    root.find('#luker_orch_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
-    root.find('#luker_orch_request_api_preset').val(String(settings.requestApiPresetName || ''));
-    root.find('#luker_orch_request_llm_preset').val(String(settings.requestLlmPresetName || ''));
-    root.find('#luker_orch_request_system_prompt').val(String(settings.requestSystemPrompt || ''));
-    root.find('#luker_orch_iter_mode_prompt_spec').val(String(settings.iterModePromptSpec || ''));
-    root.find('#luker_orch_iter_mode_prompt_loop').val(String(settings.iterModePromptLoop || ''));
-    root.find('#luker_orch_iter_mode_prompt_director').val(String(settings.iterModePromptDirector || ''));
-    root.find('#luker_orch_iter_mode_prompt_agenda').val(String(settings.iterModePromptAgenda || ''));
-    root.find('#luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
-    root.find('#luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 40));
-    root.find('#luker_orch_review_reruns').val(String(settings.reviewRerunMaxRounds ?? 2));
-    root.find('#luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
-    root.find('#luker_orch_rpm_limit').val(settings.rpmLimit || 0);
-    root.find('#luker_orch_capsule_position').val(String(Number(settings.capsuleInjectPosition)));
-    root.find('#luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
-    root.find('#luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
-    root.find('#luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
-    updateCapsulePositionVisibility(root);
-    // Drawer canonical Runtime-limits fields (General tab). The workspace-
-    // side duplicates were removed alongside this bindUi, so these are
-    // now the only editor-writable copies for director/agenda/loop caps.
-    // Popup hydration is not covered here — `refreshOrchestrationEditorPopup`
-    // rebuilds the popup HTML from templates without editor initial values
-    // (a pre-existing General-tab gap that spans other settings-level
-    // inputs too, e.g. luker_orch_max_recent_messages).
-    {
-        const directorEditor = getDirectorEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR));
-        ensureDirectorEditorIntegrity(directorEditor);
-        root.find('#luker_orch_director_max_rounds').val(String(Number(directorEditor.maxRounds) > 0 ? directorEditor.maxRounds : 40));
-        root.find('#luker_orch_director_max_concurrent_subagents').val(String(Number(directorEditor.maxConcurrentSubagents) > 0 ? directorEditor.maxConcurrentSubagents : 4));
-        root.find('#luker_orch_director_max_total_subagent_runs').val(String(Number(directorEditor.maxTotalSubagentRuns) > 0 ? directorEditor.maxTotalSubagentRuns : 16));
-        root.find('#luker_orch_director_discard_on_abort').prop('checked', Boolean(directorEditor.discardOnAbort));
-    }
-    {
-        const agendaEditor = getAgendaEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA));
-        ensureAgendaEditorIntegrity(agendaEditor);
-        root.find('#luker_orch_agenda_planner_max_rounds').val(String(agendaEditor.limits?.plannerMaxRounds || 6));
-        root.find('#luker_orch_agenda_max_concurrent_agents').val(String(agendaEditor.limits?.maxConcurrentAgents || 3));
-        root.find('#luker_orch_agenda_max_total_runs').val(String(agendaEditor.limits?.maxTotalRuns || 24));
-    }
-    {
-        const loopEditor = getLoopEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP));
-        ensureLoopEditorIntegrity(loopEditor);
-        root.find('#luker_orch_loop_max_rounds').val(String(loopEditor.max_rounds || 40));
-        // Stored as ms, edited in seconds. Floor 10s matches
-        // LOOP_WALL_CLOCK_FLOOR_MS / 1000 in persistence.js.
-        const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
-        root.find('#luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
-    }
-    refreshOpenAIPresetSelectors(root, context, settings);
+    hydrateGeneralTabFields(root, context, settings, '');
     // `renderDynamicPanels` runs the mode-visibility loop AND calls
     // `injectWorkspaceIntoTabHost` at its tail for the current mode, so
     // first-paint of the drawer's Agents / Tools & Skills tab hosts
     // (previously done here in bindUi) is now covered by the funnel.
+    // It also calls `hydratePerModeChips` which populates the 4 per-mode
+    // profile-chip blocks — no separate call from bindUi to avoid a
+    // duplicate first-paint render.
     renderDynamicPanels(root, context);
 
     root.off('.lukerOrch');
