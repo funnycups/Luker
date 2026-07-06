@@ -960,9 +960,7 @@ export async function openCpaIterationStudio(deps) {
             return;
         }
 
-        const dialogMessages = chat
-            .map((m, idx) => ({ ...m, _chatIdx: idx }))
-            .filter(m => !m.is_system);
+        const dialogMessages = chat.filter(m => !m.is_system);
 
         if (dialogMessages.length === 0) {
             try { toastr.warning(t('The current chat has no importable messages')); } catch { /* ignore */ }
