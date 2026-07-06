@@ -1,3 +1,5 @@
+import { renderInlineTextDiffHtml } from '../text-diff.js';
+
 /**
  * Render one tool call as a CardApp-Studio-style one-liner with optional
  * `<details>` expansion that shows friendly per-arg breakdown (not raw JSON).
@@ -44,7 +46,7 @@ export function renderToolCallChip(call, opts = {}) {
         return truncatedKvSummary(args, 60);
     })();
 
-    const detailsHtml = renderArgsDetails(args, i18n);
+    const detailsHtml = renderArgsDetails(name, args, i18n);
     // Allow `null` to flow through to the result renderer — read tools that
     // legitimately return null (e.g. "no rows found") still deserve a result
     // block. `renderResultDetails` handles `null` explicitly at the
@@ -116,7 +118,113 @@ function renderFieldRows(obj) {
     return rowLines.join('\n');
 }
 
-function renderArgsDetails(args, i18n) {
+/**
+ * The string-edit tool families share a naming contract: `*_str_replace*`
+ * edits via oldString/newString, `*_str_insert*` via after_text/insert_text,
+ * `*_str_delete*` via find (e.g. preset_str_replace, lorebook_str_replace_in_entry,
+ * preset_str_delete_in_prompt). The op type is derived from the tool NAME —
+ * an explicit contract carried by the tool family — never sniffed from arg
+ * shapes, so an unrelated future tool with a `find` argument is not
+ * misrendered as a deletion.
+ */
+function stringEditOpFromToolName(name) {
+    const n = String(name || '');
+    if (n.includes('_str_replace')) return 'replace';
+    if (n.includes('_str_insert')) return 'insert';
+    if (n.includes('_str_delete')) return 'delete';
+    return null;
+}
+
+/**
+ * Pick the most specific locator from a string-edit tool's args to surface
+ * in the diff zoom-overlay header. Covers the field naming across the
+ * str-edit tool families:
+ *   - book_name + uid [+ field]  → lorebook_str_replace_in_entry,
+ *                                   cea_str_replace_lorebook_entry_field,
+ *                                   luker_card_str_replace_in_lorebook_entry
+ *   - field                      → cea_str_replace_card_field
+ *   - identifier                 → preset_str_*_in_prompt
+ *   - path                       → preset_str_replace / _insert / _delete
+ * Returns '' when none apply so the renderer falls back to its default label.
+ */
+function deriveDiffLabel(args) {
+    if (!args || typeof args !== 'object') return '';
+    const bookName = typeof args.book_name === 'string' ? args.book_name : '';
+    const uid = args.uid;
+    const field = typeof args.field === 'string' ? args.field : '';
+    const identifier = typeof args.identifier === 'string' ? args.identifier : '';
+    const path = typeof args.path === 'string' ? args.path : '';
+
+    if (bookName && (uid !== undefined && uid !== null)) {
+        return field ? `${bookName}[${uid}].${field}` : `${bookName}[${uid}]`;
+    }
+    if (field) return field;
+    if (identifier) return identifier;
+    if (path) return path;
+    return '';
+}
+
+/**
+ * Render a proper red/green diff for string-edit tool calls instead of
+ * dumping raw oldString/newString text. Only fires for tools whose name
+ * declares a string-edit op (see stringEditOpFromToolName); returns ''
+ * for everything else, or when the declared op's required args are absent.
+ */
+function tryRenderArgsDiff(name, args, i18n) {
+    if (!args || typeof args !== 'object') return '';
+
+    const op = stringEditOpFromToolName(name);
+    if (!op) return '';
+
+    const diffTextKeys = new Set([
+        'oldString', 'newString', 'find', 'after_text', 'insert_text', 'replaceAll', 'expected_count',
+    ]);
+
+    let beforeText = null;
+    let afterText = null;
+
+    if (op === 'replace' && typeof args.oldString === 'string' && typeof args.newString === 'string') {
+        beforeText = args.oldString;
+        afterText = args.newString;
+    } else if (op === 'delete' && typeof args.find === 'string') {
+        beforeText = args.find;
+        afterText = '';
+    } else if (op === 'insert' && typeof args.after_text === 'string' && typeof args.insert_text === 'string') {
+        beforeText = args.after_text;
+        afterText = args.after_text + args.insert_text;
+    } else {
+        return '';
+    }
+
+    const metaArgs = {};
+    for (const k of Object.keys(args)) {
+        if (!diffTextKeys.has(k)) metaArgs[k] = args[k];
+    }
+    const metaRows = renderFieldRows(metaArgs);
+    const metaHtml = metaRows
+        ? `<div class="luker_lib_toolcall_arg_rows">${metaRows}</div>`
+        : '';
+
+    const diffBlock = renderInlineTextDiffHtml(beforeText, afterText, {
+        i18n,
+        forceOpen: false,
+        expandAffordance: true,
+        fileLabel: deriveDiffLabel(args),
+    });
+
+    return [
+        `<details class="luker_lib_toolcall_details">`,
+        `<summary>${escapeHtml(i18n('Arguments'))}</summary>`,
+        metaHtml,
+        diffBlock,
+        `</details>`,
+    ].join('\n');
+}
+
+function renderArgsDetails(name, args, i18n) {
+    const diffHtml = tryRenderArgsDiff(name, args, i18n);
+    if (diffHtml) return diffHtml;
+
     const rows = renderFieldRows(args);
     if (!rows) return '';
     return [
