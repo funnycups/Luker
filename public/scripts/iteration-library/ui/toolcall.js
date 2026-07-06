@@ -136,6 +136,35 @@ function stringEditOpFromToolName(name) {
 }
 
 /**
+ * Pick the most specific locator from a string-edit tool's args to surface
+ * in the diff zoom-overlay header. Covers the field naming across the
+ * str-edit tool families:
+ *   - book_name + uid [+ field]  → lorebook_str_replace_in_entry,
+ *                                   cea_str_replace_lorebook_entry_field,
+ *                                   luker_card_str_replace_in_lorebook_entry
+ *   - field                      → cea_str_replace_card_field
+ *   - identifier                 → preset_str_*_in_prompt
+ *   - path                       → preset_str_replace / _insert / _delete
+ * Returns '' when none apply so the renderer falls back to its default label.
+ */
+function deriveDiffLabel(args) {
+    if (!args || typeof args !== 'object') return '';
+    const bookName = typeof args.book_name === 'string' ? args.book_name : '';
+    const uid = args.uid;
+    const field = typeof args.field === 'string' ? args.field : '';
+    const identifier = typeof args.identifier === 'string' ? args.identifier : '';
+    const path = typeof args.path === 'string' ? args.path : '';
+
+    if (bookName && (uid !== undefined && uid !== null)) {
+        return field ? `${bookName}[${uid}].${field}` : `${bookName}[${uid}]`;
+    }
+    if (field) return field;
+    if (identifier) return identifier;
+    if (path) return path;
+    return '';
+}
+
+/**
  * Render a proper red/green diff for string-edit tool calls instead of
  * dumping raw oldString/newString text. Only fires for tools whose name
  * declares a string-edit op (see stringEditOpFromToolName); returns ''
@@ -180,6 +209,7 @@ function tryRenderArgsDiff(name, args, i18n) {
         i18n,
         forceOpen: false,
         expandAffordance: true,
+        fileLabel: deriveDiffLabel(args),
     });
 
     return [
