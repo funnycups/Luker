@@ -81,9 +81,12 @@ describe('scope-picker: buildScopePickerHtml with orch-preset kind', () => {
         expect(html).toMatch(/value="orch-preset\/director\/RP4"[^>]*selected/);
         // Sub-row is not hidden when suggestKind === 'orch-preset'
         expect(html).toMatch(/data-skill-scope-row="orch-preset"(?![^>]*hidden)/);
-        // Preset and character rows ARE hidden
-        expect(html).toMatch(/data-skill-scope-row="preset"[^>]*hidden/);
-        expect(html).toMatch(/data-skill-scope-row="character"[^>]*hidden/);
+        // Preset and character rows ARE hidden — order-agnostic on `hidden`
+        // vs `data-skill-scope-row` because they can appear in either order
+        // within the opening tag; assert both attributes exist on the same
+        // <div> without pinning byte-order.
+        expect(html).toMatch(/<div\b[^>]*\bdata-skill-scope-row="preset"[^>]*\bhidden\b|<div\b[^>]*\bhidden\b[^>]*\bdata-skill-scope-row="preset"/);
+        expect(html).toMatch(/<div\b[^>]*\bdata-skill-scope-row="character"[^>]*\bhidden\b|<div\b[^>]*\bhidden\b[^>]*\bdata-skill-scope-row="character"/);
     });
 
     test('renders empty-state placeholder when orchPresetScopes is empty', async () => {

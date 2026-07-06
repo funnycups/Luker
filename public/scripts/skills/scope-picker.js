@@ -224,19 +224,19 @@ export function buildScopePickerHtml({
         ${kindRadio('orch-preset', 'Orchestrator preset')}
         ${kindRadio('character', 'Character')}
     </div>
-    <div class="luker_skill_scope_preset_fields" data-skill-scope-row="preset"${presetHidden ? ' hidden' : ''}>
+    <div class="luker_skill_scope_preset_fields"${presetHidden ? ' hidden' : ''} data-skill-scope-row="preset">
         <label class="luker_skill_scope_field">
             <span class="luker_skill_scope_field_label">${esc(t('Chat completion preset'))}</span>
             <select class="text_pole" data-skill-scope-preset>${presetOptions}</select>
         </label>
     </div>
-    <div class="luker_skill_scope_orch_preset_fields" data-skill-scope-row="orch-preset"${orchPresetHidden ? ' hidden' : ''}>
+    <div class="luker_skill_scope_orch_preset_fields"${orchPresetHidden ? ' hidden' : ''} data-skill-scope-row="orch-preset">
         <label class="luker_skill_scope_field">
             <span class="luker_skill_scope_field_label">${esc(t('Orchestrator preset'))}</span>
             <select class="text_pole" data-skill-scope-orch-preset>${orchPresetOptions}</select>
         </label>
     </div>
-    <div class="luker_skill_scope_character_fields" data-skill-scope-row="character"${charHidden ? ' hidden' : ''}>
+    <div class="luker_skill_scope_character_fields"${charHidden ? ' hidden' : ''} data-skill-scope-row="character">
         <label class="luker_skill_scope_field">
             <span class="luker_skill_scope_field_label">${esc(t('Character'))}</span>
             <select class="text_pole" data-skill-scope-character>${characterOptions}</select>
