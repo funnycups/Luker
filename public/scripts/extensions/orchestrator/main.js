@@ -1722,6 +1722,16 @@ function hydrateGeneralTabFields(mount, context, settings, prefix = '') {
         const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
         $('luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
     }
+    // Character-scope action buttons. Template emits them always with
+    // `display:none`; toggle here per live character presence and scope
+    // (same pattern as `hydratePerModeChips` — always emit + hydrate on
+    // state change). Without this, buttons stay stuck at the render-
+    // time value from initial drawer mount, when no character is loaded.
+    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
+    const hasActiveCharacter = Boolean(activeAvatar);
+    const isCharacterScope = getDisplayedScope(context, settings) === 'character';
+    mount.find('[data-luker-action="save-character"]').toggle(hasActiveCharacter);
+    mount.find('[data-luker-action="clear-character"]').toggle(hasActiveCharacter && isCharacterScope);
 }
 
 /**

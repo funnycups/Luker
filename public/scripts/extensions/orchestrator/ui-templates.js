@@ -1445,7 +1445,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         world_info_position,
         getExecutionMode,
         getDisplayedScope,
-        getCurrentAvatar,
         getContext,
     } = deps;
     const s = baseId => scopeId(baseId, idPrefix);
@@ -1454,16 +1453,16 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
     // title/body are English source keys, i18n resolves per active locale.
     const fh = (titleKey, bodyKey) => renderFieldHelpButton({ title: i18n(titleKey), bodyHtml: escapeHtml(i18n(bodyKey)) });
 
-    // Resolve mode-scoped state for preset bars and character-scope
-    // action buttons. Popup and drawer callers both hit this path so
-    // self-source from context if the caller did not thread state in.
+    // Resolve mode-scoped state for preset bars. Character-scope action
+    // buttons (save-character / clear-character) are emitted here with
+    // `display:none` and later toggled by `hydrateGeneralTabFields`, so
+    // no character-presence check is needed at render time. Popup and
+    // drawer callers both hit this path, so self-source from context if
+    // the caller did not thread state in.
     const context = getContext ? getContext() : {};
     const settings = getSettings();
     const currentMode = getExecutionMode ? getExecutionMode(settings) : '';
     const safeScope = getDisplayedScope ? getDisplayedScope(context, settings) : 'global';
-    const activeAvatar = String((getCurrentAvatar && getCurrentAvatar(context)) || '').trim();
-    const hasActiveCharacter = Boolean(activeAvatar);
-    const isCharacterScope = safeScope === 'character';
 
     // Per-mode "current profile" row builders — chip + override + buttons
     // laid out flat with no wrapper card. Chips reuse
@@ -1553,8 +1552,8 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
             <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
             <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
             <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
-            ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
-            ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
+            <div class="menu_button" data-luker-action="save-character" style="display:none">${escapeHtml(i18n('Save To Character Override'))}</div>
+            <div class="menu_button" data-luker-action="clear-character" style="display:none">${escapeHtml(i18n('Clear Character Override'))}</div>
         </div>`;
     const actionsBar = ['spec', 'agenda', 'loop', 'director'].map(mode => {
         const modeVisible = currentMode === mode ? '' : ' style="display:none"';
