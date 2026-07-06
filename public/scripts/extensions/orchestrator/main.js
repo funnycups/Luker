@@ -6485,9 +6485,8 @@ async function openAiIterationStudio(context, settings, root) {
 // hydration in bindUi), but the popup's initial render still passes
 // through here so the fields at least open in the correct state.
 function updateCapsulePositionVisibility($root) {
-    const $sel = $root.find('[id$="luker_orch_capsule_position"]').first();
-    if (!$sel.length) return;
-    const positionVal = Number($sel.val());
+    const settings = getSettings();
+    const positionVal = Number(settings.capsuleInjectPosition);
     const isAtDepth = positionVal === Number(world_info_position.atDepth);
     $root.find('[id$="luker_orch_capsule_depth_block"]').toggle(isAtDepth);
     $root.find('[id$="luker_orch_capsule_role_block"]').toggle(isAtDepth);
