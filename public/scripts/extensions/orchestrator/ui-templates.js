@@ -1077,9 +1077,9 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
     }
 
     // Actions bar + per-mode boards + preset selector bar previously
-    // rendered here via `buildOrchTopbarHtml`; scheme A (m0509)
-    // dissolved that helper into the General tab so nothing lives
-    // outside the tabs except the popup's own title+chips row.
+    // rendered here as a separate topbar helper; that helper has been
+    // dissolved into the General tab so nothing lives outside the tabs
+    // except the popup's own title+chips row.
 
     const tabsHtml = renderLukerTabs({
         id: s('luker_orch_tabs'),
@@ -1234,11 +1234,9 @@ export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, 
  * needs a mirror in the popup.
  */
 /**
- * Shared action-button row for each per-mode board in the topbar.
- * Factored out of the four near-identical `<div class="flex-container">`
- * blocks in `buildOrchTopbarHtml`; toggles the two mode-specific
- * variations (copy-spec/agenda rows for spec+agenda; view-last-run for
- * every non-director mode).
+ * Shared action-button row for each per-mode board. Toggles two
+ * mode-specific variations (copy-spec/agenda rows for spec+agenda;
+ * view-last-run for every non-director mode).
  *
  * `idPrefix` gates the "Open in Popup" launcher — drawer callers pass
  * '' and get the launcher; popup callers pass 'orch-popup-' and the
@@ -1262,115 +1260,6 @@ function commonActions(deps, idPrefix, { includeViewLastRun = true, includeCopyR
                 <div class="menu_button" data-luker-action="ai-iterate-open">${escapeHtml(i18n('Open AI Iteration Studio'))}</div>
                 <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
                 ${openInPopup}`;
-}
-
-function buildOrchTopbarHtml(deps, ctx = {}, idPrefix = '') {
-    const { escapeHtml, i18n, getExecutionMode, getDisplayedScope, getCurrentAvatar, getContext } = deps;
-    const s = baseId => scopeId(baseId, idPrefix);
-    // Self-source context/settings so the drawer callsite can pass an
-    // empty `ctx` and let the topbar resolve state; popup callers pass
-    // `{context, settings}` explicitly.
-    const context = ctx.context || getContext();
-    const settings = ctx.settings || getSettings();
-    const currentMode = getExecutionMode ? getExecutionMode(settings) : '';
-    const safeScope = getDisplayedScope ? getDisplayedScope(context, settings) : 'global';
-    const activeAvatar = String((getCurrentAvatar && getCurrentAvatar(context)) || '').trim();
-    const hasActiveCharacter = Boolean(activeAvatar);
-    const isCharacterScope = safeScope === 'character';
-    // Per-mode topbar row: chip + override toggle + independent buttons,
-    // laid out flat with no wrapper card. `data-orch-mode` is the sole
-    // hook for the visibility loop; chips reuse the shared
-    // .luker-studio-editor-chip pill styling.
-    const cardChip = (idKey, textKey) => `<span class="luker-studio-editor-chip">${escapeHtml(i18n(textKey))} <b id="${s(idKey)}">${escapeHtml(i18n('(No character card)'))}</b></span>`;
-    const editingChip = (idKey) => `<span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b id="${s(idKey)}">${escapeHtml(i18n('Global profile'))}</b></span>`;
-    const overrideToggle = (toggleIdKey, checkboxIdKey) => `<label id="${s(toggleIdKey)}" class="checkbox_label luker_orch_override_toggle" style="display:none" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
-                <input type="checkbox" id="${s(checkboxIdKey)}" />
-                <span>${escapeHtml(i18n('Use this card\'s override'))}</span>
-            </label>`;
-    const modeRow = ({ mode, targetIdKey, modeIdKey, toggleIdKey, checkboxIdKey, includeViewLastRun, includeCopyRows, hintKey }) => `
-        <div data-orch-mode="${mode}" class="luker_orch_mode_row" style="display:none">
-            ${cardChip(targetIdKey, 'Current card:')}
-            ${editingChip(modeIdKey)}
-            ${overrideToggle(toggleIdKey, checkboxIdKey)}
-            ${commonActions(deps, idPrefix, { includeViewLastRun, includeCopyRows })}
-            ${hintKey ? `<small class="luker_orch_mode_hint">${escapeHtml(i18n(hintKey))}</small>` : ''}
-        </div>`;
-    const specBoard = modeRow({
-        mode: 'spec',
-        targetIdKey: 'luker_orch_profile_target',
-        modeIdKey: 'luker_orch_profile_mode',
-        toggleIdKey: 'luker_orch_spec_override_toggle',
-        checkboxIdKey: 'luker_orch_spec_override_enabled',
-        includeViewLastRun: true,
-        includeCopyRows: true,
-    });
-    const agendaBoard = modeRow({
-        mode: 'agenda',
-        targetIdKey: 'luker_orch_agenda_profile_target',
-        modeIdKey: 'luker_orch_agenda_profile_mode',
-        toggleIdKey: 'luker_orch_agenda_override_toggle',
-        checkboxIdKey: 'luker_orch_agenda_override_enabled',
-        includeViewLastRun: true,
-        includeCopyRows: true,
-    });
-    const loopBoard = modeRow({
-        mode: 'loop',
-        targetIdKey: 'luker_orch_loop_profile_target',
-        modeIdKey: 'luker_orch_loop_profile_mode',
-        toggleIdKey: 'luker_orch_loop_override_toggle',
-        checkboxIdKey: 'luker_orch_loop_override_enabled',
-        includeViewLastRun: true,
-        includeCopyRows: false,
-        hintKey: 'Loop mode runs a single agent that calls tools in a loop and finalizes when ready.',
-    });
-    const directorBoard = modeRow({
-        mode: 'director',
-        targetIdKey: 'luker_orch_director_profile_target',
-        modeIdKey: 'luker_orch_director_profile_mode',
-        toggleIdKey: 'luker_orch_director_override_toggle',
-        checkboxIdKey: 'luker_orch_director_override_enabled',
-        includeViewLastRun: false,
-        includeCopyRows: false,
-        hintKey: 'Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.',
-    });
-    // Single-mode row: no per-mode profile chips (single mode has no
-    // profile scope); shows only the descriptive hint and the runtime
-    // action buttons (view-last-run, show-run-panel, manage-skills,
-    // open-orch-editor-popup).
-    const singleBlock = `
-        <div data-orch-mode="single" class="luker_orch_mode_row" style="display:none">
-            <small id="${s('luker_orch_single_mode_hint')}" class="luker_orch_mode_hint" style="opacity:0.8">${escapeHtml(i18n('Single-agent mode is enabled. Workflow board is hidden and runtime uses the simplified single node profile.'))}</small>
-            <div class="menu_button" data-luker-action="view-last-run">${escapeHtml(i18n('View Last Run'))}</div>
-            <div class="menu_button" data-luker-action="show-run-panel">${escapeHtml(i18n('Show Run Panel'))}</div>
-            <div class="menu_button" data-luker-action="manage-skills">${escapeHtml(i18n('Manage skills...'))}</div>
-            ${idPrefix ? '' : `<div class="menu_button" data-luker-action="open-orch-editor-popup">${escapeHtml(i18n('Open in Popup'))}</div>`}
-        </div>`;
-
-    // Preset selector bar — one wrapper per mode, mode-visibility gated
-    // by `data-orch-mode` so mode-toggle logic reveals only the current
-    // mode's bar. Promoted here from the four workspace helpers so both
-    // drawer and popup render exactly one preset bar.
-    const presetBarModes = ['spec', 'agenda', 'loop', 'director'];
-    const presetBars = presetBarModes.map(mode => {
-        const modeVisible = currentMode === mode ? '' : ' style="display:none"';
-        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}>${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, safeScope))}</div>`;
-    }).join('');
-
-    // Actions bar — profile-management actions promoted from the popup
-    // workspace. Save-to-character / clear-character are conditional on
-    // the active character and scope (matches popup semantics).
-    const actionsBar = `
-        <div class="luker-studio-actions-bar">
-            <div class="menu_button" data-luker-action="reload-current">${escapeHtml(i18n('Reload Current'))}</div>
-            <div class="menu_button" data-luker-action="export-profile">${escapeHtml(i18n('Export Profile'))}</div>
-            <div class="menu_button" data-luker-action="import-profile">${escapeHtml(i18n('Import Profile'))}</div>
-            <div class="menu_button" data-luker-action="reset-global">${escapeHtml(i18n('Reset Global'))}</div>
-            <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
-            ${hasActiveCharacter ? `<div class="menu_button" data-luker-action="save-character">${escapeHtml(i18n('Save To Character Override'))}</div>` : ''}
-            ${hasActiveCharacter && isCharacterScope ? `<div class="menu_button" data-luker-action="clear-character">${escapeHtml(i18n('Clear Character Override'))}</div>` : ''}
-        </div>`;
-
-    return `<div class="luker_orch_topbar">${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}${presetBars}${actionsBar}</div>`;
 }
 
 /**
@@ -1425,7 +1314,7 @@ function buildToolsSkillsTabHtml(deps, idPrefix = '') {
  * layout — nothing outside tabs except the master enable + mode
  * select + status footer). Fieldset order (top to bottom):
  *  1. Current profile — per-mode card chip + editing chip + override
- *     toggle + run/observe action buttons (was buildOrchTopbarHtml)
+ *     toggle + run/observe action buttons
  *  2. Preset management — per-mode preset selector bar + profile
  *     actions bar (Save/Reset/Export/Import etc.)
  *  3. Default API and prompt preset (LLM node global fallback)
