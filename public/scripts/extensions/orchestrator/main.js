@@ -6963,7 +6963,8 @@ function bindUi() {
     // on the resolved per-mode editor draft, narrow-patches the persisted
     // preset via persistCustomToolsPatch (mainAgent / tool-flag / skill-chip
     // edits on the same draft are NOT flushed — those still require Save),
-    // then re-renders the panel so the new row appears immediately.
+    // then requests a popup re-render (drawer surface stays stale until
+    // the next mode switch or reload — pre-existing behavior).
     jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="add-custom-tool"], .luker_orch_editor_popup [data-orch-action="add-custom-tool"]`, async function () {
         const host = resolveCustomToolsHost(this);
         if (!host) return;
