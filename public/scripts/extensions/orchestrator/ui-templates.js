@@ -1438,7 +1438,7 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         <div class="luker-studio-actions-bar">
             <div class="menu_button" data-luker-action="save-global">${escapeHtml(i18n('Save To Global'))}</div>
             <div class="menu_button" data-luker-action="save-character" style="display:none">${escapeHtml(i18n('Save To Character Override'))}</div>
-            <div class="menu_button" data-luker-action="clear-character" style="display:none">${escapeHtml(i18n('Clear preset from this card'))}</div>
+            <div class="menu_button" data-luker-action="clear-character" style="display:none">${escapeHtml(i18n('Clear presets from this card'))}</div>
         </div>`;
     const actionsBar = ['spec', 'agenda', 'loop', 'director'].map(mode => {
         const modeVisible = currentMode === mode ? '' : ' style="display:none"';
