@@ -752,6 +752,15 @@ describe('SkillRepository - scope-level ops (deleteScope / renameScope / copySco
             await expect(repo.copyScope(fromScope, { kind: 'preset', name: 'x' }))
                 .rejects.toThrow(/kind/i);
         });
+
+        test('rejects cross-mode orch-preset copy', async () => {
+            await expect(
+                repo.copyScope(
+                    { kind: 'orch-preset', mode: 'director', name: 'RP-src' },
+                    { kind: 'orch-preset', mode: 'agenda', name: 'RP-dst' },
+                ),
+            ).rejects.toThrow(/unsupported cross-mode/i);
+        });
     });
 
     describe('list({scope: "all"}) includes orch-preset skills', () => {

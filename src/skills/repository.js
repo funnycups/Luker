@@ -604,6 +604,9 @@ export function createSkillRepository(dataRoot) {
         if (fromScope.kind !== toScope.kind) {
             throw new Error(`invalid copyScope: kind mismatch (from=${fromScope.kind}, to=${toScope.kind})`);
         }
+        if (fromScope.kind === 'orch-preset' && fromScope.mode !== toScope.mode) {
+            throw new Error('unsupported cross-mode copy (mode must match)');
+        }
         const fromDir = join(skillsRoot, encodeScopePath(fromScope));
         const toDir = join(skillsRoot, encodeScopePath(toScope));
         try {
