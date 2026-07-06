@@ -865,21 +865,23 @@ async function runOrchestration(context, payload, messages, profile) {
     // configs in agenda, per-node presets in spec, sanitized loop profile
     // in loop) that don't carry the top-level orchestrator preset's name.
     //
-    // `profile.source` from `getEffectiveProfile` is 'global' | 'character'
-    // | 'chat' | 'single'. chat-override agenda + single-agent mode aren't
-    // backed by a preset library entry — no orch-preset scope applies.
+    // Routes through computeActiveOrchPresetScope (single source of truth
+    // with the manage-skills panel) rather than calling getActivePreset
+    // directly, which would diverge via sanitizePresetEntry's empty-name
+    // → 'Default' folding and ensureDefaultSeeded's side effect.
+    // computeActiveOrchPresetScope returns null for chat-override agenda
+    // and single-agent mode (no preset library entry backs those profiles).
+    // The mode-equality guard is defensive: computeActiveOrchPresetScope
+    // reads settings.executionMode which SHOULD already match profile.mode.
     let activeOrchPresetName = '';
-    if (profile?.source === 'global' || profile?.source === 'character') {
-        try {
-            const settings = extension_settings[MODULE_NAME];
-            const avatar = getCurrentAvatar(context);
-            const presetResult = getActivePreset(settings, profile.mode, {
-                scope: profile.source,
-                context,
-                avatar,
-            });
-            activeOrchPresetName = String(presetResult?.state?.name || '').trim();
-        } catch (_) { /* leave empty — orch-preset scope simply omits */ }
+    try {
+        const settings = extension_settings[MODULE_NAME];
+        const activeOrchScope = computeActiveOrchPresetScope(context, settings);
+        if (activeOrchScope && activeOrchScope.mode === profile.mode) {
+            activeOrchPresetName = String(activeOrchScope.name || '').trim();
+        }
+    } catch (_) {
+        // "no name → no orch-preset filtering" is a valid runtime state; leave activeOrchPresetName = ''
     }
 
     if (String(profile?.mode || '') === ORCH_EXECUTION_MODE_LOOP) {
