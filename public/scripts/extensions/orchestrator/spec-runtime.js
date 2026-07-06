@@ -700,7 +700,11 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
         visibleSkillsForNode = await skillRes.resolveAgentVisibleSkills({
             modeProfile: options?.runtime?.spec || {},
             agentConfig: nodeSpec,
-            runtimeContext: skillRes.buildSkillRuntimeContext(context, preset),
+            runtimeContext: skillRes.buildSkillRuntimeContext(
+                context,
+                preset,
+                { mode: 'spec', name: String(preset?.name || '').trim() },
+            ),
         });
         nodeSystemSuffix = skillRes.buildAvailableSkillsBlock(visibleSkillsForNode);
     } catch (e) {

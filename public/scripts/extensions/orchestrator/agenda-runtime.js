@@ -753,7 +753,11 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         visibleSkillsForAgent = await skillRes.resolveAgentVisibleSkills({
             modeProfile: profile || {},
             agentConfig: preset,
-            runtimeContext: skillRes.buildSkillRuntimeContext(context, preset),
+            runtimeContext: skillRes.buildSkillRuntimeContext(
+                context,
+                preset,
+                { mode: 'agenda', name: String(preset?.name || '').trim() },
+            ),
         });
         const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForAgent);
         if (block) systemTextWithSkills = systemText + '\n\n' + block;

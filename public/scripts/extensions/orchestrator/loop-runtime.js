@@ -919,7 +919,11 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
         visibleSkillsForLoop = await skillRes.resolveAgentVisibleSkills({
             modeProfile: profile,
             agentConfig: null,
-            runtimeContext: skillRes.buildSkillRuntimeContext(context, profile),
+            runtimeContext: skillRes.buildSkillRuntimeContext(
+                context,
+                profile,
+                { mode: 'loop', name: String(profile?.name || '').trim() },
+            ),
         });
         const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForLoop);
         if (block && messages.length > 0 && messages[0]?.role === 'system') {

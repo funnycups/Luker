@@ -47,7 +47,7 @@ beforeEach(() => {
     currentSkillsList = async () => [];
 });
 
-describe('#73 — Skill resolution: 3-scope precedence', () => {
+describe('#73 — Skill resolution: 4-scope precedence', () => {
     test('character > preset > global; resolver merges and the highest-precedence entry wins per name', async () => {
         // Stub the skillsApi inventory: three entries with the same name
         // at three different scopes. resolveAgentVisibleSkills should pick
@@ -133,5 +133,132 @@ describe('#73 — Skill resolution: 3-scope precedence', () => {
         expect(res.length).toBe(1);
         expect(res[0].scope.kind).toBe('global');
         expect(res[0].description).toBe('g');
+    });
+
+    test('orch-preset overrides oai-preset when both scopes have the same skill name', async () => {
+        currentSkillsList = async () => ([
+            {
+                name: 'lantern-protocol',
+                description: 'GLOBAL: generic.',
+                scope: { kind: 'global' },
+            },
+            {
+                name: 'lantern-protocol',
+                description: 'PRESET: rp4 preset-tuned.',
+                scope: { kind: 'preset', name: 'rp4' },
+            },
+            {
+                name: 'lantern-protocol',
+                description: 'ORCH-PRESET: director/tactician-preset-tuned.',
+                scope: { kind: 'orch-preset', mode: 'director', name: 'tactician' },
+            },
+        ]);
+
+        const visible = await resolveAgentVisibleSkills({
+            modeProfile: { skills: { visible: ['*'], deny: [] } },
+            agentConfig: null,
+            runtimeContext: {
+                presetName: 'rp4',
+                orchPreset: { mode: 'director', name: 'tactician' },
+            },
+        });
+
+        expect(visible.length).toBe(1);
+        expect(visible[0].description).toMatch(/^ORCH-PRESET:/);
+        expect(visible[0].scope.kind).toBe('orch-preset');
+        expect(visible[0].scope.mode).toBe('director');
+        expect(visible[0].scope.name).toBe('tactician');
+    });
+
+    test('character > orch-preset > oai-preset > global full precedence chain', async () => {
+        currentSkillsList = async () => ([
+            // reef-rotation at all 4 layers; character wins.
+            { name: 'reef-rotation', description: 'GLOBAL',      scope: { kind: 'global' } },
+            { name: 'reef-rotation', description: 'PRESET',      scope: { kind: 'preset', name: 'rp4' } },
+            { name: 'reef-rotation', description: 'ORCH-PRESET', scope: { kind: 'orch-preset', mode: 'director', name: 'tactician' } },
+            { name: 'reef-rotation', description: 'CHARACTER',   scope: { kind: 'character', characterFile: 'ash.png' } },
+            // salt-mark at 3 layers (no character); orch-preset wins.
+            { name: 'salt-mark',     description: 'GLOBAL',      scope: { kind: 'global' } },
+            { name: 'salt-mark',     description: 'PRESET',      scope: { kind: 'preset', name: 'rp4' } },
+            { name: 'salt-mark',     description: 'ORCH-PRESET', scope: { kind: 'orch-preset', mode: 'director', name: 'tactician' } },
+            // moss-signal at 2 layers (no orch-preset override); preset wins.
+            { name: 'moss-signal',   description: 'GLOBAL',      scope: { kind: 'global' } },
+            { name: 'moss-signal',   description: 'PRESET',      scope: { kind: 'preset', name: 'rp4' } },
+        ]);
+
+        const visible = await resolveAgentVisibleSkills({
+            modeProfile: { skills: { visible: ['*'], deny: [] } },
+            agentConfig: null,
+            runtimeContext: {
+                presetName: 'rp4',
+                orchPreset: { mode: 'director', name: 'tactician' },
+                characterFile: 'ash.png',
+            },
+        });
+
+        const byName = new Map(visible.map(s => [s.name, s]));
+        expect(byName.get('reef-rotation').description).toBe('CHARACTER');
+        expect(byName.get('salt-mark').description).toBe('ORCH-PRESET');
+        expect(byName.get('moss-signal').description).toBe('PRESET');
+        expect(visible.length).toBe(3);
+    });
+
+    test('orch-preset filter is name+mode specific — wrong mode does not leak', async () => {
+        currentSkillsList = async () => ([
+            {
+                name: 'plan-x',
+                description: 'AGENDA scope',
+                scope: { kind: 'orch-preset', mode: 'agenda', name: 'foo' },
+            },
+            {
+                name: 'plan-x',
+                description: 'DIRECTOR scope (same name, different mode)',
+                scope: { kind: 'orch-preset', mode: 'director', name: 'foo' },
+            },
+            {
+                name: 'plan-x',
+                description: 'GLOBAL fallback',
+                scope: { kind: 'global' },
+            },
+        ]);
+
+        const visible = await resolveAgentVisibleSkills({
+            modeProfile: { skills: { visible: ['*'], deny: [] } },
+            agentConfig: null,
+            runtimeContext: {
+                orchPreset: { mode: 'agenda', name: 'foo' },
+            },
+        });
+
+        expect(visible.length).toBe(1);
+        expect(visible[0].description).toBe('AGENDA scope');
+    });
+});
+
+describe('buildSkillRuntimeContext — orch-preset carrier', () => {
+    let buildSkillRuntimeContext;
+    beforeAll(async () => {
+        const mod = await import('../../public/scripts/extensions/orchestrator/skill-resolution.js');
+        buildSkillRuntimeContext = mod.buildSkillRuntimeContext;
+    });
+
+    test('lifts orchPreset from third argument into runtimeContext', () => {
+        const ctx = buildSkillRuntimeContext(
+            { characterId: null },
+            null,
+            { mode: 'director', name: 'tactician' },
+        );
+        expect(ctx.orchPreset).toEqual({ mode: 'director', name: 'tactician' });
+    });
+
+    test('omits orchPreset when third argument is null (backward compatibility)', () => {
+        const ctx = buildSkillRuntimeContext({ characterId: null }, null);
+        expect(ctx.orchPreset).toBeUndefined();
+    });
+
+    test('omits orchPreset when third argument is malformed (no mode or no name)', () => {
+        expect(buildSkillRuntimeContext(null, null, { mode: 'director' }).orchPreset).toBeUndefined();
+        expect(buildSkillRuntimeContext(null, null, { name: 'x' }).orchPreset).toBeUndefined();
+        expect(buildSkillRuntimeContext(null, null, {}).orchPreset).toBeUndefined();
     });
 });

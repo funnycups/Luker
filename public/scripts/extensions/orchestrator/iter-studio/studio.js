@@ -2372,7 +2372,7 @@ export async function openOrchestratorIterationStudio(deps) {
         // block. The augment helper is a no-op when the working profile
         // has no long systemPrompts AND no visible skills, so the prompt
         // stays clean for sessions that aren't doing skill work.
-        const skillRuntimeContext = buildSkillRuntimeContext(context, null);
+        const skillRuntimeContext = buildSkillRuntimeContext(context, null, null);
         const systemPrompt = await augmentIterStudioPromptWithSkills(
             scopeHintedPrompt,
             state.live,

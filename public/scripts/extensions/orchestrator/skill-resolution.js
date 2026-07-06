@@ -17,11 +17,12 @@
  *     shape if present.
  *
  *   - `resolveAgentVisibleSkills({ modeProfile, agentConfig, runtimeContext })`
- *     — load the inventory (with brief in-memory cache), merge the three
- *     scope layers (global → preset → character, last-wins), then filter by
- *     the effective visible/deny lists. Agent-level visible starting with
- *     `"+"` inherits the mode default and appends; otherwise it replaces.
- *     Returns the SkillIndexEntry[] the agent can see.
+ *     — load the inventory (with brief in-memory cache), merge the four
+ *     scope layers (global → oai-preset → orch-preset → character,
+ *     last-wins), then filter by the effective visible/deny lists. Agent-
+ *     level visible starting with `"+"` inherits the mode default and
+ *     appends; otherwise it replaces. Returns the SkillIndexEntry[] the
+ *     agent can see.
  *
  *   - `buildAvailableSkillsBlock(visibleSkills)` — render the
  *     `<available_skills>` system-message block injected into agent task
@@ -83,10 +84,11 @@ export function ensureSkillsFieldShape(obj, { isAgent = false } = {}) {
  *      Network/transport failure collapses to an empty inventory so the
  *      orchestrator never fails closed for a transient REST error — the agent
  *      sees no skills, not a crash.
- *   2. Merge the three scope layers (global → preset → character) using a
- *      Map keyed by skill name. Character-scope wins by virtue of arriving
- *      last in the merge order. This mirrors the precedence the agent-tools
- *      fallback path uses in Unit 5 (scope priority: character > preset > global).
+ *   2. Merge the four scope layers (global → oai-preset → orch-preset →
+ *      character) using a Map keyed by skill name. Character-scope wins
+ *      by virtue of arriving last in the merge order. orch-preset overrides
+ *      oai-preset because orchestration-run-specific bindings are more
+ *      specialized than generic chat-completion-preset-wide bindings.
  *   3. Compute effective visible/deny by combining mode and agent lists.
  *      Agent visible starting with `'+'` means "inherit mode default and
  *      append the rest"; otherwise the agent list replaces the mode default
@@ -97,7 +99,7 @@ export function ensureSkillsFieldShape(obj, { isAgent = false } = {}) {
  * @param {object} args
  * @param {object} args.modeProfile - orchestrator mode profile (director, loop, etc.)
  * @param {object|null} args.agentConfig - per-agent config or null for mode-only
- * @param {object} args.runtimeContext - { presetName, characterFile }
+ * @param {object} args.runtimeContext - { presetName, characterFile, orchPreset }
  * @returns {Promise<Array>} visible skills (SkillIndexEntry shape)
  */
 export async function resolveAgentVisibleSkills({ modeProfile, agentConfig, runtimeContext }) {
@@ -117,6 +119,12 @@ export async function resolveAgentVisibleSkills({ modeProfile, agentConfig, runt
     // Physical scope merge (later-wins). Building a Map keyed by name gives
     // O(N) merge and natural collision handling — a character-scope skill
     // with the same name as a preset-scope one supersedes it for this turn.
+    //
+    // Precedence: character > orch-preset > oai-preset > global.
+    // orch-preset overrides oai-preset because an orchestration preset is
+    // the more specialized binding for an orchestration run — skills
+    // deliberately attached to a specific recipe should win over generic
+    // preset-wide skills.
     const merged = new Map();
     for (const e of inventoryRaw) {
         if (e?.scope?.kind === 'global') merged.set(e.name, e);
@@ -125,6 +133,15 @@ export async function resolveAgentVisibleSkills({ modeProfile, agentConfig, runt
         for (const e of inventoryRaw) {
             if (e?.scope?.kind === 'preset'
                 && e.scope.name === runtimeContext.presetName) {
+                merged.set(e.name, e);
+            }
+        }
+    }
+    if (runtimeContext?.orchPreset) {
+        for (const e of inventoryRaw) {
+            if (e?.scope?.kind === 'orch-preset'
+                && e.scope.mode === runtimeContext.orchPreset.mode
+                && e.scope.name === runtimeContext.orchPreset.name) {
                 merged.set(e.name, e);
             }
         }
@@ -211,20 +228,27 @@ export function invalidateSkillInventory() {
 /**
  * Build a `runtimeContext` bag from a SillyTavern context + agent profile.
  *
- * The resolver uses two fields:
+ * The resolver uses three fields:
  *   - `presetName`  — the chat-completion preset name (e.g. 'rp4'); matched
  *     against `e.scope.name` for preset-scope skills
  *   - `characterFile` — the active character's avatar filename (e.g. 'alice.png')
+ *   - `orchPreset`  — active orchestration preset `{mode, name}`; matched
+ *     against `e.scope.mode` + `e.scope.name` for orch-preset-scope skills
  *
  * Each is optional; missing values just skip the corresponding scope layer.
  * Callers that want only the character context (no preset routing) can pass
- * a `null` agentProfile.
+ * a `null` agentProfile. `orchPreset` is only set when the caller supplies
+ * a `{mode, name}` pair with non-empty strings on both fields — the four
+ * mode-runtime dispatchers (spec / agenda / loop / director) supply this
+ * so orch-preset-bound skills merge into the run.
  *
  * @param {object|null} sillyTavernContext - typically `getContext()`
  * @param {object|null} agentProfile - agent config with `promptPresetName`
- * @returns {{ presetName?: string, characterFile?: string }}
+ * @param {{mode:string, name:string}|null} [orchPreset] - active orchestration
+ *   preset scope, if any.
+ * @returns {{ presetName?: string, characterFile?: string, orchPreset?: {mode:string, name:string} }}
  */
-export function buildSkillRuntimeContext(sillyTavernContext, agentProfile = null) {
+export function buildSkillRuntimeContext(sillyTavernContext, agentProfile = null, orchPreset = null) {
     const ctx = {};
     // Character: read avatar filename from the live characters array if available.
     // `characterId` is the index; `characters[characterId].avatar` is the filename
@@ -252,6 +276,18 @@ export function buildSkillRuntimeContext(sillyTavernContext, agentProfile = null
     if (agentProfile && typeof agentProfile === 'object') {
         const promptPresetName = String(agentProfile.promptPresetName || '').trim();
         if (promptPresetName) ctx.presetName = promptPresetName;
+    }
+
+    // Orch-preset: only lift when the caller supplies a well-formed
+    // `{mode, name}` pair. Malformed / partial input silently omits the
+    // field so callers can pass `null` / `{}` / stale editor drafts
+    // without accidentally activating orch-preset scope filtering with
+    // an empty name (which would collide with any orch-preset skill
+    // that also has an empty name).
+    if (orchPreset && typeof orchPreset === 'object'
+        && typeof orchPreset.mode === 'string' && orchPreset.mode.length > 0
+        && typeof orchPreset.name === 'string' && orchPreset.name.length > 0) {
+        ctx.orchPreset = { mode: orchPreset.mode, name: orchPreset.name };
     }
 
     return ctx;

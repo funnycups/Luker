@@ -531,6 +531,7 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
             runtimeContext: skillRes.buildSkillRuntimeContext(
                 deps?.contextForNotes || null,
                 director.mainAgent || null,
+                { mode: 'director', name: String(director?.name || '').trim() },
             ),
         });
         availableSkillsBlock = skillRes.buildAvailableSkillsBlock(visibleSkillsForMain) || '';

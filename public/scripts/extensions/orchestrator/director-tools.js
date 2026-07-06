@@ -854,7 +854,11 @@ export function createSubagentDispatcher({
                 visibleSkillsForSubAgent = await skillRes.resolveAgentVisibleSkills({
                     modeProfile: directorProfile,
                     agentConfig,
-                    runtimeContext: skillRes.buildSkillRuntimeContext(contextForNotes || null, agentConfig),
+                    runtimeContext: skillRes.buildSkillRuntimeContext(
+                        contextForNotes || null,
+                        agentConfig,
+                        { mode: 'director', name: String(directorProfile?.name || '').trim() },
+                    ),
                 });
                 availableSkillsBlock = skillRes.buildAvailableSkillsBlock(visibleSkillsForSubAgent) || '';
             } catch (e) {
