@@ -80,6 +80,58 @@ describe('sanitizeAgentToolFlags: collab namespace (main-agent dispatchers)', ()
     });
 });
 
+describe('sanitizeAgentToolFlags: message namespace (sub-agent draft edits)', () => {
+    test('explicit message flags pass through unchanged', () => {
+        const sanitized = sanitizeAgentToolFlags({
+            message: { write_message: true, apply_message_patches: false },
+        });
+        expect(sanitized.message).toEqual({
+            write_message: true,
+            apply_message_patches: false,
+        });
+    });
+
+    test('missing message namespace defaults all off under defaultAllOn:false', () => {
+        const sanitized = sanitizeAgentToolFlags({});
+        expect(sanitized.message).toEqual({
+            write_message: false,
+            apply_message_patches: false,
+        });
+    });
+
+    test('missing message namespace defaults all on under defaultAllOn:true (uniform per-namespace convention)', () => {
+        // sanitizer treats message like every other namespace — follows
+        // `defaultAllOn`. The "default new profile ships with sub-agent
+        // draft editing OFF" contract is enforced by
+        // `buildFullDirectorTools` / `buildMinimalDirectorTools`, which
+        // pass an explicit `message: {false, false}` in their input; that
+        // contract has its own coverage in `default profile sub-agents
+        // carry precise per-role tool overrides` and the coverage below.
+        const sanitized = sanitizeAgentToolFlags({}, { defaultAllOn: true });
+        expect(sanitized.message).toEqual({
+            write_message: true,
+            apply_message_patches: true,
+        });
+    });
+
+    test('partial message section: specified flag wins, others fall back to default', () => {
+        const sanitized = sanitizeAgentToolFlags(
+            { message: { write_message: true } },
+            { defaultAllOn: false },
+        );
+        expect(sanitized.message.write_message).toBe(true);
+        expect(sanitized.message.apply_message_patches).toBe(false);
+    });
+
+    test('non-object message input is treated as absent (falls back to defaults)', () => {
+        const sanitized = sanitizeAgentToolFlags({ message: 'nonsense' });
+        expect(sanitized.message).toEqual({
+            write_message: false,
+            apply_message_patches: false,
+        });
+    });
+});
+
 describe('sanitizeDirectorProfile: legacy-collab migration', () => {
     // Pre-existing director profiles persisted before the collab namespace
     // shipped have a `tools` object with no `collab` key. The director
@@ -151,6 +203,106 @@ describe('sanitizeDirectorProfile: legacy-collab migration', () => {
         expect(sanitized.mainAgent.tools.collab).toEqual({
             dispatch_subagent: false,
             dispatch_inline_subagent: true,
+        });
+    });
+});
+
+describe('sanitizeDirectorProfile: legacy-message migration', () => {
+    // Pre-existing director profiles persisted before the `message`
+    // namespace shipped had unconditional main-agent write_message /
+    // apply_message_patches. On upgrade the sanitizer would leave both
+    // flags off (baseline for override sanitize is `defaultAllOn: false`;
+    // for profile sanitize it's `!hasToolsBlock`, i.e. also false when
+    // the old tools block exists), which would strip the main agent of
+    // draft-editing power and break director's core loop.
+    //
+    // We detect a pre-`message`-feature profile by "has a tools block
+    // but no `message` namespace inside it" and synthesize an explicit
+    // `mainAgent.tools` override forcing message.<verb> on. This mirrors
+    // the collab legacy-migration shim above.
+
+    test('legacy profile (tools block, no message ns) with no mainAgent override → synthesizes mainAgent override with message on', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                tools: {
+                    chat: { read_range: true, search: false },
+                    // intentionally no `message` — simulates pre-upgrade profile
+                },
+                // no mainAgent.tools override — this is the pre-flag
+                // "inherit profile default" state.
+            },
+        });
+        expect(sanitized.mainAgent.tools).not.toBeNull();
+        expect(sanitized.mainAgent.tools.message).toEqual({
+            write_message: true,
+            apply_message_patches: true,
+        });
+        // Profile-level tools also gets a message namespace filled by
+        // the sanitizer, at default-off (sub-agents don't get promoted).
+        expect(sanitized.tools.message).toEqual({
+            write_message: false,
+            apply_message_patches: false,
+        });
+    });
+
+    test('legacy profile with existing mainAgent.tools override (no message ns) → merges message-on into override', () => {
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                tools: {
+                    chat: { read_range: true },
+                },
+                mainAgent: {
+                    tools: {
+                        chat: { read_range: false, search: true },
+                        // no message — pre-flag override
+                    },
+                },
+            },
+        });
+        expect(sanitized.mainAgent.tools.message).toEqual({
+            write_message: true,
+            apply_message_patches: true,
+        });
+        // Migration must NOT clobber other explicit values in the override.
+        expect(sanitized.mainAgent.tools.chat.read_range).toBe(false);
+        expect(sanitized.mainAgent.tools.chat.search).toBe(true);
+    });
+
+    test('new profile (tools block has message ns) → no legacy migration fires, mainAgent.tools override respected as-is', () => {
+        // A profile that already carries the `message` namespace is by
+        // definition post-migration. The synthesizer must not fire —
+        // otherwise it would forcibly re-enable message on a mainAgent
+        // whose user explicitly chose to disable it (pure-orchestrator
+        // config).
+        const sanitized = sanitizeDirectorProfile({
+            director: {
+                tools: {
+                    chat: { read_range: true },
+                    message: { write_message: false, apply_message_patches: false },
+                },
+                mainAgent: {
+                    tools: {
+                        chat: { read_range: true },
+                        message: { write_message: false, apply_message_patches: false },
+                    },
+                },
+            },
+        });
+        expect(sanitized.mainAgent.tools.message).toEqual({
+            write_message: false,
+            apply_message_patches: false,
+        });
+    });
+
+    test('new profile with no tools block at all (fresh empty input) → sanitizer fills message default on (defaultAllOn:true), no legacy migration', () => {
+        // Empty input triggers `defaultAllOn: !hasToolsBlock === true`,
+        // so every flag gets fallback true — including message. This is
+        // NOT a legacy-migration path (there's no old profile to
+        // preserve). Just documents the behavior.
+        const sanitized = sanitizeDirectorProfile({});
+        expect(sanitized.tools.message).toEqual({
+            write_message: true,
+            apply_message_patches: true,
         });
     });
 });
@@ -358,6 +510,54 @@ describe('director schema fields', () => {
 
         // Skill binding: memory_scout must reference memory-scout-method-zh.
         expect(ms.skills?.visible || []).toContain('memory-scout-method-zh');
+    });
+
+    test('createDefaultDirectorProfile ships with sub-agent message editing OFF (Full preset)', () => {
+        // buildFullDirectorTools passes `message: {false, false}` explicitly
+        // even though it sanitizes with defaultAllOn:true. Sub-agent
+        // write/patch on the message body is a permission escalation, not
+        // a routine read tool, so the shipped default must not grant it.
+        // Every other read verb (chat / lorebook / etc.) IS default-on,
+        // so absence of message flags in the enable list would leave them
+        // on — this test guards against that regression.
+        const p = createDefaultDirectorProfile();
+        expect(p.tools.message).toEqual({
+            write_message: false,
+            apply_message_patches: false,
+        });
+    });
+
+    test('createMinimalDirectorProfile ships with sub-agent message editing OFF (Minimal preset)', () => {
+        const p = createMinimalDirectorProfile();
+        expect(p.tools.message).toEqual({
+            write_message: false,
+            apply_message_patches: false,
+        });
+    });
+
+    test('createDefaultDirectorProfile ships main agent with explicit override enabling message editing (Full preset)', () => {
+        // Main agent write_message / apply_message_patches is now flag-
+        // gated via tools.message.<verb> (same namespace sub-agents use).
+        // Because the profile-level default has message.<verb> off (for
+        // sub-agent inheritance), the shipping default main agent MUST
+        // carry an explicit tools override that flips message on —
+        // otherwise the default main agent would silently lose its
+        // draft-writing power and break director's core loop.
+        const p = createDefaultDirectorProfile();
+        expect(p.mainAgent.tools).not.toBeNull();
+        expect(p.mainAgent.tools.message).toEqual({
+            write_message: true,
+            apply_message_patches: true,
+        });
+    });
+
+    test('createMinimalDirectorProfile ships main agent with explicit override enabling message editing (Minimal preset)', () => {
+        const p = createMinimalDirectorProfile();
+        expect(p.mainAgent.tools).not.toBeNull();
+        expect(p.mainAgent.tools.message).toEqual({
+            write_message: true,
+            apply_message_patches: true,
+        });
     });
 
     test('canon_scout description guards against original-fiction misuse', () => {

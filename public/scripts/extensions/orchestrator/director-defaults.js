@@ -116,6 +116,13 @@ function buildDefaultDirectorTools() {
     const input = {
         memory: buildLegacyVerbBag(DIRECTOR_LEGACY_MEMORY_VERBS, true),
         search: buildLegacyVerbBag(DIRECTOR_LEGACY_SEARCH_VERBS, true),
+        // Explicit off for sub-agent draft editing on brand-new profiles.
+        // `defaultAllOn: true` below would otherwise flip these on, but
+        // granting sub-agents write/patch on the message body is a
+        // permission escalation, not a routine read tool — new users
+        // should opt in per sub-agent (via its Tools override's message
+        // fieldset) if they actually want it.
+        message: { write_message: false, apply_message_patches: false },
     };
     const flags = sanitizeAgentToolFlags(input, { defaultAllOn: true, forceFinalize: false });
     flags.finalize = false;
@@ -136,10 +143,41 @@ function buildMinimalDirectorTools() {
     const input = {
         memory: buildLegacyVerbBag(DIRECTOR_LEGACY_MEMORY_VERBS, false),
         search: buildLegacyVerbBag(DIRECTOR_LEGACY_SEARCH_VERBS, false),
+        // See `buildFullDirectorTools` — same rationale for opting sub-
+        // agent draft editing OUT of the brand-new-profile default.
+        message: { write_message: false, apply_message_patches: false },
     };
     const flags = sanitizeAgentToolFlags(input, { defaultAllOn: true, forceFinalize: false });
     flags.finalize = false;
     return flags;
+}
+
+/**
+ * Build the default main-agent tools override.
+ *
+ * Main agent write_message / apply_message_patches went from hardcoded-on
+ * to `tools.message.<verb>`-gated so the same flag namespace controls
+ * both roles (no architectural special-casing of the main agent). But
+ * the profile-level default has `message: {false, false}` — that's the
+ * inheritance target for sub-agents, which must NOT get draft editing
+ * by default. If the main agent also inherited that, the shipping
+ * default would leave the main agent unable to write, which breaks
+ * director's whole point.
+ *
+ * Fix: ship the default main agent with an explicit `tools` override
+ * that starts from the profile default (so every other flag mirrors
+ * what the sub-agents see) and flips message.write_message /
+ * message.apply_message_patches on. Users can uncheck these in the
+ * main-agent Tools override panel to convert the main agent into a
+ * pure orchestrator (assuming they enable message flags on their
+ * sub-agents to fill the writing role).
+ */
+function buildDefaultMainAgentToolsOverride(profileTools) {
+    const base = profileTools && typeof profileTools === 'object' ? profileTools : {};
+    return {
+        ...base,
+        message: { write_message: true, apply_message_patches: true },
+    };
 }
 
 /**
@@ -536,6 +574,7 @@ function buildMinimalDirectorSubAgents() {
  * the user's data dir, so missing bundled scaffolds degrade gracefully.
  */
 export function createFullDirectorProfile() {
+    const tools = buildDefaultDirectorTools();
     return sanitizeDirectorProfile({
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
         skills: {
@@ -557,12 +596,17 @@ export function createFullDirectorProfile() {
             // living-being prose + no-meta-narration + three-pass self-check
             // rules; main-agent prompt no longer inlines them.
             skills: { visible: ['+', 'director-turn-workflow-zh', 'director-dispatch-protocol-zh', 'draft-writer-style-zh'] },
+            // Explicit override so the shipping default main agent can
+            // write / patch the message body — profile-level default
+            // has message.<verb> off (for sub-agent inheritance), which
+            // would otherwise leave the main agent unable to write.
+            tools: buildDefaultMainAgentToolsOverride(tools),
         },
         subAgents: wirePerAgentSkills(buildFullDirectorSubAgents()),
         maxRounds: DIRECTOR_LIMIT_BOUNDS.maxRounds.default,
         maxConcurrentSubagents: DIRECTOR_LIMIT_BOUNDS.maxConcurrentSubagents.default,
         maxTotalSubagentRuns: DIRECTOR_LIMIT_BOUNDS.maxTotalSubagentRuns.default,
-        tools: buildDefaultDirectorTools(),
+        tools,
         discardOnAbort: false,
     });
 }
@@ -588,6 +632,7 @@ export function createFullDirectorProfile() {
  * the plugins) materializes the full sub-agent set.
  */
 export function createMinimalDirectorProfile() {
+    const tools = buildMinimalDirectorTools();
     return sanitizeDirectorProfile({
         mode: ORCH_EXECUTION_MODE_DIRECTOR,
         skills: {
@@ -605,12 +650,16 @@ export function createMinimalDirectorProfile() {
             apiPresetName: '',
             systemPrompt: buildDirectorDefaultSystemPrompt({ presetVariant: 'minimal' }),
             skills: { visible: ['+', 'director-turn-workflow-zh', 'director-dispatch-protocol-zh', 'draft-writer-style-zh'] },
+            // See `createFullDirectorProfile` — same rationale for
+            // shipping the main agent with an explicit tools override
+            // that enables message editing.
+            tools: buildDefaultMainAgentToolsOverride(tools),
         },
         subAgents: wirePerAgentSkills(buildMinimalDirectorSubAgents()),
         maxRounds: DIRECTOR_LIMIT_BOUNDS.maxRounds.default,
         maxConcurrentSubagents: DIRECTOR_LIMIT_BOUNDS.maxConcurrentSubagents.default,
         maxTotalSubagentRuns: DIRECTOR_LIMIT_BOUNDS.maxTotalSubagentRuns.default,
-        tools: buildMinimalDirectorTools(),
+        tools,
         discardOnAbort: false,
     });
 }
@@ -760,11 +809,43 @@ export function sanitizeDirectorProfile(profile) {
     });
     sanitizedTools.finalize = false;
 
+    // Legacy migration: profiles persisted before the `message` namespace
+    // shipped had unconditional main-agent write_message /
+    // apply_message_patches. On upgrade the sanitizer would leave both
+    // flags off (baseline for override sanitize is `defaultAllOn: false`;
+    // for profile sanitize it's `!hasToolsBlock`, i.e. also false when
+    // the old tools block exists), which would strip the main agent of
+    // draft-editing power and break director's whole point.
+    //
+    // We detect a pre-`message`-feature profile by "has a tools block
+    // but no `message` namespace inside it" — new profiles built via
+    // `createFullDirectorProfile` / `createMinimalDirectorProfile`
+    // always ship with the namespace present (via
+    // `buildFullDirectorTools` / `buildMinimalDirectorTools`), so this
+    // branch only fires on legacy round-trips. When it does, we
+    // synthesize an explicit `mainAgent.tools` override that keeps the
+    // pre-flag write/patch behavior:
+    //   - if the user had no override → start from the profile default
+    //     snapshot so every other flag mirrors what sub-agents see
+    //   - if the user had an override → start from that override (their
+    //     explicit choices for other namespaces stay intact)
+    // Either way we force message.<verb> = true so upgrade is transparent.
+    const isPreMessageProfile = hasToolsBlock
+        && !(directorFields.tools.message && typeof directorFields.tools.message === 'object');
+    const mainAgentToolsInput = isPreMessageProfile
+        ? {
+            ...(mainAgent.tools && typeof mainAgent.tools === 'object'
+                ? mainAgent.tools
+                : directorFields.tools),
+            message: { write_message: true, apply_message_patches: true },
+        }
+        : mainAgent.tools;
+
     const mainAgentOut = {
         promptPresetName: String(mainAgent.promptPresetName ?? '').trim(),
         apiPresetName: String(mainAgent.apiPresetName ?? '').trim(),
         systemPrompt: String(mainAgent.systemPrompt ?? ''),
-        tools: sanitizeAgentOverride(mainAgent.tools),
+        tools: sanitizeAgentOverride(mainAgentToolsInput),
     };
     if (mainAgent.skills && typeof mainAgent.skills === 'object') {
         mainAgentOut.skills = mainAgent.skills;

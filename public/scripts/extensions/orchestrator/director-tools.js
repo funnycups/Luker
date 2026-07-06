@@ -5,10 +5,20 @@
  *   1. Loop-inherited tools (chat / lorebook / memory / note / search) —
  *      available to both main and sub-agents, gated by the same
  *      `profile.tools.<ns>.<verb>` nested flag schema loop mode uses.
- *   2. Collaboration tools (dispatch_subagent / await_subagents) —
- *      main agent only.
- *   3. Message-production tools (write_message / apply_message_patches /
- *      finalize) — main agent only.
+ *   2. Collaboration tools (dispatch_subagent / await_subagents /
+ *      cancel_subagent) — main agent only.
+ *   3. Message-production tools:
+ *        - write_message / apply_message_patches — gated by
+ *          `tools.message.<verb>` for BOTH roles (no role-based special-
+ *          casing). Shipping default: main agent has an explicit
+ *          override that enables them (see
+ *          `buildDefaultMainAgentToolsOverride` in director-defaults.js);
+ *          sub-agents inherit the profile default (both off). Either
+ *          role can be flipped in its Tools override panel.
+ *        - finalize — main agent only, unconditional. Sub-agents cannot
+ *          commit / end the turn regardless.
+ *        - get_draft / draft_search — available to both, unconditional
+ *          (read-only, symmetric across roles).
  *
  * The executors are pure async functions that take a handle (or
  * dispatcher) plus parsed args, and return `{ ok, error?, ... }` for
@@ -250,18 +260,56 @@ export function buildMainAgentToolSchemas({ subAgents, tools, customToolRegistry
         ...(dispatchInlineEnabled ? [DISPATCH_INLINE_SUBAGENT_TOOL] : []),
         ...(anyDispatcherEnabled ? [AWAIT_SUBAGENTS_TOOL, CANCEL_SUBAGENT_TOOL] : []),
     ];
-    const messageProduction = [WRITE_MESSAGE_TOOL, APPLY_MESSAGE_PATCHES_TOOL, GET_DRAFT_TOOL, DRAFT_SEARCH_TOOL, FINALIZE_TOOL];
+    // Message-editing tools (write_message / apply_message_patches) are
+    // gated by `tools.message.<verb>` — the SAME flag namespace sub-
+    // agents use, no role-based special-casing. The shipping default
+    // main agent has an explicit tools override
+    // (see `buildDefaultMainAgentToolsOverride` in director-defaults.js)
+    // that enables both flags, so out-of-the-box behavior is unchanged.
+    // Users who want a pure-orchestrator main agent (sub-agents produce
+    // the message body, main agent only dispatches / commits) can
+    // uncheck these toggles in the main-agent Tools override panel.
+    //
+    // finalize / get_draft / draft_search remain unconditional:
+    // finalize is the main agent's turn-terminator ownership (sub-
+    // agents cannot commit / end the turn regardless); get_draft /
+    // draft_search are read-only and symmetric across roles.
+    const messageFlags = tools && typeof tools === 'object' && tools.message && typeof tools.message === 'object'
+        ? tools.message
+        : {};
+    const messageProduction = [
+        ...(messageFlags.write_message === true ? [WRITE_MESSAGE_TOOL] : []),
+        ...(messageFlags.apply_message_patches === true ? [APPLY_MESSAGE_PATCHES_TOOL] : []),
+        GET_DRAFT_TOOL,
+        DRAFT_SEARCH_TOOL,
+        FINALIZE_TOOL,
+    ];
     const loop = loopToolSchemasFor(tools, customToolRegistry);
     return [...collab, ...messageProduction, ...loop];
 }
 
 export function buildSubAgentToolSchemas({ tools, customToolRegistry = null }) {
-    // Sub-agents always get get_draft (lets analysts read the in-flight
-    // draft) plus whichever loop tools the profile enables. They do NOT
-    // get the message-editing tools or the dispatch/cancel collaboration
-    // tools — only the main agent writes the message and only the main
-    // agent dispatches.
-    return [GET_DRAFT_TOOL, DRAFT_SEARCH_TOOL, ...loopToolSchemasFor(tools, customToolRegistry)];
+    // Sub-agents always get get_draft / draft_search (read-only draft
+    // access) plus whichever loop tools the profile enables. The two
+    // message-editing tools (write_message / apply_message_patches) are
+    // gated by `tools.message.<verb>` — the SAME flag namespace the
+    // main agent uses, no role-based special-casing. Default profile
+    // ships with sub-agent inheritance off (see `buildFullDirectorTools`
+    // in director-defaults.js), so out-of-the-box sub-agents never see
+    // them unless the user explicitly ticks the toggles per sub-agent
+    // or profile-wide.
+    //
+    // Dispatch / cancel / finalize remain main-agent-only regardless of
+    // flag value: sub-agents cannot recurse and cannot commit / end the
+    // turn (that decision belongs to the main agent).
+    const messageFlags = tools && typeof tools === 'object' && tools.message && typeof tools.message === 'object'
+        ? tools.message
+        : {};
+    const optionalMessageTools = [
+        ...(messageFlags.write_message === true ? [WRITE_MESSAGE_TOOL] : []),
+        ...(messageFlags.apply_message_patches === true ? [APPLY_MESSAGE_PATCHES_TOOL] : []),
+    ];
+    return [GET_DRAFT_TOOL, DRAFT_SEARCH_TOOL, ...optionalMessageTools, ...loopToolSchemasFor(tools, customToolRegistry)];
 }
 
 // ── Tool executors ──
@@ -385,11 +433,15 @@ export { SUB_AGENT_MAX_ROUNDS };
  *
  * Tool access (sub-agents): the same enabled loop tools the main agent
  * has (chat / lorebook / memory / note / search, gated by
- * `profile.tools.<ns>.<verb>`). Sub-agents CANNOT call
- * `dispatch_subagent` (no recursion) or the message-editing tools
- * (`write_message` / `apply_message_patches` / `finalize`) — only the
- * main agent owns the message body. `buildSubAgentToolSchemas` enforces
- * this by returning only the loop-tool subset.
+ * `profile.tools.<ns>.<verb>`), plus get_draft / draft_search
+ * unconditionally. Sub-agents CANNOT call `dispatch_subagent`,
+ * `dispatch_inline_subagent`, `await_subagents`, `cancel_subagent`, or
+ * `finalize` — those stay main-agent-only regardless of flag values.
+ * `write_message` and `apply_message_patches` are gated by
+ * `tools.message.<verb>` (same flag namespace the main agent uses) —
+ * default off on every fresh sub-agent profile; a user can flip them
+ * on per sub-agent or profile-wide. `buildSubAgentToolSchemas`
+ * enforces the gating.
  *
  * Deps:
  *   - subAgents: profile.subAgents — id → spec lookup.
@@ -1012,6 +1064,18 @@ export function createSubagentDispatcher({
                             toolResult = await executeGetDraftTool(handle);
                         } else if (name === 'draft_search') {
                             toolResult = await executeDraftSearchTool(handle, args);
+                        } else if (name === 'write_message') {
+                            // Only reachable when tools.message.write_message
+                            // is enabled — buildSubAgentToolSchemas gates the
+                            // schema on the same flag. Reuses the same
+                            // executor as the main agent, so both roles
+                            // mutate the shared draft via the same handle.
+                            toolResult = await executeWriteMessageTool(handle, args);
+                        } else if (name === 'apply_message_patches') {
+                            // Same gating as write_message. Roll-back-on-
+                            // failure semantics are inherited from
+                            // executeApplyPatchesTool.
+                            toolResult = await executeApplyPatchesTool(handle, args);
                         } else if (typeof executeLoopTool === 'function') {
                             try {
                                 // Inherit from `contextForNotes` so

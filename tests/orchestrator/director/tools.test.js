@@ -22,7 +22,7 @@ function setupHandle({ initialText = '', generationType = 'normal' } = {}) {
 }
 
 describe('tool schemas', () => {
-    test('main-agent set includes collaboration + message-production + loop tools', () => {
+    test('main-agent set includes collaboration + message-production + loop tools (with message flags on)', () => {
         const schemas = buildMainAgentToolSchemas({
             subAgents: [{ id: 'critic', description: 'crit' }],
             tools: {
@@ -31,6 +31,7 @@ describe('tool schemas', () => {
                 memory: { search: false, list_recent: false, get: false },
                 note: { add: false, delete: false },
                 search: { search: false, visit: false },
+                message: { write_message: true, apply_message_patches: true },
                 finalize: false,
             },
         });
@@ -47,7 +48,7 @@ describe('tool schemas', () => {
         expect(names.some(n => n.startsWith('lorebook_'))).toBe(false);
     });
 
-    test('sub-agent set includes get_draft + loop tools, excludes collaboration / message-editing tools', () => {
+    test('sub-agent set includes get_draft + loop tools, excludes collaboration / finalize / message-editing tools by default', () => {
         const schemas = buildSubAgentToolSchemas({
             tools: {
                 chat: { read_range: true, search: true },
@@ -59,20 +60,24 @@ describe('tool schemas', () => {
             },
         });
         const names = schemas.map(s => s.function.name);
-        // Excluded: dispatch / await / cancel / write / patches / finalize
+        // Excluded unconditionally: dispatch / await / cancel / finalize
         expect(names).not.toContain('dispatch_subagent');
         expect(names).not.toContain('await_subagents');
         expect(names).not.toContain('cancel_subagent');
+        expect(names).not.toContain('finalize');
+        // Excluded by default (opt-in via tools.message.<verb>)
         expect(names).not.toContain('write_message');
         expect(names).not.toContain('apply_message_patches');
-        expect(names).not.toContain('finalize');
         // Included: get_draft (always) + enabled loop tools
         expect(names).toContain('get_draft');
         expect(names.some(n => n.startsWith('chat_'))).toBe(true);
     });
 
-    test('main agent without configured sub-agents still gets inline-dispatch + await/cancel + message-production', () => {
-        const schemas = buildMainAgentToolSchemas({ subAgents: [], tools: {} });
+    test('main agent without configured sub-agents still gets inline-dispatch + await/cancel + message-production (message flags on)', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [],
+            tools: { message: { write_message: true, apply_message_patches: true } },
+        });
         const names = schemas.map(s => s.function.name);
         // dispatch_subagent (by id) only when there ARE configured sub-agents.
         expect(names).not.toContain('dispatch_subagent');
@@ -112,7 +117,7 @@ describe('tool schemas', () => {
     test('apply_message_patches schema has no occurrence field', () => {
         const schemas = buildMainAgentToolSchemas({
             subAgents: [],
-            tools: {},
+            tools: { message: { write_message: true, apply_message_patches: true } },
         });
         const apply = schemas.find(s => s.function.name === 'apply_message_patches');
         expect(apply).toBeDefined();
@@ -167,14 +172,17 @@ describe('tool schemas', () => {
     test('both dispatchers disabled hides await_subagents and cancel_subagent (no live handles to act on)', () => {
         const schemas = buildMainAgentToolSchemas({
             subAgents: [{ id: 'critic', description: 'crit' }],
-            tools: { collab: { dispatch_subagent: false, dispatch_inline_subagent: false } },
+            tools: {
+                collab: { dispatch_subagent: false, dispatch_inline_subagent: false },
+                message: { write_message: true, apply_message_patches: true },
+            },
         });
         const names = schemas.map(s => s.function.name);
         expect(names).not.toContain('dispatch_subagent');
         expect(names).not.toContain('dispatch_inline_subagent');
         expect(names).not.toContain('await_subagents');
         expect(names).not.toContain('cancel_subagent');
-        // Message-production tools unaffected.
+        // Message-production tools unaffected (message flags on here).
         expect(names).toContain('write_message');
         expect(names).toContain('finalize');
     });
@@ -212,6 +220,156 @@ describe('tool schemas', () => {
         expect(subNames).not.toContain('dispatch_inline_subagent');
         expect(subNames).not.toContain('await_subagents');
         expect(subNames).not.toContain('cancel_subagent');
+    });
+
+    // ── message.* opt-in (sub-agent draft-editing tools) ──
+    //
+    // write_message / apply_message_patches are OFF by default for
+    // sub-agents; users opt a specific sub-agent (or the profile default)
+    // in through the message-* toggles. finalize stays main-agent-only
+    // regardless of any flag — sub-agents cannot commit / end the turn.
+
+    test('sub-agent schemas include write_message when tools.message.write_message is true', () => {
+        const subSchemas = buildSubAgentToolSchemas({
+            tools: { message: { write_message: true } },
+        });
+        const subNames = subSchemas.map(s => s.function.name);
+        expect(subNames).toContain('write_message');
+        expect(subNames).not.toContain('apply_message_patches');
+        expect(subNames).not.toContain('finalize');
+    });
+
+    test('sub-agent schemas include apply_message_patches when tools.message.apply_message_patches is true', () => {
+        const subSchemas = buildSubAgentToolSchemas({
+            tools: { message: { apply_message_patches: true } },
+        });
+        const subNames = subSchemas.map(s => s.function.name);
+        expect(subNames).toContain('apply_message_patches');
+        expect(subNames).not.toContain('write_message');
+        expect(subNames).not.toContain('finalize');
+    });
+
+    test('sub-agent schemas include both message tools when both flags are true', () => {
+        const subSchemas = buildSubAgentToolSchemas({
+            tools: { message: { write_message: true, apply_message_patches: true } },
+        });
+        const subNames = subSchemas.map(s => s.function.name);
+        expect(subNames).toContain('write_message');
+        expect(subNames).toContain('apply_message_patches');
+        // Finalize stays main-only regardless of message.* flags.
+        expect(subNames).not.toContain('finalize');
+    });
+
+    test('sub-agent schemas never include finalize, even when caller wedges it in tools.message', () => {
+        // Defensive: message namespace only exposes write_message and
+        // apply_message_patches. A malformed profile that adds
+        // `message.finalize` (not a real slot) must NOT sneak finalize
+        // into the sub-agent schema — finalize is committed via a
+        // dedicated tool that ends the whole director turn.
+        const subSchemas = buildSubAgentToolSchemas({
+            tools: { message: { write_message: true, apply_message_patches: true, finalize: true } },
+        });
+        const subNames = subSchemas.map(s => s.function.name);
+        expect(subNames).not.toContain('finalize');
+    });
+
+    test('sub-agent schemas exclude both message tools when flags are explicitly false', () => {
+        const subSchemas = buildSubAgentToolSchemas({
+            tools: { message: { write_message: false, apply_message_patches: false } },
+        });
+        const subNames = subSchemas.map(s => s.function.name);
+        expect(subNames).not.toContain('write_message');
+        expect(subNames).not.toContain('apply_message_patches');
+    });
+
+    test('sub-agent schemas exclude message tools when tools.message namespace is absent', () => {
+        // Sanitizer will typically fill in the namespace, but a raw
+        // handwritten tools object without `message` must still result
+        // in default-off draft editing.
+        const subSchemas = buildSubAgentToolSchemas({
+            tools: { chat: { read_range: true } },
+        });
+        const subNames = subSchemas.map(s => s.function.name);
+        expect(subNames).not.toContain('write_message');
+        expect(subNames).not.toContain('apply_message_patches');
+    });
+
+    // ── Symmetric message.* gating for the MAIN agent ──
+    //
+    // Main-agent write_message / apply_message_patches used to be
+    // hardcoded on. They now go through the same tools.message.<verb>
+    // flags sub-agents use, no role-based special-casing. The shipping
+    // default profile compensates by giving the main agent an explicit
+    // tools override with message.<verb> on (see
+    // `buildDefaultMainAgentToolsOverride` in director-defaults.js), so
+    // out-of-the-box behavior is unchanged. Users who want a pure-
+    // orchestrator main agent (sub-agents produce the message body) can
+    // uncheck these toggles in the main-agent Tools override panel.
+    //
+    // finalize / get_draft / draft_search stay unconditional on the
+    // main agent (finalize is the turn-terminator, draft reads are
+    // read-only), so those must appear regardless of message flags.
+
+    test('main-agent schemas exclude write_message when tools.message.write_message is false', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [],
+            tools: { message: { write_message: false, apply_message_patches: true } },
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).not.toContain('write_message');
+        expect(names).toContain('apply_message_patches');
+        // Read + terminator stay on regardless.
+        expect(names).toContain('get_draft');
+        expect(names).toContain('draft_search');
+        expect(names).toContain('finalize');
+    });
+
+    test('main-agent schemas exclude apply_message_patches when tools.message.apply_message_patches is false', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [],
+            tools: { message: { write_message: true, apply_message_patches: false } },
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).toContain('write_message');
+        expect(names).not.toContain('apply_message_patches');
+        expect(names).toContain('finalize');
+    });
+
+    test('main-agent becomes a pure orchestrator when both message flags are off (no write/patch, but still dispatches / finalizes)', () => {
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [{ id: 'writer', description: 'writes the draft' }],
+            tools: { message: { write_message: false, apply_message_patches: false } },
+        });
+        const names = schemas.map(s => s.function.name);
+        // Message editing stripped.
+        expect(names).not.toContain('write_message');
+        expect(names).not.toContain('apply_message_patches');
+        // Dispatch / await / cancel / finalize / get_draft / draft_search all present —
+        // main agent can still orchestrate and end the turn, just cannot write.
+        expect(names).toContain('dispatch_subagent');
+        expect(names).toContain('await_subagents');
+        expect(names).toContain('cancel_subagent');
+        expect(names).toContain('finalize');
+        expect(names).toContain('get_draft');
+        expect(names).toContain('draft_search');
+    });
+
+    test('main-agent schemas exclude message tools when tools.message namespace is absent (no hardcoded fallback)', () => {
+        // Guards against a regression that would silently re-enable the
+        // pre-flag hardcoded behavior for the main agent. If message ns
+        // is missing (raw handwritten profile), main agent gets neither
+        // tool — matching sub-agent gating exactly.
+        const schemas = buildMainAgentToolSchemas({
+            subAgents: [],
+            tools: { chat: { read_range: true } },
+        });
+        const names = schemas.map(s => s.function.name);
+        expect(names).not.toContain('write_message');
+        expect(names).not.toContain('apply_message_patches');
+        // Unconditional tools still present.
+        expect(names).toContain('get_draft');
+        expect(names).toContain('draft_search');
+        expect(names).toContain('finalize');
     });
 });
 

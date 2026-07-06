@@ -157,7 +157,7 @@ loop.finalize -> out
    - **訊息產出工具** —— `write_message(text, mode?)` 寫正文（`mode='replace'` 覆寫、`mode='append'` 追加）;`apply_message_patches(patches)` 做定點的 context-replace 補丁；`get_draft()` 回讀當前草稿；`draft_search({ pattern, flags? })` 對當前草稿做正規表達式掃描，回傳 grep `-n` 風格的命中行（`lineno: line`）——做術語 / 用詞的系統化排查時比眼看 `get_draft` 輸出更可靠，所有子代理（特別是各類 critic）都可呼叫；`finalize()` 提交併收尾。
    - **[自訂工具](./custom-tools.md)** —— 其他 Luker 擴充註冊的工具、從 SillyTavern function tool 橋接進來的工具、本編排裡手寫的工具。子代理看到的是同一組自訂工具面（在子代理粒度有覆寫時按覆寫過濾）。
 
-3. **子代理是「一次性顧問」**：派遣時拿到當前聊天快照 + 主代理寫的任務簡報 + 自己的系統提示詞 + 啟用的迴圈工具，外加 `get_draft()` 與 `draft_search()` 讓子代理可檢視主代理目前寫到哪裡。子代理彼此看不到對方的存在，看不到主代理的推理，**不能再向下派遣**，也**不能直接寫正文**——它們只產出文本，主代理決定怎麼用。
+3. **子代理是「一次性顧問」**：派遣時拿到當前聊天快照 + 主代理寫的任務簡報 + 自己的系統提示詞 + 啟用的迴圈工具，外加 `get_draft()` 與 `draft_search()` 讓子代理可檢視主代理目前寫到哪裡。子代理彼此看不到對方的存在，看不到主代理的推理，**不能再向下派遣**，也**不能提交收尾**——它們只產出文本，主代理決定怎麼用。直接改草稿的工具（`write_message` / `apply_message_patches`）由 `tools.message.<verb>` 開關控制，主代理和子代理走同一套開關：預設 profile 裡主代理有顯式覆寫把兩個開關打開、子代理繼承 profile 預設（兩個都關）。想讓某個子代理跟主代理並排動稿，去它的 Tools 覆寫面板勾上 **message** 那一組（多數情況下不需要——絕大多數子代理更適合當純顧問）；想剝奪主代理寫正文的權限、讓它做純編排（正文由子代理產出），去主代理 Tools 覆寫面板把 **message** 組裡的兩個勾都取消掉。
 
 4. **預設 profile 自帶 12 個為 RP 最佳化過的子代理**:
 

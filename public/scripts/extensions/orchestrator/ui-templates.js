@@ -281,7 +281,7 @@ export { renderCustomToolsSection };
  * (loop / spec / agenda / director sub-agent override) leaves it off
  * because those runtimes never expose those tools to the LLM.
  */
-function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, { includeCollab = false, profileCustomTools = null } = {}) {
+function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, { includeCollab = false, includeMessage = false, profileCustomTools = null } = {}) {
     const { escapeHtml, i18n } = deps;
     const safeScope = scope === 'character' ? 'character' : 'global';
     const safe = tools && typeof tools === 'object' ? tools : {};
@@ -290,6 +290,7 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
     const lorebook = safe.lorebook || {};
     const customFlags = safe.custom && typeof safe.custom === 'object' ? safe.custom : {};
     const collab = safe.collab || {};
+    const message = safe.message || {};
     const extraAttrParts = Object.entries(extraAttrs)
         .map(([key, value]) => `data-${key}="${escapeHtml(String(value))}"`)
         .join(' ');
@@ -305,6 +306,21 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
     <legend>${escapeHtml(i18n('collab (sub-agent dispatch — main agent only)'))}</legend>
     ${cb('collab.dispatch_subagent', collab.dispatch_subagent, 'dispatch_subagent')}
     ${cb('collab.dispatch_inline_subagent', collab.dispatch_inline_subagent, 'dispatch_inline_subagent')}
+</fieldset>` : '';
+    // Message-editing tools (write_message / apply_message_patches).
+    // BOTH main agent and sub-agents read the same `tools.message.<verb>`
+    // flags — no role-based special-casing. Fieldset appears on the
+    // profile-default panel, the main agent override panel, and each
+    // sub-agent override panel. Default profile ships main agent with
+    // an explicit override enabling both, sub-agents inheriting the
+    // profile default (off). Users can flip either role by ticking /
+    // unticking these toggles. Finalize is unconditional main-only and
+    // is not represented here.
+    const messageFieldset = includeMessage ? `
+<fieldset class="luker_orch_loop_tools_group">
+    <legend>${escapeHtml(i18n('message (draft edits — flag-gated for main + sub-agents)'))}</legend>
+    ${cb('message.write_message', message.write_message, 'write_message')}
+    ${cb('message.apply_message_patches', message.apply_message_patches, 'apply_message_patches')}
 </fieldset>` : '';
 
     // Custom tools fieldset: union of (a) extension/ST-bridge tools
@@ -338,7 +354,7 @@ function renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs = {}, 
     ${cb('lorebook.list', lorebook.list, 'lorebook_list')}
     ${cb('lorebook.search', lorebook.search, 'lorebook_search')}
     ${cb('lorebook.get', lorebook.get, 'lorebook_get')}
-</fieldset>${collabFieldset}${customsFieldset}`;
+</fieldset>${collabFieldset}${messageFieldset}${customsFieldset}`;
 }
 
 /**
@@ -458,6 +474,7 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
     inheritedTools = null,
     kind = 'agent',
     includeCollab = false,
+    includeMessage = false,
     profileCustomTools = null,
 }) {
     const { escapeHtml, i18n } = deps;
@@ -478,7 +495,7 @@ export function renderInheritOrOverridePanel(deps, scope, tools, {
     }
     return `
 <div class="luker_orch_tools_override_block">
-    ${renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs, { includeCollab, profileCustomTools })}
+    ${renderToolFlagsGrid(deps, scope, tools, dataAttrName, extraAttrs, { includeCollab, includeMessage, profileCustomTools })}
     <div class="menu_button menu_button_small" data-luker-action="${escapeHtml(resetAction)}" data-scope="${safeScope}" ${extraAttrParts}>${escapeHtml(i18n('Reset to inherit'))}</div>
 </div>`;
 }
@@ -859,6 +876,7 @@ function renderDirectorSubAgentRow(deps, scope, subagent, subagentIndex, directo
         resetAction: 'director-subagent-tools-reset',
         inheritedTools: directorDefaultTools || null,
         kind: 'agent',
+        includeMessage: true,
         profileCustomTools: profile?.customTools || null,
     })}
     </details>
@@ -945,6 +963,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         inheritedTools: directorDefaultTools,
         kind: 'agent',
         includeCollab: true,
+        includeMessage: true,
         profileCustomTools: profile?.customTools || null,
     })}
         </details>
@@ -970,7 +989,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
     <details class="luker_orch_tools_section">
         <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
         <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. The main agent inherits unless it has its own override.'))}</div>
-        ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true, profileCustomTools: profile?.customTools || null })}
+        ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true, includeMessage: true, profileCustomTools: profile?.customTools || null })}
         <div class="luker-studio-actions-row">
             <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
             <div class="menu_button menu_button_small" data-luker-action="director-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>

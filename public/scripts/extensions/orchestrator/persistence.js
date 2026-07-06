@@ -307,6 +307,7 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
     const chatIn = tools.chat && typeof tools.chat === 'object' ? tools.chat : {};
     const lorebookIn = tools.lorebook && typeof tools.lorebook === 'object' ? tools.lorebook : {};
     const collabIn = tools.collab && typeof tools.collab === 'object' ? tools.collab : {};
+    const messageIn = tools.message && typeof tools.message === 'object' ? tools.message : {};
     const customIn = tools.custom && typeof tools.custom === 'object' ? tools.custom : {};
     const customOut = {};
     for (const [k, v] of Object.entries(customIn)) {
@@ -394,10 +395,47 @@ export function sanitizeAgentToolFlags(input, { defaultAllOn = false, forceFinal
         // excludes them — only the main agent dispatches). For other
         // modes (loop / spec / agenda) these flags are inert: those
         // runtimes don't construct the dispatcher schemas, so the field
-        // round-trips through the profile but has no effect.
+        // round-trips through the profile but has no effect. Same inert
+        // pattern applies to `message` below.
         collab: {
             dispatch_subagent: readBooleanFlag(collabIn.dispatch_subagent, def),
             dispatch_inline_subagent: readBooleanFlag(collabIn.dispatch_inline_subagent, def),
+        },
+        // Message-editing opt-in for BOTH main agent and sub-agents —
+        // no role-based special-casing. `buildMainAgentToolSchemas` and
+        // `buildSubAgentToolSchemas` both read `tools.message.<verb>`;
+        // the shipping default main agent has an explicit `tools`
+        // override that enables both flags (see
+        // `buildDefaultMainAgentToolsOverride` in director-defaults.js),
+        // sub-agents inherit the profile default (both off). Either
+        // role can be flipped in its Tools override panel.
+        //
+        // Follows the same per-namespace default as other flag groups:
+        // `def` (from `defaultAllOn`) so "Enable all" / "Disable all"
+        // on the profile default panel act uniformly across every
+        // visible toggle.
+        //
+        // The "default new profile ships with sub-agent message editing
+        // OFF" contract is enforced ONE level up, in
+        // `buildFullDirectorTools` / `buildMinimalDirectorTools`, which
+        // pass `message: { write_message: false, apply_message_patches: false }`
+        // explicitly in their input — the only two callers that mint a
+        // brand-new profile with `defaultAllOn: true`. Legacy profile
+        // upgrades run through `sanitizeDirectorProfile`, which uses
+        // `defaultAllOn: !hasToolsBlock` — old profiles have a tools
+        // block, so upgrade uses `defaultAllOn: false` and the missing
+        // message namespace lands as false without any special-casing
+        // here. A separate legacy-message-migration in
+        // `sanitizeDirectorProfile` synthesizes a mainAgent.tools
+        // override on pre-message-feature profiles so the main agent
+        // does not silently lose its pre-flag write/patch power.
+        //
+        // Finalize is not represented — sub-agents cannot commit / end
+        // the turn regardless of flag; main agent finalize is
+        // unconditional (turn-terminator ownership).
+        message: {
+            write_message: readBooleanFlag(messageIn.write_message, def),
+            apply_message_patches: readBooleanFlag(messageIn.apply_message_patches, def),
         },
         // `finalize` is the only tool the agent can use to stop a tool
         // loop. Loop mode (and spec/agenda nodes that opt into tools)

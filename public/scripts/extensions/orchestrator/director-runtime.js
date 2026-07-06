@@ -473,9 +473,14 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
         // Sub-agents run their own tool-call mini-loop using the same
         // loop tools the main agent has access to (chat / lorebook /
         // memory / note / search — gated by the same profile.tools
-        // flags). Message-editing tools and dispatch_subagent are NOT
-        // exposed to sub-agents; only the main agent owns the message
-        // body, and sub-agents cannot recurse.
+        // flags), plus get_draft / draft_search unconditionally.
+        // Dispatch_subagent / dispatch_inline_subagent / await_subagents /
+        // cancel_subagent / finalize are NOT exposed to sub-agents; only
+        // the main agent dispatches and commits. Write_message /
+        // apply_message_patches are gated by `tools.message.<verb>` for
+        // BOTH roles (same flag namespace) — default off on every fresh
+        // sub-agent profile; a user can flip them on per sub-agent or
+        // profile-wide.
         tools: director.tools || {},
         executeLoopTool: deps?.executeLoopTool,
         chat: deps?.chat,
