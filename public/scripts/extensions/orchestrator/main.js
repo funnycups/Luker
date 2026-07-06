@@ -7427,81 +7427,83 @@ function bindUi() {
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
-    root.on('change.lukerOrch', '#luker_orch_llm_api_preset', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_llm_api_preset, .luker_orch_editor_popup #orch-popup-luker_orch_llm_api_preset`, function () {
         settings.llmNodeApiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_llm_preset', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_llm_preset, .luker_orch_editor_popup #orch-popup-luker_orch_llm_preset`, function () {
         settings.llmNodePresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
     });
 
-    root.on('input.lukerOrch', '#luker_orch_include_world_info', function () {
+    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_include_world_info, .luker_orch_editor_popup #orch-popup-luker_orch_include_world_info`, function () {
         settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_request_api_preset', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_request_api_preset, .luker_orch_editor_popup #orch-popup-luker_orch_request_api_preset`, function () {
         settings.requestApiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_request_llm_preset', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_request_llm_preset, .luker_orch_editor_popup #orch-popup-luker_orch_request_llm_preset`, function () {
         settings.requestLlmPresetName = String(jQuery(this).val() || '').trim();
         saveSettingsDebounced();
     });
 
-    root.on('input.lukerOrch', '#luker_orch_request_system_prompt', function () {
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_request_system_prompt, .luker_orch_editor_popup #orch-popup-luker_orch_request_system_prompt`, function () {
         settings.requestSystemPrompt = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
 
-    root.on('click.lukerOrch', '#luker_orch_reset_ai_prompt', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_ai_prompt, .luker_orch_editor_popup #orch-popup-luker_orch_reset_ai_prompt`, function () {
         if (!window.confirm(i18n('Reset request system prompt to default? This will overwrite the current request system prompt.'))) {
             return;
         }
         settings.requestSystemPrompt = getDefaultRequestSystemPrompt();
-        root.find('#luker_orch_request_system_prompt').val(settings.requestSystemPrompt);
+        // Update BOTH surfaces' textareas so drawer + popup stay in sync
+        // without waiting for the next popup rebuild.
+        jQuery(`#${UI_BLOCK_ID} #luker_orch_request_system_prompt, .luker_orch_editor_popup #orch-popup-luker_orch_request_system_prompt`).val(settings.requestSystemPrompt);
         saveSettingsDebounced();
         notifySuccess(i18n('Reset request system prompt'));
     });
 
-    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_spec', function () {
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_spec, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_spec`, function () {
         settings.iterModePromptSpec = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
-    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_loop', function () {
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_loop, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_loop`, function () {
         settings.iterModePromptLoop = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
-    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_director', function () {
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_director, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_director`, function () {
         settings.iterModePromptDirector = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
-    root.on('input.lukerOrch', '#luker_orch_iter_mode_prompt_agenda', function () {
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_agenda, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_agenda`, function () {
         settings.iterModePromptAgenda = String(jQuery(this).val() || '');
         saveSettingsDebounced();
     });
 
-    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_spec', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_spec, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_spec`, function () {
         settings.iterModePromptSpec = DEFAULT_SPEC_ITERATION_MODE_BLOCK;
-        root.find('#luker_orch_iter_mode_prompt_spec').val(DEFAULT_SPEC_ITERATION_MODE_BLOCK);
+        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_spec, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_spec`).val(DEFAULT_SPEC_ITERATION_MODE_BLOCK);
         saveSettingsDebounced();
     });
-    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_loop', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_loop, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_loop`, function () {
         settings.iterModePromptLoop = DEFAULT_LOOP_ITERATION_MODE_BLOCK;
-        root.find('#luker_orch_iter_mode_prompt_loop').val(DEFAULT_LOOP_ITERATION_MODE_BLOCK);
+        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_loop, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_loop`).val(DEFAULT_LOOP_ITERATION_MODE_BLOCK);
         saveSettingsDebounced();
     });
-    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_director', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_director, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_director`, function () {
         settings.iterModePromptDirector = DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK;
-        root.find('#luker_orch_iter_mode_prompt_director').val(DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK);
+        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_director, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_director`).val(DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK);
         saveSettingsDebounced();
     });
-    root.on('click.lukerOrch', '#luker_orch_reset_iter_mode_agenda', function () {
+    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_agenda, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_agenda`, function () {
         settings.iterModePromptAgenda = DEFAULT_AGENDA_ITERATION_MODE_BLOCK;
-        root.find('#luker_orch_iter_mode_prompt_agenda').val(DEFAULT_AGENDA_ITERATION_MODE_BLOCK);
+        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_agenda, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_agenda`).val(DEFAULT_AGENDA_ITERATION_MODE_BLOCK);
         saveSettingsDebounced();
     });
 
@@ -7510,12 +7512,12 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_node_iterations', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_node_iterations, .luker_orch_editor_popup #orch-popup-luker_orch_node_iterations`, function () {
         settings.nodeIterationMaxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 40));
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_review_reruns', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_review_reruns, .luker_orch_editor_popup #orch-popup-luker_orch_review_reruns`, function () {
         settings.reviewRerunMaxRounds = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
         saveSettingsDebounced();
     });
@@ -7530,26 +7532,30 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_capsule_position', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_position, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_position`, function () {
         settings.capsuleInjectPosition = normalizeCapsuleInjectPosition(jQuery(this).val());
         jQuery(this).val(String(settings.capsuleInjectPosition));
-        updateCapsulePositionVisibility(root);
+        // `updateCapsulePositionVisibility` uses an ends-with attribute
+        // selector `[id$="luker_orch_capsule_depth_block"]`, which matches
+        // both drawer and popup blocks when scoped to `document` — so a
+        // single call keeps both surfaces in sync.
+        updateCapsulePositionVisibility(jQuery(document));
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_capsule_depth', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_depth, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_depth`, function () {
         settings.capsuleInjectDepth = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
         saveSettingsDebounced();
     });
 
-    root.on('change.lukerOrch', '#luker_orch_capsule_role', function () {
+    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_role, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_role`, function () {
         const value = Number(jQuery(this).val());
         const allowedRoles = [extension_prompt_roles.SYSTEM, extension_prompt_roles.USER, extension_prompt_roles.ASSISTANT];
         settings.capsuleInjectRole = allowedRoles.includes(value) ? value : extension_prompt_roles.SYSTEM;
         saveSettingsDebounced();
     });
 
-    root.on('input.lukerOrch', '#luker_orch_capsule_custom_instruction', function () {
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_custom_instruction, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_custom_instruction`, function () {
         settings.capsuleCustomInstruction = String(jQuery(this).val() || '').trim();
         reapplyLatestCapsuleInjection(getContext());
         saveSettingsDebounced();
