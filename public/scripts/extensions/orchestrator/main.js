@@ -6478,12 +6478,12 @@ async function openAiIterationStudio(context, settings, root) {
 // position select. The depth/role settings only apply when position ===
 // atDepth (`injectCapsuleToPayload` in capsule-injection.js reads them
 // only in the atDepth branch); showing them for other positions confused
-// users into thinking they had an effect. Root-scoped so it works on
-// drawer (`#luker_orch`) and popup (`.luker_orch_editor_popup`) alike;
-// the popup capsule fields are currently unwired for change events (see
-// the pre-existing gap comment near `luker_orch_capsule_position`
-// hydration in bindUi), but the popup's initial render still passes
-// through here so the fields at least open in the correct state.
+// users into thinking they had an effect. Reads position from settings
+// (source of truth) so it stays correct when triggered from either the
+// drawer or popup surface; `$root` is purely the toggle scope, and the
+// ends-with attribute selectors (`[id$="luker_orch_capsule_depth_block"]`
+// etc.) match both drawer and popup blocks — pass `jQuery(document)` to
+// toggle both surfaces in one call.
 function updateCapsulePositionVisibility($root) {
     const settings = getSettings();
     const positionVal = Number(settings.capsuleInjectPosition);
