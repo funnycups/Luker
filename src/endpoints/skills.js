@@ -1,5 +1,5 @@
 import express from 'express';
-import { decodeScopePath } from '../skills/scope.js';
+import { decodeScopePath, encodeScopePath } from '../skills/scope.js';
 import {
     packEmbedPayload,
     parseEmbedPayload,
@@ -86,7 +86,7 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         // 409 Conflict: existing target blocks the write. (`already_installed`
         // is a SUCCESS action surfaced as r.action, never a thrown message,
         // so it isn't part of this pattern.)
-        if (/collision|already has|exists with|exists.*content|already installed|destination already exists/i.test(msg)) return 409;
+        if (/collision|already has|exists with|exists.*content|already installed|already exists/i.test(msg)) return 409;
 
         // 404 Not Found: source resource missing (read or write).
         // Includes ENOENT wrapped by readFile ("cannot read X: ENOENT...").
@@ -202,6 +202,47 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
             const result = await importFromUrl({ url, targetScope, repository: repo });
             await invalidateIndex(req);
             res.json(result);
+        } catch (e) { handleError(e, res); }
+    });
+
+    router.post('/rename-scope', async (req, res) => {
+        try {
+            const { scope, newName } = req.body || {};
+            if (!scope || typeof scope !== 'object') {
+                return res.status(400).json({ error: 'scope required in body' });
+            }
+            if (scope.kind === 'global') {
+                return res.status(400).json({ error: 'cannot rename global scope' });
+            }
+            // Round-trip through encode+decode to reject unknown kinds /
+            // invalid orch-preset modes at the endpoint boundary before
+            // touching the repository.
+            parseScope(encodeScopePath(scope));
+            const repo = getRepository(req);
+            await repo.renameScope(scope, newName);
+            await invalidateIndex(req);
+            res.status(204).end();
+        } catch (e) { handleError(e, res); }
+    });
+
+    router.post('/copy-scope', async (req, res) => {
+        try {
+            const { fromScope, toScope } = req.body || {};
+            if (!fromScope || typeof fromScope !== 'object') {
+                return res.status(400).json({ error: 'fromScope required in body' });
+            }
+            if (!toScope || typeof toScope !== 'object') {
+                return res.status(400).json({ error: 'toScope required in body' });
+            }
+            if (fromScope.kind === 'global' || toScope.kind === 'global') {
+                return res.status(400).json({ error: 'cannot copy from/to global scope' });
+            }
+            parseScope(encodeScopePath(fromScope));
+            parseScope(encodeScopePath(toScope));
+            const repo = getRepository(req);
+            await repo.copyScope(fromScope, toScope);
+            await invalidateIndex(req);
+            res.status(204).end();
         } catch (e) { handleError(e, res); }
     });
 
@@ -385,6 +426,19 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
             const repo = getRepository(req);
             const scope = parseScope(req.params.scope);
             await repo.delete(req.params.name, scope);
+            await invalidateIndex(req);
+            res.status(204).end();
+        } catch (e) { handleError(e, res); }
+    });
+
+    router.delete('/:scope', async (req, res) => {
+        try {
+            const scope = parseScope(req.params.scope);
+            if (scope.kind === 'global') {
+                return res.status(400).json({ error: 'cannot delete global scope' });
+            }
+            const repo = getRepository(req);
+            await repo.deleteScope(scope);
             await invalidateIndex(req);
             res.status(204).end();
         } catch (e) { handleError(e, res); }
