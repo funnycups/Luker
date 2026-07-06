@@ -120,4 +120,57 @@ describe('SkillScope helpers', () => {
             expect(scopeLabel(undefined)).toBe('unknown');
         });
     });
+
+    describe('orch-preset kind', () => {
+        test('encodeScopePath handles orch-preset with mode+name', () => {
+            expect(encodeScopePath({ kind: 'orch-preset', mode: 'spec', name: 'my-preset' }))
+                .toBe('orch-preset/spec/my-preset');
+            expect(encodeScopePath({ kind: 'orch-preset', mode: 'director', name: 'plan-alpha' }))
+                .toBe('orch-preset/director/plan-alpha');
+        });
+
+        test('encodeScopePath rejects orch-preset with invalid mode', () => {
+            expect(() => encodeScopePath({ kind: 'orch-preset', mode: '../evil', name: 'x' }))
+                .toThrow();
+            expect(() => encodeScopePath({ kind: 'orch-preset', mode: '', name: 'x' }))
+                .toThrow();
+        });
+
+        test('encodeScopePath rejects orch-preset with invalid name', () => {
+            expect(() => encodeScopePath({ kind: 'orch-preset', mode: 'spec', name: '../etc' }))
+                .toThrow();
+            expect(() => encodeScopePath({ kind: 'orch-preset', mode: 'spec', name: '' }))
+                .toThrow();
+        });
+
+        test('decodeScopePath handles orch-preset three-segment path', () => {
+            expect(decodeScopePath('orch-preset/spec/my-preset'))
+                .toEqual({ kind: 'orch-preset', mode: 'spec', name: 'my-preset' });
+            expect(decodeScopePath('orch-preset/agenda/hello'))
+                .toEqual({ kind: 'orch-preset', mode: 'agenda', name: 'hello' });
+        });
+
+        test('decodeScopePath rejects orch-preset with wrong segment count', () => {
+            expect(() => decodeScopePath('orch-preset/spec')).toThrow();
+            expect(() => decodeScopePath('orch-preset')).toThrow();
+            expect(() => decodeScopePath('orch-preset/spec/name/extra')).toThrow();
+        });
+
+        test('encode/decode roundtrip for orch-preset', () => {
+            const scope = { kind: 'orch-preset', mode: 'loop', name: 'test-preset-123' };
+            expect(decodeScopePath(encodeScopePath(scope))).toEqual(scope);
+        });
+
+        test('isValidScope accepts orch-preset', () => {
+            expect(isValidScope({ kind: 'orch-preset', mode: 'spec', name: 'x' })).toBe(true);
+            expect(isValidScope({ kind: 'orch-preset', mode: '', name: 'x' })).toBe(false);
+            expect(isValidScope({ kind: 'orch-preset', mode: 'spec', name: '' })).toBe(false);
+            expect(isValidScope({ kind: 'orch-preset' })).toBe(false);
+        });
+
+        test('scopeLabel formats orch-preset as "orch:<mode>/<name>"', () => {
+            expect(scopeLabel({ kind: 'orch-preset', mode: 'spec', name: 'foo' }))
+                .toBe('orch:spec/foo');
+        });
+    });
 });

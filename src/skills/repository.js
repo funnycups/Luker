@@ -142,6 +142,17 @@ export function createSkillRepository(dataRoot) {
             for (const characterFile of chars) {
                 all.push(...(await listScope({ kind: 'character', characterFile })));
             }
+            const orchPresetRoot = join(skillsRoot, 'orch-preset');
+            const orchModes = await fs.readdir(orchPresetRoot).catch(() => []);
+            for (const mode of orchModes) {
+                if (mode.startsWith('.')) continue;
+                const modeRoot = join(orchPresetRoot, mode);
+                const orchNames = await fs.readdir(modeRoot).catch(() => []);
+                for (const name of orchNames) {
+                    if (name.startsWith('.')) continue;
+                    all.push(...(await listScope({ kind: 'orch-preset', mode, name })));
+                }
+            }
             return all;
         }
         return listScope(scope);
@@ -534,6 +545,79 @@ export function createSkillRepository(dataRoot) {
         return { content, totalLines };
     }
 
+    // ──────────────────────────── scope-level ops ────────────────────────────
+
+    async function deleteScope(scope) {
+        const scopePath = encodeScopePath(scope);
+        const dir = join(skillsRoot, scopePath);
+        await fs.rm(dir, { recursive: true, force: true });
+    }
+
+    async function assertDirMissing(dir, errMsg) {
+        try {
+            await fs.access(dir);
+        } catch (e) {
+            if (e.code === 'ENOENT') return; // good — doesn't exist
+            throw e;
+        }
+        throw new Error(errMsg);
+    }
+
+    async function renameScope(scope, newName) {
+        let toScope;
+        if (scope.kind === 'orch-preset') {
+            if (!newName || typeof newName !== 'object'
+                || typeof newName.mode !== 'string' || typeof newName.name !== 'string') {
+                throw new Error('invalid renameScope: orch-preset requires newName={mode, name}');
+            }
+            if (newName.mode !== scope.mode) {
+                throw new Error('unsupported cross-mode rename (mode must match)');
+            }
+            toScope = { kind: 'orch-preset', mode: newName.mode, name: newName.name };
+        } else if (scope.kind === 'preset') {
+            if (typeof newName !== 'string' || newName.length === 0) {
+                throw new Error('invalid renameScope: preset newName required as string');
+            }
+            toScope = { kind: 'preset', name: newName };
+        } else if (scope.kind === 'character') {
+            if (typeof newName !== 'string' || newName.length === 0) {
+                throw new Error('invalid renameScope: character newName required as string');
+            }
+            toScope = { kind: 'character', characterFile: newName };
+        } else {
+            throw new Error(`unsupported renameScope for scope kind ${scope.kind}`);
+        }
+        const fromDir = join(skillsRoot, encodeScopePath(scope));
+        const toDir = join(skillsRoot, encodeScopePath(toScope));
+        await assertDirMissing(toDir, `renameScope: destination scope already exists: ${scopeLabel(toScope)}`);
+        try {
+            await fs.rename(fromDir, toDir);
+        } catch (e) {
+            if (e.code === 'ENOENT') {
+                throw new Error(`renameScope: source scope not found: ${scopeLabel(scope)}`);
+            }
+            throw e;
+        }
+    }
+
+    async function copyScope(fromScope, toScope) {
+        if (fromScope.kind !== toScope.kind) {
+            throw new Error(`invalid copyScope: kind mismatch (from=${fromScope.kind}, to=${toScope.kind})`);
+        }
+        const fromDir = join(skillsRoot, encodeScopePath(fromScope));
+        const toDir = join(skillsRoot, encodeScopePath(toScope));
+        try {
+            await fs.access(fromDir);
+        } catch (e) {
+            if (e.code === 'ENOENT') {
+                throw new Error(`copyScope: source scope not found: ${scopeLabel(fromScope)}`);
+            }
+            throw e;
+        }
+        await assertDirMissing(toDir, `copyScope: destination scope already exists: ${scopeLabel(toScope)}`);
+        await fs.cp(fromDir, toDir, { recursive: true });
+    }
+
     return {
         list,
         get,
@@ -549,5 +633,8 @@ export function createSkillRepository(dataRoot) {
         readFile,
         listFiles,
         search,
+        deleteScope,
+        renameScope,
+        copyScope,
     };
 }
