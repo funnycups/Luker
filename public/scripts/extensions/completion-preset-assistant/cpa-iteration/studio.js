@@ -1039,14 +1039,12 @@ export async function openCpaIterationStudio(deps) {
             const role = m.is_user ? 'user' : 'assistant';
             const at = m.send_date ? new Date(m.send_date).getTime() : Date.now();
             state.session.messages.push(normalizeMessageShape({
-                id: makeMessageId(),
                 role,
                 content: String(m.mes || ''),
                 at: isNaN(at) ? Date.now() : at,
             }, Date.now()));
         }
 
-        state.session.updatedAt = Date.now();
         await persistSession();
         await render();
         try { toastr.success(tf('Imported ${0} message(s)', String(selectedSet.size))); } catch { /* ignore */ }
