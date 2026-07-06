@@ -184,7 +184,7 @@ function tryRenderArgsDiff(name, args, i18n) {
     });
 
     return [
-        `<details class="luker_lib_toolcall_details" open>`,
+        `<details class="luker_lib_toolcall_details">`,
         `<summary>${escapeHtml(i18n('Arguments'))}</summary>`,
         metaHtml,
         diffBlock,
