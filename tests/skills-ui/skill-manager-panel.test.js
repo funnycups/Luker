@@ -36,6 +36,8 @@ describe('skill-manager-panel — pure helpers', () => {
             .toBe('preset: rp4');
         expect(mod.formatScopeLabel({ kind: 'character', characterFile: 'Alice.png' }))
             .toBe('character: Alice.png');
+        expect(mod.formatScopeLabel({ kind: 'orch-preset', mode: 'spec', name: 'x' }))
+            .toBe('Orchestrator preset: spec/x');
         expect(mod.formatScopeLabel(null)).toBe('unknown');
         expect(mod.formatScopeLabel({ kind: 'bogus' })).toBe('unknown');
     });
@@ -46,6 +48,8 @@ describe('skill-manager-panel — pure helpers', () => {
         expect(mod.scopesEqual({ kind: 'preset', name: 'b' }, { kind: 'preset', name: 'c' })).toBe(false);
         expect(mod.scopesEqual({ kind: 'character', characterFile: 'x' }, { kind: 'character', characterFile: 'x' })).toBe(true);
         expect(mod.scopesEqual({ kind: 'global' }, { kind: 'character', characterFile: 'x' })).toBe(false);
+        expect(mod.scopesEqual({ kind: 'orch-preset', mode: 'spec', name: 'x' }, { kind: 'orch-preset', mode: 'spec', name: 'x' })).toBe(true);
+        expect(mod.scopesEqual({ kind: 'orch-preset', mode: 'spec', name: 'x' }, { kind: 'orch-preset', mode: 'agenda', name: 'x' })).toBe(false);
         expect(mod.scopesEqual(null, { kind: 'global' })).toBe(false);
     });
 
@@ -76,6 +80,102 @@ describe('skill-manager-panel — pure helpers', () => {
 
         const allGroups = mod.filterGroups(grouped, 'all');
         expect(allGroups).toHaveLength(2);
+    });
+
+    test('filterGroups: bare "preset"/"character" bucket matches every instance of that kind', () => {
+        const flat = [
+            { name: 'a', scope: { kind: 'global' } },
+            { name: 'b', scope: { kind: 'preset', name: 'rp' } },
+            { name: 'c', scope: { kind: 'preset', name: 'other' } },
+            { name: 'd', scope: { kind: 'character', characterFile: 'X.png' } },
+        ];
+        const grouped = mod.groupSkillsByScope(flat);
+        const presetBucket = mod.filterGroups(grouped, 'preset');
+        expect(presetBucket).toHaveLength(2);
+        expect(presetBucket.every(g => g.scope.kind === 'preset')).toBe(true);
+
+        const characterBucket = mod.filterGroups(grouped, 'character');
+        expect(characterBucket).toHaveLength(1);
+        expect(characterBucket[0].scope.kind).toBe('character');
+
+        // An exact instance key still narrows to just that one (unchanged).
+        const exact = mod.filterGroups(grouped, 'preset/rp');
+        expect(exact).toHaveLength(1);
+        expect(exact[0].skills.map(s => s.name)).toEqual(['b']);
+    });
+
+    test('scopeBucketOf derives the fixed bucket from any filter key', () => {
+        expect(mod.scopeBucketOf('all')).toBe('all');
+        expect(mod.scopeBucketOf('global')).toBe('global');
+        expect(mod.scopeBucketOf('preset')).toBe('preset');
+        expect(mod.scopeBucketOf('preset/rp')).toBe('preset');
+        expect(mod.scopeBucketOf('character')).toBe('character');
+        expect(mod.scopeBucketOf('character/A.png')).toBe('character');
+        expect(mod.scopeBucketOf('orch-preset')).toBe('orch-preset');
+        expect(mod.scopeBucketOf('orch-preset/spec/x')).toBe('orch-preset');
+        expect(mod.scopeBucketOf(undefined)).toBe('all');
+    });
+
+    test('orch-preset scope: key, grouping order, bucket + bare-word filter', () => {
+        const op = { kind: 'orch-preset', mode: 'spec', name: 'x' };
+        expect(mod.scopeKey(op)).toBe('orch-preset/spec/x');
+        expect(mod.scopeInstanceOf('orch-preset/spec/x')).toBe('spec/x');
+        const flat = [
+            { name: 'g', scope: { kind: 'global' } },
+            { name: 'o', scope: op },
+        ];
+        const grouped = mod.groupSkillsByScope(flat);
+        // orch-preset skills are kept (previously dropped) and ordered last.
+        expect(grouped).toHaveLength(2);
+        expect(grouped[grouped.length - 1].scope.kind).toBe('orch-preset');
+        // The bare "orch-preset" bucket word matches every orch-preset instance.
+        const bucket = mod.filterGroups(grouped, 'orch-preset');
+        expect(bucket).toHaveLength(1);
+        expect(bucket[0].scope.kind).toBe('orch-preset');
+    });
+
+    test('groupExportPicksByScope batches picks by scope key', () => {
+        const picks = [
+            { name: 'a', scope: { kind: 'global' } },
+            { name: 'b', scope: { kind: 'global' } },
+            { name: 'c', scope: { kind: 'preset', name: 'rp' } },
+        ];
+        const batches = mod.groupExportPicksByScope(picks);
+        expect(batches).toHaveLength(2);
+        const globalBatch = batches.find(b => b.scope.kind === 'global');
+        expect(globalBatch.names.sort()).toEqual(['a', 'b']);
+        const presetBatch = batches.find(b => b.scope.kind === 'preset');
+        expect(presetBatch.names).toEqual(['c']);
+    });
+
+    test('mergeEmbedPayloads concatenates items across multiple pack results', () => {
+        const merged = mod.mergeEmbedPayloads([
+            { version: 1, items: [{ name: 'a' }] },
+            { version: 1, items: [{ name: 'b' }, { name: 'c' }] },
+            null,
+        ]);
+        expect(merged.version).toBe(1);
+        expect(merged.items.map(i => i.name)).toEqual(['a', 'b', 'c']);
+    });
+
+    test('scopeToExportDir: maps each scope kind to its panel-category folder path', () => {
+        expect(mod.scopeToExportDir({ kind: 'global' })).toBe('全局技能');
+        expect(mod.scopeToExportDir({ kind: 'preset', name: '青云上' })).toBe('预设技能/青云上');
+        expect(mod.scopeToExportDir({ kind: 'character', characterFile: '奥特曼' })).toBe('角色卡技能/奥特曼');
+        expect(mod.scopeToExportDir({ kind: 'orch-preset', mode: 'spec', name: '剧情' })).toBe('编排器预设技能/spec/剧情');
+        // path-unsafe chars in instance names are sanitized (won't break the tree)
+        expect(mod.scopeToExportDir({ kind: 'preset', name: 'a/b' })).toBe('预设技能/a_b');
+    });
+
+    test('exportEntryPath: SKILL.md becomes <id>.md; other files travel in <id>/', () => {
+        const charScope = { kind: 'character', characterFile: '奥特曼' };
+        expect(mod.exportEntryPath(charScope, '写作风格', 'SKILL.md'))
+            .toBe('角色卡技能/奥特曼/写作风格.md');
+        expect(mod.exportEntryPath(charScope, '写作风格', 'references/语料库.md'))
+            .toBe('角色卡技能/奥特曼/写作风格/references/语料库.md');
+        // global is flat — no instance layer.
+        expect(mod.exportEntryPath({ kind: 'global' }, '出图规则', 'SKILL.md'))
+            .toBe('全局技能/出图规则.md');
     });
 
     test('hasRenameCollision finds same-scope name match', () => {
@@ -168,7 +268,40 @@ describe('skill-manager-panel — pure helpers', () => {
         expect(mod.encodeBase64(a)).toBe('AQID');
     });
 
-    test('buildPanelHtml renders rows + empty state + filter dropdown', () => {
+    test('parseExportedSkills: scope-organized package → skills with reconstructed bindings', () => {
+        const skills = mod.parseExportedSkills([
+            '全局技能/出图规则.md',
+            '角色卡技能/奥特曼/写作风格.md',
+            '角色卡技能/奥特曼/写作风格/references/语料库.md', // extra file travels with the skill
+            '预设技能/青云上/双人成行.md',
+            '编排器预设技能/spec/剧情/导演流程.md',
+            '角色卡技能/奥特曼/',  // dir entry — ignored
+            '随手放的.txt',        // outside any category — ignored
+        ]);
+        const byName = Object.fromEntries(skills.map(s => [s.name, s]));
+        expect(Object.keys(byName).sort()).toEqual(['写作风格', '出图规则', '双人成行', '导演流程']);
+        expect(byName['出图规则'].scope).toEqual({ kind: 'global' });
+        expect(byName['双人成行'].scope).toEqual({ kind: 'preset', name: '青云上' });
+        expect(byName['导演流程'].scope).toEqual({ kind: 'orch-preset', mode: 'spec', name: '剧情' });
+        // Character skill keeps its card binding + its reference file.
+        const w = byName['写作风格'];
+        expect(w.scope).toEqual({ kind: 'character', characterFile: '奥特曼' });
+        expect(w.files.map(f => f.rel).sort()).toEqual(['SKILL.md', 'references/语料库.md']);
+    });
+
+    test('parseExportedSkills: bare SKILL.md at root → one scopeless skill (caller picks scope)', () => {
+        const skills = mod.parseExportedSkills(['SKILL.md', 'references/y.md']);
+        expect(skills).toHaveLength(1);
+        expect(skills[0].scope).toBeNull();
+        expect(skills[0].name).toBe('');
+        expect(skills[0].files.map(f => f.rel)).toEqual(['SKILL.md', 'references/y.md']);
+    });
+
+    test('parseExportedSkills: unknown top-level folders are ignored', () => {
+        expect(mod.parseExportedSkills(['随便/notes.md', 'x/readme.txt'])).toEqual([]);
+    });
+
+    test('buildPanelHtml renders rows + empty state + toolbar + fixed filter buckets', () => {
         const t = (s) => s;
         const esc = (s) => String(s);
         const skills = [
@@ -187,15 +320,22 @@ describe('skill-manager-panel — pure helpers', () => {
             },
         ];
         const groups = mod.groupSkillsByScope(skills);
+        // At the 'all' bucket, the global section is always expanded — its
+        // skill shows immediately.
         const html = mod.buildPanelHtml(groups, [skills[0].scope, skills[1].scope], 'all', 'installed', t, esc);
         expect(html).toContain('alpha');
-        expect(html).toContain('beta');
-        expect(html).toContain('has scripts');
-        expect(html).toContain('All scopes');
+        expect(html).toContain('All skills');
+        expect(html).toContain('Import skill');
         expect(html).toContain('Import bundled');
         expect(html).toContain('Import from file');
         expect(html).toContain('Import from URL');
+        expect(html).toContain('Export skill');
         expect(html).toContain('Create new');
+        // Preset section is collapsed by default in the 'all' bucket — the
+        // preset-scoped skill 'beta' does NOT render until the section is
+        // opened (data-skill-toggle-names="preset" is present to open it).
+        expect(html).toContain('data-skill-toggle-names="preset"');
+        expect(html).not.toContain('beta');
         // Tab strip is always rendered.
         expect(html).toContain('data-skill-tab="installed"');
         expect(html).toContain('data-skill-tab="bundled"');
@@ -207,6 +347,34 @@ describe('skill-manager-panel — pure helpers', () => {
         const bundledHtml = mod.buildPanelHtml(groups, [skills[0].scope], 'all', 'bundled', t, esc);
         expect(bundledHtml).toContain('luker_skill_manager_bundled_mount');
         expect(bundledHtml).not.toContain('Import bundled');
+    });
+
+    test('buildPanelHtml: filtering exclusively to the preset bucket auto-opens the name-picker', () => {
+        const t = (s) => s;
+        const esc = (s) => String(s);
+        const skills = [
+            { name: 'alpha', description: '', fileCount: 1, scope: { kind: 'global' } },
+            { name: 'beta', description: '', fileCount: 1, hasScripts: true, scope: { kind: 'preset', name: 'rp' } },
+        ];
+        const groups = mod.groupSkillsByScope(skills);
+        const html = mod.buildPanelHtml(groups, [], 'preset', 'installed', t, esc);
+        // Only the preset section renders — no global section at all.
+        expect(html).not.toContain('alpha');
+        // The name-picker is open automatically (no click needed) and
+        // includes an "All" row alongside the specific instance name.
+        expect(html).toContain('data-skill-toggle-name="__all__"');
+        expect(html).toContain('data-skill-toggle-name="rp"');
+        // Nothing is picked yet, so the skill card itself is still hidden
+        // behind the "pick a name" hint.
+        expect(html).not.toContain('beta');
+        expect(html).toContain('Pick a name above to see its skills');
+
+        // Explicitly picking "All" within the preset bucket reveals the
+        // card, tagged with which instance it came from.
+        const withAllPicked = mod.buildPanelHtml(groups, [], 'preset', 'installed', t, esc, { activePresetName: '__all__' });
+        expect(withAllPicked).toContain('beta');
+        expect(withAllPicked).toContain('has scripts');
+        expect(withAllPicked).toContain('From: rp');
     });
 });
 
@@ -430,6 +598,10 @@ function makeStubContext({ skills = [], bundled = [], characters = [], scenarios
         previewExtractEmbed: jest.fn(async () => ({ items: [{ name: 'imported', conflict: 'new' }] })),
         executeExtractEmbed: jest.fn(async () => ({ installed: ['imported'], skipped: [] })),
         listBundledManifest: jest.fn(async () => bundled.slice()),
+        packForEmbed: jest.fn(async ({ scope, names }) => ({
+            version: 1,
+            items: names.map(name => ({ bundleFormat: 'inline-files-v1', name, scope })),
+        })),
     };
     const POPUP_TYPE = { TEXT: 1, CONFIRM: 2, INPUT: 3, DISPLAY: 4 };
     const POPUP_RESULT = { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null };
@@ -476,25 +648,39 @@ function makeStubContext({ skills = [], bundled = [], characters = [], scenarios
     };
 }
 
+// Minimal JSZip stub so the export flow (which now builds a .zip client-side)
+// runs deterministically without loading the real bundled UMD lib. The panel
+// prefers an already-present globalThis.JSZip before dynamic-importing, so
+// assigning this is enough. Records entries in case a test wants to assert.
+class StubJSZip {
+    constructor() { this.entries = {}; }
+    file(path, content) { this.entries[path] = content; }
+    async generateAsync() { return { __stubZipBlob: true, entries: this.entries }; }
+}
+StubJSZip.loadAsync = async () => ({ files: {} });
+
 describe('openSkillManagerPanel — integration scenarios', () => {
-    let origDoc, origToastr;
+    let origDoc, origToastr, origJSZip;
 
     // eslint-disable-next-line playwright/no-duplicate-hooks
     beforeEach(() => {
         origDoc = global.document;
         origToastr = global.toastr;
+        origJSZip = global.JSZip;
         global.document = new StubDocument();
         global.toastr = {
             info: jest.fn(),
             success: jest.fn(),
             error: jest.fn(),
         };
+        global.JSZip = StubJSZip;
     });
 
     // eslint-disable-next-line playwright/no-duplicate-hooks
     afterEach(() => {
         global.document = origDoc;
         global.toastr = origToastr;
+        global.JSZip = origJSZip;
     });
 
     async function bootstrap(opts) {
@@ -531,17 +717,32 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         return { ctx, mount: stub, panelPromise };
     }
 
-    test('initial render lists skills + filter dropdown is in place', async () => {
+    test('initial render lists global skills; preset/character sections start collapsed', async () => {
         const skills = [
             { name: 'a', scope: { kind: 'global' }, description: 'desc-a', fileCount: 1 },
             { name: 'b', scope: { kind: 'character', characterFile: 'C.png' }, description: 'desc-b', fileCount: 2 },
         ];
         const { ctx, mount } = await bootstrap({ skills });
         expect(ctx.__skillsApi.list).toHaveBeenCalled();
+        // Global is always expanded — no click needed.
         expect(mount.innerHTML).toContain('desc-a');
-        expect(mount.innerHTML).toContain('desc-b');
-        expect(mount.innerHTML).toContain('All scopes');
+        expect(mount.innerHTML).toContain('All skills');
         expect(mount.innerHTML).toContain('Filter by scope:');
+        // Character section is a name-picker, collapsed until its header is
+        // clicked — the character skill isn't rendered yet.
+        expect(mount.innerHTML).not.toContain('desc-b');
+
+        // Clicking the section header opens the name-picker; picking the
+        // one instance ("All" or its own name) reveals the card.
+        const toggle = mount.querySelector('[data-skill-toggle-names="character"]');
+        expect(toggle).toBeTruthy();
+        toggle.click();
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+        const nameRow = mount.querySelector('[data-skill-toggle-kind="character"][data-skill-toggle-name="C.png"]');
+        expect(nameRow).toBeTruthy();
+        nameRow.click();
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+        expect(mount.innerHTML).toContain('desc-b');
     });
 
     test('delete flow invokes context.skills.delete and refreshes the list', async () => {
@@ -704,6 +905,67 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         expect(global.toastr.success).toHaveBeenCalled();
     });
 
+    test('Export skill: unchecking one row excludes it from the packed batches', async () => {
+        const skills = [
+            { name: 'a', scope: { kind: 'global' }, description: 'g', fileCount: 1 },
+            { name: 'b', scope: { kind: 'preset', name: 'rp' }, description: 'p', fileCount: 1 },
+        ];
+        const { ctx, mount } = await bootstrap({
+            skills,
+            scenarios: {
+                popupShow: async (popup) => {
+                    // Emulate "user unchecked skill a, left b checked" before
+                    // confirming — same onClosing-scrape drive pattern as the
+                    // move-scope conflict test above.
+                    const dlg = popup.dlg;
+                    const boxes = dlg.querySelectorAll('input[data-skill-export-name]');
+                    for (const box of boxes) {
+                        if (box.getAttribute('data-skill-export-name') === 'a') box.checked = false;
+                    }
+                    if (popup.opts && typeof popup.opts.onClosing === 'function') {
+                        const r = popup.opts.onClosing({ result: 1, dlg });
+                        if (r === false) return 0;
+                    }
+                    popup.result = 1;
+                    return 1;
+                },
+            },
+        });
+
+        const btn = mount.querySelector('[data-skill-toolbar="export"]');
+        expect(btn).toBeTruthy();
+        btn.click();
+
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+
+        expect(ctx.__skillsApi.packForEmbed).toHaveBeenCalledTimes(1);
+        const call = ctx.__skillsApi.packForEmbed.mock.calls[0][0];
+        expect(call.scope).toEqual({ kind: 'preset', name: 'rp' });
+        expect(call.names).toEqual(['b']);
+        expect(global.toastr.success).toHaveBeenCalled();
+    });
+
+    test('Export skill: cancelling the dialog calls neither packForEmbed nor any toast', async () => {
+        const skills = [
+            { name: 'a', scope: { kind: 'global' }, description: 'g', fileCount: 1 },
+        ];
+        const { ctx, mount } = await bootstrap({
+            skills,
+            scenarios: {
+                popupShow: async (popup) => {
+                    popup.result = 0;
+                    return 0; // NEGATIVE — user cancelled
+                },
+            },
+        });
+
+        const btn = mount.querySelector('[data-skill-toolbar="export"]');
+        btn.click();
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+
+        expect(ctx.__skillsApi.packForEmbed).not.toHaveBeenCalled();
+    });
+
     test('Create new triggers the create-new-skill flow (no placeholder stub toast)', async () => {
         const { ctx, mount } = await bootstrap({ skills: [] });
         const btn = mount.querySelector('[data-skill-toolbar="create"]');
@@ -770,24 +1032,32 @@ describe('openSkillManagerPanel — integration scenarios', () => {
         expect(bundledMount.innerHTML).toContain('Not installed');
     });
 
-    test('initialScope filter pre-selects scope in dropdown', async () => {
+    test('initialScope deep-link opens the preset bucket + auto-picks the instance', async () => {
         const skills = [
             { name: 'a', scope: { kind: 'global' }, description: 'g', fileCount: 1 },
             { name: 'b', scope: { kind: 'preset', name: 'rp' }, description: 'p', fileCount: 1 },
         ];
-        // Open with initialScope filter set to that preset.
+        // Open with initialScope set to that preset (e.g. CPA's "bundle
+        // skills with this preset" link).
         const initialScope = { kind: 'preset', name: 'rp' };
         const { mount } = await bootstrap({ skills, initialScope });
-        // The filter dropdown should have the preset scope selected; the panel
-        // body should only contain group(s) for that scope.
+        // The fixed filter select reflects the BUCKET ('preset'), not the
+        // exact instance — the specific preset is pre-picked and its
+        // name-picker auto-opened instead (see below), not represented as
+        // a dropdown option anymore.
         const filterSelect = mount.querySelector('[data-skill-filter]');
         expect(filterSelect).toBeTruthy();
-        expect(filterSelect.value).toBe('preset/rp');
-        // Global skill 'a' should not appear in the rendered list.
+        expect(filterSelect.value).toBe('preset');
+        // The preset's own card is already visible with no extra clicks —
+        // and only that preset's, since the global bucket isn't shown at all
+        // when the filter is narrowed to 'preset'.
         const rows = mount.querySelectorAll('[data-skill-name]');
         const names = [];
         for (const r of rows) names.push(r.getAttribute('data-skill-name'));
         expect(names).toContain('b');
         expect(names).not.toContain('a');
+        // The deep-linked instance name is marked active in the name-picker.
+        const activeRow = mount.querySelector('.luker_skill_picker_row_active[data-skill-toggle-name="rp"]');
+        expect(activeRow).toBeTruthy();
     });
 });
