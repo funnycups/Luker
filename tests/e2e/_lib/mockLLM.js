@@ -148,10 +148,16 @@ const MAIN_ONLY_TOOL_NAMES = new Set([
  *   stop:()=>Promise<void>,
  * }>}
  */
-export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [], latencyMs = 0 } = {}) {
+export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [], latencyMs = 0, streamChunkDelayMs = 0 } = {}) {
     const replies = [...scriptedReplies];
     const tools = [...scriptedToolCalls];
     const requests = [];
+    // Per-stream drip delay between SSE frames (default 0 = burst).
+    // 11.2 (reconnect) uses this to keep a stream open long enough that
+    // the test can go offline mid-flight; server-side buffering + WS
+    // replay must still deliver every chunk.
+    let chunkDelayMsGlobal = streamChunkDelayMs;
+    function setChunkDelay(ms) { chunkDelayMsGlobal = Math.max(0, Number(ms) || 0); }
 
     // Director routing state — single in-flight router. scriptDirectorRun
     // replaces it; clearDirectorRun nulls it. Per-role turn counters are
@@ -370,6 +376,9 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                     for (let i = 0; i < words.length; i++) {
                         const piece = (i === 0 ? '' : ' ') + words[i];
                         res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] })}\n\n`);
+                        if (chunkDelayMsGlobal > 0 && i < words.length - 1) {
+                            await new Promise(r => setTimeout(r, chunkDelayMsGlobal));
+                        }
                     }
                     res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
                 }
@@ -404,6 +413,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         baseURL: `http://127.0.0.1:${port}/v1`,
         scriptReply(s) { replies.push(s); },
         scriptToolCall(t) { tools.push(t); },
+        setStreamChunkDelayMs(ms) { setChunkDelay(ms); },
         scriptDirectorRun({ route } = {}) { setDirectorRoute(route); },
         clearDirectorRun() { setDirectorRoute(null); },
         requests,

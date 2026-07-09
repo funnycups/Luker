@@ -6,12 +6,7 @@ import sanitize from 'sanitize-filename';
 
 import { CHAT_COMPLETION_SOURCES } from '../../constants.js';
 import { appendMessagesToChatFile } from '../chats.js';
-import { getConfigValue, tryParse } from '../../util.js';
-import {
-    completeInspectionFromStream,
-    failInspection,
-    abortInspection,
-} from '../../request-inspector.js';
+import { getConfigValue } from '../../util.js';
 
 const generationJobs = new Map();
 const LUKER_GENERATION_JOB_MAX_ITEMS = 128;
@@ -242,6 +237,77 @@ export function extractTextFromStreamingFrameData(rawData, source = '') {
     }
 }
 
+/**
+ * Given a raw chunk emitted from a dispatch (Uint8Array / Buffer / string),
+ * attempt to extract text content and append to `job.text`. Supports both:
+ *   - SSE frames (`\n\n` delimited, `data: ` prefixed lines), including
+ *     multiple frames per chunk and partial frames spanning chunks (buffered
+ *     on `job._sseBuffer`).
+ *   - A single JSON object payload (non-streaming case, no SSE framing).
+ *
+ * Silently returns for other shapes (binary image bytes, unrelated bytes).
+ * Never throws.
+ *
+ * The runner calls this on every `chunk` event so `job.text` stays in sync
+ * with the streamed content. `appendGenerationEvent` still stores the raw
+ * event verbatim in `job.events[]` for WS replay; text extraction is a
+ * separate channel and does not alter the events array.
+ *
+ * @param {object} job
+ * @param {Uint8Array | Buffer | string} chunkBytes
+ */
+export function accumulateChunkTextIntoJob(job, chunkBytes) {
+    if (!job || chunkBytes == null) return;
+
+    let text;
+    if (typeof chunkBytes === 'string') {
+        text = chunkBytes;
+    } else if (chunkBytes instanceof Uint8Array || Buffer.isBuffer(chunkBytes)) {
+        try { text = Buffer.from(chunkBytes).toString('utf8'); }
+        catch { return; }
+    } else {
+        return;
+    }
+    if (!text) return;
+
+    const source = job?.requestMeta?.api || '';
+    job._sseBuffer = String(job._sseBuffer || '') + text;
+
+    // If the buffer looks like SSE (has a frame delimiter, or begins with a
+    // `data:` line), parse SSE frames. Last split element may be a partial
+    // frame — keep it in the buffer for the next call.
+    if (job._sseBuffer.includes('\n\n') || job._sseBuffer.startsWith('data:')) {
+        const frames = job._sseBuffer.split('\n\n');
+        job._sseBuffer = frames.pop() || '';
+        for (const frame of frames) {
+            if (!frame) continue;
+            const dataLines = [];
+            for (const line of frame.split('\n')) {
+                if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+            }
+            if (dataLines.length === 0) continue;
+            const payload = dataLines.join('\n');
+            if (!payload || payload === '[DONE]') continue;
+            const deltaText = extractTextFromStreamingFrameData(payload, source);
+            if (deltaText) job.text += deltaText;
+        }
+        return;
+    }
+
+    // No SSE framing yet — try treating the buffer as a complete JSON payload
+    // (non-streaming dispatch). Only attempt if it plausibly starts with JSON;
+    // if extraction succeeds, clear the buffer so a subsequent chunk starts
+    // fresh. Otherwise keep buffering (chunk may be partial JSON).
+    const trimmed = job._sseBuffer.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        const deltaText = extractTextFromStreamingFrameData(trimmed, source);
+        if (deltaText) {
+            job.text += deltaText;
+            job._sseBuffer = '';
+        }
+    }
+}
+
 function pruneGenerationJobs() {
     const now = Date.now();
     for (const [key, job] of generationJobs.entries()) {
@@ -297,6 +363,17 @@ export function getPersistChatKey(persistTarget) {
     return `char:${avatar}:${fileName}`;
 }
 
+export function getTaskByRequestId(requestId, expectedOwner) {
+    const id = String(requestId || '');
+    if (!id) return null;
+    const job = generationJobs.get(id);
+    if (!job) return null;
+    if (String(expectedOwner || '') !== String(job.owner || '')) {
+        throw new Error('forbidden');
+    }
+    return job;
+}
+
 export function createGenerationJob(request, options) {
     if (!options || typeof options !== 'object') {
         return null;
@@ -318,6 +395,7 @@ export function createGenerationJob(request, options) {
     const job = existing || {
         id: jobId,
         handle: request.user.profile.handle,
+        owner: request.user.profile.handle,
         createdAt: now,
         updatedAt: now,
         status: 'running',
@@ -403,10 +481,23 @@ export function appendGenerationEvent(job, rawData) {
  */
 const jobSubscribers = new Map();
 
-export function subscribeToJob(jobId, callback) {
+export function subscribeToJob(jobId, callback, options = {}) {
     const id = String(jobId || '');
     if (!id || typeof callback !== 'function') {
         return () => {};
+    }
+    const fromSeq = Number(options.fromSeq || 0);
+    // Replay events with seq >= fromSeq
+    if (fromSeq > 0) {
+        const job = generationJobs.get(id);
+        if (job && Array.isArray(job.events)) {
+            for (const entry of job.events) {
+                if (entry.seq >= fromSeq) {
+                    try { callback({ type: 'event', entry }); }
+                    catch (error) { console.warn('[LukerGeneration] subscriber threw during replay', error); }
+                }
+            }
+        }
     }
     let set = jobSubscribers.get(id);
     if (!set) {
@@ -582,68 +673,6 @@ export async function completeGenerationJobFromPayload(request, job, payload, mo
     return await completeGenerationJobFromText(request, job, text, modelName);
 }
 
-export function bindRequestCloseAbort(request, controller, options = {}) {
-    const onAbortClose = typeof options.onAbortClose === 'function' ? options.onAbortClose : null;
-    const keepAliveWhenJob = options.keepAliveWhenJob !== false;
-    const response = options.response && typeof options.response === 'object'
-        ? options.response
-        : request?.res;
-    const job = getJobFromRequest(request);
-    const hasJob = keepAliveWhenJob && Boolean(job);
-    let handled = false;
-
-    if (job) {
-        job.abortController = controller || null;
-    }
-
-    const cleanup = () => {
-        request?.removeListener?.('aborted', handleAbort);
-        request?.socket?.removeListener?.('close', handleSocketClose);
-        response?.removeListener?.('close', handleResponseClose);
-    };
-
-    const abortUpstream = async () => {
-        if (handled) {
-            return;
-        }
-        handled = true;
-        cleanup();
-        if (hasJob) {
-            return;
-        }
-        if (onAbortClose) {
-            await onAbortClose();
-        }
-        if (controller && !controller.signal?.aborted) {
-            controller.abort();
-        }
-    };
-
-    const handleAbort = () => {
-        void abortUpstream();
-    };
-
-    const handleSocketClose = () => {
-        if (response?.writableEnded || response?.finished) {
-            cleanup();
-            return;
-        }
-        void abortUpstream();
-    };
-
-    const handleResponseClose = () => {
-        if (response?.writableEnded || response?.finished) {
-            cleanup();
-            return;
-        }
-        void abortUpstream();
-    };
-
-    request?.on?.('aborted', handleAbort);
-    request?.socket?.on?.('close', handleSocketClose);
-    response?.on?.('close', handleResponseClose);
-}
-
 export function cancelGenerationJobForRequest(request, jobId, reason = 'Cancelled by user') {
     pruneGenerationJobs();
     const id = String(jobId || '').trim();
@@ -801,237 +830,6 @@ export function acknowledgeGenerationJobsForPersistTarget(request, persistTarget
     }
 
     return acknowledgeGenerationJobsForRequest(request, candidates.map(job => job.id));
-}
-
-export async function forwardStreamingWithGenerationJob(fetchResponse, response, request, job, options = {}) {
-    const modelName = String(options.modelName || request.body?.model || '');
-    let clientClosed = false;
-    response.socket?.on('close', () => {
-        clientClosed = true;
-    });
-    if (!response.headersSent) {
-        response.setHeader('x-luker-generation-id', job.id);
-    }
-    if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text().catch(() => '');
-        const errorMessage = `${fetchResponse.status} ${fetchResponse.statusText}`.trim();
-        console.warn(`Streaming API returned error: ${errorMessage}${errorText ? ` ${errorText}` : ''}`);
-        failGenerationJob(job, errorMessage || errorText || 'Streaming request failed');
-        failInspection(request, errorMessage || errorText || 'Streaming request failed', fetchResponse.status);
-        if (!clientClosed && !response.writableEnded) {
-            if (!response.headersSent) {
-                const errorJson = tryParse(errorText) ?? { error: true };
-                return response.status(500).send(errorJson);
-            }
-            response.end(errorText || '');
-        }
-        return;
-    }
-
-    let statusCode = fetchResponse.status;
-    if (statusCode === 401) {
-        statusCode = 400;
-    }
-
-    response.statusCode = statusCode;
-    response.statusMessage = fetchResponse.statusText;
-    const contentType = fetchResponse.headers.get('content-type');
-    if (contentType) {
-        response.setHeader('content-type', contentType);
-    }
-    // Ensure SSE/proxy path does not buffer stream chunks.
-    response.setHeader('Cache-Control', 'no-cache, no-transform');
-    response.setHeader('Connection', 'keep-alive');
-    response.setHeader('X-Accel-Buffering', 'no');
-    if (typeof response.flushHeaders === 'function') {
-        response.flushHeaders();
-    }
-
-    // Preserve the original byte stream for the client and decode incrementally only for SSE bookkeeping.
-    let buffer = '';
-    const decoder = new TextDecoder('utf-8');
-    try {
-        if (fetchResponse.body) {
-            for await (const chunk of fetchResponse.body) {
-                if (job.status === 'cancelled') {
-                    break;
-                }
-                const chunkBytes = chunk instanceof Uint8Array ? chunk : Buffer.from(chunk);
-                const chunkText = decoder.decode(chunkBytes, { stream: true });
-                if (!clientClosed && !response.writableEnded) {
-                    response.write(chunkBytes);
-                    if (typeof response.flush === 'function') {
-                        response.flush();
-                    }
-                }
-
-                buffer += chunkText;
-                buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-                let delimiterIndex = buffer.indexOf('\n\n');
-                while (delimiterIndex !== -1) {
-                    const frame = buffer.slice(0, delimiterIndex);
-                    buffer = buffer.slice(delimiterIndex + 2);
-                    const dataLines = frame
-                        .split('\n')
-                        .map(line => line.trimEnd())
-                        .filter(line => line.startsWith('data:'))
-                        .map(line => line.slice(5).trimStart());
-                    if (dataLines.length > 0) {
-                        appendGenerationEvent(job, dataLines.join('\n'));
-                    }
-                    delimiterIndex = buffer.indexOf('\n\n');
-                }
-            }
-        }
-    } catch (error) {
-        if (job.status !== 'cancelled') {
-            failGenerationJob(job, error?.message || 'Streaming interrupted');
-            failInspection(request, error?.message || 'Streaming interrupted');
-        } else {
-            abortInspection(request);
-        }
-        if (!clientClosed && !response.writableEnded) {
-            response.end();
-        }
-        return;
-    }
-
-    buffer += decoder.decode();
-    buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    if (buffer.trim()) {
-        const dataLines = buffer
-            .split('\n')
-            .map(line => line.trimEnd())
-            .filter(line => line.startsWith('data:'))
-            .map(line => line.slice(5).trimStart());
-        if (dataLines.length > 0) {
-            appendGenerationEvent(job, dataLines.join('\n'));
-        }
-    }
-
-    if (job.status === 'cancelled') {
-        abortInspection(request);
-        if (!clientClosed && !response.writableEnded) {
-            response.end();
-        }
-        return;
-    }
-
-    completeInspectionFromStream(request, job.events, job.text);
-    const persisted = await completeGenerationJobFromText(request, job, job.text, modelName);
-    const completionEvent = JSON.stringify({
-        luker: {
-            generation_id: job.id,
-            persisted,
-            status: job.status,
-        },
-    });
-    appendGenerationEvent(job, completionEvent);
-    if (!clientClosed && !response.writableEnded) {
-        response.write(`data: ${completionEvent}\n\n`);
-        if (typeof response.flush === 'function') {
-            response.flush();
-        }
-        response.end();
-    }
-}
-
-/**
- * Stream a fetch response to the client while accumulating SSE text for the
- * request-inspector. Mirrors forwardStreamingWithGenerationJob's tap loop
- * minus the generation-job bookkeeping. Use when no luker_generation job is
- * attached but the inspector still needs the response body and completion
- * signal.
- */
-export async function forwardStreamingWithInspectorTap(fetchResponse, response, request) {
-    const source = String(request.body?.chat_completion_source || request.body?.api_type || '');
-    let clientClosed = false;
-    response.socket?.on('close', () => { clientClosed = true; });
-
-    if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text().catch(() => '');
-        const errorMessage = `${fetchResponse.status} ${fetchResponse.statusText}`.trim();
-        console.warn(`Streaming API returned error: ${errorMessage}${errorText ? ` ${errorText}` : ''}`);
-        failInspection(request, errorMessage || errorText || 'Streaming request failed', fetchResponse.status);
-        if (!clientClosed && !response.writableEnded) {
-            if (!response.headersSent) {
-                const errorJson = tryParse(errorText) ?? { error: true };
-                return response.status(500).send(errorJson);
-            }
-            response.end(errorText || '');
-        }
-        return;
-    }
-
-    let statusCode = fetchResponse.status;
-    if (statusCode === 401) statusCode = 400;
-    response.statusCode = statusCode;
-    response.statusMessage = fetchResponse.statusText;
-    const contentType = fetchResponse.headers.get('content-type');
-    if (contentType) response.setHeader('content-type', contentType);
-    response.setHeader('Cache-Control', 'no-cache, no-transform');
-    response.setHeader('Connection', 'keep-alive');
-    response.setHeader('X-Accel-Buffering', 'no');
-    if (typeof response.flushHeaders === 'function') response.flushHeaders();
-
-    let buffer = '';
-    let accumulatedText = '';
-    const events = [];
-    const decoder = new TextDecoder('utf-8');
-    try {
-        if (fetchResponse.body) {
-            for await (const chunk of fetchResponse.body) {
-                const chunkBytes = chunk instanceof Uint8Array ? chunk : Buffer.from(chunk);
-                const chunkText = decoder.decode(chunkBytes, { stream: true });
-                if (!clientClosed && !response.writableEnded) {
-                    response.write(chunkBytes);
-                    if (typeof response.flush === 'function') response.flush();
-                }
-                buffer += chunkText;
-                buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-                let delimiterIndex = buffer.indexOf('\n\n');
-                while (delimiterIndex !== -1) {
-                    const frame = buffer.slice(0, delimiterIndex);
-                    buffer = buffer.slice(delimiterIndex + 2);
-                    const dataLines = frame
-                        .split('\n')
-                        .map(line => line.trimEnd())
-                        .filter(line => line.startsWith('data:'))
-                        .map(line => line.slice(5).trimStart());
-                    if (dataLines.length > 0) {
-                        const data = dataLines.join('\n');
-                        events.push(data);
-                        const deltaText = extractTextFromStreamingFrameData(data, source);
-                        if (deltaText) accumulatedText += deltaText;
-                    }
-                    delimiterIndex = buffer.indexOf('\n\n');
-                }
-            }
-        }
-    } catch (error) {
-        failInspection(request, error?.message || 'Streaming interrupted');
-        if (!clientClosed && !response.writableEnded) response.end();
-        return;
-    }
-
-    buffer += decoder.decode();
-    buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    if (buffer.trim()) {
-        const dataLines = buffer
-            .split('\n')
-            .map(line => line.trimEnd())
-            .filter(line => line.startsWith('data:'))
-            .map(line => line.slice(5).trimStart());
-        if (dataLines.length > 0) {
-            const data = dataLines.join('\n');
-            events.push(data);
-            const deltaText = extractTextFromStreamingFrameData(data, source);
-            if (deltaText) accumulatedText += deltaText;
-        }
-    }
-
-    completeInspectionFromStream(request, events, accumulatedText);
-    if (!clientClosed && !response.writableEnded) response.end();
 }
 
 export function getActiveGenerationJobsForRequest(request, persistTarget) {

@@ -59,7 +59,8 @@ import { createSkillsRouter } from './endpoints/skills.js';
 import { createSkillRepository } from './skills/repository.js';
 import { createMemoryIndex } from './skills/memory-index.js';
 import { ensureFreshInstallPopulate } from './skills/bundled.js';
-import { wsTicketRouter } from './ws-proxy.js';
+import { wsTicketRouter } from './ws-ticket-router.js';
+import { generationControlRouter } from './endpoints/generation-control.js';
 
 /**
  * @typedef {object} ServerStartupResult
@@ -202,6 +203,7 @@ export function setupPrivateEndpoints(app) {
         getMemoryIndex: (req) => getSkillResources(req).memoryIndex,
     }));
     app.use('/api/ws-ticket', wsTicketRouter);
+    app.use('/api/generation', generationControlRouter);
 }
 
 /**

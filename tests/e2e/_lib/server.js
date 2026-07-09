@@ -310,7 +310,10 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
             '--disableCsrf=false',
         ];
         if (scenarioConfigPath) argv.push(`--configPath=${scenarioConfigPath}`);
-        child = spawn('node', argv, {
+        const runtime = process.env.LUKER_RUNTIME === 'bun'
+            ? (process.env.LUKER_BUN_PATH || `${process.env.HOME}/.bun/bin/bun`)
+            : 'node';
+        child = spawn(runtime, argv, {
             cwd: REPO_ROOT,
             env,
             stdio: ['ignore', 'pipe', 'pipe'],

@@ -1,14 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 import express from 'express';
 import fetch from 'node-fetch';
 import sanitize from 'sanitize-filename';
-import WebSocket from 'ws';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import urlJoin from 'url-join';
-import _ from 'lodash';
 import mime from 'mime-types';
 
 import { delay, getBasicAuthHeader, isValidUrl, tryParse } from '../util.js';
@@ -16,6 +13,25 @@ import { readSecret, SECRET_KEYS } from './secrets.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { AIMLAPI_HEADERS } from '../constants.js';
 import { startImageInspection, completeImageInspection, failImageInspection, abortInspection, extractImageMeta, attachInspectionEndpoint } from '../request-inspector.js';
+import { runLukerDispatch } from '../luker-dispatch/runner.js';
+import { dispatchSdWebui } from '../luker-dispatch/providers/sd/webui.js';
+import { dispatchSdComfy } from '../luker-dispatch/providers/sd/comfy.js';
+import { dispatchSdTogether } from '../luker-dispatch/providers/sd/together.js';
+import { dispatchSdDrawthings } from '../luker-dispatch/providers/sd/drawthings.js';
+import { dispatchSdPollinations } from '../luker-dispatch/providers/sd/pollinations.js';
+import { dispatchSdStability } from '../luker-dispatch/providers/sd/stability.js';
+import { dispatchSdComfyRunPod } from '../luker-dispatch/providers/sd/comfyrunpod.js';
+import { dispatchSdCpp } from '../luker-dispatch/providers/sd/sdcpp.js';
+import { dispatchSdHuggingface } from '../luker-dispatch/providers/sd/huggingface.js';
+import { dispatchSdElectronHub } from '../luker-dispatch/providers/sd/electronhub.js';
+import { dispatchSdChutes } from '../luker-dispatch/providers/sd/chutes.js';
+import { dispatchSdNanoGpt } from '../luker-dispatch/providers/sd/nanogpt.js';
+import { dispatchSdBfl } from '../luker-dispatch/providers/sd/bfl.js';
+import { dispatchSdFalai } from '../luker-dispatch/providers/sd/falai.js';
+import { dispatchSdXai } from '../luker-dispatch/providers/sd/xai.js';
+import { dispatchSdAimlapi } from '../luker-dispatch/providers/sd/aimlapi.js';
+import { dispatchSdZai } from '../luker-dispatch/providers/sd/zai.js';
+import { dispatchSdWorkersai } from '../luker-dispatch/providers/sd/workersai.js';
 
 /**
  * Gets the comfy workflows.
@@ -297,64 +313,10 @@ router.post('/set-model', async (request, response) => {
     }
 });
 
-router.post('/generate', async (request, response) => {
-    startImageInspection(request, extractImageMeta('sd_webui', request.body));
-    try {
-        try {
-            const optionsUrl = new URL(request.body.url);
-            optionsUrl.pathname = '/sdapi/v1/options';
-            const optionsResult = await fetch(optionsUrl, { headers: { 'Authorization': getBasicAuthHeader(request.body.auth) } });
-            if (optionsResult.ok) {
-                const optionsData = /** @type {any} */ (await optionsResult.json());
-                const isForge = 'forge_preset' in optionsData;
-
-                if (!isForge) {
-                    _.unset(request.body, 'override_settings.forge_additional_modules');
-                }
-            }
-        } catch (error) {
-            console.error('SD WebUI failed to get options:', error);
-        }
-
-        const controller = new AbortController();
-        request.socket.removeAllListeners('close');
-        request.socket.on('close', function () {
-            if (!response.writableEnded) {
-                const interruptUrl = new URL(request.body.url);
-                interruptUrl.pathname = '/sdapi/v1/interrupt';
-                fetch(interruptUrl, { method: 'POST', headers: { 'Authorization': getBasicAuthHeader(request.body.auth) } });
-            }
-            controller.abort();
-        });
-
-        console.debug('SD WebUI request:', request.body);
-        const txt2imgUrl = new URL(request.body.url);
-        txt2imgUrl.pathname = '/sdapi/v1/txt2img';
-        attachInspectionEndpoint(request, txt2imgUrl, request.body.auth || '');
-        const result = await fetch(txt2imgUrl, {
-            method: 'POST',
-            body: JSON.stringify(request.body),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': getBasicAuthHeader(request.body.auth),
-            },
-            signal: controller.signal,
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            throw new Error('SD WebUI returned an error.', { cause: text });
-        }
-
-        const data = await result.json();
-        completeImageInspection(request);
-        return response.send(data);
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+router.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/webui',
+    select: () => dispatchSdWebui,
+}));
 
 router.post('/sd-next/upscalers', async (request, response) => {
     try {
@@ -567,229 +529,10 @@ comfy.post('/rename-workflow', getFileNameValidationFunction('old_name'), getFil
     }
 });
 
-/**
- * Wait for ComfyUI prompt completion via WebSocket (preferred) or polling fallback.
- * WS with auto-reconnect: if the connection drops mid-wait, retries up to WS_MAX_RETRIES
- * times before falling back to polling.
- * Polling fallback: 2s interval with retry — for setups behind HTTP-only proxies.
- */
-async function waitForComfyCompletion(baseUrl, promptId, clientId, signal) {
-    const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-    const POLL_INTERVAL_MS = 2000;
-    const POLL_RETRY_MAX = 3;
-    const WS_MAX_RETRIES = 3;
-    const WS_RETRY_DELAY_MS = 2000;
-    const WS_OPEN_TIMEOUT_MS = 5000;
-
-    const parsedBase = new URL(baseUrl);
-    const wsProtocol = parsedBase.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${parsedBase.host}/ws?clientId=${clientId}`;
-    const deadline = Date.now() + TIMEOUT_MS;
-
-    // Try WebSocket with retries
-    for (let attempt = 0; attempt <= WS_MAX_RETRIES; attempt++) {
-        if (signal?.aborted) throw new Error('Aborted');
-        if (Date.now() >= deadline) break;
-
-        try {
-            const ws = new WebSocket(wsUrl);
-
-            // Wait for WS open
-            await new Promise((resolve, reject) => {
-                const openTimeout = setTimeout(() => {
-                    ws.terminate();
-                    reject(new Error('WS open timeout'));
-                }, WS_OPEN_TIMEOUT_MS);
-                ws.on('open', () => { clearTimeout(openTimeout); resolve(); });
-                ws.on('error', (err) => { clearTimeout(openTimeout); reject(err); });
-            });
-
-            if (attempt > 0) {
-                console.debug(`[ComfyUI] WebSocket reconnected (attempt ${attempt + 1})`);
-            } else {
-                console.debug('[ComfyUI] WebSocket connected, waiting for completion...');
-            }
-
-            // Wait for completion message
-            const result = await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    ws.close();
-                    reject(new Error('ComfyUI generation timed out'));
-                }, Math.max(deadline - Date.now(), 1000));
-
-                if (signal) {
-                    signal.addEventListener('abort', () => {
-                        clearTimeout(timeout);
-                        ws.close();
-                        reject(new Error('Aborted'));
-                    }, { once: true });
-                }
-
-                ws.on('message', (rawData) => {
-                    if (typeof rawData !== 'string' && !Buffer.isBuffer(rawData)) return;
-                    let msg;
-                    try { msg = JSON.parse(rawData.toString()); } catch { return; }
-
-                    if (msg.type === 'executing' && msg.data?.prompt_id === promptId && msg.data?.node === null) {
-                        clearTimeout(timeout);
-                        ws.close();
-                        resolve('done');
-                    } else if (msg.type === 'execution_error' && msg.data?.prompt_id === promptId) {
-                        clearTimeout(timeout);
-                        ws.close();
-                        const d = msg.data;
-                        reject(new Error(`ComfyUI generation failed.\n\n${d.node_type || 'Unknown'} [${d.node_id || '?'}] ${d.exception_type || 'Error'}: ${d.exception_message || 'Unknown error'}`));
-                    }
-                });
-
-                ws.on('error', (err) => { clearTimeout(timeout); ws.close(); reject(err); });
-                ws.on('close', (code) => {
-                    clearTimeout(timeout);
-                    reject(new Error(`ComfyUI WebSocket closed (code: ${code})`));
-                });
-            });
-
-            if (result === 'done') return; // Success — exit the function
-        } catch (wsError) {
-            const isRetryable = wsError.message?.includes('WebSocket closed') || wsError.message?.includes('WS open timeout');
-            if (!isRetryable || wsError.message === 'Aborted') {
-                // Non-retryable error (execution_error, timeout, abort) — don't retry
-                throw wsError;
-            }
-
-            if (attempt < WS_MAX_RETRIES) {
-                console.debug(`[ComfyUI] WebSocket dropped (${wsError.message}), retrying in ${WS_RETRY_DELAY_MS}ms (${attempt + 1}/${WS_MAX_RETRIES})...`);
-                await delay(WS_RETRY_DELAY_MS);
-            } else {
-                console.debug(`[ComfyUI] WebSocket failed after ${WS_MAX_RETRIES + 1} attempts, falling back to polling`);
-            }
-        }
-    }
-
-    // Polling fallback
-    console.debug('[ComfyUI] Using polling fallback (2s interval)...');
-    const historyUrl = new URL(urlJoin(baseUrl, `/history/${promptId}`));
-
-    while (Date.now() < deadline) {
-        if (signal?.aborted) throw new Error('Aborted');
-
-        let lastError = null;
-        for (let retry = 0; retry < POLL_RETRY_MAX; retry++) {
-            try {
-                const result = await fetch(historyUrl, { signal });
-                if (!result.ok) throw new Error(`HTTP ${result.status}`);
-                /** @type {any} */
-                const history = await result.json();
-                const item = history[promptId];
-                if (item) return; // Done — caller will fetch full history
-                break; // No error, just not ready yet
-            } catch (err) {
-                lastError = err;
-                if (err.name === 'AbortError' || signal?.aborted) throw err;
-                if (retry < POLL_RETRY_MAX - 1) {
-                    await delay(500); // Brief pause before retry
-                }
-            }
-        }
-        // If all retries failed on network error, throw
-        if (lastError && lastError.name !== 'AbortError') {
-            console.warn(`[ComfyUI] Poll attempt failed: ${lastError.message}, will retry...`);
-        }
-        await delay(POLL_INTERVAL_MS);
-    }
-    throw new Error('ComfyUI generation timed out (polling)');
-}
-
-comfy.post('/generate', async (request, response) => {
-    startImageInspection(request, extractImageMeta('comfyui', request.body));
-    const controller = new AbortController();
-    let settled = false;
-
-    try {
-        const clientId = crypto.randomUUID();
-        const baseUrl = request.body.url;
-
-        // Submit prompt with clientId
-        const promptUrl = new URL(urlJoin(baseUrl, '/prompt'));
-        const promptBody = JSON.parse(request.body.prompt);
-        promptBody.client_id = clientId;
-        attachInspectionEndpoint(request, promptUrl, '');
-        const promptResult = await fetch(promptUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(promptBody),
-        });
-        if (!promptResult.ok) {
-            const text = await promptResult.text();
-            throw new Error('ComfyUI returned an error.', { cause: tryParse(text) });
-        }
-
-        /** @type {any} */
-        const promptData = await promptResult.json();
-        const promptId = promptData.prompt_id;
-
-        // Handle client disconnect → interrupt ComfyUI
-        request.socket.removeAllListeners('close');
-        request.socket.on('close', function () {
-            if (!settled) {
-                const interruptUrl = new URL(urlJoin(baseUrl, '/interrupt'));
-                fetch(interruptUrl, { method: 'POST', headers: { 'Authorization': getBasicAuthHeader(request.body.auth) } }).catch(() => {});
-                abortInspection(request);
-            }
-            controller.abort();
-        });
-
-        // Wait for completion (WS with polling fallback)
-        await waitForComfyCompletion(baseUrl, promptId, clientId, controller.signal);
-        settled = true;
-
-        // Fetch outputs from history (single request)
-        const historyUrl = new URL(urlJoin(baseUrl, `/history/${promptId}`));
-        const historyResult = await fetch(historyUrl);
-        if (!historyResult.ok) {
-            throw new Error('ComfyUI returned an error fetching history.');
-        }
-        /** @type {any} */
-        const historyData = await historyResult.json();
-        const historyItem = historyData[promptId];
-        if (!historyItem) {
-            throw new Error('ComfyUI history item not found after execution.');
-        }
-
-        if (historyItem.status?.status_str === 'error') {
-            const errorMessages = historyItem.status?.messages
-                ?.filter(it => it[0] === 'execution_error')
-                .map(it => it[1])
-                .map(it => `${it.node_type} [${it.node_id}] ${it.exception_type}: ${it.exception_message}`)
-                .join('\n') || '';
-            throw new Error(`ComfyUI generation did not succeed.\n\n${errorMessages}`.trim());
-        }
-
-        const outputs = Object.keys(historyItem.outputs).map(it => historyItem.outputs[it]);
-        console.debug('ComfyUI outputs:', outputs);
-        const imgInfo = outputs.map(it => it.images).flat()[0] ?? outputs.map(it => it.gifs).flat()[0];
-        if (!imgInfo) {
-            throw new Error('ComfyUI did not return any recognizable outputs.');
-        }
-        const imgUrl = new URL(urlJoin(baseUrl, '/view'));
-        imgUrl.search = `?filename=${imgInfo.filename}&subfolder=${imgInfo.subfolder}&type=${imgInfo.type}`;
-        const imgResponse = await fetch(imgUrl);
-        if (!imgResponse.ok) {
-            throw new Error('ComfyUI returned an error.');
-        }
-        const format = path.extname(imgInfo.filename).slice(1).toLowerCase() || 'png';
-        const imgBuffer = await imgResponse.arrayBuffer();
-        completeImageInspection(request, { format, sizeBytes: imgBuffer.byteLength });
-        return response.send({ format: format, data: Buffer.from(imgBuffer).toString('base64') });
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error('ComfyUI error:', error);
-        if (!response.headersSent) {
-            response.status(500).send(error.message);
-        }
-        return response;
-    }
-});
+comfy.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/comfy',
+    select: () => dispatchSdComfy,
+}));
 
 const comfyRunPod = express.Router();
 
@@ -824,80 +567,10 @@ comfyRunPod.post('/ping', async (request, response) => {
     }
 });
 
-comfyRunPod.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.COMFY_RUNPOD);
-
-        if (!key) {
-            console.warn('RunPod key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('comfyui_runpod', request.body));
-
-        let jobId;
-        let item;
-        const url = new URL(urlJoin(request.body.url, '/run'));
-
-        const controller = new AbortController();
-        request.socket.removeAllListeners('close');
-        request.socket.on('close', function () {
-            if (!response.writableEnded && !item) {
-                const interruptUrl = new URL(urlJoin(request.body.url, `/cancel/${jobId}`));
-                fetch(interruptUrl, { method: 'POST', headers: { 'Authorization': `Bearer ${key}` } });
-                abortInspection(request);
-            }
-            controller.abort();
-        });
-        const workflow = JSON.parse(request.body.prompt).prompt;
-        const wrappedWorkflow = workflow?.input?.workflow ? workflow : ({ input: { workflow: workflow } });
-        const runpodPrompt = JSON.stringify(wrappedWorkflow);
-
-        console.debug('ComfyUI RunPod request:', wrappedWorkflow);
-
-        attachInspectionEndpoint(request, url, key);
-        const promptResult = await fetch(url, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${key}` },
-            body: runpodPrompt,
-        });
-        if (!promptResult.ok) {
-            const text = await promptResult.text();
-            throw new Error('ComfyUI returned an error.', { cause: tryParse(text) });
-        }
-
-        /** @type {any} */
-        const data = await promptResult.json();
-        jobId = data.id;
-        const statusUrl = new URL(urlJoin(request.body.url, `/status/${jobId}`));
-        while (true) {
-            const result = await fetch(statusUrl, {
-                method: 'GET',
-                headers: { 'Authorization': `Bearer ${key}` },
-            });
-            if (!result.ok) {
-                throw new Error('ComfyUI returned an error.');
-            }
-            /** @type {any} */
-            const status = await result.json();
-            if (status.output) {
-                item = status.output.images[0];
-            }
-            if (item) {
-                break;
-            }
-            await delay(500);
-        }
-        const format = path.extname(item.filename).slice(1).toLowerCase() || 'png';
-        completeImageInspection(request, { format });
-        return response.send({ format: format, data: item.data });
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error('ComfyUI error:', error);
-        response.status(500).send(error.message);
-        return response;
-    }
-});
+comfyRunPod.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/comfyrunpod',
+    select: () => dispatchSdComfyRunPod,
+}));
 
 const together = express.Router();
 
@@ -940,63 +613,10 @@ together.post('/models', async (request, response) => {
     }
 });
 
-together.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.TOGETHERAI);
-
-        if (!key) {
-            console.warn('TogetherAI key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('together', request.body));
-        console.debug('TogetherAI request:', request.body);
-
-        attachInspectionEndpoint(request, 'https://api.together.xyz/v1/images/generations', key);
-        const result = await fetch('https://api.together.xyz/v1/images/generations', {
-            method: 'POST',
-            body: JSON.stringify({
-                prompt: request.body.prompt,
-                negative_prompt: request.body.negative_prompt,
-                height: request.body.height,
-                width: request.body.width,
-                model: request.body.model,
-                steps: request.body.steps,
-                n: 1,
-                // Limited to 10000 on playground, works fine with more.
-                seed: request.body.seed >= 0 ? request.body.seed : Math.floor(Math.random() * 10_000_000),
-            }),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-        });
-
-        if (!result.ok) {
-            console.warn('TogetherAI returned an error.', { body: await result.text() });
-            return response.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const data = await result.json();
-        console.debug('TogetherAI response:', data);
-
-        const choice = data?.data?.[0];
-        let b64_json = choice.b64_json;
-
-        if (!b64_json) {
-            const buffer = await (await fetch(choice.url)).arrayBuffer();
-            b64_json = Buffer.from(buffer).toString('base64');
-        }
-
-        completeImageInspection(request, { format: 'jpg', sizeBytes: Math.round(b64_json.length * 0.75) });
-        return response.send({ format: 'jpg', data: b64_json });
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+together.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/together',
+    select: () => dispatchSdTogether,
+}));
 
 const sdcpp = express.Router();
 
@@ -1033,59 +653,10 @@ sdcpp.post('/models', async (request, response) => {
     }
 });
 
-sdcpp.post('/generate', async (request, response) => {
-    startImageInspection(request, extractImageMeta('sd_cpp', request.body));
-    try {
-        const url = new URL(urlJoin(request.body.url, '/sdapi/v1/txt2img'));
-
-        const payload = {
-            model: request.body.model,
-            prompt: request.body.prompt,
-            negative_prompt: request.body.negative_prompt,
-            width: request.body.width,
-            height: request.body.height,
-            steps: request.body.steps,
-            cfg_scale: request.body.cfg_scale,
-            seed: request.body.seed,
-            batch_size: request.body.batch_size,
-            sampler_name: request.body.sampler_name,
-            scheduler: request.body.scheduler,
-            // sd.cpp produces blank images when clip_skip is 1, which is the
-            // default (no skipping). Only send clip_skip when it's > 1.
-            clip_skip: request.body.clip_skip > 1 ? request.body.clip_skip : undefined,
-        };
-
-        for (const [key, value] of Object.entries(payload)) {
-            if (value === undefined || value === null || value === '') {
-                delete payload[key];
-            }
-        }
-
-        console.debug('stable-diffusion.cpp request:', payload);
-
-        attachInspectionEndpoint(request, url, '');
-        const result = await fetch(url, {
-            method: 'POST',
-            body: JSON.stringify(payload),
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            throw new Error('stable-diffusion.cpp server returned an error.', { cause: text });
-        }
-
-        const data = await result.json();
-        completeImageInspection(request);
-        return response.send(data);
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+sdcpp.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/sdcpp',
+    select: () => dispatchSdCpp,
+}));
 
 const drawthings = express.Router();
 
@@ -1147,43 +718,10 @@ drawthings.post('/get-upscaler', async (request, response) => {
     }
 });
 
-drawthings.post('/generate', async (request, response) => {
-    startImageInspection(request, extractImageMeta('drawthings', request.body));
-    try {
-        console.debug('SD DrawThings API request:', request.body);
-
-        const url = new URL(request.body.url);
-        url.pathname = '/sdapi/v1/txt2img';
-
-        const body = { ...request.body };
-        const auth = getBasicAuthHeader(request.body.auth);
-        delete body.url;
-        delete body.auth;
-
-        attachInspectionEndpoint(request, url, request.body.auth || '');
-        const result = await fetch(url, {
-            method: 'POST',
-            body: JSON.stringify(body),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': auth,
-            },
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            throw new Error('SD DrawThings API returned an error.', { cause: text });
-        }
-
-        const data = await result.json();
-        completeImageInspection(request);
-        return response.send(data);
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+drawthings.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/drawthings',
+    select: () => dispatchSdDrawthings,
+}));
 
 const pollinations = express.Router();
 
@@ -1212,163 +750,24 @@ pollinations.post('/models', async (_request, response) => {
     }
 });
 
-pollinations.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.POLLINATIONS);
-        if (!key) {
-            console.warn('Pollinations API key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('pollinations', request.body));
-        const promptUrl = new URL(`https://gen.pollinations.ai/image/${encodeURIComponent(request.body.prompt)}`);
-        const params = new URLSearchParams({
-            model: String(request.body.model),
-            negative_prompt: String(request.body.negative_prompt),
-            seed: String(request.body.seed >= 0 ? request.body.seed : Math.floor(Math.random() * 10_000_000)),
-            width: String(request.body.width ?? 1024),
-            height: String(request.body.height ?? 1024),
-        });
-        if (request.body.enhance) {
-            params.set('enhance', String(true));
-        }
-        promptUrl.search = params.toString();
-
-        console.info('Pollinations request URL:', promptUrl.toString());
-
-        attachInspectionEndpoint(request, promptUrl, key);
-        const result = await fetch(promptUrl, {
-            method: 'GET',
-            headers: {
-                Authorization: `Bearer ${key}`,
-            },
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.warn('Pollinations returned an error.', text);
-            throw new Error('Pollinations request failed.');
-        }
-
-        const format = result.headers.get('Content-Type')?.toString() || 'image/jpeg';
-        const buffer = await result.arrayBuffer();
-        const image = Buffer.from(buffer).toString('base64');
-        completeImageInspection(request, { format: mime.extension(format) || 'jpg', sizeBytes: buffer.byteLength });
-        return response.send({ image, format: mime.extension(format) || 'jpg' });
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+pollinations.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/pollinations',
+    select: () => dispatchSdPollinations,
+}));
 
 const stability = express.Router();
 
-stability.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.STABILITY);
-
-        if (!key) {
-            console.warn('Stability AI key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('stability', request.body));
-        const { payload, model } = request.body;
-
-        console.debug('Stability AI request:', model, payload);
-
-        const formData = new FormData();
-        for (const [key, value] of Object.entries(payload)) {
-            if (value !== undefined) {
-                formData.append(key, String(value));
-            }
-        }
-
-        let apiUrl;
-        switch (model) {
-            case 'stable-image-ultra':
-                apiUrl = 'https://api.stability.ai/v2beta/stable-image/generate/ultra';
-                break;
-            case 'stable-image-core':
-                apiUrl = 'https://api.stability.ai/v2beta/stable-image/generate/core';
-                break;
-            case 'stable-diffusion-3':
-                apiUrl = 'https://api.stability.ai/v2beta/stable-image/generate/sd3';
-                break;
-            default:
-                throw new Error('Invalid Stability AI model selected');
-        }
-
-        attachInspectionEndpoint(request, apiUrl, key);
-        const result = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${key}`,
-                'Accept': 'image/*',
-            },
-            body: formData,
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.warn('Stability AI returned an error.', result.status, result.statusText, text);
-            return response.sendStatus(500);
-        }
-
-        const buffer = await result.arrayBuffer();
-        completeImageInspection(request, { sizeBytes: buffer.byteLength });
-        return response.send(Buffer.from(buffer).toString('base64'));
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+stability.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/stability',
+    select: () => dispatchSdStability,
+}));
 
 const huggingface = express.Router();
 
-huggingface.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.HUGGINGFACE);
-
-        if (!key) {
-            console.warn('Hugging Face key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('huggingface', request.body));
-        console.debug('Hugging Face request:', request.body);
-
-        const huggingFaceUrl = `https://api-inference.huggingface.co/models/${request.body.model}`;
-        attachInspectionEndpoint(request, huggingFaceUrl, key);
-        const result = await fetch(huggingFaceUrl, {
-            method: 'POST',
-            body: JSON.stringify({
-                inputs: request.body.prompt,
-            }),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-        });
-
-        if (!result.ok) {
-            console.warn('Hugging Face returned an error.');
-            return response.sendStatus(500);
-        }
-
-        const buffer = await result.arrayBuffer();
-        completeImageInspection(request, { sizeBytes: buffer.byteLength });
-        return response.send({
-            image: Buffer.from(buffer).toString('base64'),
-        });
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+huggingface.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/huggingface',
+    select: () => dispatchSdHuggingface,
+}));
 
 const electronhub = express.Router();
 
@@ -1412,67 +811,10 @@ electronhub.post('/models', async (request, response) => {
     }
 });
 
-electronhub.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
-
-        if (!key) {
-            console.warn('Electron Hub key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('electronhub', request.body));
-        let bodyParams = {
-            model: request.body.model,
-            prompt: request.body.prompt,
-            response_format: 'b64_json',
-        };
-
-        if (request.body.size) {
-            bodyParams.size = request.body.size;
-        }
-
-        if (request.body.quality) {
-            bodyParams.quality = request.body.quality;
-        }
-
-        console.debug('Electron Hub request:', bodyParams);
-
-        attachInspectionEndpoint(request, 'https://api.electronhub.ai/v1/images/generations', key);
-        const result = await fetch('https://api.electronhub.ai/v1/images/generations', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${key}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                ...bodyParams,
-            }),
-        });
-
-        if (!result.ok) {
-            const errorText = await result.text();
-            console.warn('Electron Hub returned an error.', result.status, result.statusText, errorText);
-            return response.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const data = await result.json();
-        const image = data?.data?.[0]?.b64_json;
-
-        if (!image) {
-            console.warn('Electron Hub returned invalid data.');
-            return response.sendStatus(500);
-        }
-
-        completeImageInspection(request, { sizeBytes: Math.round(image.length * 0.75) });
-        return response.send({ image });
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+electronhub.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/electronhub',
+    select: () => dispatchSdElectronHub,
+}));
 
 electronhub.post('/sizes', async (request, response) => {
     const result = await fetch(`https://api.electronhub.ai/v1/models/${request.body.model}`, {
@@ -1535,56 +877,10 @@ chutes.post('/models', async (request, response) => {
     }
 });
 
-chutes.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
-
-        if (!key) {
-            console.warn('Chutes key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('chutes', request.body));
-        const bodyParams = {
-            model: request.body.model,
-            prompt: request.body.prompt,
-            negative_prompt: request.body.negative_prompt,
-            guidance_scale: request.body.guidance_scale || 7.0,
-            width: request.body.width || 1024,
-            height: request.body.height || 1024,
-            num_inference_steps: request.body.steps || 10,
-        };
-
-        console.debug('Chutes request:', bodyParams);
-
-        attachInspectionEndpoint(request, 'https://image.chutes.ai/generate', key);
-        const result = await fetch('https://image.chutes.ai/generate', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${key}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(bodyParams),
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.warn('Chutes returned an error:', text);
-            return response.sendStatus(500);
-        }
-
-        const buffer = await result.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString('base64');
-
-        completeImageInspection(request, { sizeBytes: buffer.byteLength });
-        return response.send({ image: base64 });
-    }
-    catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+chutes.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/chutes',
+    select: () => dispatchSdChutes,
+}));
 
 const nanogpt = express.Router();
 
@@ -1627,170 +923,17 @@ nanogpt.post('/models', async (request, response) => {
     }
 });
 
-nanogpt.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
-
-        if (!key) {
-            console.warn('NanoGPT key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('nanogpt', request.body));
-        console.debug('NanoGPT request:', request.body);
-
-        attachInspectionEndpoint(request, 'https://nano-gpt.com/api/generate-image', key);
-        const result = await fetch('https://nano-gpt.com/api/generate-image', {
-            method: 'POST',
-            body: JSON.stringify(request.body),
-            headers: {
-                'x-api-key': key,
-                'Content-Type': 'application/json',
-            },
-        });
-
-        if (!result.ok) {
-            console.warn('NanoGPT returned an error.');
-            return response.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const data = await result.json();
-
-        const image = data?.data?.[0]?.b64_json;
-        if (!image) {
-            console.warn('NanoGPT returned invalid data.');
-            return response.sendStatus(500);
-        }
-
-        completeImageInspection(request, { sizeBytes: Math.round(image.length * 0.75) });
-        return response.send({ image });
-    }
-    catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+nanogpt.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/nanogpt',
+    select: () => dispatchSdNanoGpt,
+}));
 
 const bfl = express.Router();
 
-bfl.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.BFL);
-
-        if (!key) {
-            console.warn('BFL key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('bfl', request.body));
-        const requestBody = {
-            prompt: request.body.prompt,
-            steps: request.body.steps,
-            guidance: request.body.guidance,
-            width: request.body.width,
-            height: request.body.height,
-            prompt_upsampling: request.body.prompt_upsampling,
-            seed: request.body.seed ?? null,
-            safety_tolerance: 6, // being least strict
-            output_format: 'jpeg',
-        };
-
-        function getClosestAspectRatio(width, height) {
-            const minAspect = 9 / 21;
-            const maxAspect = 21 / 9;
-            const currentAspect = width / height;
-
-            const gcd = (a, b) => b === 0 ? a : gcd(b, a % b);
-            const simplifyRatio = (w, h) => {
-                const divisor = gcd(w, h);
-                return `${w / divisor}:${h / divisor}`;
-            };
-
-            if (currentAspect < minAspect) {
-                const adjustedHeight = Math.round(width / minAspect);
-                return simplifyRatio(width, adjustedHeight);
-            } else if (currentAspect > maxAspect) {
-                const adjustedWidth = Math.round(height * maxAspect);
-                return simplifyRatio(adjustedWidth, height);
-            } else {
-                return simplifyRatio(width, height);
-            }
-        }
-
-        if (String(request.body.model).endsWith('-ultra')) {
-            requestBody.aspect_ratio = getClosestAspectRatio(request.body.width, request.body.height);
-            delete requestBody.steps;
-            delete requestBody.guidance;
-            delete requestBody.width;
-            delete requestBody.height;
-            delete requestBody.prompt_upsampling;
-        }
-
-        if (String(request.body.model).endsWith('-pro-1.1')) {
-            delete requestBody.steps;
-            delete requestBody.guidance;
-        }
-
-        console.debug('BFL request:', requestBody);
-
-        const bflUrl = `https://api.bfl.ml/v1/${request.body.model}`;
-        attachInspectionEndpoint(request, bflUrl, key);
-        const result = await fetch(bflUrl, {
-            method: 'POST',
-            body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'x-key': key,
-            },
-        });
-
-        if (!result.ok) {
-            console.warn('BFL returned an error.');
-            return response.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const taskData = await result.json();
-        const { id } = taskData;
-
-        const MAX_ATTEMPTS = 100;
-        for (let i = 0; i < MAX_ATTEMPTS; i++) {
-            await delay(2500);
-
-            const statusResult = await fetch(`https://api.bfl.ml/v1/get_result?id=${id}`);
-
-            if (!statusResult.ok) {
-                const text = await statusResult.text();
-                console.warn('BFL returned an error.', text);
-                return response.sendStatus(500);
-            }
-
-            /** @type {any} */
-            const statusData = await statusResult.json();
-
-            if (statusData?.status === 'Pending') {
-                continue;
-            }
-
-            if (statusData?.status === 'Ready') {
-                const { sample } = statusData.result;
-                const fetchResult = await fetch(sample);
-                const fetchData = await fetchResult.arrayBuffer();
-                const image = Buffer.from(fetchData).toString('base64');
-                completeImageInspection(request, { format: 'jpeg', sizeBytes: fetchData.byteLength });
-                return response.send({ image: image });
-            }
-
-            throw new Error('BFL failed to generate image.', { cause: statusData });
-        }
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+bfl.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/bfl',
+    select: () => dispatchSdBfl,
+}));
 
 const falai = express.Router();
 
@@ -1842,167 +985,17 @@ falai.post('/models', async (_request, response) => {
     }
 });
 
-falai.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.FALAI);
-
-        if (!key) {
-            console.warn('FAL.AI key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('falai', request.body));
-        const requestBody = {
-            prompt: request.body.prompt,
-            image_size: { 'width': request.body.width, 'height': request.body.height },
-            num_inference_steps: request.body.steps,
-            seed: request.body.seed ?? null,
-            guidance_scale: request.body.guidance,
-            enable_safety_checker: false, // Disable general safety checks
-            safety_tolerance: 6, // Make Flux the least strict
-        };
-
-        console.debug('FAL.AI request:', requestBody);
-
-        const falaiUrl = `https://queue.fal.run/fal-ai/${request.body.model}`;
-        attachInspectionEndpoint(request, falaiUrl, key);
-        const result = await fetch(falaiUrl, {
-            method: 'POST',
-            body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Key ${key}`,
-            },
-        });
-
-        if (!result.ok) {
-            console.warn('FAL.AI returned an error.');
-            return response.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const taskData = await result.json();
-        const { status_url } = taskData;
-
-        const MAX_ATTEMPTS = 100;
-        for (let i = 0; i < MAX_ATTEMPTS; i++) {
-            await delay(2500);
-
-            const statusResult = await fetch(status_url, {
-                headers: {
-                    'Authorization': `Key ${key}`,
-                },
-            });
-
-            if (!statusResult.ok) {
-                const text = await statusResult.text();
-                console.warn('FAL.AI returned an error.', text);
-                return response.sendStatus(500);
-            }
-
-            /** @type {any} */
-            const statusData = await statusResult.json();
-
-            if (statusData?.status === 'IN_QUEUE' || statusData?.status === 'IN_PROGRESS') {
-                continue;
-            }
-
-            if (statusData?.status === 'COMPLETED') {
-                const resultFetch = await fetch(statusData?.response_url, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Key ${key}`,
-                    },
-                });
-                /** @type {any} */
-                const resultData = await resultFetch.json();
-
-                if (resultData.detail !== null && resultData.detail !== undefined) {
-                    throw new Error('FAL.AI failed to generate image.', { cause: `${resultData.detail[0].loc[1]}: ${resultData.detail[0].msg}` });
-                }
-
-                const imageFetch = await fetch(resultData?.images[0].url, {
-                    headers: {
-                        'Authorization': `Key ${key}`,
-                    },
-                });
-
-                const fetchData = await imageFetch.arrayBuffer();
-                const image = Buffer.from(fetchData).toString('base64');
-                completeImageInspection(request, { sizeBytes: fetchData.byteLength });
-                return response.send({ image: image });
-            }
-
-            throw new Error('FAL.AI failed to generate image.', { cause: statusData });
-        }
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error(error);
-        return response.status(500).send(error.cause || error.message);
-    }
-});
+falai.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/falai',
+    select: () => dispatchSdFalai,
+}));
 
 const xai = express.Router();
 
-xai.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.XAI);
-
-        if (!key) {
-            console.warn('xAI key not found.');
-            return response.sendStatus(400);
-        }
-
-        startImageInspection(request, extractImageMeta('xai', request.body));
-        const requestBody = {
-            prompt: request.body.prompt,
-            model: request.body.model,
-            aspect_ratio: request.body.aspect_ratio,
-            resolution: request.body.resolution,
-            response_format: 'b64_json',
-        };
-
-        console.debug('xAI request:', requestBody);
-
-        attachInspectionEndpoint(request, 'https://api.x.ai/v1/images/generations', key);
-        const result = await fetch('https://api.x.ai/v1/images/generations', {
-            method: 'POST',
-            body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.warn('xAI returned an error.', text);
-            return response.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const data = await result.json();
-
-        // Can either be a base64 buffer (always JPEG) or a data URL (with MIME type)
-        const encodedImage = String(data?.data?.[0]?.b64_json || '');
-        if (!encodedImage) {
-            console.warn('xAI returned invalid data.');
-            return response.sendStatus(500);
-        }
-
-        const dataUrlMatch = encodedImage.match(/^data:(.+);base64,(.+)$/);
-        const mimeType = dataUrlMatch?.[1] || 'image/jpeg';
-        const format = mime.extension(mimeType) || 'jpg';
-        const image = dataUrlMatch?.[2] || encodedImage;
-
-        completeImageInspection(request, { sizeBytes: Math.round(image.length * 0.75) });
-        return response.send({ image, format });
-    } catch (error) {
-        failImageInspection(request, error.message, 500);
-        console.error('Error communicating with xAI', error);
-        return response.sendStatus(500);
-    }
-});
+xai.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/xai',
+    select: () => dispatchSdXai,
+}));
 
 const aimlapi = express.Router();
 
@@ -2047,131 +1040,17 @@ aimlapi.post('/models', async (request, response) => {
     }
 });
 
-aimlapi.post('/generate-image', async (req, res) => {
-    try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.AIMLAPI);
-        if (!key) return res.sendStatus(400);
-
-        console.debug('AI/ML API image request:', req.body);
-
-        const apiRes = await fetch('https://api.aimlapi.com/v1/images/generations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, ...AIMLAPI_HEADERS },
-            body: JSON.stringify(req.body),
-        });
-        if (!apiRes.ok) {
-            const err = await apiRes.text();
-            return res.status(500).send(err);
-        }
-        /** @type {any} */
-        const data = await apiRes.json();
-
-        const imgObj = Array.isArray(data.images) ? data.images[0] : data.data?.[0];
-        if (!imgObj) return res.status(500).send('No image returned');
-
-        let base64;
-        if (imgObj.b64_json || imgObj.base64) {
-            base64 = imgObj.b64_json || imgObj.base64;
-        } else if (imgObj.url) {
-            const blobRes = await fetch(imgObj.url);
-            if (!blobRes.ok) throw new Error('Failed to fetch image URL');
-            const buffer = await blobRes.arrayBuffer();
-            base64 = Buffer.from(buffer).toString('base64');
-        } else {
-            throw new Error('Unsupported image format');
-        }
-
-        return res.json({ format: 'png', data: base64 });
-    } catch (e) {
-        console.error(e);
-        res.status(500).send('Internal error');
-    }
-});
+aimlapi.post('/generate-image', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/aimlapi',
+    select: () => dispatchSdAimlapi,
+}));
 
 const zai = express.Router();
 
-zai.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
-
-        if (!key) {
-            console.warn('Z.AI key not found.');
-            return response.sendStatus(400);
-        }
-
-        console.debug('Z.AI image request:', request.body);
-
-        // Always use Common API for image generation (Coding API has stricter rate limits)
-        const generateResponse = await fetch('https://api.z.ai/api/paas/v4/images/generations', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-            body: JSON.stringify({
-                prompt: request.body.prompt,
-                model: request.body.model,
-                quality: request.body.quality,
-                size: request.body.size,
-            }),
-        });
-
-        if (!generateResponse.ok) {
-            const text = await generateResponse.text();
-            console.warn('Z.AI returned an error.', text);
-            return response.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const data = await generateResponse.json();
-        console.debug('Z.AI image response:', data);
-
-        const urlString = String(data?.data?.[0]?.url ?? '');
-        if (!urlString || !isValidUrl(urlString)) {
-            console.warn('Z.AI returned an invalid image URL.');
-            return response.sendStatus(500);
-        }
-
-        const url = new URL(urlString);
-        if (!url.hostname.endsWith('.z.ai') && !url.hostname.endsWith('.ufileos.com')) {
-            console.warn('Z.AI returned a URL with an unrecognized hostname.');
-            return response.sendStatus(500);
-        }
-
-        const imageResponse = await fetch(url);
-        if (!imageResponse.ok) {
-            console.warn('Z.AI image fetch returned an error.', imageResponse.status, imageResponse.statusText);
-            return response.sendStatus(500);
-        }
-
-        for (let attempt = 0; attempt < 5; attempt++) {
-            const imageResponse = await fetch(url);
-            if (!imageResponse.ok) {
-                // Sometimes the URL is valid but the image isn't immediately available
-                if (imageResponse.status === 404) {
-                    console.info('Z.AI image not found yet, retrying...', { attempt: attempt + 1 });
-                    await delay(1000);
-                    continue;
-                }
-
-                console.warn('Z.AI image fetch returned an error. Status:', imageResponse.status, imageResponse.statusText);
-                return response.sendStatus(500);
-            }
-
-            const buffer = await imageResponse.arrayBuffer();
-            const image = Buffer.from(buffer).toString('base64');
-            const format = path.extname(url.pathname).substring(1).toLowerCase() || 'png';
-
-            return response.send({ image, format });
-        }
-
-        console.warn('Z.AI image was not available after multiple attempts.');
-        return response.sendStatus(500);
-    } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+zai.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/zai',
+    select: () => dispatchSdZai,
+}));
 
 zai.post('/generate-video', async (request, response) => {
     try {
@@ -2324,96 +1203,10 @@ workersai.post('/models', async (request, response) => {
     }
 });
 
-workersai.post('/generate', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
-
-        if (!key) {
-            console.warn('Cloudflare Workers AI API key not found.');
-            return response.sendStatus(400);
-        }
-
-        const accountId = String(request.body.account_id || '').trim();
-        if (!accountId) {
-            console.warn('Cloudflare Workers AI Account ID not found.');
-            return response.sendStatus(400);
-        }
-
-        const model = String(request.body.model || '').trim();
-        if (!model) {
-            console.warn('Cloudflare Workers AI model not specified.');
-            return response.sendStatus(400);
-        }
-
-        const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${model}`;
-
-        const body = {
-            prompt: request.body.prompt,
-            negative_prompt: request.body.negative_prompt || undefined,
-            width: request.body.width ? Number(request.body.width) : undefined,
-            height: request.body.height ? Number(request.body.height) : undefined,
-            num_steps: request.body.steps ? Number(request.body.steps) : undefined,
-            guidance: request.body.scale ? Number(request.body.scale) : undefined,
-            seed: request.body.seed >= 0 ? Number(request.body.seed) : undefined,
-        };
-
-        // Remove undefined values
-        for (const prop of Object.keys(body)) {
-            if (body[prop] === undefined) {
-                delete body[prop];
-            }
-        }
-
-        console.debug('Cloudflare Workers AI request:', model, body);
-
-        /** @type {import('node-fetch').RequestInit} */
-        const apiRequest = {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${key}`,
-            },
-        };
-
-        if (/flux-2/.test(model)) {
-            const formData = new FormData();
-            for (const [key, value] of Object.entries(body)) {
-                formData.append(key, String(value));
-            }
-            apiRequest.body = formData;
-        } else {
-            apiRequest.headers = { ...apiRequest.headers, 'Content-Type': 'application/json' };
-            apiRequest.body = JSON.stringify(body);
-        }
-
-        const result = await fetch(apiUrl, apiRequest);
-        if (!result.ok) {
-            const text = await result.text();
-            console.warn('Cloudflare Workers AI returned an error.', result.status, result.statusText, text);
-            return response.status(500).send(text);
-        }
-
-        const contentType = result.headers.get('content-type') || '';
-
-        // Partner models return JSON with base64 image
-        if (contentType.includes('application/json')) {
-            /** @type {any} */
-            const data = await result.json();
-            const image = data?.result?.image || data?.image;
-            if (!image) {
-                console.warn('Cloudflare Workers AI returned JSON without image data.');
-                return response.sendStatus(500);
-            }
-            return response.send({ format: 'png', image: image });
-        }
-
-        // Non-partner models return raw binary image data
-        const buffer = await result.arrayBuffer();
-        return response.send({ format: 'png', image: Buffer.from(buffer).toString('base64') });
-    } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
-    }
-});
+workersai.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/workersai',
+    select: () => dispatchSdWorkersai,
+}));
 
 router.use('/comfy', comfy);
 router.use('/comfyrunpod', comfyRunPod);

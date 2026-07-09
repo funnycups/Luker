@@ -36,16 +36,10 @@ const basicAuthLimiter = new RateLimiterMemory({
 });
 
 /**
- * Marker for requests dispatched in-process by the WS proxy. Such requests
- * already crossed the WS authentication boundary and must not be re-challenged
- * by Basic Auth, which is an HTTP-layer gate the WS upgrade itself cannot
- * always carry (browsers / tunnels frequently strip Authorization on upgrade).
- *
- * Set on the mock IncomingMessage in `src/ws-proxy.js`. Symbol-keyed so it
- * cannot be smuggled in via headers or query params.
+ * Determine whether a request should skip the Basic Auth challenge because
+ * an alternative auth boundary applies (LAN-sync bearer tokens, LAN
+ * migration one-shot links, etc.).
  */
-export const WS_PROXY_AUTH_BYPASS = Symbol('WS_PROXY_AUTH_BYPASS');
-
 export function isBasicAuthExemptRequest(request) {
     const requestPath = typeof request?.path === 'string'
         ? request.path
@@ -145,13 +139,6 @@ export async function tryBasicAuth(request) {
 }
 
 const basicAuthMiddleware = async function (request, response, callback) {
-    // WS proxy dispatches in-process requests through app.handle(); the WS
-    // connection itself is the auth boundary (validated at the upgrade), so
-    // re-running Basic Auth here would just duplicate work.
-    if (request[WS_PROXY_AUTH_BYPASS] === true) {
-        return callback();
-    }
-
     // LAN migration tokens are one-time, high-entropy secrets with a short TTL, so this
     // public transfer route can safely rely on the token instead of a second auth challenge.
     if (isBasicAuthExemptRequest(request)) {

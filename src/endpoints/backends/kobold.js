@@ -2,175 +2,24 @@ import fs from 'node:fs';
 import express from 'express';
 import fetch from 'node-fetch';
 
-import { forwardFetchResponse, delay } from '../../util.js';
-import { getOverrideHeaders, setAdditionalHeaders, setAdditionalHeadersByType } from '../../additional-headers.js';
+import { setAdditionalHeaders, setAdditionalHeadersByType } from '../../additional-headers.js';
 import { TEXTGEN_TYPES } from '../../constants.js';
-import {
-    attachJobToRequest,
-    bindRequestCloseAbort,
-    completeGenerationJobFromPayload,
-    createGenerationJob,
-    failGenerationJob,
-    forwardStreamingWithGenerationJob,
-} from './luker-generation.js';
+import { runLukerDispatch } from '../../luker-dispatch/runner.js';
+import { dispatchKobold } from '../../luker-dispatch/providers/kobold.js';
 
 export const router = express.Router();
 
-router.post('/generate', async function (request, response_generate) {
-    if (!request.body) return response_generate.sendStatus(400);
-
-    const requestedLukerGenerationOptions = request.body.luker_generation && typeof request.body.luker_generation === 'object'
-        ? request.body.luker_generation
-        : null;
-    const lukerGenerationJob = createGenerationJob(request, requestedLukerGenerationOptions);
-    attachJobToRequest(request, lukerGenerationJob);
-
-    if (request.body.api_server.indexOf('localhost') != -1) {
-        request.body.api_server = request.body.api_server.replace('localhost', '127.0.0.1');
-    }
-
-    const request_prompt = request.body.prompt;
-    const controller = new AbortController();
-    bindRequestCloseAbort(request, controller, {
-        onAbortClose: async () => {
-            if (request.body.can_abort && !response_generate.writableEnded) {
-                try {
-                    console.info('Aborting Kobold generation...');
-                    // send abort signal to koboldcpp
-                    const abortResponse = await fetch(`${request.body.api_server}/extra/abort`, {
-                        method: 'POST',
-                    });
-
-                    if (!abortResponse.ok) {
-                        console.error('Error sending abort request to Kobold:', abortResponse.status);
-                    }
-                } catch (error) {
-                    console.error(error);
-                }
-            }
-        },
-    });
-
-    delete request.body.luker_generation;
-
-    let this_settings = {
-        prompt: request_prompt,
-        use_story: false,
-        use_memory: false,
-        use_authors_note: false,
-        use_world_info: false,
-        max_context_length: request.body.max_context_length,
-        max_length: request.body.max_length,
-    };
-
-    if (!request.body.gui_settings) {
-        this_settings = {
-            prompt: request_prompt,
-            use_story: false,
-            use_memory: false,
-            use_authors_note: false,
-            use_world_info: false,
-            max_context_length: request.body.max_context_length,
-            max_length: request.body.max_length,
-            rep_pen: request.body.rep_pen,
-            rep_pen_range: request.body.rep_pen_range,
-            rep_pen_slope: request.body.rep_pen_slope,
-            temperature: request.body.temperature,
-            tfs: request.body.tfs,
-            top_a: request.body.top_a,
-            top_k: request.body.top_k,
-            top_p: request.body.top_p,
-            min_p: request.body.min_p,
-            typical: request.body.typical,
-            sampler_order: request.body.sampler_order,
-            singleline: !!request.body.singleline,
-            use_default_badwordsids: request.body.use_default_badwordsids,
-            mirostat: request.body.mirostat,
-            mirostat_eta: request.body.mirostat_eta,
-            mirostat_tau: request.body.mirostat_tau,
-            grammar: request.body.grammar,
-            sampler_seed: request.body.sampler_seed,
-        };
-        if (request.body.stop_sequence) {
-            this_settings.stop_sequence = request.body.stop_sequence;
-        }
-    }
-
-    console.debug(this_settings);
-    const args = {
-        body: JSON.stringify(this_settings),
-        headers: Object.assign(
-            { 'Content-Type': 'application/json' },
-            getOverrideHeaders((new URL(request.body.api_server))?.host),
-        ),
-        signal: controller.signal,
-    };
-
-    const MAX_RETRIES = 50;
-    const delayAmount = 2500;
-    for (let i = 0; i < MAX_RETRIES; i++) {
-        try {
-            const url = request.body.streaming ? `${request.body.api_server}/extra/generate/stream` : `${request.body.api_server}/v1/generate`;
-            const fetchResponse = await fetch(url, { method: 'POST', ...args });
-
-            if (request.body.streaming) {
-                if (lukerGenerationJob) {
-                    return await forwardStreamingWithGenerationJob(fetchResponse, response_generate, request, lukerGenerationJob, { modelName: request.body.model });
-                }
-                // Pipe remote SSE stream to Express response
-                return forwardFetchResponse(fetchResponse, response_generate, { jsonErrorResponse: true });
-            } else {
-                if (!fetchResponse.ok) {
-                    const errorText = await fetchResponse.text();
-                    console.warn(`Kobold returned error: ${fetchResponse.status} ${fetchResponse.statusText} ${errorText}`);
-                    if (lukerGenerationJob) {
-                        failGenerationJob(lukerGenerationJob, fetchResponse.statusText || errorText || 'Kobold request failed');
-                    }
-
-                    try {
-                        const errorJson = JSON.parse(errorText);
-                        const message = errorJson?.detail?.msg || errorText;
-                        return response_generate.status(400).send({ error: { message } });
-                    } catch {
-                        return response_generate.status(400).send({ error: { message: errorText } });
-                    }
-                }
-
-                const data = await fetchResponse.json();
-                console.debug('Endpoint response:', data);
-                if (lukerGenerationJob) {
-                    const persisted = await completeGenerationJobFromPayload(request, lukerGenerationJob, data, request.body.model);
-                    response_generate.setHeader('x-luker-generation-id', lukerGenerationJob.id);
-                    response_generate.setHeader('x-luker-server-persisted', persisted ? '1' : '0');
-                }
-                return response_generate.send(data);
-            }
-        } catch (error) {
-            // response
-            switch (error?.status) {
-                case 403:
-                case 503: // retry in case of temporary service issue, possibly caused by a queue failure?
-                    console.warn(`KoboldAI is busy. Retry attempt ${i + 1} of ${MAX_RETRIES}...`);
-                    await delay(delayAmount);
-                    break;
-                default:
-                    if (lukerGenerationJob) {
-                        failGenerationJob(lukerGenerationJob, error?.message || 'Kobold request failed');
-                    }
-                    if ('status' in error) {
-                        console.error('Status Code from Kobold:', error.status);
-                    }
-                    return response_generate.send({ error: true });
-            }
-        }
-    }
-
-    if (lukerGenerationJob) {
-        failGenerationJob(lukerGenerationJob, 'Max retries exceeded');
-    }
-    console.error('Max retries exceeded. Giving up.');
-    return response_generate.send({ error: true });
-});
+/**
+ * Kobold `/generate` — delegates to {@link dispatchKobold} via
+ * {@link runLukerDispatch}. Legacy inline handler (localhost rewrite +
+ * sampler-bag body pickBy + streaming vs `/v1/generate` fetch + can_abort
+ * side-channel POST + 403/503 retry + `{detail:{msg}}` error reshape) now
+ * lives in src/luker-dispatch/providers/kobold.js.
+ */
+router.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'kobold',
+    select: () => dispatchKobold,
+}));
 
 router.post('/status', async function (request, response) {
     if (!request.body) return response.sendStatus(400);

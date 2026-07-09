@@ -1,0 +1,220 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { jest } from '@jest/globals';
+import { dispatchMakerSuite } from '../../../src/luker-dispatch/providers/chat-completions/makersuite.js';
+
+/**
+ * Build a fake DispatchContext matching src/luker-dispatch/context.js shape.
+ * Mirrors ai21.test.js. onFetch: async (url, init) => Response.
+ *
+ * `source` toggles MAKERSUITE vs VERTEXAI branch. `secret` seeds the primary
+ * key (MAKERSUITE api key, VERTEXAI express key, or vertex service-account
+ * JSON depending on branch); we route via `secretsReadImpl` for granular
+ * per-key mocking.
+ */
+function fakeCtx({
+    body = {},
+    onFetch,
+    secret = 'gemini-fake-key',
+    secretsReadImpl,
+    signal,
+    source = 'makersuite',
+} = {}) {
+    const emitted = [];
+    const ac = new AbortController();
+    const attachedInspections = [];
+
+    const defaultOkResponse = () => new Response(JSON.stringify({
+        candidates: [{
+            content: { role: 'model', parts: [{ text: 'hello back' }] },
+            finishReason: 'STOP',
+        }],
+        usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+    return {
+        body: {
+            chat_completion_source: source,
+            model: 'gemini-2.5-flash',
+            messages: [
+                { role: 'system', content: 'you are helpful' },
+                { role: 'user', content: 'hi' },
+            ],
+            use_sysprompt: true,
+            stream: false,
+            max_tokens: 128,
+            temperature: 0.7,
+            top_p: 1,
+            ...body,
+        },
+        user: {
+            handle: 'alice',
+            directories: {},
+            profile: { handle: 'alice' },
+        },
+        signal: signal || ac.signal,
+        fetch: onFetch || jest.fn(async () => defaultOkResponse()),
+        secrets: {
+            read: jest.fn((key) => {
+                if (secretsReadImpl) return secretsReadImpl(key);
+                return secret;
+            }),
+        },
+        generation: {
+            startJob: jest.fn(() => null),
+            appendEvent: jest.fn(),
+            hasActiveKeepAliveJob: jest.fn(() => false),
+        },
+        inspection: {
+            start: jest.fn(),
+            attach: jest.fn((url) => attachedInspections.push(url)),
+            fail: jest.fn(),
+        },
+        emit: {
+            head: (h) => emitted.push({ kind: 'head', data: h }),
+            chunk: (b) => emitted.push({ kind: 'chunk', data: b }),
+            end: () => emitted.push({ kind: 'end' }),
+            error: (e) => emitted.push({ kind: 'error', error: e }),
+        },
+        _emitted: emitted,
+        _abortController: ac,
+        _attachedInspections: attachedInspections,
+    };
+}
+
+describe('dispatchMakerSuite', () => {
+    test('MAKERSUITE non-streaming: normalizes Gemini JSON to OpenAI shape then end', async () => {
+        const ctx = fakeCtx();
+        await dispatchMakerSuite(ctx);
+
+        const kinds = ctx._emitted.map(e => e.kind);
+        expect(kinds).toContain('chunk');
+        expect(kinds[kinds.length - 1]).toBe('end');
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(Buffer.from(chunks[0].data).toString('utf8'));
+        // normalizeGeminiResponseToOAI returns an OpenAI-shaped envelope.
+        expect(parsed.choices).toBeDefined();
+        expect(Array.isArray(parsed.choices)).toBe(true);
+        expect(parsed.choices[0].message.content).toBe('hello back');
+
+        expect(ctx.fetch).toHaveBeenCalledTimes(1);
+        const [url, init] = ctx.fetch.mock.calls[0];
+        expect(String(url)).toContain('generativelanguage.googleapis.com');
+        expect(String(url)).toContain('gemini-2.5-flash:generateContent');
+        expect(String(url)).toContain('key=gemini-fake-key');
+        expect(init.method).toBe('POST');
+        expect(init.headers['Content-Type']).toBe('application/json');
+        expect(init.signal).toBe(ctx.signal);
+    });
+
+    test('MAKERSUITE missing API key (no base_url, no reverse_proxy): emits error, no fetch', async () => {
+        const ctx = fakeCtx({ secret: '' });
+        await dispatchMakerSuite(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs.length).toBeGreaterThan(0);
+        expect(ctx.fetch).not.toHaveBeenCalled();
+    });
+
+    test('MAKERSUITE streaming: forwards upstream SSE chunks verbatim, URL contains alt=sse', async () => {
+        const sseBody =
+            'data: {"candidates":[{"content":{"parts":[{"text":"he"}]}}]}\n\n' +
+            'data: {"candidates":[{"content":{"parts":[{"text":"llo"}]}}]}\n\n';
+
+        const ctx = fakeCtx({
+            body: { stream: true },
+            onFetch: jest.fn(async () => new Response(sseBody, {
+                status: 200,
+                headers: { 'content-type': 'text/event-stream' },
+            })),
+        });
+
+        await dispatchMakerSuite(ctx);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks.length).toBeGreaterThan(0);
+        const decoded = chunks.map(c => Buffer.from(c.data).toString('utf8')).join('');
+        expect(decoded).toContain('"text":"he"');
+        expect(decoded).toContain('"text":"llo"');
+        expect(ctx._emitted[ctx._emitted.length - 1].kind).toBe('end');
+
+        const [url] = ctx.fetch.mock.calls[0];
+        expect(String(url)).toContain(':streamGenerateContent');
+        expect(String(url)).toContain('alt=sse');
+    });
+
+    test('MAKERSUITE upstream non-2xx: emits error, calls inspection.fail, no chunk emitted', async () => {
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response('{"error":{"message":"bad key"}}', {
+                status: 401,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs.length).toBeGreaterThan(0);
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(0);
+        expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+    });
+
+    test('MAKERSUITE ctx.signal aborted mid-request: fetch AbortError caught, emits error, no chunk', async () => {
+        const ac = new AbortController();
+        const ctx = fakeCtx({
+            signal: ac.signal,
+            onFetch: jest.fn((url, init) => new Promise((_, reject) => {
+                init.signal.addEventListener('abort', () => {
+                    const err = new Error('The user aborted a request.');
+                    err.name = 'AbortError';
+                    reject(err);
+                });
+            })),
+        });
+
+        const dispatchPromise = dispatchMakerSuite(ctx);
+        setImmediate(() => ac.abort());
+        await dispatchPromise;
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(0);
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs.length).toBeGreaterThan(0);
+    });
+
+    test('VERTEXAI reverse-proxy branch: /v1/publishers/google/models URL, Authorization header, no key= param', async () => {
+        // Vertex express/full auth modes read secrets via readSecret (NOT
+        // ctx.secrets.read) inside getVertexAIAuth; those paths need the
+        // real filesystem-backed secret store to exercise. The reverse-proxy
+        // branch is auth-mode-independent (short-circuits before secret
+        // lookup) and exercises the Vertex-specific URL builder + auth
+        // header path, so we cover the MAKERSUITE-vs-VERTEXAI distinction
+        // through this path.
+        const ctx = fakeCtx({
+            source: 'vertexai',
+            body: {
+                chat_completion_source: 'vertexai',
+                reverse_proxy: 'https://vertex-proxy.example.com',
+                proxy_password: 'proxy-token-xyz',
+                model: 'gemini-2.5-pro',
+            },
+        });
+
+        await dispatchMakerSuite(ctx);
+
+        expect(ctx.fetch).toHaveBeenCalledTimes(1);
+        const [url, init] = ctx.fetch.mock.calls[0];
+        const urlStr = String(url);
+        // Proxy mode: uses original apiUrl base + /v1/publishers/google/models/...
+        expect(urlStr).toContain('vertex-proxy.example.com');
+        expect(urlStr).toContain('/v1/publishers/google/models/gemini-2.5-pro:generateContent');
+        // Vertex proxy mode uses Authorization header, NOT ?key= param.
+        expect(urlStr).not.toContain('key=');
+        expect(init.headers['Authorization']).toBe('Bearer proxy-token-xyz');
+
+        // End-to-end: still emits chunk + end for the default OK response.
+        const kinds = ctx._emitted.map(e => e.kind);
+        expect(kinds[kinds.length - 1]).toBe('end');
+    });
+});

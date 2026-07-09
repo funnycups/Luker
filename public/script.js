@@ -336,6 +336,7 @@ import { showUndoToast } from './scripts/undo-toast.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
+import { createLukerDelivery, installFetchProxy } from './scripts/ws-delivery.js';
 
 installFrontendLogCapture();
 initAndroidDebugTrail();
@@ -1957,6 +1958,31 @@ async function firstLoadInit() {
     } catch {
         toastr.error(t`Couldn't get CSRF token. Please refresh the page.`, t`Error`, { timeOut: 0, extendedTimeOut: 0, preventDuplicates: true });
         throw new Error('Initialization failed');
+    }
+
+    // Boot the WebSocket delivery channel and install the fetch proxy that
+    // tunnels long-running /generate requests through it. The proxy replaces
+    // window.fetch so all subsequent generate calls stream chunks over WS.
+    // Ticket minting reuses the just-set CSRF token via getRequestHeaders().
+    try {
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => {
+            const resp = await fetch('/api/ws-ticket', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+            });
+            if (!resp.ok) throw new Error(`ws-ticket HTTP ${resp.status}`);
+            const data = await resp.json();
+            if (!data || typeof data.ticket !== 'string' || !data.ticket) {
+                throw new Error('ws-ticket: malformed response');
+            }
+            return data.ticket;
+        });
+        installFetchProxy(delivery);
+        // Keep a reference for debugging (mirrors the old window.__wsProxy).
+        window.__lukerDelivery = delivery;
+    } catch (err) {
+        console.warn('[ws-delivery] Boot failed; generate requests will fall back to plain HTTP:', err?.message || err);
     }
 
     console.debug('[init] csrf-token done, showing loader');

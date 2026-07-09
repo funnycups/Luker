@@ -1,4 +1,4 @@
-// #48 — private-request-filter (and ws-proxy reachability) in a real
+// #48 — private-request-filter (and ws-ticket reachability) in a real
 // browser session.
 //
 // (1) privateAddressWhitelist.enabled=true: when the filter is on, any
@@ -7,12 +7,10 @@
 //     text-completions backend at 192.168.99.123 — a private IP that is
 //     definitely not in the default 127.0.0.0/8 + ::1/128 whitelist.
 //
-// (2) ws-proxy: GET /api/ws-ticket requires CSRF + a real user; the WS
-//     upgrade itself is gated by the single-use ticket. We mint a ticket
-//     and verify the endpoint shape rather than wrestling with a full
-//     websocket handshake under the harness (the ws-proxy path requires
-//     basicAuth/csrf to be bypassed via the WS_PROXY_AUTH_BYPASS Symbol
-//     which is internal to the server process).
+// (2) ws-ticket: POST /api/ws-ticket requires CSRF + a real user; the
+//     ticket then gates the /api/ws-delivery WebSocket upgrade. We mint a
+//     ticket and verify the endpoint shape rather than wrestling with a
+//     full websocket handshake under the harness.
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
