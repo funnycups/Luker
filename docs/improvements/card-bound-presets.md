@@ -1,76 +1,84 @@
 # Card-Bound Presets & Personas
 
-The card-bound feature allows Character Card authors to specify recommended Chat Completion presets and default Personas for their characters, ensuring characters run under optimal conditions. This feature depends on [Preset Decoupling](/improvements/preset-decoupling) to guarantee that loading presets won't break the user's API connection configuration.
+Card authors can ship a character with one or more recommended chat completion presets and a default persona so the card runs under the intended sampling and prompting shape the moment it is imported. The feature builds on [Preset Decoupling](/improvements/preset-decoupling) — connection fields are always stripped, so exported cards never carry an API key or endpoint.
 
-## Character Cards Carrying Recommended Presets
+## Character cards carrying recommended presets
 
-Character Cards can embed a complete Chat Completion preset. When a user opens the Character Card, Luker will:
+A character card may embed any number of chat completion presets, each with its own name and body. When you load a character with embedded presets, Luker:
 
-1. Extract the preset content from the Character Card data
-2. **Automatically strip connection fields** — Automatically filter out all connection-related fields (such as API address, keys, model name, etc.), ensuring the user's connection configuration is not affected
-3. Inject a runtime option marked as "Card-Bound Preset" in the preset selector
-4. Automatically switch to that preset
+1. Renders a **Card-bound** `<optgroup>` at the top of the chat completion preset selector, listing every preset the card ships with.
+2. Renders your local presets below in a **Local** group.
+3. Automatically selects the card's **default** preset (if the card marked one).
 
-Luker records the preset name before switching, so it can automatically restore when leaving the character.
+The card-bound options are runtime-only — they do not add entries to your global preset library and never overwrite same-named local presets. Switching characters removes the card-bound group from the selector.
 
-::: info Connection Field Safety
-Card-bound preset loading always skips connection fields. Even if the Character Card author included API Keys or custom endpoints in the preset, this information will not be applied to the user's configuration. This is a direct safeguard of the [Preset Decoupling](/improvements/preset-decoupling) mechanism.
+::: info Connection fields never leave the card
+Every preset stored on a card is filtered through the same field classifier used by Preset Decoupling: API endpoint, key, model, proxy password, and other connection settings are removed on write. Loading a card-bound preset only applies sampling and prompt-structure fields — it cannot silently reroute your traffic to the card author's endpoint.
 :::
 
-## Character Cards Carrying Default Personas
+## Binding the current preset to a character
 
-Character Cards can specify one or more recommended Personas. This is a **global-level** binding — the Persona is directly associated with the Character Card itself, not just a specific chat session. When a user opens the Character Card:
+Open the character-management dropdown next to the character portrait and choose **Bind Current Chat Completion Preset**. Luker adds the currently selected preset to the card's embedded set and marks it as the card's default.
 
-- If the user currently has no Persona selected, Luker automatically switches to the Character Card's recommended Persona
-- If the user already has a Persona, Luker issues a reminder that the current Persona differs from the Character Card's recommendation
+- If the preset name is not yet on the card, it is added as a new slot.
+- If a slot with the same name already exists, Luker asks whether to overwrite the existing card copy with your current settings.
 
-Bound Personas are exported along with the Character Card. When other users import the Character Card, the recommended Persona information is imported as well, ensuring the Character Card author's recommended configuration is fully preserved.
+Binding is blocked when the currently selected preset is *itself* a card-bound option — there is nothing to promote in that case, and Luker surfaces an info notice instead of silently no-oping.
 
-## Auto-Switching on Load and Leave
+## Managing bound presets
 
-### When Opening a Character Card
+**Manage Bound Chat Completion Presets** opens a per-character dialog listing every card-bound slot. Each row exposes:
 
-1. Detect whether the Character Card carries a bound preset
-2. If yes, record the current preset name
-3. Inject the card-bound preset option in the preset selector
-4. Automatically switch to the bound preset (applying only generation parameters, not affecting connection configuration)
+- **Set as default** — pick which slot Luker auto-applies when the character is loaded.
+- **Overwrite from current** — replace the slot body with your currently selected preset's body while keeping the slot name.
+- **Update from local** — refresh the slot body from a same-named local preset. Disabled when no matching local preset exists.
+- **Delete** — remove the slot. If the deleted slot was the default, the default is cleared until you set a new one.
 
-### When Leaving a Character Card
+A bottom control lets you add a new slot by picking any local preset whose name is not already on the card.
 
-1. Detect whether there is an active card-bound preset
-2. Automatically restore the previously used preset
-3. Remove the card-bound option from the preset selector
-4. Reset the binding state
+## Clearing all bound presets
 
-For group chats, the restoration logic is also triggered when leaving.
+**Clear Bound Chat Completion Preset** wipes every embedded slot on the current character in one confirm step. Use it when you want to hand the card back to a plain "no recommendations" state.
 
-## Special Identification in the Preset Selector
+## Editing a bound preset in place
 
-When a card-bound preset is active, a special badge is displayed in the preset selector, clearly indicating to the user that the current preset is the Character Card's recommendation rather than their own selection.
+When a card-bound preset is the active preset in the selector, edits made through Prompt Manager, sampler sliders, prompt groups, or extension flags apply to the character's card-embedded copy — not to your local preset library. To commit the changes, click **Update current preset**. Same-named local presets stay untouched.
 
-## Chat Persona Tracking
+If you want an edit to become a standalone local preset instead, use **Save preset as**, which registers the body in the global list under a new name.
 
-Luker tracks the currently used Persona in chat metadata. Each time the Persona changes, the current Persona information is written to the chat metadata and saved.
+::: tip Prompt Manager iterates on card-bound bodies transparently
+Prompt Manager, the Chat Completion Preset Assistant (CPA), and any AI iteration flow that lands on `Update current preset` all route through the same dispatch. Iterating a card-bound preset writes back to the card slot without a separate "commit to card" step.
+:::
 
-When reopening a chat, if the current Persona is detected to differ from the one recorded in the chat history, the user is notified via a prompt to avoid continuing the conversation under the wrong Persona.
+## Orchestrator agent presets read from the card first
 
-## Editing a Card-Bound Preset
+Multi-agent orchestrator profiles reference the chat completion preset each agent runs on **by name**. When a character with a card-bound set is loaded, agent name resolution walks card slots first, then local presets, then falls back to the global default. This means an orchestrator profile exported with a card ships end-to-end runnable: the recipient does not need to import a matching preset separately.
 
-While a card-bound preset is active, any edit you make through the normal preset UI — sampler sliders, Prompt Manager entries, prompt groups, extension flags — is automatically mirrored back onto the Character Card. There is no separate "save to card" step: every settings save round-trips the latest preset body through the card's embedded snapshot.
+**Save To Character Override** in the orchestrator drawer inspects the referenced preset names before persisting. If any agent references a preset that is not yet on the card, Luker prompts:
 
-Clicking **Update Preset** while a card-bound preset is active writes to the card snapshot.
+- **Embed all** — write each referenced preset's local body into the card so the orchestrator profile stays self-contained after export.
+- **Save names only** — persist the orchestrator profile but leave the presets un-embedded. Recipients without matching local presets will fall back to the runtime default.
+- **Cancel** — abort the save entirely.
 
-To convert your edits into a standalone global preset, use **Save as new preset** instead, which prompts for a new name and registers it in the global preset list.
+## Character cards carrying default personas
 
-## Import and Export with Character Cards
+A character card can bind one or more recommended personas. When you open the card:
 
-Bound presets and recommended Personas are part of the Character Card data and are automatically carried during Character Card import and export.
+- If you have not chosen a persona, Luker switches to the card's recommendation.
+- If you already have a persona, Luker warns that it differs from the card's recommendation, so you can choose whether to align or keep your own.
+
+Bound personas travel with the card on export, and recipients see the same recommendation on import.
+
+## Import and export round-trip
+
+Bound presets, default personas, and orchestrator overrides are all part of the character card data. Standard character export (PNG or JSON) carries them along; standard import restores them. There is no separate file to distribute alongside the card.
 
 ## Dependencies
 
-The card-bound preset feature depends on [Preset Decoupling](/improvements/preset-decoupling). Without preset decoupling's field classification mechanism, connection fields cannot be safely skipped when loading Character Card presets, making the entire feature impossible.
+The card-bound preset feature depends on [Preset Decoupling](/improvements/preset-decoupling). Without decoupling's field classifier, connection fields could not be safely stripped when embedding a preset in a card.
 
-## Related Pages
+## Related
 
-- [Preset Decoupling](/improvements/preset-decoupling) — The prerequisite mechanism for card-bound presets
-- [Improvements Overview](/improvements/overview) — Overview of all technical improvements
+- [Preset Decoupling](/improvements/preset-decoupling) — the field classifier that keeps API credentials out of cards.
+- [Orchestration Presets](/features/orchestrator/presets) — how orchestrator profiles reference preset names and how Save To Character Override embeds them.
+- [Improvements Overview](/improvements/overview) — the wider improvement set.

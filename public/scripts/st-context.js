@@ -137,6 +137,8 @@ import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { power_user, registerDebugFunction, performFuzzySearch } from './power-user.js';
 import { getPresetManager } from './preset-manager.js';
 import { persistPreset } from './preset-persistence.js';
+import * as characterPresets from './character/presets.js';
+import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
 import { humanizedDateTime, isMobile, shouldSendOnEnter } from './RossAscends-mods.js';
 import { ScraperManager } from './scrapers.js';
 import { executeSlashCommands, executeSlashCommandsWithOptions, registerSlashCommand } from './slash-commands.js';
@@ -848,6 +850,23 @@ function normalizePresetRef(target = null, options = {}) {
 
     if (target && typeof target === 'object') {
         const collection = normalizePresetApi(target.collection || fallbackCollection);
+        const origin = target.origin && typeof target.origin === 'object'
+            ? (target.origin.kind === 'character' && target.origin.avatar
+                ? { kind: 'character', avatar: String(target.origin.avatar) }
+                : { kind: 'global' })
+            : { kind: 'global' };
+
+        // character-origin ref bypasses PresetManager's canonical-name lookup.
+        // That lookup targets the global preset library; card-bound presets
+        // live in a per-character namespace with no relation to the global
+        // list.  The caller's name string is preserved verbatim (trimmed).
+        if (origin.kind === 'character') {
+            const name = cleanText(target.name);
+            return collection && name
+                ? { collection, name, origin }
+                : null;
+        }
+
         const manager = getPresetManager(collection);
         const presetNames = getStoredPresetNames(collection);
         const selectedName = cleanText(manager?.getSelectedPresetName?.());
@@ -858,7 +877,7 @@ function normalizePresetRef(target = null, options = {}) {
             : selectedStoredName;
 
         return collection && resolvedName
-            ? { collection, name: resolvedName }
+            ? { collection, name: resolvedName, origin }
             : null;
     }
 
@@ -868,7 +887,7 @@ function normalizePresetRef(target = null, options = {}) {
         const selectedName = cleanText(manager?.getSelectedPresetName?.());
         const selectedStoredName = findCanonicalNameInList(getStoredPresetNames(collection), selectedName) || '';
         return collection && selectedStoredName
-            ? { collection, name: selectedStoredName }
+            ? { collection, name: selectedStoredName, origin: { kind: 'global' } }
             : null;
     }
 
@@ -877,7 +896,7 @@ function normalizePresetRef(target = null, options = {}) {
     const selectedName = cleanText(manager?.getSelectedPresetName?.());
     const selectedStoredName = findCanonicalNameInList(getStoredPresetNames(collection), selectedName) || '';
     return collection && selectedStoredName
-        ? { collection, name: selectedStoredName }
+        ? { collection, name: selectedStoredName, origin: { kind: 'global' } }
         : null;
 }
 
@@ -894,16 +913,87 @@ function buildPresetBodySnapshot(collection, name, body, source, { stored = true
 
 function listPresetRefs(collection = '') {
     const normalizedCollection = normalizePresetApi(collection);
+    const out = [];
+
+    // Card-bound refs only apply to chat completion (OpenAI-compatible
+    // collection).  TC, kobold, novel and horde collections use the manager
+    // list only.  We look up the active character via getContext() to avoid
+    // a static `characters[this_chid]` capture — the accessor tracks
+    // whichever slot the UI has selected.
+    if (normalizedCollection === 'openai') {
+        const ctx = getContext();
+        const character = ctx.characters?.[ctx.characterId];
+        if (character && typeof character === 'object' && character.avatar) {
+            const cardRefs = characterPresets.listCharacterBoundPresets(character);
+            for (const p of cardRefs) {
+                out.push({
+                    collection: normalizedCollection,
+                    name: p.name,
+                    origin: { kind: 'character', avatar: character.avatar },
+                });
+            }
+        }
+    }
+
     const names = getStoredPresetNames(normalizedCollection);
-    return names.map((name) => ({ collection: normalizedCollection, name }));
+    for (const name of names) {
+        out.push({
+            collection: normalizedCollection,
+            name,
+            origin: { kind: 'global' },
+        });
+    }
+    return out;
 }
 
 function getSelectedPresetRef(collection = '') {
+    const normalizedCollection = normalizePresetApi(collection);
+    if (normalizedCollection === 'openai') {
+        // Ghost `<option value>` prefix from preset-ref-codec.js is the
+        // sentinel that flags the selector value as pointing to a
+        // character-bound preset.
+        // Decode bypasses PresetManager's global-canonical-name lookup —
+        // the encoded name lives in the per-character namespace and has no
+        // relation to the global preset library. `typeof document` guards
+        // Node/SSR test environments where st-context.js is imported
+        // without a DOM.
+        const el = typeof document !== 'undefined' ? document.getElementById('settings_preset_openai') : null;
+        const rawValue = el ? String(el.value || '').trim() : '';
+        const decoded = decodeCardBoundOptionValue(rawValue);
+        if (decoded) {
+            return {
+                collection: 'openai',
+                name: decoded.name,
+                origin: { kind: 'character', avatar: decoded.avatar },
+            };
+        }
+    }
     return normalizePresetRef(collection || null);
 }
 
 function getLivePresetBody(collection = '') {
     const normalizedCollection = normalizePresetApi(collection);
+    const selectedRef = getSelectedPresetRef(normalizedCollection);
+
+    // Character-origin: body comes from Layer 1, not PresetManager.
+    // Card-bound presets are always considered `stored: true` because they
+    // persist on the character card itself; `source: 'character'` lets
+    // callers distinguish this from a global stored/live snapshot.
+    if (selectedRef?.origin?.kind === 'character') {
+        const character = getContext().characters.find(c => c?.avatar === selectedRef.origin.avatar);
+        if (!character) return null;
+        const hit = characterPresets.getCharacterBoundPreset(character, selectedRef.name);
+        if (!hit) return null;
+        const snap = buildPresetBodySnapshot(normalizedCollection, selectedRef.name, hit.preset, 'character', {
+            stored: true,
+            selected: true,
+        });
+        snap.ref = { collection: normalizedCollection, name: selectedRef.name, origin: selectedRef.origin };
+        return snap;
+    }
+
+    // Global-origin path (behaviour unchanged from pre-Task-3, plus origin
+    // stamp on the returned ref for API-layer consistency).
     const manager = getPresetManager(normalizedCollection);
     const selectedName = cleanText(manager?.getSelectedPresetName?.());
     const body = safeClone(manager?.getPresetSettings?.(selectedName) || {}, {});
@@ -914,16 +1004,51 @@ function getLivePresetBody(collection = '') {
         return null;
     }
 
-    return buildPresetBodySnapshot(normalizedCollection, snapshotName, body, 'live', {
+    const snap = buildPresetBodySnapshot(normalizedCollection, snapshotName, body, 'live', {
         stored: Boolean(storedRef),
         selected: true,
     });
+    snap.ref = { collection: normalizedCollection, name: snapshotName, origin: { kind: 'global' } };
+    return snap;
+}
+
+// Client-only composite state key for character-bound presets.
+// Server (`src/endpoints/presets.js`) sees this as an opaque preset name
+// string and stores it byte-for-byte under `{apiId, name}`. The prefix is
+// intentionally distinct from the DOM selector prefix `__luker_card__::`
+// (see character/preset-ref-codec.js); mixing them would let a naive server
+// consumer double-decode and corrupt existing state slots.
+const CARD_BOUND_STATE_KEY_PREFIX = '__lc__::';
+
+function composeStateTarget(ref) {
+    if (!ref || !ref.collection) return null;
+    if (ref.origin?.kind === 'character') {
+        const encAvatar = encodeURIComponent(String(ref.origin.avatar || ''));
+        return {
+            apiId: ref.collection,
+            name: `${CARD_BOUND_STATE_KEY_PREFIX}${encAvatar}::${ref.name}`,
+        };
+    }
+    return { apiId: ref.collection, name: ref.name };
 }
 
 function getStoredPresetBody(target = null) {
     const ref = normalizePresetRef(target);
     if (!ref) {
         return null;
+    }
+
+    if (ref.origin?.kind === 'character') {
+        const character = getContext().characters.find(c => c?.avatar === ref.origin.avatar);
+        if (!character) return null;
+        const hit = characterPresets.getCharacterBoundPreset(character, ref.name);
+        if (!hit) return null;
+        const snap = buildPresetBodySnapshot(ref.collection, ref.name, hit.preset, 'character', {
+            stored: true,
+            selected: false,
+        });
+        snap.ref = { collection: ref.collection, name: ref.name, origin: ref.origin };
+        return snap;
     }
 
     const manager = getPresetManager(ref.collection);
@@ -933,10 +1058,28 @@ function getStoredPresetBody(target = null) {
     }
 
     const selectedRef = normalizePresetRef(ref.collection);
-    return buildPresetBodySnapshot(ref.collection, ref.name, body, 'stored', {
+    const snap = buildPresetBodySnapshot(ref.collection, ref.name, body, 'stored', {
         stored: true,
         selected: Boolean(selectedRef && areLookupNamesEqual(selectedRef.name, ref.name)),
     });
+    snap.ref = { collection: ref.collection, name: ref.name, origin: { kind: 'global' } };
+    return snap;
+}
+
+/**
+ * Resolve a preset name against the global chat completion library only,
+ * never the current character's card-bound set.  This is the slash-command
+ * / generic-code lookup semantic: callers writing `/preset name=Foo`
+ * expect Foo to bind to the global library entry even when a same-named
+ * card-bound preset exists on the active character.
+ */
+function resolvePresetGlobalOnly(name) {
+    const collection = 'openai';
+    const cleanedName = cleanText(name);
+    if (!cleanedName) return null;
+    const canonical = findCanonicalNameInList(getStoredPresetNames(collection), cleanedName);
+    if (!canonical) return null;
+    return { collection, name: canonical, origin: { kind: 'global' } };
 }
 
 async function savePresetBody(target, body, options = {}) {
@@ -944,6 +1087,27 @@ async function savePresetBody(target, body, options = {}) {
     const presetBody = safeClone(isPlainObject(body) ? body : {}, {});
     if (!ref) {
         return { ok: false, ref: null, mode: 'noop', operations: [] };
+    }
+
+    if (ref.origin?.kind === 'character') {
+        const character = getContext().characters.find(c => c?.avatar === ref.origin.avatar);
+        if (!character) {
+            return { ok: false, ref, mode: 'character', operations: [] };
+        }
+        // Layer 1 strips OpenAI connection fields, applies read-spread-overlay
+        // to preserve sibling luker.* subkeys, and persists via writeExtensionField.
+        // Errors bubble up per the no-fallback rule; the caller sees the throw.
+        await characterPresets.updateCharacterBoundPreset(character, ref.name, presetBody);
+        const savedRef = { collection: ref.collection, name: ref.name, origin: ref.origin };
+        return {
+            ok: true,
+            ref: savedRef,
+            mode: 'character',
+            operations: [],
+            response: null,
+            body: safeClone(presetBody, {}),
+            snapshot: getStoredPresetBody(savedRef),
+        };
     }
 
     const manager = getPresetManager(ref.collection);
@@ -972,12 +1136,12 @@ async function savePresetBody(target, body, options = {}) {
     manager?.updateList?.(savedName, presetBody, { select: shouldSelect });
     return {
         ok: true,
-        ref: { collection: ref.collection, name: savedName },
+        ref: { collection: ref.collection, name: savedName, origin: { kind: 'global' } },
         mode: saveResult.mode,
         operations: safeClone(saveResult.operations || [], []),
         response: saveResult.response || null,
         body: safeClone(presetBody, {}),
-        snapshot: getStoredPresetBody({ collection: ref.collection, name: savedName }),
+        snapshot: getStoredPresetBody({ collection: ref.collection, name: savedName, origin: { kind: 'global' } }),
     };
 }
 
@@ -2364,6 +2528,7 @@ export function getContext() {
         presets: {
             list: listPresetRefs,
             resolve: normalizePresetRef,
+            resolveGlobalOnly: resolvePresetGlobalOnly,
             getSelected: getSelectedPresetRef,
             getLive: getLivePresetBody,
             getStored: getStoredPresetBody,
@@ -2373,25 +2538,37 @@ export function getContext() {
             state: {
                 get: (namespace, options = {}) => getPresetState(namespace, {
                     ...options,
-                    target: normalizePresetRef(options?.target, { collection: options?.collection }),
+                    target: composeStateTarget(normalizePresetRef(options?.target, { collection: options?.collection })),
                 }),
                 getBatch: (namespaces, options = {}) => getPresetStateBatch(namespaces, {
                     ...options,
-                    target: normalizePresetRef(options?.target, { collection: options?.collection }),
+                    target: composeStateTarget(normalizePresetRef(options?.target, { collection: options?.collection })),
                 }),
                 patch: (namespace, operations, options = {}) => patchPresetState(namespace, operations, {
                     ...options,
-                    target: normalizePresetRef(options?.target, { collection: options?.collection }),
+                    target: composeStateTarget(normalizePresetRef(options?.target, { collection: options?.collection })),
                 }),
                 update: (namespace, updater, options = {}) => updatePresetState(namespace, updater, {
                     ...options,
-                    target: normalizePresetRef(options?.target, { collection: options?.collection }),
+                    target: composeStateTarget(normalizePresetRef(options?.target, { collection: options?.collection })),
                 }),
                 delete: (namespace, options = {}) => deletePresetState(namespace, {
                     ...options,
-                    target: normalizePresetRef(options?.target, { collection: options?.collection }),
+                    target: composeStateTarget(normalizePresetRef(options?.target, { collection: options?.collection })),
                 }),
-                deleteAll: (target = null) => deleteAllPresetState(normalizePresetRef(target)),
+                deleteAll: (target = null) => deleteAllPresetState(composeStateTarget(normalizePresetRef(target))),
+            },
+        },
+        character: {
+            presets: {
+                list: characterPresets.listCharacterBoundPresets,
+                get: characterPresets.getCharacterBoundPreset,
+                add: characterPresets.addCharacterBoundPreset,
+                update: characterPresets.updateCharacterBoundPreset,
+                remove: characterPresets.removeCharacterBoundPreset,
+                setDefault: characterPresets.setCharacterBoundDefault,
+                resolveByName: characterPresets.resolveCharacterBoundPresetByName,
+                clearAll: characterPresets.clearAllCharacterBoundPresets,
             },
         },
         connectionProfiles: {

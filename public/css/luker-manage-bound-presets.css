@@ -1,0 +1,126 @@
+/**
+ * Luker — Manage Bound Presets dialog
+ *
+ * Minimal layout styles for the per-character card-bound preset manager
+ * (public/scripts/character/manage-bound-presets-dialog.js). Buttons re-use
+ * the shared `.menu_button` from the base theme so they inherit user theme
+ * choices; only spacing / row layout is scoped here.
+ */
+
+#luker_manage_bound_presets_dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75em;
+    /* Cap width so the dialog fits inside the visible chat area on
+       desktops that have the character-edit sidebar open; the previous
+       `min-width: min(48em, 92vw)` expanded the popup wide enough that
+       the trailing "Add" button in the "Add from local preset" row
+       overflowed past the popup edge behind the sidebar on 1440px
+       viewports. `width: min(42em, 100%)` bounds the popup to a size
+       that fits inside the chat area, and `.popup`'s outer max-width
+       still applies. */
+    width: min(42em, 100%);
+    max-width: 100%;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-heading {
+    margin: 0 0 0.25em 0;
+    font-size: 1.1em;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75em;
+    padding: 0.5em 0.75em;
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 15%, transparent);
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 3%, transparent);
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-default-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15em 0.6em;
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--SmartThemeQuoteColor, gold) 25%, transparent);
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.85em;
+    font-weight: 600;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-empty {
+    padding: 1em;
+    text-align: center;
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 60%, transparent);
+    font-style: italic;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-add {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding-top: 0.5em;
+    border-top: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 15%, transparent);
+    flex-wrap: wrap;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-add-label {
+    flex: 0 0 auto;
+}
+
+#luker_manage_bound_presets_dialog .luker-mbp-add-select {
+    flex: 1 1 15em;
+    min-width: 0;
+}
+
+/* Small screens: stack the row's name + actions vertically so wide button
+   clusters don't force horizontal scroll (project memory:
+   project_mobile_webview_paint_caps). Also stack the "Add from local
+   preset" row so the trailing Add button doesn't get pushed past the
+   viewport edge at 375px widths. */
+@media (max-width: 720px) {
+    #luker_manage_bound_presets_dialog .luker-mbp-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    #luker_manage_bound_presets_dialog .luker-mbp-actions {
+        justify-content: flex-start;
+    }
+    #luker_manage_bound_presets_dialog .luker-mbp-add {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    #luker_manage_bound_presets_dialog .luker-mbp-add-label,
+    #luker_manage_bound_presets_dialog .luker-mbp-add-select,
+    #luker_manage_bound_presets_dialog .luker-mbp-add-button {
+        flex: 0 0 auto;
+        width: 100%;
+    }
+}

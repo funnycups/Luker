@@ -12,11 +12,6 @@
     margin: 6px 0;
 }
 
-#completion_preset_assistant_settings .cpa_hint,
-#completion_preset_assistant_settings .cpa_status {
-    opacity: 0.8;
-}
-
 #completion_preset_assistant_settings .menu_button,
 #completion_preset_assistant_settings .menu_button_small {
     display: inline-flex;

@@ -101,11 +101,11 @@ Luker supports organizing presets into named groups, displayed as groups in the 
 
 ## Card-Bound Presets
 
-Character cards can bind a dedicated chat completion preset. When you open a chat with that character, Luker automatically switches to the bound preset; when you leave, it restores the previously used preset.
+Character cards can bind one or more dedicated chat completion presets. When you open a chat with a character that carries embedded presets, Luker adds a **Card-bound** group to the top of the preset selector listing every preset the card ships with, and auto-selects the card's default.
 
-Bound presets are stored independently within the character card data — they don't appear in your global preset list and don't affect other characters. When exporting a character card, bound presets are exported along with it.
+Card-bound presets are runtime-only — they don't appear in your global preset list, don't overwrite same-named local presets, and are removed from the selector when you leave the character. When exporting a character card, the embedded preset set travels with it.
 
-This is especially useful for card creators — you can design the optimal prompt configuration for a character, and users get the best experience immediately after importing the card without any additional setup.
+This is especially useful for card creators — you can ship a character with the sampling and prompt shape you tuned it against, and users get that behavior immediately on import without any additional setup.
 
 See [Character Card Basics](/basics/character-cards) and [Card-Bound Presets and Personas](/improvements/card-bound-presets) for details.
 

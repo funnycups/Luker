@@ -549,8 +549,8 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
     const settings = extension_settings[MODULE_NAME];
     const previousOrchestration = await getPreviousOrchestrationCapsuleText(context, payload);
     const planner = createAgendaPlannerDraft(profile?.planner);
-    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, planner);
-    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, planner);
+    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, planner)?.name || '';
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, planner)?.name || '';
     const promptText = [
         '## planner_prompt',
         String(planner?.userPromptTemplate || DEFAULT_AGENDA_PLANNER_PROMPT),
@@ -670,8 +670,8 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     const settings = extension_settings[MODULE_NAME];
     const planner = createAgendaPlannerDraft(profile?.planner);
     const preset = profile?.agents?.[dispatch.agent] || {};
-    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset);
-    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset);
+    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset)?.name || '';
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset)?.name || '';
     const systemPrompt = [
         String(preset.systemPrompt || 'You are an orchestration agent. Complete the assigned task carefully and return the full useful result through the required tool.').trim(),
         '',

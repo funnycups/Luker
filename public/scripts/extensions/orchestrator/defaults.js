@@ -304,7 +304,7 @@ export function getDefaultRequestSystemPrompt() {
         'Each preset / agent may optionally set apiPresetName to route through a specific Connection Manager profile. Leave empty unless the user explicitly asks for per-agent routing. Empty means fallback to the global orchestration API preset.',
         'If you set apiPresetName, use only names from available_connection_profiles.',
         'Each preset / agent may optionally set promptPresetName to route through a specific chat completion preset. Leave empty unless the user explicitly asks for per-agent routing. Empty means fallback to the global orchestration chat completion preset.',
-        'If you set promptPresetName, use only names from available_chat_completion_presets.',
+        'If you set promptPresetName, use only names from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are safe to reference from any card. Prefer local-global names for portable profiles; use a card-bound name only when the profile is meant to ship with the same card.',
         'Do NOT hardcode any fixed narrator persona / identity / roleplay character in system prompts.',
         'Do NOT mirror long single-prompt identity blocks; focus on process quality and constraints.',
         'Runtime context guarantee: orchestration agents and final generation already see assembled preset / character card / world-info context.',

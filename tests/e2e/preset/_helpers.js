@@ -4,8 +4,11 @@
 // correctly for this build:
 //   - selectPresetByName: drive the hidden select2 element via jQuery
 //     (Playwright's selectOption rejects hidden selects).
-//   - savePresetAsViaButton: click the visible Save-preset-as icon
-//     (#new_oai_preset) via JS so a closed-drawer parent doesn't block.
+//   - savePresetAsViaButton: open the AI Response Configuration drawer
+//     (if closed) and click the Save-preset-as icon (#new_oai_preset)
+//     via a real Playwright gesture — actionability checks (visible /
+//     enabled / stable / receives-events) protect against regressions
+//     that would hide the button.
 //   - setCounterInput / setSliderInput: write to the slider via jQuery
 //     so ST's canonical input handler fires (the counter on its own
 //     doesn't update oai_settings.<key>).
@@ -46,9 +49,27 @@ export async function selectPresetByName(page, name) {
     }, name, { timeout: 10_000 });
 }
 
+/**
+ * Ensure the AI Response Configuration drawer (`#leftNavDrawerIcon`) is
+ * open before interacting with its contents. `#new_oai_preset` and the
+ * other preset-manager buttons live inside this drawer and are
+ * `display:none` when it's closed, so any real Playwright click needs
+ * the drawer open first.
+ */
+export async function ensureOaiDrawerOpen(page) {
+    const drawer = page.locator('#leftNavDrawerIcon');
+    if (await drawer.evaluate(el => el.classList.contains('closedIcon'))) {
+        await drawer.click();
+        await page.waitForFunction(() => document.querySelector('#leftNavDrawerIcon')?.classList.contains('openIcon'), { timeout: 5000 });
+    }
+}
+
 export async function savePresetAsViaButton(page, name) {
-    await page.waitForSelector('#new_oai_preset', { state: 'attached', timeout: 10_000 });
-    await page.evaluate(() => document.querySelector('#new_oai_preset')?.click());
+    // Open the AI Response Configuration drawer (parent of
+    // #new_oai_preset) so the button is actionable — display:none until
+    // the drawer opens; a real click gesture requires a visible target.
+    await ensureOaiDrawerOpen(page);
+    await page.locator('#new_oai_preset').click();
     const popup = page.locator('.popup:visible').last();
     await popup.waitFor({ state: 'visible', timeout: 5000 });
     const input = popup.locator('input[type="text"], textarea').first();

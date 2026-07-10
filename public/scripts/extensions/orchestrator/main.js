@@ -328,6 +328,7 @@ import {
     exportLoopPayload,
     exportDirectorPayload,
 } from './simulation-payload-adapter.js';
+import { promptEmbedUnembeddedPresetsForCharacterApply } from './prompt-embed-unembedded.js';
 
 const MODULE_NAME = 'orchestrator';
 const ORCH_RESULT_EVENT = 'luker.orchestrator.result';
@@ -2946,7 +2947,7 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     'The working profile is rooted at `director` and has the fields: `mainAgent` (apiPresetName, promptPresetName, systemPrompt), `subAgents` (a list of objects with id, description, systemPrompt, apiPresetName, promptPresetName), `maxRounds`, `maxConcurrentSubagents`, `maxTotalSubagentRuns`, `discardOnAbort`, `tools` (nested `<namespace>.<verb>` boolean flag tree gating the loop tools available to both the main agent and sub-agents).',
     '',
     '- `mainAgent.systemPrompt` follows an empty-means-default contract at runtime: empty → the runtime substitutes the built-in default prompt. Do not set it to a copy of the default; leave it empty when the user wants the default. If you do set it, set it to the full prompt the user wants.',
-    '- `mainAgent.apiPresetName` / `mainAgent.promptPresetName` may be empty (inherit the global orchestration API / chat completion preset). If set, use only names from available_connection_profiles / available_chat_completion_presets. Same semantics for each sub-agent\'s own preset fields.',
+    '- `mainAgent.apiPresetName` / `mainAgent.promptPresetName` may be empty (inherit the global orchestration API / chat completion preset). If set, apiPresetName must be a name from available_connection_profiles; promptPresetName must be a name from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card. Same semantics for each sub-agent\'s own preset fields.',
     '- `tools.finalize` is always coerced to false on save (director provides its own finalize tool), regardless of input.',
     '',
     '## How sub-agents work at runtime (what every sub-agent gets by default — the BASELINE)',
@@ -3137,7 +3138,7 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '- If you set planner/agent apiPresetName, use only a name from available_connection_profiles.',
     '- The planner preset and agenda agents may optionally set promptPresetName to use a specific chat completion preset.',
     '- Leave planner/agent promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
-    '- If you set planner/agent promptPresetName, use only a name from available_chat_completion_presets.',
+    '- If you set planner/agent promptPresetName, use only a name from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card.',
     '- Prefer targeted edits. Do not rewrite the full planner preset unless necessary.',
     '- Anti-duplication (agenda-mode consequences of the shared mental model): the principle was already established — systemPrompt is identity, not runtime data; the agent sees raw activated entries with no metadata; uid is a runtime handle. Agenda-specific violations: pasting lorebook bodies into a planner / agent systemPrompt instead of naming the entry by display name and letting the agent resolve it via `lorebook_list` + `lorebook_get` at runtime; baking the planner\'s per-dispatch task brief into an agent\'s systemPrompt (the planner passes it via the dispatch payload — do not pre-fill those slots in the persistent identity); mirroring chat / character-card / scene context. **Never write a literal `uid: N` into systemPrompt** — refer to entries by display name (`comment`) or stable `entry_key` only.',
     '',
@@ -3193,7 +3194,7 @@ export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '- If you set preset apiPresetName, use only a name from available_connection_profiles.',
     '- Presets may optionally set promptPresetName to use a specific chat completion preset.',
     '- Leave preset promptPresetName empty unless the user explicitly asks for per-agent chat completion preset routing. Empty means fallback to the global orchestration chat completion preset.',
-    '- If you set preset promptPresetName, use only a name from available_chat_completion_presets.',
+    '- If you set preset promptPresetName, use only a name from available_local_global_chat_completion_presets or available_card_bound_chat_completion_presets. Card-bound names only resolve on the currently active character card and travel with the card on export; local-global names live in the user preset library and are portable across cards. Prefer local-global names when the profile is meant to be portable; use a card-bound name only when this profile is meant to ship with the same card.',
     `- Runtime prepends previous orchestration result and approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\` before node template text; do not use placeholders for that context.`,
     '- Anti-duplication (spec-mode consequences of the shared mental model): the principle was already established — systemPrompt is identity, not runtime data; the node sees raw activated entries with no metadata; uid is a runtime handle. Spec-specific violations: pasting lorebook bodies into a node\'s preset systemPrompt instead of naming the entry by display name and letting the node resolve it via `lorebook_list` + `lorebook_get` at runtime; restating upstream stage output (the runtime already prepends it before each node\'s template); mirroring chat / character-card / scene context. **Never write a literal `uid: N` into systemPrompt** — refer to entries by display name (`comment`) or stable `entry_key` only.',
     '',
@@ -6406,6 +6407,20 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
             avatar,
             enabled: true,
         };
+        const activeCharacter = context.characters?.find(c => c?.avatar === avatar) || null;
+        const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
+            context,
+            activeCharacter,
+            profile: { ...profile, mode: 'loop' },
+            i18n,
+            i18nFormat,
+            notifyError,
+            escapeHtml,
+        });
+        if (!preflight.proceed) {
+            updateUiStatus(i18n('Cancelled'));
+            return;
+        }
         const ok = await persistCharacterLoopEditor(context, settings, avatar, {
             editor: importedEditor,
             forceEnabled: true,
@@ -6419,8 +6434,11 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'character');
         renderDynamicPanels(root, context);
         const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
-        notifySuccess(i18nFormat('Iteration session applied to character override: ${0}.', name));
-        updateUiStatus(i18nFormat('Iteration session applied to character override: ${0}.', name));
+        const successMsg = preflight.embeddedCount > 0
+            ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
+            : i18nFormat('Iteration session applied to character override: ${0}.', name);
+        notifySuccess(successMsg);
+        updateUiStatus(successMsg);
         return;
     }
     if (isAgendaIterationSession(session)) {
@@ -6429,10 +6447,25 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
             notifyError(i18n('No character selected. Cannot apply to character override.'));
             return;
         }
+        const agendaProfile = cloneAgendaWorkingProfileFromEditor(session?.workingProfile || {});
         const importedEditor = {
-            ...cloneAgendaWorkingProfileFromEditor(session?.workingProfile || {}),
+            ...agendaProfile,
             enabled: true,
         };
+        const activeCharacter = context.characters?.find(c => c?.avatar === avatar) || null;
+        const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
+            context,
+            activeCharacter,
+            profile: { ...agendaProfile, mode: 'agenda' },
+            i18n,
+            i18nFormat,
+            notifyError,
+            escapeHtml,
+        });
+        if (!preflight.proceed) {
+            updateUiStatus(i18n('Cancelled'));
+            return;
+        }
         const ok = await persistCharacterAgendaEditor(context, settings, avatar, {
             editor: importedEditor,
             forceEnabled: true,
@@ -6445,8 +6478,11 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
         renderDynamicPanels(root, context);
         const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
-        notifySuccess(i18nFormat('Iteration session applied to character override: ${0}.', name));
-        updateUiStatus(i18nFormat('Iteration session applied to character override: ${0}.', name));
+        const successMsg = preflight.embeddedCount > 0
+            ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
+            : i18nFormat('Iteration session applied to character override: ${0}.', name);
+        notifySuccess(successMsg);
+        updateUiStatus(successMsg);
         return;
     }
     if (isDirectorIterationSession(session)) {
@@ -6461,6 +6497,20 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
             avatar,
             enabled: true,
         };
+        const activeCharacter = context.characters?.find(c => c?.avatar === avatar) || null;
+        const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
+            context,
+            activeCharacter,
+            profile: { ...sanitizedProfile, mode: 'director' },
+            i18n,
+            i18nFormat,
+            notifyError,
+            escapeHtml,
+        });
+        if (!preflight.proceed) {
+            updateUiStatus(i18n('Cancelled'));
+            return;
+        }
         const ok = await persistCharacterDirectorEditor(context, settings, avatar, {
             editor: importedEditor,
             forceEnabled: true,
@@ -6474,8 +6524,11 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
         renderDynamicPanels(root, context);
         const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
-        notifySuccess(i18nFormat('Iteration session applied to character override: ${0}.', name));
-        updateUiStatus(i18nFormat('Iteration session applied to character override: ${0}.', name));
+        const successMsg = preflight.embeddedCount > 0
+            ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
+            : i18nFormat('Iteration session applied to character override: ${0}.', name);
+        notifySuccess(successMsg);
+        updateUiStatus(successMsg);
         return;
     }
     const avatar = String(getCurrentAvatar(context) || '').trim();
@@ -6484,6 +6537,26 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         return;
     }
     const importedEditor = createIterationEditorFromWorkingProfile(session?.workingProfile || {});
+    // Spec mode's per-node preset refs live inside the nested `presets`
+    // map; `collectUnembeddedPresets` treats spec mode as out-of-scope
+    // (per its JSDoc) so the preflight is effectively a no-op here, but
+    // we call it anyway for shape consistency with the other branches
+    // and to leave a single choke-point if spec mode ever grows a
+    // top-level preset ref surface.
+    const activeCharacter = context.characters?.find(c => c?.avatar === avatar) || null;
+    const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
+        context,
+        activeCharacter,
+        profile: { ...importedEditor, mode: 'spec' },
+        i18n,
+        i18nFormat,
+        notifyError,
+        escapeHtml,
+    });
+    if (!preflight.proceed) {
+        updateUiStatus(i18n('Cancelled'));
+        return;
+    }
     const ok = await persistCharacterEditor(context, settings, avatar, {
         editor: {
             ...importedEditor,
@@ -6499,8 +6572,11 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
     ensureEditorIntegrity(uiState.characterEditor);
     renderDynamicPanels(root, context);
     const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
-    notifySuccess(i18nFormat('Iteration session applied to character override: ${0}.', name));
-    updateUiStatus(i18nFormat('Iteration session applied to character override: ${0}.', name));
+    const successMsg = preflight.embeddedCount > 0
+        ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
+        : i18nFormat('Iteration session applied to character override: ${0}.', name);
+    notifySuccess(successMsg);
+    updateUiStatus(successMsg);
 }
 
 async function openAiIterationStudio(context, settings, root) {
@@ -8128,6 +8204,38 @@ function bindUi() {
             }
             const sourceScope = getDisplayedScope(context, settings);
             const executionMode = getExecutionMode(settings);
+
+            // Before persisting the orchestrator profile, detect preset
+            // names the profile references that live only in the local
+            // global set (not yet embedded on the card).  Prompt the user
+            // to embed them alongside the profile so recipients who
+            // import the card get the presets too.  Sanitizers keep
+            // preset names opaque (opaque-string contract), so reading
+            // straight from the editor draft is safe.
+            const activeCharacter = context.characters?.find(c => c?.avatar === activeAvatar) || null;
+            let editorForDetect = null;
+            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+                editorForDetect = { ...(getLoopEditorByScope(sourceScope) || {}), mode: 'loop' };
+            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
+                editorForDetect = { ...(getAgendaEditorByScope(sourceScope) || {}), mode: 'agenda' };
+            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+                editorForDetect = { ...(getDirectorEditorByScope(sourceScope) || {}), mode: 'director' };
+            } else {
+                editorForDetect = { ...(getEditorByScope(sourceScope) || {}), mode: 'spec' };
+            }
+            const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
+                context,
+                activeCharacter,
+                profile: editorForDetect,
+                i18n,
+                i18nFormat,
+                notifyError,
+                escapeHtml,
+            });
+            if (!preflight.proceed) {
+                return;
+            }
+
             let ok;
             if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
                 ok = await persistCharacterLoopEditor(context, settings, activeAvatar, {

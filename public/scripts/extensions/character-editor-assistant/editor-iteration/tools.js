@@ -23,6 +23,7 @@
 //     namespaced with `luker_cea_editor_*`.
 
 import { runCharacterEditorHelperToolCall } from '../main.js';
+import { CHARACTER_PRESET_READ_TOOL_DEFS } from '/scripts/iteration-library/tools/character-presets-reads.js';
 
 // Canonical list of character-card fields the unified editor knows how to
 // commit. Mirrors the union of:
@@ -402,6 +403,10 @@ const READ_TOOL_LEGACY_NAMES = Object.freeze({
     lorebook_get: 'luker_card_get_lorebook_entries',
     world_book_list: 'luker_card_list_world_books',
     simulate_prompt: 'luker_card_simulate_prompt',
+    // `inspect_bound_preset` is native to the shared iteration-library
+    // helper API (no legacy `luker_card_*` alias exists); the runner
+    // dispatches on the short name itself.
+    inspect_bound_preset: 'inspect_bound_preset',
     // web_search has no fixed legacy name — `Luker.searchTools.toolNames.SEARCH`
     // resolves it at runtime. We handle it specially in runCeaEditorReadTool.
     web_search: null,
@@ -478,6 +483,10 @@ const READ_TOOL_DEFS = [
             parameters: { type: 'object', properties: {}, additionalProperties: false },
         },
     },
+    // `inspect_bound_preset` — spliced from the shared
+    // iteration-library/tools/character-presets-reads.js catalog so the
+    // wire-format stays identical across orchestrator iter-studio and CEA.
+    ...CHARACTER_PRESET_READ_TOOL_DEFS,
     {
         type: 'function',
         function: {

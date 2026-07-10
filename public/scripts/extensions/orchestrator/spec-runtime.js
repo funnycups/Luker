@@ -637,8 +637,8 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
         previous_orchestration: AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE,
     });
 
-    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset);
-    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset);
+    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset)?.name || '';
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset)?.name || '';
     const outputToolSchemas = buildNodeToolSet(nodeSpec, { isFinalStage });
 
     // Tool-cascade resolution: node.tools overrides profile default, which
@@ -1011,8 +1011,8 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
     const { message: lastUser } = extractLastUserMessage(messages);
     const previousOrchestration = await getPreviousOrchestrationCapsuleText(context, payload);
     const runtimeTemplate = normalizeTemplateForRuntime(nodeSpec.userPromptTemplate || preset.userPromptTemplate || '');
-    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset);
-    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset);
+    const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset)?.name || '';
+    const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, preset)?.name || '';
     const tools = buildNodeToolSet(nodeSpec);
     const allowedNames = new Set(tools.map(tool => String(tool?.function?.name || '').trim()).filter(Boolean));
     const runtimeToolMessages = [];

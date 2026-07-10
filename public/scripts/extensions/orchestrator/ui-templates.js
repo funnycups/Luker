@@ -1446,6 +1446,7 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
     }).join('');
 
     return `<div class="luker_orch_general_tab">
+        <div class="luker_orch_card_binding_hint">${escapeHtml(i18n('Hint: agents resolve their prompt/API preset from the current card\'s embedded set first. Save To Character Override will ask whether to embed referenced presets that aren\'t yet on the card.'))}</div>
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('Current profile'))}</legend>
             ${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}

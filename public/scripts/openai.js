@@ -117,6 +117,18 @@ import {
 } from './extensions/function-call-runtime.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
+import { encodeCardBoundOptionValue, decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
+import { readSelectedPresetRef, decideSavePresetDispatch } from './character/save-dispatch.js';
+import {
+    listCharacterBoundPresets,
+    readCharacterBoundState,
+    getCharacterBoundPreset,
+    addCharacterBoundPreset,
+    updateCharacterBoundPreset,
+    setCharacterBoundDefault,
+    clearAllCharacterBoundPresets,
+} from './character/presets.js';
+import { getContext } from './st-context.js';
 
 export {
     openai_messages_count,
@@ -130,6 +142,8 @@ export {
     getLastOpenAIGenerationId,
     bindCurrentChatCompletionPresetToCharacter,
     clearCharacterBoundChatCompletionPreset,
+    maybeApplyCharacterBoundPreset,
+    getCurrentPresetBodyForBinding,
     saveOpenAIPreset,
     hasUnsavedOpenAIPresetChanges,
     TokenHandler,
@@ -253,14 +267,13 @@ function logOpenAILukerPersistenceDebug(phase, details = {}) {
 const characterBoundPresetState = {
     active: false,
     previousPreset: '',
-    runtimeOptionValue: '__luker_char_bound_preset__',
-    runtimePresetName: '',
-    runtimePresetBody: null,
+    // Multi-slot: maps encoded option value (see preset-ref-codec.js) to the
+    // preset body cached for onSettingsPresetChange lookup. Populated on
+    // maybeApplyCharacterBoundPreset; cleared on removeCharacterBoundRuntimeOptions.
+    // (Task 3 replaces single runtimeOptionValue/runtimePresetName/runtimePresetBody.)
+    runtimeOptions: new Map(),
 };
 let lastOpenAIPresetSelectValue = '';
-let characterJsonDataWorker = null;
-let characterJsonDataWorkerRequestId = 0;
-const characterJsonDataWorkerPending = new Map();
 
 function scheduleOpenAIPresetChangeNotifications(presetName) {
     const token = ++openAIPresetChangeNotificationToken;
@@ -5899,130 +5912,9 @@ async function syncOpenAIPresetUiAfterApply() {
     $('#openai_logit_bias_preset').trigger('change');
 }
 
-function getCharacterBoundPresetName(character) {
-    const raw = character?.data?.extensions?.luker?.chat_completion_preset;
-    if (typeof raw === 'string') {
-        return raw.trim();
-    }
-    if (raw && typeof raw === 'object') {
-        return String(raw.name || '').trim();
-    }
-    return '';
-}
-
-function getCharacterBoundPresetPayload(character) {
-    const raw = character?.data?.extensions?.luker?.chat_completion_preset;
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        const name = String(raw.name || '').trim();
-        const preset = raw.preset && typeof raw.preset === 'object' ? stripOpenAIConnectionFieldsFromPreset(raw.preset) : null;
-        if (name && preset) {
-            return { name, preset };
-        }
-    }
-    return null;
-}
-
 function getCharacterById(characterId = this_chid) {
     const id = Number(characterId);
     return Number.isInteger(id) ? characters[id] : undefined;
-}
-
-function getCharacterJsonDataWorker() {
-    if (characterJsonDataWorker || typeof Worker === 'undefined') {
-        return characterJsonDataWorker;
-    }
-
-    characterJsonDataWorker = new Worker(new URL('./workers/character-json-data-worker.js', import.meta.url), { type: 'module' });
-    characterJsonDataWorker.addEventListener('message', (event) => {
-        const id = Number(event?.data?.id);
-        if (!Number.isInteger(id)) {
-            return;
-        }
-
-        const pending = characterJsonDataWorkerPending.get(id);
-        if (!pending) {
-            return;
-        }
-
-        characterJsonDataWorkerPending.delete(id);
-        if (event?.data?.ok && typeof event.data.jsonData === 'string') {
-            pending.resolve(event.data.jsonData);
-            return;
-        }
-
-        pending.reject(new Error(String(event?.data?.error || 'Character JSON data worker failed.')));
-    });
-    characterJsonDataWorker.addEventListener('error', (event) => {
-        const error = new Error(event?.message || 'Character JSON data worker failed.');
-        for (const pending of characterJsonDataWorkerPending.values()) {
-            pending.reject(error);
-        }
-        characterJsonDataWorkerPending.clear();
-        characterJsonDataWorker?.terminate();
-        characterJsonDataWorker = null;
-    });
-
-    return characterJsonDataWorker;
-}
-
-function updateCharacterJsonDataSnapshot(jsonDataText, boundPreset) {
-    const jsonData = JSON.parse(String(jsonDataText || ''));
-    jsonData.data = jsonData.data && typeof jsonData.data === 'object' && !Array.isArray(jsonData.data)
-        ? jsonData.data
-        : {};
-    jsonData.data.extensions = jsonData.data.extensions && typeof jsonData.data.extensions === 'object' && !Array.isArray(jsonData.data.extensions)
-        ? jsonData.data.extensions
-        : {};
-    jsonData.data.extensions.luker = jsonData.data.extensions.luker && typeof jsonData.data.extensions.luker === 'object' && !Array.isArray(jsonData.data.extensions.luker)
-        ? jsonData.data.extensions.luker
-        : {};
-    jsonData.data.extensions.luker.chat_completion_preset = boundPreset;
-    return JSON.stringify(jsonData);
-}
-
-async function syncCharacterBoundPresetJsonData(characterId, boundPreset) {
-    const id = Number(characterId);
-    if (Number(this_chid) !== id) {
-        return;
-    }
-
-    const character = getCharacterById(id);
-    if (!character?.json_data) {
-        return;
-    }
-
-    const sourceJsonData = character.json_data;
-    const worker = getCharacterJsonDataWorker();
-    try {
-        let nextJsonData;
-        if (!worker) {
-            nextJsonData = updateCharacterJsonDataSnapshot(sourceJsonData, boundPreset);
-        } else {
-            const requestId = ++characterJsonDataWorkerRequestId;
-            const responsePromise = new Promise((resolve, reject) => {
-                characterJsonDataWorkerPending.set(requestId, { resolve, reject });
-            });
-            // boundPreset may carry Promises / Proxies / function getters from
-            // upstream callers (e.g. CPA commit after applyEdits). worker.postMessage
-            // uses structuredClone, which would reject them. Round-trip through
-            // JSON to drop non-data fields before sending.
-            worker.postMessage({
-                id: requestId,
-                jsonData: sourceJsonData,
-                boundPreset: JSON.parse(JSON.stringify(boundPreset)),
-            });
-            nextJsonData = await responsePromise;
-        }
-
-        if (Number(this_chid) !== id || character.json_data !== sourceJsonData) {
-            return;
-        }
-
-        character.json_data = nextJsonData;
-        $('#character_json_data').val(nextJsonData);
-    } catch (error) {
-        console.warn('Failed to sync character-bound preset to character JSON snapshot', error);
-    }
 }
 
 export function applyPresetByName(presetName, { forceChange = false } = {}) {
@@ -6076,16 +5968,16 @@ function resolveOpenAIPresetRestoreTarget(preferredName = '') {
         || '';
 }
 
-function removeCharacterBoundRuntimeOption() {
+function removeCharacterBoundRuntimeOptions() {
     $('#settings_preset_openai option[data-luker-char-bound="1"]').remove();
-    characterBoundPresetState.runtimePresetName = '';
-    characterBoundPresetState.runtimePresetBody = null;
+    $('#settings_preset_openai optgroup[data-luker-card-bound="1"]').remove();
+    characterBoundPresetState.runtimeOptions.clear();
     updateCharacterBoundPresetBadge(false);
 }
 
 function restoreOpenAIPresetAfterCharacterBound(preferredName = '') {
     const targetPresetName = resolveOpenAIPresetRestoreTarget(preferredName);
-    removeCharacterBoundRuntimeOption();
+    removeCharacterBoundRuntimeOptions();
 
     if (!targetPresetName) {
         $('#settings_preset_openai').prop('selectedIndex', -1);
@@ -6102,26 +5994,63 @@ function restoreOpenAIPresetAfterCharacterBound(preferredName = '') {
     return restored;
 }
 
-function upsertCharacterBoundRuntimeOption(presetName, presetBody) {
-    const name = String(presetName || '').trim();
-    if (!name || !presetBody || typeof presetBody !== 'object') {
-        removeCharacterBoundRuntimeOption();
+/**
+ * Populate the ghost `<optgroup>` inside #settings_preset_openai with one
+ * option per card-bound preset.
+ *
+ * The optgroup is prepended so it appears above the global preset list.
+ * Each option's value is `__luker_card__::<enc(avatar)>::<enc(name)>` —
+ * decoded on the read side by st-context.js:getSelectedPresetRef and on
+ * apply by onSettingsPresetChange via the runtimeOptions map.
+ *
+ * @param {object} character
+ * @param {Array<{name:string, preset:object}>} presets
+ * @returns {boolean} true if at least one option was rendered
+ */
+function upsertCharacterBoundRuntimeOptions(character, presets) {
+    removeCharacterBoundRuntimeOptions();
+    if (!character || !character.avatar || !Array.isArray(presets) || presets.length === 0) {
         return false;
     }
-    const normalizedPreset = stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody));
-    removeCharacterBoundRuntimeOption();
-    const option = document.createElement('option');
-    option.value = characterBoundPresetState.runtimeOptionValue;
-    option.innerText = name;
-    option.setAttribute('data-luker-char-bound', '1');
-    $('#settings_preset_openai').append(option);
-    characterBoundPresetState.runtimePresetName = name;
-    characterBoundPresetState.runtimePresetBody = normalizedPreset;
+    const $sel = $('#settings_preset_openai');
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = t`Card-bound`;
+    optgroup.setAttribute('data-luker-card-bound', '1');
+    for (const p of presets) {
+        const name = String(p?.name || '').trim();
+        if (!name || !p?.preset || typeof p.preset !== 'object') continue;
+        const body = stripOpenAIConnectionFieldsFromPreset(structuredClone(p.preset));
+        const value = encodeCardBoundOptionValue(character.avatar, name);
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = name;
+        opt.setAttribute('data-luker-char-bound', '1');
+        optgroup.appendChild(opt);
+        characterBoundPresetState.runtimeOptions.set(value, { name, body });
+    }
+    if (optgroup.children.length === 0) {
+        return false;
+    }
+    $sel.prepend(optgroup);
     return true;
 }
 
+function getSelectedCardBoundEntry() {
+    const rawValue = String($('#settings_preset_openai').val() ?? '');
+    if (!rawValue) return null;
+    return characterBoundPresetState.runtimeOptions.get(rawValue) || null;
+}
+
+function getSelectedCardBoundName() {
+    return getSelectedCardBoundEntry()?.name || '';
+}
+
+function getSelectedCardBoundBody() {
+    return getSelectedCardBoundEntry()?.body || null;
+}
+
 function getCurrentPresetBodyForBinding() {
-    if (isCharacterBoundPresetOptionSelected() && characterBoundPresetState.runtimePresetBody) {
+    if (isCharacterBoundPresetOptionSelected() && getSelectedCardBoundBody()) {
         return getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
     }
 
@@ -6132,90 +6061,6 @@ function getCurrentPresetBodyForBinding() {
     }
 
     return getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
-}
-
-async function setCharacterBoundPresetValue(characterId, presetName, presetBody = null) {
-    const id = Number(characterId);
-    const character = Number.isInteger(id) ? characters[id] : null;
-    if (!character) {
-        return false;
-    }
-
-    const trimmed = String(presetName ?? '').trim();
-    const sanitizedPreset = trimmed && presetBody && typeof presetBody === 'object'
-        ? stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody))
-        : null;
-    const currentExtensions = character?.data?.extensions && typeof character.data.extensions === 'object' && !Array.isArray(character.data.extensions)
-        ? character.data.extensions
-        : {};
-    const currentLukerExtensions = currentExtensions.luker && typeof currentExtensions.luker === 'object' && !Array.isArray(currentExtensions.luker)
-        ? currentExtensions.luker
-        : {};
-    const currentRaw = currentLukerExtensions.chat_completion_preset;
-    const currentName = typeof currentRaw === 'string'
-        ? currentRaw.trim()
-        : String(currentRaw?.name || '').trim();
-    const currentPreset = currentRaw && typeof currentRaw === 'object' && !Array.isArray(currentRaw)
-        ? currentRaw.preset
-        : null;
-
-    if (currentName === trimmed) {
-        const samePreset = (!trimmed && !currentPreset && !sanitizedPreset)
-            || (trimmed && JSON.stringify(currentPreset || null) === JSON.stringify(sanitizedPreset || null));
-        if (samePreset) {
-            return true;
-        }
-    }
-
-    if (trimmed && !sanitizedPreset) {
-        console.warn('Skipped character-bound preset save: missing preset body.');
-        return true;
-    }
-
-    const nextBoundPreset = trimmed
-        ? {
-            name: trimmed,
-            preset: sanitizedPreset,
-        }
-        : null;
-    const nextLukerExtensions = {
-        ...currentLukerExtensions,
-        // merge-attributes deep-merges nested objects, so deletion-by-omission
-        // would keep the old bound preset on the character card. Persist an
-        // explicit null to clear the field reliably.
-        chat_completion_preset: nextBoundPreset,
-    };
-    const nextExtensions = {
-        ...currentExtensions,
-        luker: nextLukerExtensions,
-    };
-
-    character.data = character.data || {};
-    character.data.extensions = nextExtensions;
-    const jsonDataSyncPromise = syncCharacterBoundPresetJsonData(id, nextBoundPreset);
-
-    const response = await fetch('/api/characters/merge-attributes', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            avatar: character.avatar,
-            data: {
-                extensions: {
-                    luker: {
-                        chat_completion_preset: nextBoundPreset,
-                    },
-                },
-            },
-        }),
-    });
-
-    await jsonDataSyncPromise;
-
-    if (!response.ok) {
-        console.error('Failed to save character-bound chat completion preset', response.statusText);
-    }
-
-    return response.ok;
 }
 
 async function maybeApplyCharacterBoundPreset() {
@@ -6233,16 +6078,24 @@ async function maybeApplyCharacterBoundPreset() {
             characterBoundPresetState.active = false;
             characterBoundPresetState.previousPreset = '';
         } else {
-            removeCharacterBoundRuntimeOption();
+            removeCharacterBoundRuntimeOptions();
         }
         updateCharacterBoundPresetBadge(false);
         return;
     }
 
     const character = getCharacterById(this_chid);
-    const embeddedPayload = getCharacterBoundPresetPayload(character);
-    const legacyBoundPresetName = getCharacterBoundPresetName(character);
-    if (!embeddedPayload && !legacyBoundPresetName) {
+    // Layer 1 (character/presets.js) normalizes the new multi-slot shape
+    // + migrates legacy shapes (bare string / single {name, preset}) into
+    // an in-memory `{presets, defaultPresetName}` view. A bare-string legacy
+    // binding surfaces as presets:[], defaultPresetName:<name> — the
+    // legacy fallback below handles that case by name lookup in the global
+    // preset library.
+    const boundList = character ? listCharacterBoundPresets(character) : [];
+    const boundState = character ? readCharacterBoundState(character) : { presets: [], defaultPresetName: null };
+    const defaultName = String(boundState?.defaultPresetName || '').trim();
+
+    if (boundList.length === 0 && !defaultName) {
         if (characterBoundPresetState.active) {
             const restored = restoreOpenAIPresetAfterCharacterBound(characterBoundPresetState.previousPreset);
             if (!restored && characterBoundPresetState.previousPreset) {
@@ -6251,7 +6104,7 @@ async function maybeApplyCharacterBoundPreset() {
             characterBoundPresetState.active = false;
             characterBoundPresetState.previousPreset = '';
         } else {
-            removeCharacterBoundRuntimeOption();
+            removeCharacterBoundRuntimeOptions();
         }
         updateCharacterBoundPresetBadge(false);
         return;
@@ -6263,25 +6116,48 @@ async function maybeApplyCharacterBoundPreset() {
         characterBoundPresetState.active = true;
     }
 
-    if (embeddedPayload) {
-        const prepared = upsertCharacterBoundRuntimeOption(embeddedPayload.name, embeddedPayload.preset);
+    if (boundList.length > 0) {
+        // Render ghost optgroup with one option per card-bound preset.
+        const prepared = upsertCharacterBoundRuntimeOptions(character, boundList);
         if (!prepared) {
-            toastr.warning(t`Bound chat completion preset '${embeddedPayload.name}' was not found.`, t`Preset Not Found`);
+            updateCharacterBoundPresetBadge(false);
             return;
         }
-        if ($('#settings_preset_openai').val() !== characterBoundPresetState.runtimeOptionValue) {
-            $('#settings_preset_openai').val(characterBoundPresetState.runtimeOptionValue).trigger('change');
-        } else {
-            updateCharacterBoundPresetBadge(true);
+        // Only auto-select an option when the card has a default; otherwise
+        // leave the current selection alone so the user's manual pick
+        // survives a re-render (e.g. after saveSettingsDebounced).
+        const targetName = defaultName || '';
+        if (!targetName) {
+            updateCharacterBoundPresetBadge(false);
+            return;
         }
-        return;
+        const targetValue = encodeCardBoundOptionValue(character.avatar, targetName);
+        // If the default matches an actual card-bound preset, apply that body
+        // via the normal selector-change path — onSettingsPresetChange reads
+        // the body from characterBoundPresetState.runtimeOptions via the
+        // getSelectedCardBoundBody() helper.
+        if (characterBoundPresetState.runtimeOptions.has(targetValue)) {
+            if ($('#settings_preset_openai').val() !== targetValue) {
+                $('#settings_preset_openai').val(targetValue).trigger('change');
+            } else {
+                updateCharacterBoundPresetBadge(true);
+            }
+            return;
+        }
+        // defaultPresetName points to a name not present in presets[]:
+        // fall through to legacy name-based global-library lookup below.
     }
 
-    // Legacy fallback: name-only binding, use global preset if present.
-    removeCharacterBoundRuntimeOption();
-    const changed = applyPresetByName(legacyBoundPresetName);
+    // Legacy fallback: bare-string binding or defaultPresetName pointing
+    // at a global preset name (no body embedded on the card). Apply by
+    // name from the global library; remove ghost group first so the
+    // selector reflects the global option that was picked.
+    if (boundList.length === 0) {
+        removeCharacterBoundRuntimeOptions();
+    }
+    const changed = applyPresetByName(defaultName);
     if (!changed) {
-        toastr.warning(t`Bound chat completion preset '${legacyBoundPresetName}' was not found.`, t`Preset Not Found`);
+        toastr.warning(t`Bound chat completion preset '${defaultName}' was not found.`, t`Preset Not Found`);
     }
 }
 
@@ -6289,22 +6165,29 @@ let syncCharacterBoundPresetFromSettingsInFlight = false;
 let syncCharacterBoundPresetFromSettingsQueued = false;
 
 /**
- * Mirror the current oai_settings back into the bound character's preset snapshot.
- * Without this, edits made while a card-bound preset is active (sampler tweaks,
- * prompt edits, prompt-group changes) live only in settings.json — the next
- * character switch / reload calls maybeApplyCharacterBoundPreset, which loads
- * the stale snapshot and overwrites oai_settings.extensions, silently dropping
- * the user's work.
+ * Mirror the current oai_settings back into the selected card-bound preset
+ * slot. Without this, edits made while a card-bound preset is active
+ * (sampler tweaks, prompt edits, prompt-group changes) live only in
+ * settings.json — the next character switch / reload calls
+ * maybeApplyCharacterBoundPreset, which loads the stale snapshot from the
+ * card and overwrites oai_settings.extensions, silently dropping the
+ * user's work.
  *
- * Safe to call from SETTINGS_UPDATED: setCharacterBoundPresetValue short-circuits
- * when the snapshot already matches, so the round-trip after onSettingsPresetChange
- * does not loop.
+ * Multi-slot (Task 3): writes to the specific preset the user has selected
+ * in the ghost optgroup via Layer 1's updateCharacterBoundPreset. Sibling
+ * slots and defaultPresetName are preserved by Layer 1's read-spread-overlay.
+ *
+ * Safe to call from SETTINGS_UPDATED: Layer 1 short-circuits equal-body
+ * writes so the round-trip after onSettingsPresetChange does not loop.
  */
 async function syncCharacterBoundPresetFromSettings() {
     if (!characterBoundPresetState.active) {
         return;
     }
-    const presetName = String(characterBoundPresetState.runtimePresetName || '').trim();
+    if (!isCharacterBoundPresetOptionSelected()) {
+        return;
+    }
+    const presetName = getSelectedCardBoundName();
     if (!presetName) {
         return;
     }
@@ -6312,7 +6195,15 @@ async function syncCharacterBoundPresetFromSettings() {
     if (!Number.isInteger(characterId)) {
         return;
     }
-    const character = getCharacterById(characterId);
+    // Layer 1's persistCharacterBoundState calls context.characters.indexOf
+    // to route the write through writeExtensionField(id, …). context.characters
+    // is a Proxy that yields per-item wrapping proxies with identity caching;
+    // indexOf compares by strict equality against those wrapped items. A raw
+    // `characters[id]` reference from the module scope would miss (indexOf
+    // returns -1 → Layer 1 throws), so grab the wrapped element through the
+    // context accessor instead.
+    const ctx = getContext();
+    const character = ctx.characters?.[characterId];
     if (!character) {
         return;
     }
@@ -6326,8 +6217,26 @@ async function syncCharacterBoundPresetFromSettings() {
         do {
             syncCharacterBoundPresetFromSettingsQueued = false;
             const presetBody = getChatCompletionPreset(oai_settings, { includeConnectionFields: false });
-            await setCharacterBoundPresetValue(characterId, presetName, presetBody);
-            characterBoundPresetState.runtimePresetBody = stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody));
+            const stripped = stripOpenAIConnectionFieldsFromPreset(structuredClone(presetBody));
+            // Confirm the target slot still exists on the card (may have
+            // been removed by another window / a card reimport). Layer 1
+            // throws if not — swallow that specific failure without
+            // clobbering settings, since the state has diverged from the
+            // card and re-applying the card would drop the user's live edits.
+            const before = getCharacterBoundPreset(character, presetName);
+            if (!before) {
+                console.warn(`syncCharacterBoundPresetFromSettings: preset '${presetName}' not present on card ${character.avatar}; skipping`);
+                break;
+            }
+            if (JSON.stringify(before.preset || null) !== JSON.stringify(stripped || null)) {
+                await updateCharacterBoundPreset(character, presetName, stripped);
+            }
+            // Refresh the runtime cache so subsequent reads see the latest body.
+            const selectedValue = String($('#settings_preset_openai').val() ?? '');
+            const cached = characterBoundPresetState.runtimeOptions.get(selectedValue);
+            if (cached) {
+                cached.body = stripped;
+            }
         } while (syncCharacterBoundPresetFromSettingsQueued);
     } catch (error) {
         console.error('Failed to sync character-bound chat completion preset from settings', error);
@@ -6337,66 +6246,125 @@ async function syncCharacterBoundPresetFromSettings() {
 }
 
 async function bindCurrentChatCompletionPresetToCharacter(characterId = this_chid) {
-    const character = getCharacterById(characterId);
+    const id = Number(characterId);
+    if (!Number.isInteger(id)) {
+        toastr.warning(t`No character selected.`);
+        return;
+    }
+    // Layer 1's persistCharacterBoundState calls context.characters.indexOf,
+    // which compares by strict equality against the proxy-wrapped items the
+    // context accessor yields. A raw `characters[id]` module-scope reference
+    // would miss (see the matching comment in syncCharacterBoundPresetFromSettings).
+    const ctx = getContext();
+    const character = ctx.characters?.[id];
     if (!character) {
         toastr.warning(t`No character selected.`);
         return;
     }
 
-    const currentPreset = String($('#settings_preset_openai').find(':selected').text() || '').trim();
+    // Inspect the current selector to decide origin. If the user has a
+    // card-bound ghost option selected, "Bind current" is a no-op — the
+    // preset is already on the card. Surface an info toast and return so
+    // the user gets a clear signal instead of a redundant confirm.
+    const selectValue = String($('#settings_preset_openai').val() ?? '');
+    const fallbackName = String(oai_settings.preset_settings_openai ?? '').trim();
+    const currentRef = readSelectedPresetRef({ selectValue, fallbackName });
+    if (currentRef.origin?.kind === 'character') {
+        toastr.info(t`This preset is already bound to the current character card.`);
+        return;
+    }
+    const currentPreset = String(currentRef.name || '').trim();
     if (!currentPreset) {
         toastr.warning(t`No chat completion preset selected.`);
         return;
     }
     const presetBody = getCurrentPresetBodyForBinding();
+    if (!presetBody || typeof presetBody !== 'object') {
+        toastr.error(t`Failed to bind character preset.`);
+        return;
+    }
 
-    const confirmation = await Popup.show.confirm(
-        t`Bind Character Preset`,
-        t`Bind current chat completion preset '${currentPreset}' to character '${character.name}'?`,
-    );
+    // Duplicate detection: if a slot with this name already exists on the
+    // card, prompt the user with different wording so they know they are
+    // OVERWRITING the card copy, not creating a new one. Otherwise the
+    // additive Bind is what they expect.
+    const existing = getCharacterBoundPreset(character, currentPreset);
+    const confirmation = existing
+        ? await Popup.show.confirm(
+            t`Bind Character Preset`,
+            t`Preset '${currentPreset}' is already bound to '${character.name}'. Overwrite the card copy?`,
+        )
+        : await Popup.show.confirm(
+            t`Bind Character Preset`,
+            t`Bind current chat completion preset '${currentPreset}' to character '${character.name}'?`,
+        );
 
     if (!confirmation) {
         return;
     }
 
-    const ok = await setCharacterBoundPresetValue(characterId, currentPreset, presetBody);
-    if (ok) {
-        toastr.success(t`Bound preset '${currentPreset}' to '${character.name}'.`, t`Character Preset Bound`);
-        await maybeApplyCharacterBoundPreset();
-    } else {
+    try {
+        if (existing) {
+            await updateCharacterBoundPreset(character, currentPreset, presetBody);
+        } else {
+            await addCharacterBoundPreset(character, currentPreset, presetBody);
+        }
+        // Bind always sets the freshly-bound slot as default, not just on
+        // first-add. Layer 1's bootstrap-on-first-add covers the initial
+        // case; setDefault handles subsequent binds where the user's clear
+        // intent is "make this the one that auto-applies".
+        await setCharacterBoundDefault(character, currentPreset);
+    } catch (error) {
+        console.error('Failed to bind character preset', error);
         toastr.error(t`Failed to bind character preset.`);
+        return;
     }
+    toastr.success(t`Bound preset '${currentPreset}' to '${character.name}'.`, t`Character Preset Bound`);
+    await maybeApplyCharacterBoundPreset();
 }
 
 async function clearCharacterBoundChatCompletionPreset(characterId = this_chid) {
-    const character = getCharacterById(characterId);
+    const id = Number(characterId);
+    if (!Number.isInteger(id)) {
+        toastr.warning(t`No character selected.`);
+        return;
+    }
+    const ctx = getContext();
+    const character = ctx.characters?.[id];
     if (!character) {
         toastr.warning(t`No character selected.`);
         return;
     }
 
-    const current = getCharacterBoundPresetName(character);
-    if (!current) {
+    const state = readCharacterBoundState(character);
+    if (!state.defaultPresetName && state.presets.length === 0) {
         toastr.info(t`This character has no bound chat completion preset.`);
         return;
     }
+    // "Clear" wipes the ENTIRE `chat_completion_preset` field (all slots
+    // + defaultPresetName). Per-slot lifecycle belongs to the Manage
+    // dialog. Layer 1's clearAllCharacterBoundPresets routes through
+    // persistCharacterBoundState so sibling luker.* keys survive the
+    // field-null write.
 
     const confirmation = await Popup.show.confirm(
         t`Clear Character Preset`,
-        t`Clear bound chat completion preset '${current}' from '${character.name}'?`,
+        t`Clear ALL bound chat completion presets from '${character.name}'?`,
     );
 
     if (!confirmation) {
         return;
     }
 
-    const ok = await setCharacterBoundPresetValue(characterId, '');
-    if (ok) {
-        toastr.success(t`Cleared bound preset from '${character.name}'.`, t`Character Preset Cleared`);
-        await maybeApplyCharacterBoundPreset();
-    } else {
+    try {
+        await clearAllCharacterBoundPresets(character);
+    } catch (error) {
+        console.error('Failed to clear character preset', error);
         toastr.error(t`Failed to clear character preset.`);
+        return;
     }
+    toastr.success(t`Cleared all bound presets from '${character.name}'.`, t`Character Preset Cleared`);
+    await maybeApplyCharacterBoundPreset();
 }
 
 function setToolReasoningControls() {
@@ -6624,6 +6592,37 @@ async function saveOpenAIPresetBody(name, presetBody, triggerUi = true) {
  */
 async function saveOpenAIPreset(name, settings, triggerUi = true) {
     const presetBody = getChatCompletionPreset(settings, { clone: false, includeConnectionFields: false });
+
+    // Origin dispatch: when the DOM selector currently points at a
+    // card-bound ghost option AND the caller asked to save under the same
+    // name, route the write through Layer 1 (updateCharacterBoundPreset)
+    // so the character card body is the source of truth. A name mismatch
+    // (e.g. user opened "New Preset" while a card-bound entry was active)
+    // stays on the global path to create a new global preset.
+    const currentRef = readSelectedPresetRef({
+        selectValue: typeof $ === 'function' ? String($('#settings_preset_openai').val() ?? '') : '',
+        fallbackName: oai_settings?.preset_settings_openai || '',
+    });
+    const decision = decideSavePresetDispatch(currentRef, name);
+    if (decision.mode === 'character') {
+        const ctx = getContext();
+        const character = ctx?.characters?.find(c => c && c.avatar === decision.avatar);
+        if (!character) {
+            throw new Error(`saveOpenAIPreset: character not found for avatar ${decision.avatar}`);
+        }
+        // updateCharacterBoundPreset applies stripOpenAIConnectionFieldsFromPreset
+        // internally, so we don't strip again here. It also read-spread-overlays
+        // sibling luker.* fields so writeExtensionField's REPLACE semantics
+        // don't clobber e.g. luker.prompt_groups (see public/scripts/character/
+        // presets.js:persistCharacterBoundState).
+        await updateCharacterBoundPreset(character, decision.name, presetBody);
+        // Skip the selector `.trigger('change')` — the card-bound option is
+        // already the current selection, and firing change would re-enter
+        // onSettingsPresetChange → getSelectedCardBoundBody → re-apply loop.
+        // The `triggerUi` flag is intentionally ignored on this branch.
+        return;
+    }
+
     await saveOpenAIPresetBody(name, presetBody, triggerUi);
 }
 
@@ -7161,7 +7160,10 @@ async function onSettingsPresetChange(event) {
     const presetNameBefore = oai_settings.preset_settings_openai;
     const previousSelectValue = lastOpenAIPresetSelectValue;
     const currentSelectValue = String($('#settings_preset_openai').val() ?? '');
-    const wasCharacterBoundPreset = previousSelectValue === characterBoundPresetState.runtimeOptionValue;
+    // Multi-slot (Task 3): the previous option was card-bound iff its value
+    // decoded via the ghost-option prefix. Fixes the pre-Task-3 check that
+    // compared against the single sentinel string.
+    const wasCharacterBoundPreset = Boolean(decodeCardBoundOptionValue(previousSelectValue));
     const selectedOption = $('#settings_preset_openai').find(':selected');
     const usingCharacterBoundPreset = selectedOption.attr('data-luker-char-bound') === '1';
     const presetName = selectedOption.text();
@@ -7188,7 +7190,7 @@ async function onSettingsPresetChange(event) {
         oai_settings.preset_settings_openai = presetName;
     }
     let preset = usingCharacterBoundPreset
-        ? structuredClone(characterBoundPresetState.runtimePresetBody || {})
+        ? structuredClone(getSelectedCardBoundBody() || {})
         : structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
     if (!usingCharacterBoundPreset && (!preset || typeof preset !== 'object')) {
         await ensureFullSettingsLoaded();
@@ -8208,8 +8210,8 @@ async function onModelChange() {
 }
 
 async function onNewPresetClick() {
-    const defaultName = characterBoundPresetState.active && characterBoundPresetState.runtimePresetName
-        ? characterBoundPresetState.runtimePresetName
+    const defaultName = characterBoundPresetState.active && isCharacterBoundPresetOptionSelected()
+        ? getSelectedCardBoundName()
         : oai_settings.preset_settings_openai;
     const name = await Popup.show.input(t`Preset name:`, t`Hint: Use a character/group name to bind preset to a specific chat.`, defaultName);
 

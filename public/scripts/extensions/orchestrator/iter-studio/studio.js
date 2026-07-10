@@ -223,6 +223,12 @@ function getCustomToolFlagBucket(profile, mode) {
 // ──────────────────────────────────────────────────────────────────────────
 const { isLorebookReadTool, LOREBOOK_READ_TOOL_DEFS, runLorebookReadTool: runLorebookReadToolShared } = ITER_TOOLS.lorebookReads;
 const { isLorebookWriteTool, LOREBOOK_WRITE_TOOL_DEFS, runLorebookWriteTool: runLorebookWriteToolShared } = ITER_TOOLS.lorebookWrites;
+// `inspect_bound_preset` — shared iter-studio read tool that lets the AI
+// enumerate / fetch presets embedded on the active card via the Task 2
+// ctx surface `context.character.presets.*`. Same plugin-agnostic pattern
+// as lorebook-reads; the wrapper below threads `__ctx` and the current
+// avatar so callers stay symmetric with runLorebookReadTool.
+const { isCharacterPresetReadTool, CHARACTER_PRESET_READ_TOOL_DEFS, runCharacterPresetReadTool: runCharacterPresetReadToolShared } = ITER_TOOLS.characterPresetsReads;
 
 // `luker_orch_simulate` is classified as a read tool too (it runs a
 // throwaway orchestration against the working profile and returns the
@@ -258,7 +264,8 @@ function isInlineExecutedTool(name) {
         || isLorebookWriteTool(name)
         || isSimulateTool(name)
         || isSkillIterStudioTool(name)
-        || isCustomToolIterStudioTool(name);
+        || isCustomToolIterStudioTool(name)
+        || isCharacterPresetReadTool(name);
 }
 
 /**
@@ -278,6 +285,16 @@ async function runLorebookReadTool(call, avatar = '') {
  */
 async function runLorebookWriteTool(call) {
     return runLorebookWriteToolShared(call, { context: __ctx });
+}
+
+/**
+ * Execute one character-preset read tool (`inspect_bound_preset`). Thin
+ * wrapper that threads `__ctx` + the current avatar through the shared
+ * `iteration-library/tools/character-presets-reads.js` executor so call
+ * sites stay symmetric with `runLorebookReadTool(call, avatar)`.
+ */
+async function runCharacterPresetReadTool(call, avatar = '') {
+    return runCharacterPresetReadToolShared(call, { context: __ctx, avatar });
 }
 
 const CONTROL_TOOL_NAMES = Object.freeze({
@@ -1048,10 +1065,15 @@ export async function openOrchestratorIterationStudio(deps) {
         const fallback = fallbackResult.ok && fallbackResult.state ? fallbackResult.state : null;
         if (isCharScope && typeof toastr !== 'undefined') {
             try {
+                // `loadLive()` is called on open, before each turn, and
+                // on retry, so an unguarded `toastr.info` here stacks the
+                // same notice up to 4 times per session (observed obscuring
+                // the preflight popup body). `preventDuplicates: true`
+                // suppresses stacking without silencing the initial notice.
                 toastr.info(
                     `No character-scope ${mode} preset for this card — iter-studio opened on the global profile.`,
                     'iter-studio',
-                    { timeOut: 4000 },
+                    { timeOut: 4000, preventDuplicates: true },
                 );
             } catch { /* ignore */ }
         }
@@ -2333,6 +2355,12 @@ export async function openOrchestratorIterationStudio(deps) {
         //     avatar dependency, so both surfaces work without an avatar.
         const lorebookReadTools = LOREBOOK_READ_TOOL_DEFS;
         const lorebookWriteTools = LOREBOOK_WRITE_TOOL_DEFS;
+        // Card-bound preset read tool (`inspect_bound_preset`) is
+        // scope-agnostic: it inspects presets embedded on the active card
+        // regardless of orchestration scope. In global scope with no
+        // active card the executor surfaces "character not found" as a
+        // tool-call error, which is the correct signal for the AI.
+        const characterPresetReadTools = CHARACTER_PRESET_READ_TOOL_DEFS;
         // Reset tools only make sense in character scope (the scope hint
         // explicitly tells the AI about them only when scope==='character').
         // Filter them out of the catalog in global scope so the LLM can't
@@ -2350,7 +2378,7 @@ export async function openOrchestratorIterationStudio(deps) {
         // scope-agnostic (server-side scopes are passed in args) and the
         // iter-studio AI uses them to inspect / author / migrate skills
         // as part of orchestrator design.
-        return [...editToolsDeduped, ...lorebookReadTools, ...lorebookWriteTools, ...controlTools, ...SKILL_ITER_STUDIO_TOOL_DEFS];
+        return [...editToolsDeduped, ...lorebookReadTools, ...lorebookWriteTools, ...characterPresetReadTools, ...controlTools, ...SKILL_ITER_STUDIO_TOOL_DEFS];
     }
 
     async function runIterationTurn({ autoContinueFromResult = null } = {}) {
@@ -2863,6 +2891,18 @@ export async function openOrchestratorIterationStudio(deps) {
                         // instead of silently bypassing the approval flow.
                         // eslint-disable-next-line no-console
                         console.warn(`[${MODULE}:${mode}] lorebook write tool returned ok without {before, after} envelope — proposal skipped`, out);
+                        resultPayload = out.result;
+                    } else {
+                        resultPayload = { error: String(out?.error || 'unknown error') };
+                        statusLabel = 'fail';
+                    }
+                } else if (isCharacterPresetReadTool(call?.name)) {
+                    // Card-bound preset read (`inspect_bound_preset`).
+                    // Dispatches through the shared executor; the AI sees
+                    // the same `{result}` / `{error}` envelope shape the
+                    // other read tools return.
+                    const out = await runCharacterPresetReadTool({ id: callId, name: call?.name, args: call?.args }, avatarForReads);
+                    if (out?.ok) {
                         resultPayload = out.result;
                     } else {
                         resultPayload = { error: String(out?.error || 'unknown error') };

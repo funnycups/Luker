@@ -59,6 +59,32 @@ An orchestration preset references a prompt preset and an API preset **by name**
 
 The practical consequence: a preset named `审讯节奏` and one named `重叙事密度` can share the same prompt preset and connection profile and differ only in their orchestration shape — different sub-agents, different planner instructions, different injection depth. You move between them from the preset bar without touching anything in the Connection Manager or the SillyTavern preset dropdown.
 
+## Agent prompt-preset resolution reads the character card first
+
+When an orchestration preset pins an agent to a prompt preset by name (`Sonnet · slow critique`, `Haiku · fast`, …), that name is resolved at generation time. The lookup walks these locations in order:
+
+1. The current character's card-bound preset set — any preset the card embeds under the requested name wins.
+2. Your local chat completion preset library.
+3. The global runtime fallback pinned by orchestrator settings when neither of the above matches.
+
+The card-first ordering matters when a card ships with its own recommended presets: the orchestration profile and the presets it references travel together, and the recipient does not need to import matching presets separately. If the recipient has a same-named local preset, the card copy still wins for that character, so a card author's tuned prompt shape is not shadowed by whatever the recipient happened to name their local preset.
+
+The **Card-bound** `<optgroup>` at the top of each agent's preset picker in the orchestrator drawer surfaces the same set of card-embedded presets when a character is loaded, so you can see and pick from the card set from the same UI you use for local presets.
+
+## Committing an orchestration profile to a character embeds referenced presets on demand
+
+Committing an orchestration profile to the current character card runs a preflight check on the agent prompt-preset references and looks up which of them are not yet embedded on the card. Commit here covers two entry points — **Save To Character Override** in the orchestrator drawer and **Apply to Character** in the **AI Iteration Studio** popup — both sharing the same preflight.
+
+If any references are un-embedded, a summary popup opens listing them and offering three actions:
+
+- **Embed all** — copy each referenced preset's local body onto the card so the orchestration profile ships end-to-end runnable on export.
+- **Save names only** — persist the orchestration profile as-is, leaving the presets un-embedded. Recipients without matching local presets will fall back to the runtime default for those agents.
+- **Cancel** — abort the commit.
+
+Editing an agent's preset reference in the panel does not trigger the popup — the choice belongs to the commit step, not the edit step.
+
+See [Card-Bound Presets & Personas](/improvements/card-bound-presets) for how card slots are managed, edited, and stripped of connection fields.
+
 ## The `Default` preset
 
 `Default` is a seed entry, not a protected entry. You can rename it, edit it freely, or delete it — there is no asterisk on the name and nothing in the system treats it as sacred.

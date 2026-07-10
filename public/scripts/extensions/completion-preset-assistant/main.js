@@ -98,7 +98,6 @@ function registerLocaleData() {
         'Create New Preset': '新建预设',
         'Bundle skills with this preset': '将 Skills 打包到此预设',
         'No preset is currently selected.': '当前未选择预设。',
-        'Character-bound runtime presets are not directly editable.': '角色卡绑定的运行时预设暂不支持直接编辑。',
         'Enter a name for the new preset.': '请输入新预设名称。',
         'Preset already exists: ${0}': '预设已存在：${0}',
         'Preset created: ${0}': '已创建预设：${0}',
@@ -112,7 +111,6 @@ function registerLocaleData() {
         'Mode addition — orchestrator-optimize': '模式追加 —— 编排器适配',
         'Mode addition — jailbreak-only': '模式追加 —— 仅保留破限',
         'Reset to default': '重置为默认',
-        'Current preset is not a stored chat completion preset. Please select a saved preset first.': '当前不是已保存的聊天补全预设，请先选择一个已保存预设。',
         'AI request failed: ${0}': '模型请求失败：${0}',
         '(none)': '（无）',
         '(current)': '（当前）',
@@ -228,7 +226,6 @@ function registerLocaleData() {
         'Create New Preset': '新建預設',
         'Bundle skills with this preset': '將 Skills 打包到此預設',
         'No preset is currently selected.': '目前未選擇預設。',
-        'Character-bound runtime presets are not directly editable.': '角色卡綁定的執行時預設暫不支援直接編輯。',
         'Enter a name for the new preset.': '請輸入新預設名稱。',
         'Preset already exists: ${0}': '預設已存在：${0}',
         'Preset created: ${0}': '已建立預設：${0}',
@@ -242,7 +239,6 @@ function registerLocaleData() {
         'Mode addition — orchestrator-optimize': '模式追加 —— 編排器適配',
         'Mode addition — jailbreak-only': '模式追加 —— 僅保留破限',
         'Reset to default': '重置為預設',
-        'Current preset is not a stored chat completion preset. Please select a saved preset first.': '目前不是已儲存的聊天補全預設，請先選擇一個已儲存預設。',
         'AI request failed: ${0}': '模型請求失敗：${0}',
         '(none)': '（無）',
         '(current)': '（目前）',
@@ -473,11 +469,11 @@ async function openCpaIteration() {
     const context = getContext();
 
     const targetRef = getCurrentTargetRef(context);
-    const liveSnapshot = getCurrentLiveSnapshot(context);
-    if (!targetRef || !liveSnapshot?.stored) {
-        toastr.warning(i18n('Current preset is not a stored chat completion preset. Please select a saved preset first.'));
+    if (!targetRef) {
+        toastr.warning(i18n('No preset is currently selected.'));
         return;
-    }    function getTargetRef() {
+    }
+    function getTargetRef() {
         const current = getCurrentTargetRef(context);
         return current || { collection: 'openai', name: targetRef.name };
     }
@@ -701,7 +697,6 @@ function ensureUi(context = getContext()) {
                     <i class="fa-fw fa-solid fa-cubes"></i> ${escapeHtml(i18n('Bundle skills with this preset'))}
                 </div>
             </div>
-            <div class="cpa_hint">${escapeHtml(i18n('Character-bound runtime presets are not directly editable.'))}</div>
             <label for="cpa_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'cpa_request_llm_preset' })}</label>
             <select id="cpa_request_llm_preset" class="text_pole"></select>
             <label for="cpa_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>

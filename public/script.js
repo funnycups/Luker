@@ -127,6 +127,8 @@ import {
     initOpenAI,
 } from './scripts/openai.js';
 
+import { openManageBoundPresetsDialog } from './scripts/character/manage-bound-presets-dialog.js';
+
 import {
     generateNovelWithStreaming,
     getNovelGenerationData,
@@ -306,6 +308,10 @@ import { initServerHistory } from './scripts/server-history.js';
 import { initSettingsSearch } from './scripts/setting-search.js';
 import { initBulkEdit } from './scripts/bulk-edit.js';
 import { getContext } from './scripts/st-context.js';
+// Publish `globalThis.lukerContext = getContext()` for third-party plugins
+// that consume ctx off the global.  Must import AFTER st-context.js so
+// getContext() returns a fully-populated object (character.presets et al).
+import './scripts/lukerContext.js';
 import { extractReasoningBlocksFromData, extractReasoningDetailsFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { fetchRecentChatsSnapshot, initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar, openWelcomeScreen, primeRecentChatsSnapshotPromise } from './scripts/welcome-screen.js';
@@ -21079,6 +21085,15 @@ jQuery(async function () {
             } break;
             case 'bind_character_chat_completion_preset': {
                 await bindCurrentChatCompletionPresetToCharacter(this_chid);
+            } break;
+            case 'manage_character_bound_presets': {
+                // Grab the character through the context accessor so its proxy-wrapping
+                // matches what `context.characters.indexOf(character)` will compare against
+                // inside Layer 1's persist path (see comment in openai.js on
+                // syncCharacterBoundPresetFromSettings). A raw `characters[this_chid]`
+                // reference misses that indexOf and Layer 1 throws.
+                const ctx = getContext();
+                await openManageBoundPresetsDialog(ctx.characters?.[this_chid]);
             } break;
             case 'clear_character_chat_completion_preset': {
                 await clearCharacterBoundChatCompletionPreset(this_chid);

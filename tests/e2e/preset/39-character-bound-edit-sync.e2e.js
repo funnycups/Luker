@@ -74,7 +74,21 @@ function readCharacterBoundSnapshot(dataRoot, avatarFile) {
     const png = readFileSync(path);
     const cardJson = readPngCard(png);
     const card = JSON.parse(cardJson);
-    return card?.data?.extensions?.luker?.chat_completion_preset;
+    // sync-back writes the multi-slot shape
+    // `{presets: [{name, preset}], defaultPresetName}`. Prior shape was
+    // single `{name, preset}` — Layer 1 migrates old-shape reads into the
+    // new shape and the sync-back path persists it, so pick the slot
+    // matching the currently-bound name and return the same
+    // `{name, preset}` view the old assertions expect.
+    const raw = card?.data?.extensions?.luker?.chat_completion_preset;
+    if (raw && typeof raw === 'object' && Array.isArray(raw.presets)) {
+        const defaultName = String(raw.defaultPresetName || '').trim();
+        const hit = defaultName
+            ? raw.presets.find(p => p?.name === defaultName)
+            : raw.presets[0];
+        return hit || null;
+    }
+    return raw;
 }
 
 test.describe('#39 — character-bound preset edits sync back to the card', () => {

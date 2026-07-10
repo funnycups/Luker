@@ -180,11 +180,11 @@ async function defaultSendLlm({ context, settings, messages, tools, runtimeWorld
     const resolvedApiPresetName = agentResolutionMod.resolveOrchestrationAgentApiPresetName(
         settings,
         { apiPresetName },
-    );
+    )?.name || '';
     const resolvedLlmPresetName = agentResolutionMod.resolveOrchestrationAgentPromptPresetName(
         settings,
         { promptPresetName: llmPresetName },
-    );
+    )?.name || '';
     const result = await toolCallingMod.requestToolCallsWithRetry(context, settings, {
         taskMessages: messages,
         runtimeWorldInfo: runtimeWorldInfo || {},

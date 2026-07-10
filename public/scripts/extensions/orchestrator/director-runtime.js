@@ -49,6 +49,7 @@ import {
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { resolveToolSource } from './loop-tools.js';
+import { resolveCardFirstPresetName } from './agent-preset-resolver.js';
 import {
     appendRound, appendToSection, ensureSection,
     finishRun, setRoundStatus, setSectionStatus, addTokenUsage,
@@ -72,24 +73,49 @@ async function loadSkillResolution() {
 /**
  * Resolve the connection-profile name for a director agent: per-agent
  * setting wins; falls back to the orchestrator's global LLM-node setting
- * (`settings.llmNodeApiPresetName`). Mirrors loop/agenda/spec convention
- * (`resolveOrchestrationAgentApiPresetName` in `agent-resolution.js`) but
- * inlined here because the agent-resolution module transitively imports
- * `extensions.js` → `lib.js`, which can't be loaded under Node test env.
+ * (`settings.llmNodeApiPresetName`). Card-first — an embedded card
+ * preset with the same name overrides a same-named local global preset,
+ * matching the orchestrator's card-first binding rule shared with the
+ * loop / agenda / spec modes.
+ * Delegates to `resolveCardFirstPresetName` so all orchestrator modes
+ * share one resolution path; kept as a local string-returning wrapper
+ * because the surrounding call sites feed the result straight into
+ * `generateTaskStreamForMainAgent({apiPresetName, llmPresetName})`
+ * which expects a bare name (or empty string to inherit runtime
+ * defaults). `resolveByName` + character are pulled from the ctx layer
+ * lazily so this module stays Jest-clean when the loop / tools tests
+ * import it transitively.
  */
 function resolveAgentApiPresetName(settings, agentConfig) {
-    return String(agentConfig?.apiPresetName || '').trim()
-        || String(settings?.llmNodeApiPresetName || '').trim();
+    const ctx = (typeof Luker !== 'undefined') ? Luker.getContext() : null;
+    const character = ctx?.characters?.[ctx?.characterId] ?? null;
+    const resolveByName = ctx?.character?.presets?.resolveByName;
+    const resolved = resolveCardFirstPresetName({
+        explicitName: agentConfig?.apiPresetName,
+        fallbackName: settings?.llmNodeApiPresetName,
+        character,
+        resolveByName,
+    });
+    return resolved?.name || '';
 }
 
 /**
- * Mirror of `resolveOrchestrationAgentPromptPresetName` for chat-
- * completion preset names. Per-agent setting wins; falls back to the
- * orchestrator's global LLM-node setting (`settings.llmNodePresetName`).
+ * Mirror of `resolveAgentApiPresetName` for chat-completion prompt
+ * presets. Per-agent setting wins; falls back to
+ * `settings.llmNodePresetName`. Card-first via
+ * `resolveCardFirstPresetName`.
  */
 function resolveAgentPromptPresetName(settings, agentConfig) {
-    return String(agentConfig?.promptPresetName || '').trim()
-        || String(settings?.llmNodePresetName || '').trim();
+    const ctx = (typeof Luker !== 'undefined') ? Luker.getContext() : null;
+    const character = ctx?.characters?.[ctx?.characterId] ?? null;
+    const resolveByName = ctx?.character?.presets?.resolveByName;
+    const resolved = resolveCardFirstPresetName({
+        explicitName: agentConfig?.promptPresetName,
+        fallbackName: settings?.llmNodePresetName,
+        character,
+        resolveByName,
+    });
+    return resolved?.name || '';
 }
 // Note: director writes process state through the RunStateStore (panel
 // + simulation review popup read from there). For backward compat the

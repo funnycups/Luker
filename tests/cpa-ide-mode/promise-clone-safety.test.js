@@ -2,19 +2,20 @@
 /**
  * Regression for: "generateTask sender failed: Promise object could not be cloned."
  *
- * Root cause: CPA's commit() path leads to
- *   public/scripts/openai.js:syncCharacterBoundPresetJsonData
- * which forwards `boundPreset` into `worker.postMessage(...)`. The Web Worker
- * postMessage uses structuredClone internally, which rejects Promises, Proxies,
- * getters returning Promises, and functions.
+ * Historical root cause: CPA's commit() path called into a
+ * `syncCharacterBoundPresetJsonData` helper (removed alongside the multi-slot
+ * refactor) that forwarded `boundPreset` into `worker.postMessage(...)`. The
+ * Web Worker postMessage uses structuredClone internally, which rejects
+ * Promises, Proxies, getters returning Promises, and functions.
  *
- * Fix: sanitize `boundPreset` through JSON.parse(JSON.stringify(...)) before
- * postMessage. This test pins the exact contract the fix relies on:
+ * The fix was to sanitize any object heading into a Worker via
+ * JSON.parse(JSON.stringify(...)) before postMessage. This test pins the
+ * underlying JS contract that fix relies on, so future callers of the same
+ * pattern do not regress:
  *
  *   1. A preset containing non-cloneable fields fails structuredClone as-is.
  *   2. After JSON round-trip, the same preset is structuredClone-safe.
- *   3. Plain-JSON fields survive the round-trip unchanged (so the worker still
- *      receives the data it needs to update the character JSON snapshot).
+ *   3. Plain-JSON fields survive the round-trip unchanged.
  */
 
 import { describe, test, expect } from '@jest/globals';

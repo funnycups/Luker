@@ -21,6 +21,15 @@ import {
     extractSystemFromCapturedPrompt,
     extractNonSystemFromCapturedPrompt,
 } from '../../iteration-library/simulation-review/dry-run-capture.js';
+// Shared card-bound-preset read tool (`inspect_bound_preset`) — exposed
+// to the unified CEA editor's AI via a helper-tool API below so
+// buildCharacterEditorHelperApis returns it alongside the lorebook /
+// simulate / world-book APIs.
+import {
+    CHARACTER_PRESET_READ_TOOL_DEFS,
+    isCharacterPresetReadTool,
+    runCharacterPresetReadTool,
+} from '../../iteration-library/tools/character-presets-reads.js';
 
 const __ctx = Luker.getContext();
 const generateQuietPrompt = __ctx.generateQuietPrompt;
@@ -2910,6 +2919,40 @@ function createCharacterEditorWorldBookListToolApi(context, { avatar = '' } = {}
     };
 }
 
+/**
+ * Helper-tool API surfacing the shared `inspect_bound_preset` read tool
+ * (defined in `iteration-library/tools/character-presets-reads.js`) to the
+ * unified CEA editor. Shape matches the other helper-tool APIs built by
+ * this module: `{ toolNames, getToolDefs, isToolName, invoke }`.
+ *
+ * The shared executor returns `{ ok, result }` / `{ ok, error }` envelopes;
+ * this API unwraps `result` on ok and throws on failure so the legacy
+ * helper-tool runner's exception path surfaces the error, matching the
+ * contract sibling APIs use.
+ *
+ * `avatar` scopes lookups to the character being edited; when omitted the
+ * shared executor falls back to `context.characterId` (via
+ * `context.characters[context.characterId]`).
+ */
+function createCharacterEditorBoundPresetToolApi(context, { avatar = '' } = {}) {
+    const toolName = CHARACTER_PRESET_READ_TOOL_DEFS[0]?.function?.name || 'inspect_bound_preset';
+    return {
+        toolNames: Object.freeze({ INSPECT_BOUND_PRESET: toolName }),
+        getToolDefs: () => CHARACTER_PRESET_READ_TOOL_DEFS.slice(),
+        isToolName: (name) => isCharacterPresetReadTool(name),
+        invoke: async (call) => {
+            const out = await runCharacterPresetReadTool(
+                { id: call?.id, name: String(call?.name || ''), args: call?.args && typeof call.args === 'object' ? call.args : {} },
+                { context, avatar },
+            );
+            if (out?.ok) {
+                return out.result;
+            }
+            throw new Error(String(out?.error || 'inspect_bound_preset failed'));
+        },
+    };
+}
+
 function renderLorebookSyncAnalysisMarkdown(markdownText) {
     const source = String(markdownText || '').trim();
     if (!source) {
@@ -3355,6 +3398,7 @@ export function buildCharacterEditorHelperApis(context, opts = {}) {
         createCharacterEditorLorebookWriteToolApi(context, { avatar }),
         createCharacterEditorSimulateToolApi(context),
         createCharacterEditorWorldBookListToolApi(context, { avatar }),
+        createCharacterEditorBoundPresetToolApi(context, { avatar }),
         ...(searchApi ? [searchApi] : []),
     ];
 }

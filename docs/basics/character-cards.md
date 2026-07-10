@@ -80,9 +80,9 @@ Building on the standard V2 format, Luker adds several practical extensions to c
 
 ### Card-Bound Presets and Personas
 
-Character cards can bind dedicated **chat completion presets** and **user personas**. When you open a chat with this character, Luker automatically switches to the bound preset and persona; when you leave, it restores the previous settings.
+Character cards can bind one or more dedicated **chat completion presets** and one or more **user personas**. When you open a chat with this character, Luker adds the card's presets as a Card-bound group in the preset selector and applies the card's default; user personas the card recommends are surfaced the same way.
 
-This solves a common pain point: card creators no longer need to ask users to manually import specific presets, nor do they need to put user personas in world info. Bound presets and personas are independent — they won't pollute your global preset or persona lists.
+This solves a common pain point: card creators no longer need to ask users to manually import specific presets, nor do they need to put user personas in world info. Card-bound presets are runtime-only — they don't appear in your global preset list and don't overwrite same-named local presets.
 
 See [Preset System](/basics/presets) and [Card-Bound Presets and Personas](/improvements/card-bound-presets) for details.
 
