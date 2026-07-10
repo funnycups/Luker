@@ -3404,7 +3404,14 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
         const workingProfileValue = sanitizeDirectorProfile(session?.workingProfile);
         const globalProfileValue = sanitizeDirectorProfile(globalProfile);
         const latestSimulationText = stringifyIterationSimulationForPrompt(session?.lastSimulation);
-        const latestSnapshotText = toReadableYamlText(normalizeOrchestrationSnapshot(getActiveSnapshot()) || {}, '{}');
+        // Director mode does not consume the orchestration capsule — its
+        // main agent runs in GENERATE_TAKEOVER_DISPATCH and writes the
+        // assistant message body directly, so there is no capsule
+        // channel to reference. Deliberately omit `latest_orchestration_snapshot`
+        // here: the capsule store (`getActiveSnapshot`) is mode-agnostic
+        // and would surface a stale loop/spec/agenda capsule from an
+        // earlier run in this same chat, which is meaningless to the
+        // director iterator and pollutes the prompt.
         return [
             '# iteration_input',
             'You are in a multi-turn director-mode orchestration iteration session.',
@@ -3444,11 +3451,6 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
             '## latest_simulation',
             '```text',
             latestSimulationText,
-            '```',
-            '',
-            '## latest_orchestration_snapshot',
-            '```yaml',
-            latestSnapshotText,
             '```',
             '',
             '## user_request',
