@@ -101,7 +101,7 @@ export function writeCharacterWithBinding({ dataRoot, handle = 'default-user', a
  */
 export function pickStableWorldInfoPort(specBaseName) {
     const base = 8471; // mirror PORT_RANGES.worldinfo.base
-    const seq = ['25', '26', '27', '28', '29', '30', '31', '32'];
+    const seq = ['25', '26', '27', '28', '29', '30', '31', '32', '33'];
     const idx = seq.findIndex(prefix => specBaseName.startsWith(prefix));
     return idx >= 0 ? base + idx : base;
 }

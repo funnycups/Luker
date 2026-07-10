@@ -312,10 +312,21 @@ router.post('/import', async (request, response) => {
     } catch (err) {
         return response.status(400).send('Is not a valid world info file');
     }
-    if (!_.isObjectLike(worldContent) || Array.isArray(worldContent)
-        || !_.isObjectLike(worldContent.entries) || Array.isArray(worldContent.entries)) {
+    if (!_.isObjectLike(worldContent) || Array.isArray(worldContent)) {
         return response.status(400).send('Is not a valid world info file');
     }
+    // Coerce array-form `entries` (each entry carries its own `uid` inline)
+    // into the documented uid-keyed object form. Some legacy authors and
+    // merge tooling serialize world books this way; upstream ST's /import
+    // accepts them and the frontend renders array-form entries fine. We
+    // normalize here so the on-disk shape stays consistent with the rest
+    // of the codebase (see normalizeWorldInfoFile — same coercion runs on
+    // /get and /get-batch reads).
+    const { file: normalizedContent } = normalizeWorldInfoFile(worldContent);
+    if (!_.isObjectLike(normalizedContent.entries) || Array.isArray(normalizedContent.entries)) {
+        return response.status(400).send('Is not a valid world info file');
+    }
+    worldContent = normalizedContent;
 
     const worldName = path.parse(filename).name;
     if (!worldName) {
@@ -349,8 +360,16 @@ router.post('/edit', async (request, response) => {
         return response.status(400).send('World file must have a name');
     }
 
-    if (!_.isObjectLike(request.body.data) || Array.isArray(request.body.data)
-        || !_.isObjectLike(request.body.data.entries) || Array.isArray(request.body.data.entries)) {
+    if (!_.isObjectLike(request.body.data) || Array.isArray(request.body.data)) {
+        return response.status(400).send('Is not a valid world info file');
+    }
+    // Match /import: array-form `entries` (each entry inlines its own uid)
+    // is a legitimate legacy shape produced by third-party merge tools.
+    // Coerce back to the uid-keyed object form before persisting so the
+    // saved shape stays consistent with normalizeWorldInfoFile's read-side
+    // repair.
+    const { file: normalizedData } = normalizeWorldInfoFile(request.body.data);
+    if (!_.isObjectLike(normalizedData.entries) || Array.isArray(normalizedData.entries)) {
         return response.status(400).send('Is not a valid world info file');
     }
 
@@ -365,7 +384,7 @@ router.post('/edit', async (request, response) => {
     }
 
     try {
-        await getWorldInfoRepo().save(request.user.profile.handle, safeName, request.body.data);
+        await getWorldInfoRepo().save(request.user.profile.handle, safeName, normalizedData);
         return response.send({ ok: true });
     } catch (err) {
         console.error('Error editing world info:', err);
