@@ -201,6 +201,11 @@ const TRANSLATIONS = {
         'Bundled ${0} skill(s) with this preset.': '已随预设附带 ${0} 个 Skill。',
         'Failed to bundle skills with preset: ${0}': '附带 Skill 到预设失败：${0}',
         'No skills could be bundled with this preset.': '没有可随预设附带的 Skill。',
+
+        // orch-preset scope labels (skill manager, badge, dialogs).
+        'Orchestrator preset': '编排预设',
+        'orchestrator preset': '编排预设',
+        'orch-preset:${0}/${1}': '编排预设:${0}/${1}',
     },
     'zh-tw': {
         'Skills': 'Skills',
@@ -370,6 +375,11 @@ const TRANSLATIONS = {
         'Bundled ${0} skill(s) with this preset.': '已隨預設附帶 ${0} 個 Skill。',
         'Failed to bundle skills with preset: ${0}': '附帶 Skill 到預設失敗：${0}',
         'No skills could be bundled with this preset.': '沒有可隨預設附帶的 Skill。',
+
+        // orch-preset scope labels (skill manager, badge, dialogs).
+        'Orchestrator preset': '編排預設',
+        'orchestrator preset': '編排預設',
+        'orch-preset:${0}/${1}': '編排預設:${0}/${1}',
     },
 };
 

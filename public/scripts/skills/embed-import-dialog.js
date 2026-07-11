@@ -40,13 +40,14 @@ import { ensureSkillI18n } from './i18n.js';
  * @param {object} scope
  * @returns {string}
  */
-export function formatScopeLabel(scope) {
-    if (!scope || typeof scope !== 'object') return 'unknown';
+export function formatScopeLabel(scope, t = (s) => s) {
+    if (!scope || typeof scope !== 'object') return t('unknown');
     switch (scope.kind) {
-        case 'global': return 'global';
-        case 'preset': return `preset: ${scope.name}`;
-        case 'character': return `character: ${scope.characterFile}`;
-        default: return 'unknown';
+        case 'global': return t('global');
+        case 'preset': return `${t('preset')}: ${scope.name}`;
+        case 'orch-preset': return `${t('orchestrator preset')} (${scope.mode}): ${scope.name}`;
+        case 'character': return `${t('character')}: ${scope.characterFile}`;
+        default: return t('unknown');
     }
 }
 
@@ -181,7 +182,7 @@ export function buildDialogHtml(targetScope, previewItems, t, esc) {
 <div class="luker_skill_import_dialog">
     <div class="luker_skill_import_header">
         <div>${esc(t('Skills embedded in this asset will be installed into:'))}</div>
-        <div class="luker_skill_import_target_label"><b>${esc(formatScopeLabel(targetScope))}</b></div>
+        <div class="luker_skill_import_target_label"><b>${esc(formatScopeLabel(targetScope, t))}</b></div>
     </div>
     ${buildImportTableHtml(previewItems, t, esc)}
 </div>

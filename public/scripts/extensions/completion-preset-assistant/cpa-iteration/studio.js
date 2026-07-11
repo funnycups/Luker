@@ -1108,6 +1108,9 @@ export async function openCpaIterationStudio(deps) {
         if (!scope || typeof scope !== 'object') return t('(unknown scope)');
         if (scope.kind === 'global') return t('global');
         if (scope.kind === 'preset' && scope.name) return tf('preset:${0}', String(scope.name));
+        if (scope.kind === 'orch-preset' && scope.mode && scope.name) {
+            return tf('orch-preset:${0}/${1}', String(scope.mode), String(scope.name));
+        }
         if (scope.kind === 'character' && scope.characterFile) {
             return tf('character:${0}', String(scope.characterFile));
         }

@@ -248,6 +248,7 @@ function formatScopeLabel(scope, t = (s) => s) {
     switch (scope.kind) {
         case 'global': return t('global');
         case 'preset': return `${t('preset')}: ${scope.name}`;
+        case 'orch-preset': return `${t('orchestrator preset')} (${scope.mode}): ${scope.name}`;
         case 'character': return `${t('character')}: ${scope.characterFile}`;
         default: return t('unknown');
     }

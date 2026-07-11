@@ -41,6 +41,7 @@ export function formatScopeLabel(scope, t = (s) => s) {
     switch (scope.kind) {
         case 'global': return t('global');
         case 'preset': return `${t('preset')}: ${scope.name}`;
+        case 'orch-preset': return `${t('orchestrator preset')} (${scope.mode}): ${scope.name}`;
         case 'character': return `${t('character')}: ${scope.characterFile}`;
         default: return t('unknown');
     }
@@ -58,6 +59,7 @@ export function scopesEqual(a, b) {
     if (a.kind !== b.kind) return false;
     if (a.kind === 'global') return true;
     if (a.kind === 'preset') return a.name === b.name;
+    if (a.kind === 'orch-preset') return a.mode === b.mode && a.name === b.name;
     if (a.kind === 'character') return a.characterFile === b.characterFile;
     return false;
 }
@@ -73,6 +75,7 @@ export function scopeKey(scope) {
     switch (scope.kind) {
         case 'global': return 'global';
         case 'preset': return `preset/${scope.name}`;
+        case 'orch-preset': return `orch-preset/${scope.mode}/${scope.name}`;
         case 'character': return `character/${scope.characterFile}`;
         default: return '';
     }
@@ -102,8 +105,11 @@ export function groupSkillsByScope(skills) {
     for (const g of groups.values()) {
         g.skills.sort((a, b) => String(a.name).localeCompare(String(b.name)));
     }
-    // Sort groups by kind priority then by key.
-    const kindOrder = { global: 0, preset: 1, character: 2 };
+    // Sort groups by kind priority then by key. Order mirrors runtime
+    // resolver precedence (specialized last) reversed for reading order:
+    // global (shared) → preset (chat-completion) → orch-preset
+    // (orchestrator preset) → character (card-bound).
+    const kindOrder = { global: 0, preset: 1, 'orch-preset': 2, character: 3 };
     return Array.from(groups.values()).sort((a, b) => {
         const ka = kindOrder[a.scope.kind] ?? 99;
         const kb = kindOrder[b.scope.kind] ?? 99;
@@ -290,16 +296,25 @@ export function buildPanelHtml(groups, allScopes, selectedFilterKey, activeTab, 
     const scopeBadge = (scope) => {
         const kind = scope?.kind || 'unknown';
         const kindClass = `luker_skill_scope_badge_${esc(kind)}`;
-        const kindName = esc(t(kind === 'global' ? 'Global' : kind === 'preset' ? 'Preset' : 'Character'));
-        // For preset / character scopes the second segment carries the
-        // identifying detail (preset name or character file). Global has no
-        // sub-identifier, so the badge stops at the kind name — rendering
-        // "Global · Global" would just be redundant noise.
+        const kindName = esc(
+            kind === 'global' ? t('Global')
+                : kind === 'preset' ? t('Preset')
+                    : kind === 'orch-preset' ? t('Orchestrator preset')
+                        : kind === 'character' ? t('Character')
+                            : t('unknown'),
+        );
+        // For preset / orch-preset / character scopes the second segment
+        // carries the identifying detail (preset name, mode+name, or
+        // character file). Global has no sub-identifier, so the badge
+        // stops at the kind name — rendering "Global · Global" would just
+        // be redundant noise.
         const kindLabel = kind === 'preset'
             ? esc(scope.name || '?')
-            : kind === 'character'
-                ? esc(scope.characterFile || '?')
-                : null;
+            : kind === 'orch-preset'
+                ? esc(`${scope.mode || '?'}/${scope.name || '?'}`)
+                : kind === 'character'
+                    ? esc(scope.characterFile || '?')
+                    : null;
         const tail = kindLabel
             ? `<span class="luker_skill_scope_badge_sep">·</span><span class="luker_skill_scope_badge_id">${kindLabel}</span>`
             : '';
