@@ -80,13 +80,29 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         }
         return {
             stream,
-            unsubscribe: () => unsubscribe(requestId),
+            unsubscribe: (reason) => unsubscribe(requestId, reason),
         };
     }
 
-    function unsubscribe(requestId) {
+    function unsubscribe(requestId, reason = null) {
+        const entry = pending.get(requestId);
         if (ws && ws.readyState === WebSocket.OPEN) {
             try { ws.send(JSON.stringify({ type: 'unsubscribe', request_id: requestId })); } catch {}
+        }
+        // Terminate the caller's ReadableStream so any pending
+        // `reader.read()` resolves. Without this, callers looping on
+        // `for await (const chunk of response.body)` hang forever after
+        // an abort. `controller.error` propagates as AbortError-shaped
+        // exception; `controller.close` is used when the caller is
+        // shutting down cleanly (no explicit reason).
+        if (entry?.controller) {
+            try {
+                if (reason instanceof Error || (reason && typeof reason.message === 'string')) {
+                    entry.controller.error(reason);
+                } else {
+                    entry.controller.close();
+                }
+            } catch { /* controller may already be closed */ }
         }
         pending.delete(requestId);
     }
@@ -179,7 +195,11 @@ export function installFetchProxy(delivery, options = {}) {
         const signal = init?.signal;
         if (signal) {
             const onAbort = () => {
-                unsubscribe();
+                // Terminate the caller's ReadableStream with an AbortError
+                // so any `for await response.body` loop unwinds immediately.
+                // Then notify the server so upstream generation stops.
+                const abortErr = new DOMException('The user aborted a request.', 'AbortError');
+                unsubscribe(abortErr);
                 sendAbortNotification(requestId);
             };
             if (signal.aborted) {
