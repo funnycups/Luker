@@ -253,7 +253,10 @@ export async function dispatchClaude(ctx) {
             fixThinkingPrefill = true;
             const minThinkTokens = 1024;
             if (requestBody.max_tokens <= minThinkTokens) {
-                requestBody.max_tokens = requestBody.max_tokens + minThinkTokens;
+                const newValue = requestBody.max_tokens + minThinkTokens;
+                console.warn(`Claude thinking requires a minimum of ${minThinkTokens} response tokens.`);
+                console.info(`Increasing response length to ${newValue}.`);
+                requestBody.max_tokens = newValue;
             }
             requestBody.thinking = { type: 'enabled', budget_tokens: budgetTokens };
             delete requestBody.temperature;

@@ -173,4 +173,86 @@ describe('dispatchClaude', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    test('thinking mode with max_tokens<=1024 auto-bumps and warns the user', async () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+        try {
+            const fetchMock = jest.fn(async () => new Response(JSON.stringify({
+                id: 'msg_1', type: 'message', role: 'assistant',
+                content: [{ type: 'text', text: 'ok' }],
+                stop_reason: 'end_turn',
+                usage: { input_tokens: 1, output_tokens: 1 },
+            }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+            const ctx = fakeCtx({
+                onFetch: fetchMock,
+                body: {
+                    // Non-adaptive thinking model (matches useThinking regex,
+                    // does NOT match isAdaptiveModel), so budgetTokens is an
+                    // integer instead of an effort string.
+                    model: 'claude-3-7-sonnet-20250219',
+                    max_tokens: 100,
+                    reasoning_effort: 'min',
+                },
+            });
+            await dispatchClaude(ctx);
+
+            // Auto-bump kicked in: request body sent to upstream carries
+            // max_tokens = 100 + 1024 = 1124.
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            const [, init] = fetchMock.mock.calls[0];
+            const sentBody = JSON.parse(init.body);
+            expect(sentBody.max_tokens).toBe(1124);
+            expect(sentBody.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+
+            // User-visible signal that max_tokens was mutated.
+            const warnCalls = warnSpy.mock.calls.map(args => String(args[0]));
+            expect(warnCalls.some(msg => msg.includes('Claude thinking requires a minimum of 1024'))).toBe(true);
+            const infoCalls = infoSpy.mock.calls.map(args => String(args[0]));
+            expect(infoCalls.some(msg => msg.includes('Increasing response length to 1124'))).toBe(true);
+        } finally {
+            warnSpy.mockRestore();
+            infoSpy.mockRestore();
+        }
+    });
+
+    test('thinking mode with max_tokens>1024 does NOT bump or warn', async () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+        try {
+            const fetchMock = jest.fn(async () => new Response(JSON.stringify({
+                id: 'msg_1', type: 'message', role: 'assistant',
+                content: [{ type: 'text', text: 'ok' }],
+                stop_reason: 'end_turn',
+                usage: { input_tokens: 1, output_tokens: 1 },
+            }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+            const ctx = fakeCtx({
+                onFetch: fetchMock,
+                body: {
+                    model: 'claude-3-7-sonnet-20250219',
+                    max_tokens: 4096,
+                    reasoning_effort: 'min',
+                },
+            });
+            await dispatchClaude(ctx);
+
+            const [, init] = fetchMock.mock.calls[0];
+            const sentBody = JSON.parse(init.body);
+            expect(sentBody.max_tokens).toBe(4096);
+
+            const bumpMsgs = warnSpy.mock.calls
+                .map(args => String(args[0]))
+                .filter(m => m.includes('Claude thinking requires a minimum'));
+            expect(bumpMsgs).toHaveLength(0);
+            const infoBumpMsgs = infoSpy.mock.calls
+                .map(args => String(args[0]))
+                .filter(m => m.includes('Increasing response length'));
+            expect(infoBumpMsgs).toHaveLength(0);
+        } finally {
+            warnSpy.mockRestore();
+            infoSpy.mockRestore();
+        }
+    });
 });
