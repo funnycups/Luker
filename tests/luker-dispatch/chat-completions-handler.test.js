@@ -96,15 +96,16 @@ describe('selectChatCompletionDispatch', () => {
 });
 
 describe('/generate handler integration via runLukerDispatch', () => {
-    test('missing x-luker-request-id header → 400 before select is called', async () => {
-        const req = fakeRequest({ requestId: null, body: { chat_completion_source: 'claude' } });
+    test('missing x-luker-request-id header: runner auto-mints and proceeds (200 with server-supplied id)', async () => {
+        const req = fakeRequest({ requestId: null, body: { chat_completion_source: 'openai' } });
         const res = fakeResponse();
         await runLukerDispatch(req, res, {
             endpoint: 'chat-completions',
             select: (body) => selectChatCompletionDispatch(body),
         });
-        expect(res.state.statusCode).toBe(400);
-        expect(res.state.body).toEqual({ error: 'x-luker-request-id header required' });
+        expect(res.state.statusCode).toBe(200);
+        expect(typeof res.state.headers['x-luker-generation-id']).toBe('string');
+        expect(res.state.headers['x-luker-generation-id'].length).toBeGreaterThan(10);
     });
 
     test('unknown chat_completion_source → 400 via select() throw path', async () => {

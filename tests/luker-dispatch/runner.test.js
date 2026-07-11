@@ -21,13 +21,27 @@ function fakeResponse() {
 }
 
 describe('runLukerDispatch', () => {
-    test('400 when x-luker-request-id header missing', async () => {
+    test('missing x-luker-request-id header: server auto-mints and returns via x-luker-generation-id', async () => {
         const req = fakeRequest({ requestId: null });
         const res = fakeResponse();
         const select = () => async (ctx) => { ctx.emit.end(); };
         await runLukerDispatch(req, res, { endpoint: 'test', select });
-        expect(res.state.statusCode).toBe(400);
-        expect(res.state.body).toEqual({ error: 'x-luker-request-id header required' });
+        expect(res.state.statusCode).toBe(200);
+        const mintedId = res.state.headers['x-luker-generation-id'];
+        expect(typeof mintedId).toBe('string');
+        expect(mintedId.length).toBeGreaterThan(10);
+    });
+
+    test('body.luker_generation.job_id overrides header (client-supplied uuid path)', async () => {
+        const { getTaskByRequestId } = await import('../../src/endpoints/backends/luker-generation.js');
+        const req = fakeRequest({ requestId: 'header-id-should-lose', body: { luker_generation: { job_id: 'body-id-wins' } } });
+        const res = fakeResponse();
+        const select = () => async (ctx) => { ctx.emit.end(); };
+        await runLukerDispatch(req, res, { endpoint: 'test', select });
+        expect(res.state.headers['x-luker-generation-id']).toBe('body-id-wins');
+        await new Promise(r => setTimeout(r, 20));
+        // Job must be findable by the body id (what /jobs/status?id= will use).
+        expect(getTaskByRequestId('body-id-wins', 'alice')).not.toBeNull();
     });
 
     test('400 when select throws', async () => {
@@ -147,5 +161,29 @@ describe('runLukerDispatch', () => {
         await new Promise(r => setTimeout(r, 20));
         // Cleanup timer.
         if (attached.persistenceTimer) { clearTimeout(attached.persistenceTimer); attached.persistenceTimer = null; }
+    });
+
+    test('runner emits legacy luker trailer SSE frame so client openai.js:4316 can read generation_id/persisted', async () => {
+        const req = fakeRequest({ requestId: 'trailer-test-1', body: { stream: true } });
+        const res = fakeResponse();
+        const emittedChunks = [];
+        const select = () => async (ctx) => {
+            // Capture original chunk emit so we can inspect what runner appends.
+            const origChunk = ctx.emit.chunk;
+            ctx.emit.chunk = (bytes) => {
+                emittedChunks.push(bytes);
+                origChunk(bytes);
+            };
+            ctx.emit.chunk(new TextEncoder().encode('data: {"delta":"hi"}\n\n'));
+            ctx.emit.end();
+        };
+        await runLukerDispatch(req, res, { endpoint: 'test', select });
+        await new Promise(r => setTimeout(r, 20));
+        // Find the trailer frame with the luker envelope.
+        const decoded = emittedChunks.map(b => new TextDecoder().decode(b)).join('');
+        expect(decoded).toContain('"luker":');
+        expect(decoded).toContain('"generation_id":"trailer-test-1"');
+        expect(decoded).toContain('"persisted":');
+        expect(decoded).toContain('"status":');
     });
 });

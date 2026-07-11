@@ -16,11 +16,13 @@ import {
 import { createDispatchContext } from './context.js';
 
 export async function runLukerDispatch(request, response, { endpoint, select }) {
-    const requestId = String(request.headers?.['x-luker-request-id'] || '').trim();
-    if (!requestId) {
-        response.status(400).json({ error: 'x-luker-request-id header required' });
-        return;
-    }
+    // Prefer the client-supplied job_id (from body.luker_generation.job_id)
+    // when present so /jobs/status?id=<uuid> queries hit the same job the
+    // runner created. Legacy client code (openai.js:4201) pre-generates a
+    // uuid and stashes it in the body so it can poll for auto-persist.
+    const bodyJobId = String(request.body?.luker_generation?.job_id || '').trim();
+    const headerId = String(request.headers?.['x-luker-request-id'] || '').trim();
+    const requestId = bodyJobId || headerId || randomUUID();
 
     let dispatchFn;
     try {
@@ -97,6 +99,26 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         });
         try {
             await dispatchFn(ctx);
+            // Emit the legacy trailer SSE frame carrying luker.generation_id
+            // + persisted + status. Frontend openai.js:4316 reads this frame
+            // to learn the job id and persist flag. Legacy
+            // forwardStreamingWithGenerationJob appended this at stream tail;
+            // the refactor dropped it. ONLY for streaming — non-stream body
+            // is a single JSON blob that `await response.json()` would fail
+            // to parse if an SSE-shaped frame were appended.
+            const isStream = Boolean(request.body?.stream || request.body?.streaming);
+            if (isStream) {
+                try {
+                    const trailer = JSON.stringify({
+                        luker: {
+                            generation_id: job.id,
+                            persisted: Boolean(job.persisted),
+                            status: job.status,
+                        },
+                    });
+                    ctx.emit.chunk(new TextEncoder().encode(`data: ${trailer}\n\n`));
+                } catch { /* best-effort */ }
+            }
             // 若 dispatch 没显式 emit end,兜底
             ctx.emit.end();
             // Advance the generation job to `awaiting_ack` so:
@@ -107,8 +129,8 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             // `forwardStreamingWithGenerationJob`; the refactor missed it,
             // leaving every job stuck on `running` until TTL cleared it.
             //
-            // Safe no-op when the dispatch already advanced the job (e.g.
-            // via a future ctx API), because status guards there re-check.
+            // Runs AFTER emit.end so client's stream close is not delayed by
+            // the async work here.
             try {
                 await completeGenerationJobFromText(request, job, job.text || '', request.body?.model || '');
             } catch { /* generation-job best-effort; never crash background */ }

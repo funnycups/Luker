@@ -189,7 +189,19 @@ export function installFetchProxy(delivery, options = {}) {
 
     async function proxiedFetch(url, init) {
         if (!shouldProxy(url)) return originalFetch(url, init);
-        const requestId = crypto.randomUUID();
+        // Client-provided request id: reuse body.luker_generation.job_id when
+        // caller pre-generated one (openai.js:4201 does this so it can poll
+        // /jobs/status?id= with the same uuid). Otherwise mint a fresh one
+        // and let the server echo it via x-luker-generation-id.
+        let requestId = crypto.randomUUID();
+        try {
+            const b = init?.body;
+            if (typeof b === 'string') {
+                const parsed = JSON.parse(b);
+                const bodyId = String(parsed?.luker_generation?.job_id || '').trim();
+                if (bodyId) requestId = bodyId;
+            }
+        } catch { /* body not JSON or unparseable — keep the minted uuid */ }
         // Normalize caller headers to a plain object so `spread` works even
         // when the caller passed a `Headers` instance (spread on Headers
         // yields empty because Headers isn't a plain object).
@@ -201,6 +213,12 @@ export function installFetchProxy(delivery, options = {}) {
         const httpResp = await originalFetch(url, { ...(init || {}), headers });
         if (!httpResp.ok) return httpResp;
         try { await httpResp.clone().json(); } catch { /* body may be empty */ }
+        // Server echoes the actual job id via header — take it as source of
+        // truth in case body id / header id / server-mint disagree.
+        const serverJobId = httpResp.headers.get('x-luker-generation-id');
+        if (serverJobId && serverJobId !== requestId) {
+            requestId = serverJobId;
+        }
         const initialHeaders = {};
         httpResp.headers.forEach((v, k) => {
             if (k.toLowerCase().startsWith('x-luker-')) initialHeaders[k] = v;
