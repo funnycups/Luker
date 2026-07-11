@@ -6598,6 +6598,25 @@ async function openAiIterationStudio(context, settings, root) {
     const studioMode = SUPPORTED_STUDIO_MODES.has(executionMode)
         ? executionMode
         : ORCH_EXECUTION_MODE_SPEC;
+    // Resolve the currently-active orch-preset (mode + name) so the
+    // iter-studio can bind skill authoring tool calls to it by default.
+    // Skill iter-studio tools consult `mutationCtx.defaultScope` when the
+    // AI omits an explicit scope; supplying the orch-preset scope here
+    // keeps AI-driven skill writes confined to the preset being edited
+    // instead of silently polluting the global scope. When no preset is
+    // active (fresh install / mode with no library entries yet) we omit
+    // the field so the tool falls back to global — the historical
+    // default.
+    const iterScope = getIterationDefaultScope(context);
+    const avatarForScope = iterScope === 'character' ? getCurrentAvatar(context) : undefined;
+    const activePresetId = getActivePresetId(settings, studioMode, {
+        scope: iterScope,
+        context,
+        avatar: avatarForScope,
+    });
+    const activeOrchPreset = activePresetId
+        ? { mode: studioMode, name: String(activePresetId) }
+        : null;
     await openOrchestratorIterationStudio({
         mode: studioMode,
         context,
@@ -6635,6 +6654,12 @@ async function openAiIterationStudio(context, settings, root) {
             DIRECTOR: ORCH_EXECUTION_MODE_DIRECTOR,
         },
         MODULE_NAME,
+        // Skill iter-studio default-scope hint: when set, skill authoring
+        // tool calls that don't specify `scope` land in this scope. See
+        // the iter-studio dispatcher for the mutationCtx wiring.
+        skillDefaultScope: activeOrchPreset
+            ? { kind: 'orch-preset', mode: activeOrchPreset.mode, name: activeOrchPreset.name }
+            : null,
     });
 }
 

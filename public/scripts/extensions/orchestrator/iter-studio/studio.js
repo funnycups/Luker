@@ -1016,6 +1016,11 @@ export async function openOrchestratorIterationStudio(deps) {
         applyAiIterationSessionToGlobal,
         applyAiIterationSessionToCharacter,
         ORCH_EXECUTION_MODES,
+        // Optional: default scope for skill iter-studio tools when the AI
+        // omits `scope`. When the caller supplies an orch-preset scope
+        // (mode+name of the preset being edited), skill authoring writes
+        // land in that preset by default instead of the global scope.
+        skillDefaultScope = null,
     } = deps;
 
     if (!mode) throw new TypeError('openOrchestratorIterationStudio: deps.mode is required');
@@ -2400,11 +2405,24 @@ export async function openOrchestratorIterationStudio(deps) {
         // block. The augment helper is a no-op when the working profile
         // has no long systemPrompts AND no visible skills, so the prompt
         // stays clean for sessions that aren't doing skill work.
-        const skillRuntimeContext = buildSkillRuntimeContext(context, null, null);
+        //
+        // When the iter-studio host supplied a `skillDefaultScope` (the
+        // active orch-preset), thread it through the runtime context so
+        // orch-preset-scope skills already installed for this preset
+        // show up in the visible catalog, AND surface it in the prompt
+        // so the AI knows which scope its authoring tools default to.
+        const orchPresetForRuntime = (skillDefaultScope
+                && skillDefaultScope.kind === 'orch-preset'
+                && skillDefaultScope.mode
+                && skillDefaultScope.name)
+            ? { mode: skillDefaultScope.mode, name: skillDefaultScope.name }
+            : null;
+        const skillRuntimeContext = buildSkillRuntimeContext(context, null, orchPresetForRuntime);
         const systemPrompt = await augmentIterStudioPromptWithSkills(
             scopeHintedPrompt,
             state.live,
             skillRuntimeContext,
+            { defaultScope: skillDefaultScope || null },
         );
 
         // For auto-continue turns, the user-facing "latest user text" is
@@ -2714,7 +2732,16 @@ export async function openOrchestratorIterationStudio(deps) {
                     // skill mutations in the same round compose.
                     const out = await runSkillIterStudioTool(
                         { name: call?.name, args: call?.args },
-                        { getWorkingProfile: () => skillToolChainedLive || state.live },
+                        {
+                            getWorkingProfile: () => skillToolChainedLive || state.live,
+                            // When set (orchestrator iter-studio: the
+                            // current orch-preset scope), skill authoring
+                            // tools that don't specify `scope` land here
+                            // by default. Keeps AI writes confined to
+                            // the preset being edited instead of leaking
+                            // into `global`.
+                            defaultScope: skillDefaultScope || undefined,
+                        },
                     );
                     if (out?.ok) {
                         if (out.pendingEdit) {

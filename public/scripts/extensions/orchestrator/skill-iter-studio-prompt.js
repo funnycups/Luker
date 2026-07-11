@@ -99,9 +99,13 @@ export function detectLongSystemPromptAgents(profile, opts = {}) {
  *
  * @param {Array<{name: string, description: string}>} visibleSkills
  * @param {Array<{agentId: string, length: number}>} longAgents
+ * @param {{defaultScope?: {kind:string, mode?:string, name?:string}|null}} [opts]
  * @returns {string}
  */
-export function formatSkillsAugmentation(visibleSkills, longAgents) {
+export function formatSkillsAugmentation(visibleSkills, longAgents, opts = {}) {
+    const defaultScope = opts && opts.defaultScope && typeof opts.defaultScope === 'object'
+        ? opts.defaultScope
+        : null;
     const lines = [];
     lines.push('## Skill management (iter-studio extension)');
     lines.push('');
@@ -126,6 +130,15 @@ export function formatSkillsAugmentation(visibleSkills, longAgents) {
     lines.push('   - 写作正文前，请按 skill `anti-cliche-rules` 列出的反套路清单核对一遍，避免其中标注的陈词。');
     lines.push('   - 产出最终回复前，请按 skill `finalize-output-shape` 定义的字段顺序与字段约束组织输出。');
     lines.push('   - 推断与决策环节，请按 skill `reasoning-discipline` 的步骤要求显式分解。');
+    lines.push('');
+    lines.push('Skill scope for authoring tools:');
+    if (defaultScope && defaultScope.kind === 'orch-preset' && defaultScope.mode && defaultScope.name) {
+        lines.push(`- Default when \`scope\` is omitted: \`{kind:"orch-preset", mode:"${defaultScope.mode}", name:"${defaultScope.name}"}\` — the orchestrator preset currently being edited. Skills created / edited without an explicit \`scope\` will belong to this preset and travel with it on export / import.`);
+        lines.push('- Only pass an explicit `scope` when the skill genuinely does not belong to this preset (e.g. a truly cross-preset utility skill → `{kind:"global"}`, a character-bound persona skill → `{kind:"character", characterFile}`). Do NOT default to `global` "just in case" — that pollutes shared inventory.');
+    } else {
+        lines.push('- Default when `scope` is omitted: `{kind:"global"}`. Skills you create without an explicit scope go into the shared global inventory.');
+        lines.push('- Prefer scoping skills narrowly when they are only relevant to one preset (`{kind:"preset", name}` for chat-completion presets, `{kind:"orch-preset", mode, name}` for orchestrator presets) or one character (`{kind:"character", characterFile}`).');
+    }
     lines.push('');
     lines.push('Currently visible skills for this profile:');
     const named = (visibleSkills || []).filter(s => s && typeof s.name === 'string');
@@ -156,7 +169,10 @@ export function formatSkillsAugmentation(visibleSkills, longAgents) {
  * @param {{
  *   resolveVisibleSkills?: (args: object) => Promise<Array>,
  *   minChars?: number,
- * }} [opts] - test seam; default uses resolveAgentVisibleSkills from skill-resolution.js
+ *   defaultScope?: {kind:string, mode?:string, name?:string}|null,
+ * }} [opts] - test seam; default uses resolveAgentVisibleSkills from skill-resolution.js.
+ *   `defaultScope` (when set) is surfaced in the prompt so the AI knows which
+ *   scope its authoring tools default to when it omits `scope`.
  * @returns {Promise<string>}
  */
 export async function augmentIterStudioPromptWithSkills(
@@ -187,6 +203,6 @@ export async function augmentIterStudioPromptWithSkills(
     if (longAgents.length === 0 && (!Array.isArray(visibleSkills) || visibleSkills.length === 0)) {
         return basePrompt;
     }
-    const block = formatSkillsAugmentation(visibleSkills, longAgents);
+    const block = formatSkillsAugmentation(visibleSkills, longAgents, { defaultScope: opts.defaultScope || null });
     return `${basePrompt}\n\n${block}`;
 }

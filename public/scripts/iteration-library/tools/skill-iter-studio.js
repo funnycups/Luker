@@ -154,15 +154,29 @@ export function isSkillIterStudioTool(name) {
 // matches the REST API shape) or the literal string 'global'. Tests
 // frequently pass the string form for brevity, so normalize once at the top
 // of each handler.
+//
+// When `args.scope` is omitted, `defaultScope` (supplied by the calling
+// iter-studio via `mutationCtx.defaultScope`) is used. This lets the
+// orchestrator iter-studio bind writes to the currently-active
+// `{kind:'orch-preset', mode, name}` by default so AI-driven skill
+// authoring stays confined to the preset being edited instead of
+// silently polluting the global scope. Callers that want a specific
+// scope can still pass it explicitly.
 // ────────────────────────────────────────────────────────────────────────────
 
-function normalizeScope(scope) {
-    if (!scope) return { kind: 'global' };
+function normalizeScope(scope, defaultScope = null) {
+    if (!scope) {
+        if (defaultScope) return normalizeScope(defaultScope);
+        return { kind: 'global' };
+    }
     if (scope === 'global' || scope === 'all') return { kind: 'global' };
     if (typeof scope === 'string') return { kind: 'global' };
     if (scope.kind === 'global') return { kind: 'global' };
     if (scope.kind === 'preset' && scope.name) {
         return { kind: 'preset', name: String(scope.name) };
+    }
+    if (scope.kind === 'orch-preset' && scope.mode && scope.name) {
+        return { kind: 'orch-preset', mode: String(scope.mode), name: String(scope.name) };
     }
     if (scope.kind === 'character' && scope.characterFile) {
         return { kind: 'character', characterFile: String(scope.characterFile) };
@@ -517,10 +531,11 @@ export function buildSkillVisibilityChange(beforeProfile, afterProfile, { kind, 
 
 const SCOPE_SCHEMA = {
     type: 'object',
-    description: 'Skill scope. Use {kind:\'global\'} for shared skills, {kind:\'preset\', name} for preset-bound (preset-scope skills travel with the preset regardless of connection profile), {kind:\'character\', characterFile} for card-bound. Defaults to global when omitted.',
+    description: 'Skill scope. Use {kind:\'global\'} for shared skills, {kind:\'preset\', name} for preset-bound (preset-scope skills travel with the preset regardless of connection profile), {kind:\'orch-preset\', mode, name} for orchestrator-preset-bound (mode is one of "director"/"agenda"/"loop"/"spec"; travels with the orchestrator preset), {kind:\'character\', characterFile} for card-bound. When omitted, the iter-studio host chooses a sensible default (e.g. the orchestrator iter-studio defaults to the orch-preset currently being edited so skill writes stay confined to that preset).',
     properties: {
-        kind: { type: 'string', enum: ['global', 'preset', 'character'] },
+        kind: { type: 'string', enum: ['global', 'preset', 'orch-preset', 'character'] },
         name: { type: 'string' },
+        mode: { type: 'string', description: 'Required for orch-preset scope; one of director/agenda/loop/spec.' },
         characterFile: { type: 'string' },
     },
     required: ['kind'],
@@ -797,10 +812,10 @@ const HANDLERS = {
         };
     },
 
-    async skill_inspect(args) {
+    async skill_inspect(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         const skillsApi = getSkillsApi();
-        const scope = normalizeScope(args.scope);
+        const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const [entry, fileTree] = await Promise.all([
             skillsApi.get(args.name, scope),
             skillsApi.listFiles({ scope, name: args.name }),
@@ -821,10 +836,10 @@ const HANDLERS = {
         };
     },
 
-    async skill_read_content(args) {
+    async skill_read_content(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         return getSkillsApi().readFile({
-            scope: normalizeScope(args.scope),
+            scope: normalizeScope(args.scope, mctx?.defaultScope),
             name: String(args.name),
             path: args.path,
             offset: args.offset,
@@ -832,24 +847,24 @@ const HANDLERS = {
         });
     },
 
-    async skill_search_content(args) {
+    async skill_search_content(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         if (!args?.query) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'query is required' });
         return getSkillsApi().search({
-            scope: normalizeScope(args.scope),
+            scope: normalizeScope(args.scope, mctx?.defaultScope),
             name: String(args.name),
             query: String(args.query),
         });
     },
 
-    async skill_create(args) {
+    async skill_create(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         if (!args?.description) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'description is required' });
         if (typeof args?.body !== 'string') throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'body is required' });
         const name = String(args.name);
         const description = String(args.description);
         const body = String(args.body);
-        const scope = normalizeScope(args.scope);
+        const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const skillMd = composeSkillMd(name, description, body);
         const files = [{ path: 'SKILL.md', encoding: 'utf8', content: skillMd }];
         if (Array.isArray(args.files)) {
@@ -884,11 +899,11 @@ const HANDLERS = {
         });
     },
 
-    async skill_update_content(args) {
+    async skill_update_content(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         if (!args?.path) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'path is required' });
         if (typeof args?.content !== 'string') throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'content is required' });
-        const scope = normalizeScope(args.scope);
+        const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const name = String(args.name);
         const path = String(args.path);
         const before = await readFileSafe(scope, name, path);
@@ -912,14 +927,14 @@ const HANDLERS = {
         });
     },
 
-    async skill_edit_content(args) {
+    async skill_edit_content(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         if (!args?.path) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'path is required' });
         if (typeof args?.oldString !== 'string' || args.oldString.length === 0) {
             throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'oldString is required (non-empty)' });
         }
         if (typeof args?.newString !== 'string') throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'newString is required' });
-        const scope = normalizeScope(args.scope);
+        const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const name = String(args.name);
         const path = String(args.path);
         const replaceAll = Boolean(args.replaceAll);
@@ -954,12 +969,12 @@ const HANDLERS = {
         });
     },
 
-    async skill_update_frontmatter(args) {
+    async skill_update_frontmatter(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         if (!args?.patch || typeof args.patch !== 'object') {
             throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'patch is required' });
         }
-        const scope = normalizeScope(args.scope);
+        const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const name = String(args.name);
         const before = await readFileSafe(scope, name, 'SKILL.md');
         if (before === null) {
@@ -980,10 +995,10 @@ const HANDLERS = {
         });
     },
 
-    async skill_rename(args) {
+    async skill_rename(args, mctx) {
         if (!args?.fromName) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'fromName is required' });
         if (!args?.toName) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'toName is required' });
-        const scope = normalizeScope(args.scope);
+        const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const fromName = String(args.fromName);
         const toName = String(args.toName);
         return proposalReturn({
@@ -1017,9 +1032,9 @@ const HANDLERS = {
         });
     },
 
-    async skill_delete(args) {
+    async skill_delete(args, mctx) {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
-        const scope = normalizeScope(args.scope);
+        const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const name = String(args.name);
         return proposalReturn({
             kind: 'delete',
@@ -1099,7 +1114,7 @@ const HANDLERS = {
     },
 
     // ── Migration helpers ───────────────────────────────────────────────
-    async skill_extract_from_text(args) {
+    async skill_extract_from_text(args, mctx) {
         if (typeof args?.sourceText !== 'string' || args.sourceText.length === 0) {
             throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'sourceText is required (non-empty)' });
         }
@@ -1112,7 +1127,7 @@ const HANDLERS = {
             description: String(args.description),
             body: String(args.sourceText),
             scope: args.scope,
-        });
+        }, mctx);
     },
 
     async skill_replace_in_systemprompt(args, mctx) {
