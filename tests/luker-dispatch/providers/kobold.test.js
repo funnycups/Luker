@@ -109,14 +109,15 @@ describe('dispatchKobold', () => {
         expect(String(url)).toBe('http://127.0.0.1:5001/v1/generate');
     });
 
-    test('retry on 403: retries up to success', async () => {
+    test('retry on resolved 403 Response: retries up to success', async () => {
         let calls = 0;
         const fetchMock = jest.fn(async () => {
             calls++;
             if (calls <= 2) {
-                const err = new Error('busy');
-                err.status = 403;
-                throw err;
+                return new Response('busy', {
+                    status: 403,
+                    headers: { 'content-type': 'text/plain' },
+                });
             }
             return new Response(JSON.stringify({ results: [{ text: 'finally' }] }), {
                 status: 200, headers: { 'content-type': 'application/json' },
@@ -130,7 +131,55 @@ describe('dispatchKobold', () => {
         expect(chunk).toBeDefined();
         const parsed = JSON.parse(chunkToStr(chunk));
         expect(parsed.results[0].text).toBe('finally');
+
+        // Head emits exactly once: only the final resolved-Response reaches
+        // ctx.emit.head; retried 403 responses continue past the head branch.
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(200);
     }, 30000);
+
+    test('retry on resolved 503 Response: retries up to success', async () => {
+        let calls = 0;
+        const fetchMock = jest.fn(async () => {
+            calls++;
+            if (calls === 1) {
+                return new Response('overloaded', {
+                    status: 503,
+                    headers: { 'content-type': 'text/plain' },
+                });
+            }
+            return new Response(JSON.stringify({ results: [{ text: 'ok' }] }), {
+                status: 200, headers: { 'content-type': 'application/json' },
+            });
+        });
+        const ctx = fakeCtx({ onFetch: fetchMock });
+        await dispatchKobold(ctx);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(ctx._emitted.filter(e => e.kind === 'chunk')).toHaveLength(1);
+    }, 30000);
+
+    test('fetch rejection with .status=403 does NOT retry (rejections carry no HTTP status)', async () => {
+        // fetch() rejections in the real runtime never carry a `.status`
+        // field (status only exists on the resolved Response). Old code
+        // branched on `error?.status === 403` in the catch, so it never
+        // fired. The fix moves the check to the resolved-Response branch;
+        // rejections must terminate immediately without retry.
+        let calls = 0;
+        const fetchMock = jest.fn(async () => {
+            calls++;
+            const err = new Error('busy');
+            // @ts-ignore — mimic a hypothetical status-carrying rejection
+            err.status = 403;
+            throw err;
+        });
+        const ctx = fakeCtx({ onFetch: fetchMock });
+        await dispatchKobold(ctx);
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(1);
+        expect(ctx._emitted.filter(e => e.kind === 'chunk')).toHaveLength(0);
+    });
 
     test('can_abort → POST /extra/abort fired on signal abort', async () => {
         const ac = new AbortController();

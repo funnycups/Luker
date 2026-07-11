@@ -19,10 +19,10 @@
 //     `${api_server}/extra/abort` (fire-and-forget)
 //   • Upstream 4xx/5xx: reshape body `{detail:{msg}}` → emit.error with the
 //     inner msg (falls back to raw text if not JSON)
-//   • Retry loop on `error?.status === 403 || 503`: MAX_RETRIES=50,
-//     2500ms delay. In practice fetch() rejections carry no `.status`, so
-//     this loop only kicks in when the environment surfaces an HTTP-shaped
-//     error (matches legacy behavior).
+//   • Retry loop on resolved-Response 403/503: MAX_RETRIES=50, 2500ms
+//     delay. fetch() rejections carry no `.status`, so the retry branch
+//     is evaluated on the Response (not on rejected errors); a rejected
+//     fetch terminates the dispatch immediately.
 
 import { getOverrideHeaders } from '../../additional-headers.js';
 import { pipeResponseBodyToEmit } from '../response-stream.js';
@@ -174,10 +174,19 @@ export async function dispatchKobold(ctx) {
             // `await headPromise`; without it the client hangs on
             // subscribe races with setImmediate dispatch.
             //
-            // Retry note: fetch() rejections re-enter the loop before
-            // this line; only resolved responses (both ok and !ok) reach
-            // head emit, so head fires exactly once per completed
-            // request.
+            // Retry note: 403/503 retries branch on the resolved Response
+            // (fetch rejections carry no `.status`, so status checks must
+            // be evaluated on a Response, not on a rejected error). Head
+            // fires only once per completed request because retry `continue`
+            // skips the head emit below.
+            if (!resp.ok && (resp.status === 403 || resp.status === 503)) {
+                if (attempt < MAX_RETRIES - 1) {
+                    console.warn(`KoboldAI is busy. Retry attempt ${attempt + 1} of ${MAX_RETRIES}...`);
+                    await delay(RETRY_DELAY_MS);
+                    continue;
+                }
+            }
+
             ctx.emit.head({ status: resp.status, headers: {} });
 
             if (body.streaming) {
@@ -211,19 +220,10 @@ export async function dispatchKobold(ctx) {
             ctx.emit.end();
             return;
         } catch (error) {
-            // Legacy retry: 403/503 retry up to MAX_RETRIES with 2500ms.
-            // In practice fetch() rejections carry no `.status`; kept 1:1
-            // with legacy behavior — non-status errors fall through to the
-            // default branch and emit immediately.
-            const status = error?.status;
-            if (status === 403 || status === 503) {
-                console.warn(`KoboldAI is busy. Retry attempt ${attempt + 1} of ${MAX_RETRIES}...`);
-                await delay(RETRY_DELAY_MS);
-                continue;
-            }
-            if (status !== undefined) {
-                console.error('Status Code from Kobold:', status);
-            }
+            // fetch() rejections (network error, AbortError, invalid URL)
+            // carry no `.status`, so the 403/503 retry lives on the
+            // resolved-Response branch above. Rejections terminate the
+            // dispatch immediately.
             try { ctx.inspection.fail(error); } catch { /* inspection best-effort */ }
             ctx.emit.error(error);
             return;
