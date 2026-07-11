@@ -18,7 +18,7 @@
  * "Pack to embed" path in the skill manager subpanel.
  */
 
-import { packAndAttachSkillsForExport } from './embed-export-helper.js';
+import { attachEmbeddedSkillsSource, packAndAttachSkillsForExport } from './embed-export-helper.js';
 
 /**
  * Confirm-then-attach for preset export. Resolves to true if the user opted
@@ -78,14 +78,23 @@ export async function maybeAttachSkillsToPresetExport({ context, presetBody, t =
 }
 
 /**
- * Confirm-then-attach for orchestrator preset export. Mirrors
- * `maybeAttachSkillsToPresetExport` but for the orch-preset scope
- * (Task 7 lifecycle). Reads (mode, name) from `payload.mode` and
- * `payload.name` — see `buildPortablePayloadForMode` in the orchestrator
- * main.js for the payload shape. Envelope-level `.name` is the canonical
- * source (stamped for all 4 modes); `payload.profile?.name` is kept as a
- * defensive fallback for payloads shaped by callers that only populate
- * the profile field (e.g. legacy external tooling).
+ * Confirm-then-attach for orchestrator preset export. Bundles every skill
+ * "active" for the preset — i.e. every skill any agent in the profile can
+ * see once loaded — regardless of source scope (global / oai-preset /
+ * orch-preset). Character-scope skills are intentionally excluded; they
+ * belong to the character card and travel with it separately.
+ *
+ * The importer materializes all bundled skills into the destination
+ * `orch-preset/<mode>/<name>` scope, so this flow doubles as a scope
+ * migration: cross-scope references collapse into the preset scope on
+ * import, which is what "export active skills as preset-scope" means to
+ * the user.
+ *
+ * (mode, name) are read from `payload.mode` and `payload.name` — see
+ * `buildPortablePayloadForMode` in the orchestrator main.js. Envelope-
+ * level `.name` is stamped for all 4 modes; `payload.profile?.name` is
+ * a defensive fallback for external tooling that only populates the
+ * profile field.
  *
  * @param {object} opts
  * @param {object} opts.context - SillyTavern context
@@ -103,29 +112,115 @@ export async function maybeAttachSkillsToOrchPresetExport({ context, payload, t 
     if (!mode || !name) return false;
     const targetScope = { kind: 'orch-preset', mode, name };
 
-    let list;
+    // Resolve every skill active for this preset across all source scopes.
+    // Delegates profile-walking + resolver invocation to the orchestrator
+    // plugin (via the extension-api boundary — core never imports from a
+    // plugin). Returns Map<scopeKey, {scope, names[]}>. Empty = no active
+    // skills / orchestrator plugin unavailable.
+    let byScope;
     try {
-        list = await context.skills.list({ scope: targetScope });
+        const orchApi = context.getExtensionApi
+            ? context.getExtensionApi('orchestrator')
+            : null;
+        if (!orchApi || typeof orchApi.collectResolvedSkillsForOrchPreset !== 'function') {
+            // Orchestrator plugin not loaded — fall back to the prior
+            // scope-local behavior so the export still bundles any skill
+            // that happens to live in orch-preset scope. This keeps the
+            // hook viable in dev/test contexts where the plugin isn't
+            // wired.
+            const legacyList = await context.skills.list({ scope: targetScope });
+            if (!Array.isArray(legacyList) || legacyList.length === 0) return false;
+            const ok = await confirmIncludeOrchPresetSkills({
+                context, t, list: legacyList, targetScope,
+            });
+            if (!ok) return false;
+            const attached = await packAndAttachSkillsForExport({
+                context, targetScope, attachTo: payload,
+            });
+            if (attached) {
+                toast(
+                    t('Bundled ${0} skill(s) with this preset.').replace('${0}', String(legacyList.length)),
+                    'success',
+                );
+                return true;
+            }
+            return false;
+        }
+        byScope = await orchApi.collectResolvedSkillsForOrchPreset(payload);
     } catch (e) {
         // eslint-disable-next-line no-console
-        console.warn('[embed-export-hook] orch-preset list failed:', e?.message || e);
+        console.warn('[embed-export-hook] resolve active skills failed:', e?.message || e);
         return false;
     }
-    if (!Array.isArray(list) || list.length === 0) return false;
+    if (!byScope || byScope.size === 0) return false;
 
-    const ok = await confirmIncludeOrchPresetSkills({ context, t, list, targetScope });
+    // Flatten for the confirm popup (dedup by name across scopes for
+    // display, but keep the per-scope grouping for the actual pack).
+    const flatNames = new Set();
+    for (const { names } of byScope.values()) {
+        for (const n of names) flatNames.add(n);
+    }
+    if (flatNames.size === 0) return false;
+
+    const displayList = [...flatNames].sort().map(n => ({ name: n }));
+    const ok = await confirmIncludeOrchPresetSkills({ context, t, list: displayList, targetScope });
     if (!ok) return false;
 
+    // Pack each source-scope group separately (server needs the source
+    // scope to read the skill files), then merge the resulting items[]
+    // into a single embed payload. Since embed items carry only the skill
+    // name (not their source scope), the importer will materialize them
+    // all into the destination orch-preset scope — this is exactly the
+    // "export active skills as preset-scope" behavior users expect.
+    //
+    // Cross-scope collisions (same skill name in more than one source
+    // scope) resolve in resolver-precedence order:
+    //   character > orch-preset > oai-preset > global
+    // character is excluded from packing, so precedence here is
+    //   orch-preset > preset > global
+    // (specialized > generic — matches runtime scope-merge semantics).
     try {
-        const attached = await packAndAttachSkillsForExport({
-            context,
-            targetScope,
-            attachTo: payload,
-        });
-        if (attached) {
-            toast(t('Bundled ${0} skill(s) with this preset.').replace('${0}', String(list.length)), 'success');
-            return true;
+        const precedence = { global: 0, preset: 1, 'orch-preset': 2 };
+        // name -> {kindRank, item}
+        const dedup = new Map();
+        for (const { scope, names } of byScope.values()) {
+            if (!Array.isArray(names) || names.length === 0) continue;
+            const kindRank = precedence[scope.kind];
+            if (kindRank === undefined) continue;
+            let sub;
+            try {
+                sub = await context.skills.packForEmbed({ scope, names, mode: 'auto' });
+            } catch (e) {
+                // Missing / concurrently-deleted skills in a single scope
+                // shouldn't block the whole export — log and continue so
+                // the remaining scopes still travel.
+                // eslint-disable-next-line no-console
+                console.warn('[embed-export-hook] pack scope failed:',
+                    `${scope.kind}/${scope.name || scope.mode || ''}`,
+                    e?.message || e);
+                continue;
+            }
+            if (!sub || !Array.isArray(sub.items)) continue;
+            for (const item of sub.items) {
+                if (!item || typeof item !== 'object' || !item.name) continue;
+                const prev = dedup.get(item.name);
+                if (!prev || prev.kindRank < kindRank) {
+                    dedup.set(item.name, { kindRank, item });
+                }
+            }
         }
+        if (dedup.size === 0) {
+            toast(t('No skills could be bundled with this preset.'), 'error');
+            return false;
+        }
+        const finalItems = [...dedup.values()].map(v => v.item);
+        const embedPayload = { version: 1, items: finalItems };
+        attachEmbeddedSkillsSource(payload, embedPayload);
+        toast(
+            t('Bundled ${0} skill(s) with this preset.').replace('${0}', String(finalItems.length)),
+            'success',
+        );
+        return true;
     } catch (e) {
         toast(t('Failed to bundle skills with preset: ${0}').replace('${0}', e?.message || String(e)), 'error');
     }
@@ -147,7 +242,8 @@ async function confirmIncludeOrchPresetSkills({ context, t, list, targetScope })
     const scope_label = `orchestrator preset (${escHtml(targetScope.mode)}): ${escHtml(targetScope.name)}`;
     const html = `
 <div class="luker_skill_export_confirm">
-    <div>${escHtml(t('Include orchestrator preset skills in this export?'))}</div>
+    <div>${escHtml(t('Include all skills active for this orchestrator preset in the export?'))}</div>
+    <div class="luker_skill_export_confirm_hint">${escHtml(t('Bundled skills will install into this preset\u2019s scope on import.'))}</div>
     <div class="luker_skill_export_confirm_scope"><b>${scope_label}</b></div>
     <ul class="luker_skill_export_confirm_list">${list_html}</ul>
 </div>

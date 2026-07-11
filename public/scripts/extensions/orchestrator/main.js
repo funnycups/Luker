@@ -318,6 +318,7 @@ import {
     setCharacterLoopOverrideEnabled,
     setCharacterSpecOverrideEnabled,
 } from './editor-persist.js';
+import { collectResolvedSkillsForOrchPreset } from './collect-active-skills.js';
 import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
@@ -358,6 +359,12 @@ registerExtensionApi(MODULE_NAME, {
     // the override accessors above when persisting an override edited by
     // a sibling plugin.
     persistOrchestratorCharacterExtension,
+    // Skill-export bridge: walks a portable orchestrator payload's agent
+    // surface and returns the union of skills any agent in the preset
+    // can see, grouped by source scope. Used by the skills embed-export
+    // hook to bundle all "active" skills into an orch-preset export
+    // (see `public/scripts/skills/embed-export-hook.js`).
+    collectResolvedSkillsForOrchPreset,
 });
 // Module-scope cache for the director content payload captured at
 // GENERATE_TAKEOVER_DISPATCH. Director's main + sub agents read from this
