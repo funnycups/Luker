@@ -3557,9 +3557,16 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
 }
 
 function buildAiIterationToolSet(session = null) {
-    // Shared by every mode's tools-edit functions (director / spec / agenda).
-    // Loop mode currently inlines its own copy inside `luker_orch_set_loop_profile`
-    // since it patches `tools` alongside other profile fields.
+    // Shared by every mode's tools-edit functions (director / spec / agenda /
+    // loop).
+    // Mirrors the shape emitted by sanitizeAgentToolFlags in persistence.js.
+    // Namespaces must stay in sync: note / chat / lorebook / custom / collab /
+    // message. Legacy `memory` / `search` (pre-Layer-2) are still accepted so
+    // that agents editing old profiles or reasoning from legacy docs can flip
+    // those verbs; the executor translates them into `custom.<ns>_<verb>` (see
+    // sanitizeAgentToolFlags memory→custom / search→custom migration and
+    // loop-iteration.js mergeLegacyAsCustom). Similarly note.add / note.delete
+    // are legacy aliases for note.open / note.close.
     const toolsFlagSchema = {
         type: 'object',
         properties: {
@@ -3568,6 +3575,9 @@ function buildAiIterationToolSet(session = null) {
                 properties: {
                     open: { type: 'boolean' },
                     close: { type: 'boolean' },
+                    // legacy aliases (pre note.open/close rename)
+                    add: { type: 'boolean' },
+                    delete: { type: 'boolean' },
                 },
                 additionalProperties: false,
             },
@@ -3590,6 +3600,34 @@ function buildAiIterationToolSet(session = null) {
                 },
                 additionalProperties: false,
             },
+            // Layer-2 extension tools (memory-graph / search-tools / …) live
+            // here keyed by full tool name. Values are boolean enable flags.
+            custom: {
+                type: 'object',
+                additionalProperties: { type: 'boolean' },
+            },
+            // Director-only collaboration verbs. Inert for other modes but
+            // still round-trip through the profile.
+            collab: {
+                type: 'object',
+                properties: {
+                    dispatch_subagent: { type: 'boolean' },
+                    dispatch_inline_subagent: { type: 'boolean' },
+                },
+                additionalProperties: false,
+            },
+            // Message-editing opt-in for both main agent and sub-agents.
+            message: {
+                type: 'object',
+                properties: {
+                    write_message: { type: 'boolean' },
+                    apply_message_patches: { type: 'boolean' },
+                },
+                additionalProperties: false,
+            },
+            // Legacy namespaces (translated to `custom.<ns>_<verb>` by
+            // sanitizeAgentToolFlags). Accepted here so old prompts / migrated
+            // profiles keep flipping the intended verbs.
             memory: {
                 type: 'object',
                 properties: {
@@ -3828,60 +3866,7 @@ function buildAiIterationToolSet(session = null) {
                             promptPresetName: { type: 'string' },
                             max_rounds: { type: 'integer', minimum: 1 },
                             wall_clock_budget_ms: { type: 'integer', minimum: 10000 },
-                            tools: {
-                                type: 'object',
-                                properties: {
-                                    note: {
-                                        type: 'object',
-                                        properties: {
-                                            add: { type: 'boolean' },
-                                            delete: { type: 'boolean' },
-                                        },
-                                        additionalProperties: false,
-                                    },
-                                    chat: {
-                                        type: 'object',
-                                        properties: {
-                                            read_range: { type: 'boolean' },
-                                            search: { type: 'boolean' },
-                                        },
-                                        additionalProperties: false,
-                                    },
-                                    lorebook: {
-                                        type: 'object',
-                                        properties: {
-                                            world_book_list: { type: 'boolean' },
-                                            list: { type: 'boolean' },
-                                            search: { type: 'boolean' },
-                                            get: { type: 'boolean' },
-                                            force_activate: { type: 'boolean' },
-                                        },
-                                        additionalProperties: false,
-                                    },
-                                    memory: {
-                                        type: 'object',
-                                        properties: {
-                                            schema: { type: 'boolean' },
-                                            list_candidates: { type: 'boolean' },
-                                            edge_summary: { type: 'boolean' },
-                                            node_brief: { type: 'boolean' },
-                                            expand_seeds: { type: 'boolean' },
-                                            keyword_search: { type: 'boolean' },
-                                            vector_search: { type: 'boolean' },
-                                            find_by_name: { type: 'boolean' },
-                                            compaction_candidates: { type: 'boolean' },
-                                            node_create: { type: 'boolean' },
-                                            node_edit: { type: 'boolean' },
-                                            node_delete: { type: 'boolean' },
-                                            link_upsert: { type: 'boolean' },
-                                            link_delete: { type: 'boolean' },
-                                            compact_nodes: { type: 'boolean' },
-                                        },
-                                        additionalProperties: false,
-                                    },
-                                },
-                                additionalProperties: false,
-                            },
+                            tools: toolsFlagSchema,
                         },
                         additionalProperties: false,
                     },
