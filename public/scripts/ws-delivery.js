@@ -190,7 +190,14 @@ export function installFetchProxy(delivery, options = {}) {
     async function proxiedFetch(url, init) {
         if (!shouldProxy(url)) return originalFetch(url, init);
         const requestId = crypto.randomUUID();
-        const headers = { ...(init?.headers || {}), 'x-luker-request-id': requestId };
+        // Normalize caller headers to a plain object so `spread` works even
+        // when the caller passed a `Headers` instance (spread on Headers
+        // yields empty because Headers isn't a plain object).
+        const callerHeaders = init?.headers;
+        const normalizedHeaders = callerHeaders instanceof Headers
+            ? Object.fromEntries(callerHeaders.entries())
+            : (callerHeaders || {});
+        const headers = { ...normalizedHeaders, 'x-luker-request-id': requestId };
         const httpResp = await originalFetch(url, { ...(init || {}), headers });
         if (!httpResp.ok) return httpResp;
         try { await httpResp.clone().json(); } catch { /* body may be empty */ }

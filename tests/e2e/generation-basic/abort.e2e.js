@@ -42,12 +42,20 @@ test.afterAll(async () => {
 });
 
 test('generation-basic: #mes_stop fires POST /api/generation/:id/abort, keeps partial reply, no error toast', async ({ page }) => {
-    // Capture every POST to the abort endpoint so we can assert it fired.
+    // Capture every POST to the abort endpoint AND its response so we can
+    // assert (a) it fired and (b) server accepted it (not 403/401/404).
     const abortRequests = [];
+    const abortResponses = [];
     page.on('request', (req) => {
         const url = req.url();
         if (url.includes('/api/generation/') && url.endsWith('/abort') && req.method() === 'POST') {
             abortRequests.push({ url, method: req.method() });
+        }
+    });
+    page.on('response', async (resp) => {
+        const url = resp.url();
+        if (url.includes('/api/generation/') && url.endsWith('/abort')) {
+            abortResponses.push({ url, status: resp.status() });
         }
     });
 
@@ -105,6 +113,15 @@ test('generation-basic: #mes_stop fires POST /api/generation/:id/abort, keeps pa
     // The URL shape must be /api/generation/<uuid>/abort — asserts the
     // request-id round-trip (header → client → notification path).
     expect(abortRequests[0].url).toMatch(/\/api\/generation\/[0-9a-f-]{8,}\/abort$/i);
+
+    // Server MUST have accepted the abort. Any 4xx here is a regression:
+    // - 401/403 → CSRF or auth middleware rejected the POST (headers bug)
+    // - 404     → task lookup missed (owner or request_id mismatch)
+    // Historically bug 9aa2c26dd caused 403 in production because the
+    // notification skipped the CSRF header; this assertion locks it in.
+    expect(abortResponses.length, 'server must respond to abort notification').toBeGreaterThanOrEqual(1);
+    expect(abortResponses[0].status, `abort should return 2xx; got status=${abortResponses[0].status}`).toBeGreaterThanOrEqual(200);
+    expect(abortResponses[0].status).toBeLessThan(300);
 
     // The partial reply that was already visible must still be visible.
     const postAbortText = await page.evaluate(() => {
