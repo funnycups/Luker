@@ -119,7 +119,7 @@ describe('dispatchChutes', () => {
         expect(ctx._emitted[ctx._emitted.length - 1].kind).toBe('end');
     });
 
-    test('upstream non-2xx: emits error, calls inspection.fail, no chunk emitted', async () => {
+    test('upstream non-2xx: surfaces status+body via head+chunk+end (no emit.error)', async () => {
         const ctx = fakeCtx({
             onFetch: jest.fn(async () => new Response('{"error":{"message":"bad key"}}', {
                 status: 401,
@@ -129,9 +129,20 @@ describe('dispatchChutes', () => {
         await dispatchChutes(ctx);
 
         const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs.length).toBeGreaterThan(0);
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(401);
+
         const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
-        expect(chunks).toHaveLength(0);
+        expect(chunks).toHaveLength(1);
+        const decoded = new TextDecoder().decode(chunks[0].data);
+        expect(decoded).toBe('{"error":{"message":"bad key"}}');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
     });
 

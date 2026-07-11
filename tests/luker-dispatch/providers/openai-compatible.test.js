@@ -180,7 +180,7 @@ describe('dispatchOpenAICompatible', () => {
         expect(ctx._emitted[ctx._emitted.length - 1].kind).toBe('end');
     });
 
-    test('upstream non-2xx: emits error, inspection.fail called, no chunk', async () => {
+    test('upstream non-2xx: surfaces status+body via head+chunk+end (no emit.error)', async () => {
         const ctx = fakeCtx({
             secretMap: { api_key_openai: 'oa-key' },
             onFetch: jest.fn(async () => new Response('{"error":{"message":"bad key"}}', {
@@ -188,9 +188,19 @@ describe('dispatchOpenAICompatible', () => {
             })),
         });
         await dispatchOpenAICompatible(ctx);
+
         const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs.length).toBeGreaterThan(0);
-        expect(ctx._emitted.filter(e => e.kind === 'chunk')).toHaveLength(0);
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(401);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(new TextDecoder().decode(chunks[0].data)).toBe('{"error":{"message":"bad key"}}');
+
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
         expect(ctx.inspection.fail).toHaveBeenCalled();
     });
 

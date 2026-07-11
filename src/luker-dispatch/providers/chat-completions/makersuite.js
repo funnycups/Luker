@@ -385,7 +385,16 @@ export async function dispatchMakerSuite(ctx) {
                 console.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const msg = `${apiName} upstream ${generateResponse.status}: ${errorText}`;
                 ctx.inspection.fail(new Error(msg), generateResponse?.status ?? 502);
-                ctx.emit.error(new Error(msg));
+                // Surface upstream status + body to the client via head + chunk + end
+                // instead of emit.error. Client sees Response.status=<upstream> and
+                // Response.body readable so callers can do `await response.text()` or
+                // `await response.json()` for structured error inspection (matches
+                // legacy handler shape which returned `.status(4xx).send({error:{...}})`).
+                ctx.emit.head({ status: generateResponse.status, headers: {} });
+                if (errorText) {
+                    ctx.emit.chunk(new TextEncoder().encode(errorText));
+                }
+                ctx.emit.end();
                 return;
             }
 

@@ -103,7 +103,16 @@ export async function dispatchCohere(ctx) {
             try { errText = await resp.text(); } catch { /* body already consumed */ }
             const msg = `Cohere upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
-            ctx.emit.error(new Error(msg));
+            // Surface upstream status + body to the client via head + chunk + end
+            // instead of emit.error. Client sees Response.status=<upstream> and
+            // Response.body readable so callers can do `await response.text()` or
+            // `await response.json()` for structured error inspection (matches
+            // legacy handler shape which returned `.status(4xx).send({error:{...}})`).
+            ctx.emit.head({ status: resp.status, headers: {} });
+            if (errText) {
+                ctx.emit.chunk(new TextEncoder().encode(errText));
+            }
+            ctx.emit.end();
             return;
         }
 

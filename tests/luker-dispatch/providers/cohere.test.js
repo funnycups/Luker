@@ -133,7 +133,7 @@ describe('dispatchCohere', () => {
         expect(reqBody.stream).toBe(true);
     });
 
-    test('upstream non-2xx: emits error, calls inspection.fail, no chunk emitted', async () => {
+    test('upstream non-2xx: surfaces status+body via head+chunk+end (no emit.error)', async () => {
         const ctx = fakeCtx({
             onFetch: jest.fn(async () => new Response('{"message":"invalid api token"}', {
                 status: 401,
@@ -143,9 +143,20 @@ describe('dispatchCohere', () => {
         await dispatchCohere(ctx);
 
         const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs.length).toBeGreaterThan(0);
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(401);
+
         const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
-        expect(chunks).toHaveLength(0);
+        expect(chunks).toHaveLength(1);
+        const decoded = new TextDecoder().decode(chunks[0].data);
+        expect(decoded).toBe('{"message":"invalid api token"}');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
     });
 
