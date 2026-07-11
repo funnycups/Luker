@@ -658,7 +658,7 @@ export async function dispatchOpenAICompatible(ctx) {
             excludeKeysByYaml(requestBody, body.custom_exclude_body);
         }
 
-        ctx.inspection.attach(endpointUrl);
+        ctx.inspection.attach(endpointUrl, apiKey, requestBody);
         const resp = await ctx.fetch(endpointUrl, {
             method: 'POST',
             headers: {
@@ -675,7 +675,7 @@ export async function dispatchOpenAICompatible(ctx) {
             try { errText = await resp.text(); } catch { /* body already consumed */ }
             const msg = `OpenAI-compatible upstream ${resp.status}: ${errText.slice(0, 500)}`;
             const err = new Error(msg);
-            ctx.inspection.fail(err);
+            ctx.inspection.fail(err, resp?.status ?? 502);
             ctx.emit.error(err);
             return;
         }

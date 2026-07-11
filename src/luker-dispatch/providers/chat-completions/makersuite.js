@@ -368,7 +368,7 @@ export async function dispatchMakerSuite(ctx) {
             url = `${apiUrl.toString().replace(/\/$/, '')}/${apiVersion}/models/${model}:${responseType}?key=${apiKey}${stream ? '&alt=sse' : ''}`;
         }
 
-        ctx.inspection.attach(url);
+        ctx.inspection.attach(url, apiKey || '', requestBody);
         const generateResponse = await ctx.fetch(url, {
             body: JSON.stringify(requestBody),
             method: 'POST',
@@ -384,7 +384,7 @@ export async function dispatchMakerSuite(ctx) {
                 try { errorText = await generateResponse.text(); } catch { /* body already consumed */ }
                 console.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const msg = `${apiName} upstream ${generateResponse.status}: ${errorText.slice(0, 500)}`;
-                ctx.inspection.fail(new Error(msg));
+                ctx.inspection.fail(new Error(msg), generateResponse?.status ?? 502);
                 ctx.emit.error(new Error(msg));
                 return;
             }

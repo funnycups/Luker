@@ -57,7 +57,7 @@ async function fireKoboldAbort(ctx, apiServer) {
  * src/endpoints/backends/kobold.js:56-97.
  *
  * @param {object} body ctx.body
- * @returns {string} JSON-serialized upstream body
+ * @returns {object} upstream body object (JSON-serialized at fetch site)
  */
 function buildKoboldBody(body) {
     /** @type {any} */
@@ -97,7 +97,7 @@ function buildKoboldBody(body) {
         }
     }
 
-    return JSON.stringify(settings);
+    return settings;
 }
 
 function buildKoboldHeaders(apiServer) {
@@ -158,10 +158,10 @@ export async function dispatchKobold(ctx) {
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
-            ctx.inspection.attach(url);
+            ctx.inspection.attach(url, '', upstreamBody);
             const resp = await ctx.fetch(url, {
                 method: 'POST',
-                body: upstreamBody,
+                body: JSON.stringify(upstreamBody),
                 headers,
                 signal: ctx.signal,
                 timeout: 0,
@@ -186,7 +186,7 @@ export async function dispatchKobold(ctx) {
                     message = errorJson?.detail?.msg || errText;
                 } catch { /* not JSON */ }
                 const err = new Error(String(message));
-                ctx.inspection.fail(err);
+                ctx.inspection.fail(err, resp?.status ?? 502);
                 ctx.emit.error(err);
                 return;
             }

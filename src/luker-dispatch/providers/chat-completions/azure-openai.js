@@ -83,7 +83,7 @@ export async function dispatchAzureOpenAI(ctx) {
         const url = new URL(`/openai/deployments/${azure_deployment_name}/chat/completions`, azure_base_url);
         url.searchParams.set('api-version', azure_api_version);
         const fetchUrl = url.toString();
-        ctx.inspection.attach(fetchUrl);
+        ctx.inspection.attach(fetchUrl, apiKey, apiRequestBody);
 
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
@@ -99,7 +99,7 @@ export async function dispatchAzureOpenAI(ctx) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
             const msg = `Azure OpenAI upstream ${resp.status}: ${errText.slice(0, 500)}`;
-            ctx.inspection.fail(new Error(msg));
+            ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             ctx.emit.error(new Error(msg));
             return;
         }

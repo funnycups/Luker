@@ -279,7 +279,7 @@ export async function dispatchClaude(ctx) {
         mergeObjectWithYaml(additionalHeaders, body.custom_include_headers);
 
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'messages' : apiUrl + '/messages';
-        ctx.inspection.attach(fetchUrl);
+        ctx.inspection.attach(fetchUrl, secretKey, requestBody);
 
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',

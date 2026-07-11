@@ -199,7 +199,7 @@ function buildHeaders(ctx, apiType, apiServer, secretId) {
  *
  * @param {string} apiType TEXTGEN_TYPES value
  * @param {object} body ctx.body (not mutated)
- * @returns {string} JSON-serialized upstream body
+ * @returns {object} upstream body object (JSON-serialized at fetch site)
  */
 function buildUpstreamBody(apiType, body) {
     const { luker_generation: _lg, ...rest } = body || {};
@@ -268,7 +268,7 @@ function buildUpstreamBody(apiType, body) {
             // (matches the legacy handler's fall-through behavior).
             break;
     }
-    return JSON.stringify(payload);
+    return payload;
 }
 
 /**
@@ -385,6 +385,10 @@ export async function dispatchTextCompletions(ctx) {
         const url = baseUrl + suffix;
 
         const secretId = body.secret_id ?? null;
+        const secretKey = SECRET_KEY_BY_API_TYPE[apiType];
+        const apiKey = secretKey
+            ? (ctx.secrets.read(secretKey, { secretId }) || '')
+            : '';
         const headers = buildHeaders(ctx, apiType, apiServer, secretId);
         const upstreamBody = buildUpstreamBody(apiType, body);
 
@@ -403,10 +407,10 @@ export async function dispatchTextCompletions(ctx) {
             }
         }
 
-        ctx.inspection.attach(url);
+        ctx.inspection.attach(url, apiKey, upstreamBody);
         const resp = await ctx.fetch(url, {
             method: 'POST',
-            body: upstreamBody,
+            body: JSON.stringify(upstreamBody),
             headers,
             signal: ctx.signal,
             timeout: 0,
@@ -417,7 +421,7 @@ export async function dispatchTextCompletions(ctx) {
             try { errText = await resp.text(); } catch { /* body already consumed */ }
             const msg = `text-completions upstream ${resp.status}: ${errText.slice(0, 500)}`;
             const err = new Error(msg);
-            ctx.inspection.fail(err);
+            ctx.inspection.fail(err, resp?.status ?? 502);
             ctx.emit.error(err);
             return;
         }

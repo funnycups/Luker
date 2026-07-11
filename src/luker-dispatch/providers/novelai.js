@@ -221,7 +221,7 @@ export async function dispatchNovelAI(ctx) {
         const baseURL = (model.includes('kayra') || model.includes('erato')) ? TEXT_NOVELAI : API_NOVELAI;
         const url = body.streaming ? `${baseURL}/ai/generate-stream` : `${baseURL}/ai/generate`;
 
-        ctx.inspection.attach(url);
+        ctx.inspection.attach(url, apiKey, data);
         const resp = await ctx.fetch(url, {
             method: 'POST',
             body: JSON.stringify(data),
@@ -250,7 +250,7 @@ export async function dispatchNovelAI(ctx) {
                 }
             } catch { /* not JSON */ }
             const err = new Error(String(message));
-            ctx.inspection.fail(err);
+            ctx.inspection.fail(err, resp?.status ?? 502);
             ctx.emit.error(err);
             return;
         }
