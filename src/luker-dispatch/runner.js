@@ -68,7 +68,33 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         // image inspector via startImage/completeImage and manage complete
         // themselves — the runner-side complete below is a no-op for them
         // because findEntry() returns null when there's no __inspectorId.
+        //
+        // inspectionEvents holds one string per SSE `data:` payload, NOT one
+        // per chunk. TCP-level chunk boundaries don't align with SSE frame
+        // boundaries: a single chunk may contain multiple `data: {...}\n\n`
+        // frames concatenated, or split a frame across two chunks. We
+        // maintain a per-job _inspectorSseBuffer separately from
+        // _sseBuffer (used by accumulateChunkTextIntoJob) so text and
+        // inspector extraction are independent.
         const inspectionEvents = [];
+        let inspectorSseBuffer = '';
+        function flushInspectorSseFrames(chunkText) {
+            inspectorSseBuffer += chunkText;
+            if (!inspectorSseBuffer.includes('\n\n')) return;
+            const frames = inspectorSseBuffer.split('\n\n');
+            inspectorSseBuffer = frames.pop() || '';
+            for (const frame of frames) {
+                if (!frame) continue;
+                const dataLines = [];
+                for (const line of frame.split('\n')) {
+                    if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+                }
+                if (dataLines.length === 0) continue;
+                const payload = dataLines.join('\n');
+                if (!payload) continue;
+                inspectionEvents.push(payload);
+            }
+        }
         const ctx = createDispatchContext({
             request, task: job, abortController,
             onEmit: (event) => {
@@ -77,15 +103,30 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                 // 从 chunk 字节里增量抽 text,喂给 auto-persist / /api/generation/active
                 if (event?.kind === 'chunk') {
                     accumulateChunkTextIntoJob(job, event.data);
-                    // Capture each chunk as a decoded string for the inspector
-                    // usage/text extractor. Best-effort — if bytes aren't UTF-8
-                    // we still count the frame but text extraction handles it.
+                    // Capture chunk bytes as SSE-parsed payloads for the
+                    // inspector usage/text extractor. Non-streaming chat
+                    // dispatches emit exactly one chunk = the full JSON body;
+                    // that chunk won't contain `\n\n` so no frames flush here
+                    // — the non-stream branch below handles it via JSON.parse
+                    // in runner's completeInspection call.
                     try {
                         const bytes = event.data;
+                        let text = '';
                         if (bytes && typeof bytes === 'string') {
-                            inspectionEvents.push(bytes);
+                            text = bytes;
                         } else if (bytes && (bytes instanceof Uint8Array || Buffer.isBuffer(bytes))) {
-                            inspectionEvents.push(Buffer.from(bytes).toString('utf8'));
+                            text = Buffer.from(bytes).toString('utf8');
+                        }
+                        if (text) {
+                            const isStream = Boolean(request.body?.stream || request.body?.streaming);
+                            if (isStream) {
+                                flushInspectorSseFrames(text);
+                            } else {
+                                // Non-stream: push the raw chunk (full JSON body)
+                                // so the runner's non-stream branch can JSON.parse
+                                // inspectionEvents.join('') into the payload.
+                                inspectionEvents.push(text);
+                            }
                         }
                     } catch { /* best-effort */ }
                 } else if (event?.kind === 'end') {
@@ -95,6 +136,12 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                         accumulateChunkTextIntoJob(job, '\n\n');
                     }
                     job._sseBuffer = '';
+                    // Same flush for the inspector's SSE buffer so a tail
+                    // frame without terminator still gets parsed.
+                    if (inspectorSseBuffer && !inspectorSseBuffer.endsWith('\n\n')) {
+                        flushInspectorSseFrames('\n\n');
+                    }
+                    inspectorSseBuffer = '';
                 }
             },
         });
