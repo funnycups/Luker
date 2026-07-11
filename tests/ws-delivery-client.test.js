@@ -68,15 +68,37 @@ describe('lukerDelivery client', () => {
         expect(second.done).toBe(true);
     });
 
-    test('error frame surfaces as stream error', async () => {
+    test('error frame before head surfaces as 502 body via headPromise', async () => {
         const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
         const delivery = createLukerDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
-        const { stream } = delivery.subscribe('req-3', {});
+        const { stream, headPromise } = delivery.subscribe('req-3', {});
         ws._receive({ type: 'error', request_id: 'req-3', seq: 1, code: 'forbidden', message: 'nope' });
+        const head = await headPromise;
+        expect(head.status).toBe(502);
         const reader = stream.getReader();
-        await expect(reader.read()).rejects.toThrow(/nope/);
+        const first = await reader.read();
+        expect(first.done).toBe(false);
+        const text = new TextDecoder().decode(first.value);
+        expect(text).toMatch(/nope/);
+        const second = await reader.read();
+        expect(second.done).toBe(true);
+    });
+
+    test('error frame after head errors the stream', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const ws = MockWebSocket.instances[0];
+        const { stream, headPromise } = delivery.subscribe('req-3b', {});
+        // head arrives first, resolving headPromise
+        ws._receive({ type: 'head', request_id: 'req-3b', status: 200, headers: {} });
+        await headPromise;
+        // Then error mid-stream
+        ws._receive({ type: 'error', request_id: 'req-3b', seq: 1, code: 'timeout', message: 'lost' });
+        const reader = stream.getReader();
+        await expect(reader.read()).rejects.toThrow(/lost/);
     });
 
     test('reconnect after WS close, resume outstanding subs', async () => {

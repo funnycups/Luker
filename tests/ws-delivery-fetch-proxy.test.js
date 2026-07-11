@@ -19,6 +19,7 @@ describe('installFetchProxy', () => {
                             c.close();
                         },
                     }),
+                    headPromise: Promise.resolve({ status: 200, headers: {} }),
                     unsubscribe: jest.fn(),
                 };
             }),

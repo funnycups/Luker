@@ -30,28 +30,52 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             try { msg = JSON.parse(evt.data); } catch { return; }
             const entry = pending.get(msg.request_id);
             if (!entry) return;
-            if (msg.type === 'chunk') {
+            if (msg.type === 'head') {
+                // Upstream status/headers passthrough. Resolves the promise
+                // proxiedFetch is awaiting so it can construct `new Response`
+                // with correct status. Server dispatch contract: always emit
+                // head once, immediately after the upstream fetch resolves.
+                if (!entry.headResolved) {
+                    entry.headResolved = true;
+                    const status = Number.isFinite(msg.status) ? Number(msg.status) : 200;
+                    const headers = (msg.headers && typeof msg.headers === 'object') ? msg.headers : {};
+                    entry.resolveHead({ status, headers });
+                }
+            } else if (msg.type === 'chunk') {
                 if (typeof msg.seq === 'number') entry.lastSeq = msg.seq;
+                // Fallback: if head frame never arrived (dispatch bug / very
+                // old server), resolve with 200 so the caller doesn't hang.
+                if (!entry.headResolved) {
+                    entry.headResolved = true;
+                    entry.resolveHead({ status: 200, headers: {} });
+                }
                 const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0));
                 try { entry.controller.enqueue(bytes); } catch {}
             } else if (msg.type === 'end') {
                 if (typeof msg.seq === 'number') entry.lastSeq = msg.seq;
+                if (!entry.headResolved) {
+                    entry.headResolved = true;
+                    entry.resolveHead({ status: 200, headers: {} });
+                }
                 try { entry.controller.close(); } catch {}
                 pending.delete(msg.request_id);
             } else if (msg.type === 'error') {
-                // Legacy WS error frame — surface as stream error so
-                // `for await response.body` throws. Kept for compatibility;
-                // Luker dispatch itself surfaces upstream 4xx/5xx via
-                // chunk(body bytes) + end (Response body = upstream JSON)
-                // so `openai.js:4371 if (data.error)` etc still fire.
-                try { entry.controller.error(new Error(msg.message || msg.code || 'ws delivery error')); } catch {}
+                // Structured error frame from dispatch (thrown Error path).
+                // If head hasn't resolved, surface as HTTP 502 with the
+                // error message as body so callers can do `await response.text()`
+                // or `await response.json()` for diagnostics without hanging.
+                // If head already resolved (error mid-stream), error the
+                // caller's stream so `for await response.body` throws.
+                if (!entry.headResolved) {
+                    entry.headResolved = true;
+                    const errMsg = msg.message || msg.code || 'ws delivery error';
+                    entry.resolveHead({ status: 502, headers: { 'content-type': 'text/plain' } });
+                    try { entry.controller.enqueue(new TextEncoder().encode(errMsg)); } catch {}
+                    try { entry.controller.close(); } catch {}
+                } else {
+                    try { entry.controller.error(new Error(msg.message || msg.code || 'ws delivery error')); } catch {}
+                }
                 pending.delete(msg.request_id);
-            } else if (msg.type === 'head') {
-                // Ignored: Response object was constructed immediately after
-                // HTTP resp 200 (before any WS frame). Upstream status and
-                // headers cannot be back-filled onto an already-constructed
-                // Response. Kept as no-op so dispatches that still emit head
-                // (harmless legacy) don't error the stream.
             }
         };
         socket.onclose = () => { if (ws === socket) ws = null; if (!closed) scheduleReconnect(); };
@@ -62,12 +86,15 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             if (closed) return;
             try {
                 await connectOnce();
-                // Re-subscribe / resume all pending
+                // Re-subscribe / resume all pending. Always use `resume` with
+                // `from_seq >= 1` so the server replays any events that were
+                // emitted (and lost) during the disconnect window. Bare
+                // `subscribe` is live-only on the server and would miss the
+                // head/first-chunk frame if it landed while the socket was
+                // closing.
                 for (const [requestId, entry] of pending.entries()) {
-                    const fromSeq = entry.lastSeq > 0 ? entry.lastSeq + 1 : 0;
-                    ws.send(JSON.stringify(fromSeq > 0
-                        ? { type: 'resume', request_id: requestId, from_seq: fromSeq }
-                        : { type: 'subscribe', request_id: requestId }));
+                    const fromSeq = entry.lastSeq > 0 ? entry.lastSeq + 1 : 1;
+                    ws.send(JSON.stringify({ type: 'resume', request_id: requestId, from_seq: fromSeq }));
                 }
             } catch {
                 scheduleReconnect();
@@ -81,10 +108,19 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             start(c) { controller = c; },
             cancel() { unsubscribe(requestId); },
         });
+        // headPromise resolves with upstream {status, headers} from the
+        // dispatch's `head` frame. proxiedFetch awaits this before
+        // constructing `new Response` so the caller sees the real upstream
+        // status (401/429/500/etc), not a synthetic 200. See setupHandlers
+        // for fallbacks when head never arrives.
+        let resolveHead;
+        const headPromise = new Promise((res) => { resolveHead = res; });
         pending.set(requestId, {
             controller,
             lastSeq: fromSeq > 0 ? fromSeq - 1 : 0,
             initialHeaders,
+            resolveHead,
+            headResolved: false,
         });
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(fromSeq > 0
@@ -93,6 +129,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         }
         return {
             stream,
+            headPromise,
             unsubscribe: (reason) => unsubscribe(requestId, reason),
         };
     }
@@ -236,7 +273,7 @@ export function installFetchProxy(delivery, options = {}) {
         httpResp.headers.forEach((v, k) => {
             if (k.toLowerCase().startsWith('x-luker-')) initialHeaders[k] = v;
         });
-        const { stream, unsubscribe } = delivery.subscribe(requestId, initialHeaders);
+        const { stream, headPromise, unsubscribe } = delivery.subscribe(requestId, initialHeaders);
         // Wire caller-supplied AbortSignal: on abort, unsubscribe (which cancels
         // the WS-side stream) AND notify the server so it can stop the upstream
         // generation. Server endpoint is best-effort — failure is swallowed.
@@ -256,21 +293,22 @@ export function installFetchProxy(delivery, options = {}) {
                 signal.addEventListener('abort', onAbort, { once: true });
             }
         }
-        // Return Response immediately — caller can begin reading response.body
-        // right away. Upstream 4xx/5xx from the dispatch surface as chunk(body)
-        // + end, so `await response.json()` on the caller yields the upstream
-        // error structure (`{error:{message}}`) and the existing legacy
-        // client-side branches (openai.js:4371 `if (data.error)` etc) fire.
-        // We cannot back-fill Response.status from an out-of-band head frame
-        // because Response is immutable once constructed; the error surfacing
-        // through body content is the correct architecture for this stream
-        // model.
+        // Wait for the dispatch to publish upstream {status, headers} via a
+        // `head` frame, OR fallback to {200, {}} when the first chunk/end/
+        // error arrives without a head. Contract: every dispatch emits head
+        // once, right after ctx.fetch resolves. This ensures response.status
+        // reflects the real upstream status (401/429/500/etc) instead of a
+        // synthetic 200, so existing client-side branches that check
+        // `response.status` or `!response.ok` fire correctly.
+        const head = await headPromise;
+        const mergedHeaders = {
+            ...initialHeaders,
+            'content-type': 'text/event-stream',
+            ...(head.headers || {}),
+        };
         return new Response(stream, {
-            status: 200,
-            headers: {
-                ...initialHeaders,
-                'content-type': 'text/event-stream',
-            },
+            status: head.status || 200,
+            headers: mergedHeaders,
         });
     }
 
