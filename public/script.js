@@ -1970,8 +1970,15 @@ async function firstLoadInit() {
     // tunnels long-running /generate requests through it. The proxy replaces
     // window.fetch so all subsequent generate calls stream chunks over WS.
     // Ticket minting reuses the just-set CSRF token via getRequestHeaders().
+    // NOTE: install the fetch proxy FIRST (before connect resolves), so any
+    // /generate request issued during connect / retry is queued through the
+    // proxy. If connect fails outright we still surface a loud error — the
+    // server requires x-luker-request-id and /generate cannot fall back to
+    // plain HTTP under the new architecture.
     try {
         const delivery = createLukerDelivery();
+        installFetchProxy(delivery);
+        window.__lukerDelivery = delivery;
         await delivery.connect(async () => {
             const resp = await fetch('/api/ws-ticket', {
                 method: 'POST',
@@ -1984,11 +1991,15 @@ async function firstLoadInit() {
             }
             return data.ticket;
         });
-        installFetchProxy(delivery);
-        // Keep a reference for debugging (mirrors the old window.__wsProxy).
-        window.__lukerDelivery = delivery;
     } catch (err) {
-        console.warn('[ws-delivery] Boot failed; generate requests will fall back to plain HTTP:', err?.message || err);
+        console.error('[ws-delivery] Boot failed — /generate requests will hang or 400:', err?.message || err);
+        try {
+            toastr.error(
+                t`WebSocket delivery failed to start. Chat and plugin generation will not work. Check console for details.`,
+                t`Connection error`,
+                { timeOut: 0, extendedTimeOut: 0, preventDuplicates: true },
+            );
+        } catch { /* toastr may not be ready yet */ }
     }
 
     console.debug('[init] csrf-token done, showing loader');

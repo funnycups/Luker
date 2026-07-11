@@ -13,7 +13,8 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         const ticket = await ticketProvider();
         return new Promise((resolve, reject) => {
             const proto = `${TICKET_PROTOCOL_PREFIX}${ticket}`;
-            const socket = new WebSocket(`ws://${location.host}/api/ws-delivery`, [proto]);
+            const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const socket = new WebSocket(`${wsProto}//${location.host}/api/ws-delivery`, [proto]);
             socket.onopen = () => { ws = socket; setupHandlers(socket); resolve(); };
             socket.onerror = () => reject(new Error('ws connection failed'));
             socket.onclose = () => {
