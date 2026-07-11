@@ -19,6 +19,7 @@
 
 import { SECRET_KEYS, readSecret } from '../../../endpoints/secrets.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { normalizeClaudeResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import {
     convertClaudeMessages,
     cachingAtDepthForClaude,
@@ -305,8 +306,18 @@ export async function dispatchClaude(ctx) {
         if (body.stream) {
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
-            const bufOrText = await resp.arrayBuffer();
-            ctx.emit.chunk(new Uint8Array(bufOrText));
+            // Non-streaming Claude returns Anthropic-shaped JSON
+            // (content: [{type,text}], stop_reason, usage: {input_tokens,
+            // output_tokens}). Frontend consumers (openai.js:4515 for main
+            // chat, generate-task.js:807 for iter studio) expect OAI shape
+            // (choices[0].message.content). Legacy sendClaudeRequest called
+            // normalizeClaudeResponseToOAI before response.send; the refactor
+            // dropped it so both non-stream paths returned raw Anthropic body
+            // and consumers saw `undefined` / `no choices` errors.
+            const anthropicJson = await resp.json();
+            const oai = normalizeClaudeResponseToOAI(anthropicJson);
+            const oaiBytes = new TextEncoder().encode(JSON.stringify(oai));
+            ctx.emit.chunk(oaiBytes);
             ctx.emit.end();
         }
     } catch (err) {
