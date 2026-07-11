@@ -78,22 +78,50 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         // inspector extraction are independent.
         const inspectionEvents = [];
         let inspectorSseBuffer = '';
+        // SSE frame parsing 1:1 copied from legacy
+        // forwardStreamingWithGenerationJob (luker-generation.js in the
+        // pre-refactor tree). Do NOT simplify or "modernize" any step:
+        //   - CRLF → LF normalization on every append (nginx-wrapped
+        //     Anthropic and Claude passthrough proxies emit CRLF)
+        //   - `while (indexOf) { slice frame; slice buffer; }` loop instead
+        //     of split.pop (keeps partial frame consumption explicit)
+        //   - .trimEnd() then .slice(5).trimStart() per line (NOT full
+        //     .trim() — that strips payload-internal trailing whitespace
+        //     in Claude thinking/tool_use deltas)
+        //   - separate tail flush after chunks stop (last frame may not
+        //     terminate with \n\n)
         function flushInspectorSseFrames(chunkText) {
             inspectorSseBuffer += chunkText;
-            if (!inspectorSseBuffer.includes('\n\n')) return;
-            const frames = inspectorSseBuffer.split('\n\n');
-            inspectorSseBuffer = frames.pop() || '';
-            for (const frame of frames) {
-                if (!frame) continue;
-                const dataLines = [];
-                for (const line of frame.split('\n')) {
-                    if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+            inspectorSseBuffer = inspectorSseBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            let delimiterIndex = inspectorSseBuffer.indexOf('\n\n');
+            while (delimiterIndex !== -1) {
+                const frame = inspectorSseBuffer.slice(0, delimiterIndex);
+                inspectorSseBuffer = inspectorSseBuffer.slice(delimiterIndex + 2);
+                const dataLines = frame
+                    .split('\n')
+                    .map(line => line.replace(/\s+$/, ''))
+                    .filter(line => line.startsWith('data:'))
+                    .map(line => line.slice(5).replace(/^\s+/, ''));
+                if (dataLines.length > 0) {
+                    const payload = dataLines.join('\n');
+                    if (payload) inspectionEvents.push(payload);
                 }
-                if (dataLines.length === 0) continue;
-                const payload = dataLines.join('\n');
-                if (!payload) continue;
-                inspectionEvents.push(payload);
+                delimiterIndex = inspectorSseBuffer.indexOf('\n\n');
             }
+        }
+        function flushInspectorTailBuffer() {
+            if (!inspectorSseBuffer) return;
+            const tail = inspectorSseBuffer;
+            inspectorSseBuffer = '';
+            if (!tail.trim()) return;
+            const dataLines = tail
+                .split('\n')
+                .map(line => line.replace(/\s+$/, ''))
+                .filter(line => line.startsWith('data:'))
+                .map(line => line.slice(5).replace(/^\s+/, ''));
+            if (dataLines.length === 0) return;
+            const payload = dataLines.join('\n');
+            if (payload) inspectionEvents.push(payload);
         }
         const ctx = createDispatchContext({
             request, task: job, abortController,
@@ -209,6 +237,11 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                 // rewrites status/httpStatus regardless of prior state.
                 if (entry && entry.type === 'chat' && entry.status === 'running') {
                     if (isStream) {
+                        // Grab any final frame that didn't terminate with
+                        // \n\n before extractors run — otherwise
+                        // usage/message_delta frames at the very tail get
+                        // dropped and responseParts + usage come back empty.
+                        flushInspectorTailBuffer();
                         completeInspectionFromStream(request, inspectionEvents, job.text || '');
                     } else {
                         // Best-effort JSON parse of accumulated single-frame

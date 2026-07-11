@@ -272,6 +272,12 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
 
     const source = job?.requestMeta?.api || '';
     job._sseBuffer = String(job._sseBuffer || '') + text;
+    // Normalize CRLF → LF before framing. Some upstream proxies (nginx-
+    // wrapped Anthropic, Claude passthrough proxies) emit CRLF instead of
+    // LF; without normalization the \n\n frame delimiter never matches and
+    // job.text never accumulates. Legacy forwardStreamingWithGenerationJob
+    // did this on every buffer append; the refactor must mirror it exactly.
+    job._sseBuffer = job._sseBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
     // If the buffer looks like SSE (has a frame delimiter, or begins with a
     // `data:` line), parse SSE frames. Last split element may be a partial
@@ -281,10 +287,14 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
         job._sseBuffer = frames.pop() || '';
         for (const frame of frames) {
             if (!frame) continue;
-            const dataLines = [];
-            for (const line of frame.split('\n')) {
-                if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
-            }
+            // .trimEnd() + .slice(5).trimStart() matches legacy parsing
+            // exactly. Full .trim() strips payload-internal trailing
+            // whitespace in Claude thinking/tool_use deltas.
+            const dataLines = frame
+                .split('\n')
+                .map(line => line.replace(/\s+$/, ''))
+                .filter(line => line.startsWith('data:'))
+                .map(line => line.slice(5).replace(/^\s+/, ''));
             if (dataLines.length === 0) continue;
             const payload = dataLines.join('\n');
             if (!payload || payload === '[DONE]') continue;
