@@ -39,10 +39,19 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 try { entry.controller.close(); } catch {}
                 pending.delete(msg.request_id);
             } else if (msg.type === 'error') {
+                // Legacy WS error frame — surface as stream error so
+                // `for await response.body` throws. Kept for compatibility;
+                // Luker dispatch itself surfaces upstream 4xx/5xx via
+                // chunk(body bytes) + end (Response body = upstream JSON)
+                // so `openai.js:4371 if (data.error)` etc still fire.
                 try { entry.controller.error(new Error(msg.message || msg.code || 'ws delivery error')); } catch {}
                 pending.delete(msg.request_id);
             } else if (msg.type === 'head') {
-                // future: allow dispatch to update headers; MVP ignores
+                // Ignored: Response object was constructed immediately after
+                // HTTP resp 200 (before any WS frame). Upstream status and
+                // headers cannot be back-filled onto an already-constructed
+                // Response. Kept as no-op so dispatches that still emit head
+                // (harmless legacy) don't error the stream.
             }
         };
         socket.onclose = () => { if (ws === socket) ws = null; if (!closed) scheduleReconnect(); };
@@ -72,7 +81,11 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             start(c) { controller = c; },
             cancel() { unsubscribe(requestId); },
         });
-        pending.set(requestId, { controller, lastSeq: fromSeq > 0 ? fromSeq - 1 : 0, initialHeaders });
+        pending.set(requestId, {
+            controller,
+            lastSeq: fromSeq > 0 ? fromSeq - 1 : 0,
+            initialHeaders,
+        });
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(fromSeq > 0
                 ? { type: 'resume', request_id: requestId, from_seq: fromSeq }
@@ -243,9 +256,21 @@ export function installFetchProxy(delivery, options = {}) {
                 signal.addEventListener('abort', onAbort, { once: true });
             }
         }
+        // Return Response immediately — caller can begin reading response.body
+        // right away. Upstream 4xx/5xx from the dispatch surface as chunk(body)
+        // + end, so `await response.json()` on the caller yields the upstream
+        // error structure (`{error:{message}}`) and the existing legacy
+        // client-side branches (openai.js:4371 `if (data.error)` etc) fire.
+        // We cannot back-fill Response.status from an out-of-band head frame
+        // because Response is immutable once constructed; the error surfacing
+        // through body content is the correct architecture for this stream
+        // model.
         return new Response(stream, {
-            status: httpResp.status,
-            headers: { ...Object.fromEntries(httpResp.headers.entries()), 'content-type': 'text/event-stream' },
+            status: 200,
+            headers: {
+                ...initialHeaders,
+                'content-type': 'text/event-stream',
+            },
         });
     }
 
