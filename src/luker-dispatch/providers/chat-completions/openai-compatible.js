@@ -599,7 +599,7 @@ export async function dispatchOpenAICompatible(ctx) {
         // Missing API key check (CUSTOM is exempt because it may be a local server).
         if (!apiKey && !body.base_url && !body.reverse_proxy && source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
             const err = new Error('OpenAI API key is missing.');
-            ctx.inspection.fail(err);
+            ctx.inspection.fail(err, 400);
             ctx.emit.error(err);
             return;
         }

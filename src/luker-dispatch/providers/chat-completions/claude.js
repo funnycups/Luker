@@ -308,7 +308,7 @@ export async function dispatchClaude(ctx) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
             const msg = `Claude upstream ${resp.status}: ${errText}`;
-            ctx.inspection.fail(new Error(msg));
+            ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
             // (head already emitted above). Client sees
             // Response.status=<upstream> and Response.body readable so

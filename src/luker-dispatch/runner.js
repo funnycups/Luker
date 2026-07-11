@@ -199,7 +199,15 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             // Gemini / etc.
             try {
                 const entry = findEntry(request);
-                if (entry && entry.type === 'chat') {
+                // Don't overwrite terminal states set by the dispatch itself:
+                //   - failInspection (upstream 4xx/5xx handled in dispatch's
+                //     !resp.ok branch — sets status='error' + real httpStatus)
+                //   - abortInspection (user-cancelled)
+                // Without this guard, upstream Claude 400 requests come back
+                // as status='success' httpStatus=200 in the inspector UI
+                // because runner-side completeInspection unconditionally
+                // rewrites status/httpStatus regardless of prior state.
+                if (entry && entry.type === 'chat' && entry.status === 'running') {
                     if (isStream) {
                         completeInspectionFromStream(request, inspectionEvents, job.text || '');
                     } else {
