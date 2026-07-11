@@ -9,6 +9,7 @@ import {
     attachJobToRequest,
 } from '../endpoints/backends/luker-generation.js';
 import {
+    completeInspection,
     completeInspectionFromStream,
     failInspection,
     findEntry,
@@ -139,10 +140,37 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             // `type: 'image'` entry with its own completeImage lifecycle),
             // and calling completeInspectionFromStream on an image entry
             // would clobber its already-set responseText/parts/usage.
+            //
+            // For NON-streaming chat requests, inspectionEvents contains a
+            // single decoded string = the full upstream JSON body.
+            // completeInspectionFromStream tries to parse it as SSE frames
+            // ("data: {...}\n\n") and yields empty usage/parts. Detect the
+            // non-stream case via body.stream and route to completeInspection
+            // with the parsed payload instead — matches legacy
+            // finalizePayloadWithJob→completeInspection semantics so
+            // inspector UI shows usage + parts for non-stream Claude / OAI /
+            // Gemini / etc.
             try {
                 const entry = findEntry(request);
                 if (entry && entry.type === 'chat') {
-                    completeInspectionFromStream(request, inspectionEvents, job.text || '');
+                    if (isStream) {
+                        completeInspectionFromStream(request, inspectionEvents, job.text || '');
+                    } else {
+                        // Best-effort JSON parse of accumulated single-frame
+                        // body; if it fails (unexpected non-JSON payload)
+                        // fall back to the streaming path so we at least set
+                        // status/duration/httpStatus and don't leave the
+                        // entry perma-pending.
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(inspectionEvents.join(''));
+                        } catch { /* fall through */ }
+                        if (payload && typeof payload === 'object') {
+                            completeInspection(request, payload, payload);
+                        } else {
+                            completeInspectionFromStream(request, inspectionEvents, job.text || '');
+                        }
+                    }
                 }
             } catch { /* inspector best-effort, never fails the request */ }
         } catch (err) {
