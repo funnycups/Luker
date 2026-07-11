@@ -9,6 +9,8 @@ import {
 import {
     startInspection,
     attachInspectionEndpoint,
+    completeInspection,
+    completeInspectionFromStream,
     failInspection,
     startImageInspection,
     completeImageInspection,
@@ -63,6 +65,8 @@ export function createDispatchContext({ request, task, abortController, onEmit }
         inspection: {
             start() { startInspection(request); },
             attach(url, apiKey, wirePayload) { attachInspectionEndpoint(request, url, apiKey, wirePayload); },
+            complete(payload, rawApiResponse) { completeInspection(request, payload, rawApiResponse); },
+            completeFromStream(events, accumulatedText) { completeInspectionFromStream(request, events, accumulatedText); },
             fail(err) { failInspection(request, err); },
             startImage(meta) { startImageInspection(request, meta); },
             completeImage(resultMeta) { completeImageInspection(request, resultMeta); },

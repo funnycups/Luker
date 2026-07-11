@@ -72,4 +72,44 @@ describe('runLukerDispatch', () => {
         expect(job.status).toBe('failed');
         expect(job.error).toContain('upstream 500');
     });
+
+    test('runner completes request-inspector entry on dispatch success (regression: stuck-on-running)', async () => {
+        const { getBufferForHandle } = await import('../../src/request-inspector.js');
+        const req = fakeRequest({ requestId: 'inspect-success-1', body: { chat_completion_source: 'claude', model: 'claude-3', stream: true } });
+        const res = fakeResponse();
+        // Dispatch simulates calling ctx.inspection.start() at entry (as real
+        // providers do) then emitting the reply.
+        const select = () => async (ctx) => {
+            ctx.inspection.start();
+            ctx.emit.chunk(new TextEncoder().encode('hello'));
+            ctx.emit.end();
+        };
+        await runLukerDispatch(req, res, { endpoint: 'test', select });
+        await new Promise(r => setTimeout(r, 20));
+        const buf = getBufferForHandle('alice');
+        const entry = buf.find(e => e.id === req.__inspectorId);
+        expect(entry).toBeDefined();
+        // Regression: inspector previously stuck on 'running' because no
+        // dispatch called completeInspection. Runner now covers it.
+        expect(entry.status).toBe('success');
+        expect(entry.httpStatus).toBe(200);
+        expect(typeof entry.durationMs).toBe('number');
+    });
+
+    test('runner fails request-inspector entry on dispatch throw', async () => {
+        const { getBufferForHandle } = await import('../../src/request-inspector.js');
+        const req = fakeRequest({ requestId: 'inspect-fail-1', body: { chat_completion_source: 'claude', model: 'claude-3', stream: true } });
+        const res = fakeResponse();
+        const select = () => async (ctx) => {
+            ctx.inspection.start();
+            throw new Error('upstream 401');
+        };
+        await runLukerDispatch(req, res, { endpoint: 'test', select });
+        await new Promise(r => setTimeout(r, 20));
+        const buf = getBufferForHandle('alice');
+        const entry = buf.find(e => e.id === req.__inspectorId);
+        expect(entry).toBeDefined();
+        expect(entry.status).toBe('error');
+        expect(entry.error).toContain('upstream 401');
+    });
 });
