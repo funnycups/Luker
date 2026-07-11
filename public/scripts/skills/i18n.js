@@ -190,6 +190,17 @@ const TRANSLATIONS = {
         'Add...': '添加……',
         'Add': '添加',
         'Remove': '移除',
+
+        // Preset / orch-preset export: bundle-skills confirmation + toasts.
+        // Wired from `public/scripts/skills/embed-export-hook.js` via the
+        // orchestrator plugin's `t: i18n` handoff.
+        'Include': '包含',
+        'Include preset-scope skills in this export?': '导出时一并附带此预设作用域的 Skills 吗？',
+        'Include all skills active for this orchestrator preset in the export?': '导出时一并附带此编排预设当前激活的所有 Skills 吗？',
+        'Bundled skills will install into this preset\u2019s scope on import.': '导入时，附带的 Skills 会安装到该预设的作用域下。',
+        'Bundled ${0} skill(s) with this preset.': '已随预设附带 ${0} 个 Skill。',
+        'Failed to bundle skills with preset: ${0}': '附带 Skill 到预设失败：${0}',
+        'No skills could be bundled with this preset.': '没有可随预设附带的 Skill。',
     },
     'zh-tw': {
         'Skills': 'Skills',
@@ -350,6 +361,15 @@ const TRANSLATIONS = {
         'Add...': '新增……',
         'Add': '新增',
         'Remove': '移除',
+
+        // Preset / orch-preset export: bundle-skills confirmation + toasts.
+        'Include': '包含',
+        'Include preset-scope skills in this export?': '匯出時一併附帶此預設作用域的 Skills 嗎？',
+        'Include all skills active for this orchestrator preset in the export?': '匯出時一併附帶此編排預設目前啟用的所有 Skills 嗎？',
+        'Bundled skills will install into this preset\u2019s scope on import.': '匯入時，附帶的 Skills 會安裝到該預設的作用域下。',
+        'Bundled ${0} skill(s) with this preset.': '已隨預設附帶 ${0} 個 Skill。',
+        'Failed to bundle skills with preset: ${0}': '附帶 Skill 到預設失敗：${0}',
+        'No skills could be bundled with this preset.': '沒有可隨預設附帶的 Skill。',
     },
 };
 
