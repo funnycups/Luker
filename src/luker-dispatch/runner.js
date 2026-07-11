@@ -4,11 +4,14 @@ import {
     createGenerationJob,
     appendGenerationEvent,
     accumulateChunkTextIntoJob,
+    completeGenerationJobFromText,
     failGenerationJob,
+    attachJobToRequest,
 } from '../endpoints/backends/luker-generation.js';
 import {
     completeInspectionFromStream,
     failInspection,
+    findEntry,
 } from '../request-inspector.js';
 import { createDispatchContext } from './context.js';
 
@@ -40,6 +43,12 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         response.status(500).json({ error: 'failed to create task' });
         return;
     }
+    // Attach the job to the request so any downstream middleware / router
+    // that inspects `getJobFromRequest(request)` sees the active job. The
+    // legacy handlers all did this immediately after createGenerationJob;
+    // the refactor forgot to carry it over, leaving getJobFromRequest
+    // permanently returning null.
+    attachJobToRequest(request, job);
     const abortController = new AbortController();
     job.abortController = abortController;
 
@@ -90,18 +99,38 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             await dispatchFn(ctx);
             // 若 dispatch 没显式 emit end,兜底
             ctx.emit.end();
-            // Runner-side inspector complete. Safe no-op when startInspection
-            // never fired (SD image handlers, non-chat dispatch). This is why
-            // 请求检查器 previously stuck at "running" — no dispatch called
-            // completeInspection; the runner now covers it.
+            // Advance the generation job to `awaiting_ack` so:
+            //   - GET /jobs/status returns a terminal state (SSE consumers exit)
+            //   - the auto-persist grace timer arms (client-ACK-race)
+            //   - acknowledgeGenerationJobsForRequest accepts the ack
+            // Legacy handlers did this via `finalizePayloadWithJob` /
+            // `forwardStreamingWithGenerationJob`; the refactor missed it,
+            // leaving every job stuck on `running` until TTL cleared it.
+            //
+            // Safe no-op when the dispatch already advanced the job (e.g.
+            // via a future ctx API), because status guards there re-check.
             try {
-                completeInspectionFromStream(request, inspectionEvents, job.text || '');
+                await completeGenerationJobFromText(request, job, job.text || '', request.body?.model || '');
+            } catch { /* generation-job best-effort; never crash background */ }
+            // Runner-side inspector complete. Only advance `type: 'chat'`
+            // entries — SD dispatches use `startImageInspection` (creates a
+            // `type: 'image'` entry with its own completeImage lifecycle),
+            // and calling completeInspectionFromStream on an image entry
+            // would clobber its already-set responseText/parts/usage.
+            try {
+                const entry = findEntry(request);
+                if (entry && entry.type === 'chat') {
+                    completeInspectionFromStream(request, inspectionEvents, job.text || '');
+                }
             } catch { /* inspector best-effort, never fails the request */ }
         } catch (err) {
             ctx.emit.error(err);
             failGenerationJob(job, err.message || String(err));
             try {
-                failInspection(request, err?.message || String(err));
+                const entry = findEntry(request);
+                if (entry && entry.type === 'chat') {
+                    failInspection(request, err?.message || String(err));
+                }
             } catch { /* inspector best-effort */ }
         }
     });

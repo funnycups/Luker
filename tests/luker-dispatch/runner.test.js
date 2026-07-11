@@ -112,4 +112,40 @@ describe('runLukerDispatch', () => {
         expect(entry.status).toBe('error');
         expect(entry.error).toContain('upstream 401');
     });
+
+    test('runner advances job to awaiting_ack after dispatch success (regression: stuck-on-running)', async () => {
+        const { getTaskByRequestId } = await import('../../src/endpoints/backends/luker-generation.js');
+        const req = fakeRequest({ requestId: 'complete-job-1', body: { model: 'test-model' } });
+        const res = fakeResponse();
+        const select = () => async (ctx) => {
+            ctx.emit.chunk(new TextEncoder().encode('hi'));
+            ctx.emit.end();
+        };
+        await runLukerDispatch(req, res, { endpoint: 'test', select });
+        await new Promise(r => setTimeout(r, 30));
+        const job = getTaskByRequestId('complete-job-1', 'alice');
+        expect(job).not.toBeNull();
+        // Was 'running' pre-fix — auto-persist grace timer never armed,
+        // /jobs/status never reached terminal state, client SSE hung.
+        expect(job.status).toBe('awaiting_ack');
+        expect(job.modelName).toBe('test-model');
+        // Cancel the persistence timer so this test doesn't leak a setTimeout.
+        if (job.persistenceTimer) { clearTimeout(job.persistenceTimer); job.persistenceTimer = null; }
+    });
+
+    test('runner attaches job to request so getJobFromRequest works downstream', async () => {
+        const { getJobFromRequest } = await import('../../src/endpoints/backends/luker-generation.js');
+        const req = fakeRequest({ requestId: 'attach-job-1' });
+        const res = fakeResponse();
+        const select = () => async (ctx) => { ctx.emit.end(); };
+        await runLukerDispatch(req, res, { endpoint: 'test', select });
+        // Should be attached even before the setImmediate background fires
+        // — attachJobToRequest is on the sync path before response.json.
+        const attached = getJobFromRequest(req);
+        expect(attached).not.toBeNull();
+        expect(attached.id).toBe('attach-job-1');
+        await new Promise(r => setTimeout(r, 20));
+        // Cleanup timer.
+        if (attached.persistenceTimer) { clearTimeout(attached.persistenceTimer); attached.persistenceTimer = null; }
+    });
 });

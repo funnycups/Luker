@@ -184,7 +184,7 @@ export function startInspection(request) {
  * @param {import('express').Request} request
  * @returns {object|null}
  */
-function findEntry(request) {
+export function findEntry(request) {
  const handle = String(request?.user?.profile?.handle || '');
  const id = request?.__inspectorId;
  if (!handle || !id) return null;

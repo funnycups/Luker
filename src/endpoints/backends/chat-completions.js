@@ -11,6 +11,7 @@ import {
 } from '../../constants.js';
 import {
     color,
+    flattenSchema,
     getConfigValue,
     mergeObjectWithYaml,
     normalizeOpenAIBaseUrl,
@@ -1151,10 +1152,30 @@ export function selectChatCompletionDispatch(body) {
     return fn;
 }
 
-router.post('/generate', (req, res) => runLukerDispatch(req, res, {
-    endpoint: 'chat-completions',
-    select: (body) => selectChatCompletionDispatch(body),
-}));
+router.post('/generate', (req, res) => {
+    // Handler-level preamble (applies before any provider dispatch runs).
+    // These mutations are provider-agnostic and were run once by the
+    // legacy handler before the switch statement. The refactor to
+    // per-provider dispatch functions missed re-adding them, so user's
+    // `custom_prompt_post_processing` selection and `json_schema` flatten
+    // were silently ignored for every source.
+    const body = req.body || {};
+    const postProcessingType = body.custom_prompt_post_processing;
+    if (Array.isArray(body.messages) && postProcessingType) {
+        console.info('Applying custom prompt post-processing of type', postProcessingType);
+        body.messages = postProcessPrompt(
+            body.messages,
+            postProcessingType,
+            getPromptNames(req));
+    }
+    if (body.json_schema?.value) {
+        body.json_schema.value = flattenSchema(body.json_schema.value, body.chat_completion_source);
+    }
+    return runLukerDispatch(req, res, {
+        endpoint: 'chat-completions',
+        select: (b) => selectChatCompletionDispatch(b),
+    });
+});
 
 const multimodalModels = express.Router();
 
