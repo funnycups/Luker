@@ -112,7 +112,7 @@ export async function dispatchXai(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
-            const msg = `xAI upstream ${resp.status}: ${errText.slice(0, 500)}`;
+            const msg = `xAI upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             ctx.emit.error(new Error(msg));
             return;

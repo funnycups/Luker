@@ -383,7 +383,7 @@ export async function dispatchMakerSuite(ctx) {
                 let errorText = '';
                 try { errorText = await generateResponse.text(); } catch { /* body already consumed */ }
                 console.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
-                const msg = `${apiName} upstream ${generateResponse.status}: ${errorText.slice(0, 500)}`;
+                const msg = `${apiName} upstream ${generateResponse.status}: ${errorText}`;
                 ctx.inspection.fail(new Error(msg), generateResponse?.status ?? 502);
                 ctx.emit.error(new Error(msg));
                 return;

@@ -419,7 +419,7 @@ export async function dispatchTextCompletions(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
-            const msg = `text-completions upstream ${resp.status}: ${errText.slice(0, 500)}`;
+            const msg = `text-completions upstream ${resp.status}: ${errText}`;
             const err = new Error(msg);
             ctx.inspection.fail(err, resp?.status ?? 502);
             ctx.emit.error(err);
