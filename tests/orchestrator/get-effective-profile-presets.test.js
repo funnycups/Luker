@@ -137,6 +137,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/ui-templa
     buildOrchestrationEditorPopupPanelHtml: () => '',
     buildOrchestratorSettingsHtml: () => '',
     injectWorkspaceIntoTabHost: () => {},
+    refreshPresetSelectorBars: () => {},
     renderInheritOrOverridePanel: () => '',
     renderSkillChipsPlaceholder: () => '',
 }));

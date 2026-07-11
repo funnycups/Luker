@@ -1220,6 +1220,48 @@ export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, 
 }
 
 /**
+ * Rebuild the four `.luker_orch_preset_bar` widgets inside the General
+ * tab (one per mode) so the `<option>` list, selected `activeId`, and
+ * scope-dependent action-button `data-scope` attributes reflect current
+ * `settings.presetLibraries[mode]` + `uiState.*ActivePresetIds`.
+ *
+ * `buildGeneralTabHtml` renders the bars once at drawer mount time
+ * inside a stable `[data-luker-preset-bar-host="<mode>"]` anchor;
+ * `renderDynamicPanels` calls this helper on every re-render so preset
+ * CRUD (new/duplicate/rename/delete/import) and scope changes show up
+ * without needing to rebuild the whole General tab (which would blow
+ * away input focus, scroll position, and any in-progress unsaved
+ * textarea contents).
+ *
+ * The popup uses `buildOrchestrationEditorPopupPanelHtml` for a full
+ * re-mount so it doesn't need a separate re-render path — see
+ * `refreshOrchestrationEditorPopup` in main.js.
+ *
+ * @param {*} root - jQuery-wrapped drawer root (`#orchestrator_settings`)
+ * @param {object} deps - same deps object passed to buildGeneralTabHtml
+ * @param {object} context - SillyTavern context
+ * @param {object} settings - extensionSettings.orchestrator
+ */
+export function refreshPresetSelectorBars(root, deps, context, settings) {
+    if (!root || typeof root.find !== 'function') return;
+    const getDisplayedScope = deps?.getDisplayedScopeForMode;
+    if (typeof getDisplayedScope !== 'function') return;
+    // Force a fresh `uiState.{global,character}ActivePresetIds` sync
+    // before rebuilding the bars — `presetBarPropsFor` reads those
+    // caches to pick the `selected` <option>, and mutations that
+    // bypass `reloadOrchestratorEditor` (save-character, iter-studio
+    // apply-to-*, etc.) leave the cache stale otherwise.
+    const initFn = deps?.initializeUiState;
+    if (typeof initFn === 'function') initFn(context);
+    for (const mode of ['spec', 'agenda', 'loop', 'director']) {
+        const scope = String(getDisplayedScope(context, settings, mode) || 'global');
+        const host = root.find(`[data-luker-preset-bar-host="${mode}"]`);
+        if (!host.length) continue;
+        host.html(renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, scope)));
+    }
+}
+
+/**
  * Build the topbar shown above the tabs in the drawer (and mirrored by
  * the popup — Task 10). Merges the four previous per-mode board
  * variants (`#luker_orch_{spec,agenda,loop,director}_board`) into one
@@ -1420,11 +1462,14 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         </div>`;
 
     // Preset selector bar — one wrapper per mode, mode-visibility gated
-    // by `data-orch-mode`. Single mode has no preset library.
+    // by `data-orch-mode`. Single mode has no preset library. The stable
+    // `data-luker-preset-bar-host="<mode>"` anchor lets the drawer's
+    // re-render funnel (`refreshPresetSelectorBars`) swap in fresh
+    // `<option>` lists after preset CRUD without touching anything else.
     const presetBarModes = ['spec', 'agenda', 'loop', 'director'];
     const presetBars = presetBarModes.map(mode => {
         const modeVisible = currentMode === mode ? '' : ' style="display:none"';
-        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}>${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, safeScope))}</div>`;
+        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}><div data-luker-preset-bar-host="${escapeHtml(mode)}">${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, safeScope))}</div></div>`;
     }).join('');
 
     // Actions bar — profile-management actions. Single mode has no
@@ -1446,7 +1491,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
     }).join('');
 
     return `<div class="luker_orch_general_tab">
-        <div class="luker_orch_card_binding_hint">${escapeHtml(i18n('Hint: agents resolve their prompt/API preset from the current card\'s embedded set first. Save To Character Override will ask whether to embed referenced presets that aren\'t yet on the card.'))}</div>
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('Current profile'))}</legend>
             ${specBoard}${agendaBoard}${loopBoard}${directorBoard}${singleBlock}

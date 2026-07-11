@@ -14,6 +14,7 @@ import {
     buildOrchestrationEditorPopupPanelHtml,
     buildOrchestratorSettingsHtml,
     injectWorkspaceIntoTabHost,
+    refreshPresetSelectorBars,
     renderInheritOrOverridePanel,
     renderSkillChipsPlaceholder,
 } from './ui-templates.js';
@@ -1651,6 +1652,7 @@ function getOrchestratorUiTemplateDeps() {
         getDirectorEditorByScope,
         getDirectorProfileFromSettings,
         getDisplayedScope,
+        getDisplayedScopeForMode,
         getEditorByScope,
         getExecutionMode,
         getLoopEditorByScope,
@@ -1661,6 +1663,7 @@ function getOrchestratorUiTemplateDeps() {
         hasCharacterLoopOverride,
         hasCharacterSpecOverride,
         i18n,
+        initializeUiState,
         renderConnectionProfileOptions,
         renderOpenAIPresetOptions,
         renderPresetBoard,
@@ -1874,6 +1877,14 @@ function renderDynamicPanels(root, context) {
     if (drawerRootEl instanceof HTMLElement) {
         void hydrateSkillChips(drawerRootEl, context, settings);
     }
+    // Refresh the four preset selector bars in the General tab so preset
+    // CRUD (new/duplicate/rename/delete/import) and displayed-scope
+    // switches show up in the drawer's dropdown immediately. Without this
+    // targeted refresh, the General tab HTML is only ever built once at
+    // drawer mount time (via `buildOrchestratorSettingsHtml`) and stale
+    // `<option>` lists linger — see the "click a deleted preset shows
+    // another preset's content" regression this fix addresses.
+    refreshPresetSelectorBars(root, getOrchestratorUiTemplateDeps(), context, settings);
     refreshOrchestrationEditorPopup(context, settings);
 }
 
@@ -6755,15 +6766,33 @@ function bindUi() {
         if (!mode || !scope || !presetId) return;
         const ctx = getContext();
         const avatar = String(getCurrentAvatar(ctx) || '').trim();
-        setActivePresetId(extension_settings[MODULE_NAME], mode, scope, presetId,
+        // `setActivePresetId` silently returns false when the requested
+        // preset id doesn't exist in the scope's library (typical cause:
+        // a stale dropdown option still visible after a delete, before
+        // the selector-bar refresh has landed). Bail early with a
+        // toast + drawer re-render so the user gets a clear signal and
+        // the stale <option> is replaced instead of quietly writing a
+        // stale activeIds map back to disk.
+        const applied = setActivePresetId(extension_settings[MODULE_NAME], mode, scope, presetId,
             { context: ctx, avatar });
+        if (!applied) {
+            notifyError(i18n('Preset no longer exists — refreshing the list.'));
+            reloadOrchestratorEditor(root, context);
+            return;
+        }
         if (scope === 'character') {
             const idx = getCharacterIndexByAvatar(ctx, avatar);
             if (idx >= 0) {
                 // setActivePresetId already mutated the character's
                 // ext.activePresetIds in place; persist the whole ext as-is.
-                const prev = getCharacterExtensionDataByAvatar(ctx, avatar) || {};
-                await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
+                // Guard: if the card has no orchestrator ext yet
+                // `getCharacterExtensionDataByAvatar` returns a fresh {}
+                // that is NOT wired into the character — writing it back
+                // would clobber the very ext we just tried to mutate.
+                const prev = getCharacterExtensionDataByAvatar(ctx, avatar);
+                if (prev && typeof prev === 'object' && Object.keys(prev).length > 0) {
+                    await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
+                }
             }
         } else {
             await saveSettings();
