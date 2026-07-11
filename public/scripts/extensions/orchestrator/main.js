@@ -7567,11 +7567,19 @@ function bindUi() {
     // tools. "Override" copies the current default snapshot so the user
     // starts from what they were inheriting; "reset" sets the field to
     // null so cascade-resolver falls back to the next layer.
+    // Director tool override/reset handlers refresh BOTH surfaces: the
+    // popup (when open, via `refreshOrchestrationEditorPopup` early-returns
+    // when no popup is mounted) AND the drawer (via `renderDynamicPanels`
+    // on the drawer `root`). The selectors match both `#${UI_BLOCK_ID}`
+    // (drawer) and `.luker_orch_editor_popup` (popup), so a drawer-only
+    // click must trigger a drawer redraw — otherwise the button appears
+    // to do nothing even though `editor.*.tools` was mutated in memory.
     jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-default-tools-enable-all"], .luker_orch_editor_popup [data-luker-action="director-default-tools-enable-all"]`, function () {
         const { editor } = getDirectorEditorForElement(this);
         if (!editor) return;
         editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: true, forceFinalize: false });
         editor.tools.finalize = false;
+        renderDynamicPanels(root, context);
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
@@ -7580,6 +7588,7 @@ function bindUi() {
         if (!editor) return;
         editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: false, forceFinalize: false });
         editor.tools.finalize = false;
+        renderDynamicPanels(root, context);
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
@@ -7596,6 +7605,7 @@ function bindUi() {
             : {};
         editor.mainAgent.tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
         editor.mainAgent.tools.finalize = false;
+        renderDynamicPanels(root, context);
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
@@ -7603,6 +7613,7 @@ function bindUi() {
         const { editor } = getDirectorEditorForElement(this);
         if (!editor?.mainAgent) return;
         editor.mainAgent.tools = null;
+        renderDynamicPanels(root, context);
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
@@ -7618,6 +7629,7 @@ function bindUi() {
             : {};
         subAgents[index].tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
         subAgents[index].tools.finalize = false;
+        renderDynamicPanels(root, context);
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
@@ -7629,6 +7641,7 @@ function bindUi() {
         const subAgents = editor.subAgents;
         if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
         subAgents[index].tools = null;
+        renderDynamicPanels(root, context);
         refreshOrchestrationEditorPopup(getContext(), getSettings());
     });
 
