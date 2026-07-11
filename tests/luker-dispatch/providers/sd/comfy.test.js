@@ -201,4 +201,30 @@ describe('dispatchSdComfy', () => {
         expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(1);
         expect(ctx.inspection.failImage).toHaveBeenCalled();
     });
+
+    test('all upstream ctx.fetch calls (prompt/history/view) receive ctx.signal', async () => {
+        FakeWebSocket.onNew = (ws) => {
+            ws.emit('open');
+            setTimeout(() => {
+                ws.emit('message', Buffer.from(JSON.stringify({
+                    type: 'executing',
+                    data: { prompt_id: PROMPT_ID, node: null },
+                })));
+            }, 20);
+        };
+        const ctx = fakeCtx({ onFetch: buildStandardFetch() });
+        await dispatchSdComfy(ctx);
+
+        // Fire-and-forget /interrupt is not expected here (no abort fired),
+        // so ctx.fetch calls should be: /prompt, /history/<id>, /view.
+        const relevantCalls = ctx.fetch.mock.calls.filter(([u]) => {
+            const s = String(u);
+            return s.endsWith('/prompt') || s.includes('/history/') || s.includes('/view');
+        });
+        expect(relevantCalls.length).toBe(3);
+        for (const [, init] of relevantCalls) {
+            expect(init).toBeDefined();
+            expect(init.signal).toBe(ctx.signal);
+        }
+    });
 });

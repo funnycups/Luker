@@ -183,6 +183,7 @@ export async function dispatchSdComfy(ctx) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(promptBody),
+            signal: ctx.signal,
         });
 
         // Architectural contract: every dispatch emits a single head frame
@@ -229,7 +230,7 @@ export async function dispatchSdComfy(ctx) {
         settled = true;
 
         const historyUrl = new URL(urlJoin(baseUrl, `/history/${promptId}`));
-        const historyResult = await ctx.fetch(historyUrl);
+        const historyResult = await ctx.fetch(historyUrl, { signal: ctx.signal });
         if (!historyResult.ok) {
             throw new Error('ComfyUI returned an error fetching history.');
         }
@@ -257,7 +258,7 @@ export async function dispatchSdComfy(ctx) {
         }
         const imgUrl = new URL(urlJoin(baseUrl, '/view'));
         imgUrl.search = `?filename=${imgInfo.filename}&subfolder=${imgInfo.subfolder}&type=${imgInfo.type}`;
-        const imgResponse = await ctx.fetch(imgUrl);
+        const imgResponse = await ctx.fetch(imgUrl, { signal: ctx.signal });
         if (!imgResponse.ok) {
             throw new Error('ComfyUI returned an error.');
         }
