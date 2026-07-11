@@ -1977,7 +1977,9 @@ async function firstLoadInit() {
     // plain HTTP under the new architecture.
     try {
         const delivery = createLukerDelivery();
-        installFetchProxy(delivery);
+        installFetchProxy(delivery, {
+            getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
+        });
         window.__lukerDelivery = delivery;
         await delivery.connect(async () => {
             const resp = await fetch('/api/ws-ticket', {

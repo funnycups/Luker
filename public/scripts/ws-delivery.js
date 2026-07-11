@@ -161,6 +161,13 @@ function defaultShouldProxy(url) {
 export function installFetchProxy(delivery, options = {}) {
     const shouldProxy = options.shouldProxy || defaultShouldProxy;
     const originalFetch = options.originalFetch || window.fetch.bind(window);
+    // Optional headers provider so out-of-band POSTs (like /abort) carry the
+    // same CSRF/session headers the SPA uses for normal requests. Without
+    // this, `/api/generation/:id/abort` fails CSRF middleware with 403 and
+    // the server never learns to stop upstream generation.
+    const getExtraHeaders = typeof options.getExtraHeaders === 'function'
+        ? options.getExtraHeaders
+        : () => ({});
 
     // Fire-and-forget POST to notify the server that a proxied generation
     // was aborted client-side. The server endpoint may not exist yet; any
@@ -169,7 +176,10 @@ export function installFetchProxy(delivery, options = {}) {
         try {
             const p = originalFetch(`/api/generation/${encodeURIComponent(requestId)}/abort`, {
                 method: 'POST',
-                headers: { 'x-luker-request-id': requestId },
+                headers: {
+                    ...getExtraHeaders(),
+                    'x-luker-request-id': requestId,
+                },
             });
             if (p && typeof p.catch === 'function') p.catch(() => {});
         } catch {
