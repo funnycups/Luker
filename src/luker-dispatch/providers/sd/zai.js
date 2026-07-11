@@ -74,6 +74,15 @@ export async function dispatchSdZai(ctx) {
             signal: ctx.signal,
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        // Only the initial generate fetch emits head; the CDN
+        // image-download retries below are internal.
+        ctx.emit.head({ status: generateResponse.status, headers: {} });
+
         if (!generateResponse.ok) {
             const text = await generateResponse.text().catch(() => '');
             console.warn('Z.AI returned an error.', text);

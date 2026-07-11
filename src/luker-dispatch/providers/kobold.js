@@ -167,6 +167,19 @@ export async function dispatchKobold(ctx) {
                 timeout: 0,
             });
 
+            // Architectural contract: every dispatch emits a single head
+            // frame immediately after the upstream fetch resolves,
+            // regardless of status. The WebSocket delivery layer
+            // (ws-delivery) uses head to release the client-side
+            // `await headPromise`; without it the client hangs on
+            // subscribe races with setImmediate dispatch.
+            //
+            // Retry note: fetch() rejections re-enter the loop before
+            // this line; only resolved responses (both ok and !ok) reach
+            // head emit, so head fires exactly once per completed
+            // request.
+            ctx.emit.head({ status: resp.status, headers: {} });
+
             if (body.streaming) {
                 // Streaming: forward raw SSE bytes verbatim. Do not gate on
                 // resp.ok — legacy handler pipes streaming responses as-is

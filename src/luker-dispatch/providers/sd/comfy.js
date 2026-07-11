@@ -184,6 +184,17 @@ export async function dispatchSdComfy(ctx) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(promptBody),
         });
+
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        // Only the initial /prompt fetch emits head; the /history and
+        // /view image-download fetches, the /interrupt fire-and-forget,
+        // and the internal ComfyUI WebSocket are all internal.
+        ctx.emit.head({ status: promptResult.status, headers: {} });
+
         if (!promptResult.ok) {
             const text = await promptResult.text();
             const err = new Error('ComfyUI returned an error.');

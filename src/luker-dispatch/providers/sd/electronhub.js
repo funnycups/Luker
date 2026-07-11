@@ -61,6 +61,13 @@ export async function dispatchSdElectronHub(ctx) {
             signal: ctx.signal,
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        ctx.emit.head({ status: result.status, headers: {} });
+
         if (!result.ok) {
             const errorText = await result.text().catch(() => '');
             console.warn('Electron Hub returned an error.', result.status, result.statusText, errorText);

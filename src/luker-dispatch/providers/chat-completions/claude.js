@@ -294,17 +294,25 @@ export async function dispatchClaude(ctx) {
             },
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        ctx.emit.head({ status: resp.status, headers: {} });
+
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
             const msg = `Claude upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg));
-            // Surface upstream status + body to the client via head + chunk + end
-            // instead of emit.error. Client sees Response.status=<upstream> and
-            // Response.body readable so callers can do `await response.text()` or
-            // `await response.json()` for structured error inspection (matches
-            // legacy handler shape which returned `.status(4xx).send({error:{...}})`).
-            ctx.emit.head({ status: resp.status, headers: {} });
+            // Surface upstream status + body to the client via chunk + end
+            // (head already emitted above). Client sees
+            // Response.status=<upstream> and Response.body readable so
+            // callers can do `await response.text()` or
+            // `await response.json()` for structured error inspection
+            // (matches legacy handler shape which returned
+            // `.status(4xx).send({error:{...}})`).
             if (errText) {
                 ctx.emit.chunk(new TextEncoder().encode(errText));
             }

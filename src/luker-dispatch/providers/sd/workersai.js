@@ -97,6 +97,14 @@ export async function dispatchSdWorkersai(ctx) {
 
         ctx.inspection.attach(apiUrl, key);
         const result = await ctx.fetch(apiUrl, apiRequest);
+
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        ctx.emit.head({ status: result.status, headers: {} });
+
         if (!result.ok) {
             const text = await result.text().catch(() => '');
             console.warn('Cloudflare Workers AI returned an error.', result.status, result.statusText, text);

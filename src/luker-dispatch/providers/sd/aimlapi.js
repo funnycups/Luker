@@ -66,6 +66,13 @@ export async function dispatchSdAimlapi(ctx) {
             signal: ctx.signal,
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        ctx.emit.head({ status: apiRes.status, headers: {} });
+
         if (!apiRes.ok) {
             const errText = await apiRes.text().catch(() => '');
             const err = new Error('AI/ML API returned an error');

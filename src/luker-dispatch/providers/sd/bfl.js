@@ -112,6 +112,15 @@ export async function dispatchSdBfl(ctx) {
             signal: ctx.signal,
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        // Only the initial task-submit fetch emits head; the subsequent
+        // status-poll and image-download fetches are internal.
+        ctx.emit.head({ status: result.status, headers: {} });
+
         if (!result.ok) {
             console.warn('BFL returned an error.');
             const err = new Error('BFL returned an error');

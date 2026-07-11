@@ -84,6 +84,16 @@ export async function dispatchSdComfyRunPod(ctx) {
             body: runpodPrompt,
             signal: ctx.signal,
         });
+
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        // Only the initial /run job-submit fetch emits head; the
+        // /status poll and /cancel fire-and-forget are internal.
+        ctx.emit.head({ status: promptResult.status, headers: {} });
+
         if (!promptResult.ok) {
             const text = await promptResult.text().catch(() => '');
             const err = new Error('ComfyUI returned an error.');

@@ -376,6 +376,13 @@ export async function dispatchMakerSuite(ctx) {
             signal: ctx.signal,
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        ctx.emit.head({ status: generateResponse.status, headers: {} });
+
         if (stream) {
             await pipeResponseBodyToEmit(generateResponse, ctx);
         } else {
@@ -385,12 +392,13 @@ export async function dispatchMakerSuite(ctx) {
                 console.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const msg = `${apiName} upstream ${generateResponse.status}: ${errorText}`;
                 ctx.inspection.fail(new Error(msg), generateResponse?.status ?? 502);
-                // Surface upstream status + body to the client via head + chunk + end
-                // instead of emit.error. Client sees Response.status=<upstream> and
-                // Response.body readable so callers can do `await response.text()` or
-                // `await response.json()` for structured error inspection (matches
-                // legacy handler shape which returned `.status(4xx).send({error:{...}})`).
-                ctx.emit.head({ status: generateResponse.status, headers: {} });
+                // Surface upstream status + body to the client via chunk + end
+                // (head already emitted above). Client sees
+                // Response.status=<upstream> and Response.body readable so
+                // callers can do `await response.text()` or
+                // `await response.json()` for structured error inspection
+                // (matches legacy handler shape which returned
+                // `.status(4xx).send({error:{...}})`).
                 if (errorText) {
                     ctx.emit.chunk(new TextEncoder().encode(errorText));
                 }

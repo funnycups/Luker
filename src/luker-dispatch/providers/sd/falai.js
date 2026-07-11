@@ -73,6 +73,16 @@ export async function dispatchSdFalai(ctx) {
             signal: ctx.signal,
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        // Only the initial queue-submit fetch emits head; the status
+        // poll, response-URL fetch, and CDN image-download below are
+        // internal.
+        ctx.emit.head({ status: result.status, headers: {} });
+
         if (!result.ok) {
             console.warn('FAL.AI returned an error.');
             const err = new Error('FAL.AI returned an error');

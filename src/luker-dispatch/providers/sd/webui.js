@@ -99,6 +99,16 @@ export async function dispatchSdWebui(ctx) {
             signal: ctx.signal,
         });
 
+        // Architectural contract: every dispatch emits a single head frame
+        // immediately after the upstream fetch resolves, regardless of
+        // status. The WebSocket delivery layer (ws-delivery) uses head to
+        // release the client-side `await headPromise`; without it the
+        // client hangs on subscribe races with setImmediate dispatch.
+        // Only the main txt2img fetch emits head; the Forge-detect
+        // options probe and the fire-and-forget /interrupt call are
+        // internal.
+        ctx.emit.head({ status: result.status, headers: {} });
+
         if (!result.ok) {
             const text = await result.text().catch(() => '');
             const err = new Error('SD WebUI returned an error.');
