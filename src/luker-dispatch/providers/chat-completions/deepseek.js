@@ -38,6 +38,7 @@ export async function dispatchDeepSeek(ctx) {
     const apiKey = bodyApiKey || ctx.secrets.read(SECRET_KEYS.DEEPSEEK) || '';
 
     if (!apiKey && !body.base_url && !body.reverse_proxy) {
+        console.warn('DeepSeek API key is missing.');
         ctx.emit.error(new Error('DeepSeek API key is missing'));
         return;
     }
@@ -126,6 +127,8 @@ export async function dispatchDeepSeek(ctx) {
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'chat/completions' : apiUrl + '/chat/completions';
         ctx.inspection.attach(fetchUrl, apiKey, requestBody);
 
+        console.debug('DeepSeek request:', requestBody);
+
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
@@ -147,6 +150,7 @@ export async function dispatchDeepSeek(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.warn(`DeepSeek API returned error: ${resp.status} ${resp.statusText} ${errText}`);
             const msg = `DeepSeek upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
@@ -167,11 +171,16 @@ export async function dispatchDeepSeek(ctx) {
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
             const buf = await resp.arrayBuffer();
+            try {
+                const json = JSON.parse(new TextDecoder().decode(buf));
+                console.debug('DeepSeek response:', json);
+            } catch { /* non-JSON body — skip debug log */ }
             ctx.emit.chunk(new Uint8Array(buf));
             ctx.emit.end();
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Error communicating with DeepSeek API: ', err);
         ctx.emit.error(err);
     }
 }
