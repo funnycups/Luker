@@ -180,4 +180,44 @@ describe('ws-delivery server', () => {
             ws.close();
         } finally { await server.close(); }
     });
+
+    // Mobile browser reload class: a malformed WebSocket frame after upgrade
+    // (or a raw socket error mid-handshake) causes the ws Receiver on the
+    // server-side WebSocket instance to emit 'error'. Prior to the fix in
+    // ws-delivery.js, neither the wss connection ws nor the pre-upgrade raw
+    // net.Socket had an 'error' listener, so the error bubbled to
+    // process.uncaughtException — which server-main.js handles by exiting
+    // the entire server process. The receiver-error path is exercised here;
+    // the raw-socket handler in onUpgrade is defensive coverage for the same
+    // class of client-side network failures during handshake.
+    test('malformed ws frame from client does not surface as uncaughtException', async () => {
+        const server = await startTestServer({
+            verifyTicket: () => ({ user_handle: 'alice' }),
+        });
+        const uncaught = [];
+        const record = (err) => { uncaught.push(err); };
+        // prependListener beats jest-installed handlers so we observe whether
+        // the ws-delivery path really let an error through.
+        process.prependListener('uncaughtException', record);
+        try {
+            const ws = connectWs(server.port, 'good');
+            // Client-side noop error handler — unrelated wiring shouldn't
+            // pollute the process-level probe.
+            ws.on('error', () => {});
+            await waitOpen(ws);
+            // Bypass ws.send() masking + framing and write raw bytes.
+            // 0xFF sets RSV2 and RSV3 (RFC 6455 §5.2); the server-side ws
+            // Receiver parses the frame, fails validation, and — critically —
+            // emits the RangeError as an 'error' on the WebSocket instance.
+            // The stack matches the production crash trace users hit:
+            // `TCP.onStreamRead (node:internal/stream_base_commons)`.
+            ws._socket.write(Buffer.from([0xFF, 0x80, 0, 0, 0, 0]));
+            // Give the server-side receiver time to parse and emit.
+            await new Promise(r => setTimeout(r, 200));
+            expect(uncaught).toEqual([]);
+        } finally {
+            process.removeListener('uncaughtException', record);
+            await server.close();
+        }
+    });
 });
