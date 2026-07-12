@@ -136,6 +136,34 @@ describe('dispatchNovelAI', () => {
         expect(oSent.parameters.eos_token_id).toBeUndefined();
     });
 
+    test('upstream non-2xx: surfaces status+body via head+chunk+end (no emit.error)', async () => {
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                message: 'Unauthorized access token',
+            }), { status: 401, headers: { 'content-type': 'application/json' } })),
+        });
+        await dispatchNovelAI(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(401);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const decoded = new TextDecoder().decode(chunks[0].data);
+        const parsed = JSON.parse(decoded);
+        expect(parsed.message).toBe('Unauthorized access token');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
+        expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.fail.mock.calls[0][1]).toBe(401);
+    });
+
     test('ctx.signal abort: emits error, no chunk', async () => {
         const ac = new AbortController();
         const ctx = fakeCtx({
