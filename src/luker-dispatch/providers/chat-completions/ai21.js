@@ -47,9 +47,7 @@ export async function dispatchAI21(ctx) {
                 role: 'user',
                 content: `JSON schema for the response:\n${JSON.stringify(body.json_schema.value, null, 4)}`,
             };
-            if (Array.isArray(body.messages)) {
-                body.messages.push(schemaMessage);
-            }
+            body.messages.push(schemaMessage);
         }
 
         const convertedPrompt = convertAI21Messages(body.messages, getPromptNames({ body }));

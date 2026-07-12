@@ -87,9 +87,7 @@ export async function dispatchDeepSeek(ctx) {
                 role: 'user',
                 content: `JSON schema for the response:\n${JSON.stringify(body.json_schema.value, null, 4)}`,
             };
-            if (Array.isArray(body.messages)) {
-                body.messages.push(message);
-            }
+            body.messages.push(message);
         }
 
         mergeObjectWithYaml(bodyParams, body.custom_include_body);
