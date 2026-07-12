@@ -176,6 +176,7 @@ export async function dispatchSdBfl(ctx) {
 
             throw new Error('BFL failed to generate image.', { cause: statusData });
         }
+        throw new Error(`BFL exceeded max poll attempts (${MAX_ATTEMPTS})`);
     } catch (error) {
         ctx.inspection.failImage(error, 500);
         console.error(error);

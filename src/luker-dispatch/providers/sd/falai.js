@@ -156,6 +156,7 @@ export async function dispatchSdFalai(ctx) {
 
             throw new Error('FAL.AI failed to generate image.', { cause: statusData });
         }
+        throw new Error(`FAL.AI exceeded max poll attempts (${MAX_ATTEMPTS})`);
     } catch (error) {
         ctx.inspection.failImage(error, 500);
         console.error(error);
