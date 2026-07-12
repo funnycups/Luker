@@ -1130,6 +1130,17 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
 
                 try {
                     const result = await executeTool(name, args, toolContext);
+                    // Post-execute abort check: if the user aborted
+                    // during the tool body (a slow LLM sub-call, DOM
+                    // work, disk I/O), surface it immediately instead
+                    // of waiting for the next round boundary. Cheap:
+                    // throwIfAborted is a single .aborted read + throw
+                    // on the common path. Not gated pre-execute because
+                    // tool results scheduled in this round (e.g. a
+                    // `note_open` that already wrote to disk) belong
+                    // to the completed round — cancelling them mid-
+                    // enumeration would silently drop side-effects.
+                    throwIfAborted(abortSignal, 'Orchestration aborted.');
                     messages.push(makeOkToolMessage(persistedId, normalizeToolOk(result), round));
                     recordToTrace(trace, 'tool_result', { round, name, tool_call_id: persistedId });
                     const okSectionId = ensureSection({

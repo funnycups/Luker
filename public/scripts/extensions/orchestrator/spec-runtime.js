@@ -861,6 +861,12 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                             tc?.args && typeof tc.args === 'object' ? tc.args : {},
                             toolContext,
                         );
+                        // Post-execute abort check: surface user abort
+                        // immediately instead of waiting for the next
+                        // round boundary. Not gated pre-execute because
+                        // tool side-effects already committed in this
+                        // round belong to the completed round.
+                        throwIfAborted(abortSignal, 'Orchestration aborted.');
                         toolResult = {
                             ok: true,
                             data: toolResult,
