@@ -246,6 +246,31 @@ export async function dispatchNovelAI(ctx) {
         ctx.emit.head({ status: resp.status, headers: {} });
 
         if (body.streaming) {
+            // Streaming path gate for upstream !ok: mirrors the
+            // non-streaming branch below (and legacy
+            // forwardFetchResponse({jsonErrorResponse:true}) shape).
+            // Without this gate the raw JSON error body pipes into the
+            // client SSE parser mid-stream and is silently dropped, so the
+            // user sees an empty response with no error toast. Head has
+            // already been emitted above with the real upstream status, so
+            // we only need chunk+end here.
+            if (!resp.ok) {
+                const text = await resp.text().catch(() => '');
+                console.warn(`Novel API returned error (streaming): ${resp.status} ${resp.statusText} ${text}`);
+                let message = text;
+                try {
+                    const parsed = JSON.parse(text);
+                    if (parsed?.message) {
+                        message = parsed.message;
+                    }
+                } catch { /* not JSON */ }
+                ctx.inspection.fail(new Error(String(message)), resp?.status ?? 502);
+                if (text) {
+                    ctx.emit.chunk(new TextEncoder().encode(text));
+                }
+                ctx.emit.end();
+                return;
+            }
             // Streaming: forward raw SSE bytes verbatim.
             await pipeResponseBodyToEmit(resp, ctx);
             return;

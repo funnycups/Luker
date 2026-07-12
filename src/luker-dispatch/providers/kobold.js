@@ -193,6 +193,30 @@ export async function dispatchKobold(ctx) {
             ctx.emit.head({ status: resp.status, headers: {} });
 
             if (body.streaming) {
+                // Streaming path gate for upstream !ok: mirrors the
+                // non-streaming branch below (and legacy
+                // forwardFetchResponse({jsonErrorResponse:true}) shape).
+                // Without this gate the raw JSON error body pipes into the
+                // client SSE parser mid-stream and is silently dropped, so
+                // the user sees an empty response with no error toast.
+                // Head has already been emitted above with the real
+                // upstream status, so we only need chunk+end here.
+                if (!resp.ok) {
+                    let errText = '';
+                    try { errText = await resp.text(); } catch { /* body already consumed */ }
+                    console.warn(`Kobold returned error (streaming): ${resp.status} ${resp.statusText} ${errText}`);
+                    let message = errText;
+                    try {
+                        const errorJson = JSON.parse(errText);
+                        message = errorJson?.detail?.msg || errText;
+                    } catch { /* not JSON */ }
+                    ctx.inspection.fail(new Error(String(message)), resp?.status ?? 502);
+                    if (errText) {
+                        ctx.emit.chunk(new TextEncoder().encode(errText));
+                    }
+                    ctx.emit.end();
+                    return;
+                }
                 // Streaming: forward raw SSE bytes verbatim. Do not gate on
                 // resp.ok — legacy handler pipes streaming responses as-is
                 // via forwardFetchResponse.

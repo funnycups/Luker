@@ -164,6 +164,41 @@ describe('dispatchNovelAI', () => {
         expect(ctx.inspection.fail.mock.calls[0][1]).toBe(401);
     });
 
+    test('streaming upstream !ok: gates raw JSON error body via head+chunk+end (not piped as SSE)', async () => {
+        // Same gate as kobold streaming: without it, the raw JSON error
+        // body pipes into the client SSE parser mid-stream and is silently
+        // dropped (NovelAI custom SSE parser ignores non-event frames), so
+        // the user sees an empty response with no toast. Head has already
+        // been emitted above with the real upstream status.
+        const errBody = JSON.stringify({ message: 'Unauthorized during stream' });
+        const ctx = fakeCtx({
+            body: { streaming: true, model: 'kayra-v1' },
+            onFetch: jest.fn(async () => new Response(errBody, {
+                status: 401,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchNovelAI(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(401);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const decoded = new TextDecoder().decode(chunks[0].data);
+        expect(JSON.parse(decoded).message).toBe('Unauthorized during stream');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
+        expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.fail.mock.calls[0][1]).toBe(401);
+    });
+
     test('ctx.signal abort: emits error, no chunk', async () => {
         const ac = new AbortController();
         const ctx = fakeCtx({

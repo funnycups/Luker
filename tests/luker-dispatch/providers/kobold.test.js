@@ -242,6 +242,42 @@ describe('dispatchKobold', () => {
         expect(ctx.inspection.fail.mock.calls[0][1]).toBe(400);
     });
 
+    test('streaming upstream !ok: gates raw JSON error body via head+chunk+end (not piped as SSE)', async () => {
+        // Without this gate the raw JSON error body pipes into the client
+        // SSE parser mid-stream and is silently dropped (EventSource
+        // ignores non-SSE lines), so the user sees an empty response with
+        // no toast. The gate mirrors the legacy
+        // `forwardFetchResponse({jsonErrorResponse:true})` shape and the
+        // non-streaming branch of this same dispatch.
+        const errBody = JSON.stringify({ detail: { msg: 'streaming upstream complaint' } });
+        const ctx = fakeCtx({
+            body: { streaming: true },
+            onFetch: jest.fn(async () => new Response(errBody, {
+                status: 400,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchKobold(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(400);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const decoded = new TextDecoder().decode(chunks[0].data);
+        expect(JSON.parse(decoded).detail.msg).toBe('streaming upstream complaint');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
+        expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.fail.mock.calls[0][1]).toBe(400);
+    });
+
     test('ctx.signal abort mid-request: emits error, no chunk', async () => {
         const ac = new AbortController();
         const ctx = fakeCtx({
