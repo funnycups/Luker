@@ -59,6 +59,7 @@ export async function dispatchElectronHub(ctx) {
     const apiKey = ctx.secrets.read(SECRET_KEYS.ELECTRONHUB) || '';
 
     if (!apiKey) {
+        console.warn('Electron Hub key is missing.');
         ctx.emit.error(new Error('Electron Hub key is missing'));
         return;
     }
@@ -124,6 +125,8 @@ export async function dispatchElectronHub(ctx) {
         const fetchUrl = API_ELECTRONHUB + '/chat/completions';
         ctx.inspection.attach(fetchUrl, apiKey, requestBody);
 
+        console.debug('Electron Hub request:', requestBody);
+
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
@@ -144,6 +147,7 @@ export async function dispatchElectronHub(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.warn('Electron Hub returned error: ', errText);
             const msg = `Electron Hub upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
@@ -164,11 +168,16 @@ export async function dispatchElectronHub(ctx) {
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
             const buf = await resp.arrayBuffer();
+            try {
+                const json = JSON.parse(new TextDecoder().decode(buf));
+                console.debug('Electron Hub response:', json);
+            } catch { /* non-JSON body — skip debug log */ }
             ctx.emit.chunk(new Uint8Array(buf));
             ctx.emit.end();
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Error communicating with Electron Hub: ', err);
         ctx.emit.error(err);
     }
 }
