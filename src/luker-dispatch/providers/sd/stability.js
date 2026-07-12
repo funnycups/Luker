@@ -94,8 +94,15 @@ export async function dispatchSdStability(ctx) {
             const text = await result.text().catch(() => '');
             console.warn('Stability AI returned an error.', result.status, result.statusText, text);
             const err = new Error('Stability AI returned an error');
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, result.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end.
+            // Note: successful responses are raw base64 (not JSON), but
+            // Stability error responses are JSON — this branch handles the
+            // error case only, so JSON pass-through is correct here.
+            if (text) {
+                ctx.emit.chunk(new TextEncoder().encode(text));
+            }
+            ctx.emit.end();
             return;
         }
 

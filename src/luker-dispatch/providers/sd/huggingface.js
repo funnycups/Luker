@@ -62,10 +62,15 @@ export async function dispatchSdHuggingface(ctx) {
         ctx.emit.head({ status: result.status, headers: {} });
 
         if (!result.ok) {
-            console.warn('Hugging Face returned an error.');
+            const text = await result.text().catch(() => '');
+            console.warn('Hugging Face returned an error.', text);
             const err = new Error('Hugging Face returned an error');
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, result.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end.
+            if (text) {
+                ctx.emit.chunk(new TextEncoder().encode(text));
+            }
+            ctx.emit.end();
             return;
         }
 

@@ -76,8 +76,12 @@ export async function dispatchSdXai(ctx) {
             const text = await result.text().catch(() => '');
             console.warn('xAI returned an error.', text);
             const err = new Error('xAI returned an error');
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, result.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end.
+            if (text) {
+                ctx.emit.chunk(new TextEncoder().encode(text));
+            }
+            ctx.emit.end();
             return;
         }
 

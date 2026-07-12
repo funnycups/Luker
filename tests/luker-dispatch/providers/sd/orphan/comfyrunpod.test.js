@@ -90,6 +90,28 @@ describe('dispatchSdComfyRunPod', () => {
         expect(payload.format).toBe('jpg');
     });
 
+    test('/run HTTP 500 → head+chunk+end with raw error body (no emit.error)', async () => {
+        const fetchMock = jest.fn(async (url) => {
+            if (String(url).endsWith('/run')) {
+                return new Response('bad workflow', { status: 500 });
+            }
+            throw new Error(`unexpected: ${url}`);
+        });
+        const ctx = fakeCtx({ onFetch: fetchMock });
+        await dispatchSdComfyRunPod(ctx);
+
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(500);
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(new TextDecoder().decode(chunks[0].data)).toBe('bad workflow');
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
+        expect(ctx.inspection.failImage).toHaveBeenCalled();
+        expect(ctx.inspection.failImage.mock.calls[0][1]).toBe(500);
+    });
+
     test('abort mid-request: emit.error, no chunk', async () => {
         const ac = new AbortController();
         const fetchMock = jest.fn((_url, init) => new Promise((_r, reject) => {

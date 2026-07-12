@@ -50,6 +50,24 @@ describe('dispatchSdNanoGpt', () => {
         expect(ctx._emitted.filter(e => e.kind === 'error').length).toBeGreaterThan(0);
     });
 
+    test('upstream 500 → head+chunk+end with raw error body (no emit.error)', async () => {
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response('nanogpt blew up', { status: 500 })),
+        });
+        await dispatchSdNanoGpt(ctx);
+
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(500);
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(new TextDecoder().decode(chunks[0].data)).toBe('nanogpt blew up');
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
+        expect(ctx.inspection.failImage).toHaveBeenCalled();
+        expect(ctx.inspection.failImage.mock.calls[0][1]).toBe(500);
+    });
+
     test('abort mid-request: emit.error, no chunk', async () => {
         const ac = new AbortController();
         const fetchMock = jest.fn((_url, init) => new Promise((_r, reject) => {

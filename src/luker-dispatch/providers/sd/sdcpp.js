@@ -76,8 +76,12 @@ export async function dispatchSdCpp(ctx) {
             const text = await result.text().catch(() => '');
             const err = new Error('stable-diffusion.cpp server returned an error.');
             err.cause = text;
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, result.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end.
+            if (text) {
+                ctx.emit.chunk(new TextEncoder().encode(text));
+            }
+            ctx.emit.end();
             return;
         }
 

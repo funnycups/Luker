@@ -113,8 +113,14 @@ export async function dispatchSdWebui(ctx) {
             const text = await result.text().catch(() => '');
             const err = new Error('SD WebUI returned an error.');
             err.cause = text;
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, result.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end
+            // (head already emitted above). Client sees Response.body
+            // readable so callers can inspect the upstream error payload.
+            if (text) {
+                ctx.emit.chunk(new TextEncoder().encode(text));
+            }
+            ctx.emit.end();
             return;
         }
 

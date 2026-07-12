@@ -183,7 +183,7 @@ describe('dispatchSdWebui', () => {
         expect(interruptCalls[0][1].method).toBe('POST');
     });
 
-    test('upstream 500 → emit.error and failImage', async () => {
+    test('upstream 500 → head+chunk+end with raw error body (no emit.error)', async () => {
         const fetchMock = jest.fn(async (url) => {
             if (String(url).endsWith('/sdapi/v1/options')) {
                 return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -194,8 +194,18 @@ describe('dispatchSdWebui', () => {
         await dispatchSdWebui(ctx);
 
         const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs).toHaveLength(1);
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(500);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(new TextDecoder().decode(chunks[0].data)).toBe('nope');
+
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
         expect(ctx.inspection.failImage).toHaveBeenCalled();
-        expect(ctx._emitted.filter(e => e.kind === 'chunk')).toHaveLength(0);
+        expect(ctx.inspection.failImage.mock.calls[0][1]).toBe(500);
     });
 });

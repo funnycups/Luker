@@ -110,8 +110,12 @@ export async function dispatchSdWorkersai(ctx) {
             console.warn('Cloudflare Workers AI returned an error.', result.status, result.statusText, text);
             const err = new Error('Cloudflare Workers AI returned an error');
             err.cause = text;
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, result.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end.
+            if (text) {
+                ctx.emit.chunk(new TextEncoder().encode(text));
+            }
+            ctx.emit.end();
             return;
         }
 

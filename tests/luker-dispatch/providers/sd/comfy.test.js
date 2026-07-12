@@ -194,7 +194,7 @@ describe('dispatchSdComfy', () => {
         expect(ctx.inspection.failImage).toHaveBeenCalled();
     });
 
-    test('/prompt HTTP 500 → emit.error, no WS opened', async () => {
+    test('/prompt HTTP 500 → head+chunk+end with raw error body (no emit.error, no WS opened)', async () => {
         const fetchMock = jest.fn(async (url) => {
             if (String(url).endsWith('/prompt')) {
                 return new Response('bad workflow', { status: 500 });
@@ -205,8 +205,19 @@ describe('dispatchSdComfy', () => {
         await dispatchSdComfy(ctx);
 
         expect(FakeWebSocket.instances).toHaveLength(0);
-        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(1);
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(500);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(new TextDecoder().decode(chunks[0].data)).toBe('bad workflow');
+
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
         expect(ctx.inspection.failImage).toHaveBeenCalled();
+        expect(ctx.inspection.failImage.mock.calls[0][1]).toBe(500);
     });
 
     test('all upstream ctx.fetch calls (prompt/history/view) receive ctx.signal', async () => {

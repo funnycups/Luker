@@ -72,8 +72,12 @@ export async function dispatchSdElectronHub(ctx) {
             const errorText = await result.text().catch(() => '');
             console.warn('Electron Hub returned an error.', result.status, result.statusText, errorText);
             const err = new Error('Electron Hub returned an error');
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, result.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end.
+            if (errorText) {
+                ctx.emit.chunk(new TextEncoder().encode(errorText));
+            }
+            ctx.emit.end();
             return;
         }
 

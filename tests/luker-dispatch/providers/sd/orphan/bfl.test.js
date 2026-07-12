@@ -112,4 +112,21 @@ describe('dispatchSdBfl', () => {
         expect(sent.width).toBeUndefined();
         expect(sent.height).toBeUndefined();
     }, 15000);
+
+    test('task-submit HTTP 500 → head+chunk+end with raw error body (no emit.error)', async () => {
+        const fetchMock = jest.fn(async () => new Response('bfl blew up', { status: 500 }));
+        const ctx = fakeCtx({ onFetch: fetchMock });
+        await dispatchSdBfl(ctx);
+
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(500);
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(new TextDecoder().decode(chunks[0].data)).toBe('bfl blew up');
+        expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
+        expect(ctx.inspection.failImage).toHaveBeenCalled();
+        expect(ctx.inspection.failImage.mock.calls[0][1]).toBe(500);
+    });
 });

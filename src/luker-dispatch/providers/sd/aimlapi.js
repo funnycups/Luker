@@ -77,8 +77,12 @@ export async function dispatchSdAimlapi(ctx) {
             const errText = await apiRes.text().catch(() => '');
             const err = new Error('AI/ML API returned an error');
             err.cause = errText;
-            ctx.inspection.failImage(err, 500);
-            ctx.emit.error(err);
+            ctx.inspection.failImage(err, apiRes.status ?? 500);
+            // Surface upstream status + body to the client via chunk + end.
+            if (errText) {
+                ctx.emit.chunk(new TextEncoder().encode(errText));
+            }
+            ctx.emit.end();
             return;
         }
 
