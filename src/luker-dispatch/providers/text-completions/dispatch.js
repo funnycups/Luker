@@ -392,6 +392,8 @@ export async function dispatchTextCompletions(ctx) {
         const headers = buildHeaders(ctx, apiType, apiServer, secretId);
         const upstreamBody = buildUpstreamBody(apiType, body);
 
+        console.debug(body);
+
         // KOBOLDCPP abort side channel — fire a POST to /api/extra/abort
         // when the dispatch signal aborts.
         if (apiType === TEXTGEN_TYPES.KOBOLDCPP) {
@@ -467,11 +469,13 @@ export async function dispatchTextCompletions(ctx) {
                 index: choice?.index,
             }));
         }
+        console.debug('Endpoint response:', data);
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify(data)));
         ctx.emit.end();
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Endpoint error:', err);
         ctx.emit.error(err);
     }
 }
