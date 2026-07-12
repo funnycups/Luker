@@ -85,6 +85,12 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
 
     response.status(200);
     response.setHeader('x-luker-generation-id', requestId);
+    // Initial snapshot only — always '0' because dispatch has not yet run
+    // and headers are flushed by response.json() below (setHeader after flush
+    // is a no-op). The real persisted state is delivered via the SSE trailer
+    // `data.luker.persisted` after dispatch completes; frontend consumers
+    // (openai.js:4360, kai.js:261, nai.js:780, textgen.js:1347, script.js:565)
+    // read this header as an initial snapshot and overwrite from the trailer.
     response.setHeader('x-luker-server-persisted', '0');
     response.json({});
 
