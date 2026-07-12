@@ -45,6 +45,7 @@ import {
     buildGeminiFunctionDeclaration,
     convertGeminiToolChoice,
     getConfigValue,
+    tryParse,
 } from '../../../util.js';
 import { normalizeGeminiResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
@@ -399,16 +400,13 @@ export async function dispatchMakerSuite(ctx) {
                 console.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const msg = `${apiName} upstream ${generateResponse.status}: ${errorText}`;
                 ctx.inspection.fail(new Error(msg), generateResponse?.status ?? 502);
-                // Surface upstream status + body to the client via chunk + end
-                // (head already emitted above). Client sees
-                // Response.status=<upstream> and Response.body readable so
-                // callers can do `await response.text()` or
-                // `await response.json()` for structured error inspection
-                // (matches legacy handler shape which returned
-                // `.status(4xx).send({error:{...}})`).
-                if (errorText) {
-                    ctx.emit.chunk(new TextEncoder().encode(errorText));
-                }
+                // Legacy shape: always deliver a JSON envelope so client-side
+                // `await response.json()` succeeds (parses upstream body when
+                // possible, falls back to `{error:true}` sentinel for empty
+                // or non-JSON bodies). Matches
+                // `res.status(500).send(tryParse(errorText) ?? {error:true})`.
+                const envelope = errorText ? (tryParse(errorText) ?? { error: true }) : { error: true };
+                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(envelope)));
                 ctx.emit.end();
                 return;
             }
@@ -458,7 +456,7 @@ export async function dispatchMakerSuite(ctx) {
         }
     } catch (error) {
         console.error(`Error communicating with ${apiName} API:`, error);
-        try { ctx.inspection.fail(error); } catch { /* inspection best-effort */ }
+        try { ctx.inspection.fail(error?.message || `${apiName} request failed`, 500); } catch { /* inspection best-effort */ }
         ctx.emit.error(error);
     }
 }
