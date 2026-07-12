@@ -567,6 +567,7 @@ export async function dispatchOpenAICompatible(ctx) {
     const source = body.chat_completion_source;
     const resolver = RESOLVERS[source];
     if (!resolver) {
+        console.warn('This chat completion source is not supported yet.');
         ctx.emit.error(new Error(`OpenAI-compatible dispatch: unsupported source: ${source}`));
         return;
     }
@@ -598,6 +599,7 @@ export async function dispatchOpenAICompatible(ctx) {
 
         // Missing API key check (CUSTOM is exempt because it may be a local server).
         if (!apiKey && !body.base_url && !body.reverse_proxy && source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
+            console.warn('OpenAI API key is missing.');
             const err = new Error('OpenAI API key is missing.');
             ctx.inspection.fail(err, 400);
             ctx.emit.error(err);
@@ -659,6 +661,9 @@ export async function dispatchOpenAICompatible(ctx) {
         }
 
         ctx.inspection.attach(endpointUrl, apiKey, requestBody);
+
+        console.debug('Chat Completion request:', requestBody);
+
         const resp = await ctx.fetch(endpointUrl, {
             method: 'POST',
             headers: {
@@ -680,6 +685,7 @@ export async function dispatchOpenAICompatible(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.error('Chat completion request error: ', errText);
             const msg = `OpenAI-compatible upstream ${resp.status}: ${errText}`;
             const err = new Error(msg);
             ctx.inspection.fail(err, resp?.status ?? 502);
@@ -698,14 +704,20 @@ export async function dispatchOpenAICompatible(ctx) {
         }
 
         if (body.stream) {
+            console.info('Streaming request in progress');
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
             const buf = await resp.arrayBuffer();
+            try {
+                const json = JSON.parse(new TextDecoder().decode(buf));
+                console.debug('Chat Completion response:', json);
+            } catch { /* non-JSON body — skip debug log */ }
             ctx.emit.chunk(new Uint8Array(buf));
             ctx.emit.end();
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Generation failed', err);
         ctx.emit.error(err);
     }
 }
