@@ -156,6 +156,8 @@ export async function dispatchKobold(ctx) {
         ? `${apiServer}/extra/generate/stream`
         : `${apiServer}/v1/generate`;
 
+    console.debug(upstreamBody);
+
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
             ctx.inspection.attach(url, '', upstreamBody);
@@ -224,6 +226,7 @@ export async function dispatchKobold(ctx) {
 
             /** @type {any} */
             const data = await resp.json();
+            console.debug('Endpoint response:', data);
             const encoder = new TextEncoder();
             ctx.emit.chunk(encoder.encode(JSON.stringify(data)));
             ctx.emit.end();
@@ -234,12 +237,16 @@ export async function dispatchKobold(ctx) {
             // resolved-Response branch above. Rejections terminate the
             // dispatch immediately.
             try { ctx.inspection.fail(error); } catch { /* inspection best-effort */ }
+            if (error && 'status' in error) {
+                console.error('Status Code from Kobold:', error.status);
+            }
             ctx.emit.error(error);
             return;
         }
     }
 
     // Exhausted retries.
+    console.error('Max retries exceeded. Giving up.');
     const err = new Error('Max retries exceeded');
     try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
     ctx.emit.error(err);
