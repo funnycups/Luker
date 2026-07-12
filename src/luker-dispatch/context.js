@@ -136,7 +136,33 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
             head({ status, headers }) { safeEmit({ kind: 'head', data: { status, headers } }); },
             chunk(bytes) { safeEmit({ kind: 'chunk', data: bytes }); },
             end() { safeEmit({ kind: 'end', data: null }); },
-            error(err) { safeEmit({ kind: 'error', data: { message: String(err?.message || err) } }); },
+            // Serialize both `err.message` AND `err.cause`. Several SD
+            // providers throw `new Error('X failed to generate image.',
+            // { cause: statusData })` or set `err.cause = errText` after
+            // reading an upstream response body — the cause carries the
+            // field-level validation detail (fal.ai `${loc[1]}: ${msg}` /
+            // Cloudflare Workers AI `{errors:[]}` / aimlapi raw upstream
+            // text / sdcpp / webui). Without appending it here, the
+            // client-side ws-delivery reads `msg.message` (line 71) which
+            // only carries the generic "X returned an error" prefix, so
+            // users see a useless generic error and lose the actionable
+            // validation detail. Cause is appended after `: ` so the same
+            // channel keeps working — no new frame shape required.
+            error(err) {
+                const message = String(err?.message || err);
+                const cause = err?.cause;
+                let full = message;
+                if (cause !== undefined && cause !== null) {
+                    const causeStr = typeof cause === 'string'
+                        ? cause
+                        : (cause?.message ? String(cause.message) : (() => {
+                            try { return JSON.stringify(cause); }
+                            catch { return String(cause); }
+                        })());
+                    if (causeStr) full = `${message}: ${causeStr}`;
+                }
+                safeEmit({ kind: 'error', data: { message: full } });
+            },
             // Runner-only escape hatch: append a chunk AFTER the dispatch has
             // already emitted a terminal `end`/`error`. Legacy behavior
             // appended a `data: {"luker":{...}}\n\n` trailer frame to the tail
