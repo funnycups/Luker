@@ -3,6 +3,20 @@
 const TICKET_PROTOCOL_PREFIX = 'luker-ws-ticket.';
 const DEFAULT_RECONNECT_BACKOFF_MS = 500;
 
+// requestId is a routing correlation id (not a security primitive), so a
+// Math.random fallback is fine when crypto.randomUUID is unavailable —
+// which happens in insecure contexts (HTTP served from non-localhost).
+function uuidv4() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
 export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BACKOFF_MS } = {}) {
     let ws = null;
     let ticketProvider = null;
@@ -243,7 +257,7 @@ export function installFetchProxy(delivery, options = {}) {
         // caller pre-generated one (openai.js:4201 does this so it can poll
         // /jobs/status?id= with the same uuid). Otherwise mint a fresh one
         // and let the server echo it via x-luker-generation-id.
-        let requestId = crypto.randomUUID();
+        let requestId = uuidv4();
         try {
             const b = init?.body;
             if (typeof b === 'string') {
