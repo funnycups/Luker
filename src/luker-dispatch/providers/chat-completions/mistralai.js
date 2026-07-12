@@ -32,7 +32,7 @@ export async function dispatchMistralAI(ctx) {
     const bodyApiKey = typeof body.proxy_password === 'string' ? body.proxy_password : '';
     const apiKey = bodyApiKey || ctx.secrets.read(SECRET_KEYS.MISTRALAI) || '';
 
-    if (!apiKey && !body.reverse_proxy) {
+    if (!apiKey) {
         console.warn('MistralAI API key is missing.');
         const err = new Error('MistralAI API key is missing');
         ctx.inspection.fail(err, 400);

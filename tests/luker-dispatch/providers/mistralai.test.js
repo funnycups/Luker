@@ -96,6 +96,21 @@ describe('dispatchMistralAI', () => {
         expect(ctx.fetch).not.toHaveBeenCalled();
     });
 
+    test('missing API key (WITH reverse_proxy): still fails early (legacy strict guard)', async () => {
+        // Legacy MistralAI (pre-dispatch) required an API key even when
+        // reverse_proxy was set — unlike DeepSeek/xAI/Claude which allow
+        // key-less reverse_proxy. Dispatch preserves that strict contract.
+        const ctx = fakeCtx({
+            secret: '',
+            body: { reverse_proxy: 'https://proxy.example.com/v1' },
+        });
+        await dispatchMistralAI(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs.length).toBeGreaterThan(0);
+        expect(ctx.fetch).not.toHaveBeenCalled();
+    });
+
     test('streaming: forwards upstream SSE chunks verbatim then end', async () => {
         const sseBody =
             'data: {"choices":[{"delta":{"content":"he"}}]}\n\n' +
