@@ -207,9 +207,18 @@ export async function dispatchKobold(ctx) {
                     const errorJson = JSON.parse(errText);
                     message = errorJson?.detail?.msg || errText;
                 } catch { /* not JSON */ }
-                const err = new Error(String(message));
-                ctx.inspection.fail(err, resp?.status ?? 502);
-                ctx.emit.error(err);
+                ctx.inspection.fail(new Error(String(message)), resp?.status ?? 502);
+                // Surface upstream status + body to the client via chunk + end
+                // (head already emitted above). Client sees
+                // Response.status=<upstream> and Response.body readable so
+                // callers can do `await response.text()` or
+                // `await response.json()` for structured error inspection
+                // (matches legacy handler shape which returned
+                // `.status(4xx).send({error:{...}})`).
+                if (errText) {
+                    ctx.emit.chunk(new TextEncoder().encode(errText));
+                }
+                ctx.emit.end();
                 return;
             }
 

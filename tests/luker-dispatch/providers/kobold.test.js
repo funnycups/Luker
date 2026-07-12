@@ -214,7 +214,7 @@ describe('dispatchKobold', () => {
         expect(abortInit.method).toBe('POST');
     });
 
-    test('upstream error reshape: {"detail":{"msg":"foo"}} → emit.error contains foo', async () => {
+    test('upstream error: emits head+chunk+end with raw error body (no emit.error)', async () => {
         const ctx = fakeCtx({
             onFetch: jest.fn(async () => new Response(JSON.stringify({
                 detail: { msg: 'foo bar upstream complaint' },
@@ -223,10 +223,23 @@ describe('dispatchKobold', () => {
         await dispatchKobold(ctx);
 
         const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs.length).toBeGreaterThan(0);
-        expect(errs[0].error.message).toContain('foo bar upstream complaint');
-        expect(ctx._emitted.filter(e => e.kind === 'chunk')).toHaveLength(0);
-        expect(ctx.inspection.fail).toHaveBeenCalled();
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(400);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const decoded = new TextDecoder().decode(chunks[0].data);
+        const parsed = JSON.parse(decoded);
+        expect(parsed.detail.msg).toBe('foo bar upstream complaint');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
+        expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.fail.mock.calls[0][1]).toBe(400);
     });
 
     test('ctx.signal abort mid-request: emits error, no chunk', async () => {
