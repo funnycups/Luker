@@ -218,12 +218,12 @@ describe('dispatchMakerSuite', () => {
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
     });
 
-    test('MAKERSUITE 200 with empty candidates array: emits head 200 + `{error:{message}}` chunk (legacy soft-error envelope)', async () => {
-        // Legacy shape: `res.send({error:{message}})` (Express default 200).
-        // Delivered post-head as head+chunk+end so the client's
-        // `data.error` branch (openai.js:4455) fires with the descriptive
-        // block-reason message. HTTP 500 would bury the message inside the
-        // `!response.ok` generic throw at openai.js:4037.
+    test('MAKERSUITE 200 with empty candidates array + promptFeedback.blockReason: emits head 200 + `{error:{message}}` chunk (blocked, terminal)', async () => {
+        // Blocked-prompt branch is TERMINAL — retrying against the same
+        // safety filter burns quota. Delivered as HTTP 200 + `{error:{message}}`
+        // (Express default) so the client's `data.error` handler fires with
+        // the descriptive block-reason message. HTTP 500 would bury the
+        // message inside the `!response.ok` generic throw.
         const ctx = fakeCtx({
             onFetch: jest.fn(async () => new Response(JSON.stringify({
                 candidates: [],
@@ -258,15 +258,43 @@ describe('dispatchMakerSuite', () => {
         expect(rawArg.promptFeedback.blockReason).toBe('SAFETY');
     });
 
-    test('MAKERSUITE 200 with candidate but empty text/no functionCall/no inlineData: emits head 200 + `{error:{message}}` chunk', async () => {
-        // "Candidate text empty" branch — same legacy envelope shape as
-        // no-candidate above. Candidate present but content extraction
-        // yields nothing usable.
+    test('MAKERSUITE 200 with empty candidates array + NO blockReason: emits normalized OAI shape with empty content (transient — client retries)', async () => {
+        // Transient-empty branch: upstream returned zero candidates but did
+        // NOT flag prompt-block. Likely a model flake; forward as legal OAI
+        // 200 + empty choices so the client-side empty-response detector
+        // (openai.js:isChatCompletionResponseEmpty) triggers withRetry.
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                candidates: [],
+                // no promptFeedback.blockReason
+            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        // Not a `{error:{message}}` envelope any more — it's the normalized
+        // OAI shape with empty content, which the client detector treats as
+        // retriable.
+        expect(parsed.error).toBeUndefined();
+        expect(Array.isArray(parsed.choices)).toBe(true);
+        expect(parsed.choices).toHaveLength(1);
+        expect(parsed.choices[0].message.content).toBe('');
+        expect(parsed.choices[0].message.tool_calls).toBeUndefined();
+    });
+
+    test('MAKERSUITE 200 with candidate but empty text AND blocked finishReason (SAFETY): emits head 200 + `{error:{message}}` chunk (terminal)', async () => {
+        // Output-blocked branch: candidate present but content filter cut
+        // the response. TERMINAL — retry hits the same filter.
         const ctx = fakeCtx({
             onFetch: jest.fn(async () => new Response(JSON.stringify({
                 candidates: [{
                     content: { role: 'model', parts: [] },
-                    finishReason: 'STOP',
+                    finishReason: 'SAFETY',
                 }],
             }), { status: 200, headers: { 'content-type': 'application/json' } })),
         });
@@ -284,11 +312,40 @@ describe('dispatchMakerSuite', () => {
         const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
         expect(parsed.error).toBeDefined();
         expect(parsed.error.message).toContain('Candidate text empty');
+        expect(parsed.error.message).toContain('SAFETY');
 
         const ends = ctx._emitted.filter(e => e.kind === 'end');
         expect(ends).toHaveLength(1);
 
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+    });
+
+    test('MAKERSUITE 200 with candidate but empty text and finishReason=STOP: emits normalized OAI shape with empty content (transient — client retries)', async () => {
+        // Model completed STOP but produced nothing usable (e.g. all parts
+        // are thoughts, or a truly blank text). Not policy-blocked → treat
+        // as transient and let client-side withRetry decide.
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                candidates: [{
+                    content: { role: 'model', parts: [] },
+                    finishReason: 'STOP',
+                }],
+            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed.error).toBeUndefined();
+        expect(Array.isArray(parsed.choices)).toBe(true);
+        expect(parsed.choices[0].message.content).toBe('');
+        expect(parsed.choices[0].message.tool_calls).toBeUndefined();
+        // finish_reason 'stop' propagates through normalizeGeminiResponseToOAI.
+        expect(parsed.choices[0].finish_reason).toBe('stop');
     });
 
     test('MAKERSUITE ctx.signal aborted mid-request: fetch AbortError caught, emits error, no chunk', async () => {

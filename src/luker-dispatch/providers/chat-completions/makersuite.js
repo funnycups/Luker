@@ -415,29 +415,52 @@ export async function dispatchMakerSuite(ctx) {
             const generateResponseJson = await generateResponse.json();
 
             const candidates = generateResponseJson?.candidates;
+            const hasBlockedFinishReason = (() => {
+                const raw = String(candidates?.[0]?.finishReason || '').toUpperCase();
+                return ['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(raw);
+            })();
+            const promptBlockReason = generateResponseJson?.promptFeedback?.blockReason;
+
             if (!candidates || candidates.length === 0) {
-                let message = `${apiName} API returned no candidate`;
-                console.warn(message, generateResponseJson);
-                if (generateResponseJson?.promptFeedback?.blockReason) {
-                    message += `\nPrompt was blocked due to : ${generateResponseJson.promptFeedback.blockReason}`;
+                // Distinguish "prompt was blocked" (terminal, don't retry) from
+                // "upstream returned zero candidates with no reason" (retriable
+                // — likely transient model flake). Blocked → keep the descriptive
+                // error envelope so toastr shows the block reason. Empty-with-no-
+                // reason → emit a legal 200 with empty candidates so the client-
+                // side empty-response detector (openai.js:isChatCompletionResponseEmpty)
+                // triggers withRetry.
+                if (promptBlockReason) {
+                    let message = `${apiName} API returned no candidate\nPrompt was blocked due to : ${promptBlockReason}`;
+                    console.warn(message, generateResponseJson);
+                    // Legacy shape: `res.send({error:{message}})` (Express default
+                    // HTTP 200 with the error envelope). The head frame at line
+                    // 392 above already carried the upstream 200 status, so we
+                    // only emit chunk+end here. Client:
+                    //   • response.ok stays true → skips the `!response.ok`
+                    //     raw-throw path at openai.js.
+                    //   • `.json()` parses cleanly → `data.error` branch fires →
+                    //     toastr shows the block-reason message.
+                    // Using HTTP 500 here would bury the descriptive block
+                    // reason inside the generic "Got response status 500"
+                    // substring.
+                    const errPayload = { error: { message } };
+                    const errBody = JSON.stringify(errPayload);
+                    ctx.emit.chunk(new TextEncoder().encode(errBody));
+                    ctx.emit.end();
+                    try { ctx.inspection.complete(errPayload, generateResponseJson); }
+                    catch { /* inspection best-effort */ }
+                    return;
                 }
-                // Legacy shape: `res.send({error:{message}})` (Express default
-                // HTTP 200 with the error envelope). The head frame at line
-                // 392 above already carried the upstream 200 status, so we
-                // only emit chunk+end here. Client:
-                //   • response.ok stays true → skips the `!response.ok`
-                //     raw-throw path at openai.js:4037.
-                //   • `.json()` parses cleanly at :4450 → `data.error`
-                //     branch at :4455 fires → toastr shows the block-reason
-                //     message.
-                // Using HTTP 500 here would bury the descriptive block
-                // reason inside the generic "Got response status 500"
-                // substring thrown at :4047.
-                const errPayload = { error: { message } };
-                const errBody = JSON.stringify(errPayload);
-                ctx.emit.chunk(new TextEncoder().encode(errBody));
+
+                // No candidates, no block reason → transient. Forward the raw
+                // Gemini shape after normalizing to OAI so the client's empty-
+                // response detector sees `choices` (post-normalization) or the
+                // absence thereof and can decide to retry.
+                console.warn(`${apiName} API returned no candidate (transient, no block reason)`, generateResponseJson);
+                const reply = normalizeGeminiResponseToOAI(generateResponseJson);
+                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(reply)));
                 ctx.emit.end();
-                try { ctx.inspection.complete(errPayload, generateResponseJson); }
+                try { ctx.inspection.complete(reply, generateResponseJson); }
                 catch { /* inspection best-effort */ }
                 return;
             }
@@ -449,17 +472,29 @@ export async function dispatchMakerSuite(ctx) {
 
             const responseText = typeof responseContent === 'string' ? responseContent : responseContent?.parts?.filter(part => !part.thought)?.map(part => part.text)?.join('\n\n');
             if (!responseText && !functionCall && !inlineData) {
-                let message = `${apiName} Candidate text empty`;
-                console.warn(message, generateResponseJson);
-                // Same shape as the no-candidate branch above: legacy HTTP 200
-                // (already emitted via head at line 392) + `{error:{message}}`
-                // chunk so the client's `data.error` handler surfaces the
-                // message via toastr.
-                const errPayload = { error: { message } };
-                const errBody = JSON.stringify(errPayload);
-                ctx.emit.chunk(new TextEncoder().encode(errBody));
+                // Same split as the no-candidate branch: safety/content-policy
+                // finishReasons are terminal (retry burns quota and hits the
+                // same filter); anything else (STOP with genuinely empty
+                // parts, OTHER, MALFORMED_FUNCTION_CALL, undefined) is treated
+                // as a transient model flake and forwarded as a legal empty
+                // response so client-side withRetry can kick in.
+                if (hasBlockedFinishReason) {
+                    let message = `${apiName} Candidate text empty (finishReason=${candidates[0].finishReason})`;
+                    console.warn(message, generateResponseJson);
+                    const errPayload = { error: { message } };
+                    const errBody = JSON.stringify(errPayload);
+                    ctx.emit.chunk(new TextEncoder().encode(errBody));
+                    ctx.emit.end();
+                    try { ctx.inspection.complete(errPayload, generateResponseJson); }
+                    catch { /* inspection best-effort */ }
+                    return;
+                }
+
+                console.warn(`${apiName} Candidate text empty (transient, finishReason=${candidates[0].finishReason ?? 'undefined'})`, generateResponseJson);
+                const reply = normalizeGeminiResponseToOAI(generateResponseJson);
+                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(reply)));
                 ctx.emit.end();
-                try { ctx.inspection.complete(errPayload, generateResponseJson); }
+                try { ctx.inspection.complete(reply, generateResponseJson); }
                 catch { /* inspection best-effort */ }
                 return;
             }
