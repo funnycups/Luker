@@ -218,6 +218,79 @@ describe('dispatchMakerSuite', () => {
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
     });
 
+    test('MAKERSUITE 200 with empty candidates array: emits head 200 + `{error:{message}}` chunk (legacy soft-error envelope)', async () => {
+        // Legacy shape: `res.send({error:{message}})` (Express default 200).
+        // Delivered post-head as head+chunk+end so the client's
+        // `data.error` branch (openai.js:4455) fires with the descriptive
+        // block-reason message. HTTP 500 would bury the message inside the
+        // `!response.ok` generic throw at openai.js:4037.
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                candidates: [],
+                promptFeedback: { blockReason: 'SAFETY' },
+            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(200);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed.error).toBeDefined();
+        expect(parsed.error.message).toContain('no candidate');
+        expect(parsed.error.message).toContain('SAFETY');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
+        // Soft error still routes to inspection.complete so the run shows up
+        // as a completed request (with the error payload) rather than an
+        // aborted/failed one.
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+        const [payloadArg, rawArg] = ctx.inspection.complete.mock.calls[0];
+        expect(payloadArg.error.message).toContain('no candidate');
+        expect(rawArg.promptFeedback.blockReason).toBe('SAFETY');
+    });
+
+    test('MAKERSUITE 200 with candidate but empty text/no functionCall/no inlineData: emits head 200 + `{error:{message}}` chunk', async () => {
+        // "Candidate text empty" branch — same legacy envelope shape as
+        // no-candidate above. Candidate present but content extraction
+        // yields nothing usable.
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                candidates: [{
+                    content: { role: 'model', parts: [] },
+                    finishReason: 'STOP',
+                }],
+            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(200);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed.error).toBeDefined();
+        expect(parsed.error.message).toContain('Candidate text empty');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+    });
+
     test('MAKERSUITE ctx.signal aborted mid-request: fetch AbortError caught, emits error, no chunk', async () => {
         const ac = new AbortController();
         const ctx = fakeCtx({

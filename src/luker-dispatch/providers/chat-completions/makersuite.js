@@ -421,7 +421,24 @@ export async function dispatchMakerSuite(ctx) {
                 if (generateResponseJson?.promptFeedback?.blockReason) {
                     message += `\nPrompt was blocked due to : ${generateResponseJson.promptFeedback.blockReason}`;
                 }
-                ctx.emit.error(new Error(message));
+                // Legacy shape: `res.send({error:{message}})` (Express default
+                // HTTP 200 with the error envelope). The head frame at line
+                // 392 above already carried the upstream 200 status, so we
+                // only emit chunk+end here. Client:
+                //   • response.ok stays true → skips the `!response.ok`
+                //     raw-throw path at openai.js:4037.
+                //   • `.json()` parses cleanly at :4450 → `data.error`
+                //     branch at :4455 fires → toastr shows the block-reason
+                //     message.
+                // Using HTTP 500 here would bury the descriptive block
+                // reason inside the generic "Got response status 500"
+                // substring thrown at :4047.
+                const errPayload = { error: { message } };
+                const errBody = JSON.stringify(errPayload);
+                ctx.emit.chunk(new TextEncoder().encode(errBody));
+                ctx.emit.end();
+                try { ctx.inspection.complete(errPayload, generateResponseJson); }
+                catch { /* inspection best-effort */ }
                 return;
             }
 
@@ -434,7 +451,16 @@ export async function dispatchMakerSuite(ctx) {
             if (!responseText && !functionCall && !inlineData) {
                 let message = `${apiName} Candidate text empty`;
                 console.warn(message, generateResponseJson);
-                ctx.emit.error(new Error(message));
+                // Same shape as the no-candidate branch above: legacy HTTP 200
+                // (already emitted via head at line 392) + `{error:{message}}`
+                // chunk so the client's `data.error` handler surfaces the
+                // message via toastr.
+                const errPayload = { error: { message } };
+                const errBody = JSON.stringify(errPayload);
+                ctx.emit.chunk(new TextEncoder().encode(errBody));
+                ctx.emit.end();
+                try { ctx.inspection.complete(errPayload, generateResponseJson); }
+                catch { /* inspection best-effort */ }
                 return;
             }
 
