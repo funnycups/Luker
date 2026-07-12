@@ -28,6 +28,7 @@ import {
 } from '../../../prompt-converters.js';
 import {
     buildClaudeTool,
+    color,
     convertClaudeToolChoice,
     excludeKeysByYaml,
     getConfigValue,
@@ -258,8 +259,8 @@ export async function dispatchClaude(ctx) {
             const minThinkTokens = 1024;
             if (requestBody.max_tokens <= minThinkTokens) {
                 const newValue = requestBody.max_tokens + minThinkTokens;
-                console.warn(`Claude thinking requires a minimum of ${minThinkTokens} response tokens.`);
-                console.info(`Increasing response length to ${newValue}.`);
+                console.warn(color.yellow(`Claude thinking requires a minimum of ${minThinkTokens} response tokens.`));
+                console.info(color.blue(`Increasing response length to ${newValue}.`));
                 requestBody.max_tokens = newValue;
             }
             requestBody.thinking = { type: 'enabled', budget_tokens: budgetTokens };
