@@ -413,6 +413,7 @@ export async function dispatchToSender({
     toolChoice = 'auto',
     jsonSchema = null,
     llmPresetName = '',
+    apiPresetName = '',
     apiSettingsOverride = null,
     functionCallMode = 'auto',
     functionCallOptions = null,
@@ -437,6 +438,13 @@ export async function dispatchToSender({
             replaceTools: hasTools,
             jsonSchema,
             llmPresetName: String(llmPresetName || '').trim(),
+            // apiPresetName is forwarded (not just apiSettingsOverride) so
+            // profile-scoped knobs read by name — RPM throttle
+            // (openai.js:sendOpenAIRequest) and per-profile max-request-retries
+            // (postChatCompletionGenerateRequest → getMaxRequestRetries) —
+            // resolve against the caller's target profile, not the active
+            // main-chat profile.
+            apiPresetName: String(apiPresetName || '').trim(),
             apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
             requestScope: 'extension_internal',
             functionCallMode: String(functionCallMode || 'auto'),
@@ -532,6 +540,7 @@ export function dispatchToSenderStreaming({
     toolChoice = 'auto',
     jsonSchema = null,
     llmPresetName = '',
+    apiPresetName = '',
     apiSettingsOverride = null,
     functionCallMode = 'auto',
     functionCallOptions = null,
@@ -567,6 +576,10 @@ export function dispatchToSenderStreaming({
                 replaceTools: hasTools,
                 jsonSchema,
                 llmPresetName: String(llmPresetName || '').trim(),
+                // See dispatchToSender: forward apiPresetName so RPM throttle
+                // and per-profile max-request-retries resolve against the
+                // caller's target profile.
+                apiPresetName: String(apiPresetName || '').trim(),
                 apiSettingsOverride: apiSettingsOverride && typeof apiSettingsOverride === 'object' ? apiSettingsOverride : null,
                 requestScope: 'extension_internal',
                 functionCallMode: String(functionCallMode || 'auto'),
@@ -1025,6 +1038,7 @@ export async function generateTask({
                 toolChoice,
                 jsonSchema,
                 llmPresetName: effectiveLlmPresetName,
+                apiPresetName,
                 apiSettingsOverride: profile.apiSettingsOverride,
                 functionCallMode,
                 functionCallOptions,
@@ -1044,6 +1058,7 @@ export async function generateTask({
                 toolChoice,
                 jsonSchema,
                 llmPresetName: effectiveLlmPresetName,
+                apiPresetName,
                 apiSettingsOverride: profile.apiSettingsOverride,
                 functionCallMode,
                 functionCallOptions,
@@ -1161,6 +1176,7 @@ export function generateTaskStream({
                 toolChoice,
                 jsonSchema,
                 llmPresetName: effectiveLlmPresetName,
+                apiPresetName,
                 apiSettingsOverride: profile.apiSettingsOverride,
                 functionCallMode,
                 functionCallOptions,

@@ -32,8 +32,10 @@ describe('generateTask end-to-end', () => {
 
     test('apiPresetName resolves apiSettingsOverride and reaches sender', async () => {
         let capturedOverride = null;
+        let capturedPresetName = null;
         const fakeOpenAI = async (type, msgs, signal, opts) => {
             capturedOverride = opts.apiSettingsOverride;
+            capturedPresetName = opts.apiPresetName;
             return { choices: [{ message: { content: 'x' }, finish_reason: 'stop' }] };
         };
         await generateTask({
@@ -41,6 +43,10 @@ describe('generateTask end-to-end', () => {
             apiPresetName: 'P1',
         }, { _injected: baseInjected({ senders: { sendOpenAIRequest: fakeOpenAI } }) });
         expect(capturedOverride).toEqual({ reverse_proxy: 'http://x' });
+        // Forwarded verbatim so downstream profile-scoped knobs (RPM throttle,
+        // per-profile max-request-retries) resolve against the caller's target
+        // profile, not the active main-chat profile.
+        expect(capturedPresetName).toBe('P1');
     });
 
     test('AbortError from sender wraps to code=aborted', async () => {
@@ -313,6 +319,25 @@ describe('generateTaskStream — openai happy path', () => {
 
         const final = await result;
         expect(final.assistantText).toBe('partial-final');
+    });
+
+    test('apiPresetName forwards through streaming dispatch to sender', async () => {
+        // Regression guard: dispatchToSenderStreaming used to drop
+        // apiPresetName, so profile-scoped knobs (RPM throttle, per-profile
+        // max-request-retries) fell back to the active main-chat profile.
+        let capturedPresetName = null;
+        const fakeStreamingOpenAI = async (type, msgs, signal, opts) => {
+            capturedPresetName = opts.apiPresetName;
+            return async function* gen() {
+                yield { text: 'ok', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+            };
+        };
+        const { result } = generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+            apiPresetName: 'P1',
+        }, { _injected: baseInjected({ senders: { sendOpenAIRequest: fakeStreamingOpenAI } }) });
+        await result;
+        expect(capturedPresetName).toBe('P1');
     });
 
     test('jsonSchema mode parses streamed content into result.jsonData', async () => {
