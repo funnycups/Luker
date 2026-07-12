@@ -42,6 +42,14 @@ jest.unstable_mockModule('../../src/endpoints/backends/luker-generation.js', () 
         job.lastSeq = seq;
         job.events.push({ seq, data: rawData, ts: Date.now() });
     },
+    // Runner calls this on every chunk envelope to accumulate `job.text`
+    // independently of `job.events` (which now holds envelopes for WS
+    // delivery). Best-effort text extraction from decoded bytes; the
+    // full-featured implementation lives in luker-generation.js and does
+    // CRLF-normalise + SSE frame split + provider-specific text pulls.
+    // This mock is a no-op because the persisted-trailer test only cares
+    // about `job.persisted` and `job.status` values on the trailer frame.
+    accumulateChunkTextIntoJob: () => {},
     failGenerationJob: (job, err) => { if (job) { job.status = 'failed'; job.error = String(err || ''); } },
     // The whole point of this test file: force-complete synchronously
     // with persisted=true so the trailer envelope carries a real value.

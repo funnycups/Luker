@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
     createGenerationJob,
     appendGenerationEvent,
+    accumulateChunkTextIntoJob,
     completeGenerationJobFromText,
     failGenerationJob,
     attachJobToRequest,
@@ -89,32 +90,47 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
 
     // Background dispatch
     setImmediate(async () => {
-        // Stream events accumulator for the request inspector. Only kept when
-        // startInspection ran (i.e. dispatch is a chat/text/kobold/novelai
-        // provider that calls ctx.inspection.start()). SD dispatches use the
-        // image inspector via startImage/completeImage and manage complete
-        // themselves — the runner-side complete below is a no-op for them
-        // because findEntry() returns null when there's no __inspectorId.
+        // Two INDEPENDENT event stores fed from the same emit stream:
         //
-        // Same list of SSE payload strings feeds two consumers:
-        //   1. `job.events` (via appendGenerationEvent) — legacy shape is
-        //      `{seq, data: <payload-string>, ts}`. `/jobs/events` REST
-        //      replay + `/jobs/events-stream` SSE catch-up ship these
-        //      entries as-is to the frontend, which JSON.parses `data` back
-        //      into a payload object. If we stored the raw
-        //      `{kind:'chunk', data:Uint8Array}` envelope from the dispatch
-        //      emit here, the replayed frames would be un-parseable JSON
-        //      (envelope wrapping the byte array) and text extraction inside
-        //      appendGenerationEvent — which JSON.parses each entry to pull
-        //      delta text — would silently drop every frame.
-        //   2. The request inspector's stream-parser
-        //      (completeInspectionFromStream) which expects the same
-        //      payload-string shape.
+        //   1. `job.events[]` — envelope shape `{seq, data:{kind, data}, ts}`.
+        //      This is what `ws-delivery.js:eventToFrame` consumes to build
+        //      the per-frame wire messages the browser expects
+        //      (`{type:'head'|'chunk'|'end'|'error', ...}`). It MUST hold
+        //      envelopes, not decoded SSE payload strings — the client's
+        //      WebSocket handler dispatches on `msg.type` and would drop
+        //      every non-envelope frame.
+        //
+        //      Also replayed verbatim by `/jobs/events{-stream}` recovery
+        //      endpoints. The frontend recovery `handleEvent`
+        //      (public/script.js:815) only reads `payload.seq`; it does not
+        //      inspect `payload.data`, so the envelope shape does not
+        //      regress the SSE catch-up path either. The authoritative
+        //      recovery text feed is the periodic `status` frame carrying
+        //      `job.text`, which is accumulated below via
+        //      `accumulateChunkTextIntoJob`.
+        //
+        //   2. `inspectionEvents[]` — array of SSE `data:` payload strings.
+        //      Consumed by `completeInspectionFromStream` (below, on
+        //      dispatch success) which parses provider-native usage /
+        //      responseParts / thinking blocks out of each frame. Legacy
+        //      shape. Only kept when startInspection ran (chat / text /
+        //      kobold / novelai). SD dispatches go through
+        //      startImageInspection / completeImage and ignore this array.
         //
         // TCP-level chunk boundaries don't align with SSE frame boundaries:
-        // a single chunk may contain multiple `data: {...}\n\n` frames
-        // concatenated, or split a frame across two chunks. `sseBuffer`
-        // absorbs partial frames and gets flushed on `\n\n`.
+        // a single chunk may contain multiple `data: {...}\n\n` frames or
+        // split a frame across chunks. `sseBuffer` reassembles partials
+        // before flushing per fully-received payload into `inspectionEvents`.
+        //
+        // `job.text` accumulation is a THIRD independent channel driven by
+        // `accumulateChunkTextIntoJob(job, bytes)` on every chunk. That
+        // helper owns its own buffer on `job._sseBuffer` (does the same
+        // CRLF-normalise + `\n\n` frame split + `extractTextFromStreamingFrameData`
+        // as the legacy `forwardStreamingWithGenerationJob` path). We do
+        // NOT rely on `appendGenerationEvent`'s built-in text extraction
+        // here because it JSON.parses whatever we hand it — passing an
+        // envelope object would silently yield '' delta for every frame
+        // (JSON.parse('[object Object]') throws → caught → empty).
         const inspectionEvents = [];
         let sseBuffer = '';
         // SSE frame parsing 1:1 copied from legacy
@@ -129,6 +145,10 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         //     in Claude thinking/tool_use deltas)
         //   - separate tail flush after chunks stop (last frame may not
         //     terminate with \n\n)
+        //
+        // Only feeds `inspectionEvents`. `job.events` receives envelopes
+        // in `onEmit` directly; `job.text` is accumulated in `onEmit` via
+        // `accumulateChunkTextIntoJob` on the raw bytes.
         function flushSseFrames(chunkText) {
             sseBuffer += chunkText;
             sseBuffer = sseBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -144,14 +164,6 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                 if (dataLines.length > 0) {
                     const payload = dataLines.join('\n');
                     if (payload) {
-                        // Route to BOTH consumers so job.events and the
-                        // inspector see the exact same per-payload frames.
-                        // appendGenerationEvent also does its own text
-                        // extraction into job.text — that's the sole
-                        // path text lands on the job now that the runner
-                        // no longer double-extracts via
-                        // accumulateChunkTextIntoJob (see onEmit below).
-                        appendGenerationEvent(job, payload);
                         inspectionEvents.push(payload);
                     }
                 }
@@ -171,7 +183,6 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             if (dataLines.length === 0) return;
             const payload = dataLines.join('\n');
             if (payload) {
-                appendGenerationEvent(job, payload);
                 inspectionEvents.push(payload);
             }
         }
@@ -179,15 +190,24 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             request, task: job, abortController,
             onCloseHandlers,
             onEmit: (event) => {
+                // Store every envelope (head / chunk / end / error) in
+                // `job.events` so `ws-delivery.js:eventToFrame` can turn
+                // each entry into the exact wire frame the browser's WS
+                // handler dispatches on (`msg.type`). Without this,
+                // eventToFrame's `typeof data !== 'object'` guard returns
+                // null for every entry and NOTHING reaches the client —
+                // Response bodies stay pending forever.
+                appendGenerationEvent(job, event);
                 if (event?.kind === 'chunk') {
-                    // Decode chunk bytes → text, then either SSE-frame it
-                    // (stream path) or push whole body once (non-stream
-                    // path). Both routes end up storing a
-                    // `{seq, data: <string>, ts}` entry in job.events via
-                    // appendGenerationEvent — legacy shape needed by
-                    // /jobs/events replay + text extraction.
-                    let text = '';
+                    // Chunk-only side channels:
+                    //   - accumulate job.text so /jobs/status recovery
+                    //     shows live text (frontend `handleStatus` reads
+                    //     `payload.text`).
+                    //   - decode + SSE-frame into `inspectionEvents` for
+                    //     completeInspectionFromStream at dispatch tail.
                     const bytes = event.data;
+                    accumulateChunkTextIntoJob(job, bytes);
+                    let text = '';
                     if (bytes && typeof bytes === 'string') {
                         text = bytes;
                     } else if (bytes && (bytes instanceof Uint8Array || Buffer.isBuffer(bytes))) {
@@ -200,18 +220,19 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                         flushSseFrames(text);
                     } else {
                         // Non-stream: the chunk is the full upstream JSON
-                        // body. Push once as a single event entry; the
-                        // completeInspection path below JSON.parses
-                        // inspectionEvents.join(''). appendGenerationEvent
-                        // will extract text via extractTextFromFinalPayload.
-                        appendGenerationEvent(job, text);
+                        // body. Push once as a single inspection entry;
+                        // the completeInspection path below JSON.parses
+                        // inspectionEvents.join('') to hand the raw
+                        // payload to the inspector.
                         inspectionEvents.push(text);
                     }
                 } else if (event?.kind === 'end') {
-                    // 收尾:如果 SSE 尾部帧没有 \n\n 结束符,手动 flush 残余,
-                    // 否则最后一帧(常见:usage delta / message_stop / [DONE])
-                    // 会丢失,导致 job.text 和 inspector responseParts/usage
-                    // 都缺失最后一段。
+                    // Tail-flush any SSE residue that never received a
+                    // closing \n\n. Real providers (Claude, OpenAI usage
+                    // deltas) often ship the terminal frame without the
+                    // closing separator; without this, the final
+                    // usage/message_delta payload never lands in the
+                    // inspector.
                     if (sseBuffer) {
                         if (!sseBuffer.endsWith('\n\n')) {
                             flushSseFrames('\n\n');
@@ -221,11 +242,10 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                     }
                     sseBuffer = '';
                 }
-                // `head` and `error` envelopes are intentionally NOT stored
-                // in job.events: legacy shape only ever held SSE payload
-                // strings. Errors are surfaced separately via
-                // failGenerationJob / failInspection in the catch block
-                // below.
+                // `head` and `error` intentionally have no side channel —
+                // they're already in `job.events` for WS delivery, and
+                // failInspection / completeInspection paths in the outer
+                // try/catch cover the inspector surface.
             },
         });
         try {
