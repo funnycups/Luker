@@ -10,7 +10,6 @@ import {
 import {
     completeInspection,
     completeInspectionFromStream,
-    failInspection,
     findEntry,
 } from '../request-inspector.js';
 import { createDispatchContext } from './context.js';
@@ -325,14 +324,33 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                 }
             } catch { /* inspector best-effort, never fails the request */ }
         } catch (err) {
-            ctx.emit.error(err);
-            failGenerationJob(job, err.message || String(err));
+            // Order matters: (1) surface to client through emit.error so the
+            // WS delivery layer flips the terminal-lock and abandons any
+            // buffered chunks; (2) transition the generation job from
+            // `running` → `failed` so /api/generation/active stops handing
+            // out a zombie id that keeps ticking until the 2h TTL prune
+            // reaper collects it; (3) mark the request-inspector entry as
+            // errored with an explicit 500 so the UI shows a fault instead
+            // of a perma-pending row. Every step wrapped in its own
+            // try/catch: any one throwing must not prevent the others (a
+            // failInspection throw was previously swallowing the
+            // failGenerationJob call above the fix).
+            try { ctx.emit.error(err); }
+            catch (e) { console.warn('[Runner] emit.error threw:', e); }
+            try { failGenerationJob(job, err?.message || String(err)); }
+            catch (e) { console.warn('[Runner] failGenerationJob threw:', e); }
             try {
                 const entry = findEntry(request);
                 if (entry && entry.type === 'chat') {
-                    failInspection(request, err?.message || String(err));
+                    // Explicit 500: an unhandled dispatch throw is not an
+                    // upstream 4xx (those go through the dispatch's own
+                    // !resp.ok branch which sets httpStatus to the real
+                    // upstream code). Route through ctx.inspection.fail so
+                    // dispatches that override the inspection facade (tests)
+                    // see the same call site.
+                    ctx.inspection.fail(err, 500);
                 }
-            } catch { /* inspector best-effort */ }
+            } catch (e) { console.warn('[Runner] inspection.fail threw:', e); }
         }
     });
 }

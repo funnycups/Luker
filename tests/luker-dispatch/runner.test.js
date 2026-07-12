@@ -125,6 +125,31 @@ describe('runLukerDispatch', () => {
         expect(entry).toBeDefined();
         expect(entry.status).toBe('error');
         expect(entry.error).toContain('upstream 401');
+        // Explicit 500: an unhandled dispatch throw is not an upstream 4xx.
+        // Before the fix, failInspection was called without httpStatus and
+        // the inspector UI showed httpStatus=null which rendered as a blank
+        // status column — indistinguishable from a still-running entry.
+        expect(entry.httpStatus).toBe(500);
+    });
+
+    test('runner marks generation job as failed when dispatch throws (Task 2G regression)', async () => {
+        // Guards the zombie-job path: pre-fix, dispatch throws surfaced via
+        // emit.error but the job stayed status='running' until the 2h TTL
+        // reaper, leaving /api/generation/active handing out dead ids.
+        const { getTaskByRequestId } = await import('../../src/endpoints/backends/luker-generation.js');
+        const req = fakeRequest({ requestId: 'inspect-fail-job-1', body: { chat_completion_source: 'claude', model: 'claude-3', stream: true } });
+        const res = fakeResponse();
+        const select = () => async (ctx) => {
+            ctx.inspection.start();
+            throw new Error('boom');
+        };
+        await runLukerDispatch(req, res, { endpoint: 'test', select });
+        await new Promise(r => setTimeout(r, 20));
+        const job = getTaskByRequestId('inspect-fail-job-1', 'alice');
+        expect(job).not.toBeNull();
+        expect(job.status).toBe('failed');
+        expect(job.error).toContain('boom');
+        expect(job.finishedAt).toBeGreaterThan(0);
     });
 
     test('runner advances job to awaiting_ack after dispatch success (regression: stuck-on-running)', async () => {
