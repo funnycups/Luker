@@ -39,8 +39,7 @@ export async function dispatchMinimax(ctx) {
     const apiUrl = body.minimax_endpoint === MINIMAX_ENDPOINT.CN
         ? API_MINIMAX_CN : API_MINIMAX;
 
-    const secretId = typeof body.secret_id === 'string' ? body.secret_id : undefined;
-    const apiKey = ctx.secrets.read(SECRET_KEYS.MINIMAX, { secretId }) || '';
+    const apiKey = ctx.secrets.read(SECRET_KEYS.MINIMAX, { secretId: body.secret_id }) || '';
 
     if (!apiKey) {
         console.warn('MiniMax key is missing.');
