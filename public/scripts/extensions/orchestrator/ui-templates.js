@@ -1024,10 +1024,10 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         getDisplayedScope,
         getExecutionMode,
         getPopupEditingLabel,
-        hasCharacterAgendaOverride,
-        hasCharacterDirectorOverride,
-        hasCharacterLoopOverride,
-        hasCharacterSpecOverride,
+        hasCharacterAgendaPresetLibrary,
+        hasCharacterDirectorPresetLibrary,
+        hasCharacterLoopPresetLibrary,
+        hasCharacterSpecPresetLibrary,
         i18n,
         syncCharacterEditorWithActiveAvatar,
     } = deps;
@@ -1049,30 +1049,41 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
     // Resolve the per-mode "Editing:" label + execution-mode chip label
     // by mode. Falls through to spec-defaults so the (rare) case where
     // getExecutionMode returns an unknown value still renders.
+    // Editing-label + profile-title use library-presence semantics so
+    // toggling the override off still labels the card as "Character
+    // override (configured, currently disabled)" and preserves the
+    // persisted-vs-draft distinction. The runtime "active" predicate
+    // has already flipped `isCharacterScope` back to global (via
+    // `getDisplayedScope` → `getStoredDisplayedScopeForMode`), so the
+    // topbar chip will land on the global branch anyway when the
+    // toggle is off — this branch is only exercised when the user
+    // manually pinned the character scope after toggling off, which
+    // is exactly when the "configured, currently disabled" wording
+    // should show.
     let editingLabel;
     let modeChipLabel;
     if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
         const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
-        const hasDirectorCharacterOverride = hasCharacterDirectorOverride(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasDirectorCharacterOverride, Boolean(directorOverride?.enabled));
+        const hasDirectorLibrary = hasCharacterDirectorPresetLibrary(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasDirectorLibrary, Boolean(directorOverride?.enabled));
         modeChipLabel = i18n('Director');
     } else if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
         const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
-        const hasLoopCharacterOverride = hasCharacterLoopOverride(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasLoopCharacterOverride, Boolean(loopOverride?.enabled));
+        const hasLoopLibrary = hasCharacterLoopPresetLibrary(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasLoopLibrary, Boolean(loopOverride?.enabled));
         modeChipLabel = i18n('Loop');
     } else if (currentMode === ORCH_EXECUTION_MODE_AGENDA) {
         const agendaOverride = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
-        const hasAgendaCharacterOverride = hasCharacterAgendaOverride(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasAgendaCharacterOverride, Boolean(agendaOverride?.enabled));
+        const hasAgendaLibrary = hasCharacterAgendaPresetLibrary(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasAgendaLibrary, Boolean(agendaOverride?.enabled));
         modeChipLabel = i18n('Agenda planner');
     } else if (currentMode === ORCH_EXECUTION_MODE_SINGLE) {
         editingLabel = getPopupEditingLabel(isCharacterScope, false, false);
         modeChipLabel = i18n('Single agent');
     } else {
         const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
-        const hasSpecCharacterOverride = hasCharacterSpecOverride(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasSpecCharacterOverride, Boolean(override?.enabled));
+        const hasSpecLibrary = hasCharacterSpecPresetLibrary(context, activeAvatar);
+        editingLabel = getPopupEditingLabel(isCharacterScope, hasSpecLibrary, Boolean(override?.enabled));
         modeChipLabel = i18n('Spec workflow');
     }
 
@@ -1148,10 +1159,10 @@ export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, 
         getLoopEditorByScope,
         getPopupEditingLabel,
         getProfileTitleForScope,
-        hasCharacterAgendaOverride,
-        hasCharacterDirectorOverride,
-        hasCharacterLoopOverride,
-        hasCharacterSpecOverride,
+        hasCharacterAgendaPresetLibrary,
+        hasCharacterDirectorPresetLibrary,
+        hasCharacterLoopPresetLibrary,
+        hasCharacterSpecPresetLibrary,
         syncCharacterEditorWithActiveAvatar,
     } = deps;
 
@@ -1167,20 +1178,24 @@ export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, 
     let profileTitle;
     if (mode === 'director') {
         editor = getDirectorEditorByScope(scope);
-        const hasOverride = hasCharacterDirectorOverride(context, activeAvatar);
-        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+        // Profile title uses library-presence semantics so a
+        // toggled-off card still renders as "Character Override: <name>"
+        // rather than downgrading to "Character Draft". `scope` here has
+        // already gated on the runtime "active" predicate.
+        const hasLibrary = hasCharacterDirectorPresetLibrary(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasLibrary);
     } else if (mode === 'agenda') {
         editor = getAgendaEditorByScope(scope);
-        const hasOverride = hasCharacterAgendaOverride(context, activeAvatar);
-        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+        const hasLibrary = hasCharacterAgendaPresetLibrary(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasLibrary);
     } else if (mode === 'loop') {
         editor = getLoopEditorByScope(scope);
-        const hasOverride = hasCharacterLoopOverride(context, activeAvatar);
-        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+        const hasLibrary = hasCharacterLoopPresetLibrary(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasLibrary);
     } else if (mode === 'spec') {
         editor = getEditorByScope(scope);
-        const hasOverride = hasCharacterSpecOverride(context, activeAvatar);
-        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasOverride);
+        const hasLibrary = hasCharacterSpecPresetLibrary(context, activeAvatar);
+        profileTitle = getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasLibrary);
     } else {
         // 'single' has no per-agent workspace — its Agents-tab content
         // is emitted at build time by buildAgentsTabHtml. Anything else

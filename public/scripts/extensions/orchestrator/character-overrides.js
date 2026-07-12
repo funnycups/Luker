@@ -18,11 +18,19 @@
  *      `getCharacterLoopOverrideByAvatar`, `getCharacterDirectorOverrideByAvatar`,
  *      `hasCharacterSpecOverride`, `hasCharacterAgendaOverride`,
  *      `hasCharacterLoopOverride`, `hasCharacterDirectorOverride`,
- *      `hasCharacterOverride`, `getCharacterCardSnapshot`. The four
- *      per-mode `getCharacter*OverrideByAvatar` accessors return a
- *      lightweight `{ mode, enabled }` view stitched together from the
+ *      `hasCharacterOverride`, `hasCharacterSpecPresetLibrary`,
+ *      `hasCharacterAgendaPresetLibrary`, `hasCharacterLoopPresetLibrary`,
+ *      `hasCharacterDirectorPresetLibrary`, `getCharacterCardSnapshot`.
+ *      The four per-mode `getCharacter*OverrideByAvatar` accessors return
+ *      a lightweight `{ mode, enabled }` view stitched together from the
  *      `overrideEnabled[mode]` flag — they exist for UI render paths that
- *      only need the enabled bit, not the full preset payload.
+ *      only need the enabled bit, not the full preset payload. The two
+ *      predicate families are NOT interchangeable: `has*Override` means
+ *      "actively applied right now" (library + toggle on), while
+ *      `has*PresetLibrary` means "library saved on card regardless of
+ *      toggle" and is only for UI plumbing that must keep working while
+ *      the toggle is off (the toggle itself, the "configured, currently
+ *      disabled" label branch, the profile-title renderer).
  *   3. Execution-mode resolution — `normalizeExecutionMode`,
  *      `getExecutionMode`, `getCharacterSavedExecutionModeByAvatar`,
  *      `applyCharacterExecutionModeForAvatar`. The card pins the saved
@@ -160,24 +168,64 @@ function cardHasPresetLibraryForMode(context, avatar, mode) {
     return Boolean(lib && typeof lib === 'object' && Object.keys(lib).length > 0);
 }
 
+/**
+ * Two override predicates per mode:
+ *
+ *   `hasCharacter<Mode>Override`         — "the card's override is
+ *       actively taking effect right now". True iff the library exists
+ *       AND the per-mode `overrideEnabled` flag is on. This is the
+ *       predicate for anything that decides which profile/scope to use
+ *       (displayed scope, runtime skill filter, iter-studio's exposed
+ *       reset tool, etc.) — the toggle-off state must be indistinguishable
+ *       from "no override at all".
+ *
+ *   `hasCharacter<Mode>PresetLibrary`    — "the card has a saved
+ *       library for this mode regardless of the toggle". This is the
+ *       predicate for UI plumbing that must keep working while the
+ *       toggle is off: the override toggle itself needs to stay
+ *       visible so the user can re-enable, the "configured, currently
+ *       disabled" chip label branch fires here, and the profile-title
+ *       renderer treats it as a persisted (not draft) card override.
+ *
+ * Callers must not confuse the two: mistaking library-presence for
+ * "active" is exactly the bug that made toggle-off refresh only the
+ * preset dropdown while the workspace, active preset, and skill scope
+ * silently stayed pinned to the card.
+ */
 export function hasCharacterSpecOverride(context, avatar) {
-    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_SPEC);
+    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_SPEC);
 }
 
 export function hasCharacterAgendaOverride(context, avatar) {
-    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
+    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
 }
 
 export function hasCharacterLoopOverride(context, avatar) {
-    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_LOOP);
+    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_LOOP);
 }
 
 export function hasCharacterDirectorOverride(context, avatar) {
-    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
+    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
 }
 
 export function hasCharacterOverride(context, avatar) {
     return hasCharacterSpecOverride(context, avatar);
+}
+
+export function hasCharacterSpecPresetLibrary(context, avatar) {
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_SPEC);
+}
+
+export function hasCharacterAgendaPresetLibrary(context, avatar) {
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
+}
+
+export function hasCharacterLoopPresetLibrary(context, avatar) {
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_LOOP);
+}
+
+export function hasCharacterDirectorPresetLibrary(context, avatar) {
+    return cardHasPresetLibraryForMode(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
 }
 
 /**
