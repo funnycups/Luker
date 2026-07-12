@@ -812,29 +812,26 @@ function addExtensionScript(name, manifest) {
         return Promise.resolve();
     }
 
-    return new Promise((resolve, reject) => {
-        const url = `/scripts/extensions/${name}/${manifest.js}`;
-        const id = sanitizeSelector(`${name}-js`);
-        let ready = false;
+    const url = `/scripts/extensions/${name}/${manifest.js}`;
+    const id = sanitizeSelector(`${name}-js`);
 
-        if ($(`script[id="${id}"]`).length === 0) {
-            const script = document.createElement('script');
-            script.id = id;
-            script.type = 'module';
-            script.src = url;
-            script.async = true;
-            script.onerror = function (err) {
-                reject(new Error(formatExtensionLoadError(err, url)));
-            };
-            script.onload = function () {
-                if (!ready) {
-                    ready = true;
-                    resolve();
-                }
-            };
-            document.body.appendChild(script);
-        }
-    });
+    if ($(`script[id="${id}"]`).length !== 0) {
+        return Promise.resolve();
+    }
+
+    // Marker element for de-dup + DOM inspection; not used for loading.
+    // The actual load goes through import() below so browser-thrown errors
+    // (404 with URL, MIME mismatch, SyntaxError with line/col, unresolved
+    // specifier, or the specific transitive URL that failed) surface as
+    // real Error objects instead of the bare error Event that a
+    // <script type="module"> tag reports to onerror.
+    const marker = document.createElement('script');
+    marker.id = id;
+    marker.type = 'module';
+    marker.dataset.extensionSrc = url;
+    document.body.appendChild(marker);
+
+    return import(new URL(url, window.location.href).href).then(() => undefined);
 }
 
 /**
