@@ -134,13 +134,32 @@ describe('dispatchClaude', () => {
         expect(rawArg.content[0].signature).toBe('sig-abc');
     });
 
-    test('missing API key with no reverse_proxy: emits error, no fetch', async () => {
+    test('missing API key with no reverse_proxy: emits head+chunk+end with HTTP 400 JSON envelope, no fetch', async () => {
         const ctx = fakeCtx({ secret: '' });
         await dispatchClaude(ctx);
 
+        // Legacy shape: `.status(400).send({error:true})`. Delivered post-head
+        // via head+chunk+end so the client sees Response.status=400 + a
+        // parseable JSON body (not a generic transport error).
         const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs.length).toBeGreaterThan(0);
+        expect(errs).toHaveLength(0);
         expect(ctx.fetch).not.toHaveBeenCalled();
+
+        const heads = ctx._emitted.filter(e => e.kind === 'head');
+        expect(heads).toHaveLength(1);
+        expect(heads[0].data.status).toBe(400);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed.error).toBe(true);
+        expect(parsed.message).toContain('Claude API key is missing');
+
+        const ends = ctx._emitted.filter(e => e.kind === 'end');
+        expect(ends).toHaveLength(1);
+
+        expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.fail.mock.calls[0][1]).toBe(400);
     });
 
     test('streaming: forwards upstream SSE chunks verbatim then end', async () => {

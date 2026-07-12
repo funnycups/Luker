@@ -100,9 +100,20 @@ export async function dispatchClaude(ctx) {
 
     if (!secretKey && !body.reverse_proxy) {
         console.warn('Claude API key is missing.');
-        const err = new Error('Claude API key is missing');
-        ctx.inspection.fail(err, 400);
-        ctx.emit.error(err);
+        // Legacy shape: `.status(400).send({error:true})`. Surface the missing
+        // key as an HTTP 400 with a parseable JSON envelope via head+chunk+
+        // end so the client's `!response.ok` branch fires with a meaningful
+        // body (not a generic stream error). Client:
+        //   • ws-delivery reads msg.type='head' → resolves headPromise with
+        //     status=400, then chunk/end enqueue the body → proxiedFetch
+        //     constructs `new Response(stream, { status: 400 })`.
+        //   • openai.js sees `!response.ok`, reads `.text()`, throws with
+        //     the envelope substring (matches pre-refactor error surface).
+        const errBody = JSON.stringify({ error: true, message: 'Claude API key is missing.' });
+        ctx.emit.head({ status: 400, headers: { 'content-type': 'application/json' } });
+        ctx.emit.chunk(new TextEncoder().encode(errBody));
+        ctx.emit.end();
+        ctx.inspection.fail(new Error('Claude API key is missing.'), 400);
         return;
     }
 
