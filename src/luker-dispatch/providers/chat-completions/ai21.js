@@ -28,6 +28,7 @@ export async function dispatchAI21(ctx) {
     const apiKey = ctx.secrets.read(SECRET_KEYS.AI21) || '';
 
     if (!apiKey) {
+        console.warn('AI21 API key is missing.');
         ctx.emit.error(new Error('AI21 API key is missing'));
         return;
     }
@@ -66,6 +67,8 @@ export async function dispatchAI21(ctx) {
         const fetchUrl = API_AI21 + '/chat/completions';
         ctx.inspection.attach(fetchUrl, apiKey, requestBody);
 
+        console.debug('AI21 request:', requestBody);
+
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
@@ -87,6 +90,7 @@ export async function dispatchAI21(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.warn(`AI21 API returned error: ${resp.status} ${resp.statusText} ${errText}`);
             const msg = `AI21 upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
@@ -107,11 +111,16 @@ export async function dispatchAI21(ctx) {
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
             const buf = await resp.arrayBuffer();
+            try {
+                const json = JSON.parse(new TextDecoder().decode(buf));
+                console.debug('AI21 response:', json);
+            } catch { /* non-JSON body — skip debug log */ }
             ctx.emit.chunk(new Uint8Array(buf));
             ctx.emit.end();
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Error communicating with AI21 API: ', err);
         ctx.emit.error(err);
     }
 }
