@@ -32,6 +32,7 @@ export async function dispatchMistralAI(ctx) {
     const apiKey = bodyApiKey || ctx.secrets.read(SECRET_KEYS.MISTRALAI) || '';
 
     if (!apiKey && !body.reverse_proxy) {
+        console.warn('MistralAI API key is missing.');
         ctx.emit.error(new Error('MistralAI API key is missing'));
         return;
     }
@@ -83,6 +84,8 @@ export async function dispatchMistralAI(ctx) {
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'chat/completions' : apiUrl + '/chat/completions';
         ctx.inspection.attach(fetchUrl, apiKey, requestBody);
 
+        console.debug('MisralAI request:', requestBody);
+
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
@@ -103,6 +106,7 @@ export async function dispatchMistralAI(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.warn(`MistralAI API returned error: ${resp.status} ${resp.statusText} ${errText}`);
             const msg = `MistralAI upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
@@ -123,11 +127,16 @@ export async function dispatchMistralAI(ctx) {
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
             const buf = await resp.arrayBuffer();
+            try {
+                const json = JSON.parse(new TextDecoder().decode(buf));
+                console.debug('MistralAI response:', json);
+            } catch { /* non-JSON body — skip debug log */ }
             ctx.emit.chunk(new Uint8Array(buf));
             ctx.emit.end();
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Error communicating with MistralAI API: ', err);
         ctx.emit.error(err);
     }
 }
