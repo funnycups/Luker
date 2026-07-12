@@ -3926,16 +3926,100 @@ function applyParsedPlainTextToolCallsToResponse(responseData, inspection) {
     return responseData;
 }
 
+/**
+ * Detect a semantically-empty non-streaming chat-completion response.
+ * Empty iff every choice has no text content AND no tool_calls, and (for
+ * Claude native shape) `data.content[]` has no non-empty text block either.
+ * `data.error` responses are handled upstream (`if (data.error)` in
+ * `sendOpenAIRequest`) and are explicitly NOT treated as empty here.
+ * @param {any} data
+ * @returns {boolean}
+ */
+function isChatCompletionResponseEmpty(data) {
+    if (!data || typeof data !== 'object') return true;
+    if (data.error) return false;
+
+    // Claude native shape: { content: [{type:'text', text:'...'}, ...] }
+    if (Array.isArray(data.content) && data.content.length > 0) {
+        const hasText = data.content.some(p => p?.type === 'text' && typeof p.text === 'string' && p.text.length > 0);
+        const hasToolUse = data.content.some(p => p?.type === 'tool_use');
+        if (hasText || hasToolUse) return false;
+    }
+
+    const choices = Array.isArray(data.choices) ? data.choices : [];
+    if (choices.length === 0) {
+        // No choices AND no Claude-shape content → empty
+        return !(Array.isArray(data.content) && data.content.length > 0);
+    }
+
+    return choices.every(choice => {
+        const msg = choice?.message ?? {};
+        const rawContent = msg.content ?? choice?.text;
+        let contentEmpty;
+        if (typeof rawContent === 'string') {
+            contentEmpty = rawContent.length === 0;
+        } else if (Array.isArray(rawContent)) {
+            contentEmpty = !rawContent.some(p => (typeof p?.text === 'string' && p.text.length > 0));
+        } else {
+            contentEmpty = !rawContent;
+        }
+        const noToolCalls = !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0;
+        return contentEmpty && noToolCalls;
+    });
+}
+
+/**
+ * @typedef {object} PostChatCompletionResult
+ * @property {Response} response The raw fetch Response.
+ * @property {any|null} cachedJson Pre-parsed body when the fetcher peeked it
+ *   for empty-response detection; caller should prefer this over calling
+ *   `response.json()` again. `null` when body was not peeked (stream request,
+ *   maxRetries=0, non-JSON body, or HTTP error).
+ */
+
+/**
+ * @param {object} requestBody
+ * @param {AbortSignal?} signal
+ * @param {{quietErrors?: boolean, apiPresetName?: string}} [options]
+ * @returns {Promise<PostChatCompletionResult>}
+ */
 async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false, apiPresetName = '' } = {}) {
     const maxRetries = getMaxRequestRetries(apiPresetName);
+    const isStreamRequest = Boolean(requestBody?.stream);
+    // Only peek body for empty-response detection when retries are enabled
+    // and this is a non-stream request. Streaming responses have their own
+    // consumer and must not have their body pre-read.
+    const shouldDetectEmpty = !isStreamRequest && maxRetries > 0;
+
+    let cachedJson = null;
 
     const response = await withRetry(async () => {
-        return await fetch('/api/backends/chat-completions/generate', {
+        cachedJson = null;
+        const r = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
             body: JSON.stringify(unescapeMacroBracesInRequestData(requestBody)),
             headers: getRequestHeaders(),
             signal,
         });
+        if (!shouldDetectEmpty || !r.ok) return r;
+
+        // Clone before reading so the caller can still consume the original body.
+        let parsed;
+        try {
+            parsed = await r.clone().json();
+        } catch {
+            // Body not JSON (unlikely for chat-completions) — let caller handle.
+            return r;
+        }
+
+        if (isChatCompletionResponseEmpty(parsed)) {
+            const err = new Error('Empty response body (no content and no tool_calls)');
+            // No `err.status` and no `err.skipRetry` → withRetry treats this
+            // as a retriable network-class error.
+            throw err;
+        }
+        cachedJson = parsed;
+        return r;
     }, {
         maxRetries,
         signal,
@@ -3963,7 +4047,7 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
         throw new Error(`Got response status ${response.status} from ${response.url}: ${responseBody.substring(0, 200)}`);
     }
 
-    return response;
+    return { response, cachedJson };
 }
 
 async function attemptPlainTextFunctionCallRetry({
@@ -4022,8 +4106,8 @@ async function attemptPlainTextFunctionCallRetry({
                 requestBody.secret_id = requestSecretId;
             }
 
-            const retryResponse = await postChatCompletionGenerateRequest(requestBody, signal, { quietErrors: true, apiPresetName });
-            const retryData = await retryResponse.json();
+            const { response: retryResponse, cachedJson: retryCachedJson } = await postChatCompletionGenerateRequest(requestBody, signal, { quietErrors: true, apiPresetName });
+            const retryData = retryCachedJson ?? await retryResponse.json();
             checkQuotaError(retryData, { quiet: true });
             checkModerationError(retryData, { quiet: true });
 
@@ -4214,7 +4298,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             });
         }
     }
-    const response = await postChatCompletionGenerateRequest(requestBody, signal, { apiPresetName });
+    const { response, cachedJson } = await postChatCompletionGenerateRequest(requestBody, signal, { apiPresetName });
     const generationIdHeader = response.headers.get('x-luker-generation-id');
     if (shouldTrackLukerGenerationState && generationIdHeader) {
         lastOpenAIGenerationId = generationIdHeader;
@@ -4363,7 +4447,7 @@ async function sendOpenAIRequest(type, messages, signal, {
                 persisted: lastOpenAIReplyPersistedByServer,
             });
         }
-        let data = await response.json();
+        let data = cachedJson ?? await response.json();
 
         checkQuotaError(data);
         checkModerationError(data);
