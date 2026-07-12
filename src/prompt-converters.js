@@ -40,6 +40,22 @@ const enableThoughtSignatures = !!getConfigValue('gemini.thoughtSignatures', tru
 
 /**
  * Extracts the character name, user name, and group member names from the request.
+ *
+ * SHAPE WARNING (for luker-dispatch callers): this helper only reads
+ * `request.body.*`. Chat-completion providers that live under
+ * `src/luker-dispatch/providers/chat-completions/` (COHERE, AI21, MINIMAX,
+ * MISTRALAI, ...) call this as `getPromptNames({ body })` — passing a
+ * bare `{ body }` object instead of the full Express `request`. If a future
+ * change makes this helper depend on any other request field
+ * (e.g. `request.user`, `request.query`, `request.headers`), those
+ * dispatch-side callers will SILENTLY read `undefined` and drop the field
+ * on the floor — no error, no warning, just missing data in the prompt.
+ *
+ * If you extend this helper beyond `body`, either:
+ *   (a) update every `getPromptNames({ body })` call site to pass the fields
+ *       you now need, or
+ *   (b) split the extra logic into a separate helper.
+ *
  * @param {import('express').Request} request Express request object
  * @returns {PromptNames} Prompt names
  */
