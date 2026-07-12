@@ -293,6 +293,14 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                 //   - failInspection (upstream 4xx/5xx handled in dispatch's
                 //     !resp.ok branch — sets status='error' + real httpStatus)
                 //   - abortInspection (user-cancelled)
+                //   - completeInspection (dispatch that owns the raw upstream
+                //     body — Claude / MakerSuite / VertexAI / Cohere — calls
+                //     ctx.inspection.complete(oai, raw) directly so the
+                //     extractors see provider-native fields like
+                //     usage.cache_read_input_tokens, usageMetadata.
+                //     cachedContentTokenCount, thinking blocks with
+                //     signatures. Runner-side completeInspection can only
+                //     pass (payload, payload) which loses the raw shape.)
                 // Without this guard, upstream Claude 400 requests come back
                 // as status='success' httpStatus=200 in the inspector UI
                 // because runner-side completeInspection unconditionally

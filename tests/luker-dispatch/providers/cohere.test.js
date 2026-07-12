@@ -52,6 +52,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'cohere-fake-key', signal } = {}
         inspection: {
             start: jest.fn(),
             attach: jest.fn((url) => attachedInspections.push(url)),
+            complete: jest.fn(),
             fail: jest.fn(),
         },
         emit: {
@@ -92,6 +93,49 @@ describe('dispatchCohere', () => {
         expect(init.method).toBe('POST');
         expect(init.headers['Authorization']).toBe('Bearer cohere-fake-key');
         expect(init.signal).toBe(ctx.signal);
+    });
+
+    test('non-streaming: feeds raw Cohere body to inspector alongside OAI-normalized reply (Task 2D)', async () => {
+        // Cohere's raw response has tool_plan reasoning + nested
+        // usage.tokens/billed_units that the OAI-normalized reply flattens
+        // away. Passing rawApiResponse to the inspector is forward-compat
+        // wiring for source='cohere' extractors that need the pre-flatten
+        // shape (currently the inspector routes Cohere usage through
+        // extractUsageFromOAI on the normalized payload; the raw body
+        // arriving unchanged means future cohere-specific extractors can
+        // land without touching this dispatch call site again).
+        const rawCohere = {
+            id: 'cohere-raw-1',
+            message: {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'raw answer' }],
+                tool_plan: 'i will call the search tool',
+            },
+            finish_reason: 'complete',
+            usage: {
+                billed_units: { input_tokens: 42, output_tokens: 7 },
+                tokens: { input_tokens: 42, output_tokens: 7 },
+            },
+        };
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawCohere), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchCohere(ctx);
+
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+        const [oaiArg, rawArg] = ctx.inspection.complete.mock.calls[0];
+        // First arg = OAI-normalized (message lifted into choices[0]).
+        expect(oaiArg.choices?.[0]?.message?.content).toBe('raw answer');
+        expect(oaiArg.choices?.[0]?.message?.reasoning_content).toBe('i will call the search tool');
+        // Second arg = raw Cohere body (preserves nested usage.tokens +
+        // billed_units + top-level message.tool_plan).
+        expect(rawArg).toEqual(rawCohere);
+        expect(rawArg.usage.tokens.input_tokens).toBe(42);
+        expect(rawArg.usage.billed_units.output_tokens).toBe(7);
+        expect(rawArg.message.tool_plan).toBe('i will call the search tool');
     });
 
     test('missing API key: emits error, no fetch', async () => {

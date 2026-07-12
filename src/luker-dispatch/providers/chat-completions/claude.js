@@ -339,6 +339,22 @@ export async function dispatchClaude(ctx) {
             const oaiBytes = new TextEncoder().encode(JSON.stringify(oai));
             ctx.emit.chunk(oaiBytes);
             ctx.emit.end();
+            // Feed BOTH the normalized OAI payload and the raw Anthropic
+            // body to the inspector. Runner-side completeInspection only
+            // has access to the OAI reply (that's what dispatch emits on
+            // the chunk bus) and would call completeInspection(oai, oai)
+            // — extractUsageFromClaude then walks the OAI-normalized
+            // usage shape and misses Anthropic-native fields:
+            //   • usage.cache_creation_input_tokens (cache_write)
+            //   • usage.cache_read_input_tokens (cache_read)
+            //   • content[].type='thinking' blocks with .signature
+            //   • content[].type='tool_use' blocks (extractPartsFromPayload
+            //     for source='claude' walks raw.content directly)
+            // Calling ctx.inspection.complete here marks the entry as
+            // 'success' so the runner's status-guard skips the fallback
+            // path (entry.status === 'running' check in runner.js:300).
+            try { ctx.inspection.complete(oai, anthropicJson); }
+            catch { /* inspection best-effort */ }
         }
     } catch (err) {
         // AbortError, network error, or any body-construction throw.

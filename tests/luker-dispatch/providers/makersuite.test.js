@@ -67,6 +67,7 @@ function fakeCtx({
         inspection: {
             start: jest.fn(),
             attach: jest.fn((url) => attachedInspections.push(url)),
+            complete: jest.fn(),
             fail: jest.fn(),
         },
         emit: {
@@ -106,6 +107,52 @@ describe('dispatchMakerSuite', () => {
         expect(init.method).toBe('POST');
         expect(init.headers['Content-Type']).toBe('application/json');
         expect(init.signal).toBe(ctx.signal);
+    });
+
+    test('MAKERSUITE non-streaming: feeds raw Gemini body to inspector alongside OAI-normalized reply (Task 2D)', async () => {
+        // extractUsageFromGemini reads usageMetadata.cachedContentTokenCount
+        // + candidatesTokenCount from the raw shape; extractPartsFromPayload
+        // walks raw.candidates[0].content.parts for thoughtSignature,
+        // inlineData, functionCall. The OAI-normalized reply flattens
+        // usageMetadata → usage.prompt_tokens/completion_tokens/
+        // prompt_tokens_details and drops thoughtSignature entirely, so
+        // rawApiResponse must reach the inspector for the extractors to
+        // see the source-of-truth fields.
+        const rawGemini = {
+            candidates: [{
+                content: {
+                    role: 'model',
+                    parts: [
+                        { text: 'reasoning trace', thought: true, thoughtSignature: 'thought-sig-1' },
+                        { text: 'final answer' },
+                    ],
+                },
+                finishReason: 'STOP',
+            }],
+            usageMetadata: {
+                promptTokenCount: 100,
+                candidatesTokenCount: 20,
+                cachedContentTokenCount: 60,
+                totalTokenCount: 120,
+            },
+        };
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawGemini), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+        const [oaiArg, rawArg] = ctx.inspection.complete.mock.calls[0];
+        // First arg = OAI-normalized (has choices[].message).
+        expect(oaiArg.choices?.[0]?.message?.content).toBe('final answer');
+        // Second arg = raw Gemini body (preserves usageMetadata +
+        // thoughtSignature).
+        expect(rawArg).toEqual(rawGemini);
+        expect(rawArg.usageMetadata.cachedContentTokenCount).toBe(60);
+        expect(rawArg.candidates[0].content.parts[0].thoughtSignature).toBe('thought-sig-1');
     });
 
     test('MAKERSUITE missing API key (no base_url, no reverse_proxy): emits error, no fetch', async () => {

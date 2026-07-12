@@ -46,6 +46,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'sk-ant-fake', signal } = {}) {
         inspection: {
             start: jest.fn(),
             attach: jest.fn((url) => attachedInspections.push(url)),
+            complete: jest.fn(),
             fail: jest.fn(),
         },
         emit: {
@@ -83,6 +84,54 @@ describe('dispatchClaude', () => {
         expect(init.headers['x-api-key']).toBe('sk-ant-fake');
         expect(init.headers['anthropic-version']).toBe('2023-06-01');
         expect(init.signal).toBe(ctx.signal);
+    });
+
+    test('non-streaming: feeds raw Anthropic body to inspector alongside OAI-normalized payload (Task 2D)', async () => {
+        // Pre-fix: runner called completeInspection(payload, payload) with
+        // the OAI-normalized reply for both args. extractUsageFromClaude
+        // then looked for usage.cache_read_input_tokens on the flat-normalized
+        // usage shape (which only has prompt_tokens/prompt_tokens_details)
+        // and always returned cache_read=null / cache_write=null. Passing
+        // the raw Anthropic body as rawApiResponse lets the extractor read
+        // native cache_creation_input_tokens / cache_read_input_tokens
+        // plus content[].type='thinking' blocks (signature preserved).
+        const rawAnthropic = {
+            id: 'msg_cache_1',
+            type: 'message',
+            role: 'assistant',
+            content: [
+                { type: 'thinking', thinking: 'internal reasoning', signature: 'sig-abc' },
+                { type: 'text', text: 'answer' },
+            ],
+            stop_reason: 'end_turn',
+            usage: {
+                input_tokens: 100,
+                output_tokens: 10,
+                cache_creation_input_tokens: 500,
+                cache_read_input_tokens: 800,
+            },
+        };
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawAnthropic), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchClaude(ctx);
+
+        expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+        const [oaiArg, rawArg] = ctx.inspection.complete.mock.calls[0];
+        // First arg = OAI-normalized (has choices[].message).
+        expect(oaiArg).toBeDefined();
+        expect(oaiArg.choices?.[0]?.message?.content).toBe('answer');
+        expect(oaiArg.choices?.[0]?.message?.reasoning_content).toBe('internal reasoning');
+        // Second arg = raw Anthropic body (preserves cache_* + thinking
+        // block with signature).
+        expect(rawArg).toEqual(rawAnthropic);
+        expect(rawArg.usage.cache_creation_input_tokens).toBe(500);
+        expect(rawArg.usage.cache_read_input_tokens).toBe(800);
+        expect(rawArg.content[0].type).toBe('thinking');
+        expect(rawArg.content[0].signature).toBe('sig-abc');
     });
 
     test('missing API key with no reverse_proxy: emits error, no fetch', async () => {

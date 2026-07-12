@@ -134,6 +134,19 @@ export async function dispatchCohere(ctx) {
             const bytes = new TextEncoder().encode(JSON.stringify(normalized));
             ctx.emit.chunk(bytes);
             ctx.emit.end();
+            // Cohere's raw response carries usage.tokens.{input,output} on a
+            // shape the OAI-normalized reply doesn't expose (normalized only
+            // has flat usage.prompt_tokens / completion_tokens). The
+            // inspector currently only special-cases source='claude' /
+            // 'makersuite' / 'vertexai' for rawApiResponse-derived usage,
+            // so this call is a forward-compat wiring: today
+            // extractUsageFromOAI on the normalized payload is what fills
+            // the entry, but passing the raw body means a future
+            // extractUsageFromCohere addition (tool_plan reasoning tokens,
+            // citations, cache metrics) has the source-of-truth data
+            // available without touching this call site again.
+            try { ctx.inspection.complete(normalized, rawJson); }
+            catch { /* inspection best-effort */ }
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }

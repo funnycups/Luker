@@ -436,6 +436,18 @@ export async function dispatchMakerSuite(ctx) {
             const reply = normalizeGeminiResponseToOAI(generateResponseJson);
             ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(reply)));
             ctx.emit.end();
+            // Route the raw Gemini body to the inspector alongside the
+            // OAI-normalized reply. extractUsageFromGemini (source =
+            // 'makersuite' | 'vertexai') reads usageMetadata.
+            // cachedContentTokenCount + candidatesTokenCount from the raw
+            // shape; extractPartsFromPayload walks raw.candidates[0].
+            // content.parts for thoughtSignature / inlineData / functionCall.
+            // Without passing rawApiResponse, the runner falls back to
+            // completeInspection(reply, reply) which loses those fields.
+            // See runner.js:290 for the status-guard that skips the
+            // fallback once ctx.inspection.complete has already run.
+            try { ctx.inspection.complete(reply, generateResponseJson); }
+            catch { /* inspection best-effort */ }
         }
     } catch (error) {
         console.error(`Error communicating with ${apiName} API:`, error);
