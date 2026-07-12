@@ -208,7 +208,7 @@ export async function dispatchKobold(ctx) {
                     }
                 }
 
-                ctx.emit.head({ status: resp.status, headers: {} });
+                ctx.emit.head({ status: resp.status, headers: resp.headers });
 
                 if (body.streaming) {
                     // Streaming path gate for upstream !ok: mirrors the

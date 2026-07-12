@@ -82,7 +82,7 @@ export async function dispatchSdZai(ctx) {
         // client hangs on subscribe races with setImmediate dispatch.
         // Only the initial generate fetch emits head; the CDN
         // image-download retries below are internal.
-        ctx.emit.head({ status: generateResponse.status, headers: {} });
+        ctx.emit.head({ status: generateResponse.status, headers: generateResponse.headers });
 
         if (!generateResponse.ok) {
             const text = await generateResponse.text().catch(() => '');

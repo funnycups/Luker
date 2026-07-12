@@ -72,7 +72,7 @@ export async function dispatchSdAimlapi(ctx) {
         // status. The WebSocket delivery layer (ws-delivery) uses head to
         // release the client-side `await headPromise`; without it the
         // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: apiRes.status, headers: {} });
+        ctx.emit.head({ status: apiRes.status, headers: apiRes.headers });
 
         if (!apiRes.ok) {
             const errText = await apiRes.text().catch(() => '');

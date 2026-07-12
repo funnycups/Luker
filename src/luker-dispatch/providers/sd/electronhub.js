@@ -67,7 +67,7 @@ export async function dispatchSdElectronHub(ctx) {
         // status. The WebSocket delivery layer (ws-delivery) uses head to
         // release the client-side `await headPromise`; without it the
         // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: result.status, headers: {} });
+        ctx.emit.head({ status: result.status, headers: result.headers });
 
         if (!result.ok) {
             const errorText = await result.text().catch(() => '');

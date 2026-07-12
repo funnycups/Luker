@@ -76,7 +76,7 @@ export async function dispatchSdTogether(ctx) {
         // client hangs on subscribe races with setImmediate dispatch.
         // Only the initial images-generation fetch emits head; the
         // fallback URL-download fetch below is internal.
-        ctx.emit.head({ status: result.status, headers: {} });
+        ctx.emit.head({ status: result.status, headers: result.headers });
 
         if (!result.ok) {
             const text = await result.text().catch(() => '');

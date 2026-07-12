@@ -93,7 +93,7 @@ export async function dispatchSdComfyRunPod(ctx) {
         // client hangs on subscribe races with setImmediate dispatch.
         // Only the initial /run job-submit fetch emits head; the
         // /status poll and /cancel fire-and-forget are internal.
-        ctx.emit.head({ status: promptResult.status, headers: {} });
+        ctx.emit.head({ status: promptResult.status, headers: promptResult.headers });
 
         if (!promptResult.ok) {
             const text = await promptResult.text().catch(() => '');

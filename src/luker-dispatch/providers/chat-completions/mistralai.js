@@ -104,7 +104,7 @@ export async function dispatchMistralAI(ctx) {
         // status. The WebSocket delivery layer (ws-delivery) uses head to
         // release the client-side `await headPromise`; without it the
         // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: resp.status, headers: {} });
+        ctx.emit.head({ status: resp.status, headers: resp.headers });
 
         if (!resp.ok) {
             let errText = '';

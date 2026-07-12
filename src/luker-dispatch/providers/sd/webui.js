@@ -107,7 +107,7 @@ export async function dispatchSdWebui(ctx) {
         // Only the main txt2img fetch emits head; the Forge-detect
         // options probe and the fire-and-forget /interrupt call are
         // internal.
-        ctx.emit.head({ status: result.status, headers: {} });
+        ctx.emit.head({ status: result.status, headers: result.headers });
 
         if (!result.ok) {
             const text = await result.text().catch(() => '');

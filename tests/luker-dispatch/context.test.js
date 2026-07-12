@@ -45,6 +45,116 @@ describe('createDispatchContext', () => {
         expect(Array.from(emitted[1].data)).toEqual([1, 2, 3]);
     });
 
+    describe('emit.head propagates whitelisted upstream headers', () => {
+        // Dispatches SHOULD pass `resp.headers` (Headers instance from
+        // node-fetch) instead of the historical `{}`. The context method
+        // picks a small whitelist so client-side proxied fetch can surface
+        // ratelimit / retry-after via Response.headers.get(). Prior to
+        // this, request-retry.js (public/scripts/request-retry.js:63,131)
+        // read `Retry-After` from a synthetic Response with no headers,
+        // so all ratelimit-driven backoffs used the default schedule.
+        test('plain object with mixed headers → only whitelisted kept, lowercased', () => {
+            const { ctx, emitted } = baseFixture();
+            ctx.emit.head({
+                status: 429,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Retry-After': '30',
+                    'x-ratelimit-remaining': '0',
+                    'set-cookie': 'session=abc',       // stripped
+                    'x-custom-debug': 'zzz',           // stripped
+                },
+            });
+            expect(emitted[0].data.headers).toEqual({
+                'content-type': 'application/json',
+                'retry-after': '30',
+                'x-ratelimit-remaining': '0',
+            });
+        });
+
+        test('Headers instance (node-fetch shape) → picked via forEach', () => {
+            const { ctx, emitted } = baseFixture();
+            // Headers is a WHATWG global in modern Node.
+            const h = new Headers();
+            h.set('content-type', 'text/event-stream');
+            h.set('retry-after', '5');
+            h.set('anthropic-ratelimit-tokens-remaining', '1234');
+            h.set('authorization', 'Bearer sk-secret'); // stripped
+            ctx.emit.head({ status: 200, headers: h });
+            expect(emitted[0].data.headers).toEqual({
+                'content-type': 'text/event-stream',
+                'retry-after': '5',
+                'anthropic-ratelimit-tokens-remaining': '1234',
+            });
+        });
+
+        test('ratelimit- and x-ratelimit- prefixes all pass through', () => {
+            const { ctx, emitted } = baseFixture();
+            ctx.emit.head({
+                status: 200,
+                headers: {
+                    'ratelimit-limit': '100',
+                    'ratelimit-remaining': '10',
+                    'ratelimit-reset': '60',
+                    'x-ratelimit-limit-requests': '1000',
+                    'x-ratelimit-remaining-requests': '999',
+                    'anthropic-ratelimit-requests-limit': '50',
+                    'x-request-id': 'req-abc',
+                    'x-goog-request-id': 'goog-xyz',
+                },
+            });
+            expect(Object.keys(emitted[0].data.headers).sort()).toEqual([
+                'anthropic-ratelimit-requests-limit',
+                'ratelimit-limit',
+                'ratelimit-remaining',
+                'ratelimit-reset',
+                'x-goog-request-id',
+                'x-ratelimit-limit-requests',
+                'x-ratelimit-remaining-requests',
+                'x-request-id',
+            ]);
+        });
+
+        test('empty object → empty object (back-compat with dispatches passing {})', () => {
+            const { ctx, emitted } = baseFixture();
+            ctx.emit.head({ status: 200, headers: {} });
+            expect(emitted[0].data.headers).toEqual({});
+        });
+
+        test('null / undefined headers → empty object', () => {
+            const { ctx, emitted } = baseFixture();
+            ctx.emit.head({ status: 200, headers: null });
+            ctx.emit.head({ status: 200, headers: undefined });
+            // second emit is post-terminal? no — head is not terminal.
+            expect(emitted[0].data.headers).toEqual({});
+            expect(emitted[1].data.headers).toEqual({});
+        });
+
+        test('undefined header values are skipped', () => {
+            const { ctx, emitted } = baseFixture();
+            ctx.emit.head({
+                status: 200,
+                headers: { 'content-type': undefined, 'retry-after': '10' },
+            });
+            expect(emitted[0].data.headers).toEqual({ 'retry-after': '10' });
+        });
+
+        test('secret / auth headers are stripped even when explicitly set', () => {
+            const { ctx, emitted } = baseFixture();
+            ctx.emit.head({
+                status: 200,
+                headers: {
+                    'authorization': 'Bearer sk-1',
+                    'cookie': 'session=abc',
+                    'set-cookie': 'session=def',
+                    'x-api-key': 'sk-2',
+                    'content-type': 'application/json',
+                },
+            });
+            expect(emitted[0].data.headers).toEqual({ 'content-type': 'application/json' });
+        });
+    });
+
     test('emit.error terminates and rejects subsequent emit', () => {
         const { ctx, emitted } = baseFixture();
         ctx.emit.error(new Error('boom'));

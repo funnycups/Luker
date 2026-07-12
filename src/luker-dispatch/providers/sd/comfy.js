@@ -222,7 +222,7 @@ export async function dispatchSdComfy(ctx) {
         // Only the initial /prompt fetch emits head; the /history and
         // /view image-download fetches, the /interrupt fire-and-forget,
         // and the internal ComfyUI WebSocket are all internal.
-        ctx.emit.head({ status: promptResult.status, headers: {} });
+        ctx.emit.head({ status: promptResult.status, headers: promptResult.headers });
 
         if (!promptResult.ok) {
             const text = await promptResult.text().catch(() => '');

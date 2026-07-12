@@ -389,7 +389,7 @@ export async function dispatchMakerSuite(ctx) {
         // status. The WebSocket delivery layer (ws-delivery) uses head to
         // release the client-side `await headPromise`; without it the
         // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: generateResponse.status, headers: {} });
+        ctx.emit.head({ status: generateResponse.status, headers: generateResponse.headers });
 
         if (stream) {
             await pipeResponseBodyToEmit(generateResponse, ctx);

@@ -18,6 +18,74 @@ import {
     abortInspection,
 } from '../request-inspector.js';
 
+// Whitelist of upstream response headers propagated to the client via
+// the `head` frame. Kept small and behaviorally-motivated:
+//   • `content-type` — SSE clients branch on it; inspector renders body accordingly.
+//   • `retry-after` / `ratelimit-*` / `x-ratelimit-*` — request-retry.js
+//     (public/scripts/request-retry.js:63,131) reads Retry-After to
+//     compute backoff; inspector UI shows remaining quota.
+//   • `anthropic-ratelimit-*` — Claude-specific ratelimit family, same purpose.
+//   • `x-request-id` / `x-goog-request-id` — upstream request IDs (support tickets).
+//
+// Everything else (Set-Cookie, auth echo, provider-internal debug hints)
+// is stripped. Match is case-insensitive because node-fetch normalizes to
+// lowercase but `Headers` from other transports may not.
+const HEAD_HEADER_PREFIXES = [
+    'ratelimit-',
+    'x-ratelimit-',
+    'anthropic-ratelimit-',
+];
+const HEAD_HEADER_EXACT = new Set([
+    'content-type',
+    'retry-after',
+    'x-request-id',
+    'x-goog-request-id',
+]);
+
+function isWhitelistedHeader(name) {
+    const lower = String(name).toLowerCase();
+    if (HEAD_HEADER_EXACT.has(lower)) return true;
+    for (const prefix of HEAD_HEADER_PREFIXES) {
+        if (lower.startsWith(prefix)) return true;
+    }
+    return false;
+}
+
+/**
+ * Pick the whitelisted subset from a headers input. Accepts:
+ *   • A plain object (already-picked / caller-controlled) — pass-through
+ *     after lowercasing keys and applying the whitelist. Callers passing
+ *     `{}` get `{}` back (no-op, back-compat).
+ *   • A `Headers` instance (node-fetch / undici / whatwg) — iterate via
+ *     `.forEach` and pick whitelisted keys.
+ *   • `null` / `undefined` — returns `{}`.
+ *
+ * Returns a fresh lower-cased plain object suitable for JSON serialization.
+ */
+function pickWhitelistedHeaders(headers) {
+    const out = {};
+    if (!headers) return out;
+    // Headers-like: forEach(value, name) per whatwg fetch spec.
+    if (typeof headers.forEach === 'function' && typeof headers.get === 'function') {
+        headers.forEach((value, name) => {
+            if (isWhitelistedHeader(name)) {
+                out[String(name).toLowerCase()] = String(value);
+            }
+        });
+        return out;
+    }
+    // Plain object.
+    if (typeof headers === 'object') {
+        for (const [name, value] of Object.entries(headers)) {
+            if (value === undefined || value === null) continue;
+            if (isWhitelistedHeader(name)) {
+                out[String(name).toLowerCase()] = String(value);
+            }
+        }
+    }
+    return out;
+}
+
 export function createDispatchContext({ request, task, abortController, onEmit, onCloseHandlers }) {
     let terminal = false;
 
@@ -28,9 +96,7 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
         }
         try { onEmit(event); }
         catch (error) { console.warn('[Dispatch] onEmit threw', error); }
-    }
-
-    return {
+    }    return {
         body: request.body,
         user: {
             handle: request.user?.profile?.handle,
@@ -133,7 +199,29 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
         },
 
         emit: {
-            head({ status, headers }) { safeEmit({ kind: 'head', data: { status, headers } }); },
+            // Emit a `head` frame with upstream status + a whitelisted
+            // projection of upstream response headers. Callers pass:
+            //   • `status` — the HTTP status code from `resp.status`
+            //   • `headers` — either a plain object (already picked by the
+            //      dispatch) OR a `Headers`-like instance with `.get`/`.forEach`
+            //      (typically `resp.headers` from `node-fetch`). When a
+            //      Headers-like instance is passed, this method pulls only
+            //      the whitelisted subset so upstream `ratelimit-*`,
+            //      `retry-after`, `x-ratelimit-*`, `anthropic-ratelimit-*`,
+            //      `x-request-id`, `x-goog-request-id`, and `content-type`
+            //      reach the client via the `head` frame + ws-delivery.
+            //
+            // Passing plain `{}` remains valid (dispatches that don't yet
+            // forward upstream headers), but new dispatches SHOULD pass
+            // `resp.headers` so the client-side proxied fetch surfaces
+            // `Response.headers.get('retry-after')` etc. — request-retry.js
+            // (public/scripts/request-retry.js:63,131) already reads it
+            // to compute backoff, and inspector UI can show ratelimit
+            // state without dispatch-side manual pickers.
+            head({ status, headers }) {
+                const picked = pickWhitelistedHeaders(headers);
+                safeEmit({ kind: 'head', data: { status, headers: picked } });
+            },
             chunk(bytes) { safeEmit({ kind: 'chunk', data: bytes }); },
             end() { safeEmit({ kind: 'end', data: null }); },
             // Serialize both `err.message` AND `err.cause`. Several SD

@@ -82,7 +82,7 @@ export async function dispatchSdFalai(ctx) {
         // Only the initial queue-submit fetch emits head; the status
         // poll, response-URL fetch, and CDN image-download below are
         // internal.
-        ctx.emit.head({ status: result.status, headers: {} });
+        ctx.emit.head({ status: result.status, headers: result.headers });
 
         if (!result.ok) {
             const text = await result.text().catch(() => '');

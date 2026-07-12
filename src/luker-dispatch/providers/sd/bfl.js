@@ -120,7 +120,7 @@ export async function dispatchSdBfl(ctx) {
         // client hangs on subscribe races with setImmediate dispatch.
         // Only the initial task-submit fetch emits head; the subsequent
         // status-poll and image-download fetches are internal.
-        ctx.emit.head({ status: result.status, headers: {} });
+        ctx.emit.head({ status: result.status, headers: result.headers });
 
         if (!result.ok) {
             const text = await result.text().catch(() => '');
