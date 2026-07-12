@@ -205,6 +205,22 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         });
         try {
             await dispatchFn(ctx);
+            // Advance the generation job to `awaiting_ack` FIRST so the
+            // trailer we emit next reports the current `persisted` flag
+            // accurately. `completeGenerationJobFromText` arms the 15s
+            // auto-persist grace timer; `job.persisted` flips to `true`
+            // asynchronously when the timer fires (or when a fast synchronous
+            // persistence path completes it inline in tests). Callers that
+            // need the final flag still poll /jobs/status — the trailer just
+            // carries whatever state we can observe *right now*.
+            //
+            // Legacy handlers called this via `finalizePayloadWithJob` /
+            // `forwardStreamingWithGenerationJob`; the refactor initially
+            // called it AFTER emitting the trailer, guaranteeing every
+            // trailer reported `persisted: false` and `status: 'running'`.
+            try {
+                await completeGenerationJobFromText(request, job, job.text || '', request.body?.model || '');
+            } catch { /* generation-job best-effort; never crash background */ }
             // Emit the legacy trailer SSE frame carrying luker.generation_id
             // + persisted + status. Frontend openai.js:4316 reads this frame
             // to learn the job id and persist flag. Legacy
@@ -212,6 +228,10 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             // the refactor dropped it. ONLY for streaming — non-stream body
             // is a single JSON blob that `await response.json()` would fail
             // to parse if an SSE-shaped frame were appended.
+            //
+            // Uses `emit.trailer` (context.js) which bypasses safeEmit's
+            // terminal-lock: dispatches emit `end` at their own tail, and
+            // without the bypass every trailer would be silently dropped.
             const isStream = Boolean(request.body?.stream || request.body?.streaming);
             if (isStream) {
                 try {
@@ -222,24 +242,11 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                             status: job.status,
                         },
                     });
-                    ctx.emit.chunk(new TextEncoder().encode(`data: ${trailer}\n\n`));
+                    ctx.emit.trailer(new TextEncoder().encode(`data: ${trailer}\n\n`));
                 } catch { /* best-effort */ }
             }
-            // 若 dispatch 没显式 emit end,兜底
+            // 若 dispatch 没显式 emit end,兜底 (already terminal → no-op).
             ctx.emit.end();
-            // Advance the generation job to `awaiting_ack` so:
-            //   - GET /jobs/status returns a terminal state (SSE consumers exit)
-            //   - the auto-persist grace timer arms (client-ACK-race)
-            //   - acknowledgeGenerationJobsForRequest accepts the ack
-            // Legacy handlers did this via `finalizePayloadWithJob` /
-            // `forwardStreamingWithGenerationJob`; the refactor missed it,
-            // leaving every job stuck on `running` until TTL cleared it.
-            //
-            // Runs AFTER emit.end so client's stream close is not delayed by
-            // the async work here.
-            try {
-                await completeGenerationJobFromText(request, job, job.text || '', request.body?.model || '');
-            } catch { /* generation-job best-effort; never crash background */ }
             // Runner-side inspector complete. Only advance `type: 'chat'`
             // entries — SD dispatches use `startImageInspection` (creates a
             // `type: 'image'` entry with its own completeImage lifecycle),

@@ -168,11 +168,19 @@ describe('runLukerDispatch', () => {
         const res = fakeResponse();
         const emittedChunks = [];
         const select = () => async (ctx) => {
-            // Capture original chunk emit so we can inspect what runner appends.
+            // Capture BOTH chunk and trailer emits — trailer bypasses
+            // safeEmit's terminal-lock and is what the runner uses to
+            // append the {luker:{...}} frame AFTER dispatch has already
+            // called emit.end.
             const origChunk = ctx.emit.chunk;
             ctx.emit.chunk = (bytes) => {
                 emittedChunks.push(bytes);
                 origChunk(bytes);
+            };
+            const origTrailer = ctx.emit.trailer;
+            ctx.emit.trailer = (bytes) => {
+                emittedChunks.push(bytes);
+                origTrailer(bytes);
             };
             ctx.emit.chunk(new TextEncoder().encode('data: {"delta":"hi"}\n\n'));
             ctx.emit.end();

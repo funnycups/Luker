@@ -137,6 +137,26 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
             chunk(bytes) { safeEmit({ kind: 'chunk', data: bytes }); },
             end() { safeEmit({ kind: 'end', data: null }); },
             error(err) { safeEmit({ kind: 'error', data: { message: String(err?.message || err) } }); },
+            // Runner-only escape hatch: append a chunk AFTER the dispatch has
+            // already emitted a terminal `end`/`error`. Legacy behavior
+            // appended a `data: {"luker":{...}}\n\n` trailer frame to the tail
+            // of every streaming chat/text response so the frontend
+            // (openai.js:4316 / kai-settings.js / nai-settings.js /
+            // textgen-settings.js / script.js) could learn the server-side
+            // `generation_id` + `persisted` flag from the stream itself.
+            //
+            // Refactor's `safeEmit` locks the terminal state on the first
+            // `end`/`error` and drops every subsequent emit — including the
+            // runner's trailer. This bypass exists so the runner can still
+            // append the trailer without introducing an ordering coupling
+            // (dispatch must emit chunks first, then runner appends trailer,
+            // then real terminal fires). Bypass is NOT exposed to dispatches
+            // and does NOT reopen the terminal flag: the next `emit.end` /
+            // `emit.error` after a trailer is still a no-op.
+            trailer(bytes) {
+                try { onEmit({ kind: 'chunk', data: bytes }); }
+                catch (error) { console.warn('[Dispatch] onEmit threw (trailer)', error); }
+            },
         },
     };
 }
