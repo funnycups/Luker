@@ -1816,55 +1816,61 @@ function hydratePerModeChips(mount, context, settings, prefix = '') {
 
     // Spec mode uses legacy `luker_orch_profile_*` (no `spec_` prefix) for
     // target + mode labels, but `luker_orch_spec_override_*` for the toggle.
+    //
+    // Toggle-visibility runs on library-presence alone (not on the
+    // `isCharacterScope` runtime predicate) — otherwise flipping the
+    // toggle off would immediately hide the toggle itself, stranding
+    // the user with no way to re-enable. `getDisplayedScopeLabel`
+    // reads `isEnabled` separately to pick the "(enabled)" vs
+    // "(configured, currently disabled)" wording, and it prefers the
+    // "configured, currently disabled" branch whenever the library is
+    // present regardless of the current runtime scope, so the label
+    // stays honest about the persisted override even after the toggle
+    // has flipped displayed scope back to global.
     {
         const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
-        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC);
-        const isCharacterScope = scope === 'character';
-        // Toggle-visibility + "configured, currently disabled" label
-        // branch need library-presence semantics: if we used the "actively
-        // applied" predicate here, flipping the toggle off would hide the
-        // toggle itself (user can't re-enable) and swap the label back to
-        // "no override". `getDisplayedScopeLabel` reads `isEnabled`
-        // separately to pick the "(enabled)" vs "(configured, currently
-        // disabled)" wording.
         const hasLibrary = hasCharacterSpecPresetLibrary(context, activeAvatar);
         const isEnabled = Boolean(override?.enabled);
+        // When the library is present, force the label to the character
+        // branch so "configured, currently disabled" always fires (the
+        // runtime scope has already fallen back to global, so
+        // getDisplayedScopeLabel(false, …) would otherwise render
+        // "Global profile" and hide the persisted override from the
+        // user's mental model).
+        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_profile_target').text(targetLabel);
-        $('luker_orch_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasLibrary, isEnabled));
-        $('luker_orch_spec_override_toggle').toggle(isCharacterScope && hasLibrary);
+        $('luker_orch_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
+        $('luker_orch_spec_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
         $('luker_orch_spec_override_enabled').prop('checked', isEnabled);
     }
     {
         const override = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
-        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA);
-        const isCharacterScope = scope === 'character';
         const hasLibrary = hasCharacterAgendaPresetLibrary(context, activeAvatar);
         const isEnabled = Boolean(override?.enabled);
+        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_agenda_profile_target').text(targetLabel);
-        $('luker_orch_agenda_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasLibrary, isEnabled));
-        $('luker_orch_agenda_override_toggle').toggle(isCharacterScope && hasLibrary);
+        $('luker_orch_agenda_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
+        $('luker_orch_agenda_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
         $('luker_orch_agenda_override_enabled').prop('checked', isEnabled);
     }
     {
         const override = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
-        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP);
-        const isCharacterScope = scope === 'character';
         const hasLibrary = hasCharacterLoopPresetLibrary(context, activeAvatar);
         const isEnabled = Boolean(override?.enabled);
+        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_loop_profile_target').text(targetLabel);
-        $('luker_orch_loop_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasLibrary, isEnabled));
-        $('luker_orch_loop_override_toggle').toggle(isCharacterScope && hasLibrary);
+        $('luker_orch_loop_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
+        $('luker_orch_loop_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
         $('luker_orch_loop_override_enabled').prop('checked', isEnabled);
     }
     {
         const override = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
-        const scope = getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
-        const isCharacterScope = scope === 'character';
         const hasLibrary = hasCharacterDirectorPresetLibrary(context, activeAvatar);
         const isEnabled = Boolean(override?.enabled);
+        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_director_profile_target').text(targetLabel);
-        $('luker_orch_director_profile_mode').text(getDisplayedScopeLabel(isCharacterScope, hasLibrary, isEnabled));
-        $('luker_orch_director_override_toggle').toggle(isCharacterScope && hasLibrary);
+        $('luker_orch_director_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
+        $('luker_orch_director_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
         $('luker_orch_director_override_enabled').prop('checked', isEnabled);
     }
 }

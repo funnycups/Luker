@@ -1046,36 +1046,32 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
     const isCharacterScope = scope === 'character';
     const currentMode = settings && getExecutionMode ? getExecutionMode(settings) : '';
 
-    // Resolve the per-mode "Editing:" label + execution-mode chip label
-    // by mode. Falls through to spec-defaults so the (rare) case where
-    // getExecutionMode returns an unknown value still renders.
-    // Editing-label + profile-title use library-presence semantics so
-    // toggling the override off still labels the card as "Character
-    // override (configured, currently disabled)" and preserves the
-    // persisted-vs-draft distinction. The runtime "active" predicate
-    // has already flipped `isCharacterScope` back to global (via
-    // `getDisplayedScope` → `getStoredDisplayedScopeForMode`), so the
-    // topbar chip will land on the global branch anyway when the
-    // toggle is off — this branch is only exercised when the user
-    // manually pinned the character scope after toggling off, which
-    // is exactly when the "configured, currently disabled" wording
-    // should show.
+    // Editing-label uses library-presence to force the character
+    // branch when the library is present regardless of `isCharacterScope`.
+    // The runtime scope (`getDisplayedScope`) already fell back to
+    // global when the toggle was flipped off, so passing
+    // `isCharacterScope` here would land on
+    // "Global profile" and hide the fact that the card still carries
+    // a persisted override. Passing `hasLibrary` as the character-scope
+    // arg keeps `getPopupEditingLabel` in the "Character override
+    // (configured, currently disabled)" branch until the library
+    // itself is cleared.
     let editingLabel;
     let modeChipLabel;
     if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
         const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
         const hasDirectorLibrary = hasCharacterDirectorPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasDirectorLibrary, Boolean(directorOverride?.enabled));
+        editingLabel = getPopupEditingLabel(hasDirectorLibrary || isCharacterScope, hasDirectorLibrary, Boolean(directorOverride?.enabled));
         modeChipLabel = i18n('Director');
     } else if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
         const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
         const hasLoopLibrary = hasCharacterLoopPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasLoopLibrary, Boolean(loopOverride?.enabled));
+        editingLabel = getPopupEditingLabel(hasLoopLibrary || isCharacterScope, hasLoopLibrary, Boolean(loopOverride?.enabled));
         modeChipLabel = i18n('Loop');
     } else if (currentMode === ORCH_EXECUTION_MODE_AGENDA) {
         const agendaOverride = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
         const hasAgendaLibrary = hasCharacterAgendaPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasAgendaLibrary, Boolean(agendaOverride?.enabled));
+        editingLabel = getPopupEditingLabel(hasAgendaLibrary || isCharacterScope, hasAgendaLibrary, Boolean(agendaOverride?.enabled));
         modeChipLabel = i18n('Agenda planner');
     } else if (currentMode === ORCH_EXECUTION_MODE_SINGLE) {
         editingLabel = getPopupEditingLabel(isCharacterScope, false, false);
@@ -1083,7 +1079,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
     } else {
         const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
         const hasSpecLibrary = hasCharacterSpecPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(isCharacterScope, hasSpecLibrary, Boolean(override?.enabled));
+        editingLabel = getPopupEditingLabel(hasSpecLibrary || isCharacterScope, hasSpecLibrary, Boolean(override?.enabled));
         modeChipLabel = i18n('Spec workflow');
     }
 
