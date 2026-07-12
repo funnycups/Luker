@@ -25,15 +25,16 @@ const API_AI21 = 'https://api.ai21.com/studio/v1';
  */
 export async function dispatchAI21(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const apiKey = ctx.secrets.read(SECRET_KEYS.AI21) || '';
 
     if (!apiKey) {
         console.warn('AI21 API key is missing.');
-        ctx.emit.error(new Error('AI21 API key is missing'));
+        const err = new Error('AI21 API key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const bodyParams = {};

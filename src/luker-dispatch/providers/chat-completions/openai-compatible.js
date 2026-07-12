@@ -564,15 +564,16 @@ function detectTextCompletion(body) {
  */
 export async function dispatchOpenAICompatible(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const source = body.chat_completion_source;
     const resolver = RESOLVERS[source];
     if (!resolver) {
         console.warn('This chat completion source is not supported yet.');
-        ctx.emit.error(new Error(`OpenAI-compatible dispatch: unsupported source: ${source}`));
+        const err = new Error(`OpenAI-compatible dispatch: unsupported source: ${source}`);
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const isTextCompletion = detectTextCompletion(body);

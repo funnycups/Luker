@@ -26,6 +26,7 @@ const API_MISTRAL = 'https://api.mistral.ai/v1';
  */
 export async function dispatchMistralAI(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
 
     // Direct body-supplied password wins (legacy: proxy_password override).
     const bodyApiKey = typeof body.proxy_password === 'string' ? body.proxy_password : '';
@@ -33,19 +34,21 @@ export async function dispatchMistralAI(ctx) {
 
     if (!apiKey && !body.reverse_proxy) {
         console.warn('MistralAI API key is missing.');
-        ctx.emit.error(new Error('MistralAI API key is missing'));
+        const err = new Error('MistralAI API key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
 
     let apiUrl;
     try {
         apiUrl = new URL(body.reverse_proxy || body.base_url || API_MISTRAL).toString();
-    } catch (err) {
-        ctx.emit.error(new Error(`MistralAI upstream URL invalid: ${err?.message || err}`));
+    } catch (parseErr) {
+        const err = new Error(`MistralAI upstream URL invalid: ${parseErr?.message || parseErr}`);
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const messages = convertMistralMessages(body.messages, getPromptNames({ body }));

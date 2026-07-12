@@ -96,6 +96,7 @@ function resolveMakerSuiteApiKey(ctx) {
  */
 export async function dispatchMakerSuite(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const useVertexAi = body.chat_completion_source === CHAT_COMPLETION_SOURCES.VERTEXAI;
     const apiName = useVertexAi ? 'Google Vertex AI' : 'Google AI Studio';
 
@@ -107,8 +108,10 @@ export async function dispatchMakerSuite(ctx) {
     if (useVertexAi) {
         try {
             apiUrl = new URL(body.reverse_proxy || body.base_url || API_VERTEX_AI);
-        } catch (err) {
-            ctx.emit.error(new Error(`${apiName} upstream URL invalid: ${err?.message || err}`));
+        } catch (parseErr) {
+            const err = new Error(`${apiName} upstream URL invalid: ${parseErr?.message || parseErr}`);
+            ctx.inspection.fail(err, 400);
+            ctx.emit.error(err);
             return;
         }
         try {
@@ -116,23 +119,29 @@ export async function dispatchMakerSuite(ctx) {
             authHeader = auth.authHeader;
             authType = auth.authType;
             console.debug(`Using Vertex AI authentication type: ${authType}`);
-        } catch (error) {
-            console.warn(`${apiName} authentication failed: ${error.message}`);
-            ctx.emit.error(new Error(error.message));
+        } catch (authErr) {
+            console.warn(`${apiName} authentication failed: ${authErr.message}`);
+            const err = new Error(authErr.message);
+            ctx.inspection.fail(err, 400);
+            ctx.emit.error(err);
             return;
         }
     } else {
         try {
             apiUrl = new URL(body.reverse_proxy || body.base_url || API_MAKERSUITE);
-        } catch (err) {
-            ctx.emit.error(new Error(`${apiName} upstream URL invalid: ${err?.message || err}`));
+        } catch (parseErr) {
+            const err = new Error(`${apiName} upstream URL invalid: ${parseErr?.message || parseErr}`);
+            ctx.inspection.fail(err, 400);
+            ctx.emit.error(err);
             return;
         }
         apiKey = resolveMakerSuiteApiKey(ctx);
 
         if (!body.base_url && !body.reverse_proxy && !apiKey) {
             console.warn(`${apiName} API key is missing.`);
-            ctx.emit.error(new Error(`${apiName} API key is missing`));
+            const err = new Error(`${apiName} API key is missing`);
+            ctx.inspection.fail(err, 400);
+            ctx.emit.error(err);
             return;
         }
 
@@ -308,8 +317,6 @@ export async function dispatchMakerSuite(ctx) {
 
     const requestBody = getGeminiBody();
     console.debug(`${apiName} request:`, requestBody);
-
-    ctx.inspection.start();
 
     try {
         const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');

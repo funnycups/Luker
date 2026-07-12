@@ -32,6 +32,7 @@ const API_DEEPSEEK = 'https://api.deepseek.com/beta';
  */
 export async function dispatchDeepSeek(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
 
     // Direct body-supplied password wins (legacy: proxy_password override).
     const bodyApiKey = typeof body.proxy_password === 'string' ? body.proxy_password : '';
@@ -39,19 +40,21 @@ export async function dispatchDeepSeek(ctx) {
 
     if (!apiKey && !body.base_url && !body.reverse_proxy) {
         console.warn('DeepSeek API key is missing.');
-        ctx.emit.error(new Error('DeepSeek API key is missing'));
+        const err = new Error('DeepSeek API key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
 
     let apiUrl;
     try {
         apiUrl = new URL(body.reverse_proxy || body.base_url || API_DEEPSEEK).toString();
-    } catch (err) {
-        ctx.emit.error(new Error(`DeepSeek upstream URL invalid: ${err?.message || err}`));
+    } catch (parseErr) {
+        const err = new Error(`DeepSeek upstream URL invalid: ${parseErr?.message || parseErr}`);
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const bodyParams = {};

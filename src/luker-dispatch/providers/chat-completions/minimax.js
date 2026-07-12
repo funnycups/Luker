@@ -34,6 +34,7 @@ const API_MINIMAX_CN = 'https://api.minimaxi.com/v1';
  */
 export async function dispatchMinimax(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
 
     const apiUrl = body.minimax_endpoint === MINIMAX_ENDPOINT.CN
         ? API_MINIMAX_CN : API_MINIMAX;
@@ -43,11 +44,11 @@ export async function dispatchMinimax(ctx) {
 
     if (!apiKey) {
         console.warn('MiniMax key is missing.');
-        ctx.emit.error(new Error('MiniMax key is missing'));
+        const err = new Error('MiniMax key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         // MiniMax does not allow consecutive messages with the same role.

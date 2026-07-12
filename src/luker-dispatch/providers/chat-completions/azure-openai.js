@@ -38,15 +38,16 @@ import { pipeResponseBodyToEmit } from '../../response-stream.js';
  */
 export async function dispatchAzureOpenAI(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const apiKey = ctx.secrets.read(SECRET_KEYS.AZURE_OPENAI) || '';
 
     const { azure_base_url, azure_deployment_name, azure_api_version } = body;
     if (!azure_base_url || !azure_deployment_name || !azure_api_version || !apiKey) {
-        ctx.emit.error(new Error('Azure OpenAI configuration is incomplete. Please provide Base URL, Deployment Name, API Version, and API Key in the connection settings.'));
+        const err = new Error('Azure OpenAI configuration is incomplete. Please provide Base URL, Deployment Name, API Version, and API Key in the connection settings.');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         // Whitelist body fields per AZURE_OPENAI_KEYS.

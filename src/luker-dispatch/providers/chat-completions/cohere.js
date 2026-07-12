@@ -34,15 +34,16 @@ const API_COHERE_V2 = 'https://api.cohere.ai/v2';
  */
 export async function dispatchCohere(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const apiKey = ctx.secrets.read(SECRET_KEYS.COHERE) || '';
 
     if (!apiKey) {
         console.warn('Cohere API key is missing.');
-        ctx.emit.error(new Error('Cohere API key is missing'));
+        const err = new Error('Cohere API key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const convertedHistory = convertCohereMessages(body.messages, getPromptNames({ body }));

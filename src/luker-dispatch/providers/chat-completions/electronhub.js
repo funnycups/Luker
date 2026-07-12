@@ -56,15 +56,16 @@ function resolveClaudeCacheConfig(body) {
  */
 export async function dispatchElectronHub(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const apiKey = ctx.secrets.read(SECRET_KEYS.ELECTRONHUB) || '';
 
     if (!apiKey) {
         console.warn('Electron Hub key is missing.');
-        ctx.emit.error(new Error('Electron Hub key is missing'));
+        const err = new Error('Electron Hub key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const bodyParams = {};

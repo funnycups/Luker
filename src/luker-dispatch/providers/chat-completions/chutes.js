@@ -24,15 +24,16 @@ const API_CHUTES = 'https://llm.chutes.ai/v1';
  */
 export async function dispatchChutes(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const apiKey = ctx.secrets.read(SECRET_KEYS.CHUTES) || '';
 
     if (!apiKey) {
         console.warn('Chutes key is missing.');
-        ctx.emit.error(new Error('Chutes key is missing'));
+        const err = new Error('Chutes key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const bodyParams = {};

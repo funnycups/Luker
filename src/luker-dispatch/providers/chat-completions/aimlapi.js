@@ -25,15 +25,16 @@ const API_AIMLAPI = 'https://api.aimlapi.com/v1';
  */
 export async function dispatchAimlapi(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const apiKey = ctx.secrets.read(SECRET_KEYS.AIMLAPI) || '';
 
     if (!apiKey) {
         console.warn('AI/ML API key is missing.');
-        ctx.emit.error(new Error('AI/ML API key is missing'));
+        const err = new Error('AI/ML API key is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         const bodyParams = {};
