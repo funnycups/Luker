@@ -53,6 +53,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'azure-fake-key', signal } = {})
             start: jest.fn(),
             attach: jest.fn((url) => attachedInspections.push(url)),
             fail: jest.fn(),
+            abort: jest.fn(),
         },
         emit: {
             head: (h) => emitted.push({ kind: 'head', data: h }),
@@ -176,5 +177,9 @@ describe('dispatchAzureOpenAI', () => {
         expect(chunks).toHaveLength(0);
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
+        // AbortError routes to inspection.abort (user-cancel), not inspection.fail
+        // (real fault). Legacy `chat-completions.js:2140-2145` split on error.name.
+        expect(ctx.inspection.abort).toHaveBeenCalledTimes(1);
+        expect(ctx.inspection.fail).not.toHaveBeenCalled();
     });
 });

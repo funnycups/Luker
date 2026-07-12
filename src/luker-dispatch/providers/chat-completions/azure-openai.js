@@ -138,7 +138,12 @@ export async function dispatchAzureOpenAI(ctx) {
             ctx.emit.end();
         }
     } catch (err) {
-        try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        if (err?.name === 'AbortError') {
+            try { ctx.inspection.abort(); } catch { /* inspection best-effort */ }
+        } else {
+            try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+            console.error('Azure OpenAI request failed: ', err);
+        }
         ctx.emit.error(err);
     }
 }
