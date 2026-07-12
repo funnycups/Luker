@@ -223,8 +223,34 @@ function defaultShouldProxy(url) {
 }
 
 export function installFetchProxy(delivery, options = {}) {
+    // Default target = top window; iframe callers pass `iframe.contentWindow`
+    // so the proxy lands in the iframe's realm. TavernHelper (JS-Slash-Runner)
+    // and similar third-party runtimes execute user scripts inside a
+    // `TH-render` iframe whose own `window.fetch` was never proxied, so calls
+    // to `/api/backends/*/generate` from those scripts hit the runner's
+    // immediate `{}` body and never subscribe to the WS delivery — see
+    // installFetchProxyForAllIframes below for the iframe lifecycle driver.
+    const targetWindow = options.targetWindow || window;
+
+    // Idempotency: re-install on the same window is a no-op that returns the
+    // existing disposer. The iframe-lifecycle driver re-invokes this on every
+    // `iframe.load` (to survive navigate/reload resetting `contentWindow.fetch`)
+    // and needs the second/third call to short-circuit instead of stacking
+    // wrappers around our own proxiedFetch.
+    if (targetWindow.__lukerFetchProxyDisposer) return targetWindow.__lukerFetchProxyDisposer;
+
+    // Rebind built-ins to the target realm. Without this, `new Response(...)`
+    // constructs a parent-realm Response returned to iframe consumers, so
+    // `response instanceof Response` inside the iframe evaluates to `false`
+    // (iframe.Response !== parent.Response). Same for Headers instance-checks
+    // on caller `init.headers`, and DOMException-typed abort errors. Shadowing
+    // the outer globals via destructure means the function body below keeps
+    // its existing `Response` / `Headers` / `DOMException` identifiers with no
+    // further edits, but they now resolve to the target-window classes.
+    const { Response, Headers, DOMException } = targetWindow;
+
     const shouldProxy = options.shouldProxy || defaultShouldProxy;
-    const originalFetch = options.originalFetch || window.fetch.bind(window);
+    const originalFetch = options.originalFetch || targetWindow.fetch.bind(targetWindow);
     // Optional headers provider so out-of-band POSTs (like /abort) carry the
     // same CSRF/session headers the SPA uses for normal requests. Without
     // this, `/api/generation/:id/abort` fails CSRF middleware with 403 and
@@ -326,6 +352,103 @@ export function installFetchProxy(delivery, options = {}) {
         });
     }
 
-    window.fetch = proxiedFetch;
-    return () => { window.fetch = originalFetch; };
+    targetWindow.fetch = proxiedFetch;
+    const disposer = () => {
+        // Only restore if nobody else has since re-monkey-patched fetch in
+        // this window; blindly restoring would clobber a later override.
+        if (targetWindow.fetch === proxiedFetch) targetWindow.fetch = originalFetch;
+        delete targetWindow.__lukerFetchProxyDisposer;
+    };
+    targetWindow.__lukerFetchProxyDisposer = disposer;
+    return disposer;
+}
+
+/**
+ * Install the fetch proxy into every same-origin iframe on the page, current
+ * and future. Cross-origin iframes silently skip (SecurityError on
+ * `contentWindow` access is the browser contract for cross-origin isolation,
+ * not an actionable failure).
+ *
+ * Motivation: TavernHelper's JS-Slash-Runner (and any script runtime that
+ * sandboxes user scripts inside `<iframe>`) gives each script its own
+ * `window.fetch` untouched by the top-window proxy. Under the runner-based
+ * `/generate` architecture (src/luker-dispatch/runner.js) the HTTP body is
+ * always `{}` and the real payload lands over WebSocket delivery, so iframe
+ * scripts calling `fetch('/api/backends/chat-completions/generate', ...)`
+ * see `{}` and treat it as an "invalid response format" failure. Patching
+ * every iframe realm restores the contract for all such scripts uniformly.
+ *
+ * Lifecycle coverage is deliberately three-step and none is optional:
+ *   1. Patch existing iframes at install time — covers iframes that already
+ *      landed in the DOM before delivery boot (unlikely for TH-render at
+ *      first-load, but not zero for pre-warmed / pinned messages).
+ *   2. MutationObserver — TH-render iframes are runtime-created (per rendered
+ *      message / per script activation); without this, we cover exactly zero
+ *      TavernHelper scripts in the common case.
+ *   3. `iframe.load` event re-patch — browsers reset `contentWindow.fetch`
+ *      on navigate / reload / srcdoc rewrite. `installFetchProxy` is
+ *      idempotent per-window so redundant patch calls are harmless.
+ *
+ * @param {ReturnType<createLukerDelivery>} delivery Shared delivery instance
+ *     from the top window; all iframe subscriptions multiplex over the same
+ *     WebSocket, no per-iframe WS.
+ * @param {object} [options] Same shape as `installFetchProxy`'s options
+ *     (getExtraHeaders / shouldProxy); `targetWindow` is set per-iframe and
+ *     any caller-supplied value is ignored.
+ * @returns {() => void} Disposer that disconnects the observer. Already-
+ *     patched iframes retain their proxy (there's no safe global unwind).
+ */
+export function installFetchProxyForAllIframes(delivery, options = {}) {
+    function patchIframe(iframe) {
+        // Cross-origin: contentWindow access throws SecurityError. Silent
+        // skip — this is the browser's boundary, not a diagnosable state.
+        let win;
+        try { win = iframe.contentWindow; } catch { return; }
+        if (!win) return;
+        try {
+            installFetchProxy(delivery, { ...options, targetWindow: win });
+        } catch (err) {
+            // Real errors (e.g. iframe.contentWindow.Response missing on some
+            // exotic iframe type) surface loudly — swallowing would hide the
+            // exact "generate requests silently fail" class of bug this whole
+            // module exists to prevent.
+            console.warn('[ws-delivery] iframe fetch patch failed:', err?.message || err);
+        }
+    }
+
+    function attachLoadHook(iframe) {
+        iframe.addEventListener('load', () => patchIframe(iframe));
+    }
+
+    // Step 1: existing iframes.
+    for (const iframe of document.querySelectorAll('iframe')) {
+        patchIframe(iframe);
+        attachLoadHook(iframe);
+    }
+
+    // Step 2 + 3: watch for iframes added at any depth. `subtree: true` so we
+    // pick up iframes wrapped inside a container element (TH-render wraps
+    // iframes inside a `.mes` bubble subtree, not as direct <body> children).
+    const mo = new MutationObserver(mutations => {
+        for (const m of mutations) {
+            for (const node of m.addedNodes) {
+                if (!(node instanceof Element)) continue;
+                if (node.tagName === 'IFRAME') {
+                    patchIframe(node);
+                    attachLoadHook(node);
+                    continue;
+                }
+                // Container node that may itself contain iframes.
+                const nested = node.querySelectorAll?.('iframe');
+                if (!nested) continue;
+                for (const iframe of nested) {
+                    patchIframe(iframe);
+                    attachLoadHook(iframe);
+                }
+            }
+        }
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+
+    return () => mo.disconnect();
 }

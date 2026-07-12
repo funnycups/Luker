@@ -342,7 +342,7 @@ import { showUndoToast } from './scripts/undo-toast.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
-import { createLukerDelivery, installFetchProxy } from './scripts/ws-delivery.js';
+import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes } from './scripts/ws-delivery.js';
 
 installFrontendLogCapture();
 initAndroidDebugTrail();
@@ -1978,6 +1978,18 @@ async function firstLoadInit() {
     try {
         const delivery = createLukerDelivery();
         installFetchProxy(delivery, {
+            getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
+        });
+        // Also patch every same-origin iframe's own fetch, current and future.
+        // TavernHelper (JS-Slash-Runner) sandboxes user scripts inside a
+        // `TH-render` iframe whose `window.fetch` was untouched by the top
+        // proxy above — those scripts calling `/api/backends/*/generate`
+        // would otherwise receive the runner's synthetic `{}` body directly
+        // and bail with "invalid response format". See
+        // public/scripts/ws-delivery.js:installFetchProxyForAllIframes for
+        // the three-step lifecycle (current + MutationObserver + iframe
+        // `load` re-patch) and per-window idempotency guard.
+        installFetchProxyForAllIframes(delivery, {
             getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
         });
         window.__lukerDelivery = delivery;
