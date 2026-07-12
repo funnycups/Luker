@@ -42,10 +42,6 @@ jest.unstable_mockModule('../../src/endpoints/backends/luker-generation.js', () 
         job.lastSeq = seq;
         job.events.push({ seq, data: rawData, ts: Date.now() });
     },
-    // Only used by the pre-Task-2E runner (single-file bisect regression
-    // safety net: keep this key defined so this test file still loads if
-    // runner.js reverts to importing it).
-    accumulateChunkTextIntoJob: () => {},
     failGenerationJob: (job, err) => { if (job) { job.status = 'failed'; job.error = String(err || ''); } },
     // The whole point of this test file: force-complete synchronously
     // with persisted=true so the trailer envelope carries a real value.

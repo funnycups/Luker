@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import {
     createGenerationJob,
     appendGenerationEvent,
-    accumulateChunkTextIntoJob,
     completeGenerationJobFromText,
     failGenerationJob,
     attachJobToRequest,
@@ -98,15 +97,27 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         // themselves — the runner-side complete below is a no-op for them
         // because findEntry() returns null when there's no __inspectorId.
         //
-        // inspectionEvents holds one string per SSE `data:` payload, NOT one
-        // per chunk. TCP-level chunk boundaries don't align with SSE frame
-        // boundaries: a single chunk may contain multiple `data: {...}\n\n`
-        // frames concatenated, or split a frame across two chunks. We
-        // maintain a per-job _inspectorSseBuffer separately from
-        // _sseBuffer (used by accumulateChunkTextIntoJob) so text and
-        // inspector extraction are independent.
+        // Same list of SSE payload strings feeds two consumers:
+        //   1. `job.events` (via appendGenerationEvent) — legacy shape is
+        //      `{seq, data: <payload-string>, ts}`. `/jobs/events` REST
+        //      replay + `/jobs/events-stream` SSE catch-up ship these
+        //      entries as-is to the frontend, which JSON.parses `data` back
+        //      into a payload object. If we stored the raw
+        //      `{kind:'chunk', data:Uint8Array}` envelope from the dispatch
+        //      emit here, the replayed frames would be un-parseable JSON
+        //      (envelope wrapping the byte array) and text extraction inside
+        //      appendGenerationEvent — which JSON.parses each entry to pull
+        //      delta text — would silently drop every frame.
+        //   2. The request inspector's stream-parser
+        //      (completeInspectionFromStream) which expects the same
+        //      payload-string shape.
+        //
+        // TCP-level chunk boundaries don't align with SSE frame boundaries:
+        // a single chunk may contain multiple `data: {...}\n\n` frames
+        // concatenated, or split a frame across two chunks. `sseBuffer`
+        // absorbs partial frames and gets flushed on `\n\n`.
         const inspectionEvents = [];
-        let inspectorSseBuffer = '';
+        let sseBuffer = '';
         // SSE frame parsing 1:1 copied from legacy
         // forwardStreamingWithGenerationJob (luker-generation.js in the
         // pre-refactor tree). Do NOT simplify or "modernize" any step:
@@ -119,13 +130,13 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         //     in Claude thinking/tool_use deltas)
         //   - separate tail flush after chunks stop (last frame may not
         //     terminate with \n\n)
-        function flushInspectorSseFrames(chunkText) {
-            inspectorSseBuffer += chunkText;
-            inspectorSseBuffer = inspectorSseBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            let delimiterIndex = inspectorSseBuffer.indexOf('\n\n');
+        function flushSseFrames(chunkText) {
+            sseBuffer += chunkText;
+            sseBuffer = sseBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            let delimiterIndex = sseBuffer.indexOf('\n\n');
             while (delimiterIndex !== -1) {
-                const frame = inspectorSseBuffer.slice(0, delimiterIndex);
-                inspectorSseBuffer = inspectorSseBuffer.slice(delimiterIndex + 2);
+                const frame = sseBuffer.slice(0, delimiterIndex);
+                sseBuffer = sseBuffer.slice(delimiterIndex + 2);
                 const dataLines = frame
                     .split('\n')
                     .map(line => line.replace(/\s+$/, ''))
@@ -133,15 +144,25 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                     .map(line => line.slice(5).replace(/^\s+/, ''));
                 if (dataLines.length > 0) {
                     const payload = dataLines.join('\n');
-                    if (payload) inspectionEvents.push(payload);
+                    if (payload) {
+                        // Route to BOTH consumers so job.events and the
+                        // inspector see the exact same per-payload frames.
+                        // appendGenerationEvent also does its own text
+                        // extraction into job.text — that's the sole
+                        // path text lands on the job now that the runner
+                        // no longer double-extracts via
+                        // accumulateChunkTextIntoJob (see onEmit below).
+                        appendGenerationEvent(job, payload);
+                        inspectionEvents.push(payload);
+                    }
                 }
-                delimiterIndex = inspectorSseBuffer.indexOf('\n\n');
+                delimiterIndex = sseBuffer.indexOf('\n\n');
             }
         }
-        function flushInspectorTailBuffer() {
-            if (!inspectorSseBuffer) return;
-            const tail = inspectorSseBuffer;
-            inspectorSseBuffer = '';
+        function flushSseTailBuffer() {
+            if (!sseBuffer) return;
+            const tail = sseBuffer;
+            sseBuffer = '';
             if (!tail.trim()) return;
             const dataLines = tail
                 .split('\n')
@@ -150,57 +171,62 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                 .map(line => line.slice(5).replace(/^\s+/, ''));
             if (dataLines.length === 0) return;
             const payload = dataLines.join('\n');
-            if (payload) inspectionEvents.push(payload);
+            if (payload) {
+                appendGenerationEvent(job, payload);
+                inspectionEvents.push(payload);
+            }
         }
         const ctx = createDispatchContext({
             request, task: job, abortController,
             onCloseHandlers,
             onEmit: (event) => {
-                // 把 event 塞进 job.events 供 replay/persist
-                appendGenerationEvent(job, event);
-                // 从 chunk 字节里增量抽 text,喂给 auto-persist / /api/generation/active
                 if (event?.kind === 'chunk') {
-                    accumulateChunkTextIntoJob(job, event.data);
-                    // Capture chunk bytes as SSE-parsed payloads for the
-                    // inspector usage/text extractor. Non-streaming chat
-                    // dispatches emit exactly one chunk = the full JSON body;
-                    // that chunk won't contain `\n\n` so no frames flush here
-                    // — the non-stream branch below handles it via JSON.parse
-                    // in runner's completeInspection call.
-                    try {
-                        const bytes = event.data;
-                        let text = '';
-                        if (bytes && typeof bytes === 'string') {
-                            text = bytes;
-                        } else if (bytes && (bytes instanceof Uint8Array || Buffer.isBuffer(bytes))) {
-                            text = Buffer.from(bytes).toString('utf8');
-                        }
-                        if (text) {
-                            const isStream = Boolean(request.body?.stream || request.body?.streaming);
-                            if (isStream) {
-                                flushInspectorSseFrames(text);
-                            } else {
-                                // Non-stream: push the raw chunk (full JSON body)
-                                // so the runner's non-stream branch can JSON.parse
-                                // inspectionEvents.join('') into the payload.
-                                inspectionEvents.push(text);
-                            }
-                        }
-                    } catch { /* best-effort */ }
+                    // Decode chunk bytes → text, then either SSE-frame it
+                    // (stream path) or push whole body once (non-stream
+                    // path). Both routes end up storing a
+                    // `{seq, data: <string>, ts}` entry in job.events via
+                    // appendGenerationEvent — legacy shape needed by
+                    // /jobs/events replay + text extraction.
+                    let text = '';
+                    const bytes = event.data;
+                    if (bytes && typeof bytes === 'string') {
+                        text = bytes;
+                    } else if (bytes && (bytes instanceof Uint8Array || Buffer.isBuffer(bytes))) {
+                        try { text = Buffer.from(bytes).toString('utf8'); }
+                        catch { text = ''; }
+                    }
+                    if (!text) return;
+                    const isStream = Boolean(request.body?.stream || request.body?.streaming);
+                    if (isStream) {
+                        flushSseFrames(text);
+                    } else {
+                        // Non-stream: the chunk is the full upstream JSON
+                        // body. Push once as a single event entry; the
+                        // completeInspection path below JSON.parses
+                        // inspectionEvents.join(''). appendGenerationEvent
+                        // will extract text via extractTextFromFinalPayload.
+                        appendGenerationEvent(job, text);
+                        inspectionEvents.push(text);
+                    }
                 } else if (event?.kind === 'end') {
-                    // 收尾:如果 SSE 尾部帧没有 \n\n 结束符,追加 \n\n 触发最后一次 flush
-                    const tail = String(job._sseBuffer || '');
-                    if (tail && !tail.endsWith('\n\n')) {
-                        accumulateChunkTextIntoJob(job, '\n\n');
+                    // 收尾:如果 SSE 尾部帧没有 \n\n 结束符,手动 flush 残余,
+                    // 否则最后一帧(常见:usage delta / message_stop / [DONE])
+                    // 会丢失,导致 job.text 和 inspector responseParts/usage
+                    // 都缺失最后一段。
+                    if (sseBuffer) {
+                        if (!sseBuffer.endsWith('\n\n')) {
+                            flushSseFrames('\n\n');
+                        } else {
+                            flushSseFrames('');
+                        }
                     }
-                    job._sseBuffer = '';
-                    // Same flush for the inspector's SSE buffer so a tail
-                    // frame without terminator still gets parsed.
-                    if (inspectorSseBuffer && !inspectorSseBuffer.endsWith('\n\n')) {
-                        flushInspectorSseFrames('\n\n');
-                    }
-                    inspectorSseBuffer = '';
+                    sseBuffer = '';
                 }
+                // `head` and `error` envelopes are intentionally NOT stored
+                // in job.events: legacy shape only ever held SSE payload
+                // strings. Errors are surfaced separately via
+                // failGenerationJob / failInspection in the catch block
+                // below.
             },
         });
         try {
@@ -278,7 +304,7 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                         // \n\n before extractors run — otherwise
                         // usage/message_delta frames at the very tail get
                         // dropped and responseParts + usage come back empty.
-                        flushInspectorTailBuffer();
+                        flushSseTailBuffer();
                         completeInspectionFromStream(request, inspectionEvents, job.text || '');
                     } else {
                         // Best-effort JSON parse of accumulated single-frame
