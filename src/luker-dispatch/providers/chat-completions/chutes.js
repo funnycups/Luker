@@ -27,6 +27,7 @@ export async function dispatchChutes(ctx) {
     const apiKey = ctx.secrets.read(SECRET_KEYS.CHUTES) || '';
 
     if (!apiKey) {
+        console.warn('Chutes key is missing.');
         ctx.emit.error(new Error('Chutes key is missing'));
         return;
     }
@@ -80,6 +81,8 @@ export async function dispatchChutes(ctx) {
         const fetchUrl = API_CHUTES + '/chat/completions';
         ctx.inspection.attach(fetchUrl, apiKey, requestBody);
 
+        console.debug('Chutes request:', requestBody);
+
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
@@ -100,6 +103,7 @@ export async function dispatchChutes(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.warn('Chutes returned error: ', errText);
             const msg = `Chutes upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
@@ -120,11 +124,16 @@ export async function dispatchChutes(ctx) {
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
             const buf = await resp.arrayBuffer();
+            try {
+                const json = JSON.parse(new TextDecoder().decode(buf));
+                console.debug('Chutes response:', json);
+            } catch { /* non-JSON body — skip debug log */ }
             ctx.emit.chunk(new Uint8Array(buf));
             ctx.emit.end();
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Error communicating with Chutes: ', err);
         ctx.emit.error(err);
     }
 }
