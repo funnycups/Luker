@@ -25,6 +25,7 @@ function fakeCtx({ body = {}, onFetch, signal } = {}) {
         },
         user: { handle: 'alice', directories: {}, profile: { handle: 'alice' } },
         signal: signal || ac.signal,
+        abort() { try { ac.abort(); } catch { /* ignore */ } },
         fetch: onFetch || jest.fn(async () => new Response(JSON.stringify({
             id: 'tc-1',
             choices: [{ index: 0, text: 'hello back', finish_reason: 'stop' }],
@@ -276,6 +277,107 @@ describe('dispatchTextCompletions', () => {
         expect(String(abortUrl)).toBe('http://127.0.0.1:5001/api/extra/abort');
         expect(abortInit.method).toBe('POST');
         void upstreamPromise;
+    });
+
+    test('KOBOLDCPP opts into ctx.onRequestClose so client disconnect fires /api/extra/abort', async () => {
+        // The runner does NOT default-bind client-close → ctx.signal.abort
+        // (generation-jobs survive disconnect). KoboldCpp has no resume
+        // channel — once the client drops, the GPU keeps generating until
+        // it finishes on its own. So the dispatch must opt in to
+        // ctx.onRequestClose to release GPU cycles on tab close/cancel.
+        const fetchMock = jest.fn((url, init) => {
+            if (String(url).includes('/api/extra/abort')) {
+                return Promise.resolve(new Response('{}', { status: 200 }));
+            }
+            return new Promise((_resolve, reject) => {
+                init.signal?.addEventListener?.('abort', () => {
+                    const err = new Error('aborted');
+                    err.name = 'AbortError';
+                    reject(err);
+                });
+            });
+        });
+        // Fake ctx.onRequestClose the way runner exposes it: register cb,
+        // return disposer; a simulated `req.emit('close')` fires every
+        // handler.
+        const closeHandlers = new Set();
+        const ctx = fakeCtx({
+            body: {
+                api_type: TEXTGEN_TYPES.KOBOLDCPP,
+                api_server: 'http://127.0.0.1:5001',
+                stream: true,
+            },
+            onFetch: fetchMock,
+        });
+        ctx.onRequestClose = (cb) => {
+            closeHandlers.add(cb);
+            return () => { closeHandlers.delete(cb); };
+        };
+        const p = dispatchTextCompletions(ctx);
+        // Let the dispatch reach the point where the hook is registered.
+        await new Promise(r => setImmediate(r));
+        expect(closeHandlers.size).toBe(1);
+        // Simulate client TCP-close → runner would iterate the handler set.
+        for (const cb of closeHandlers) cb();
+        await p;
+        await new Promise(r => setImmediate(r));
+
+        const abortCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes('/api/extra/abort'));
+        // At least one abort POST from the close hook. In production the
+        // hook also calls ctx.abort() which flips ctx.signal — the
+        // pre-existing signal listener then fires a second abort POST.
+        // Both paths are correct; assertion is >= 1 to allow the double.
+        expect(abortCalls.length).toBeGreaterThanOrEqual(1);
+        // ctx.abort() was called by the close hook so the parked upstream
+        // fetch unwinds via ctx.signal → AbortError (dispatch returns
+        // without hanging the test).
+        expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+    });
+
+    test('KOBOLDCPP close hook disposed after successful settle (no /api/extra/abort on clean end)', async () => {
+        // A normal response tail races the request 'close' event on some
+        // Express teardowns. Without disposing the hook we'd fire abort
+        // on every successful completion.
+        const closeHandlers = new Set();
+        const ctx = fakeCtx({
+            body: {
+                api_type: TEXTGEN_TYPES.KOBOLDCPP,
+                api_server: 'http://127.0.0.1:5001',
+                stream: false,
+            },
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                choices: [{ text: 'ok' }],
+            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+        });
+        ctx.onRequestClose = (cb) => {
+            closeHandlers.add(cb);
+            return () => { closeHandlers.delete(cb); };
+        };
+        await dispatchTextCompletions(ctx);
+        // Dispatch finished; disposer must have removed the handler.
+        expect(closeHandlers.size).toBe(0);
+    });
+
+    test('non-KOBOLDCPP text-completions api_types do NOT register onRequestClose (persist-through-disconnect)', async () => {
+        // Only KOBOLDCPP has a no-resume upstream. The other 14
+        // text-completions providers preserve the survives-disconnect
+        // contract — a browser tab close must not abort the upstream so
+        // GET /api/generation/active can hand the job back.
+        for (const apiType of [
+            TEXTGEN_TYPES.OOBA, TEXTGEN_TYPES.OPENROUTER, TEXTGEN_TYPES.OLLAMA,
+            TEXTGEN_TYPES.LLAMACPP, TEXTGEN_TYPES.TOGETHERAI, TEXTGEN_TYPES.MANCER,
+        ]) {
+            const closeHandlers = new Set();
+            const ctx = fakeCtx({
+                body: { api_type: apiType, api_server: 'http://127.0.0.1:5000' },
+            });
+            ctx.onRequestClose = (cb) => {
+                closeHandlers.add(cb);
+                return () => { closeHandlers.delete(cb); };
+            };
+            await dispatchTextCompletions(ctx);
+            expect(closeHandlers.size).toBe(0);
+        }
     });
 
     test('OLLAMA stream: NDJSON → SSE data: frames + trailing [DONE]', async () => {

@@ -21,6 +21,7 @@ function fakeCtx({ body = {}, onFetch, signal } = {}) {
         },
         user: { handle: 'alice', directories: {}, profile: { handle: 'alice' } },
         signal: signal || ac.signal,
+        abort() { try { ac.abort(); } catch { /* ignore */ } },
         fetch: onFetch || jest.fn(async () => new Response(JSON.stringify({
             results: [{ text: 'hello back' }],
         }), { status: 200, headers: { 'content-type': 'application/json' } })),
@@ -212,6 +213,74 @@ describe('dispatchKobold', () => {
         const [abortUrl, abortInit] = abortCalls[0];
         expect(String(abortUrl)).toBe('http://127.0.0.1:5001/extra/abort');
         expect(abortInit.method).toBe('POST');
+    });
+
+    test('can_abort → opts into ctx.onRequestClose so client disconnect fires /extra/abort', async () => {
+        // The runner does NOT default-bind client-close → ctx.signal.abort
+        // (generation-jobs survive disconnect). Classic Kobold has no
+        // resume channel — once the client drops, the GPU keeps
+        // generating until it finishes on its own. Opt in to
+        // ctx.onRequestClose so tab close/cancel releases GPU cycles.
+        const fetchMock = jest.fn((url, init) => {
+            if (String(url).includes('/extra/abort')) {
+                return Promise.resolve(new Response('{}', { status: 200 }));
+            }
+            return new Promise((_resolve, reject) => {
+                init.signal?.addEventListener?.('abort', () => {
+                    const err = new Error('aborted');
+                    err.name = 'AbortError';
+                    reject(err);
+                });
+            });
+        });
+        const closeHandlers = new Set();
+        const ctx = fakeCtx({
+            body: { can_abort: true, streaming: true },
+            onFetch: fetchMock,
+        });
+        ctx.onRequestClose = (cb) => {
+            closeHandlers.add(cb);
+            return () => { closeHandlers.delete(cb); };
+        };
+        const p = dispatchKobold(ctx);
+        await new Promise(r => setImmediate(r));
+        expect(closeHandlers.size).toBe(1);
+        for (const cb of closeHandlers) cb();
+        await p;
+        await new Promise(r => setImmediate(r));
+
+        const abortCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes('/extra/abort'));
+        // At least one abort POST from the close hook. In production the
+        // hook also calls ctx.abort() which flips ctx.signal — the
+        // pre-existing signal listener then fires a second abort POST.
+        // Both paths are correct; assertion is >= 1 to allow the double.
+        expect(abortCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test('can_abort close hook disposed after successful settle (no /extra/abort on clean end)', async () => {
+        const closeHandlers = new Set();
+        const ctx = fakeCtx({
+            body: { can_abort: true },
+        });
+        ctx.onRequestClose = (cb) => {
+            closeHandlers.add(cb);
+            return () => { closeHandlers.delete(cb); };
+        };
+        await dispatchKobold(ctx);
+        expect(closeHandlers.size).toBe(0);
+    });
+
+    test('can_abort=false does NOT register onRequestClose', async () => {
+        const closeHandlers = new Set();
+        const ctx = fakeCtx({
+            body: { can_abort: false },
+        });
+        ctx.onRequestClose = (cb) => {
+            closeHandlers.add(cb);
+            return () => { closeHandlers.delete(cb); };
+        };
+        await dispatchKobold(ctx);
+        expect(closeHandlers.size).toBe(0);
     });
 
     test('upstream error: emits head+chunk+end with raw error body (no emit.error)', async () => {

@@ -399,6 +399,17 @@ export async function dispatchTextCompletions(ctx) {
 
         // KOBOLDCPP abort side channel — fire a POST to /api/extra/abort
         // when the dispatch signal aborts.
+        //
+        // Beyond signal-aborted, opt into ctx.onRequestClose so a client
+        // TCP-close also fires /api/extra/abort. The runner does not
+        // default-bind close → abort (generation-job-survives-disconnect
+        // contract), but KoboldCpp has no resume channel: once the client
+        // drops, the GPU keeps generating until it finishes on its own,
+        // wasting cycles on a job nobody is watching. Opt-in mirrors
+        // comfy.js:196-208 and providers/kobold.js which face the same
+        // "no resume" upstream. Disposer is invoked in finally so a
+        // clean response tail's `request 'close'` does not re-fire abort.
+        let disposeCloseHook = null;
         if (apiType === TEXTGEN_TYPES.KOBOLDCPP) {
             const onAbort = () => {
                 // Fire-and-forget; we don't want abort side-effects to
@@ -410,72 +421,86 @@ export async function dispatchTextCompletions(ctx) {
             } else {
                 ctx.signal.addEventListener('abort', onAbort, { once: true });
             }
-        }
-
-        ctx.inspection.attach(url, apiKey, upstreamBody);
-        const resp = await ctx.fetch(url, {
-            method: 'POST',
-            body: JSON.stringify(upstreamBody),
-            headers,
-            signal: ctx.signal,
-            timeout: 0,
-        });
-
-        // Architectural contract: every dispatch emits a single head frame
-        // immediately after the upstream fetch resolves, regardless of
-        // status. The WebSocket delivery layer (ws-delivery) uses head to
-        // release the client-side `await headPromise`; without it the
-        // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: resp.status, headers: {} });
-
-        if (!resp.ok) {
-            let errText = '';
-            try { errText = await resp.text(); } catch { /* body already consumed */ }
-            const msg = `text-completions upstream ${resp.status}: ${errText}`;
-            const err = new Error(msg);
-            ctx.inspection.fail(err, resp?.status ?? 502);
-            // Surface upstream status + body to the client via chunk + end
-            // (head already emitted above). Client sees
-            // Response.status=<upstream> and Response.body readable so
-            // callers can do `await response.text()` or
-            // `await response.json()` for structured error inspection
-            // (matches legacy handler shape which returned
-            // `.status(4xx).send({error:{...}})`).
-            if (errText) {
-                ctx.emit.chunk(new TextEncoder().encode(errText));
+            if (typeof ctx.onRequestClose === 'function') {
+                disposeCloseHook = ctx.onRequestClose(() => {
+                    void fireKoboldCppAbort(ctx, baseUrl, secretId);
+                    try { ctx.abort?.(); } catch { /* ignore */ }
+                });
             }
+        }
+
+        try {
+            ctx.inspection.attach(url, apiKey, upstreamBody);
+            const resp = await ctx.fetch(url, {
+                method: 'POST',
+                body: JSON.stringify(upstreamBody),
+                headers,
+                signal: ctx.signal,
+                timeout: 0,
+            });
+
+            // Architectural contract: every dispatch emits a single head frame
+            // immediately after the upstream fetch resolves, regardless of
+            // status. The WebSocket delivery layer (ws-delivery) uses head to
+            // release the client-side `await headPromise`; without it the
+            // client hangs on subscribe races with setImmediate dispatch.
+            ctx.emit.head({ status: resp.status, headers: {} });
+
+            if (!resp.ok) {
+                let errText = '';
+                try { errText = await resp.text(); } catch { /* body already consumed */ }
+                const msg = `text-completions upstream ${resp.status}: ${errText}`;
+                const err = new Error(msg);
+                ctx.inspection.fail(err, resp?.status ?? 502);
+                // Surface upstream status + body to the client via chunk + end
+                // (head already emitted above). Client sees
+                // Response.status=<upstream> and Response.body readable so
+                // callers can do `await response.text()` or
+                // `await response.json()` for structured error inspection
+                // (matches legacy handler shape which returned
+                // `.status(4xx).send({error:{...}})`).
+                if (errText) {
+                    ctx.emit.chunk(new TextEncoder().encode(errText));
+                }
+                ctx.emit.end();
+                return;
+            }
+
+            const streamMode = body.stream;
+
+            if (apiType === TEXTGEN_TYPES.OLLAMA && streamMode) {
+                await parseOllamaStream(resp, ctx);
+                ctx.emit.end();
+                return;
+            }
+
+            if (streamMode) {
+                await pipeResponseBodyToEmit(resp, ctx);
+                return;
+            }
+
+            // Non-streaming: read full JSON body, apply INFERMATICAI reshape,
+            // emit a single chunk of the (possibly-rewritten) JSON.
+            /** @type {any} */
+            const data = await resp.json();
+            if (apiType === TEXTGEN_TYPES.INFERMATICAI) {
+                data.choices = (data?.choices || []).map(choice => ({
+                    text: choice?.message?.content || choice.text,
+                    logprobs: choice?.logprobs,
+                    index: choice?.index,
+                }));
+            }
+            console.debug('Endpoint response:', data);
+            const encoder = new TextEncoder();
+            ctx.emit.chunk(encoder.encode(JSON.stringify(data)));
             ctx.emit.end();
-            return;
+        } finally {
+            // Drop the close hook once the dispatch has settled — a
+            // normal response tail routinely fires request 'close' just
+            // after we emit end/error, and we don't want to POST
+            // /api/extra/abort on a successfully completed generation.
+            try { disposeCloseHook?.(); } catch { /* ignore */ }
         }
-
-        const streamMode = body.stream;
-
-        if (apiType === TEXTGEN_TYPES.OLLAMA && streamMode) {
-            await parseOllamaStream(resp, ctx);
-            ctx.emit.end();
-            return;
-        }
-
-        if (streamMode) {
-            await pipeResponseBodyToEmit(resp, ctx);
-            return;
-        }
-
-        // Non-streaming: read full JSON body, apply INFERMATICAI reshape,
-        // emit a single chunk of the (possibly-rewritten) JSON.
-        /** @type {any} */
-        const data = await resp.json();
-        if (apiType === TEXTGEN_TYPES.INFERMATICAI) {
-            data.choices = (data?.choices || []).map(choice => ({
-                text: choice?.message?.content || choice.text,
-                logprobs: choice?.logprobs,
-                index: choice?.index,
-            }));
-        }
-        console.debug('Endpoint response:', data);
-        const encoder = new TextEncoder();
-        ctx.emit.chunk(encoder.encode(JSON.stringify(data)));
-        ctx.emit.end();
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
         console.error('Endpoint error:', err);

@@ -142,12 +142,29 @@ export async function dispatchKobold(ctx) {
 
     // Wire the can_abort side channel — fire-and-forget POST to
     // `${api_server}/extra/abort` when the dispatch signal aborts.
+    //
+    // In addition to signal-aborted, opt into ctx.onRequestClose so a
+    // client TCP-close also fires /extra/abort. The runner does not
+    // default-bind close → abort (generation-job-survives-disconnect
+    // contract), but Kobold's classic backend has no resume channel:
+    // once the client drops, the GPU keeps generating until it finishes
+    // on its own, wasting cycles on a job nobody is watching. Opt-in
+    // mirrors comfy.js:196-208 which faces the same "no resume" upstream.
+    // Disposer is deferred to after the main fetch loop settles so a
+    // clean response tail's `request 'close'` does not re-fire abort.
+    let disposeCloseHook = null;
     if (body.can_abort) {
         const onAbort = () => { void fireKoboldAbort(ctx, apiServer); };
         if (ctx.signal.aborted) {
             onAbort();
         } else {
             ctx.signal.addEventListener('abort', onAbort, { once: true });
+        }
+        if (typeof ctx.onRequestClose === 'function') {
+            disposeCloseHook = ctx.onRequestClose(() => {
+                void fireKoboldAbort(ctx, apiServer);
+                try { ctx.abort?.(); } catch { /* ignore */ }
+            });
         }
     }
 
@@ -159,120 +176,128 @@ export async function dispatchKobold(ctx) {
 
     console.debug(upstreamBody);
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        try {
-            ctx.inspection.attach(url, '', upstreamBody);
-            const resp = await ctx.fetch(url, {
-                method: 'POST',
-                body: JSON.stringify(upstreamBody),
-                headers,
-                signal: ctx.signal,
-                timeout: 0,
-            });
+    try {
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                ctx.inspection.attach(url, '', upstreamBody);
+                const resp = await ctx.fetch(url, {
+                    method: 'POST',
+                    body: JSON.stringify(upstreamBody),
+                    headers,
+                    signal: ctx.signal,
+                    timeout: 0,
+                });
 
-            // Architectural contract: every dispatch emits a single head
-            // frame immediately after the upstream fetch resolves,
-            // regardless of status. The WebSocket delivery layer
-            // (ws-delivery) uses head to release the client-side
-            // `await headPromise`; without it the client hangs on
-            // subscribe races with setImmediate dispatch.
-            //
-            // Retry note: 403/503 retries branch on the resolved Response
-            // (fetch rejections carry no `.status`, so status checks must
-            // be evaluated on a Response, not on a rejected error). Head
-            // fires only once per completed request because retry `continue`
-            // skips the head emit below.
-            if (!resp.ok && (resp.status === 403 || resp.status === 503)) {
-                if (attempt < MAX_RETRIES - 1) {
-                    console.warn(`KoboldAI is busy. Retry attempt ${attempt + 1} of ${MAX_RETRIES}...`);
-                    await delay(RETRY_DELAY_MS);
-                    continue;
+                // Architectural contract: every dispatch emits a single head
+                // frame immediately after the upstream fetch resolves,
+                // regardless of status. The WebSocket delivery layer
+                // (ws-delivery) uses head to release the client-side
+                // `await headPromise`; without it the client hangs on
+                // subscribe races with setImmediate dispatch.
+                //
+                // Retry note: 403/503 retries branch on the resolved Response
+                // (fetch rejections carry no `.status`, so status checks must
+                // be evaluated on a Response, not on a rejected error). Head
+                // fires only once per completed request because retry `continue`
+                // skips the head emit below.
+                if (!resp.ok && (resp.status === 403 || resp.status === 503)) {
+                    if (attempt < MAX_RETRIES - 1) {
+                        console.warn(`KoboldAI is busy. Retry attempt ${attempt + 1} of ${MAX_RETRIES}...`);
+                        await delay(RETRY_DELAY_MS);
+                        continue;
+                    }
                 }
-            }
 
-            ctx.emit.head({ status: resp.status, headers: {} });
+                ctx.emit.head({ status: resp.status, headers: {} });
 
-            if (body.streaming) {
-                // Streaming path gate for upstream !ok: mirrors the
-                // non-streaming branch below (and legacy
-                // forwardFetchResponse({jsonErrorResponse:true}) shape).
-                // Without this gate the raw JSON error body pipes into the
-                // client SSE parser mid-stream and is silently dropped, so
-                // the user sees an empty response with no error toast.
-                // Head has already been emitted above with the real
-                // upstream status, so we only need chunk+end here.
+                if (body.streaming) {
+                    // Streaming path gate for upstream !ok: mirrors the
+                    // non-streaming branch below (and legacy
+                    // forwardFetchResponse({jsonErrorResponse:true}) shape).
+                    // Without this gate the raw JSON error body pipes into the
+                    // client SSE parser mid-stream and is silently dropped, so
+                    // the user sees an empty response with no error toast.
+                    // Head has already been emitted above with the real
+                    // upstream status, so we only need chunk+end here.
+                    if (!resp.ok) {
+                        let errText = '';
+                        try { errText = await resp.text(); } catch { /* body already consumed */ }
+                        console.warn(`Kobold returned error (streaming): ${resp.status} ${resp.statusText} ${errText}`);
+                        let message = errText;
+                        try {
+                            const errorJson = JSON.parse(errText);
+                            message = errorJson?.detail?.msg || errText;
+                        } catch { /* not JSON */ }
+                        ctx.inspection.fail(new Error(String(message)), resp?.status ?? 502);
+                        if (errText) {
+                            ctx.emit.chunk(new TextEncoder().encode(errText));
+                        }
+                        ctx.emit.end();
+                        return;
+                    }
+                    // Streaming: forward raw SSE bytes verbatim. Do not gate on
+                    // resp.ok — legacy handler pipes streaming responses as-is
+                    // via forwardFetchResponse.
+                    await pipeResponseBodyToEmit(resp, ctx);
+                    return;
+                }
+
+                // Non-streaming
                 if (!resp.ok) {
                     let errText = '';
                     try { errText = await resp.text(); } catch { /* body already consumed */ }
-                    console.warn(`Kobold returned error (streaming): ${resp.status} ${resp.statusText} ${errText}`);
+                    console.warn(`Kobold returned error: ${resp.status} ${resp.statusText} ${errText}`);
                     let message = errText;
                     try {
                         const errorJson = JSON.parse(errText);
                         message = errorJson?.detail?.msg || errText;
                     } catch { /* not JSON */ }
                     ctx.inspection.fail(new Error(String(message)), resp?.status ?? 502);
+                    // Surface upstream status + body to the client via chunk + end
+                    // (head already emitted above). Client sees
+                    // Response.status=<upstream> and Response.body readable so
+                    // callers can do `await response.text()` or
+                    // `await response.json()` for structured error inspection
+                    // (matches legacy handler shape which returned
+                    // `.status(4xx).send({error:{...}})`).
                     if (errText) {
                         ctx.emit.chunk(new TextEncoder().encode(errText));
                     }
                     ctx.emit.end();
                     return;
                 }
-                // Streaming: forward raw SSE bytes verbatim. Do not gate on
-                // resp.ok — legacy handler pipes streaming responses as-is
-                // via forwardFetchResponse.
-                await pipeResponseBodyToEmit(resp, ctx);
-                return;
-            }
 
-            // Non-streaming
-            if (!resp.ok) {
-                let errText = '';
-                try { errText = await resp.text(); } catch { /* body already consumed */ }
-                console.warn(`Kobold returned error: ${resp.status} ${resp.statusText} ${errText}`);
-                let message = errText;
-                try {
-                    const errorJson = JSON.parse(errText);
-                    message = errorJson?.detail?.msg || errText;
-                } catch { /* not JSON */ }
-                ctx.inspection.fail(new Error(String(message)), resp?.status ?? 502);
-                // Surface upstream status + body to the client via chunk + end
-                // (head already emitted above). Client sees
-                // Response.status=<upstream> and Response.body readable so
-                // callers can do `await response.text()` or
-                // `await response.json()` for structured error inspection
-                // (matches legacy handler shape which returned
-                // `.status(4xx).send({error:{...}})`).
-                if (errText) {
-                    ctx.emit.chunk(new TextEncoder().encode(errText));
-                }
+                /** @type {any} */
+                const data = await resp.json();
+                console.debug('Endpoint response:', data);
+                const encoder = new TextEncoder();
+                ctx.emit.chunk(encoder.encode(JSON.stringify(data)));
                 ctx.emit.end();
                 return;
+            } catch (error) {
+                // fetch() rejections (network error, AbortError, invalid URL)
+                // carry no `.status`, so the 403/503 retry lives on the
+                // resolved-Response branch above. Rejections terminate the
+                // dispatch immediately.
+                try { ctx.inspection.fail(error); } catch { /* inspection best-effort */ }
+                if (error && 'status' in error) {
+                    console.error('Status Code from Kobold:', error.status);
+                }
+                ctx.emit.error(error);
+                return;
             }
-
-            /** @type {any} */
-            const data = await resp.json();
-            console.debug('Endpoint response:', data);
-            const encoder = new TextEncoder();
-            ctx.emit.chunk(encoder.encode(JSON.stringify(data)));
-            ctx.emit.end();
-            return;
-        } catch (error) {
-            // fetch() rejections (network error, AbortError, invalid URL)
-            // carry no `.status`, so the 403/503 retry lives on the
-            // resolved-Response branch above. Rejections terminate the
-            // dispatch immediately.
-            try { ctx.inspection.fail(error); } catch { /* inspection best-effort */ }
-            if (error && 'status' in error) {
-                console.error('Status Code from Kobold:', error.status);
-            }
-            ctx.emit.error(error);
-            return;
         }
-    }
 
-    // Exhausted retries.
-    console.error('Max retries exceeded. Giving up.');
-    const err = new Error('Max retries exceeded');
-    try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
-    ctx.emit.error(err);
+        // Exhausted retries.
+        console.error('Max retries exceeded. Giving up.');
+        const err = new Error('Max retries exceeded');
+        try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        ctx.emit.error(err);
+    } finally {
+        // Drop the close hook once the dispatch has settled — a normal
+        // response tail routinely fires request 'close' just after we
+        // emit end/error, and we don't want to POST /extra/abort on a
+        // successfully completed generation.
+        try { disposeCloseHook?.(); } catch { /* ignore */ }
+    }
 }
