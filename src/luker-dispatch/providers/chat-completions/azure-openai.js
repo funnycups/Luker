@@ -83,6 +83,10 @@ export async function dispatchAzureOpenAI(ctx) {
         const url = new URL(`/openai/deployments/${azure_deployment_name}/chat/completions`, azure_base_url);
         url.searchParams.set('api-version', azure_api_version);
         const fetchUrl = url.toString();
+
+        console.info(`Sending request to Azure OpenAI: ${fetchUrl}`);
+        console.debug('Azure OpenAI Request Body:', apiRequestBody);
+
         ctx.inspection.attach(fetchUrl, apiKey, apiRequestBody);
 
         const resp = await ctx.fetch(fetchUrl, {
@@ -125,6 +129,10 @@ export async function dispatchAzureOpenAI(ctx) {
             await pipeResponseBodyToEmit(resp, ctx);
         } else {
             const buf = await resp.arrayBuffer();
+            try {
+                const json = JSON.parse(new TextDecoder().decode(buf));
+                console.debug('Azure OpenAI response:', json);
+            } catch { /* non-JSON body — skip debug log */ }
             ctx.emit.chunk(new Uint8Array(buf));
             ctx.emit.end();
         }
