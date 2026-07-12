@@ -18,7 +18,7 @@ import {
     abortInspection,
 } from '../request-inspector.js';
 
-export function createDispatchContext({ request, task, abortController, onEmit }) {
+export function createDispatchContext({ request, task, abortController, onEmit, onCloseHandlers }) {
     let terminal = false;
 
     function safeEmit(event) {
@@ -38,7 +38,36 @@ export function createDispatchContext({ request, task, abortController, onEmit }
             profile: request.user?.profile,
         },
         signal: abortController.signal,
+        // Explicit abort trigger. Runner owns the AbortController; dispatch
+        // code that needs to fire abort as a side effect (comfy /interrupt
+        // → stop local polling) goes through this instead of receiving the
+        // controller directly. Kept a no-op-safe method call so tests that
+        // stub ctx don't need to reproduce the whole abort lifecycle.
+        abort() {
+            try { abortController.abort(); } catch { /* ignore */ }
+        },
         fetch,
+
+        // Register a callback that fires when the underlying HTTP request
+        // socket closes (client disconnected — tab close, network drop,
+        // explicit browser cancel, or an abort routed through the runner).
+        //
+        // The runner does NOT default-bind close→abort so that the
+        // generation-job survives disconnect and can be reclaimed by
+        // GET /api/generation/active. Dispatches that hold external
+        // resources whose only stop channel is the client connection
+        // (ComfyUI's /interrupt, etc.) opt in here to preserve legacy
+        // shutdown semantics.
+        //
+        // Returns a disposer so the dispatch can drop the handler after a
+        // successful settle (avoids firing side effects on a normal close
+        // that races the response tail).
+        onRequestClose(callback) {
+            if (typeof callback !== 'function') return () => {};
+            if (!onCloseHandlers) return () => {};
+            onCloseHandlers.add(callback);
+            return () => { onCloseHandlers.delete(callback); };
+        },
 
         secrets: {
             // Mirror legacy readProviderSecret(request, key) semantics:

@@ -34,6 +34,7 @@ class FakeWebSocket extends EventEmitter {
 function fakeCtx({ body = {}, onFetch, signal } = {}) {
     const emitted = [];
     const ac = new AbortController();
+    const closeHandlers = new Set();
     const handle = `sd-comfy-user-${Math.random().toString(36).slice(2)}`;
     return {
         body: {
@@ -45,6 +46,11 @@ function fakeCtx({ body = {}, onFetch, signal } = {}) {
         user: { handle, directories: {}, profile: { handle } },
         signal: signal || ac.signal,
         fetch: onFetch,
+        abort: jest.fn(() => ac.abort()),
+        onRequestClose: jest.fn((cb) => {
+            closeHandlers.add(cb);
+            return () => closeHandlers.delete(cb);
+        }),
         secrets: { read: jest.fn(() => '') },
         generation: {
             startJob: jest.fn(() => null),
@@ -68,6 +74,7 @@ function fakeCtx({ body = {}, onFetch, signal } = {}) {
         },
         _emitted: emitted,
         _abortController: ac,
+        _closeHandlers: closeHandlers,
     };
 }
 
@@ -226,5 +233,56 @@ describe('dispatchSdComfy', () => {
             expect(init).toBeDefined();
             expect(init.signal).toBe(ctx.signal);
         }
+    });
+
+    test('client disconnect (onRequestClose fires) → POST /interrupt + ctx.abort()', async () => {
+        // WS opens but never delivers a completion frame, so the dispatch
+        // is parked inside waitForComfyCompletion until signal aborts.
+        FakeWebSocket.onNew = (ws) => {
+            setImmediate(() => ws.emit('open'));
+        };
+        let interruptFired = false;
+        const ctx = fakeCtx({
+            onFetch: buildStandardFetch({ interruptOnPromptId: () => { interruptFired = true; } }),
+        });
+        const p = dispatchSdComfy(ctx);
+        // Let dispatch POST /prompt and register its close handler.
+        await new Promise(r => setTimeout(r, 20));
+        expect(ctx.onRequestClose).toHaveBeenCalledTimes(1);
+        expect(ctx._closeHandlers.size).toBe(1);
+
+        // Simulate runner-side request 'close' fanout.
+        for (const cb of ctx._closeHandlers) cb();
+        await p;
+
+        expect(interruptFired).toBe(true);
+        expect(ctx.abort).toHaveBeenCalled();
+        expect(ctx._abortController.signal.aborted).toBe(true);
+        // The dispatch exits via the "Aborted" error path from
+        // waitForComfyCompletion, so emit.error must have fired.
+        expect(ctx._emitted.some(e => e.kind === 'error')).toBe(true);
+    });
+
+    test('close handler is disposed on normal success so late close does not POST /interrupt', async () => {
+        FakeWebSocket.onNew = (ws) => {
+            ws.emit('open');
+            setTimeout(() => {
+                ws.emit('message', Buffer.from(JSON.stringify({
+                    type: 'executing',
+                    data: { prompt_id: PROMPT_ID, node: null },
+                })));
+            }, 20);
+        };
+        let interruptFired = false;
+        const ctx = fakeCtx({
+            onFetch: buildStandardFetch({ interruptOnPromptId: () => { interruptFired = true; } }),
+        });
+        await dispatchSdComfy(ctx);
+
+        // finally-block disposer must have cleared the registered handler.
+        expect(ctx._closeHandlers.size).toBe(0);
+        // Even if we tried to fire the (now-empty) set, no /interrupt.
+        for (const cb of ctx._closeHandlers) cb();
+        expect(interruptFired).toBe(false);
     });
 });

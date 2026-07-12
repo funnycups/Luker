@@ -55,6 +55,35 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     const abortController = new AbortController();
     job.abortController = abortController;
 
+    // Client-disconnect notification pipe.
+    //
+    // Refactor intentionally does NOT default-bind close→abort like the
+    // legacy `bindRequestCloseAbort` helper did. Core motivation of the
+    // runner rewrite is "generation-job survives disconnect": the
+    // auto-persist grace timer catches a mid-flight tab close and persists
+    // the still-arriving upstream text so a subsequent
+    // GET /api/generation/active can hand the job back to the client.
+    // Auto-aborting on TCP close would break that contract, leak whatever
+    // the upstream already spent, and race the grace timer.
+    //
+    // A dispatch that *does* need side effects on client disconnect (e.g.
+    // ComfyUI must POST /interrupt or the GPU keeps generating on an
+    // external server whose job we cannot resume) opts in by calling
+    // ctx.onRequestClose(cb). Explicit user-initiated cancel still lives
+    // on the POST /api/generation/:id/abort path (cancelGenerationJobForRequest).
+    const onCloseHandlers = new Set();
+    // `request.once('close', ...)` guards against Express emitting close
+    // more than once on some socket teardown paths; each handler still
+    // runs at most once because it is only added once.
+    if (request && typeof request.once === 'function') {
+        request.once('close', () => {
+            for (const handler of onCloseHandlers) {
+                try { handler(); }
+                catch (err) { console.warn('[Dispatch] onRequestClose handler threw:', err); }
+            }
+        });
+    }
+
     response.status(200);
     response.setHeader('x-luker-generation-id', requestId);
     response.setHeader('x-luker-server-persisted', '0');
@@ -125,6 +154,7 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         }
         const ctx = createDispatchContext({
             request, task: job, abortController,
+            onCloseHandlers,
             onEmit: (event) => {
                 // 把 event 塞进 job.events 供 replay/persist
                 appendGenerationEvent(job, event);

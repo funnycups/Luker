@@ -169,6 +169,7 @@ export async function dispatchSdComfy(ctx) {
     ctx.inspection.startImage(extractImageMeta('comfyui', body));
 
     let settled = false;
+    let disposeCloseHandler = null;
 
     try {
         const clientId = crypto.randomUUID();
@@ -178,6 +179,33 @@ export async function dispatchSdComfy(ctx) {
         const promptBody = JSON.parse(body.prompt);
         promptBody.client_id = clientId;
         ctx.inspection.attach(promptUrl, '');
+
+        // ComfyUI is the one dispatch whose upstream state lives on a
+        // remote server we cannot resume — a GPU job keeps running until
+        // it either completes or receives /interrupt. If the client
+        // disconnects (tab close, cancel), the runner's default
+        // "generation-job survives disconnect" behaviour would leak the
+        // remote GPU cycle until natural completion. Opt in via
+        // ctx.onRequestClose to fire /interrupt + abort the local
+        // controller so waitForComfyCompletion exits its WS/poll loop.
+        //
+        // Registered BEFORE the /prompt POST so a very fast disconnect
+        // still triggers /interrupt once we know the baseUrl. promptId is
+        // not required by /interrupt (it interrupts the currently running
+        // prompt for whichever workflow the server is executing).
+        if (typeof ctx.onRequestClose === 'function') {
+            disposeCloseHandler = ctx.onRequestClose(() => {
+                if (settled) return;
+                try {
+                    const interruptUrl = new URL(urlJoin(baseUrl, '/interrupt'));
+                    ctx.fetch(interruptUrl, {
+                        method: 'POST',
+                        headers: { 'Authorization': getBasicAuthHeader(body.auth) },
+                    }).catch(() => {});
+                } catch { /* ignore */ }
+                try { ctx.abort?.(); } catch { /* ignore */ }
+            });
+        }
 
         const promptResult = await ctx.fetch(promptUrl, {
             method: 'POST',
@@ -274,5 +302,11 @@ export async function dispatchSdComfy(ctx) {
         ctx.inspection.failImage(error, 500);
         console.error('ComfyUI error:', error);
         ctx.emit.error(error);
+    } finally {
+        // Drop the close hook once the dispatch has settled — a normal
+        // response tail routinely fires request 'close' just after we
+        // emit end/error, and we don't want to POST /interrupt on a
+        // successfully completed prompt.
+        try { disposeCloseHandler?.(); } catch { /* ignore */ }
     }
 }
