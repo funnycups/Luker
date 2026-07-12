@@ -33,6 +33,7 @@
 
 import { SECRET_KEYS } from '../../endpoints/secrets.js';
 import { pipeResponseBodyToEmit } from '../response-stream.js';
+import util from 'node:util';
 
 const API_NOVELAI = 'https://api.novelai.net';
 const TEXT_NOVELAI = 'https://text.novelai.net';
@@ -222,6 +223,9 @@ export async function dispatchNovelAI(ctx) {
         const url = body.streaming ? `${baseURL}/ai/generate-stream` : `${baseURL}/ai/generate`;
 
         ctx.inspection.attach(url, apiKey, data);
+
+        console.debug(util.inspect(data, { depth: 4 }));
+
         const resp = await ctx.fetch(url, {
             method: 'POST',
             body: JSON.stringify(data),
@@ -273,6 +277,7 @@ export async function dispatchNovelAI(ctx) {
 
         /** @type {any} */
         const respData = await resp.json();
+        console.info('NovelAI Output', respData?.output);
         const encoder = new TextEncoder();
         ctx.emit.chunk(encoder.encode(JSON.stringify(respData)));
         ctx.emit.end();
