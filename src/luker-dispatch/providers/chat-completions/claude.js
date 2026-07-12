@@ -97,6 +97,7 @@ export async function dispatchClaude(ctx) {
     const secretKey = bodyApiKey || resolveClaudeApiKey(ctx);
 
     if (!secretKey && !body.reverse_proxy) {
+        console.warn('Claude API key is missing.');
         ctx.emit.error(new Error('Claude API key is missing'));
         return;
     }
@@ -285,6 +286,8 @@ export async function dispatchClaude(ctx) {
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'messages' : apiUrl + '/messages';
         ctx.inspection.attach(fetchUrl, secretKey, requestBody);
 
+        console.debug('Claude request:', requestBody);
+
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
@@ -307,6 +310,7 @@ export async function dispatchClaude(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.warn(`Claude API returned error: ${resp.status} ${resp.statusText}\n${errText}`);
             const msg = `Claude upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
@@ -335,6 +339,7 @@ export async function dispatchClaude(ctx) {
             // dropped it so both non-stream paths returned raw Anthropic body
             // and consumers saw `undefined` / `no choices` errors.
             const anthropicJson = await resp.json();
+            console.debug('Claude response:', anthropicJson);
             const oai = normalizeClaudeResponseToOAI(anthropicJson);
             const oaiBytes = new TextEncoder().encode(JSON.stringify(oai));
             ctx.emit.chunk(oaiBytes);
@@ -359,6 +364,7 @@ export async function dispatchClaude(ctx) {
     } catch (err) {
         // AbortError, network error, or any body-construction throw.
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Error communicating with Claude: ', err);
         ctx.emit.error(err);
     }
 }
