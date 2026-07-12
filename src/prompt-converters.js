@@ -644,27 +644,24 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
             });
         }
 
-        // merge consecutive messages with the same role
-        if (index > 0 && message.role === contents[contents.length - 1].role) {
-            parts.forEach((part) => {
-                if (part.text) {
-                    const textPart = contents[contents.length - 1].parts.find(p => typeof p.text === 'string');
-                    if (textPart) {
-                        textPart.text += '\n\n' + part.text;
-                    } else {
-                        contents[contents.length - 1].parts.push(part);
-                    }
-                }
-                if (part.inlineData || part.functionCall || part.functionResponse || part.thoughtSignature || part.mediaResolution) {
-                    contents[contents.length - 1].parts.push(part);
-                }
-            });
-        } else {
-            contents.push({
-                role: message.role,
-                parts: parts,
-            });
-        }
+        // One input message = one output content entry. Consecutive same-role
+        // messages are NOT merged here. The Google API does not require
+        // alternating roles (see the Content type reference:
+        // https://ai.google.dev/api/caching -- `role` is described only as
+        // "Must be either 'user' or 'model'", with no sequence constraint).
+        // If a user wants to squash consecutive same-role messages, they can
+        // pick a prompt post-processing option ("Merge consecutive roles" /
+        // MERGE) in Settings; the generic postProcessPrompt runs in the
+        // handler preamble (src/endpoints/backends/chat-completions.js:
+        // 1162-1170) before this converter, so their choice is honored.
+        // Hard-coding a merge here would override that choice for Google
+        // users only, which was the historical behavior (introduced by
+        // upstream ST PR #1973, 2024-03-27, motivated by an unverified
+        // "gemini-1.5-pro was incoherent without merging" claim).
+        contents.push({
+            role: message.role,
+            parts: parts,
+        });
     });
 
     return { contents: contents, system_instruction: system_instruction };

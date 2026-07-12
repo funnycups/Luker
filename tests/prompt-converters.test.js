@@ -1298,14 +1298,41 @@ describe('convertGooglePrompt', () => {
         expect(roles).not.toContain('tool');
     });
 
-    test('merges consecutive same-role messages', () => {
+    test('does not merge consecutive same-role messages (users get to choose via postProcessPrompt)', () => {
+        // convertGooglePrompt is a pure format converter: role name mapping
+        // (assistant -> model) and content shape (string -> parts:[{text}]).
+        // It must NOT collapse consecutive same-role messages: the Google
+        // API does not require alternating roles, and users who want that
+        // behavior can pick a "Merge consecutive roles" prompt post-
+        // processing option in Settings (postProcessPrompt runs in the
+        // handler preamble before this converter).
         const messages = [
             { role: 'user', content: 'A' },
             { role: 'user', content: 'B' },
             { role: 'assistant', content: 'Reply' },
         ];
         const result = mod.convertGooglePrompt(messages, 'gemini-2.0-flash', false, names);
+        const userContents = result.contents.filter(c => c.role === 'user');
+        expect(userContents).toHaveLength(2);
+        expect(userContents[0].parts).toEqual([{ text: 'A' }]);
+        expect(userContents[1].parts).toEqual([{ text: 'B' }]);
+        expect(result.contents.find(c => c.role === 'model').parts).toEqual([{ text: 'Reply' }]);
+    });
+
+    test('postProcessPrompt MERGE, run before this converter, does collapse consecutive same-role messages', () => {
+        // Documents the composition path: users who want the old "merge
+        // consecutive user messages" Google behavior get it by selecting
+        // PROMPT_PROCESSING_TYPE.MERGE, which the handler applies before
+        // dispatching to convertGooglePrompt.
+        const messages = [
+            { role: 'user', content: 'A' },
+            { role: 'user', content: 'B' },
+            { role: 'assistant', content: 'Reply' },
+        ];
+        const merged = mod.postProcessPrompt(messages, mod.PROMPT_PROCESSING_TYPE.MERGE, names);
+        const result = mod.convertGooglePrompt(merged, 'gemini-2.0-flash', false, names);
         expect(result.contents.filter(c => c.role === 'user')).toHaveLength(1);
+        expect(result.contents[0].parts[0].text).toBe('A\n\nB');
     });
 
     test('converts image_url to inlineData', () => {
