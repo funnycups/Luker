@@ -1094,6 +1094,16 @@ async function onWorldInfoFinalized(payload) {
         };
     });
 
+    // Thread `resolveStopRequest` through the payload so the runtime
+    // that eventually calls `startRun()` (loop-runtime / spec-runtime /
+    // agenda-runtime / director dispatch) can register it as the run's
+    // `stopFn`. The run panel's Stop button then takes the same fast
+    // unwind path the toast Stop button already uses (Promise.race in
+    // main.js short-circuits with 'cancelled by user' immediately),
+    // instead of waiting for the LLM sender to reject and the runtime
+    // catch block to reach `finishRun`.
+    orchestrationPayload.__lukerResolveStopRequest = resolveStopRequest;
+
     try {
         await loadOrchestratorChatState(context);
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');

@@ -997,6 +997,14 @@ export async function runAgendaOrchestration(context, payload, messages, profile
         mode: 'agenda',
         chatKey,
         abortFn: () => { try { Luker.getContext().stopGeneration(); } catch (_) { /* best-effort */ } },
+        // Fast-unwind hook installed by the top-level orchestration
+        // dispatch; renderer prefers it over abortFn to skip the wait
+        // for the LLM sender to reject. Undefined for iter-studio
+        // simulations and direct-runtime invocations — those fall
+        // back to raw abortFn semantics.
+        stopFn: typeof payload?.__lukerResolveStopRequest === 'function'
+            ? payload.__lukerResolveStopRequest
+            : null,
         quiet: Boolean(payload?.__lukerSimulate),
     });
     const state = {

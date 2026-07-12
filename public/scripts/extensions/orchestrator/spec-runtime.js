@@ -1426,6 +1426,18 @@ export async function runSpecOrchestration(context, payload, messages, profile, 
         mode: 'spec',
         chatKey,
         abortFn: () => { try { Luker.getContext().stopGeneration(); } catch (_) { /* best-effort */ } },
+        // Fast-unwind hook installed by the top-level orchestration
+        // dispatch in main.js. When present, the run panel's Stop
+        // button prefers it over `abortFn` so the cancel takes the
+        // clean 'user_stopped' branch (Promise.race short-circuit +
+        // cancelled-event emission) instead of waiting for the LLM
+        // sender to reject and the runtime catch block to reach
+        // `finishRun`. Undefined for iter-studio simulations and any
+        // future direct-runtime invocations — those still get raw
+        // `abortFn` semantics.
+        stopFn: typeof payload?.__lukerResolveStopRequest === 'function'
+            ? payload.__lukerResolveStopRequest
+            : null,
         quiet: Boolean(payload?.__lukerSimulate),
     });
     const runtime = {
