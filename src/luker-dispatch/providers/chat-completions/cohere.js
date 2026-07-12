@@ -37,6 +37,7 @@ export async function dispatchCohere(ctx) {
     const apiKey = ctx.secrets.read(SECRET_KEYS.COHERE) || '';
 
     if (!apiKey) {
+        console.warn('Cohere API key is missing.');
         ctx.emit.error(new Error('Cohere API key is missing'));
         return;
     }
@@ -88,6 +89,8 @@ export async function dispatchCohere(ctx) {
         const fetchUrl = API_COHERE_V2 + '/chat';
         ctx.inspection.attach(fetchUrl, apiKey, requestBody);
 
+        console.debug('Cohere request:', requestBody);
+
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
@@ -108,6 +111,7 @@ export async function dispatchCohere(ctx) {
         if (!resp.ok) {
             let errText = '';
             try { errText = await resp.text(); } catch { /* body already consumed */ }
+            console.warn(`Cohere API returned error: ${resp.status} ${resp.statusText} ${errText}`);
             const msg = `Cohere upstream ${resp.status}: ${errText}`;
             ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
             // Surface upstream status + body to the client via chunk + end
@@ -130,6 +134,7 @@ export async function dispatchCohere(ctx) {
             // Legacy sendCohereRequest returns `normalizeCohereResponseToOAI(rawJson)`
             // to the client, not the raw upstream body. Preserve that shape here.
             const rawJson = await resp.json();
+            console.debug('Cohere response:', rawJson);
             const normalized = normalizeCohereResponseToOAI(rawJson);
             const bytes = new TextEncoder().encode(JSON.stringify(normalized));
             ctx.emit.chunk(bytes);
@@ -150,6 +155,7 @@ export async function dispatchCohere(ctx) {
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
+        console.error('Error communicating with Cohere API: ', err);
         ctx.emit.error(err);
     }
 }
