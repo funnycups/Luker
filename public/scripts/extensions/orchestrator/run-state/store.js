@@ -33,7 +33,7 @@ function ensureRunningMatchesId(runId) {
     // Note: status is NOT checked here. finishRun/setRunMeta must mutate after status change.
 }
 
-export function startRun({ mode, chatKey, abortFn = null, quiet = false }) {
+export function startRun({ mode, chatKey, abortFn = null, stopFn = null, quiet = false }) {
     if (currentRun && currentRun.status === 'running') {
         throw new Error('A run is already in progress.');
     }
@@ -53,6 +53,18 @@ export function startRun({ mode, chatKey, abortFn = null, quiet = false }) {
         tokensSpent: null,
         cost: null,
         abortFn: typeof abortFn === 'function' ? abortFn : null,
+        // `stopFn` is the fast-unwind path used by orchestration
+        // dispatches that own a `Promise.race([task, stopRequestPromise])`
+        // in main.js — calling it resolves the race immediately and
+        // the wrapper takes the clean 'cancelled by user' branch,
+        // rather than waiting for the LLM sender to reject and the
+        // runtime catch block to reach `finishRun`. `abortFn` remains
+        // the underlying signal (ST `stopGeneration()`); when both are
+        // present the renderer prefers `stopFn` and lets it call the
+        // abort internally. When only `abortFn` is set (runtime invoked
+        // outside the main dispatch, e.g. iter-studio simulation), the
+        // renderer falls back to it — same behavior as before.
+        stopFn: typeof stopFn === 'function' ? stopFn : null,
         quiet: Boolean(quiet),
     };
     emit({ type: EV.RUN_STARTED, runId, mode: currentRun.mode, quiet: currentRun.quiet });

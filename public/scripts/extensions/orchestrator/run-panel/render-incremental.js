@@ -126,6 +126,11 @@ export class PanelRenderer {
         this.modeBadgeEl.dataset.mode = run.mode;
         this.headerStatusEl.dataset.status = run.status;
         this.stopBtnEl.hidden = false;
+        // Reset the disabled state from any prior `stop()` click. Kept
+        // together with `hidden = false` so a fresh run always starts
+        // with an interactive button regardless of how the previous run
+        // ended (finished normally / user-aborted / errored mid-tool).
+        this.stopBtnEl.disabled = false;
         this._startElapsedTimer();
         this._renderHeader();
     }
@@ -403,9 +408,38 @@ export class PanelRenderer {
 
     stop() {
         const run = getCurrentRun();
-        if (run?.abortFn) {
-            try { run.abortFn(); } catch (_) { /* ignore */ }
-        }
+        if (!run) return;
+        // Immediate UI acknowledgement so the user knows the click
+        // registered even when the actual abort is stuck waiting on an
+        // in-flight tool call / LLM stream. The button gets disabled
+        // (no double-fires), the elapsed timer is frozen client-side
+        // so it stops ticking, and the header dot swaps to a stopping
+        // pseudo-status. All of these are undone by `_renderRunFinished`
+        // when the runtime eventually reaches its terminal state, so
+        // the visual truth converges with the store even though the
+        // click-time freeze is speculative.
+        if (this.stopBtnEl) this.stopBtnEl.disabled = true;
+        if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+        if (this.headerStatusEl) this.headerStatusEl.dataset.status = 'stopping';
+        // Prefer the fast-unwind `stopFn` over the raw `abortFn` when
+        // the run was registered with one: it resolves the main.js
+        // `Promise.race([orchestrationTask, stopRequestPromise])`
+        // immediately, taking the clean 'cancelled by user' branch
+        // that emits the cancelled event + tears down the toast without
+        // waiting for the LLM sender to reject. `stopFn` itself calls
+        // the same underlying abort internally (via `pluginAbortController`),
+        // so we do not need to also invoke `abortFn` — that would
+        // double-fire `stopGeneration()` and log a spurious "stopped
+        // by user" toast when nothing was streaming. For runtime-only
+        // runs (iter-studio simulation, standalone loop, etc.) `stopFn`
+        // is null and we fall back to the raw `abortFn`.
+        try {
+            if (run.stopFn) {
+                run.stopFn();
+            } else if (run.abortFn) {
+                run.abortFn();
+            }
+        } catch (_) { /* ignore */ }
     }
 
     /**
