@@ -29,15 +29,16 @@ const API_URL = 'https://image.chutes.ai/generate';
  */
 export async function dispatchSdChutes(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('chutes', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.CHUTES);
     if (!key) {
         console.warn('Chutes key not found.');
-        ctx.emit.error(new Error('Chutes key not found'));
+        const err = new Error('Chutes key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('chutes', body));
 
     try {
         const bodyParams = {

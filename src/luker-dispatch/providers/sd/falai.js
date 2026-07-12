@@ -38,15 +38,16 @@ const MAX_ATTEMPTS = 100;
  */
 export async function dispatchSdFalai(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('falai', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.FALAI);
     if (!key) {
         console.warn('FAL.AI key not found.');
-        ctx.emit.error(new Error('FAL.AI key not found'));
+        const err = new Error('FAL.AI key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('falai', body));
 
     try {
         const requestBody = {

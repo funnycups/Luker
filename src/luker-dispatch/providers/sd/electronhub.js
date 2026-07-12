@@ -29,15 +29,16 @@ const API_URL = 'https://api.electronhub.ai/v1/images/generations';
  */
 export async function dispatchSdElectronHub(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('electronhub', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.ELECTRONHUB);
     if (!key) {
         console.warn('Electron Hub key not found.');
-        ctx.emit.error(new Error('Electron Hub key not found'));
+        const err = new Error('Electron Hub key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('electronhub', body));
 
     try {
         const bodyParams = {

@@ -28,15 +28,16 @@ import { extractImageMeta } from '../../../request-inspector.js';
  */
 export async function dispatchSdHuggingface(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('huggingface', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.HUGGINGFACE);
     if (!key) {
         console.warn('Hugging Face key not found.');
-        ctx.emit.error(new Error('Hugging Face key not found'));
+        const err = new Error('Hugging Face key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('huggingface', body));
 
     try {
         console.debug('Hugging Face request:', body);

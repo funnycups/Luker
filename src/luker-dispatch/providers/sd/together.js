@@ -34,15 +34,16 @@ const IMAGES_URL = 'https://api.together.xyz/v1/images/generations';
  */
 export async function dispatchSdTogether(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('together', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.TOGETHERAI);
     if (!key) {
         console.warn('TogetherAI key not found.');
-        ctx.emit.error(new Error('TogetherAI key not found'));
+        const err = new Error('TogetherAI key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('together', body));
 
     try {
         console.debug('TogetherAI request:', body);

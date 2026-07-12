@@ -35,29 +35,34 @@ import { extractImageMeta } from '../../../request-inspector.js';
  */
 export async function dispatchSdWorkersai(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('workersai', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.WORKERS_AI);
     if (!key) {
         console.warn('Cloudflare Workers AI API key not found.');
-        ctx.emit.error(new Error('Cloudflare Workers AI API key not found'));
+        const err = new Error('Cloudflare Workers AI API key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
 
     const accountId = String(body.account_id || '').trim();
     if (!accountId) {
         console.warn('Cloudflare Workers AI Account ID not found.');
-        ctx.emit.error(new Error('Cloudflare Workers AI Account ID not found'));
+        const err = new Error('Cloudflare Workers AI Account ID not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
 
     const model = String(body.model || '').trim();
     if (!model) {
         console.warn('Cloudflare Workers AI model not specified.');
-        ctx.emit.error(new Error('Cloudflare Workers AI model not specified'));
+        const err = new Error('Cloudflare Workers AI model not specified');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('workersai', body));
 
     try {
         const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${model}`;

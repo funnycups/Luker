@@ -61,15 +61,16 @@ function getClosestAspectRatio(width, height) {
  */
 export async function dispatchSdBfl(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('bfl', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.BFL);
     if (!key) {
         console.warn('BFL key not found.');
-        ctx.emit.error(new Error('BFL key not found'));
+        const err = new Error('BFL key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('bfl', body));
 
     try {
         const requestBody = {

@@ -49,15 +49,16 @@ function resolveStabilityUrl(model) {
  */
 export async function dispatchSdStability(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('stability', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.STABILITY);
     if (!key) {
         console.warn('Stability AI key not found.');
-        ctx.emit.error(new Error('Stability AI key not found'));
+        const err = new Error('Stability AI key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('stability', body));
 
     try {
         const { payload, model } = body;

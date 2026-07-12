@@ -29,15 +29,16 @@ const API_URL = 'https://nano-gpt.com/api/generate-image';
  */
 export async function dispatchSdNanoGpt(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('nanogpt', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.NANOGPT);
     if (!key) {
         console.warn('NanoGPT key not found.');
-        ctx.emit.error(new Error('NanoGPT key not found'));
+        const err = new Error('NanoGPT key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('nanogpt', body));
 
     try {
         console.debug('NanoGPT request:', body);

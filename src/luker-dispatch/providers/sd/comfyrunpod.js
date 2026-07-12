@@ -36,15 +36,16 @@ import { extractImageMeta } from '../../../request-inspector.js';
  */
 export async function dispatchSdComfyRunPod(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('comfyui_runpod', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.COMFY_RUNPOD);
     if (!key) {
         console.warn('RunPod key not found.');
-        ctx.emit.error(new Error('RunPod key not found'));
+        const err = new Error('RunPod key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('comfyui_runpod', body));
 
     let jobId;
     let item;

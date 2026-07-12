@@ -45,15 +45,16 @@ const IMAGE_FETCH_RETRY_MS = 1000;
  */
 export async function dispatchSdZai(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('zai', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.ZAI);
     if (!key) {
         console.warn('Z.AI key not found.');
-        ctx.emit.error(new Error('Z.AI key not found'));
+        const err = new Error('Z.AI key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('zai', body));
 
     try {
         console.debug('Z.AI image request:', body);

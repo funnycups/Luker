@@ -33,15 +33,16 @@ const API_URL = 'https://api.x.ai/v1/images/generations';
  */
 export async function dispatchSdXai(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('xai', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.XAI);
     if (!key) {
         console.warn('xAI key not found.');
-        ctx.emit.error(new Error('xAI key not found'));
+        const err = new Error('xAI key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('xai', body));
 
     try {
         const requestBody = {

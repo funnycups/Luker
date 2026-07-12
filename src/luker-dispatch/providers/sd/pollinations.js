@@ -31,15 +31,16 @@ import { extractImageMeta } from '../../../request-inspector.js';
  */
 export async function dispatchSdPollinations(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('pollinations', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.POLLINATIONS);
     if (!key) {
         console.warn('Pollinations API key not found.');
-        ctx.emit.error(new Error('Pollinations API key not found'));
+        const err = new Error('Pollinations API key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('pollinations', body));
 
     try {
         const promptUrl = new URL(`https://gen.pollinations.ai/image/${encodeURIComponent(body.prompt)}`);

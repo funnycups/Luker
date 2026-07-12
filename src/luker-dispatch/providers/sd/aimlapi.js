@@ -41,15 +41,16 @@ const API_URL = 'https://api.aimlapi.com/v1/images/generations';
  */
 export async function dispatchSdAimlapi(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.startImage(extractImageMeta('aimlapi', body));
 
     const key = ctx.secrets.read(SECRET_KEYS.AIMLAPI);
     if (!key) {
         console.warn('AI/ML API key not found.');
-        ctx.emit.error(new Error('AI/ML API key not found'));
+        const err = new Error('AI/ML API key not found');
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.startImage(extractImageMeta('aimlapi', body));
 
     try {
         console.debug('AI/ML API image request:', body);
