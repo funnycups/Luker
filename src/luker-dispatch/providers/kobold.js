@@ -125,13 +125,14 @@ async function delay(ms) {
  */
 export async function dispatchKobold(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
 
     if (!body.api_server) {
-        ctx.emit.error(new Error('kobold dispatch: api_server missing'));
+        const err = new Error('kobold dispatch: api_server missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     // localhost → 127.0.0.1 rewrite (legacy line 28-30).
     let apiServer = body.api_server;

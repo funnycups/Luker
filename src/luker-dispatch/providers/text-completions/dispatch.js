@@ -360,18 +360,21 @@ async function parseOllamaStream(upstream, ctx) {
  */
 export async function dispatchTextCompletions(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
     const apiType = body.api_type;
     const suffix = URL_SUFFIX[apiType];
     if (!suffix) {
-        ctx.emit.error(new Error(`text-completions dispatch: unsupported api_type: ${apiType}`));
+        const err = new Error(`text-completions dispatch: unsupported api_type: ${apiType}`);
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
     if (!body.api_server) {
-        ctx.emit.error(new Error('text-completions dispatch: api_server missing'));
+        const err = new Error('text-completions dispatch: api_server missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     try {
         // localhost → 127.0.0.1 rewrite. Node fetch does not resolve

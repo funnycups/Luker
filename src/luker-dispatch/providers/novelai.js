@@ -132,15 +132,16 @@ function getRepPenaltyWhitelist(model) {
  */
 export async function dispatchNovelAI(ctx) {
     const body = ctx.body || {};
+    ctx.inspection.start();
 
     const apiKey = ctx.secrets.read(SECRET_KEYS.NOVEL) || '';
     if (!apiKey) {
         console.warn('NovelAI Access Token is missing.');
-        ctx.emit.error(new Error('NovelAI Access Token is missing'));
+        const err = new Error('NovelAI Access Token is missing');
+        ctx.inspection.fail(err, 400);
+        ctx.emit.error(err);
         return;
     }
-
-    ctx.inspection.start();
 
     // ---- bad words / logit bias / rep-pen whitelist assembly ----
     // Mirrors novelai.js:197-221. Helpers already .slice() their module-
