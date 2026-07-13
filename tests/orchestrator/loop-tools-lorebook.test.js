@@ -28,6 +28,8 @@ import { describe, test, expect } from '@jest/globals';
 import {
     execLorebookSearch,
     execLorebookGet,
+    execWorldBookList,
+    execLorebookList,
 } from '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js';
 import {
     executeLoopTool,
@@ -746,5 +748,63 @@ describe('applyLoopProfilePatchArgs lorebook merge', () => {
             get: false,
             force_activate: true,
         });
+    });
+});
+
+describe('disabled entries (entry.disable === true) are invisible to all four discovery tools', () => {
+    // Main-flow WI skips entry.disable during activation (world-info.js:8971).
+    // The orchestrator's discovery tools must match: user-disabled entries
+    // should not surface via lorebook_list / lorebook_search / lorebook_get /
+    // world_book_list either. Otherwise the "disable" toggle in the WI panel
+    // is a lie for orchestrator agents.
+    const ENTRIES = [
+        { world: 'BookA', uid: 1, key: ['on1'],  content: 'ALPHA_CONTENT',   comment: 'enabled_entry_1', disable: false },
+        { world: 'BookA', uid: 2, key: ['off2'], content: 'BRAVO_CONTENT',   comment: 'disabled_entry_2', disable: true },
+        { world: 'BookB', uid: 3, key: ['off3'], content: 'CHARLIE_CONTENT', comment: 'disabled_entry_3', disable: true },
+        { world: 'BookB', uid: 4, key: ['on4'],  content: 'DELTA_CONTENT',   comment: 'enabled_entry_4', disable: false },
+    ];
+
+    function ctx(extra = {}) {
+        return {
+            __getSortedEntriesFn: async () => ENTRIES,
+            __lukerRun: { activatedEntryKeys: new Set() },
+            ...extra,
+        };
+    }
+
+    test('execLorebookSearch does not surface disabled entry content', async () => {
+        const result = await execLorebookSearch({ pattern: '_CONTENT$' }, ctx());
+        expect(result.output).toContain('ALPHA_CONTENT');
+        expect(result.output).toContain('DELTA_CONTENT');
+        expect(result.output).not.toContain('BRAVO_CONTENT');
+        expect(result.output).not.toContain('CHARLIE_CONTENT');
+    });
+
+    test('execLorebookGet on a disabled entry throws not-found (byte-identical to genuine miss)', async () => {
+        await expect(execLorebookGet({ book_name: 'BookA', uid: 2 }, ctx())).rejects.toThrow(ToolError);
+        // Enabled sibling still resolvable — proves this isn't over-blocking.
+        const ok = await execLorebookGet({ book_name: 'BookA', uid: 1 }, ctx());
+        expect(ok.content).toContain('ALPHA_CONTENT');
+    });
+
+    test('execLorebookList excludes disabled entries from per-book listing', async () => {
+        const result = await execLorebookList({ book_name: 'BookA' }, ctx());
+        // Only the enabled entry shows up.
+        expect(result.output).toContain('uid=1');
+        expect(result.output).not.toContain('uid=2');
+    });
+
+    test('execWorldBookList counts only enabled entries per book', async () => {
+        // A book whose entries are all disabled must vanish from the list entirely,
+        // same shape as a book with zero entries — see design note at lorebook.js:266.
+        const allDisabled = [
+            { world: 'HiddenBook', uid: 10, key: ['x'], content: 'X', comment: 'x', disable: true },
+            { world: 'HiddenBook', uid: 11, key: ['y'], content: 'Y', comment: 'y', disable: true },
+        ];
+        const result = await execWorldBookList({}, ctx({ __getSortedEntriesFn: async () => [...ENTRIES, ...allDisabled] }));
+        // BookA and BookB have 1 enabled entry each; HiddenBook has 0 and must not appear.
+        expect(result.output).toContain('BookA (1 ');
+        expect(result.output).toContain('BookB (1 ');
+        expect(result.output).not.toContain('HiddenBook');
     });
 });

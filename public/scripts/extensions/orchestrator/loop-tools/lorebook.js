@@ -57,16 +57,27 @@ function entryMatchesFilter(entry, compiled) {
  * Production: read `getSorted` from ctx.worldInfoEntry. Tests: prefer
  * the injected `context.__getSortedEntriesFn` hook to bypass the
  * build-only `lib.js` chain.
+ *
+ * `getSortedEntries` returns every entry from every enabled book,
+ * INCLUDING entries the user has toggled off in the WI panel
+ * (`entry.disable === true`). Main-flow WI skips disabled entries
+ * during activation (`world-info.js:8971`), so the agent should not
+ * see them via discovery tools either — otherwise a disabled entry
+ * becomes agent-visible through `lorebook_list` / `lorebook_search` /
+ * `lorebook_get` even though the user explicitly turned it off.
  */
 async function loadAllEnabledEntries(context) {
+    let entries;
     if (typeof context?.__getSortedEntriesFn === 'function') {
         const result = await context.__getSortedEntriesFn();
-        return Array.isArray(result) ? result : [];
+        entries = Array.isArray(result) ? result : [];
+    } else {
+        const getSorted = Luker.getContext().worldInfoEntry?.getSorted;
+        if (typeof getSorted !== 'function') return [];
+        const raw = await getSorted();
+        entries = Array.isArray(raw) ? raw : [];
     }
-    const getSorted = Luker.getContext().worldInfoEntry?.getSorted;
-    if (typeof getSorted !== 'function') return [];
-    const entries = await getSorted();
-    return Array.isArray(entries) ? entries : [];
+    return entries.filter(e => !e?.disable);
 }
 
 function entryDisplayName(entry) {
