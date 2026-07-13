@@ -287,14 +287,14 @@ describe('dispatchMakerSuite', () => {
         expect(parsed.choices[0].message.tool_calls).toBeUndefined();
     });
 
-    test('MAKERSUITE 200 with candidate but empty text AND blocked finishReason (SAFETY): emits head 200 + `{error:{message}}` chunk (terminal)', async () => {
-        // Output-blocked branch: candidate present but content filter cut
-        // the response. TERMINAL — retry hits the same filter.
+    test('MAKERSUITE 200 with candidate but empty text AND deterministic blocked finishReason (BLOCKLIST): emits head 200 + `{error:{message}}` chunk (terminal)', async () => {
+        // Output-blocked by a deterministic filter (hard keyword blocklist).
+        // TERMINAL — retry deterministically hits the same list.
         const ctx = fakeCtx({
             onFetch: jest.fn(async () => new Response(JSON.stringify({
                 candidates: [{
                     content: { role: 'model', parts: [] },
-                    finishReason: 'SAFETY',
+                    finishReason: 'BLOCKLIST',
                 }],
             }), { status: 200, headers: { 'content-type': 'application/json' } })),
         });
@@ -312,12 +312,59 @@ describe('dispatchMakerSuite', () => {
         const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
         expect(parsed.error).toBeDefined();
         expect(parsed.error.message).toContain('Candidate text empty');
-        expect(parsed.error.message).toContain('SAFETY');
+        expect(parsed.error.message).toContain('BLOCKLIST');
 
         const ends = ctx._emitted.filter(e => e.kind === 'end');
         expect(ends).toHaveLength(1);
 
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+    });
+
+    test('MAKERSUITE 200 with candidate but empty text and probabilistic filter (SAFETY): emits normalized OAI shape with empty content (transient — client retries)', async () => {
+        // Gemini's SAFETY / RECITATION / PROHIBITED_CONTENT filters are
+        // probabilistic — same prompt + different sampling can flip the
+        // verdict, so they flow through the transient/retriable branch.
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                candidates: [{
+                    content: { role: 'model', parts: [] },
+                    finishReason: 'SAFETY',
+                }],
+            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        const errs = ctx._emitted.filter(e => e.kind === 'error');
+        expect(errs).toHaveLength(0);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed.error).toBeUndefined();
+        expect(Array.isArray(parsed.choices)).toBe(true);
+        expect(parsed.choices[0].message.content).toBe('');
+        expect(parsed.choices[0].message.tool_calls).toBeUndefined();
+    });
+
+    test('MAKERSUITE 200 with candidate but empty text and probabilistic filter (PROHIBITED_CONTENT): emits normalized OAI shape with empty content (regression: observed to flip on retry)', async () => {
+        // Regression: user log 2026-... surfaced PROHIBITED_CONTENT during a
+        // long-context RP call; a subsequent identical call went STOP normal.
+        // Confirms PROHIBITED_CONTENT is probabilistic in practice → retriable.
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify({
+                candidates: [{
+                    content: { role: 'model', parts: [] },
+                    finishReason: 'PROHIBITED_CONTENT',
+                }],
+            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed.error).toBeUndefined();
+        expect(parsed.choices[0].message.content).toBe('');
     });
 
     test('MAKERSUITE 200 with candidate but empty text and finishReason=STOP: emits normalized OAI shape with empty content (transient — client retries)', async () => {

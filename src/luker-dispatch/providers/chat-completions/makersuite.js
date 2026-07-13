@@ -417,7 +417,15 @@ export async function dispatchMakerSuite(ctx) {
             const candidates = generateResponseJson?.candidates;
             const hasBlockedFinishReason = (() => {
                 const raw = String(candidates?.[0]?.finishReason || '').toUpperCase();
-                return ['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'].includes(raw);
+                // Deterministic filters only: hard keyword blocklist (BLOCKLIST)
+                // and PII-pattern detector (SPII). Retrying against these
+                // burns quota with certainty of same outcome.
+                //
+                // The probabilistic filters (SAFETY, RECITATION,
+                // PROHIBITED_CONTENT) are intentionally NOT here — same prompt
+                // + different sampling can flip the verdict, so they flow
+                // through the transient/retriable branch below.
+                return ['BLOCKLIST', 'SPII'].includes(raw);
             })();
             const promptBlockReason = generateResponseJson?.promptFeedback?.blockReason;
 
