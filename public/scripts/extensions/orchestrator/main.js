@@ -4458,10 +4458,30 @@ async function runDirectorSimulationLoop(context, session, simulationMessages, a
     const simulationAbortController = new AbortController();
     const linkedSimAbort = linkAbortSignals(eventData.abortSignal, simulationAbortController.signal);
     if (linkedSimAbort.signal) eventData.abortSignal = linkedSimAbort.signal;
-    const directorRunId = startRun({
+    // Same run-panel fast-unwind concern as the production director
+    // dispatch (see the extended comment on the GENERATE_TAKEOVER_DISPATCH
+    // startRun call). Simulation's abort is scoped to `simulationAbortController`
+    // rather than global `stopGeneration()`, so `stopFn` mirrors `abortFn`
+    // for the transport side but ALSO folds the panel run to `aborted`
+    // right away — otherwise the panel's stopping-state pseudo-UI persists
+    // until director-runtime's background IIFE settles into its finally
+    // block. The IIFE's later `finishRun` call is guarded by try/catch and
+    // stays a no-op / idempotent overwrite.
+    let directorRunId;
+    directorRunId = startRun({
         mode: 'director',
         chatKey: getChatKey(context),
         abortFn: () => { try { simulationAbortController.abort(); } catch (_) { /* best-effort */ } },
+        stopFn: () => {
+            try { simulationAbortController.abort(); } catch (_) { /* best-effort */ }
+            try {
+                finishRun({
+                    runId: directorRunId,
+                    status: 'aborted',
+                    error: 'user_stopped',
+                });
+            } catch (_) { /* run may already have settled */ }
+        },
         quiet: true,
     });
 
@@ -8705,10 +8725,56 @@ jQuery(() => {
                 // pressing the global stop button. abortController.signal
                 // (which director-runtime consumes via eventData.abortSignal)
                 // goes aborted and the run unwinds.
-                const directorRunId = startRun({
+                //
+                // `stopFn` is the fast-unwind path the run-panel Stop button
+                // prefers over raw `abortFn`. Director does NOT run through
+                // the `Promise.race([orchestrationTask, stopRequestPromise])`
+                // in onWorldInfoFinalized (that wrapper early-returns for
+                // director mode at main.js:1116) and its
+                // `handleDirectorDispatch` returns synchronously while a
+                // background IIFE keeps running the tool-call loop — so
+                // `finishRun` is buried inside that IIFE's `finally { await
+                // handle.complete; ... }` and only fires whenever the loop
+                // actually reaches a terminal state (which can be
+                // arbitrarily late when the LLM sender is stuck or the
+                // current round is waiting on a local tool). Without a
+                // `stopFn` the panel's Stop button falls back to raw
+                // `abortFn` and the RUN_FINISHED event that clears the
+                // header bar / freezes the timer / hides the stop button
+                // never fires until the background IIFE settles, leaving
+                // the panel visibly "stopping" long after the user's
+                // message-send button already flipped back to send.
+                //
+                // Fix: fire the underlying abort AND immediately fold the
+                // panel run to `aborted` so `_renderRunFinished` runs and
+                // the header/timer/button converge with the user's intent
+                // right away. director-runtime's finally block later calls
+                // `finishRun` again with the resolved handle status; the
+                // second call throws in `ensureRunningMatchesId` when the
+                // run has since been replaced/cleared and the caller's
+                // existing try/catch swallows it (see
+                // director-runtime.js:311 "store may already be cleared").
+                // When the run is still in place, the second `finishRun`
+                // just overwrites status/endedAt with the real terminal
+                // state and re-emits RUN_FINISHED — the panel handler is
+                // idempotent (rerunning _renderRunFinished with the same
+                // run only refreshes the elapsed number and re-hides the
+                // already-hidden stop button).
+                let directorRunId;
+                directorRunId = startRun({
                     mode: 'director',
                     chatKey: getChatKey(context),
                     abortFn: () => { try { getContext().stopGeneration(); } catch (_) { /* best-effort */ } },
+                    stopFn: () => {
+                        try { getContext().stopGeneration(); } catch (_) { /* best-effort */ }
+                        try {
+                            finishRun({
+                                runId: directorRunId,
+                                status: 'aborted',
+                                error: 'user_stopped',
+                            });
+                        } catch (_) { /* run may already have settled */ }
+                    },
                 });
 
                 await handleDirectorDispatch(eventData, {

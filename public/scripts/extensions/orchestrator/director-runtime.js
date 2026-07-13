@@ -935,6 +935,18 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                     }
                 } catch (_) { /* store may have been cleared */ }
             }
+            // Post-execute abort check: surface user abort immediately
+            // instead of waiting for the next tool-loop iteration (or
+            // worse, the next round's top-of-loop check after another
+            // full LLM round). Cheap: single `.aborted` read + throw on
+            // the common path. Placed AFTER the messages.push + panel
+            // status update so the tool result that already ran is
+            // preserved in the transcript / visible in the panel — only
+            // the *next* tool / round is suppressed. Mirrors the
+            // post-execute checks in loop-runtime / spec-runtime /
+            // agenda-runtime (see commit 2b228b93b — director was
+            // missed).
+            throwIfAborted(eventData?.abortSignal, 'Orchestration aborted.');
         }
         if (panelRunId && panelRoundId) {
             try {
