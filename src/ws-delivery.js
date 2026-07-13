@@ -7,6 +7,20 @@ import {
 
 const TICKET_PROTOCOL_PREFIX = 'luker-ws-ticket.';
 
+// App-level heartbeat cadence. We don't rely on TCP keepalive (Linux default
+// 2h) or WebSocket protocol ping (browser doesn't expose the pong to JS,
+// making it useless for client-side zombie detection). Values chosen so:
+//   - PING_INTERVAL < the shortest common idle-kill window: mobile-carrier NAT
+//     rebind ~30-300s, enterprise firewall ~60s, home router ~5min. 30s covers
+//     the tightest realistic upstream reaper while keeping traffic minimal
+//     (~24 bytes/frame × 2 = ~50 bytes / 30s per connection).
+//   - PONG_TIMEOUT > 2× PING_INTERVAL so a single dropped ping doesn't kill a
+//     good connection. If two consecutive pings go unanswered, TCP is dead
+//     for practical purposes and we terminate the socket so the client's
+//     reconnect + resume path kicks in.
+const WS_SERVER_PING_INTERVAL_MS = 30_000;
+const WS_SERVER_PONG_TIMEOUT_MS = 70_000;
+
 function extractTicket(req) {
     const protoHeader = String(req.headers['sec-websocket-protocol'] || '');
     for (const part of protoHeader.split(',').map(s => s.trim())) {
@@ -26,6 +40,11 @@ function sendJson(ws, obj) {
 function eventToFrame(requestId, entry) {
     const data = entry?.data;
     if (!data || typeof data !== 'object') {
+        // Should not happen after commit 24a299d0e restored envelope shape.
+        // Log because if it recurs, every WS delivery for this job silently
+        // drops frames — exactly the "server dispatched OK, client hangs"
+        // regression class we've already been bitten by.
+        console.warn('[ws-delivery] eventToFrame got malformed entry for', requestId, entry);
         return null;
     }
     if (data.kind === 'head') {
@@ -48,6 +67,7 @@ function eventToFrame(requestId, entry) {
     if (data.kind === 'error') {
         return { type: 'error', request_id: requestId, seq: entry.seq, code: data.data?.code || 'internal', message: data.data?.message || '' };
     }
+    console.warn('[ws-delivery] eventToFrame unknown kind for', requestId, data.kind);
     return null;
 }
 
@@ -80,13 +100,16 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
         wss.handleUpgrade(req, socket, head, (ws) => {
             ws.userHandle = userInfo.user_handle;
             ws.subscriptions = new Map();
+            ws.lastPongAt = Date.now();
             wss.emit('connection', ws, req);
         });
     }
 
     httpServer.on('upgrade', onUpgrade);
 
-    wss.on('connection', (ws) => {
+    wss.on('connection', (ws, req) => {
+        const peer = req?.socket?.remoteAddress || '?';
+        console.info(`[ws-delivery] connection user=${ws.userHandle} peer=${peer}`);
         // ws.WebSocket is an EventEmitter; per the `ws` docs an unlistened
         // 'error' event bubbles to process. The most common trigger is a
         // client-side connection RST after upgrade (browser reload, tab
@@ -102,21 +125,31 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
             catch { return; }
             if (!msg || typeof msg !== 'object') return;
 
+            // App-level heartbeat: client echoes back our ping. Bump lastPongAt
+            // so the reaper below leaves this connection alone.
+            if (msg.type === 'pong') {
+                ws.lastPongAt = Date.now();
+                return;
+            }
+
             if (msg.type === 'subscribe' || msg.type === 'resume') {
                 const requestId = String(msg.request_id || '');
                 if (!requestId) return;
                 let job;
                 try { job = getTaskByRequestId(requestId, ws.userHandle); }
                 catch (err) {
+                    console.warn(`[ws-delivery] subscribe forbidden user=${ws.userHandle} request_id=${requestId}`);
                     sendJson(ws, { type: 'error', request_id: requestId, code: 'forbidden', message: 'access denied' });
                     return;
                 }
                 if (!job) {
+                    console.warn(`[ws-delivery] subscribe not_found user=${ws.userHandle} request_id=${requestId}`);
                     sendJson(ws, { type: 'error', request_id: requestId, code: 'not_found', message: 'task not found' });
                     return;
                 }
                 if (ws.subscriptions.has(requestId)) return;  // already subscribed
                 const fromSeq = msg.type === 'resume' ? Number(msg.from_seq || 0) : 0;
+                console.info(`[ws-delivery] ${msg.type} user=${ws.userHandle} request_id=${requestId} from_seq=${fromSeq}`);
                 const unsub = subscribeToJob(requestId, (payload) => {
                     if (payload.type !== 'event') return;
                     const frame = eventToFrame(requestId, payload.entry);
@@ -130,7 +163,8 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
             }
         });
 
-        ws.on('close', () => {
+        ws.on('close', (code, reason) => {
+            console.info(`[ws-delivery] closed user=${ws.userHandle} code=${code} reason="${String(reason || '')}" subs=${ws.subscriptions.size}`);
             for (const unsub of ws.subscriptions.values()) {
                 try { unsub(); } catch {}
             }
@@ -138,8 +172,30 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
         });
     });
 
+    // Heartbeat reaper: iterate all live connections, send an app-level ping,
+    // terminate any connection that hasn't responded to one in
+    // WS_SERVER_PONG_TIMEOUT_MS. This is the primary zombie-TCP defense on
+    // the server side; the client's own stale-check timer covers the reverse
+    // direction (server->client bytes stopped flowing).
+    const heartbeatTimer = setInterval(() => {
+        const now = Date.now();
+        for (const ws of wss.clients) {
+            if (ws.readyState !== ws.OPEN) continue;
+            if (now - (ws.lastPongAt || 0) > WS_SERVER_PONG_TIMEOUT_MS) {
+                console.warn(`[ws-delivery] pong timeout user=${ws.userHandle} — terminating`);
+                try { ws.terminate(); } catch { /* already gone */ }
+                continue;
+            }
+            try { ws.send(JSON.stringify({ type: 'ping', ts: now })); } catch { /* send failure will surface via ws error/close */ }
+        }
+    }, WS_SERVER_PING_INTERVAL_MS);
+    // Don't let the reaper keep the process alive on shutdown (tests, SIGTERM
+    // handlers). The close() disposer also clearInterval-s it explicitly.
+    if (typeof heartbeatTimer?.unref === 'function') heartbeatTimer.unref();
+
     return {
         close() {
+            clearInterval(heartbeatTimer);
             httpServer.off('upgrade', onUpgrade);
             wss.close();
         },

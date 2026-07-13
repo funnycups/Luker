@@ -342,7 +342,7 @@ import { showUndoToast } from './scripts/undo-toast.js';
 import { compressRequest, setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
-import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes } from './scripts/ws-delivery.js';
+import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks } from './scripts/ws-delivery.js';
 
 installFrontendLogCapture();
 initAndroidDebugTrail();
@@ -2005,6 +2005,13 @@ async function firstLoadInit() {
             }
             return data.ticket;
         });
+        // Page-lifecycle hooks: force a reconnect on tab-becomes-visible and
+        // on network-back-online. Covers the mobile suspend / laptop sleep /
+        // network-handoff cases where the WS TCP dies silently and neither
+        // the browser's onclose nor the OS TCP keepalive notices for
+        // minutes to hours. Installed AFTER connect so we don't fight the
+        // initial connect race.
+        installLifecycleHooks(delivery);
     } catch (err) {
         console.error('[ws-delivery] Boot failed — /generate requests will hang or 400:', err?.message || err);
         try {
