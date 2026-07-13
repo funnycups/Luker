@@ -875,6 +875,19 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
                     const toolCtx = Object.create(deps?.contextForNotes || null);
                     toolCtx.chat = deps.chat;
                     toolCtx.__customToolRegistry = customToolRegistry;
+                    // Thread the per-run lorebookFilter onto every tool
+                    // call. Director runs in the takeover handler that
+                    // fires AFTER the WI payload is baked into the prompt,
+                    // so we don't have the payload to attach — only the
+                    // filter, which the 5 lorebook exec functions use to
+                    // suppress filtered books/entries at source. Empty
+                    // filter default keeps existing behavior for profiles
+                    // that never set one.
+                    toolCtx.__lukerRun = {
+                        lorebookFilter: director?.lorebookFilter || { bookPattern: '', entryPattern: '' },
+                        activatedEntryKeys: new Set(),
+                        wiFinalizedPayload: null,
+                    };
                     // Custom tools in director mode often want to inspect the
                     // in-flight draft (e.g. a pre-finalize skeleton check). The
                     // built-in `get_draft` tool returns `handle.getText()`, so

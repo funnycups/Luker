@@ -280,6 +280,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-st
     ensureDirectorEditorIntegrity: (v) => v,
     ensureEditorIntegrity: (v) => v,
     ensureLoopEditorIntegrity: (v) => v,
+    ensureLorebookFilterOnEditor: (v) => v,
     initializeUiState: () => {},
     loadCharacterAgendaEditorState: () => ({}),
     loadCharacterDirectorEditorState: () => ({}),
@@ -435,5 +436,97 @@ describe('getEffectiveProfile — picks active preset from current scope', () =>
         const profile = main.getEffectiveProfile(ctx);
         expect(profile.mainAgent.systemPrompt).toBe('CARD-D');
         expect(profile.source).toBe('character');
+    });
+});
+
+describe('getEffectiveProfile — agenda branch threads lorebookFilter', () => {
+    // agenda-profile.js is mocked passthrough (`sanitizeAgendaWorkingProfile: (v) => v`)
+    // at file top, so whatever `lorebookFilter` we stash on the source profile
+    // is what `p.lorebookFilter` reads inside main.getEffectiveProfile.
+
+    const FILTER = { bookPattern: '^private$', entryPattern: '^internal_' };
+
+    test('agenda global scope: return object carries lorebookFilter from active preset', () => {
+        extensionSettings.orchestrator = {
+            executionMode: 'agenda',
+            presetLibrariesMigrationDone: 1,
+            presetLibraries: {
+                spec: {}, loop: {}, director: {},
+                agenda: {
+                    a1: {
+                        name: 'A1',
+                        planner: {},
+                        agents: { finalizer: {} },
+                        finalAgentId: 'finalizer',
+                        limits: {},
+                        lorebookFilter: FILTER,
+                    },
+                },
+            },
+            activePresetIds: { spec: '', agenda: 'a1', loop: '', director: '' },
+        };
+        const profile = main.getEffectiveProfile({ characters: [] });
+        expect(profile.source).toBe('global');
+        expect(profile.mode).toBe('agenda');
+        expect(profile.lorebookFilter).toEqual(FILTER);
+    });
+
+    test('spec global scope: return object carries lorebookFilter from active preset spec', () => {
+        // sanitizeSpec places lorebookFilter inside `.spec`; getEffectiveProfile
+        // must additionally expose it at the top level so downstream consumers
+        // (`onWorldInfoFinalized` preFilter read, runMeta.lorebookFilter for
+        // Channel B tools) can consume it uniformly across all four modes
+        // without branching on nested-vs-flat placement.
+        extensionSettings.orchestrator = {
+            executionMode: 'spec',
+            presetLibrariesMigrationDone: 1,
+            presetLibraries: {
+                agenda: {}, loop: {}, director: {},
+                spec: {
+                    s1: {
+                        name: 'S1',
+                        spec: {
+                            stages: [],
+                            lorebookFilter: FILTER,
+                        },
+                        presets: {},
+                    },
+                },
+            },
+            activePresetIds: { spec: 's1', agenda: '', loop: '', director: '' },
+        };
+        const profile = main.getEffectiveProfile({ characters: [] });
+        expect(profile.source).toBe('global');
+        expect(profile.mode).toBe('spec');
+        expect(profile.lorebookFilter).toEqual(FILTER);
+    });
+
+    test('agenda chat-override scope: return object carries lorebookFilter from chat override', () => {
+        extensionSettings.orchestrator = {
+            executionMode: 'agenda',
+            presetLibrariesMigrationDone: 1,
+            presetLibraries: {
+                spec: {}, loop: {}, director: {},
+                agenda: {},
+            },
+            activePresetIds: { spec: '', agenda: '', loop: '', director: '' },
+            // getChatKey is mocked to return '' — chat override keyed on ''.
+            chatOverrides: {
+                '': {
+                    agenda: {
+                        enabled: true,
+                        planner: {},
+                        agents: { finalizer: {} },
+                        finalAgentId: 'finalizer',
+                        limits: {},
+                        lorebookFilter: FILTER,
+                    },
+                },
+            },
+        };
+        const profile = main.getEffectiveProfile({ characters: [] });
+        expect(profile.source).toBe('chat');
+        expect(profile.mode).toBe('agenda');
+        expect(profile.lorebookFilter).toEqual(FILTER);
     });
 });

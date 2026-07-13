@@ -1117,6 +1117,18 @@ export function createSubagentDispatcher({
                                 toolCtx.chat = chat;
                                 toolCtx.__customToolRegistry = customToolRegistry;
                                 // Mirror director-runtime.js main-agent path:
+                                // thread per-run lorebookFilter into the sub-
+                                // agent's tool ctx so the 5 lorebook exec
+                                // functions suppress filtered books/entries at
+                                // source. wiFinalizedPayload stays null —
+                                // director's takeover fires after WI join, so
+                                // force_activate cleanly hits NO_PAYLOAD.
+                                toolCtx.__lukerRun = {
+                                    lorebookFilter: directorProfile?.lorebookFilter || { bookPattern: '', entryPattern: '' },
+                                    activatedEntryKeys: new Set(),
+                                    wiFinalizedPayload: null,
+                                };
+                                // Mirror director-runtime.js main-agent path:
                                 // give custom tools a stable sync way to read
                                 // the in-flight draft body without round-tripping
                                 // through the built-in `get_draft` tool.

@@ -90,6 +90,29 @@ export function ensureEditorIntegrity(editor) {
     }
     editor.spec = toEditableSpec(editor.spec || defaultSpec, editor.presets);
     editor.presets = toEditablePresetMap(editor.presets);
+    ensureLorebookFilterOnEditor(editor.spec);
+}
+
+/**
+ * Guarantee a `lorebookFilter = { bookPattern, entryPattern }` shape on
+ * an editor draft. Called by the popup input handlers before they write
+ * a field and by the per-mode integrity ensurers so subsequent render
+ * passes can index `editor.lorebookFilter.bookPattern` without guarding.
+ * Missing / non-object host slot is created; non-string patterns are
+ * coerced to '' to match the sanitizer's contract (Task 1).
+ */
+export function ensureLorebookFilterOnEditor(editor) {
+    if (!editor || typeof editor !== 'object') return;
+    if (!editor.lorebookFilter || typeof editor.lorebookFilter !== 'object') {
+        editor.lorebookFilter = { bookPattern: '', entryPattern: '' };
+        return;
+    }
+    if (typeof editor.lorebookFilter.bookPattern !== 'string') {
+        editor.lorebookFilter.bookPattern = '';
+    }
+    if (typeof editor.lorebookFilter.entryPattern !== 'string') {
+        editor.lorebookFilter.entryPattern = '';
+    }
 }
 
 export function pickDefaultPreset(editor) {
@@ -215,6 +238,7 @@ export function ensureLoopEditorIntegrity(editor) {
     editor.wall_clock_budget_ms = normalized.wall_clock_budget_ms;
     editor.capsule_inject = normalized.capsule_inject;
     editor.customTools = normalized.customTools;
+    editor.lorebookFilter = normalized.lorebookFilter;
 }
 
 /**
@@ -282,6 +306,7 @@ export function ensureDirectorEditorIntegrity(editor) {
     editor.tools = normalized.tools;
     editor.discardOnAbort = normalized.discardOnAbort;
     editor.customTools = normalized.customTools;
+    editor.lorebookFilter = normalized.lorebookFilter;
     // Stale wrapper from any pre-flatten editor object — strip so the
     // editor draft is exclusively the new flat shape.
     delete editor.director;

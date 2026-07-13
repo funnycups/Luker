@@ -226,6 +226,42 @@ export const ORCH_TOOL_DISPLAY = {
         type: 'control',
     },
 
+    // ── Lorebook filter tools (shared across all four modes) ──────
+    // Wired by main.js#buildAiIterationToolSet into every mode's tool
+    // list; the executor branches in main.js dispatch through
+    // dispatchLorebookFilterToolCall which thin-wraps
+    // applyLorebookFilterPatchArgs. `summarize` surfaces the first line of
+    // the pattern (multiline patterns get truncated) so the chip shows
+    // what the AI is filtering without expanding args.
+    luker_orch_set_lorebook_book_filter: {
+        icon: '✏️',
+        label: 'Set lorebook book filter',
+        type: 'edit',
+        summarize: (a) => {
+            const first = String(a?.pattern || '').split('\n')[0] || '';
+            return first.length > 60 ? `${first.slice(0, 60)}…` : first;
+        },
+    },
+    luker_orch_set_lorebook_entry_filter: {
+        icon: '✏️',
+        label: 'Set lorebook entry filter',
+        type: 'edit',
+        summarize: (a) => {
+            const first = String(a?.pattern || '').split('\n')[0] || '';
+            return first.length > 60 ? `${first.slice(0, 60)}…` : first;
+        },
+    },
+    luker_orch_clear_lorebook_book_filter: {
+        icon: '🗑️',
+        label: 'Clear lorebook book filter',
+        type: 'edit',
+    },
+    luker_orch_clear_lorebook_entry_filter: {
+        icon: '🗑️',
+        label: 'Clear lorebook entry filter',
+        type: 'edit',
+    },
+
     // ── Lorebook read tools (borrowed surface from the CEA editor) ──
     // Spliced into the catalog by iter-studio/studio.js#buildToolCatalog
     // only when the popup is scoped to a character with an avatar — the

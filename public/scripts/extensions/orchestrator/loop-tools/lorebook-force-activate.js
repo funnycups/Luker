@@ -44,6 +44,7 @@
  */
 
 import { ToolError } from '../loop-runtime.js';
+import { compileLorebookFilter } from '../lorebook-filter.js';
 
 const POSITION_BEFORE = 0;
 const POSITION_AFTER = 1;
@@ -140,6 +141,20 @@ export async function execLorebookForceActivate(args, context) {
         );
     }
 
+    // Source-side filter: a book-pattern match makes the whole book
+    // invisible — throw the same error a genuinely absent book would.
+    // An entry-pattern match makes the specific uid invisible — the
+    // per-uid loop below reports it as `uid_not_found`, indistinguishable
+    // from a uid that never existed in the book. Zero side channel.
+    const compiled = compileLorebookFilter(context?.__lukerRun?.lorebookFilter || { bookPattern: '', entryPattern: '' });
+    if (compiled.test(bookName, '')) {
+        throw new ToolError(
+            `lorebook_force_activate: world book '${bookName}' not found or empty.`,
+            'LOREBOOK_FORCE_BOOK_NOT_FOUND',
+            'Verify the name via world_book_list. Names are case-sensitive.',
+        );
+    }
+
     // Ensure the before/after arrays exist so push() is safe.
     if (!Array.isArray(payload.worldInfoBeforeEntries)) payload.worldInfoBeforeEntries = [];
     if (!Array.isArray(payload.worldInfoAfterEntries)) payload.worldInfoAfterEntries = [];
@@ -153,6 +168,12 @@ export async function execLorebookForceActivate(args, context) {
     for (const uid of uids) {
         const entry = book.entries[uid] || book.entries[String(uid)];
         if (!entry) {
+            skipped.push({ uid, reason: 'uid_not_found' });
+            continue;
+        }
+        // Entry-pattern filter: report as uid_not_found so a filtered
+        // entry looks identical to one that simply doesn't exist.
+        if (!compiled.isEmpty && compiled.test(entry.world, entry.comment)) {
             skipped.push({ uid, reason: 'uid_not_found' });
             continue;
         }

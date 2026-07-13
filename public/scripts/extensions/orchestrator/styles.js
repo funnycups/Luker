@@ -888,11 +888,13 @@ export function ensureStyles(uiBlockId) {
     border-radius: 999px !important;
 }
 .luker_orch_tools_section,
-.luker_orch_skills_section {
+.luker_orch_skills_section,
+.luker_orch_wi_filter_section {
     margin: 6px 0;
 }
 .luker_orch_tools_section > summary,
-.luker_orch_skills_section > summary {
+.luker_orch_skills_section > summary,
+.luker_orch_wi_filter_section > summary {
     cursor: pointer;
     padding: 4px 8px;
     background: rgba(180, 180, 180, 0.07);
@@ -901,8 +903,29 @@ export function ensureStyles(uiBlockId) {
     font-weight: 500;
 }
 .luker_orch_tools_section > summary:hover,
-.luker_orch_skills_section > summary:hover {
+.luker_orch_skills_section > summary:hover,
+.luker_orch_wi_filter_section > summary:hover {
     background: rgba(180, 180, 180, 0.14);
+}
+.luker_orch_wi_filter_body {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.luker_orch_wi_filter_body label {
+    font-size: 0.9rem;
+    opacity: 0.85;
+}
+.luker_orch_wi_filter_body textarea {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.9rem;
+    min-height: 60px;
+    resize: vertical;
+}
+.luker_orch_wi_filter_hint {
+    opacity: 0.7;
+    font-size: 0.85rem;
 }
 .luker_orch_preset_bar {
     display: flex;

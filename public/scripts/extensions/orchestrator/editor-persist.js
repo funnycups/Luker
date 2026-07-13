@@ -339,6 +339,7 @@ export async function persistCharacterDirectorEditor(context, settings, avatar, 
         maxTotalSubagentRuns: sanitizedProfile.maxTotalSubagentRuns,
         tools: sanitizedProfile.tools,
         discardOnAbort: sanitizedProfile.discardOnAbort,
+        lorebookFilter: sanitizedProfile.lorebookFilter,
     });
     overrideEnabled[ORCH_EXECUTION_MODE_DIRECTOR] = enabledFlag;
 

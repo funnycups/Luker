@@ -42,6 +42,7 @@ import { DEFAULT_LOOP_SYSTEM_PROMPT } from './loop-default-prompt.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
 import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { sanitizeLorebookFilter } from './lorebook-filter.js';
 
 const STATE_NAMESPACE = 'luker_orchestrator_anchors';
 const SCHEMA_NAMESPACE = `${STATE_NAMESPACE}__schema`;
@@ -587,6 +588,7 @@ export function sanitizeLoopProfile(input) {
             return Math.max(LOOP_WALL_CLOCK_FLOOR_MS, Math.floor(n));
         })(),
         capsule_inject: sanitizeLoopCapsuleInject(source.capsule_inject),
+        lorebookFilter: sanitizeLorebookFilter(source.lorebookFilter),
         ...(() => {
             const seeded = seedDefaultCustomToolsIfNeeded(source, sanitizeCustomTools(source.customTools));
             return {

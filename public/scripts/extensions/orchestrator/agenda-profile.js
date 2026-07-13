@@ -45,6 +45,7 @@ import { sanitizeAgentToolFlags, seedDefaultLayer2Customs } from './persistence.
 import { toReadableYamlText } from './output-formatting.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
+import { sanitizeLorebookFilter } from './lorebook-filter.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -140,6 +141,7 @@ export function sanitizeAgendaWorkingProfile(workingProfile = null) {
                 deny: Array.isArray(source.skills.deny) ? source.skills.deny.slice() : [],
             }
             : { visible: ['*'], deny: [] },
+        lorebookFilter: sanitizeLorebookFilter(source?.lorebookFilter),
     };
 }
 
@@ -178,6 +180,7 @@ export function ensureAgendaEditorIntegrity(editor) {
     editor.defaultTools = normalized.defaultTools;
     editor.customTools = normalized.customTools;
     editor.skills = normalized.skills;
+    editor.lorebookFilter = normalized.lorebookFilter;
     if ('avatar' in editor) {
         editor.avatar = String(editor.avatar || '');
     }

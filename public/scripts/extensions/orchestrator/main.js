@@ -87,6 +87,11 @@ import {
     normalizeWorldInfoResolverMessages,
 } from './world-info.js';
 import {
+    applyProfileWorldInfoFilter,
+    applyLorebookFilterPatchArgs,
+    buildActivatedEntryKeysFromPayload,
+} from './lorebook-filter.js';
+import {
     clearCapsulePrompt,
     injectCapsuleToPayload,
     migrateLegacyCapsuleInjectPosition,
@@ -273,6 +278,7 @@ import {
     ensureDirectorEditorIntegrity,
     ensureEditorIntegrity,
     ensureLoopEditorIntegrity,
+    ensureLorebookFilterOnEditor,
     initializeUiState,
     loadCharacterAgendaEditorState,
     loadCharacterDirectorEditorState,
@@ -838,6 +844,7 @@ export function getEffectiveProfile(context) {
                 agents: p.agents,
                 finalAgentId: p.finalAgentId,
                 limits: p.limits,
+                lorebookFilter: p.lorebookFilter,
             };
         }
         const p = sanitizeAgendaWorkingProfile(active || {});
@@ -849,6 +856,7 @@ export function getEffectiveProfile(context) {
             agents: p.agents,
             finalAgentId: p.finalAgentId,
             limits: p.limits,
+            lorebookFilter: p.lorebookFilter,
         };
     }
     if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
@@ -861,12 +869,18 @@ export function getEffectiveProfile(context) {
     }
     // spec
     const presets = (active?.presets && typeof active.presets === 'object') ? active.presets : {};
+    const sanitized = sanitizeSpec(active?.spec);
     return {
         source: sourceLabel,
         key: keyLabel,
         mode: ORCH_EXECUTION_MODE_SPEC,
-        spec: sanitizeSpec(active?.spec),
+        spec: sanitized,
         presets,
+        // Flatten to top-level so `onWorldInfoFinalized` preFilter read and
+        // runMeta.lorebookFilter (which drives Channel B lorebook tool
+        // filtering) can consume the filter uniformly across all four modes
+        // without knowing spec's `.spec.lorebookFilter` nesting.
+        lorebookFilter: sanitized.lorebookFilter,
     };
 }
 
@@ -1020,6 +1034,25 @@ async function onWorldInfoFinalized(payload) {
     if (!shouldRunOrchestrationForPayload(payload)) {
         return;
     }
+    // Apply per-preset world book filter before any downstream reads.
+    // This mutates payload's WI arrays in place; ST core re-reads them
+    // downstream (via {...worldInfoResolution, ...payload}), then joins
+    // and passes to prepareOpenAIMessages — covers all four modes
+    // (spec/agenda/loop/director) with one hook.
+    //
+    // Applies only to the current turn's WI join; upstream stage/agent
+    // outputs from earlier in the same run are unaffected — filter changes
+    // take effect from the next turn.
+    let preFilterProfile = null;
+    try {
+        preFilterProfile = getEffectiveProfile(context);
+        const preFilter = preFilterProfile?.lorebookFilter;
+        if (preFilter) {
+            applyProfileWorldInfoFilter(payload, preFilter);
+        }
+    } catch (err) {
+        console.warn('[orchestrator] applyProfileWorldInfoFilter failed', err);
+    }
     if (orchInFlight) {
         return;
     }
@@ -1045,17 +1078,12 @@ async function onWorldInfoFinalized(payload) {
     // them in the loop agent would waste a round. Set is keyed by
     // `${world}.${uid}`, the same shape main-flow World Info uses
     // internally (`world-info.js` builds it from `allActivatedEntries`).
-    const activatedEntryKeys = new Set();
-    const allActivatedEntries = payload?.allActivatedEntries;
-    if (allActivatedEntries && typeof allActivatedEntries[Symbol.iterator] === 'function') {
-        for (const entry of allActivatedEntries) {
-            if (!entry) continue;
-            const world = String(entry.world || '');
-            const uid = entry.uid;
-            if (uid === undefined || uid === null) continue;
-            activatedEntryKeys.add(`${world}.${uid}`);
-        }
-    }
+    //
+    // Fix: payload.allActivatedEntries has never existed on ST core's
+    // wiFinalizedPayload (only worldInfoResolution.activatedEntries does).
+    // Previous read was always undefined, silently disabling
+    // lorebook_search's dedup. Use the correct source now.
+    const activatedEntryKeys = buildActivatedEntryKeysFromPayload(payload);
     const runMeta = {
         activatedEntryKeys,
         // Reference to the in-flight wiFinalizedPayload so loop's
@@ -1067,6 +1095,7 @@ async function onWorldInfoFinalized(payload) {
         // handler returns. Push after emit returns has no effect because
         // join has already materialized worldInfoBefore/After strings.
         wiFinalizedPayload: payload,
+        lorebookFilter: preFilterProfile?.lorebookFilter || { bookPattern: '', entryPattern: '' },
     };
     const orchestrationPayload = linkedAbort.signal && linkedAbort.signal !== payload?.signal
         ? {
@@ -3587,6 +3616,81 @@ function buildAiIterationUserPrompt(settings, session, userInputText, {
     ].join('\n');
 }
 
+// Iter-studio lorebook-filter tool schemas. `set_*` accepts a multiline
+// regex string (one JS RegExp per non-empty line, any-line match filters);
+// empty string clears the field. `clear_*` takes no args. Shared across
+// director / loop / agenda / spec tool-list builders.
+const LOREBOOK_FILTER_SET_SCHEMA = {
+    type: 'object',
+    properties: {
+        pattern: {
+            type: 'string',
+            description: 'Multiline regex; each non-empty line is one JS RegExp. Any-line match filters. Empty string = clear.',
+        },
+    },
+    required: ['pattern'],
+    additionalProperties: false,
+};
+const LOREBOOK_FILTER_CLEAR_SCHEMA = {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+};
+
+/**
+ * Shared iter-studio dispatcher for the four `luker_orch_{set,clear}_lorebook_{book,entry}_filter`
+ * tools. All four modes (director / loop / agenda / spec) call this from
+ * their per-mode executor loop; the caller supplies read/write functions
+ * scoped to the mode's working-profile shape (root for director/loop/agenda,
+ * `.spec` for spec) so this helper stays profile-shape agnostic.
+ *
+ * On success: writes the sanitized `nextFilter` back through `writeFilter`
+ * and returns `{changed:true, actionText, payload:{ok:true,...}}`.
+ * On failure (invalid regex / missing pattern / wrong type / noop): does
+ * NOT throw upward; returns `{changed:false, actionText, payload:{ok:false,error,detail,...}}`
+ * so the executor can push a real tool reply — matching the iter-studio
+ * noop/error contract (project_iter_studio_noop_error_contract).
+ */
+function dispatchLorebookFilterToolCall(name, args, readFilter, writeFilter) {
+    const dimension = name.includes('_book_') ? 'book' : 'entry';
+    const isClear = name.startsWith('luker_orch_clear_');
+    const patchArgs = isClear ? { pattern: '' } : (args && typeof args === 'object' ? args : {});
+    const currentFilter = readFilter() || { bookPattern: '', entryPattern: '' };
+    let nextFilter;
+    try {
+        nextFilter = applyLorebookFilterPatchArgs(currentFilter, patchArgs, { dimension });
+    } catch (err) {
+        const detail = String(err?.message || err || 'invalid_args');
+        // Prefer the structured `err.code` set by applyLorebookFilterPatchArgs
+        // ('noop' | 'invalid_args'); fall back to 'invalid_args' if a future
+        // caller path throws a bare Error without a code.
+        const code = (err && typeof err.code === 'string') ? err.code : 'invalid_args';
+        const actionText = `Skipped ${name}: ${detail}`;
+        return {
+            changed: false,
+            actionText,
+            payload: { ok: false, error: code, detail, action: actionText },
+        };
+    }
+    writeFilter(nextFilter);
+    const label = dimension === 'book' ? 'book-name' : 'entry-name';
+    const actionText = isClear
+        ? `Cleared ${label} filter.`
+        : `Set ${label} filter to ${JSON.stringify(patchArgs.pattern)}.`;
+    return {
+        changed: true,
+        actionText,
+        payload: { ok: true, action: actionText, nextFilter },
+    };
+}
+
+const LOREBOOK_FILTER_TOOL_NAMES = new Set([
+    'luker_orch_set_lorebook_book_filter',
+    'luker_orch_set_lorebook_entry_filter',
+    'luker_orch_clear_lorebook_book_filter',
+    'luker_orch_clear_lorebook_entry_filter',
+]);
+
 function buildAiIterationToolSet(session = null) {
     // Shared by every mode's tools-edit functions (director / spec / agenda /
     // loop).
@@ -3691,6 +3795,45 @@ function buildAiIterationToolSet(session = null) {
         },
         additionalProperties: false,
     };
+    // Per-preset lorebook filter tools shared by every mode. Registered at
+    // the end of each mode's tool list (before CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS)
+    // so the AI can natural-language-edit `lorebookFilter.{bookPattern,entryPattern}`
+    // without going through set_loop_profile / set_director_main_agent /
+    // set_agenda_planner / set_spec_default_tools.
+    const lorebookFilterToolDefs = [
+        {
+            type: 'function',
+            function: {
+                name: 'luker_orch_set_lorebook_book_filter',
+                description: 'Set the book-name regex filter for this profile. Multiline; any line matches → whole book excluded from context and all lorebook tools.',
+                parameters: LOREBOOK_FILTER_SET_SCHEMA,
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_orch_set_lorebook_entry_filter',
+                description: 'Set the entry-name regex filter for this profile. Multiline; any line matches → single entry excluded (matched against entry.comment).',
+                parameters: LOREBOOK_FILTER_SET_SCHEMA,
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_orch_clear_lorebook_book_filter',
+                description: 'Clear the book-name regex filter for this profile.',
+                parameters: LOREBOOK_FILTER_CLEAR_SCHEMA,
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_orch_clear_lorebook_entry_filter',
+                description: 'Clear the entry-name regex filter for this profile.',
+                parameters: LOREBOOK_FILTER_CLEAR_SCHEMA,
+            },
+        },
+    ];
     if (isDirectorIterationSession(session)) {
         return [
             {
@@ -3879,6 +4022,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
     }
@@ -3932,6 +4076,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
     }
@@ -4110,6 +4255,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
     }
@@ -4280,6 +4426,7 @@ function buildAiIterationToolSet(session = null) {
                 },
             },
         },
+        ...lorebookFilterToolDefs,
         ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
     ];
 }
@@ -4667,8 +4814,8 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
                 // persisting. Mirror production's `onWorldInfoFinalized` wiring:
                 // use captured `coreChat` as the messages arg so spec/agenda
                 // template renderers see the same processed chat the live
-                // pipeline would feed them, and transform `allActivatedEntries`
-                // into `__lukerRun.activatedEntryKeys` so loop's
+                // pipeline would feed them, and derive `__lukerRun.activatedEntryKeys`
+                // from `worldInfoResolution.activatedEntries` so loop's
                 // `lorebook_search` dedups the same entries production already
                 // injected into the main context.
                 const captured = await captureDryRunPayload(
@@ -4680,17 +4827,10 @@ async function runAiIterationSimulation(context, session, args = {}, abortSignal
                 const chatForRuntime = capturedCoreChat && capturedCoreChat.length > 0
                     ? structuredClone(capturedCoreChat)
                     : structuredClone(simulationMessages);
-                const activatedEntryKeys = new Set();
-                const allActivatedEntries = captured?.allActivatedEntries;
-                if (allActivatedEntries && typeof allActivatedEntries[Symbol.iterator] === 'function') {
-                    for (const entry of allActivatedEntries) {
-                        if (!entry) continue;
-                        const world = String(entry.world || '');
-                        const uid = entry.uid;
-                        if (uid === undefined || uid === null) continue;
-                        activatedEntryKeys.add(`${world}.${uid}`);
-                    }
-                }
+                // Fix: payload.allActivatedEntries has never existed on ST core's
+                // wiFinalizedPayload; use the correct source
+                // (worldInfoResolution.activatedEntries) via the shared helper.
+                const activatedEntryKeys = buildActivatedEntryKeysFromPayload(captured);
                 const payload = {
                     type: String(args?.trigger || 'normal').trim().toLowerCase() || 'normal',
                     coreChat: chatForRuntime,
@@ -4923,6 +5063,18 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
                 pendingCustomToolEdits.push({ sourceCallId: callId, blob: ctOutcome.pendingCustomToolEdit });
             }
             if (ctOutcome.changed) changed = true;
+            continue;
+        }
+        if (LOREBOOK_FILTER_TOOL_NAMES.has(name)) {
+            const outcome = dispatchLorebookFilterToolCall(
+                name,
+                args,
+                () => session.workingProfile?.lorebookFilter,
+                (nextFilter) => { session.workingProfile.lorebookFilter = nextFilter; },
+            );
+            actions.push(outcome.actionText);
+            pushToolResult(outcome.payload);
+            if (outcome.changed) changed = true;
             continue;
         }
         if (name === 'luker_orch_set_agenda_planner' || name === 'luker_orch_set_agenda_planner_prompt') {
@@ -5298,6 +5450,18 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
             if (ctOutcome.changed) changed = true;
             continue;
         }
+        if (LOREBOOK_FILTER_TOOL_NAMES.has(name)) {
+            const outcome = dispatchLorebookFilterToolCall(
+                name,
+                args,
+                () => session.workingProfile?.lorebookFilter,
+                (nextFilter) => { session.workingProfile.lorebookFilter = nextFilter; },
+            );
+            actions.push(outcome.actionText);
+            pushToolResult(outcome.payload);
+            if (outcome.changed) changed = true;
+            continue;
+        }
         if (name === 'luker_orch_set_loop_profile') {
             const before = sanitizeLoopProfile(session.workingProfile);
             let after;
@@ -5449,6 +5613,18 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
                 pendingCustomToolEdits.push({ sourceCallId: callId, blob: ctOutcome.pendingCustomToolEdit });
             }
             if (ctOutcome.changed) changed = true;
+            continue;
+        }
+        if (LOREBOOK_FILTER_TOOL_NAMES.has(name)) {
+            const outcome = dispatchLorebookFilterToolCall(
+                name,
+                args,
+                () => director?.lorebookFilter,
+                (nextFilter) => { director.lorebookFilter = nextFilter; },
+            );
+            actions.push(outcome.actionText);
+            pushToolResult(outcome.payload);
+            if (outcome.changed) changed = true;
             continue;
         }
         if (name === 'luker_orch_set_director_main_agent') {
@@ -5889,6 +6065,30 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
                 pendingCustomToolEdits.push({ sourceCallId: callId, blob: ctOutcome.pendingCustomToolEdit });
             }
             if (ctOutcome.changed) changed = true;
+            continue;
+        }
+        if (LOREBOOK_FILTER_TOOL_NAMES.has(name)) {
+            // Spec-mode filter lives at `.spec.lorebookFilter` (see
+            // sanitizeSpec in spec-schema.js:175 — filter is scoped to the
+            // spec sub-object, not the profile root).
+            if (!session.workingProfile.spec || typeof session.workingProfile.spec !== 'object') {
+                session.workingProfile.spec = { stages: [] };
+            }
+            const outcome = dispatchLorebookFilterToolCall(
+                name,
+                args,
+                () => session.workingProfile.spec.lorebookFilter,
+                (nextFilter) => { session.workingProfile.spec.lorebookFilter = nextFilter; },
+            );
+            // Re-run sanitizeSpec for symmetry with sibling spec-mode tool
+            // branches (set_default_tools / set_stage etc). The trailing
+            // sanitizeSpec at end-of-function already covers this, but
+            // per-branch sanitize keeps intermediate reads within the same
+            // executor loop consistent.
+            session.workingProfile.spec = sanitizeSpec(session.workingProfile.spec);
+            actions.push(outcome.actionText);
+            pushToolResult(outcome.payload);
+            if (outcome.changed) changed = true;
             continue;
         }
         if (name === 'luker_orch_set_stage') {
@@ -7208,6 +7408,60 @@ function bindUi() {
         }
         return null;
     }
+
+    // Resolve the (mode, scope, host) triple for a `[data-orch-wi-filter]`
+    // textarea. The `filterHost` is the object whose `.lorebookFilter`
+    // field the sanitizer round-trips: for spec it lives under
+    // `editor.spec`, for the other three modes it lives on the editor
+    // top level (same shape the per-mode sanitizer emits — Task 2).
+    // Mirrors `resolveCustomToolsHost` above so the same closure-scoped
+    // helpers (getScopeFromElementOrMode / getXxxEditorByScope /
+    // ensureXxxEditorIntegrity) do the mode dispatch.
+    function resolveLorebookFilterHost(element) {
+        const mode = String(jQuery(element).closest('[data-orch-mode]').attr('data-orch-mode') || '').toLowerCase();
+        let executionMode = mode;
+        if (executionMode === 'loop') executionMode = ORCH_EXECUTION_MODE_LOOP;
+        else if (executionMode === 'agenda') executionMode = ORCH_EXECUTION_MODE_AGENDA;
+        else if (executionMode === 'director') executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
+        else if (executionMode === 'spec') executionMode = ORCH_EXECUTION_MODE_SPEC;
+        else return null;
+        const scope = getScopeFromElementOrMode(element, context, settings, executionMode);
+        if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
+            const editor = getLoopEditorByScope(scope);
+            ensureLoopEditorIntegrity(editor);
+            ensureLorebookFilterOnEditor(editor);
+            return { mode: 'loop', scope, editor, filterHost: editor };
+        }
+        if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
+            const editor = getDirectorEditorByScope(scope);
+            ensureDirectorEditorIntegrity(editor);
+            ensureLorebookFilterOnEditor(editor);
+            return { mode: 'director', scope, editor, filterHost: editor };
+        }
+        if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
+            const editor = getAgendaEditorByScope(scope);
+            ensureAgendaEditorIntegrity(editor);
+            ensureLorebookFilterOnEditor(editor);
+            return { mode: 'agenda', scope, editor, filterHost: editor };
+        }
+        if (executionMode === ORCH_EXECUTION_MODE_SPEC) {
+            const editor = getEditorByScope(scope);
+            ensureEditorIntegrity(editor);
+            if (!editor.spec || typeof editor.spec !== 'object') editor.spec = {};
+            ensureLorebookFilterOnEditor(editor.spec);
+            return { mode: 'spec', scope, editor, filterHost: editor.spec };
+        }
+        return null;
+    }
+
+    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-wi-filter], .luker_orch_editor_popup [data-orch-wi-filter]`, function () {
+        const $el = jQuery(this);
+        const field = String($el.attr('data-orch-wi-filter') || '');
+        if (field !== 'bookPattern' && field !== 'entryPattern') return;
+        const host = resolveLorebookFilterHost(this);
+        if (!host) return;
+        host.filterHost.lorebookFilter[field] = String($el.val() || '');
+    });
 
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-tool-flag], .luker_orch_editor_popup [data-orch-tool-flag]`, function () {
         const name = String(jQuery(this).attr('data-orch-tool-flag') || '');

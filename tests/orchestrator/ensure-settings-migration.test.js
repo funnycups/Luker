@@ -292,6 +292,7 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-st
     ensureDirectorEditorIntegrity: (v) => v,
     ensureEditorIntegrity: (v) => v,
     ensureLoopEditorIntegrity: (v) => v,
+    ensureLorebookFilterOnEditor: (v) => v,
     initializeUiState: () => {},
     loadCharacterAgendaEditorState: () => ({}),
     loadCharacterDirectorEditorState: () => ({}),

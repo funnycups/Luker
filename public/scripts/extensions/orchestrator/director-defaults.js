@@ -22,6 +22,7 @@
 import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags } from './persistence.js';
 import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
+import { sanitizeLorebookFilter } from './lorebook-filter.js';
 
 /**
  * Inline normalizer for the `skills` field. Kept local rather than imported
@@ -878,6 +879,8 @@ export function sanitizeDirectorProfile(profile) {
         result.skills = directorFields.skills;
     }
     normalizeSkillsField(result);
+
+    result.lorebookFilter = sanitizeLorebookFilter(directorFields.lorebookFilter);
 
     return result;
 }

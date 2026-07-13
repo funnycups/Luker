@@ -207,6 +207,10 @@ export function toEditableSpec(spec, presets) {
         defaultTools: sanitized.defaultTools === undefined ? null : sanitized.defaultTools,
         customTools: Array.isArray(sanitized.customTools) ? sanitized.customTools : [],
         skills: cloneSkillsField(sanitized.skills) || { visible: ['*'], deny: [] },
+        // Round-trip the per-preset lorebook filter: sanitizeSpec always
+        // emits a canonical `{ bookPattern, entryPattern }` shape, so the
+        // editor draft carries it verbatim for the popup textareas.
+        lorebookFilter: sanitized.lorebookFilter || { bookPattern: '', entryPattern: '' },
     };
 
     if (stages.length > 0) {
@@ -272,6 +276,13 @@ export function serializeEditorSpec(editorSpec) {
     }
     const skills = cloneSkillsField(editorSpec?.skills);
     if (skills) payload.skills = skills;
+    // Round-trip the per-preset lorebook filter through the sanitizer
+    // so a bookPattern / entryPattern edited in the popup lands in
+    // sanitizeSpec's output rather than being replaced by the empty
+    // default when the payload is rebuilt here (Task 5).
+    if (editorSpec && editorSpec.lorebookFilter !== undefined) {
+        payload.lorebookFilter = editorSpec.lorebookFilter;
+    }
     return sanitizeSpec(payload);
 }
 

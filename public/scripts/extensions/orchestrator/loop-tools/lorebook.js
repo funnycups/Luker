@@ -27,10 +27,30 @@
 
 import { ToolError } from '../loop-runtime.js';
 import { gatherGrepMatches } from '../grep-tool.js';
+import { compileLorebookFilter } from '../lorebook-filter.js';
 
 function entryActivationKey(entry) {
     if (!entry) return '';
     return `${String(entry.world || '')}.${String(entry.uid ?? '')}`;
+}
+
+/**
+ * Source-side gatekeeper for every lorebook exec: reads the per-run
+ * `lorebookFilter` off `context.__lukerRun`, compiles it, and returns
+ * a `{isEmpty, test(book, entry)}` handle. Callers filter inputs BEFORE
+ * any user-visible output is shaped so that a filtered book/entry is
+ * indistinguishable from a genuinely absent one — zero side channel to
+ * the agent. An empty/missing filter yields `isEmpty: true` and callers
+ * skip the filter loop entirely (no perf cost).
+ */
+function getCompiledFilter(context) {
+    const raw = context?.__lukerRun?.lorebookFilter;
+    return compileLorebookFilter(raw || { bookPattern: '', entryPattern: '' });
+}
+
+function entryMatchesFilter(entry, compiled) {
+    if (!entry || compiled.isEmpty) return false;
+    return compiled.test(entry.world, entry.comment);
 }
 
 /**
@@ -77,6 +97,7 @@ export async function execLorebookSearch(args, context) {
     const bookFilter = String(args?.book ?? '').trim();
 
     const entries = await loadAllEnabledEntries(context);
+    const compiled = getCompiledFilter(context);
     const activated = context?.__lukerRun?.activatedEntryKeys instanceof Set
         ? context.__lukerRun.activatedEntryKeys
         : new Set();
@@ -85,6 +106,7 @@ export async function execLorebookSearch(args, context) {
         for (const entry of entries) {
             if (!entry) continue;
             if (activated.has(entryActivationKey(entry))) continue;
+            if (entryMatchesFilter(entry, compiled)) continue;
             const book = String(entry.world || '');
             if (bookFilter && book !== bookFilter) continue;
             yield {
@@ -131,6 +153,7 @@ export async function execLorebookGet(args, context) {
     }
     const book = String(args?.book ?? '').trim();
     const entries = await loadAllEnabledEntries(context);
+    const compiled = getCompiledFilter(context);
 
     const target = entries.find(e => {
         if (!e) return false;
@@ -140,6 +163,7 @@ export async function execLorebookGet(args, context) {
             if (!keys.includes(entryKeyRaw.trim())) return false;
         }
         if (book && String(e.world || '') !== book) return false;
+        if (entryMatchesFilter(e, compiled)) return false;
         return true;
     });
     if (!target) {
@@ -230,11 +254,17 @@ async function loadWorldBookScopes(context) {
  */
 export async function execWorldBookList(_args, context) {
     const entries = await loadAllEnabledEntries(context);
+    const compiled = getCompiledFilter(context);
     const counts = new Map();
     for (const entry of entries) {
         if (!entry) continue;
         const book = String(entry.world || '');
         if (!book) continue;
+        // Source-side filter: a book/entry match drops the row before it
+        // ever contributes to the visible per-book counts. If every entry
+        // in a book is filtered, the book itself vanishes from the listing
+        // — same shape as a book with zero enabled entries.
+        if (entryMatchesFilter(entry, compiled)) continue;
         counts.set(book, (counts.get(book) || 0) + 1);
     }
     const scopes = await loadWorldBookScopes(context);
@@ -338,6 +368,7 @@ export async function execLorebookList(args, context) {
     const range = parseUidRange(args?.range);
 
     const entries = await loadAllEnabledEntries(context);
+    const compiled = getCompiledFilter(context);
     const activated = context?.__lukerRun?.activatedEntryKeys instanceof Set
         ? context.__lukerRun.activatedEntryKeys
         : new Set();
@@ -347,6 +378,12 @@ export async function execLorebookList(args, context) {
         if (!entry) continue;
         if (String(entry.world || '') !== bookName) continue;
         if (activated.has(entryActivationKey(entry))) continue;
+        // Source-side filter: a book- or entry-level match silently drops
+        // the row. If the entire book is book-pattern-matched, every entry
+        // is filtered and the output is empty — same shape as an empty
+        // book or a genuinely absent book, so the agent gets zero side
+        // channel confirming "this book exists but you can't see it".
+        if (entryMatchesFilter(entry, compiled)) continue;
         const uid = Number(entry.uid);
         if (!Number.isFinite(uid)) continue;
         if (range && (uid < range.start || uid > range.end)) continue;

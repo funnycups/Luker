@@ -37,6 +37,7 @@ import { ORCH_EXECUTION_MODE_DIRECTOR, sanitizeDirectorProfile } from './directo
 import { sanitizeAgentToolFlags, sanitizeOptionalAgentToolFlags, seedDefaultLayer2Customs } from './persistence.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
+import { sanitizeLorebookFilter } from './lorebook-filter.js';
 
 const MODULE_NAME = 'orchestrator';
 
@@ -171,6 +172,7 @@ export function sanitizeSpec(spec) {
             };
         })(),
     };
+    out.lorebookFilter = sanitizeLorebookFilter(spec.lorebookFilter);
     // Mode-level skills: ensure the runtime always reads a canonical
     // `{ visible, deny }` shape. Inline normalizer (see director-defaults.js
     // for rationale on not importing from skill-resolution.js).

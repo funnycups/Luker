@@ -466,6 +466,41 @@ export function renderSkillChipsPlaceholder(deps, scope, target, label = '') {
  * (e.g. `spec-node-tools-override`); `actionExtraAttrs` mirrors the
  * checkbox extraAttrs so the click handler can find the same target.
  */
+/**
+ * Render the "world book filter" section shared by all four mode
+ * workspaces' Tools & Skills tab. Two multiline regex fields —
+ * `bookPattern` matches world-book file names, `entryPattern` matches
+ * entry comments; empty field disables that dimension. Both fields
+ * round-trip through the per-mode profile sanitizer as
+ * `lorebookFilter.{bookPattern,entryPattern}`, so the runtime picks
+ * them up automatically (Task 4).
+ *
+ * `mode` is baked into the textarea id so all four mode tabs can
+ * co-exist in the same popup DOM without id collisions (the tab host
+ * renders every mode side-by-side and hides inactive ones via
+ * `style="display:none"` rather than remove).
+ */
+export function renderLorebookFilterSection(deps, mode, lorebookFilter, { open = true } = {}) {
+    const { escapeHtml, i18n } = deps;
+    const safeMode = String(mode || '').replace(/[^a-z]/gi, '') || 'mode';
+    const bookId = `luker_orch_wi_filter_book_${safeMode}`;
+    const entryId = `luker_orch_wi_filter_entry_${safeMode}`;
+    const bookPattern = String(lorebookFilter?.bookPattern || '');
+    const entryPattern = String(lorebookFilter?.entryPattern || '');
+    const openAttr = open ? ' open' : '';
+    return `
+    <details class="luker_orch_wi_filter_section"${openAttr}>
+        <summary>${escapeHtml(i18n('World book filter (applies to all agents in this preset)'))}</summary>
+        <div class="luker_orch_wi_filter_body">
+            <label for="${bookId}">${escapeHtml(i18n('Book name regex (multiline, any line matches → whole book filtered)'))}</label>
+            <textarea id="${bookId}" data-orch-wi-filter="bookPattern" rows="3" spellcheck="false">${escapeHtml(bookPattern)}</textarea>
+            <label for="${entryId}">${escapeHtml(i18n('Entry name regex (multiline, matched against entry comment)'))}</label>
+            <textarea id="${entryId}" data-orch-wi-filter="entryPattern" rows="3" spellcheck="false">${escapeHtml(entryPattern)}</textarea>
+            <div class="luker_orch_wi_filter_hint">${escapeHtml(i18n('Empty field = no filtering on that dimension; invalid regex lines are skipped with a console warning.'))}</div>
+        </div>
+    </details>`;
+}
+
 export function renderInheritOrOverridePanel(deps, scope, tools, {
     dataAttrName,
     extraAttrs = {},
@@ -652,6 +687,7 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
         : `<div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
     </details>
     ${renderCustomToolsSection(deps, safeScope, 'agenda', editor?.customTools || [], (editor?.defaultTools && editor.defaultTools.custom) || {})}
+    ${renderLorebookFilterSection(deps, 'agenda', editor?.lorebookFilter || {})}
     <details class="luker_orch_skills_section" open>
         <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
         ${renderSkillChipsPlaceholder(deps, safeScope, {
@@ -698,6 +734,7 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
         : `<div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
     </details>
     ${renderCustomToolsSection(deps, safeScope, 'spec', editor?.spec?.customTools || [], (editor?.spec?.defaultTools && editor.spec.defaultTools.custom) || {})}
+    ${renderLorebookFilterSection(deps, 'spec', editor?.spec?.lorebookFilter || {})}
     <details class="luker_orch_skills_section" open>
         <summary>${escapeHtml(i18n('Mode-level skills (baseline for every node)'))}</summary>
         ${renderSkillChipsPlaceholder(deps, safeScope, {
@@ -789,6 +826,7 @@ export function renderLoopWorkspace(deps, scope, editor, title = '') {
         ${checkbox('finalize', true, `finalize  ${i18n('(forced on)')}`, true, true)}
     </fieldset>
     ${renderCustomToolsSection(deps, safeScope, 'loop', editor?.customTools || [], (editor?.tools && editor.tools.custom) || {})}
+    ${renderLorebookFilterSection(deps, 'loop', editor?.lorebookFilter || {})}
     <details class="luker_orch_skills_section">
         <summary>${escapeHtml(i18n('Skills'))}</summary>
         ${renderSkillChipsPlaceholder(deps, safeScope, {
@@ -996,6 +1034,7 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
         </div>
     </details>
     ${renderCustomToolsSection(deps, safeScope, 'director', profile?.customTools || [], (profile?.tools && profile.tools.custom) || {})}
+    ${renderLorebookFilterSection(deps, 'director', profile?.lorebookFilter || {})}
     <details class="luker_orch_skills_section" open>
         <summary>${escapeHtml(i18n('Mode-level skills (baseline for every agent)'))}</summary>
         ${renderSkillChipsPlaceholder(deps, safeScope, {
