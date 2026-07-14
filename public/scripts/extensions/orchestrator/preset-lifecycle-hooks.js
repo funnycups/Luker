@@ -185,3 +185,72 @@ export function computeActiveOrchPresetScope(context, settings) {
     if (!name) return null;
     return { kind: 'orch-preset', mode, name };
 }
+
+/**
+ * Walk a `presetLibraries` container (either global-scope or
+ * card-embedded — the shape is identical) and clear every
+ * `promptPresetName` field that matches the just-deleted preset name.
+ *
+ * Fields cleared per mode (from `orchestrator/defaults.js`,
+ * `director-defaults.js`, `agenda-profile.js`, `editable-spec.js`):
+ *
+ *   loop[id]                       .promptPresetName
+ *   agenda[id].planner             .promptPresetName
+ *   agenda[id].agents[*]           .promptPresetName
+ *   director[id].mainAgent         .promptPresetName
+ *   director[id].subAgents[*]      .promptPresetName
+ *   spec[id].presets[*]            .promptPresetName
+ *
+ * Returns true if any field was cleared, so the caller can gate a
+ * persist call.
+ *
+ * @param {object|undefined} presetLibraries
+ * @param {string} deletedName
+ * @returns {boolean}
+ */
+export function purgePromptPresetNameInLibrary(presetLibraries, deletedName) {
+    if (!presetLibraries || typeof presetLibraries !== 'object' || !deletedName) return false;
+    let mutated = false;
+    const clearIfMatch = (host, field) => {
+        if (host && typeof host === 'object' && String(host[field] || '') === deletedName) {
+            host[field] = '';
+            mutated = true;
+        }
+    };
+
+    const loop = presetLibraries.loop;
+    if (loop && typeof loop === 'object') {
+        for (const entry of Object.values(loop)) clearIfMatch(entry, 'promptPresetName');
+    }
+    const agenda = presetLibraries.agenda;
+    if (agenda && typeof agenda === 'object') {
+        for (const entry of Object.values(agenda)) {
+            clearIfMatch(entry?.planner, 'promptPresetName');
+            const agents = entry?.agents;
+            if (agents && typeof agents === 'object') {
+                for (const agent of Object.values(agents)) clearIfMatch(agent, 'promptPresetName');
+            }
+        }
+    }
+    const director = presetLibraries.director;
+    if (director && typeof director === 'object') {
+        for (const entry of Object.values(director)) {
+            clearIfMatch(entry?.mainAgent, 'promptPresetName');
+            const subs = entry?.subAgents;
+            if (Array.isArray(subs)) {
+                for (const sub of subs) clearIfMatch(sub, 'promptPresetName');
+            }
+        }
+    }
+    const spec = presetLibraries.spec;
+    if (spec && typeof spec === 'object') {
+        for (const entry of Object.values(spec)) {
+            const presets = entry?.presets;
+            if (presets && typeof presets === 'object') {
+                for (const preset of Object.values(presets)) clearIfMatch(preset, 'promptPresetName');
+            }
+        }
+    }
+    return mutated;
+}
+

@@ -261,6 +261,7 @@ import {
     emitOrchPresetDeleted,
     emitOrchPresetExportReady,
     emitOrchPresetImportReady,
+    purgePromptPresetNameInLibrary,
     renameOrchPresetSkills,
 } from './preset-lifecycle-hooks.js';
 import {
@@ -8803,6 +8804,56 @@ jQuery(() => {
                 await maybeAttachSkillsToOrchPresetExport({ context, payload, t: i18n });
             } catch (err) {
                 console.warn(`[${MODULE_NAME}] orch-preset export skills attachment failed:`, err);
+            }
+        });
+    }
+    // Hook chat-completion preset deletion: an orchestrator preset entry
+    // (loop, agenda planner/agent, director main/sub, spec preset) can
+    // hold an opaque `promptPresetName` pointing at a chat-completion
+    // preset by name. When that preset is deleted upstream, the runtime
+    // silently falls back to the global orchestration prompt preset via
+    // agent-preset-resolver, so the user's intent is lost without a
+    // warning. Clear the references at delete time so the fallback is a
+    // deliberate default, not a mystery. Only openai-family presets are
+    // relevant — other apiIds don't feed the chat-completion pipeline.
+    if (context.eventTypes?.PRESET_DELETED) {
+        context.eventSource.on(context.eventTypes.PRESET_DELETED, async ({ apiId, name } = {}) => {
+            try {
+                if (apiId !== 'openai') return;
+                const deletedName = String(name || '');
+                if (!deletedName) return;
+
+                let mutatedSettings = false;
+                const settings = extension_settings[MODULE_NAME];
+                if (settings && typeof settings === 'object') {
+                    if (String(settings.llmNodePresetName || '') === deletedName) {
+                        settings.llmNodePresetName = '';
+                        mutatedSettings = true;
+                    }
+                    if (String(settings.requestLlmPresetName || '') === deletedName) {
+                        settings.requestLlmPresetName = '';
+                        mutatedSettings = true;
+                    }
+                    if (purgePromptPresetNameInLibrary(settings.presetLibraries, deletedName)) {
+                        mutatedSettings = true;
+                    }
+                }
+                if (mutatedSettings) saveSettingsDebounced();
+
+                // Card-embedded libraries: symmetric shape under
+                // character.data.extensions.orchestrator.presetLibraries.
+                // Persist per-character only when a card actually mutated,
+                // so cards with no orchestrator override skip the write.
+                const characters = Array.isArray(context?.characters) ? context.characters : [];
+                for (let i = 0; i < characters.length; i++) {
+                    const ext = characters[i]?.data?.extensions?.[MODULE_NAME];
+                    if (!ext || typeof ext !== 'object') continue;
+                    if (purgePromptPresetNameInLibrary(ext.presetLibraries, deletedName)) {
+                        await persistOrchestratorCharacterExtension(context, i, { ...ext });
+                    }
+                }
+            } catch (err) {
+                console.warn(`[${MODULE_NAME}] PRESET_DELETED purge failed:`, err?.message || err);
             }
         });
     }

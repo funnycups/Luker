@@ -281,3 +281,97 @@ describe('computeActiveOrchPresetScope', () => {
         expect(result).toBeNull();
     });
 });
+
+describe('purgePromptPresetNameInLibrary', () => {
+    test('clears loop preset field when name matches', () => {
+        const libs = {
+            loop: {
+                l1: { name: 'A', promptPresetName: 'MyBase' },
+                l2: { name: 'B', promptPresetName: 'Other' },
+            },
+        };
+        const mutated = hooks.purgePromptPresetNameInLibrary(libs, 'MyBase');
+        expect(mutated).toBe(true);
+        expect(libs.loop.l1.promptPresetName).toBe('');
+        expect(libs.loop.l2.promptPresetName).toBe('Other');
+    });
+
+    test('clears agenda planner and every matching agent', () => {
+        const libs = {
+            agenda: {
+                a1: {
+                    planner: { promptPresetName: 'MyBase' },
+                    agents: {
+                        one: { promptPresetName: 'MyBase' },
+                        two: { promptPresetName: 'Other' },
+                        three: { promptPresetName: 'MyBase' },
+                    },
+                },
+            },
+        };
+        const mutated = hooks.purgePromptPresetNameInLibrary(libs, 'MyBase');
+        expect(mutated).toBe(true);
+        expect(libs.agenda.a1.planner.promptPresetName).toBe('');
+        expect(libs.agenda.a1.agents.one.promptPresetName).toBe('');
+        expect(libs.agenda.a1.agents.two.promptPresetName).toBe('Other');
+        expect(libs.agenda.a1.agents.three.promptPresetName).toBe('');
+    });
+
+    test('clears director mainAgent and matching subAgents (array)', () => {
+        const libs = {
+            director: {
+                d1: {
+                    mainAgent: { promptPresetName: 'MyBase' },
+                    subAgents: [
+                        { id: 's1', promptPresetName: 'MyBase' },
+                        { id: 's2', promptPresetName: 'Other' },
+                    ],
+                },
+            },
+        };
+        const mutated = hooks.purgePromptPresetNameInLibrary(libs, 'MyBase');
+        expect(mutated).toBe(true);
+        expect(libs.director.d1.mainAgent.promptPresetName).toBe('');
+        expect(libs.director.d1.subAgents[0].promptPresetName).toBe('');
+        expect(libs.director.d1.subAgents[1].promptPresetName).toBe('Other');
+    });
+
+    test('clears spec preset entries under presets map', () => {
+        const libs = {
+            spec: {
+                sp1: {
+                    presets: {
+                        pA: { promptPresetName: 'MyBase' },
+                        pB: { promptPresetName: 'Other' },
+                    },
+                },
+            },
+        };
+        const mutated = hooks.purgePromptPresetNameInLibrary(libs, 'MyBase');
+        expect(mutated).toBe(true);
+        expect(libs.spec.sp1.presets.pA.promptPresetName).toBe('');
+        expect(libs.spec.sp1.presets.pB.promptPresetName).toBe('Other');
+    });
+
+    test('returns false and mutates nothing when no field matches', () => {
+        const libs = {
+            loop: { l1: { promptPresetName: 'X' } },
+            director: {
+                d1: {
+                    mainAgent: { promptPresetName: 'Y' },
+                    subAgents: [{ promptPresetName: 'Z' }],
+                },
+            },
+        };
+        const before = JSON.parse(JSON.stringify(libs));
+        const mutated = hooks.purgePromptPresetNameInLibrary(libs, 'MyBase');
+        expect(mutated).toBe(false);
+        expect(libs).toEqual(before);
+    });
+
+    test('is a safe no-op when presetLibraries is missing or empty deletedName', () => {
+        expect(hooks.purgePromptPresetNameInLibrary(undefined, 'X')).toBe(false);
+        expect(hooks.purgePromptPresetNameInLibrary({}, 'X')).toBe(false);
+        expect(hooks.purgePromptPresetNameInLibrary({ loop: { l1: { promptPresetName: 'X' } } }, '')).toBe(false);
+    });
+});
