@@ -43,6 +43,7 @@ const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
+import { computeDepthsFromEnd, regexChatMessageForAgent } from './regex-chat.js';
 import {
     AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE,
     ORCH_NODE_TYPE_REVIEW,
@@ -597,6 +598,41 @@ export function extractReviewDecision(toolCalls = [], nodeId = '') {
     throw new Error(`Review node '${nodeId}' did not return a review decision tool call.`);
 }
 
+/**
+ * Build the `{{recent_chat}}` / `{{last_user}}` template values for a
+ * node run. Both go through prompt-scoped regex scripts so orchestrator
+ * agents see the same rewritten text the main model would (see
+ * `regex-chat.js` for rationale). `depth` is computed against the full
+ * `messages` array so `minDepth` / `maxDepth` filters behave the same
+ * way they do in Generate().
+ *
+ * @param {Array} messages full chat array
+ * @param {number} maxRecent how many assistant turns to include
+ * @returns {{ recentChatText: string, lastUserText: string }}
+ */
+function buildRecentChatAndLastUser(messages, maxRecent) {
+    const source = Array.isArray(messages) ? messages : [];
+    const depths = computeDepthsFromEnd(source);
+    const indexOf = new Map();
+    for (let i = 0; i < source.length; i += 1) {
+        indexOf.set(source[i], i);
+    }
+    const recentChatText = getRecentMessages(source, maxRecent)
+        .map(message => {
+            const idx = indexOf.get(message);
+            const depth = typeof idx === 'number' ? depths[idx] : undefined;
+            const rewrittenMes = regexChatMessageForAgent(message, depth);
+            const speaker = message?.is_user ? 'User' : (message?.name || 'Assistant');
+            return `${speaker}: ${rewrittenMes}`;
+        })
+        .join('\n');
+    const { index: lastUserIndex, message: lastUser } = extractLastUserMessage(source);
+    const lastUserText = lastUserIndex >= 0
+        ? regexChatMessageForAgent(lastUser, depths[lastUserIndex])
+        : '';
+    return { recentChatText, lastUserText };
+}
+
 export async function runWorkerNode(context, payload, nodeSpec, preset, messages, previousNodeOutputs, abortSignal = null, options = {}) {
     throwIfAborted(abortSignal, 'Orchestration aborted.');
     const isFinalStage = Boolean(options?.isFinalStage);
@@ -612,10 +648,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
         rerunReason: String(options?.rerunReason || ''),
     });
     const settings = extension_settings[MODULE_NAME];
-    const recent = getRecentMessages(messages, settings.maxRecentMessages)
-        .map(message => `${message?.is_user ? 'User' : (message?.name || 'Assistant')}: ${String(message?.mes || '')}`)
-        .join('\n');
-    const { message: lastUser } = extractLastUserMessage(messages);
+    const { recentChatText: recent, lastUserText } = buildRecentChatAndLastUser(messages, settings.maxRecentMessages);
     const previousOutputs = buildPreviousOutputsMarkdown(previousNodeOutputs);
     const distillerOutput = buildDistillerOutputMarkdown(previousNodeOutputs);
     const previousOrchestration = await getPreviousOrchestrationCapsuleText(context, payload);
@@ -630,7 +663,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
     const runtimeTemplate = normalizeTemplateForRuntime(nodeSpec.userPromptTemplate || preset.userPromptTemplate || '');
     const baseUserPrompt = renderTemplate(runtimeTemplate, {
         recent_chat: recent,
-        last_user: String(lastUser?.mes || ''),
+        last_user: lastUserText,
         previous_outputs: previousOutputs,
         distiller: distillerOutput,
         previous_snapshot: '',
@@ -1011,10 +1044,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
     const settings = extension_settings[MODULE_NAME];
     const maxReruns = getReviewRerunMaxRounds(settings);
     const maxRounds = Math.max(1, getNodeIterationMaxRounds(settings) + maxReruns + 1);
-    const recent = getRecentMessages(messages, settings.maxRecentMessages)
-        .map(message => `${message?.is_user ? 'User' : (message?.name || 'Assistant')}: ${String(message?.mes || '')}`)
-        .join('\n');
-    const { message: lastUser } = extractLastUserMessage(messages);
+    const { recentChatText: recent, lastUserText } = buildRecentChatAndLastUser(messages, settings.maxRecentMessages);
     const previousOrchestration = await getPreviousOrchestrationCapsuleText(context, payload);
     const runtimeTemplate = normalizeTemplateForRuntime(nodeSpec.userPromptTemplate || preset.userPromptTemplate || '');
     const llmPresetName = resolveOrchestrationAgentPromptPresetName(settings, preset)?.name || '';
@@ -1059,7 +1089,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             });
             const baseUserPrompt = renderTemplate(runtimeTemplate, {
                 recent_chat: recent,
-                last_user: String(lastUser?.mes || ''),
+                last_user: lastUserText,
                 previous_outputs: buildPreviousOutputsMarkdown(availableOutputs),
                 distiller: buildDistillerOutputMarkdown(availableOutputs),
                 previous_snapshot: '',

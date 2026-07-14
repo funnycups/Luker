@@ -25,6 +25,7 @@
 
 import { ToolError } from '../loop-runtime.js';
 import { gatherGrepMatches } from '../grep-tool.js';
+import { computeDepthsFromEnd, regexChatMessageForAgent } from '../regex-chat.js';
 
 const MAX_RANGE = 50;
 
@@ -112,13 +113,14 @@ export async function execChatReadRange(args, context) {
     start = alignedStart;
     end = alignedEnd;
 
+    const depths = computeDepthsFromEnd(chat);
     const out = [];
     for (let i = start; i <= end; i += 1) {
         const message = chat[i];
         out.push({
             floor: i,
             role: roleFromMessage(message),
-            content: String(message?.mes || ''),
+            content: regexChatMessageForAgent(message, depths[i]),
         });
     }
     return out;
@@ -143,13 +145,14 @@ export async function execChatSearch(args, context) {
     }
     const flags = typeof args?.flags === 'string' && args.flags.length > 0 ? args.flags : 'gm';
     const chat = Array.isArray(context?.chat) ? context.chat : [];
+    const depths = computeDepthsFromEnd(chat);
 
     function* corpus() {
         for (let i = 0; i < chat.length; i++) {
             const msg = chat[i];
             yield {
                 prefix: `floor_${i} [${roleFromMessage(msg)}]`,
-                content: String(msg?.mes || ''),
+                content: regexChatMessageForAgent(msg, depths[i]),
             };
         }
     }

@@ -2454,6 +2454,27 @@ export function getContext() {
         getPastCharacterChats,
         deleteCharacterChat: deleteCharacterChatByName,
         saveSettingsDebounced,
+        // Prompt-scoped regex helpers. Third-party plugins (orchestrator,
+        // memory-graph, iter-studio, ...) that surface chat text to an
+        // LLM must rewrite it through the user's regex scripts, or their
+        // agents see raw `.mes` while the main generation pipeline sees
+        // the rewritten text. Direct `import` from
+        // `extensions/regex/engine.js` would transitively pull
+        // `public/script.js` and its DOM bootstrap chain into environments
+        // that can't handle it (jest ESM, isolated test rigs). Exposing
+        // the two primitives here keeps plugins DOM-clean and matches the
+        // three-layer API contract.
+        //
+        // - `applyRegex(rawString, placement, params?)` — thin alias for
+        //   `getRegexedString`. `placement` is a `regex_placement.*` value;
+        //   `params` mirrors the engine signature ({ characterOverride,
+        //   isMarkdown, isPrompt, isPluginPrompt, isEdit, depth }).
+        // - `placement` — the `regex_placement` enum (USER_INPUT / AI_OUTPUT
+        //   / SLASH_COMMAND / WORLD_INFO / REASONING).
+        regex: {
+            applyRegex: getRegexedString,
+            placement: regex_placement,
+        },
         iterationLibrary: ITERATION_LIBRARY_API,
         edits: EDITS_API,
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,

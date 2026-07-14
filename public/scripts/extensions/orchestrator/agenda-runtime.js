@@ -45,6 +45,7 @@ const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
+import { computeDepthsFromEnd, regexChatMessageForAgent } from './regex-chat.js';
 import {
     AGENDA_PLANNER_TOOL,
     AGENDA_RESULT_TOOL,
@@ -335,14 +336,29 @@ export function createAgendaTodo({ id = '', goal = '', status = 'todo' } = {}) {
 }
 
 export function buildAgendaRecentChatText(messages, settings = extension_settings[MODULE_NAME]) {
-    return getRecentMessages(messages, settings?.maxRecentMessages)
-        .map(message => `${message?.is_user ? 'User' : (message?.name || 'Assistant')}: ${String(message?.mes || '')}`)
+    const source = Array.isArray(messages) ? messages : [];
+    const depths = computeDepthsFromEnd(source);
+    const indexOf = new Map();
+    for (let i = 0; i < source.length; i += 1) {
+        indexOf.set(source[i], i);
+    }
+    return getRecentMessages(source, settings?.maxRecentMessages)
+        .map(message => {
+            const idx = indexOf.get(message);
+            const depth = typeof idx === 'number' ? depths[idx] : undefined;
+            const rewrittenMes = regexChatMessageForAgent(message, depth);
+            const speaker = message?.is_user ? 'User' : (message?.name || 'Assistant');
+            return `${speaker}: ${rewrittenMes}`;
+        })
         .join('\n');
 }
 
 export function buildAgendaLastUserText(messages) {
-    const { message: lastUser } = extractLastUserMessage(messages);
-    return String(lastUser?.mes || '');
+    const source = Array.isArray(messages) ? messages : [];
+    const { index, message } = extractLastUserMessage(source);
+    if (index < 0 || !message) return '';
+    const depths = computeDepthsFromEnd(source);
+    return regexChatMessageForAgent(message, depths[index]);
 }
 
 export function selectAgendaRuns(runs = [], selectedRunIds = null) {
