@@ -111,3 +111,43 @@ export function regexChatMessageForAgent(message, depth) {
     const placement = message?.is_user ? api.placement.USER_INPUT : api.placement.AI_OUTPUT;
     return api.applyRegex(raw, placement, { isPrompt: true, depth });
 }
+
+/**
+ * Apply AI_OUTPUT-scoped, plugin-message regex scripts to a piece of
+ * agent-produced text before it re-enters an LLM's context via a
+ * non-`role:'assistant'` channel (e.g. a sub-agent's `outputText`
+ * bubbling back through a `tool_result` envelope to the main agent).
+ *
+ * Why a separate helper from `regexChatMessageForAgent`:
+ *   - Placement is fixed to AI_OUTPUT (this text is by definition an
+ *     agent's own output; there is no user-input case).
+ *   - Flag is `isPluginPrompt:true`, matching what
+ *     `applyPluginRegexToPromptMessages` already sets on assistant
+ *     messages built by `buildPresetAwarePromptMessages`. This means a
+ *     single user-authored rule scoped to AI_OUTPUT with the
+ *     "plugin messages only" flag ticked will cover BOTH (a) an
+ *     agent's own next-round view of its previous-round assistant turn
+ *     AND (b) a sub-agent's output as seen by the parent through
+ *     `await_subagents` — one rule, both channels.
+ *   - `isPrompt` is deliberately NOT set: prompt-scoped rules already
+ *     ran on the chat-derived inputs feeding the agent; this pass is
+ *     specifically about the plugin-message ephemerality lane.
+ *   - `depth` is `undefined`: `tool_result` envelopes don't sit at a
+ *     stable chat-depth, and depth-based filtering (`minDepth` /
+ *     `maxDepth`) is almost never authored on pluginOnly rules.
+ *     Passing `undefined` disables the depth filter, matching how
+ *     `applyPluginRegexToPromptMessages` treats an undepthed message.
+ *
+ * Returns raw text when the regex API isn't reachable (bare unit tests
+ * without a Luker stub) so orchestrator degrades gracefully.
+ *
+ * @param {string} text — raw agent output text
+ * @returns {string} text after plugin-scoped AI_OUTPUT regex application
+ */
+export function regexAgentPluginOutput(text) {
+    const raw = String(text ?? '');
+    if (!raw) return '';
+    const api = getRegexApi();
+    if (!api) return raw;
+    return api.applyRegex(raw, api.placement.AI_OUTPUT, { isPluginPrompt: true });
+}

@@ -48,6 +48,7 @@ import {
     appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
+import { regexAgentPluginOutput } from './regex-chat.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -1007,7 +1008,24 @@ export function createSubagentDispatcher({
                     }
                     const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas);
                     if (roundToolCalls.length === 0) {
-                        finalText = roundAssistantText;
+                        // Apply user-authored plugin-scoped AI_OUTPUT
+                        // regex to the sub-agent's output before it
+                        // crosses back to the parent through the
+                        // `await_subagents` tool_result envelope.
+                        // Without this pass the same rule that already
+                        // scrubs an agent's own next-round view (via
+                        // `applyPluginRegexToPromptMessages` on the
+                        // `role:'assistant'` history) would silently
+                        // miss the sub-agent → parent hand-off, because
+                        // that hand-off travels as a JSON-serialized
+                        // `role:'tool'` payload the plugin-regex lane
+                        // does not (and should not) reach into. The
+                        // run-panel section still shows the raw text —
+                        // `subMessages.push` below and the streamed
+                        // panel deltas both use `roundAssistantText`
+                        // unmodified — so authors keep transparent
+                        // visibility into what the model actually said.
+                        finalText = regexAgentPluginOutput(roundAssistantText);
                         converged = true;
                         // The terminator round has no tool calls and no
                         // assistant push (the runtime contract says final
