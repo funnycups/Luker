@@ -33,9 +33,22 @@ export class PresetRepo {
             tx.putResource(this._key(handle, apiId, name), { doc }));
     }
 
+    // Deleting the preset doc atomically also purges every namespaced sidecar
+    // written by plugins against this preset. Doing both in one withTransaction
+    // means SQL engines run one connection/one commit, and FS mode fails as a
+    // unit rather than leaving orphan `<preset>.luker-state.<ns>.json` files
+    // if a caller only invoked /delete (skipping the old two-step handshake
+    // where the client had to POST /state/delete-all separately).
     async delete(handle, apiId, name) {
         assertWritable();
-        return this._engine.withTransaction(handle, (tx) => tx.deleteResource(this._key(handle, apiId, name)));
+        return this._engine.withTransaction(handle, async (tx) => {
+            const key = this._key(handle, apiId, name);
+            const namespaces = await tx.listPresetStateNamespaces(key);
+            for (const ns of namespaces) {
+                await tx.deletePresetState(key, ns);
+            }
+            return tx.deleteResource(key);
+        });
     }
 
     async exists(handle, apiId, name) {

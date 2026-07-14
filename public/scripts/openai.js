@@ -16,7 +16,6 @@ import {
     extension_prompt_roles,
     extension_prompt_types,
     Generate,
-    deleteAllPresetState,
     getExtensionPrompt,
     getExtensionPromptMaxDepth,
     getMediaDisplay,
@@ -6985,7 +6984,6 @@ async function onDeletePresetClick() {
         if (!presetBodyToDelete || typeof presetBodyToDelete !== 'object' || !Object.keys(presetBodyToDelete).length) {
             toastr.success(t`Preset deleted`);
             await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: nameToDelete });
-            await deleteAllPresetState({ apiId: 'openai', name: nameToDelete });
             await maybeDeleteLinkedLorebookForPresetDeletion({ presetName: nameToDelete, extensions: presetBodyToDelete.extensions });
         } else {
             showUndoToast({
@@ -7000,7 +6998,6 @@ async function onDeletePresetClick() {
                 },
                 onCommit: async () => {
                     await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: nameToDelete });
-                    await deleteAllPresetState({ apiId: 'openai', name: nameToDelete });
                     await maybeDeleteLinkedLorebookForPresetDeletion({ presetName: nameToDelete, extensions: presetBodyToDelete.extensions });
                 },
             });

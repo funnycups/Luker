@@ -15,7 +15,6 @@ import {
     novelai_setting_names,
     novelai_settings,
     online_status,
-    deleteAllPresetState,
     renamePresetStateTarget,
     saveSettings,
     saveSettingsDebounced,
@@ -1293,7 +1292,6 @@ class PresetManager {
             if (!presetSnapshot) {
                 toastr.success(successToast);
                 await eventSource.emit(event_types.PRESET_DELETED, { apiId: this.apiId, name: resolvedName });
-                await deleteAllPresetState({ apiId: this.apiId, name: resolvedName });
                 await maybeDeleteLinkedLorebookForPresetDeletion({ presetName: resolvedName, extensions });
             } else {
                 showUndoToast({
@@ -1308,7 +1306,6 @@ class PresetManager {
                     },
                     onCommit: async () => {
                         await eventSource.emit(event_types.PRESET_DELETED, { apiId: this.apiId, name: resolvedName });
-                        await deleteAllPresetState({ apiId: this.apiId, name: resolvedName });
                         await maybeDeleteLinkedLorebookForPresetDeletion({ presetName: resolvedName, extensions });
                     },
                 });

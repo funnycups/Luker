@@ -2152,6 +2152,18 @@ async function firstLoadInit() {
             // extension loading first.
             try { registerSkillEmbedLifecycle({ context: getContext() }); } catch (_) { /* best-effort */ }
         },
+        () => {
+            // Drop the batched preset-state read cache for a preset the
+            // moment PRESET_DELETED fires. The server-side PresetRepo.delete
+            // is now atomic (main doc + every sidecar in one transaction),
+            // so this is purely local cleanup so subsequent
+            // getPresetStateBatch calls don't return stale rows for a name
+            // that has just been deleted (or reused for a new preset).
+            eventSource.on(event_types.PRESET_DELETED, ({ apiId, name } = {}) => {
+                if (!apiId || !name) return;
+                invalidateAllPresetStateRequestCache({ apiId, name });
+            });
+        },
     ]);
     console.debug('[init] startup tasks batch 3 done');
     performance.mark('[init] batch3 done');
