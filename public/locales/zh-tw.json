@@ -4836,6 +4836,8 @@
     "Prompt Tokens": "提示詞權杖",
     "Completion Tokens": "補全權杖",
     "Total Tokens": "總權杖數",
+    "Finish Reason": "結束原因",
+    "Provider Reason": "原始結束原因",
     "Cache Read": "快取讀取",
     "Cache Write": "快取寫入",
     "chars": "字元",

@@ -5001,6 +5001,8 @@
     "Prompt Tokens": "提示词令牌",
     "Completion Tokens": "补全令牌",
     "Total Tokens": "总令牌数",
+    "Finish Reason": "结束原因",
+    "Provider Reason": "原始结束原因",
     "Cache Read": "缓存读取",
     "Cache Write": "缓存写入",
     "chars": "字符",

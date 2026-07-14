@@ -172,6 +172,19 @@ export function startInspection(request) {
  status: 'running',
  httpStatus: null,
  error: '',
+ // Normalized OpenAI-shape stop reason (stop/length/tool_calls/content_filter/…).
+ // For native providers we translate their vocabulary into OAI's on capture so
+ // list-scan filters and cross-provider stats stay comparable. `null` = never
+ // received (still running / failed before response / provider silent).
+ finishReason: null,
+ // Provider-original stop-reason string, verbatim, before any normalization.
+ // Claude=`stop_reason` (end_turn/max_tokens/tool_use/…), Gemini=`finishReason`
+ // (STOP/MAX_TOKENS/SAFETY/…), OpenRouter=`native_finish_reason` (upstream
+ // provider's string when OR proxies e.g. Groq/Together). Kept separate from
+ // `finishReason` because the raw value carries diagnostic info the OAI
+ // vocabulary erases (e.g. Gemini SAFETY → OAI `content_filter` loses which
+ // safety category tripped; Claude `pause_turn` has no OAI equivalent).
+ nativeFinishReason: null,
  };
 
  pushEntry(handle, entry);
@@ -248,6 +261,160 @@ function extractUsageFromGemini(payload) {
  cache_read: meta.cachedContentTokenCount ?? null,
  cache_write: null,
  };
+}
+
+// ---- Finish-reason extraction helpers ----
+
+// Claude stop_reason → OAI finish_reason. Kept in sync with the mapping used
+// on the response-normalization path (src/endpoints/backends/chat-completions.js
+// CLAUDE_STOP_REASON_TO_OAI) so inspector-normalized values match what the
+// client saw in `choices[0].finish_reason`. `pause_turn` and `refusal` have
+// no OAI vocabulary equivalent; leave them null on the normalized field and
+// rely on `nativeFinishReason` to carry the truth.
+const CLAUDE_STOP_TO_OAI = {
+ end_turn: 'stop',
+ stop_sequence: 'stop',
+ max_tokens: 'length',
+ tool_use: 'tool_calls',
+};
+
+// Gemini candidates[0].finishReason → OAI. Mirrors
+// GEMINI_FINISH_REASON_TO_OAI in the response normalizer. `OTHER`,
+// `MALFORMED_FUNCTION_CALL`, and `IMAGE_*` variants deliberately fall
+// through to null so the raw value is the sole source of truth for those.
+const GEMINI_FINISH_TO_OAI = {
+ STOP: 'stop',
+ MAX_TOKENS: 'length',
+ SAFETY: 'content_filter',
+ RECITATION: 'content_filter',
+ BLOCKLIST: 'content_filter',
+ PROHIBITED_CONTENT: 'content_filter',
+ SPII: 'content_filter',
+ LANGUAGE: 'content_filter',
+};
+
+// Cohere finish_reason → OAI. Mirrors COHERE_FINISH_REASON_TO_OAI.
+const COHERE_FINISH_TO_OAI = {
+ COMPLETE: 'stop',
+ STOP_SEQUENCE: 'stop',
+ MAX_TOKENS: 'length',
+ TOOL_CALL: 'tool_calls',
+ ERROR: null,
+};
+
+/**
+ * Pull finish/stop reason from a non-streaming response.
+ * Returns `{ finishReason, nativeFinishReason }` — either or both may be null
+ * when the provider didn't send one (rare) or the payload shape doesn't
+ * match the source. `nativeFinishReason` is preserved verbatim (Gemini's
+ * SAFETY casing matters; OpenRouter passes through arbitrary upstream tags).
+ *
+ * @param {object} payload OAI-normalized reply
+ * @param {object} [rawApiResponse] provider-native body (Claude/Gemini/Cohere)
+ * @param {string} source backend id from body.chat_completion_source
+ * @returns {{finishReason: string|null, nativeFinishReason: string|null}}
+ */
+function extractFinishReasonFromPayload(payload, rawApiResponse, source) {
+ let nativeFinishReason = null;
+ let finishReason = null;
+
+ if (source === 'claude' && rawApiResponse?.stop_reason) {
+ nativeFinishReason = String(rawApiResponse.stop_reason);
+ finishReason = CLAUDE_STOP_TO_OAI[nativeFinishReason] ?? null;
+ } else if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse?.candidates)) {
+ const raw = rawApiResponse.candidates[0]?.finishReason;
+ if (raw) {
+ nativeFinishReason = String(raw);
+ finishReason = GEMINI_FINISH_TO_OAI[nativeFinishReason] ?? null;
+ }
+ } else if (source === 'cohere' && rawApiResponse?.finish_reason) {
+ nativeFinishReason = String(rawApiResponse.finish_reason);
+ finishReason = COHERE_FINISH_TO_OAI[nativeFinishReason] ?? null;
+ }
+
+ // Fall back / augment from the OAI-shaped choices array. This is the
+ // primary path for OpenAI, DeepSeek, Mistral, xAI, AIMLAPI, OpenRouter,
+ // Azure, MiniMax, Chutes, ElectronHub, AI21, and any other OAI-compatible
+ // upstream that goes through the runner catch-all. OpenRouter also
+ // surfaces `native_finish_reason` on the choice — that's the upstream
+ // provider's original string (e.g. Groq's `length`, Together's `eos`),
+ // which is exactly what "native" means here even though the runner didn't
+ // see a separate raw body.
+ const choice = payload?.choices?.[0];
+ if (choice) {
+ if (!finishReason && choice.finish_reason) {
+ finishReason = String(choice.finish_reason);
+ }
+ if (!nativeFinishReason && choice.native_finish_reason) {
+ nativeFinishReason = String(choice.native_finish_reason);
+ } else if (!nativeFinishReason && choice.finish_reason) {
+ // For plain-OAI providers, native == normalized. Copy so the UI
+ // always has something to show when a reason exists at all.
+ nativeFinishReason = String(choice.finish_reason);
+ }
+ }
+
+ return { finishReason, nativeFinishReason };
+}
+
+/**
+ * Pull finish reason from SSE events. Walks in reverse — the finish-carrying
+ * frame is always at the tail of a well-formed stream (Claude message_delta,
+ * Gemini final candidates chunk, OAI final delta with finish_reason set).
+ *
+ * @param {Array<string|{data:string}>} events
+ * @param {string} source
+ * @returns {{finishReason: string|null, nativeFinishReason: string|null}}
+ */
+export function extractFinishReasonFromStreamEvents(events, source) {
+ if (!Array.isArray(events) || events.length === 0) {
+ return { finishReason: null, nativeFinishReason: null };
+ }
+
+ for (let i = events.length - 1; i >= 0; i--) {
+ const raw = normalizeEvent(events[i]);
+ if (!raw || raw === '[DONE]') continue;
+
+ let parsed;
+ try { parsed = JSON.parse(raw); } catch { continue; }
+ if (parsed?.luker) continue;
+
+ if (source === 'claude') {
+ // Anthropic streaming emits message_delta with the terminal
+ // stop_reason once the model releases the turn. Nothing else on
+ // the stream carries it.
+ if (parsed?.type === 'message_delta' && parsed?.delta?.stop_reason) {
+ const native = String(parsed.delta.stop_reason);
+ return { finishReason: CLAUDE_STOP_TO_OAI[native] ?? null, nativeFinishReason: native };
+ }
+ continue;
+ }
+
+ if (source === 'makersuite' || source === 'vertexai') {
+ const raw2 = parsed?.candidates?.[0]?.finishReason;
+ if (raw2) {
+ const native = String(raw2);
+ return { finishReason: GEMINI_FINISH_TO_OAI[native] ?? null, nativeFinishReason: native };
+ }
+ continue;
+ }
+
+ // OpenAI / OpenAI-compatible. finish_reason on the choice (either
+ // in delta or on the choice itself for providers that fold it in).
+ // Also pick up OpenRouter's `native_finish_reason` when present.
+ const choice = parsed?.choices?.[0];
+ if (!choice) continue;
+ const norm = choice.finish_reason ?? choice.delta?.finish_reason;
+ const nat = choice.native_finish_reason ?? choice.delta?.native_finish_reason;
+ if (norm || nat) {
+ return {
+ finishReason: norm ? String(norm) : null,
+ nativeFinishReason: nat ? String(nat) : (norm ? String(norm) : null),
+ };
+ }
+ }
+
+ return { finishReason: null, nativeFinishReason: null };
 }
 
 /**
@@ -710,6 +877,10 @@ export function completeInspection(request, payload, rawApiResponse) {
  Object.assign(entry.usage, usage);
  entry.responseText = extractTextFromPayload(payload, source, rawApiResponse);
  entry.responseParts = extractPartsFromPayload(payload, source, rawApiResponse);
+
+ const fr = extractFinishReasonFromPayload(payload, rawApiResponse, source);
+ entry.finishReason = fr.finishReason;
+ entry.nativeFinishReason = fr.nativeFinishReason;
 }
 
 /**
@@ -739,6 +910,10 @@ export function completeInspectionFromStream(request, events, accumulatedText) {
  .map(p => p.text)
  .join('') || extractTextFromStreamEvents(events, entry.source);
  }
+
+ const fr = extractFinishReasonFromStreamEvents(events, entry.source);
+ entry.finishReason = fr.finishReason;
+ entry.nativeFinishReason = fr.nativeFinishReason;
 }
 
 /**

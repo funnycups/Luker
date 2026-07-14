@@ -624,6 +624,19 @@ function buildChatDetailHtml(detail) {
  ? `<tr><td>${t`API Key`}</td><td class="ri-mono" title="${escapeHtml(detail.apiKeyFingerprint)}">${escapeHtml(detail.apiKeyFingerprint)}</td></tr>`
  : '';
 
+ // Two finish-reason fields on the entry:
+ //   finishReason        — normalized to OAI vocabulary (stop/length/…)
+ //   nativeFinishReason  — provider-original string, verbatim
+ // Show the native row whenever we captured one. Only add the normalized
+ // row when it exists AND differs from native — otherwise both rows would
+ // show the same string for plain-OpenAI providers.
+ const native = detail.nativeFinishReason;
+ const norm = detail.finishReason;
+ const finishRows = [
+ native ? `<tr><td>${t`Provider Reason`}</td><td class="ri-mono">${escapeHtml(native)}</td></tr>` : '',
+ (norm && norm !== native) ? `<tr><td>${t`Finish Reason`}</td><td class="ri-mono">${escapeHtml(norm)}</td></tr>` : '',
+ ].join('');
+
  return `
  <div class="ri-detail">
  <div class="ri-detail-header">
@@ -644,7 +657,7 @@ function buildChatDetailHtml(detail) {
  <tr><td>${t`Messages`}</td><td>${detail.messageCount}</td></tr>
  <tr><td>${t`Prompt Chars`}</td><td>${(detail.promptCharLength || 0).toLocaleString()}</td></tr>
  <tr><td>${t`Max Tokens`}</td><td>${detail.maxTokens ?? '\u2014'}</td></tr>
- </table>
+  </table>
  </div>
 
  <div class="ri-detail-section">
@@ -652,6 +665,7 @@ function buildChatDetailHtml(detail) {
  <table class="ri-kv">
  <tr><td>${t`Status`}</td><td>${statusIcon(detail.status)} ${escapeHtml(detail.status)}</td></tr>
  <tr><td>HTTP</td><td>${detail.httpStatus ?? '\u2014'}</td></tr>
+ ${finishRows}
  <tr><td>${t`Duration`}</td><td>${formatDuration(detail.durationMs)}</td></tr>
  <tr><td>${t`Prompt Tokens`}</td><td>${formatTokens(usage.prompt_tokens)}</td></tr>
  <tr><td>${t`Completion Tokens`}</td><td>${formatTokens(usage.completion_tokens)}</td></tr>
