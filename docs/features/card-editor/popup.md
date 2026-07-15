@@ -50,13 +50,21 @@ Expanding "Conversation history" at the bottom of the popup reveals all editing 
 
 ## World Info Sync
 
-When you import a new character card via replace or update, if the old and new cards bind to different World Info books, the editor assistant pops up a sync dialog with three options:
+When you import a new character card via replace or update, if the new card carries an embedded world book (or the cards bind to different world books), the editor assistant pops up a sync dialog with three options:
 
 ![World Info sync popup: three options](/images/card-editor-popup/cea-lorebook-sync.png)
 
-- **Analyze with model and update** — The AI analyzes the differences between old and new World Info books and merges them intelligently
-- **Direct replace** — Replace the old World Info book entirely with the new one
-- **Don't replace** — Keep the existing World Info book unchanged
+- **Import new book** — Save the new card's embedded world book as a standalone file and bind it to this character. Use when you want the new card's shipped lore verbatim.
+- **Keep old book** — Re-bind the previously bound book and ignore the new card's embedded book. Use when you only wanted to refresh the character fields.
+- **Merge in editor** — Open the iteration studio with a prev-vs-next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.
+
+Cancelling the dialog leaves everything untouched.
+
+When you take the **Merge in editor** path, the studio's topbar carries a **View full replace diff** button. It opens a structured, full-screen overview of the differences between the character card + world book you were using before and the ones you just imported — the same information the AI receives as its first-turn brief, but shown to you with per-field cards, per-entry line diffs, and word-level red/green highlights:
+
+![Full replace-diff popup — previous vs current card and world book](/images/card-editor-popup/cea-replace-diff.png)
+
+If you close the studio without applying any AI-proposed change, the pre-import (new book file + character binding) is rolled back automatically, so cancelling a merge session leaves your working state exactly as it was before the replace.
 
 Whether the sync popup shows up is controlled by the "Enable World Info sync popup after replacing/updating a character card" toggle on the extensions panel.
 
