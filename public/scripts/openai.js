@@ -2723,11 +2723,17 @@ function syncSourceModelInputs({ selectSelector, datalistSelector, modelList = [
     }
 
     // Reflect the saved id onto the picker so it tracks the text input.
+    // NOTE: on a <select> without an explicit <option value="">, jQuery
+    // .val('') is a no-op — selectedIndex stays put (or falls to 0 on first
+    // render), which makes the picker appear to "select" an unrelated model
+    // whenever the text input holds a value not present in the option list.
+    // Set selectedIndex = -1 directly to actually show "nothing selected".
     const savedId = String(savedModelId || '');
+    const selectEl = $select.get(0);
     if (savedId && $select.find(`option[value="${CSS.escape(savedId)}"]`).length > 0) {
         $select.val(savedId);
-    } else {
-        $select.val('');
+    } else if (selectEl) {
+        selectEl.selectedIndex = -1;
     }
 }
 
@@ -10111,10 +10117,14 @@ export function initOpenAI() {
             const value = String($(this).val() || '').trim();
             oai_settings[key] = value;
             const $picker = $(select);
+            const pickerEl = $picker.get(0);
             if (value && $picker.find(`option[value="${CSS.escape(value)}"]`).length > 0) {
                 $picker.val(value);
-            } else {
-                $picker.val('');
+            } else if (pickerEl) {
+                // .val('') is a no-op on a <select> without an empty option — it
+                // leaves selectedIndex on options[0], so the picker visually
+                // "selects" an unrelated model. Clear the highlight properly.
+                pickerEl.selectedIndex = -1;
             }
             saveSettingsDebounced();
         });
