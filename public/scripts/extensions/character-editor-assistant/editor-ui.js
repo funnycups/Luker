@@ -126,7 +126,7 @@ export function createCharacterEditorUi(deps) {
 .popup .cea_sync_chat_tools { margin-top:8px; border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 14%, transparent); border-radius:10px; padding:6px 10px; }
 .popup .cea_sync_chat_tools > summary { cursor:pointer; font-weight:600; opacity:0.85; list-style:none; padding:2px 0; }
 .popup .cea_sync_chat_tools > summary::-webkit-details-marker { display:none; }
-.popup .cea_sync_chat_tools > summary::before { content:'\f078'; font-family:'Font Awesome 6 Free'; font-weight:900; font-size:0.78em; display:inline-block; margin-right:6px; opacity:0.6; transition:transform 120ms; }
+.popup .cea_sync_chat_tools > summary::before { content:'\\f078'; font-family:'Font Awesome 6 Free'; font-weight:900; font-size:0.78em; display:inline-block; margin-right:6px; opacity:0.6; transition:transform 120ms; }
 .popup .cea_sync_chat_tools[open] > summary::before { transform:rotate(-180deg); }
 .popup .cea_sync_chat_tools_body { display:flex; flex-direction:column; gap:6px; margin-top:6px; }
 .popup .cea_sync_chat_toolcall { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 12%, transparent); border-radius:8px; padding:6px 8px; background:color-mix(in oklab, var(--SmartThemeBodyColor) 5%, transparent); }
