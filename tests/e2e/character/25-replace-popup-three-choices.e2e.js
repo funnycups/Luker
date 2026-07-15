@@ -4,11 +4,10 @@
 // path in the character More menu, the character-editor-assistant plugin
 // raises a confirm popup with up to three concrete next-steps:
 //
-//   1. Import the new card's embedded world book  (when the new PNG carries
-//      data.character_book)
-//   2. Open editor: let AI iterate old book into new  (always shown)
-//   3. Skip and keep the previous book bound  (when the replaced card had a
-//      primary world book and that book still exists on disk)
+//   1. Import new book  (when the new PNG carries data.character_book)
+//   2. Keep old book    (when the replaced card had a primary world
+//                        book and that book still exists on disk)
+//   3. Merge in editor  (always shown)
 //
 // This test drives all three branches end-to-end against a real server +
 // real browser + real file picker. The user-visible regression behind
@@ -133,7 +132,7 @@ async function openReplaceWithFile(page, pngPath) {
  */
 async function waitForReplaceChoicePopup(page) {
     const popup = page.locator('dialog.popup[open]', {
-        hasText: /Replace lorebook|替换角色卡|替換角色卡/,
+        hasText: /Replace:|替换角色卡|替換角色卡/,
     }).last();
     await popup.waitFor({ state: 'visible', timeout: 20_000 });
     return popup;
@@ -187,13 +186,13 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             // embedded book + Ash had a previous binding that still
             // exists on disk).
             const importBtn = popup.locator('.popup-button-custom', {
-                hasText: /Import the new card's embedded world book|导入新卡自带的世界书|匯入新卡自帶的世界書/,
+                hasText: /Import new book|导入新世界书|匯入新世界書/,
             }).first();
             const editorBtn = popup.locator('.popup-button-custom', {
-                hasText: /Open editor: let AI iterate old book into new|让 AI 把旧世界书迭代到新世界书|讓 AI 把舊世界書迭代到新世界書/,
+                hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/,
             }).first();
             const skipBtn = popup.locator('.popup-button-custom', {
-                hasText: /Skip and keep the previous book bound|保留原绑定的世界书|保留原綁定的世界書/,
+                hasText: /Keep old book|保留旧世界书|保留舊世界書/,
             }).first();
             await expect(importBtn).toBeVisible();
             await expect(editorBtn).toBeVisible();
@@ -249,7 +248,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
         }
     });
 
-    test('KEEP path: clicking "Skip and keep the previous book bound" preserves the old binding and does NOT create the new card\'s embedded book', async ({ page }) => {
+    test('KEEP path: clicking "Keep old book" preserves the old binding and does NOT create the new card\'s embedded book', async ({ page }) => {
         const server = await startServer({ batchKey: 'character', scenarioId: 'replace-popup-keep' });
         try {
             markOnboarded({ dataRoot: server.dataRoot });
@@ -272,7 +271,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await openReplaceWithFile(page, briallenPngPath);
             const popup = await waitForReplaceChoicePopup(page);
             const skipBtn = popup.locator('.popup-button-custom', {
-                hasText: /Skip and keep the previous book bound|保留原绑定的世界书|保留原綁定的世界書/,
+                hasText: /Keep old book|保留旧世界书|保留舊世界書/,
             }).first();
             await expect(skipBtn).toBeVisible();
             await skipBtn.click();
@@ -340,7 +339,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await openReplaceWithFile(page, briallenPngPath);
             const popup = await waitForReplaceChoicePopup(page);
             const editorBtn = popup.locator('.popup-button-custom', {
-                hasText: /Open editor: let AI iterate old book into new|让 AI 把旧世界书迭代到新世界书|讓 AI 把舊世界書迭代到新世界書/,
+                hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/,
             }).first();
             await editorBtn.click();
             await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
@@ -364,21 +363,28 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             }, { name: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
             expect(existsSync(newBookPath), `${BRIALLEN_BOOK_NAME}.json present on disk AFTER OPEN_EDITOR fires`).toBe(true);
 
-            // REGRESSION 2: the seed system message visible in the iter
-            // studio's chat pane must contain BOTH the prev-side rename
-            // half AND a description-changed line — proving the diff
-            // computed against the materialized new book (not an empty stub).
-            // (If we hadn't materialized, the diff would only have
-            // `Primary world book: <prev> → <next>` because nameMismatch
-            // short-circuits per-entry diff; here entries differ too.)
-            const seedText = await page.evaluate(() => {
-                const chat = document.querySelector('[data-cea-editor-messages]');
-                return chat ? (chat.textContent || '') : '';
-            });
-            // Direction convention header — proves the new seed framing landed.
-            expect(seedText).toMatch(/post-replace iteration|替换角色卡之后|替換角色卡之後/);
+            // REGRESSION 2: the structured replace-diff overview
+            // (surfaced via the topbar "View full replace diff" button)
+            // must carry BOTH the prev-side rename half AND a
+            // description-changed field card — proving the diff computed
+            // against the materialized new book (not an empty stub).
+            // Previously this check read `[data-cea-editor-messages]`,
+            // but the post-replace seed message is now hidden from the
+            // chat pane (hiddenFromUi) and the same information moved
+            // into the topbar button's popup.
+            const openDiffBtn = page.locator('[data-cea-editor-action="open-replace-diff"]').first();
+            await expect(openDiffBtn).toBeVisible();
+            await openDiffBtn.click();
+            const diffPopup = page.locator('dialog.popup[open]', {
+                hasText: /Replace diff — previous vs current|替换差异|替換差異/,
+            }).first();
+            await diffPopup.waitFor({ state: 'visible', timeout: 10_000 });
+            const overviewText = (await diffPopup.locator('.cea_replace_diff_overview').textContent()) || '';
             // The card-field diff carries description: Briallen vs Ash.
-            expect(seedText).toContain('description');
+            expect(overviewText).toContain('description');
+            // Close the diff popup before closing the studio.
+            await diffPopup.locator('.popup-button-ok').first().click({ timeout: 3000 }).catch(() => {});
+            await diffPopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
 
             // Close the studio.
             await page.keyboard.press('Escape').catch(() => {});
@@ -415,13 +421,13 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await openReplaceWithFile(page, briallenPngPath);
             const popup = await waitForReplaceChoicePopup(page);
             const importBtn = popup.locator('.popup-button-custom', {
-                hasText: /Import the new card's embedded world book|导入新卡自带的世界书|匯入新卡自帶的世界書/,
+                hasText: /Import new book|导入新世界书|匯入新世界書/,
             }).first();
             const editorBtn = popup.locator('.popup-button-custom', {
-                hasText: /Open editor: let AI iterate old book into new|让 AI 把旧世界书迭代到新世界书|讓 AI 把舊世界書迭代到新世界書/,
+                hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/,
             }).first();
             const skipBtn = popup.locator('.popup-button-custom', {
-                hasText: /Skip and keep the previous book bound|保留原绑定的世界书|保留原綁定的世界書/,
+                hasText: /Keep old book|保留旧世界书|保留舊世界書/,
             });
             await expect(importBtn).toBeVisible();
             await expect(editorBtn).toBeVisible();
@@ -432,6 +438,77 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             const cancelBtn = popup.locator('.popup-button-cancel').first();
             await cancelBtn.click({ timeout: 3000 }).catch(() => {});
             await popup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        } finally {
+            await tearDownServer(server);
+        }
+    });
+
+    test('OPEN_EDITOR + close-without-apply: rolls back the pre-materialized new book (delete file + restore previous binding)', async ({ page }) => {
+        // Regression for the bug where picking OPEN_EDITOR and then
+        // closing the studio without proposing anything left the
+        // character silently bound to the new book and the new file
+        // sitting on disk — indistinguishable from having picked
+        // Import New Book. With the rollback wired, "opened and did
+        // nothing" restores the exact pre-replace disk state.
+        const server = await startServer({ batchKey: 'character', scenarioId: 'replace-editor-rollback' });
+        try {
+            markOnboarded({ dataRoot: server.dataRoot });
+            disableTagImportPopup({ dataRoot: server.dataRoot });
+            bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+            appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+            const ashBook = writeWorldBook({ dataRoot: server.dataRoot, name: ASH_BOOK, entries: BRYN_ENTRIES });
+            writeEmbeddedCharacter({
+                dataRoot: server.dataRoot,
+                avatarFile: 'ash-rollback-branch.png',
+                overrides: { extensions: { world: ashBook } },
+            });
+
+            await awaitMainUI(page, server.baseURL);
+            await clickCharacterCard(page, ASH_NAME);
+            await dismissAnyPopup(page);
+            await openCharacterEditPanel(page);
+
+            // Baseline: Ash bound to bryn-headland-ash; briallen-tides absent.
+            expect((await page.locator('#character_world').inputValue()) || '').toBe(ashBook);
+            const newBookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${BRIALLEN_BOOK_NAME}.json`);
+            expect(existsSync(newBookPath), `${BRIALLEN_BOOK_NAME}.json must NOT exist before replace`).toBe(false);
+
+            await openReplaceWithFile(page, briallenPngPath);
+            const popup = await waitForReplaceChoicePopup(page);
+            const editorBtn = popup.locator('.popup-button-custom', {
+                hasText: /Merge in editor|在编辑器中合并|在編輯器中合併/,
+            }).first();
+            await editorBtn.click();
+            await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+
+            // Studio appears with the new book materialized.
+            const studioDialog = page.locator('dialog.popup[open]', {
+                hasText: /Character Editor — AI iteration|角色编辑器 - AI 迭代|角色編輯器 - AI 迭代/,
+            }).first();
+            await studioDialog.waitFor({ state: 'visible', timeout: 30_000 });
+            // Wait for materialize to complete before we close.
+            await page.waitForFunction(({ name }) => {
+                const ctx = window.Luker?.getContext?.();
+                const names = typeof ctx?.getWorldInfoNames === 'function' ? ctx.getWorldInfoNames() : [];
+                return Array.isArray(names) && names.includes(name);
+            }, { name: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
+            expect(existsSync(newBookPath), 'new book file present on disk while studio is open').toBe(true);
+
+            // Close the studio WITHOUT interacting with it. The dialog's
+            // own cancel button is disabled; Escape triggers the onClosing
+            // gate which allows close since state.isBusy is false.
+            await page.keyboard.press('Escape');
+            await studioDialog.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+
+            // Rollback: new book file must be deleted from disk AND the
+            // character's binding restored to the previous book.
+            await page.waitForFunction(({ name }) => {
+                const ctx = window.Luker?.getContext?.();
+                const names = typeof ctx?.getWorldInfoNames === 'function' ? ctx.getWorldInfoNames() : [];
+                return !(Array.isArray(names) && names.includes(name));
+            }, { name: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
+            expect(existsSync(newBookPath), 'new book file must be deleted after close-without-apply').toBe(false);
+            expect((await page.locator('#character_world').inputValue()) || '').toBe(ashBook);
         } finally {
             await tearDownServer(server);
         }

@@ -56,7 +56,7 @@ async function clickReplaceWithFile(page, pngPath) {
 }
 
 async function waitForCeaReplaceLorebookPopup(page) {
-    const popup = page.locator('dialog.popup[open]', { hasText: /Replace lorebook|替换角色卡|替換角色卡/ }).last();
+    const popup = page.locator('dialog.popup[open]', { hasText: /Replace:|替换角色卡|替換角色卡/ }).last();
     await popup.waitFor({ state: 'visible', timeout: 20_000 });
     return popup;
 }

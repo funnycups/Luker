@@ -160,15 +160,15 @@ function registerLocaleData() {
         'Edit and regenerate from here': '编辑并从此处重新生成',
         'Edit message — saving will regenerate from this turn:': '编辑消息——保存将从此轮开始重新生成：',
         'Enable lorebook sync popup after Replace/Update': '替换／更新角色卡后弹出世界书处理选项',
-        'Replace lorebook: what should happen to the world book?': '替换角色卡：要如何处理世界书？',
+        'Replace: what should happen to the world book?': '替换角色卡：要如何处理世界书？',
         'You just replaced or updated this character card. Choose what to do with its world book:': '你刚替换或更新了这张角色卡。请选择如何处理它的世界书：',
-        'Import the new card\'s embedded world book': '导入新卡自带的世界书',
-        'Open editor: let AI iterate old book into new': '打开编辑器：让 AI 把旧世界书迭代到新世界书',
-        'Skip and keep the previous book bound (${0})': '跳过并保留原绑定的世界书（${0}）',
+        'Import new book': '导入新世界书',
+        'Keep old book': '保留旧世界书',
+        'Merge in editor': '在编辑器中合并',
         'Cancel': '取消',
-        '• Import the new card\'s embedded world book — saves the V2/V3 character_book carried by the imported card as a standalone world book file, and binds it as the primary book. Use this when you want the new card\'s shipped lore verbatim.': '• 导入新卡自带的世界书 —— 把新卡片随包的内置世界书另存为独立的世界书文件，并绑定为主世界书。当你希望原汁原味地使用新卡片自带的设定时选这个。',
-        '• Open editor — opens the iteration studio with a diff of the previous card and book versus the new ones, so the AI can carry your earlier edits forward into the new book. Use this when you have hand-curated additions you want preserved.': '• 打开编辑器 —— 在迭代工作台中加载新旧角色卡与世界书的差异，让 AI 把你之前手工添加的内容迁移到新世界书。当你之前有手动修改过的世界书条目想保留时选这个。',
-        '• Skip and keep the previous book bound — re-binds the previously bound book (${0}) to this card and leaves the new card\'s embedded book on the card unused. Use this when you only wanted to refresh the card fields and not touch lore.': '• 跳过并保留原绑定的世界书 —— 把先前绑定的世界书（${0}）重新绑回这张卡片，新卡自带的内置世界书保留在卡片中但不启用。当你只想刷新角色卡字段、不想动世界书时选这个。',
+        'Save the new card\'s embedded world book as a standalone file and bind it to this character. Use when you want the new card\'s shipped lore verbatim.': '把新卡自带的内置世界书另存为独立文件并绑定给这个角色。当你想原样使用新卡自带的设定时选它。',
+        'Re-bind the previously bound book (${0}) and ignore the new card\'s embedded book. Use when you only wanted to refresh the character fields.': '把原本绑定的世界书（${0}）重新绑回来，忽略新卡自带的内置世界书。当你只想更新角色卡字段、不动世界书时选它。',
+        'Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.': '在迭代工作台里打开新旧对比，让 AI 把你先前的手工修改迁移到新世界书。当你有想保留的手动修改时选它。',
         'Kept the previous primary world book bound: ${0}': '已保留原主世界书的绑定：${0}',
         'Just imported this card — review the baseline and suggest tweaks.': '刚导入了这张角色卡。请先审视卡片当前的基础设定与世界书条目，然后与我多轮对话、逐步给出改进建议或直接动手编辑。',
         'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '刚更新了这张角色卡。下方是与上一版的差异——请审阅这些变化，然后给出后续调整建议或直接动手编辑。',
@@ -178,9 +178,50 @@ function registerLocaleData() {
         'Field changed: ${0}': '字段变更：${0}',
         'Field added: ${0}': '新增字段：${0}',
         'Field removed: ${0}': '移除字段：${0}',
-        'Entry added (uid ${0}): ${1}': '新增条目（uid ${0}）：${1}',
-        'Entry removed (uid ${0}): ${1}': '移除条目（uid ${0}）：${1}',
-        'Entry changed (uid ${0}, ${1}): ${2}': '条目变更（uid ${0}，${1}）：${2}',
+        // Per-entry seed-diff headings. The short forms
+        // ('Entry removed' / 'Entry added' / 'prev entry' / 'next entry')
+        // are composed into the '${0} (uid ${1}): ${2}' template by
+        // renderLorebookEntryFullDump so both bookName-preserved and
+        // bookName-changed paths render with the same visual shape.
+        'Entry removed': '移除条目',
+        'Entry added': '新增条目',
+        'prev entry': '旧条目',
+        'next entry': '新条目',
+        '${0} (uid ${1}): ${2}': '${0}（uid ${1}）：${2}',
+        'Entry changed (uid ${0}): ${1}': '条目变更（uid ${0}）：${1}',
+        'Previous world book ${0} (${1} entries):': '旧世界书 ${0}（共 ${1} 条）：',
+        'Next world book ${0} (${1} entries):': '新世界书 ${0}（共 ${1} 条）：',
+        'Cancelled — restored previous world book: ${0}': '已取消 —— 已恢复原世界书：${0}',
+        // Replace-diff overview popup (topbar button + full-screen popup)
+        'View full replace diff': '查看完整替换差异',
+        'Replace diff — previous vs current': '替换差异 —— 旧版本 vs 新版本',
+        'This is the full structural diff between the version you were using and the version you just imported. Use it to decide what to migrate; the chat below carries the same information for the AI.': '这里展示的是你之前在用的版本和你刚刚导入的新版本之间的完整结构化差异。用它来判断哪些内容要迁移过去；下方聊天中的 AI 也拿到了同一份信息。',
+        'Close': '关闭',
+        'No structural changes detected between the previous version and the new one.': '未检测到旧版本与新版本之间的结构性差异。',
+        'Character card: ${0} → ${1}': '角色卡：${0} → ${1}',
+        'Character card': '角色卡',
+        'No character-card fields changed.': '角色卡字段未发生变化。',
+        'previous': '旧',
+        'current': '新',
+        '(unnamed)': '（未命名）',
+        'World book: ${0} → ${1}': '世界书：${0} → ${1}',
+        'World book: ${0}': '世界书：${0}',
+        'World book': '世界书',
+        'added': '新增',
+        'removed': '删除',
+        'changed': '修改',
+        'unchanged': '未变',
+        'Removed entries (${0})': '被删除的条目（${0}）',
+        'Added entries (${0})': '新增的条目（${0}）',
+        'Changed entries (${0})': '发生修改的条目（${0}）',
+        'Only in previous': '仅在旧版本',
+        'Only in current': '仅在新版本',
+        'Changed': '已修改',
+        'Fields changed: ${0}': '发生变化的字段：${0}',
+        '(untitled entry)': '（未命名条目）',
+        '(no entry data)': '（无条目数据）',
+        'keys: ${0}': '关键词：${0}',
+        'No world-book entries added, removed, or changed.': '世界书条目没有新增、删除或修改。',
         '(no human-readable changes detected)': '（未检测到可读差异）',
         'You are running a post-replace iteration. The user replaced their character card with a new version. Your job is to help the user reconcile the previous version (prev, the one they were actually using) with the new version (next, the one they just imported) — but DO NOT touch the card or world book on this first turn.': '你现在处于"替换角色卡之后"的迭代流程。用户刚刚把角色卡更新为新版本。你的工作是帮用户把旧版本（prev，用户之前一直在用的）和新版本（next，刚导入的）做调和。但本轮不要动角色卡或世界书。',
         'Direction convention used throughout this seed message and the diffs below:': '本条消息及下方差异中使用的方向约定：',
@@ -455,15 +496,15 @@ function registerLocaleData() {
         'Edit and regenerate from here': '編輯並從此處重新產生',
         'Edit message — saving will regenerate from this turn:': '編輯訊息——儲存將從此輪開始重新產生：',
         'Enable lorebook sync popup after Replace/Update': '替換／更新角色卡後彈出世界書處理選項',
-        'Replace lorebook: what should happen to the world book?': '替換角色卡：要如何處理世界書？',
+        'Replace: what should happen to the world book?': '替換角色卡：要如何處理世界書？',
         'You just replaced or updated this character card. Choose what to do with its world book:': '你剛替換或更新了這張角色卡。請選擇如何處理它的世界書：',
-        'Import the new card\'s embedded world book': '匯入新卡自帶的世界書',
-        'Open editor: let AI iterate old book into new': '開啟編輯器：讓 AI 把舊世界書迭代到新世界書',
-        'Skip and keep the previous book bound (${0})': '跳過並保留原綁定的世界書（${0}）',
+        'Import new book': '匯入新世界書',
+        'Keep old book': '保留舊世界書',
+        'Merge in editor': '在編輯器中合併',
         'Cancel': '取消',
-        '• Import the new card\'s embedded world book — saves the V2/V3 character_book carried by the imported card as a standalone world book file, and binds it as the primary book. Use this when you want the new card\'s shipped lore verbatim.': '• 匯入新卡自帶的世界書 —— 把新卡片隨附的內建世界書另存為獨立的世界書檔案，並綁定為主世界書。當你希望原汁原味地使用新卡片自帶的設定時選這個。',
-        '• Open editor — opens the iteration studio with a diff of the previous card and book versus the new ones, so the AI can carry your earlier edits forward into the new book. Use this when you have hand-curated additions you want preserved.': '• 開啟編輯器 —— 在迭代工作台中載入新舊角色卡與世界書的差異，讓 AI 把你之前手工加入的內容遷移到新世界書。當你之前有手動修改過的世界書條目想保留時選這個。',
-        '• Skip and keep the previous book bound — re-binds the previously bound book (${0}) to this card and leaves the new card\'s embedded book on the card unused. Use this when you only wanted to refresh the card fields and not touch lore.': '• 跳過並保留原綁定的世界書 —— 把先前綁定的世界書（${0}）重新綁回這張卡片，新卡自帶的內建世界書保留在卡片中但不啟用。當你只想刷新角色卡欄位、不想動世界書時選這個。',
+        'Save the new card\'s embedded world book as a standalone file and bind it to this character. Use when you want the new card\'s shipped lore verbatim.': '把新卡自帶的內建世界書另存為獨立檔案並綁定給這個角色。當你想原樣使用新卡自帶的設定時選它。',
+        'Re-bind the previously bound book (${0}) and ignore the new card\'s embedded book. Use when you only wanted to refresh the character fields.': '把原本綁定的世界書（${0}）重新綁回來，忽略新卡自帶的內建世界書。當你只想更新角色卡欄位、不動世界書時選它。',
+        'Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.': '在迭代工作台裡開啟新舊對比，讓 AI 把你先前的手工修改遷移到新世界書。當你有想保留的手動修改時選它。',
         'Kept the previous primary world book bound: ${0}': '已保留原主世界書的綁定：${0}',
         'Just imported this card — review the baseline and suggest tweaks.': '剛匯入了這張角色卡。請先審視卡片目前的基礎設定與世界書條目，然後與我多輪對話、逐步給出改進建議或直接動手編輯。',
         'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '剛更新了這張角色卡。下方是與上一版的差異——請審閱這些變化，然後給出後續調整建議或直接動手編輯。',
@@ -473,9 +514,45 @@ function registerLocaleData() {
         'Field changed: ${0}': '欄位變更：${0}',
         'Field added: ${0}': '新增欄位：${0}',
         'Field removed: ${0}': '移除欄位：${0}',
-        'Entry added (uid ${0}): ${1}': '新增條目（uid ${0}）：${1}',
-        'Entry removed (uid ${0}): ${1}': '移除條目（uid ${0}）：${1}',
-        'Entry changed (uid ${0}, ${1}): ${2}': '條目變更（uid ${0}，${1}）：${2}',
+        'Entry removed': '移除條目',
+        'Entry added': '新增條目',
+        'prev entry': '舊條目',
+        'next entry': '新條目',
+        '${0} (uid ${1}): ${2}': '${0}（uid ${1}）：${2}',
+        'Entry changed (uid ${0}): ${1}': '條目變更（uid ${0}）：${1}',
+        'Previous world book ${0} (${1} entries):': '舊世界書 ${0}（共 ${1} 條）：',
+        'Next world book ${0} (${1} entries):': '新世界書 ${0}（共 ${1} 條）：',
+        'Cancelled — restored previous world book: ${0}': '已取消 —— 已恢復原世界書：${0}',
+        // Replace-diff overview popup (topbar button + full-screen popup)
+        'View full replace diff': '檢視完整替換差異',
+        'Replace diff — previous vs current': '替換差異 —— 舊版本 vs 新版本',
+        'This is the full structural diff between the version you were using and the version you just imported. Use it to decide what to migrate; the chat below carries the same information for the AI.': '這裡呈現的是你先前使用的版本與你剛剛匯入的新版本之間的完整結構化差異。用它來判斷哪些內容需要遷移；下方對話中的 AI 也拿到了同一份資訊。',
+        'Close': '關閉',
+        'No structural changes detected between the previous version and the new one.': '未偵測到舊版本與新版本之間的結構性差異。',
+        'Character card: ${0} → ${1}': '角色卡：${0} → ${1}',
+        'Character card': '角色卡',
+        'No character-card fields changed.': '角色卡欄位未發生變化。',
+        'previous': '舊',
+        'current': '新',
+        '(unnamed)': '（未命名）',
+        'World book: ${0} → ${1}': '世界書：${0} → ${1}',
+        'World book: ${0}': '世界書：${0}',
+        'World book': '世界書',
+        'added': '新增',
+        'removed': '刪除',
+        'changed': '修改',
+        'unchanged': '未變',
+        'Removed entries (${0})': '被刪除的條目（${0}）',
+        'Added entries (${0})': '新增的條目（${0}）',
+        'Changed entries (${0})': '發生修改的條目（${0}）',
+        'Only in previous': '僅在舊版本',
+        'Only in current': '僅在新版本',
+        'Changed': '已修改',
+        'Fields changed: ${0}': '發生變化的欄位：${0}',
+        '(untitled entry)': '（未命名條目）',
+        '(no entry data)': '（無條目資料）',
+        'keys: ${0}': '關鍵詞：${0}',
+        'No world-book entries added, removed, or changed.': '世界書條目沒有新增、刪除或修改。',
         '(no human-readable changes detected)': '（未偵測到可讀差異）',
         'You are running a post-replace iteration. The user replaced their character card with a new version. Your job is to help the user reconcile the previous version (prev, the one they were actually using) with the new version (next, the one they just imported) — but DO NOT touch the card or world book on this first turn.': '你現在處於「替換角色卡之後」的迭代流程。使用者剛剛把角色卡更新為新版本。你的工作是幫使用者把舊版本（prev，使用者之前一直在用的）和新版本（next，剛匯入的）做調和。但本輪不要動角色卡或世界書。',
         'Direction convention used throughout this seed message and the diffs below:': '本條訊息及下方差異中使用的方向約定：',
@@ -3621,13 +3698,19 @@ function buildCharacterEditorOperationKey(operation) {
 const CHARACTER_DIFF_TOP_FIELDS = Object.freeze(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions']);
 const CHARACTER_DIFF_DATA_FIELDS = Object.freeze(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions']);
 const LOREBOOK_ENTRY_DIFF_FIELDS = Object.freeze(['comment', 'content', 'key', 'keysecondary', 'order', 'position', 'depth', 'disable', 'constant', 'selective', 'selectiveLogic', 'probability', 'useProbability', 'excludeRecursion', 'preventRecursion', 'delayUntilRecursion']);
-const CHARACTER_DIFF_EXCERPT_LIMIT = 240;
 
+// Post-replace seed diffs feed the LLM's very first turn and drive the
+// entire reconciliation plan. Silent truncation here hid the actual
+// content of changed fields / entries so the model could only see "X
+// changed" without seeing what X changed *to* — which produced generic,
+// hand-wavy plans that couldn't reference specific curated lines. We
+// now render prev/next verbatim and let the model handle length. The
+// seed is a one-shot message; the context-window cost is bounded by
+// the card and lorebook themselves.
 function diffExcerpt(value) {
-    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
-    if (!text) return '(empty)';
-    if (text.length <= CHARACTER_DIFF_EXCERPT_LIMIT) return text;
-    return `${text.slice(0, CHARACTER_DIFF_EXCERPT_LIMIT)}…`;
+    const text = String(value ?? '');
+    if (!text.trim()) return '(empty)';
+    return text;
 }
 
 function fieldsEqualForDiff(a, b) {
@@ -3666,21 +3749,49 @@ export function summarizeCharacterDiff(prevCharacter, nextCharacter) {
     const next = pickCharacterDiffFields(nextCharacter);
     const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
     const lines = [];
+    // Multi-line prose fields (description / personality / scenario /
+    // first_mes / mes_example / creator_notes / system_prompt /
+    // post_history_instructions) get their prev/next values inside
+    // fenced blocks so the model sees the full unmodified text. Short
+    // scalar fields (like `name`) stay on inline arrow-diff lines.
+    const emitFieldDump = (key, prevVal, nextVal, kind /* 'changed' | 'added' | 'removed' */) => {
+        const prevText = String(prevVal ?? '');
+        const nextText = String(nextVal ?? '');
+        const multiline = prevText.includes('\n') || nextText.includes('\n') || prevText.length > 200 || nextText.length > 200;
+        let heading;
+        if (kind === 'changed') heading = i18nFormat('Field changed: ${0}', mdLiteral(key));
+        else if (kind === 'added') heading = i18nFormat('Field added: ${0}', mdLiteral(key));
+        else heading = i18nFormat('Field removed: ${0}', mdLiteral(key));
+        lines.push(`- ${heading}`);
+        if (multiline) {
+            if (kind !== 'added') {
+                lines.push('    - prev:');
+                lines.push('      ```');
+                lines.push(prevText || '(empty)');
+                lines.push('      ```');
+            }
+            if (kind !== 'removed') {
+                lines.push('    - next:');
+                lines.push('      ```');
+                lines.push(nextText || '(empty)');
+                lines.push('      ```');
+            }
+        } else {
+            if (kind !== 'added') lines.push(`    - prev: ${mdLiteral(prevText || '(empty)')}`);
+            if (kind !== 'removed') lines.push(`    - next: ${mdLiteral(nextText || '(empty)')}`);
+        }
+    };
     for (const key of [...keys].sort()) {
         const hadPrev = Object.prototype.hasOwnProperty.call(prev, key);
         const hadNext = Object.prototype.hasOwnProperty.call(next, key);
         if (hadPrev && hadNext) {
             if (!fieldsEqualForDiff(prev[key], next[key])) {
-                lines.push(`- ${i18nFormat('Field changed: ${0}', mdLiteral(key))}`);
-                lines.push(`    - prev: ${mdLiteral(diffExcerpt(prev[key]))}`);
-                lines.push(`    - next: ${mdLiteral(diffExcerpt(next[key]))}`);
+                emitFieldDump(key, prev[key], next[key], 'changed');
             }
         } else if (hadNext) {
-            lines.push(`- ${i18nFormat('Field added: ${0}', mdLiteral(key))}`);
-            lines.push(`    - next: ${mdLiteral(diffExcerpt(next[key]))}`);
+            emitFieldDump(key, undefined, next[key], 'added');
         } else {
-            lines.push(`- ${i18nFormat('Field removed: ${0}', mdLiteral(key))}`);
-            lines.push(`    - prev: ${mdLiteral(diffExcerpt(prev[key]))}`);
+            emitFieldDump(key, prev[key], undefined, 'removed');
         }
     }
     return lines;
@@ -3706,6 +3817,46 @@ function entryLabel(entry) {
     return '(no label)';
 }
 
+// Emit prev/next full text for a field-level per-uid diff. Multi-line
+// content stays as-is (no whitespace collapse) so the model sees the
+// user-curated structure verbatim — that's the whole point of the
+// reconciliation seed. Empty values render as `(empty)` so absence is
+// distinguishable from "same content".
+function appendPrevNextField(lines, label, prevVal, nextVal) {
+    lines.push(`    - ${label}: ${mdLiteral(String(label))}`);
+    lines.push('      prev:');
+    lines.push('      ```');
+    lines.push(String(prevVal ?? ''));
+    lines.push('      ```');
+    lines.push('      next:');
+    lines.push('      ```');
+    lines.push(String(nextVal ?? ''));
+    lines.push('      ```');
+}
+
+function renderLorebookEntryFullDump(lines, headingPrefix, uid, entry) {
+    const label = entryLabel(entry);
+    lines.push(`- ${i18nFormat('${0} (uid ${1}): ${2}', headingPrefix, uid, mdLiteral(label))}`);
+    const norm = normalizeLorebookEntryForSync(entry, entry?.uid);
+    for (const key of LOREBOOK_ENTRY_DIFF_FIELDS) {
+        const value = norm[key];
+        if (value == null) continue;
+        const isEmptyString = typeof value === 'string' && value === '';
+        const isEmptyArray = Array.isArray(value) && value.length === 0;
+        if (isEmptyString || isEmptyArray) continue;
+        if (key === 'content' || key === 'comment') {
+            lines.push(`    - ${mdLiteral(key)}:`);
+            lines.push('      ```');
+            lines.push(String(value ?? ''));
+            lines.push('      ```');
+        } else if (Array.isArray(value)) {
+            lines.push(`    - ${mdLiteral(key)}: ${mdLiteral(value.join(', '))}`);
+        } else {
+            lines.push(`    - ${mdLiteral(key)}: ${mdLiteral(String(value))}`);
+        }
+    }
+}
+
 export function summarizeLorebookDiff(prevSnapshot, nextLorebookData, prevBookName, nextBookName) {
     const lines = [];
     const prevName = String(prevBookName || '').trim();
@@ -3721,26 +3872,112 @@ export function summarizeLorebookDiff(prevSnapshot, nextLorebookData, prevBookNa
     const nextEntries = nextLorebookData && typeof nextLorebookData === 'object' && nextLorebookData.entries && typeof nextLorebookData.entries === 'object'
         ? nextLorebookData.entries
         : {};
-    // When primary book changed, every entry in either side is added/removed; treating that as the per-entry diff
-    // would flood the seed message. The book-rename line above is enough; per-entry diff only when the book is the same.
+
     if (prevName === nextName) {
+        // Same book name → uid identity is meaningful, diff per uid so
+        // the model sees exactly which entries were touched.
         const uids = new Set([...Object.keys(prevEntries), ...Object.keys(nextEntries)]);
         for (const uid of [...uids].sort((a, b) => Number(a) - Number(b))) {
             const prevEntry = prevEntries[uid];
             const nextEntry = nextEntries[uid];
             if (prevEntry && !nextEntry) {
-                lines.push(`- ${i18nFormat('Entry removed (uid ${0}): ${1}', uid, mdLiteral(entryLabel(prevEntry)))}`);
+                renderLorebookEntryFullDump(lines, i18n('Entry removed'), uid, prevEntry);
             } else if (!prevEntry && nextEntry) {
-                lines.push(`- ${i18nFormat('Entry added (uid ${0}): ${1}', uid, mdLiteral(entryLabel(nextEntry)))}`);
+                renderLorebookEntryFullDump(lines, i18n('Entry added'), uid, nextEntry);
             } else if (prevEntry && nextEntry) {
                 const changedFields = summarizeLorebookEntryDiff(prevEntry, nextEntry);
                 if (changedFields.length) {
-                    lines.push(`- ${i18nFormat('Entry changed (uid ${0}, ${1}): ${2}', uid, mdLiteral(changedFields.join(', ')), mdLiteral(entryLabel(nextEntry)))}`);
+                    lines.push(`- ${i18nFormat('Entry changed (uid ${0}): ${1}', uid, mdLiteral(entryLabel(nextEntry)))}`);
+                    const prevNorm = normalizeLorebookEntryForSync(prevEntry, prevEntry?.uid);
+                    const nextNorm = normalizeLorebookEntryForSync(nextEntry, nextEntry?.uid);
+                    for (const key of changedFields) {
+                        const prevValRaw = prevNorm[key];
+                        const nextValRaw = nextNorm[key];
+                        const prevText = Array.isArray(prevValRaw) ? prevValRaw.join(', ') : String(prevValRaw ?? '');
+                        const nextText = Array.isArray(nextValRaw) ? nextValRaw.join(', ') : String(nextValRaw ?? '');
+                        if (key === 'content' || key === 'comment' || prevText.includes('\n') || nextText.includes('\n')) {
+                            appendPrevNextField(lines, key, prevText, nextText);
+                        } else {
+                            lines.push(`    - ${mdLiteral(key)}: \`${mdLiteral(prevText || '(empty)')}\` → \`${mdLiteral(nextText || '(empty)')}\``);
+                        }
+                    }
                 }
             }
         }
+        return lines;
+    }
+
+    // Different book names → uid identity is NOT meaningful (uid 5 in
+    // book A is unrelated to uid 5 in book B). Dump both sides in
+    // full so the model can do content-based reconciliation across
+    // the rename. This is verbose but it's the only faithful way to
+    // convey "here's everything you had, here's everything you have
+    // now, decide what to migrate".
+    const prevUids = Object.keys(prevEntries).sort((a, b) => Number(a) - Number(b));
+    const nextUids = Object.keys(nextEntries).sort((a, b) => Number(a) - Number(b));
+    if (prevUids.length > 0) {
+        lines.push('');
+        lines.push(`- ${i18nFormat('Previous world book ${0} (${1} entries):', prevLabel, String(prevUids.length))}`);
+        for (const uid of prevUids) {
+            renderLorebookEntryFullDump(lines, i18n('prev entry'), uid, prevEntries[uid]);
+        }
+    }
+    if (nextUids.length > 0) {
+        lines.push('');
+        lines.push(`- ${i18nFormat('Next world book ${0} (${1} entries):', nextLabel, String(nextUids.length))}`);
+        for (const uid of nextUids) {
+            renderLorebookEntryFullDump(lines, i18n('next entry'), uid, nextEntries[uid]);
+        }
     }
     return lines;
+}
+
+/**
+ * Resolve the "next" world book contents used for post-replace comparisons.
+ *
+ * The new card's authoritative book content is `nextCharacter.data.character_book`
+ * (V2/V3 spec slot). Read it directly via convertCharacterBook so the diff
+ * always compares against what the new card actually carries — independent
+ * of whether the OPEN_EDITOR branch's pre-materialize step ran, whether
+ * the disk file is the same content, or whether the new book name collides
+ * with a different local book the user already had. Fall back to disk only
+ * when the card carries no embedded book (i.e. it ships referring to a
+ * pre-existing local book by name).
+ *
+ * Extracted from buildPostReplaceSeedMessage so both the seed prose builder
+ * and the structured replace-diff overview (UI-facing) get the same shape
+ * for the "next" book, i.e. neither view drifts from the other on cards
+ * whose embedded book is authoritative vs the disk fallback.
+ *
+ * @param {Object} context
+ * @param {Object} nextCharacter  V2/V3 card imported by the replace.
+ * @returns {Promise<{ entries: Object }>}
+ */
+export async function resolvePostReplaceNextLorebookData(context, nextCharacter) {
+    let nextLorebookData = { entries: {} };
+    const embeddedBook = nextCharacter?.data?.character_book;
+    const embeddedHasEntries = embeddedBook
+        && Array.isArray(embeddedBook.entries)
+        && embeddedBook.entries.length > 0;
+    if (embeddedHasEntries && typeof __ctx?.convertCharacterBook === 'function') {
+        try {
+            const converted = __ctx.convertCharacterBook(embeddedBook);
+            if (converted && typeof converted === 'object' && converted.entries) {
+                nextLorebookData = { entries: converted.entries };
+            }
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] convertCharacterBook failed for diff; falling back to disk`, error);
+        }
+    }
+    const nextBookName = String(nextCharacter?.data?.extensions?.world || '').trim();
+    if (!Object.keys(nextLorebookData.entries).length && nextBookName) {
+        try {
+            nextLorebookData = await loadLorebookData(context, nextBookName);
+        } catch (error) {
+            console.warn(`[${MODULE_NAME}] failed to load post-replace lorebook for diff`, error);
+        }
+    }
+    return nextLorebookData;
 }
 
 export async function buildPostReplaceSeedMessage(context, detail) {
@@ -3758,36 +3995,7 @@ export async function buildPostReplaceSeedMessage(context, detail) {
     const nextBookName = String(nextCharacter?.data?.extensions?.world || '').trim();
     const prevBookName = String(previousLorebookSnapshot?.bookName || previousCharacter?.data?.extensions?.world || '').trim();
 
-    // The new card's authoritative book content is `nextCharacter.data.character_book`
-    // (V2/V3 spec slot). Read it directly via convertCharacterBook so the diff
-    // always compares against what the new card actually carries — independent
-    // of whether the OPEN_EDITOR branch's pre-materialize step ran, whether
-    // the disk file is the same content, or whether `nextBookName` collides
-    // with a different local book the user already had. Fall back to disk
-    // only when the card carries no embedded book (i.e. it ships referring
-    // to a pre-existing local book by name).
-    let nextLorebookData = { entries: {} };
-    const embeddedBook = nextCharacter?.data?.character_book;
-    const embeddedHasEntries = embeddedBook
-        && Array.isArray(embeddedBook.entries)
-        && embeddedBook.entries.length > 0;
-    if (embeddedHasEntries && typeof __ctx?.convertCharacterBook === 'function') {
-        try {
-            const converted = __ctx.convertCharacterBook(embeddedBook);
-            if (converted && typeof converted === 'object' && converted.entries) {
-                nextLorebookData = { entries: converted.entries };
-            }
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] convertCharacterBook failed for diff; falling back to disk`, error);
-        }
-    }
-    if (!Object.keys(nextLorebookData.entries).length && nextBookName) {
-        try {
-            nextLorebookData = await loadLorebookData(context, nextBookName);
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] failed to load post-replace lorebook for diff`, error);
-        }
-    }
+    const nextLorebookData = await resolvePostReplaceNextLorebookData(context, nextCharacter);
 
     const cardLines = summarizeCharacterDiff(previousCharacter, nextCharacter);
     const bookLines = summarizeLorebookDiff(previousLorebookSnapshot, nextLorebookData, prevBookName, nextBookName);
@@ -3859,41 +4067,71 @@ export const REPLACE_POPUP_RESULT_VALUE = Object.freeze({
  * with skip-and-rebind.
  */
 async function promptReplaceOutcomeChoice({ hasNewEmbeddedBook, previousBookName, previousBookExists }) {
+    // Button text is short and action-oriented — the concrete
+    // trade-offs live in the body copy above. Historically all three
+    // buttons carried a full-sentence explanation each, which:
+    //   1. overflowed to two lines on narrow popups, breaking alignment
+    //   2. gave every button equal visual weight (all `popup-button-ok`)
+    //      so the user couldn't tell which one was the safe default
+    //   3. duplicated the same info the body was already explaining,
+    //      then contradicted it when the two drifted out of sync
+    // Now: body carries `<strong>Label</strong> — explanation` per
+    // option, buttons carry only the labels.
     const buttons = [];
     if (hasNewEmbeddedBook) {
         buttons.push({
-            text: i18n('Import the new card\'s embedded world book'),
+            text: i18n('Import new book'),
             result: REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK,
+            // Only the recommended default gets the solid `popup-button-ok`
+            // treatment. The other two intentionally stay neutral so the
+            // user can spot the recommended action at a glance.
             classes: ['popup-button-ok'],
         });
     }
-    buttons.push({
-        text: i18n('Open editor: let AI iterate old book into new'),
-        result: REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR,
-        classes: ['popup-button-ok'],
-    });
     if (previousBookName && previousBookExists) {
         buttons.push({
-            text: i18nFormat('Skip and keep the previous book bound (${0})', previousBookName),
+            text: i18n('Keep old book'),
             result: REPLACE_POPUP_RESULT_VALUE.KEEP_OLD_BOOK,
-            classes: [],
+            classes: hasNewEmbeddedBook ? [] : ['popup-button-ok'],
         });
     }
-    const bodyLines = [
-        i18n('You just replaced or updated this character card. Choose what to do with its world book:'),
-        '',
-    ];
+    buttons.push({
+        text: i18n('Merge in editor'),
+        result: REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR,
+        classes: (!hasNewEmbeddedBook && !(previousBookName && previousBookExists)) ? ['popup-button-ok'] : [],
+    });
+
+    // Body: one framing sentence + one option-per-line with the label
+    // in <strong>. Each line reads as a self-contained mini-summary
+    // so the user can pick without hovering / squinting at the buttons.
+    const optionRows = [];
     if (hasNewEmbeddedBook) {
-        bodyLines.push(i18n('• Import the new card\'s embedded world book — saves the V2/V3 character_book carried by the imported card as a standalone world book file, and binds it as the primary book. Use this when you want the new card\'s shipped lore verbatim.'));
+        optionRows.push({
+            label: i18n('Import new book'),
+            body: i18n('Save the new card\'s embedded world book as a standalone file and bind it to this character. Use when you want the new card\'s shipped lore verbatim.'),
+        });
     }
-    bodyLines.push(i18n('• Open editor — opens the iteration studio with a diff of the previous card and book versus the new ones, so the AI can carry your earlier edits forward into the new book. Use this when you have hand-curated additions you want preserved.'));
     if (previousBookName && previousBookExists) {
-        bodyLines.push(i18nFormat('• Skip and keep the previous book bound — re-binds the previously bound book (${0}) to this card and leaves the new card\'s embedded book on the card unused. Use this when you only wanted to refresh the card fields and not touch lore.', previousBookName));
+        optionRows.push({
+            label: i18n('Keep old book'),
+            body: i18nFormat('Re-bind the previously bound book (${0}) and ignore the new card\'s embedded book. Use when you only wanted to refresh the character fields.', previousBookName),
+        });
     }
-    const html = DOMPurify.sanitize(bodyLines.map(line => line === '' ? '<br/>' : `<div>${escapeHtml(line)}</div>`).join(''));
+    optionRows.push({
+        label: i18n('Merge in editor'),
+        body: i18n('Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.'),
+    });
+
+    const bodyHtml = [
+        `<div style="margin-bottom:12px;">${escapeHtml(i18n('You just replaced or updated this character card. Choose what to do with its world book:'))}</div>`,
+        '<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;">',
+        ...optionRows.map(row => `<li style="line-height:1.45;"><strong>${escapeHtml(row.label)}</strong> — ${escapeHtml(row.body)}</li>`),
+        '</ul>',
+    ].join('');
+    const html = DOMPurify.sanitize(bodyHtml);
 
     const result = await Popup.show.confirm(
-        i18n('Replace lorebook: what should happen to the world book?'),
+        i18n('Replace: what should happen to the world book?'),
         html,
         {
             okButton: false,
@@ -3901,7 +4139,9 @@ async function promptReplaceOutcomeChoice({ hasNewEmbeddedBook, previousBookName
             customButtons: buttons,
             defaultResult: hasNewEmbeddedBook
                 ? REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK
-                : REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR,
+                : (previousBookName && previousBookExists
+                    ? REPLACE_POPUP_RESULT_VALUE.KEEP_OLD_BOOK
+                    : REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR),
         },
     );
 
@@ -4871,9 +5111,18 @@ async function handlePostReplaceWorldBookChoice(detail, avatar) {
         && effectiveNewBookName
         && effectiveNewBookName !== previousBookName
         && !worldBookExists(context, effectiveNewBookName);
+    let materializedBookName = '';
     if (shouldMaterializeNewBook) {
         try {
             await importEmbeddedBookForAvatar(context, avatar);
+            // The materialize path uses `character_book.name` when set
+            // and falls back to `${characterName}'s Lorebook`. Compute
+            // the final resolved name the same way so rollback can find
+            // the file to delete.
+            const chars = Array.isArray(context?.characters) ? context.characters : (Array.isArray(__ctx.characters) ? __ctx.characters : []);
+            const chid = chars.findIndex(c => String(c?.avatar || '').trim() === avatar);
+            const resolvedName = String(chars[chid]?.data?.character_book?.name || `${chars[chid]?.name}'s Lorebook`).trim();
+            materializedBookName = resolvedName || effectiveNewBookName;
         } catch (error) {
             console.warn(`[${MODULE_NAME}] OPEN_EDITOR: failed to materialize new card's embedded book before diff`, error);
             // Fall through — we still want the AI session to open. The
@@ -4881,11 +5130,67 @@ async function handlePostReplaceWorldBookChoice(detail, avatar) {
         }
     }
 
+    // Post-replace rollback context. If the user closes the popup
+    // WITHOUT applying any edit, the popup calls this callback so the
+    // world book state can be restored to what it was before
+    // OPEN_EDITOR ran:
+    //   1. Re-bind the character to previousBookName (undoes the
+    //      binding switch that importEmbeddedBookForAvatar did).
+    //   2. If we materialized a new book file that did NOT exist
+    //      pre-replace, delete it from disk (undoes the disk write).
+    // Applied even a single edit → the user chose to iterate on the
+    // new book; rollback is skipped and the new book stays.
+    const postReplaceRollback = (shouldMaterializeNewBook && (previousBookName || materializedBookName))
+        ? async () => {
+            try {
+                if (previousBookName) {
+                    await rebindPreviousPrimaryBook(context, avatar, previousBookName);
+                }
+                if (materializedBookName && typeof __ctx?.deleteWorldBook === 'function') {
+                    try { await __ctx.deleteWorldBook(materializedBookName); }
+                    catch (delErr) { console.warn(`[${MODULE_NAME}] OPEN_EDITOR rollback: deleteWorldBook failed`, delErr); }
+                }
+                notifySuccess(i18nFormat('Cancelled — restored previous world book: ${0}', previousBookName || '(none)'));
+            } catch (err) {
+                console.warn(`[${MODULE_NAME}] OPEN_EDITOR rollback failed`, err);
+                notifyError(i18nFormat('Rollback failed: ${0}', err?.message || err));
+            }
+        }
+        : null;
+
     const seedSystemMessage = await buildPostReplaceSeedMessage(context, detail);
+    // Build the structured replace context the studio surfaces via the
+    // topbar "View full replace diff" button. Reuses the same
+    // previousLorebookSnapshot + resolvePostReplaceNextLorebookData helpers
+    // as the seed builder so the visual diff and the LLM's seed prose
+    // describe the same "next" book (embedded-authoritative when the card
+    // ships one, disk fallback otherwise).
+    const replaceContext = detail?.previousCharacter
+        ? {
+            previousCharacter: detail.previousCharacter,
+            previousLorebookSnapshot: detail.previousLorebookSnapshot || null,
+            nextCharacter: detail?.character || null,
+            nextLorebookData: await resolvePostReplaceNextLorebookData(context, detail?.character || null),
+        }
+        : null;
     await openCharacterEditorPopup(context, {
         avatar,
         seedSystemMessage,
+        // The seed message is a long prose brief written for the LLM to
+        // read on its first turn. The user gets the same information in a
+        // structured, interactive form via the topbar "View full replace
+        // diff" button, so we hide the prose from the chat pane. Keeping
+        // it in state.session.messages means buildTaskMessages still ships
+        // it to the model on the first turn.
+        hideSeedFromUi: true,
         autoSend: true,
+        postReplaceRollback,
+        replaceContext,
+        // Give the studio the same renderLineDiffHtml instance the CEA
+        // editor uses for per-edit proposal cards, so the full-replace-
+        // diff popup renders side-by-side line diffs identical to those
+        // the user sees later when reviewing AI edits.
+        renderLineDiffHtml,
     });
 }
 

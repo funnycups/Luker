@@ -79,5 +79,8 @@ android-app/app/.externalNativeBuild/
 tests/skills-ui/playwright/_local-*.spec.js
 tests/.e2e-scratch/
 tests/.frontend-scratch/
+tests/.e2e-screenshots/
+.playwright-mcp/
+_probe-th/
 node_modules
 tests/node_modules

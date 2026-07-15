@@ -31,11 +31,14 @@ function escapeHtmlLocal(value) {
         .replaceAll('\'', '&#39;');
 }
 
-function truncateForPreview(value, max = 320) {
-    const str = String(value ?? '');
-    if (str.length <= max) return str;
-    return `${str.slice(0, max)}…`;
-}
+// truncateForPreview used to cap entry.content at 320 chars — including
+// inside the expanded `<details>` disclosure. Users who explicitly
+// opened a card still saw a `…`-clipped excerpt with no way to see the
+// rest. Removed because the current render path emits full content
+// verbatim inside the disclosure (collapsed cards hide content
+// entirely). Callers wanting an intentionally-truncated preview must
+// compose their own excerpt so the truncation is visible where it
+// happens, not tucked behind a helper name.
 
 function formatTemplate(template, ...values) {
     return String(template ?? '').replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
@@ -147,7 +150,13 @@ function renderEntryCard(t, tFormat, entry, { isPending = false, missingRefOp = 
     const commentRaw = String(entry?.comment ?? entry?.title ?? '').trim();
     const titleText = forceTitle || commentRaw || (uid !== '' ? `#${uid}` : t('(untitled entry)'));
     const state = getStateGlyph(entry);
-    const content = !missingRefOp ? truncateForPreview(entry?.content || '', 320) : '';
+    // Expanded `<details>` renders the entry's full content verbatim.
+    // Silent truncation here previously capped it at 320 chars, so users
+    // who explicitly opened the disclosure still saw a `…`-clipped
+    // excerpt with no way to see the rest — violates "no silent
+    // truncation". Collapsed state hides content entirely, so trusting
+    // the disclosure gesture and rendering full text on expand is safe.
+    const content = !missingRefOp ? String(entry?.content || '') : '';
     const keys = extractKeys(entry);
     const metaPills = renderMetaPills(t, tFormat, entry, isPending, missingRefOp);
     const keysHtml = renderKeyChips(keys);

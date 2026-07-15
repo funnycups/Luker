@@ -179,12 +179,12 @@ test.describe('#27 — import-embedded persists the binding', () => {
             await replacePopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
             await page.locator('#character_replace_file').setInputFiles(cardBPath);
 
-            // CEA 3-button popup — click "Keep the previous book bound" to
+            // CEA 3-button popup — click "Keep old book" to
             // preserve book-a binding (the user's most-likely safe choice).
-            const ceaPopup = page.locator('dialog.popup[open]', { hasText: /Replace lorebook|替换角色卡|替換角色卡/ }).last();
+            const ceaPopup = page.locator('dialog.popup[open]', { hasText: /Replace:|替换角色卡|替換角色卡/ }).last();
             await ceaPopup.waitFor({ state: 'visible', timeout: 20_000 });
             const keepBtn = ceaPopup.locator('.popup-button-custom', {
-                hasText: /Skip and keep the previous book bound|保留原绑定的世界书|保留原綁定的世界書/,
+                hasText: /Keep old book|保留旧世界书|保留舊世界書/,
             }).first();
             await keepBtn.click();
             await ceaPopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});

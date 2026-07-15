@@ -80,6 +80,7 @@ import {
     readLegacyCharIterPopupSessions,
 } from '../main.js';
 import { renderCeaEditorPreviewPane } from '../editor-preview.js';
+import { buildReplaceDiffModel, renderReplaceDiffOverview } from '../replace-diff-overview.js';
 import {
     buildCeaEditorToolSet,
     isCeaEditorControlCall,
@@ -386,6 +387,11 @@ export function _internalSeedSystemMessage(state, opts = {}) {
         rolledBackAt: null,
         auto: false,
         at: Date.now(),
+        // When the seed is a prose brief written for the LLM (post-replace
+        // review scaffolding, diff dumps), the caller passes hideSeedFromUi
+        // so the chat pane skips it. The message stays in state.session.messages
+        // so buildTaskMessages still ships it to the model on the first turn.
+        hiddenFromUi: Boolean(opts?.hideSeedFromUi),
     });
 }
 
@@ -1310,6 +1316,16 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
     // Only stamp when at least one edit actually landed — a zero-clean
     // batch should not render the IDE-style "✓ Applied" check.
     if (applied > 0) {
+        // Latch: at least one edit has hit disk this popup session.
+        // The postReplaceRollback path (see openUnifiedCharacterEditorPopup
+        // onClosing) checks this flag to decide whether to undo the
+        // pre-materialize step done before the popup opened. We also
+        // mirror to rollbackEnvelope (owned by the outer wrapper) so
+        // the finally-block rollback check sees the same truth even
+        // when state creation itself was fine but a later teardown
+        // rethrow needs to be recovered.
+        state.hasEverApplied = true;
+        if (state.rollbackEnvelope) state.rollbackEnvelope.hasEverApplied = true;
         const stampedAt = Date.now();
         const messages = state.session.messages || [];
         for (let i = messages.length - 1; i >= 0; i--) {
@@ -1609,6 +1625,25 @@ async function loadSessionIntoState(state, sessionId, opts = {}) {
  *   `buildUnifiedCharacterEditorLiveSnapshot(context, avatar)` in main.js
  *   to load the character + primary lorebook. Passing a value here is for
  *   tests / callers that already have the snapshot in hand.
+ * @param {Function} [opts.postReplaceRollback]  Optional teardown callback.
+ *   Invoked from the finally-after-close block ONLY when
+ *   `state.hasEverApplied === false` (no edit was ever committed to disk
+ *   this session). Used by the CEA post-replace OPEN_EDITOR flow: the
+ *   caller pre-imports the new card's embedded world book and switches
+ *   the character's primary-book binding before opening the popup so
+ *   the AI can diff against real disk state; if the user closes without
+ *   applying anything, the callback undoes that pre-import + binding
+ *   switch. Throwing here is caught and logged — teardown must not
+ *   propagate.
+ * @param {Object} [opts.replaceContext]  Optional structured snapshot
+ *   of the pre-replace vs post-replace state. When present, the popup
+ *   surfaces a topbar button that opens a full-screen diff overview
+ *   (previous card + previous world book vs current card + current
+ *   world book) built from this payload. Shape:
+ *     - previousCharacter          — V2/V3 card as loaded before replace
+ *     - nextCharacter              — V2/V3 card imported by the replace
+ *     - previousLorebookSnapshot   — { bookName, entries } snapshot
+ *     - nextLorebookData           — { entries } current bound book
  * @returns {Promise<void>} Resolves when the user dismisses the popup.
  */
 export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
@@ -1619,6 +1654,47 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
     if (!avatar) {
         throw new TypeError('openUnifiedCharacterEditorPopup: opts.avatar is required');
     }
+
+    // Post-replace rollback envelope. The rollback callback (if any) is
+    // wired by the CEA post-replace OPEN_EDITOR flow to undo the
+    // pre-materialize step (new book file + binding switch) if the
+    // user closes the popup without applying any edit. We track
+    // "any edit ever landed on disk" in an outer-scope object so
+    // both the mount body (which flips state.hasEverApplied on
+    // successful commit) and the outer finally block (which fires
+    // even if mount setup throws before state exists) share a
+    // single source of truth.
+    //
+    // Why the outer finally instead of just the popup's own
+    // try/finally around `await popupPromise`? Because the popup
+    // setup path (helperApis bootstrap, session migration, state
+    // build) can throw before the popup is ever shown — and in
+    // that case the caller absolutely wants rollback to run:
+    // nothing landed on disk from the popup, but the pre-materialize
+    // step in main.js did land, and skipping rollback would leave
+    // the user in the same silently-overwritten state that the
+    // original bug reported.
+    const rollbackEnvelope = { hasEverApplied: false };
+    // Test-only hook: fires immediately, before any mount setup that
+    // could throw, so a test can flip rollbackEnvelope.hasEverApplied
+    // to simulate "user applied at least one edit" without having to
+    // drive the whole popup UI. Production callers never pass this.
+    if (typeof opts?._testOnly_onRollbackEnvelopeReady === 'function') {
+        try { opts._testOnly_onRollbackEnvelopeReady(rollbackEnvelope); }
+        catch { /* swallow — test-only */ }
+    }
+    try {
+        await _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnvelope);
+    } finally {
+        if (!rollbackEnvelope.hasEverApplied && typeof opts?.postReplaceRollback === 'function') {
+            try { await opts.postReplaceRollback(); }
+            catch (err) { console.warn(`[${MODULE}] postReplaceRollback failed`, err); }
+        }
+    }
+}
+
+async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnvelope) {
+    const avatar = String(opts?.avatar || '').trim();
 
     ensureStylesheetInjected();
     ITER_UI.ensureUiStylesheetInjected();
@@ -1721,6 +1797,19 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         isBusy: false,
         aborting: false,
         abortController: null,
+        // Set to true the first time any edit successfully lands on
+        // disk (see applyPendingEdits below). Used by the
+        // postReplaceRollback path: if the user closes the popup after
+        // OPEN_EDITOR without ever applying an edit, the popup rolls
+        // back the pre-materialize step (book file deletion + binding
+        // restore) so their disk state matches what it was before they
+        // clicked OPEN_EDITOR.
+        hasEverApplied: false,
+        // Shared reference with the outer openUnifiedCharacterEditorPopup
+        // wrapper's finally block — the same latch, exposed as an
+        // object property so the wrapper can observe our flip even
+        // when the popup mount body throws before returning.
+        rollbackEnvelope,
     };
 
     // ──────────────────────────────────────────────────────────────────
@@ -2106,6 +2195,14 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
     // preview pane) shared across all four iter popups. Mobile collapses
     // the grid to a single column and surfaces the chat / preview tab bar.
     const popupId = `cea_editor_${avatar.replace(/[^a-zA-Z0-9_]/g, '_')}_${Date.now().toString(36)}`;
+    const replaceContext = opts?.replaceContext && typeof opts.replaceContext === 'object' ? opts.replaceContext : null;
+    const hasReplaceContext = Boolean(
+        replaceContext && (
+            replaceContext.previousCharacter
+            || replaceContext.previousLorebookSnapshot
+            || replaceContext.nextLorebookData
+        ),
+    );
     const popupHtml = buildPopupHtml({
         popupId,
         title: t('Character Editor — AI iteration'),
@@ -2121,6 +2218,8 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         resizerAriaLabel: t('Resize chat and preview columns'),
         autoApplyLabel: t('Auto-apply edits'),
         autoApply: Boolean(state.session?.surfaceState?.autoApply),
+        showReplaceDiffButton: hasReplaceContext,
+        replaceDiffButtonLabel: t('View full replace diff'),
     });
     const popup = new Popup(popupHtml, POPUP_TYPE.DISPLAY, '', {
         wider: true,
@@ -2185,7 +2284,14 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         // context for the next round, but the user shouldn't see them as
         // chat noise. Mirror this filter on the LLM-history side ONLY by
         // keeping the messages array unchanged for buildTaskMessages.
-        const messages = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto));
+        //
+        // Same treatment for messages carrying `hiddenFromUi: true` —
+        // used by the post-replace seed injection, which pushes a long
+        // system message full of diff prose that the LLM needs to read
+        // as its first-turn brief. The user gets the structured full-
+        // screen diff via the topbar "View full replace diff" button
+        // instead, so the raw prose bubble is pure chat noise for them.
+        const messages = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto) && !m?.hiddenFromUi);
         const lastAssistantIdx = (() => {
             for (let i = messages.length - 1; i >= 0; i--) {
                 const m = messages[i];
@@ -3015,6 +3121,35 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
             setPreviewView(bookName, { page: Math.max(1, cur.page + delta) });
             renderPreviewPane();
         });
+        $root.on('click.ceaEditor', '[data-cea-editor-action="open-replace-diff"]', (e) => {
+            e.preventDefault();
+            if (!hasReplaceContext) return;
+            try {
+                const model = buildReplaceDiffModel(replaceContext);
+                const bodyHtml = renderReplaceDiffOverview(model, {
+                    escapeHtml: escapeHtmlInline,
+                    i18n: t,
+                    i18nFormat: tf,
+                    renderLineDiffHtml: opts?.renderLineDiffHtml || null,
+                });
+                const shellHtml = `<div class="cea_replace_diff_popup_shell">
+                    <h2 class="cea_replace_diff_popup_title">${escapeHtmlInline(t('Replace diff — previous vs current'))}</h2>
+                    <p class="cea_replace_diff_popup_hint">${escapeHtmlInline(t('This is the full structural diff between the version you were using and the version you just imported. Use it to decide what to migrate; the chat below carries the same information for the AI.'))}</p>
+                    ${bodyHtml}
+                </div>`;
+                const diffPopup = new Popup(shellHtml, POPUP_TYPE.DISPLAY, '', {
+                    wider: true,
+                    wide: true,
+                    large: true,
+                    allowVerticalScrolling: true,
+                    okButton: t('Close'),
+                    cancelButton: false,
+                });
+                diffPopup.show().catch((err) => console.warn(`[${MODULE}] replace-diff popup rejected`, err));
+            } catch (err) {
+                console.error(`[${MODULE}] open-replace-diff failed`, err);
+            }
+        });
         $root.on('click.ceaEditor', '[data-cea-editor-action="new-session"]', async (e) => {
             e.preventDefault();
             if (state.isBusy) {
@@ -3191,6 +3326,10 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
         // a frame that fires after popup DOM has detached.
         try { busRenderScheduler.dispose(); } catch { /* ignore */ }
         try { await persistSession(); } catch { /* ignore */ }
+        // NOTE: post-replace rollback runs one level up (see
+        // openUnifiedCharacterEditorPopup wrapper's finally block) so
+        // it fires even if the inner mount body throws before we ever
+        // reach `await popupPromise`. Keeping it here would double-fire.
     }
 }
 
@@ -3209,11 +3348,22 @@ function buildPopupHtml({
     resizerAriaLabel,
     autoApplyLabel,
     autoApply,
+    showReplaceDiffButton,
+    replaceDiffButtonLabel,
 }) {
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const replaceDiffBtnHtml = showReplaceDiffButton
+        ? `<button type="button" class="menu_button menu_button_small cea_editor_topbar_action" data-cea-editor-action="open-replace-diff" title="${esc(replaceDiffButtonLabel || 'View full replace diff')}">
+                <i class="fa-solid fa-code-compare" aria-hidden="true"></i>
+                <span>${esc(replaceDiffButtonLabel || 'View full replace diff')}</span>
+            </button>`
+        : '';
     return `
 <div id="${popupId}" class="cea_editor_studio luker-iter-workspace" data-iter-layout="split" data-iter-active-tab="chat">
-    <div class="cea_editor_title">${esc(title)}</div>
+    <div class="cea_editor_topbar">
+        <div class="cea_editor_title">${esc(title)}</div>
+        <div class="cea_editor_topbar_actions">${replaceDiffBtnHtml}</div>
+    </div>
     <details class="cea_editor_history" data-cea-editor-history${historyOpen ? ' open' : ''}>
         <summary>${esc(historyLabel)}</summary>
         <div class="cea_editor_history_items" data-cea-editor-history-items></div>

@@ -110,12 +110,13 @@ beforeAll(async () => {
 });
 
 describe('summarizeCharacterDiff', () => {
-    test('detects changed top-level field with prev/next excerpts wrapped as inline code', () => {
+    test('detects changed top-level field with prev/next full values inline', () => {
+        // Short values render inline as `- prev: ...` / `- next: ...`
+        // wrapped in inline-code backticks so markdown does not eat any
+        // special characters in the excerpt.
         const prev = { name: 'Alice', description: 'Old description here.' };
         const next = { name: 'Alice', description: 'A brand new description.' };
         const lines = CEA.summarizeCharacterDiff(prev, next);
-        // Field names + values are wrapped in backticks so markdown won't eat
-        // underscores/asterisks in real values like `system_prompt`.
         expect(lines.some(l => l.includes('Field changed: `description`'))).toBe(true);
         expect(lines.some(l => l.includes('`Old description here.`'))).toBe(true);
         expect(lines.some(l => l.includes('`A brand new description.`'))).toBe(true);
@@ -151,13 +152,23 @@ describe('summarizeCharacterDiff', () => {
         expect(CEA.summarizeCharacterDiff(prev, next)).toEqual([]);
     });
 
-    test('truncates long excerpts with ellipsis (still wrapped in backticks)', () => {
+    test('renders long values verbatim inside fenced blocks (no silent truncation)', () => {
+        // Long content used to be silently clipped at 240 chars with an
+        // ellipsis, giving the AI a partial view of what actually
+        // changed and blocking meaningful reconciliation. It now renders
+        // in a fenced code block verbatim so the model sees the full
+        // prev/next content. Multi-line / long values are the only
+        // reason to reach for fenced rendering — short scalars keep the
+        // inline `- prev: ` / `- next: ` shape.
         const long = 'x'.repeat(500);
         const lines = CEA.summarizeCharacterDiff({ description: 'old' }, { description: long });
-        const nextLine = lines.find(l => l.includes('next:'));
-        expect(nextLine).toBeTruthy();
-        // Closing backtick comes after the ellipsis.
-        expect(nextLine.endsWith('…`')).toBe(true);
+        const joined = lines.join('\n');
+        // Full 500 x's present unclipped.
+        expect(joined).toContain('x'.repeat(500));
+        // No ellipsis anywhere in the diff.
+        expect(joined).not.toContain('…');
+        // Fenced block markers appear around long values.
+        expect(joined).toMatch(/```/);
     });
 
     test('preserves underscores and asterisks in real-world field names', () => {
@@ -173,26 +184,55 @@ describe('summarizeCharacterDiff', () => {
         expect(joined).toContain('`new__value__two`');
     });
 
-    test('escapes literal backticks in field values via a longer fence', () => {
+    test('long values with embedded backticks stay literal because they render inside fenced blocks', () => {
+        // Fenced blocks preserve any inner backtick run without escaping,
+        // so a value containing ``backticks`` renders as-is inside ``` … ```.
+        // We add newlines to force the "multiline" code path.
+        const prev = { description: 'plain\nline' };
+        const next = { description: 'value with ``backticks`` inside\nsecond line' };
+        const lines = CEA.summarizeCharacterDiff(prev, next);
+        const joined = lines.join('\n');
+        expect(joined).toContain('value with ``backticks`` inside');
+        expect(joined).toContain('second line');
+        // Fenced blocks used for multi-line values.
+        expect(joined).toMatch(/```/);
+    });
+
+    test('short single-line values with embedded backticks still get an extended inline-code fence', () => {
+        // Single-line values keep the inline `- prev: `…` / `- next: `…`
+        // shape because they fit; mdLiteral extends the backtick fence to
+        // outlast any inner backtick run so nothing collapses.
         const prev = { description: 'plain' };
-        // Value contains a backtick run of length 2 — fence must be at least 3.
         const next = { description: 'value with ``backticks`` inside' };
         const lines = CEA.summarizeCharacterDiff(prev, next);
-        const nextLine = lines.find(l => l.includes('next:'));
+        const nextLine = lines.find(l => l.includes('- next:'));
         expect(nextLine).toBeTruthy();
-        // Three-backtick fence keeps the inner pair literal.
         expect(nextLine).toContain('```value with ``backticks`` inside```');
     });
 });
 
 describe('summarizeLorebookDiff', () => {
-    test('short-circuits to a one-line rename when the primary book name changes', () => {
-        const prevSnap = { bookName: 'OldBook', entries: { 0: { uid: 0, content: 'A' } } };
-        const nextData = { entries: { 0: { uid: 0, content: 'A' } } };
+    test('when primary book is renamed, dumps both sides in full because uid identity is not preserved across the rename', () => {
+        // uid 5 in OldBook is unrelated to uid 5 in NewBook — treating
+        // them as "the same entry" would produce false positives /
+        // negatives. Instead we list ALL prev entries under a "Previous
+        // world book" heading and ALL next entries under a "Next world
+        // book" heading so the AI can do content-based reconciliation
+        // across the rename. This is verbose but faithful.
+        const prevSnap = { bookName: 'OldBook', entries: { 0: { uid: 0, content: 'A', comment: 'first' } } };
+        const nextData = { entries: { 5: { uid: 5, content: 'B', comment: 'other' } } };
         const lines = CEA.summarizeLorebookDiff(prevSnap, nextData, 'OldBook', 'NewBook');
-        expect(lines.some(l => l.includes('`OldBook`') && l.includes('→') && l.includes('`NewBook`'))).toBe(true);
-        // No per-entry lines when the book itself was swapped.
-        expect(lines.some(l => l.includes('Entry'))).toBe(false);
+        const joined = lines.join('\n');
+        // Rename banner is still there.
+        expect(joined).toContain('`OldBook`');
+        expect(joined).toContain('`NewBook`');
+        expect(joined).toContain('→');
+        // Both sides are dumped in full (headings with counts).
+        expect(joined).toMatch(/Previous world book `OldBook` \(1 entries\)/);
+        expect(joined).toMatch(/Next world book `NewBook` \(1 entries\)/);
+        // Each entry's content is present verbatim (inside fenced blocks).
+        expect(joined).toContain('A');
+        expect(joined).toContain('B');
     });
 
     test('lists added / removed / changed entries by uid when book is the same', () => {
@@ -212,11 +252,15 @@ describe('summarizeLorebookDiff', () => {
             },
         };
         const lines = CEA.summarizeLorebookDiff(prevSnap, nextData, 'B', 'B');
-        expect(lines.some(l => l.includes('Entry removed (uid 2)') && l.includes('`entry two`'))).toBe(true);
-        expect(lines.some(l => l.includes('Entry added (uid 4)') && l.includes('`entry four`'))).toBe(true);
-        expect(lines.some(l => l.includes('Entry changed (uid 3') && l.includes('`content`') && l.includes('`entry three`'))).toBe(true);
+        const joined = lines.join('\n');
+        expect(joined).toMatch(/Entry removed \(uid 2\).*`entry two`/);
+        expect(joined).toMatch(/Entry added \(uid 4\).*`entry four`/);
+        // Change header + per-field content diff (fenced because 'content' is a prose field).
+        expect(joined).toMatch(/Entry changed \(uid 3\).*`entry three`/);
+        expect(joined).toContain('old');
+        expect(joined).toContain('new');
         // Unchanged entry must NOT appear.
-        expect(lines.some(l => l.includes('uid 1'))).toBe(false);
+        expect(joined).not.toMatch(/uid 1/);
     });
 
     test('returns empty array when nothing changed at all', () => {
@@ -225,13 +269,19 @@ describe('summarizeLorebookDiff', () => {
         expect(CEA.summarizeLorebookDiff(prevSnap, nextData, 'B', 'B')).toEqual([]);
     });
 
-    test('handles a missing previous snapshot gracefully', () => {
+    test('handles a missing previous snapshot gracefully, still lists the new book contents', () => {
         const nextData = { entries: { 1: { uid: 1, content: 'x' } } };
         const lines = CEA.summarizeLorebookDiff(null, nextData, '', 'B');
-        // Primary-name change is listed (with the empty side rendered as `(none)`);
-        // per-entry diff is suppressed since the names differ (treated as a
-        // wholesale swap, not entry edits).
-        expect(lines.some(l => l.includes('Primary world book') && l.includes('`(none)`') && l.includes('`B`'))).toBe(true);
+        const joined = lines.join('\n');
+        // Primary-name change is listed (empty side rendered as `(none)`).
+        expect(joined).toContain('Primary world book');
+        expect(joined).toContain('`(none)`');
+        expect(joined).toContain('`B`');
+        // Since names differ, we dump the next side's contents in full so
+        // the AI can see what the new book actually contains — a
+        // one-line "book renamed" banner alone would leave the model
+        // guessing about the entries on the new side.
+        expect(joined).toMatch(/Next world book `B` \(1 entries\)/);
     });
 });
 

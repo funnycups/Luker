@@ -153,7 +153,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { areLookupNamesEqual, findCanonicalNameInList, timestampToMoment, uuidv4, importFromExternalUrl, getCharaFilename, escapeHtml, download, getFileText, getStringHash, createThumbnail, isValidUrl } from './utils.js';
 import { addGlobalVariable, addLocalVariable, decrementGlobalVariable, decrementLocalVariable, deleteGlobalVariable, deleteLocalVariable, existsGlobalVariable, existsLocalVariable, getGlobalVariable, getLocalVariable, incrementGlobalVariable, incrementLocalVariable, popLocalVariable, pushLocalVariable, setGlobalVariable, setLocalVariable } from './variables.js';
-import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_info_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld, newWorldInfoEntryTemplate, createWorldInfoEntry, setWorldInfoButtonClass, setGlobalWorldInfoSelection, deleteWorldInfoEntry, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection, getSortedEntries } from './world-info.js';
+import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, loadWorldInfoBatch, reloadEditor, saveWorldInfo, updateWorldInfoList, wi_anchor_position, world_info_position, world_names, getCharaAuxWorlds, createNewWorldInfo, importEmbeddedWorldInfo, charUpdatePrimaryWorld, getCharacterEmbeddedWorld, newWorldInfoEntryTemplate, createWorldInfoEntry, setWorldInfoButtonClass, setGlobalWorldInfoSelection, deleteWorldInfoEntry, deleteWorldInfo, selected_world_info, getChatWorldInfoNames, setChatWorldInfoSelection, getSortedEntries } from './world-info.js';
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfile } from './extensions/connection-manager/profile-resolver.js';
@@ -2737,6 +2737,13 @@ export function getContext() {
         getWorldInfoNames: () => Array.isArray(world_names) ? [...world_names] : [],
         getCharaAuxWorlds,
         createWorldBook: createNewWorldInfo,
+        // File-level delete for a world book by name. Used by CEA's
+        // post-replace OPEN_EDITOR rollback when the user closes the
+        // popup without applying any edits — the newly-materialized
+        // book (which didn't exist before OPEN_EDITOR was picked) is
+        // removed so the character's disk state matches the pre-replace
+        // baseline. Entry-level delete stays on `worldInfoEntry.delete`.
+        deleteWorldBook: deleteWorldInfo,
         importEmbeddedWorldInfo,
         charUpdatePrimaryWorld,
         getCharacterEmbeddedWorld,
