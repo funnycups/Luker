@@ -37,6 +37,7 @@ import {
     updateCharacterBoundPreset,
     removeCharacterBoundPreset,
     setCharacterBoundDefault,
+    renameCharacterBoundPreset,
 } from './presets.js';
 import { getCurrentPresetBodyForBinding, maybeApplyCharacterBoundPreset } from '/scripts/openai.js';
 import { decodeCardBoundOptionValue } from './preset-ref-codec.js';
@@ -93,6 +94,7 @@ function renderRow(item, localPresetNames) {
         ${defaultCell}
         <button type="button" class="menu_button luker-mbp-overwrite-current" title="${escapeHtml(t`Overwrite this card slot with the currently-selected preset's body.`)}">${escapeHtml(t`Overwrite from current`)}</button>
         ${updateFromLocalBtn}
+        <button type="button" class="menu_button luker-mbp-rename">${escapeHtml(t`Rename`)}</button>
         <button type="button" class="menu_button luker-mbp-remove">${escapeHtml(t`Delete`)}</button>
     </div>
 </div>`;
@@ -211,6 +213,33 @@ export async function openManageBoundPresetsDialog(character) {
                 rerender();
             } catch (err) {
                 console.error('manage-bound-presets: update-from-local failed', err);
+                toastr.error(String(err?.message || err));
+            }
+        });
+    });
+
+    $dlg.on('click', `#${DIALOG_ID} .luker-mbp-rename`, async (ev) => {
+        await withRowName(ev, async (oldName) => {
+            const newNameRaw = await Popup.show.input(
+                t`Rename card-bound preset`,
+                t`Enter a new name:`,
+                oldName,
+            );
+            const newName = String(newNameRaw || '').trim();
+            if (!newName || newName === oldName) return;
+            try {
+                await renameCharacterBoundPreset(character, oldName, newName);
+                // Rebuild ghost optgroup + preserve selection. See the
+                // twin comment in preset-manager.js's card-bound rename
+                // dispatch: `maybeApplyCharacterBoundPreset` refreshes
+                // both the DOM options (encoded via
+                // encodeCardBoundOptionValue) and the runtimeOptions Map
+                // in one pass — hand-patching the DOM would desync them.
+                await maybeApplyCharacterBoundPreset();
+                toastr.success(t`Card-bound preset renamed`);
+                rerender();
+            } catch (err) {
+                console.error('manage-bound-presets: rename failed', err);
                 toastr.error(String(err?.message || err));
             }
         });

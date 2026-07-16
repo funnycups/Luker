@@ -26,7 +26,10 @@ import { t } from './i18n.js';
 import { instruct_presets } from './instruct-mode.js';
 import { kai_settings } from './kai-settings.js';
 import { convertNovelPreset } from './nai-settings.js';
-import { getChatCompletionPreset, oai_settings, openai_setting_names, openai_settings } from './openai.js';
+import { getChatCompletionPreset, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings } from './openai.js';
+import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
+import { renameCharacterBoundPreset } from './character/presets.js';
+import { getContext } from './st-context.js';
 import { persistPreset } from './preset-persistence.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
 import { context_presets, getContextSettings, power_user } from './power-user.js';
@@ -1883,6 +1886,57 @@ export async function initPresetManager() {
 
     $(document).on('click', '[data-preset-manager-rename]', async function () {
         const apiId = $(this).data('preset-manager-rename');
+
+        // Luker: card-bound dispatch MUST run before the global rename path.
+        // When the openai preset selector currently shows a card-bound ghost
+        // option (value encoded via preset-ref-codec), route rename through
+        // the Layer 1 API `renameCharacterBoundPreset` which mutates only the
+        // card slot — no PRESET_RENAMED events, no `preset_groups` walk, no
+        // orphan file in `data/<user>/OpenAI Settings/`. Other apiIds
+        // (nai / textgenerationwebui / …) have no card-bound concept and
+        // fall through to the original global path below.
+        if (apiId === 'openai') {
+            const selectValue = String($('#settings_preset_openai').val() ?? '');
+            const decoded = decodeCardBoundOptionValue(selectValue);
+            if (decoded) {
+                const popupHeader = t`Rename card-bound preset`;
+                const oldName = decoded.name;
+                const newName = await getSanitizedFilename(
+                    await Popup.show.input(popupHeader, t`Enter a new name:`, oldName) || '',
+                );
+                if (!newName || oldName === newName) return;
+                if (equalsIgnoreCaseAndAccents(oldName, newName)) {
+                    toastr.warning(t`Name not accepted, as it is the same as before (ignoring case and accents).`, t`Rename Preset`);
+                    return;
+                }
+                const ctx = getContext();
+                const character = ctx.characters?.find(c => c && c.avatar === decoded.avatar);
+                if (!character) {
+                    toastr.error(t`Character card not found`);
+                    return;
+                }
+                try {
+                    await renameCharacterBoundPreset(character, oldName, newName);
+                    // Rebuild the ghost optgroup + preserve selection.
+                    // `maybeApplyCharacterBoundPreset` calls
+                    // `upsertCharacterBoundRuntimeOptions`, which regenerates
+                    // each ghost <option>'s value via
+                    // `encodeCardBoundOptionValue(avatar, newName)` and its
+                    // textContent from the new name; the runtimeOptions Map
+                    // key is refreshed in the same pass. We do NOT hand-patch
+                    // the DOM `option.textContent` — doing so would desync
+                    // the Map (Task 3 depends on the Map to look up the
+                    // preset body by value).
+                    await maybeApplyCharacterBoundPreset();
+                    toastr.success(t`Card-bound preset renamed`);
+                } catch (err) {
+                    console.error('card-bound rename failed', err);
+                    toastr.error(String(err?.message || err));
+                }
+                return;
+            }
+        }
+
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {

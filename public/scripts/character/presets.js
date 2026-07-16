@@ -217,6 +217,53 @@ export function resolveCharacterBoundPresetByName(character, name) {
 }
 
 /**
+ * Rename a card-bound preset slot without touching the global preset library.
+ *
+ * Contract:
+ *   - `oldName` / `newName` are trimmed before use.
+ *   - Empty (after trim) → throws (mirrors add/update guards).
+ *   - trim-equal old/new → no-op (return without persisting).
+ *   - `oldName` not in card presets[] → throws.
+ *   - `newName` already in the same card's presets[] → throws (same-origin
+ *     unique-name invariant, mirroring the layered
+ *     `resolveCharacterBoundPresetByName` design where card wins over
+ *     global — cross-origin same-name collisions are legal).
+ *   - If the renamed slot IS the current default, `defaultPresetName`
+ *     follows the rename in the same persist call (atomic — a single
+ *     `persistCharacterBoundState` write, no torn intermediate state).
+ *   - Does NOT emit the global `PRESET_RENAMED_BEFORE` / `PRESET_RENAMED`
+ *     events, does NOT touch `preset_groups`, does NOT touch
+ *     `openai_setting_names` / `openai_settings` — this is a pure card-slot
+ *     mutation.
+ *   - Preserves the preset body object reference (only the outer `name`
+ *     changes).
+ * @param {object} character
+ * @param {string} oldName
+ * @param {string} newName
+ * @returns {Promise<void>}
+ */
+export async function renameCharacterBoundPreset(character, oldName, newName) {
+    const oldTrim = String(oldName || '').trim();
+    const newTrim = String(newName || '').trim();
+    if (!oldTrim || !newTrim) throw new Error('renameCharacterBoundPreset: oldName and newName required');
+    if (oldTrim === newTrim) return;
+    const cur = readCharacterBoundState(character);
+    const idx = cur.presets.findIndex(p => p.name === oldTrim);
+    if (idx < 0) throw new Error(`renameCharacterBoundPreset: not found: ${oldTrim}`);
+    if (cur.presets.some(p => p.name === newTrim)) {
+        // Same-origin (same card) collision → error. Cross-origin (card vs
+        // global) same-name is legal by design (see
+        // resolveCharacterBoundPresetByName's card-first / global-fallback
+        // layering at presets.js:209).
+        throw new Error(`renameCharacterBoundPreset: name already exists: ${newTrim}`);
+    }
+    const nextPresets = cur.presets.slice();
+    nextPresets[idx] = { name: newTrim, preset: nextPresets[idx].preset };
+    const nextDefault = cur.defaultPresetName === oldTrim ? newTrim : cur.defaultPresetName;
+    await persistCharacterBoundState(character, { presets: nextPresets, defaultPresetName: nextDefault });
+}
+
+/**
  * Wipe the character-bound chat_completion_preset field entirely.
  * Layer 1's persist path writes an explicit `null` when presets is empty
  * AND defaultPresetName is null, which is exactly the field-cleared state.

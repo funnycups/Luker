@@ -98,8 +98,11 @@ export async function emitOrchPresetDeleted(context, { mode, name } = {}) {
 /**
  * Emit ORCH_PRESET_EXPORT_READY before download so the skills subsystem
  * can mutate `payload` in place to attach embedded skill content under
- * `payload.extensions.luker.embedded_skills_source`. Sole positional
- * argument matches OAI_PRESET_EXPORT_READY convention.
+ * `payload.extensions.luker.embedded_skills_source`. The orch payload is
+ * self-describing (`mode` + `name` live on the payload itself), so we pass
+ * it as a single positional argument. This intentionally differs from
+ * OAI_PRESET_EXPORT_READY, whose `{data, presetName}` shape exists because
+ * a preset body has no `name` field of its own.
  *
  * @param {object} context
  * @param {object} payload — the outgoing preset JSON payload

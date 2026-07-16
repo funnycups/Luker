@@ -27,21 +27,25 @@ import { attachEmbeddedSkillsSource, packAndAttachSkillsForExport } from './embe
  *
  * @param {object} opts
  * @param {object} opts.context - SillyTavern context
- * @param {object} opts.presetBody - the preset JSON being exported
- *   (mutated in place when the user opts in)
+ * @param {object} opts.data - the preset JSON being exported (mutated in
+ *   place when the user opts in). Renamed from `presetBody` to align with
+ *   the `{data, presetName}` payload shape carried by
+ *   OAI_PRESET_EXPORT_READY (mirrors OAI_PRESET_IMPORT_READY, openai.js:6910).
+ * @param {string} opts.presetName - the real name of the preset being
+ *   exported (card slot name in card-bound mode, global name otherwise).
+ *   Provided by the event so the hook no longer needs to reach into
+ *   `oai_settings.preset_settings_openai`, which is stale global while
+ *   a card-bound ghost is selected (the root of the export identity drift).
  * @param {(s:string)=>string} [opts.t]
  * @returns {Promise<boolean>}
  */
-export async function maybeAttachSkillsToPresetExport({ context, presetBody, t = (s) => s } = {}) {
+export async function maybeAttachSkillsToPresetExport({ context, data, presetName, t = (s) => s } = {}) {
     if (!context || !context.skills) return false;
-    if (!presetBody || typeof presetBody !== 'object') return false;
+    if (!data || typeof data !== 'object') return false;
+    const trimmedName = String(presetName || '').trim();
+    if (!trimmedName) return false;
 
-    // The preset name comes from the preset manager (the preset being
-    // exported is the currently selected one). Preset-scope skills are
-    // keyed by preset name alone.
-    const presetName = resolvePresetName(context);
-    if (!presetName) return false;
-    const targetScope = { kind: 'preset', name: presetName };
+    const targetScope = { kind: 'preset', name: trimmedName };
 
     // Bail early if the scope has no skills — no popup, no payload, just
     // pass through. This is the dominant case for users who don't bind
@@ -65,7 +69,7 @@ export async function maybeAttachSkillsToPresetExport({ context, presetBody, t =
         const payload = await packAndAttachSkillsForExport({
             context,
             targetScope,
-            attachTo: presetBody,
+            attachTo: data,
         });
         if (payload) {
             toast(t('Bundled ${0} skill(s) with this preset.').replace('${0}', String(list.length)), 'success');
@@ -279,26 +283,6 @@ async function confirmIncludeSkills({ context, t, list, targetScope }) {
 
 function isAffirmative(result) {
     return result === 1 || result === true;
-}
-
-/**
- * Resolve the name of the preset being exported. The export handler in
- * openai.js reads `oai_settings.preset_settings_openai` for "the currently
- * selected preset", so we mirror that. Falls back to scanning common
- * positions on the supplied body for a name field.
- *
- * @param {object} context
- * @returns {string}
- */
-function resolvePresetName(context) {
-    try {
-        const oai = context?.chatCompletionSettings
-            || context?.extensionSettings?.openai
-            || context?.extension_settings?.openai;
-        const name = oai?.preset_settings_openai;
-        if (typeof name === 'string' && name.trim()) return name.trim();
-    } catch (_) { /* swallow */ }
-    return '';
 }
 
 function toast(message, level) {

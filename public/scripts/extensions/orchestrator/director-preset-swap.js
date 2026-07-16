@@ -35,6 +35,7 @@
 
 import { DIRECTOR_PURE_PRESET_NAME, DIRECTOR_PURE_PRESET_BODY } from './pure-preset-body.js';
 import { i18n, i18nFormat } from './i18n.js';
+import { decodeCardBoundOptionValue } from '../../character/preset-ref-codec.js';
 
 let pendingPresetSnapshot = null;
 
@@ -110,7 +111,32 @@ export async function applyDirectorPresetSwap(ctx) {
 
     const activeName = oaiSettings.preset_settings_openai;
 
-    if (typeof ctx?.openai?.hasUnsavedChanges === 'function' && ctx.openai.hasUnsavedChanges(activeName)) {
+    // 捕获当前 <select> 的 raw value(可能是 ghost sentinel `__luker_card__::…`,
+    // 也可能是数字 index / 全局 preset 名映射)。origin 由 decodeCardBoundOptionValue
+    // 判定 —— 命中即 character origin,restore 时需回到同一 ghost <option>;否则
+    // 走全局 fallback,与旧行为等价。
+    //
+    // DOM 读取用原生 document 而非 jQuery,让本捕获段在 node/jest 无 DOM 环境
+    // 也不抛(module-scope import 的 preset-ref-codec 是纯函数,可安全跑)。
+    let ghostSelectValue = '';
+    let origin = 'global';
+    try {
+        if (typeof document !== 'undefined') {
+            ghostSelectValue = String(document.getElementById('settings_preset_openai')?.value ?? '');
+            if (decodeCardBoundOptionValue(ghostSelectValue)) {
+                origin = 'character';
+            }
+        }
+    } catch (_) { /* DOM unavailable: 兜底 origin='global',ghostSelectValue='' */ }
+
+    // Unsaved-changes guard 只在 global origin 有意义。Card-bound 模式下用户编辑
+    // 由 syncCharacterBoundPresetFromSettings 自动写回 card slot,没有 "dirty
+    // global body" 需要用户裁决;而 activeName 是 stale 全局名,直接 savePreset
+    // (activeName, oaiSettings) 会把 card slot body 灌进不相关的全局 preset —
+    // 破坏面比"少弹一次警告"大得多。character origin 一律跳过 popup。
+    if (origin === 'global'
+        && typeof ctx?.openai?.hasUnsavedChanges === 'function'
+        && ctx.openai.hasUnsavedChanges(activeName)) {
         const result = await ctx.callGenericPopup(
             i18nFormat('Director will switch to a synthetic preset for prompt composition. The active preset "${0}" has unsaved changes.', activeName),
             ctx.POPUP_TYPE.CONFIRM,
@@ -142,7 +168,7 @@ export async function applyDirectorPresetSwap(ctx) {
     }
 
     applyByName(DIRECTOR_PURE_PRESET_NAME, { forceChange: true });
-    pendingPresetSnapshot = { activeName };
+    pendingPresetSnapshot = { activeName, ghostSelectValue, origin };
 }
 
 /**
@@ -152,13 +178,39 @@ export async function applyDirectorPresetSwap(ctx) {
  */
 export function restoreDirectorPresetSwap(ctx) {
     if (pendingPresetSnapshot === null) return;
-    const { activeName } = pendingPresetSnapshot;
+    const { activeName, ghostSelectValue, origin } = pendingPresetSnapshot;
     pendingPresetSnapshot = null;
 
     const applyByName = ctx?.openai?.applyByName;
     if (typeof applyByName !== 'function') {
         console.warn('[orchestrator] cannot restore preset swap: ctx.openai.applyByName missing');
         return;
+    }
+
+    // Character origin:优先 restore 到原 ghost <option>,让 onSettingsPresetChange
+    // 走 usingCharacterBoundPreset=true 分支从 characterBoundPresetState.runtimeOptions
+    // 读回正确 body。走 applyByName(activeName) 会落到 stale 全局 option —— live
+    // oai_settings 被 stale 全局 body 覆盖,吞掉用户在 director 运行前的编辑。
+    //
+    // 前置校验:ghost <option> 仍在 DOM(理论上 director 期间不会被移除,
+    // removeCharacterBoundRuntimeOptions 只在 maybeApplyCharacterBoundPreset
+    // 里被调,而 director 不触发角色 / 群聊切换)。缺失就降级到 global 分支,
+    // 落到 stale 全局 —— 与旧行为等价,但显式 warn 留给开发者 debug 痕迹。
+    // **不弹 toast**:真实生产中这条降级路径几乎不会触发,弹 toast 会吓到用户。
+    if (origin === 'character' && ghostSelectValue) {
+        const escaped = (typeof CSS !== 'undefined' && typeof CSS.escape === 'function')
+            ? CSS.escape(ghostSelectValue)
+            : ghostSelectValue.replace(/["\\]/g, '\\$&');
+        const optionExists = (typeof document !== 'undefined')
+            && !!document.querySelector(`#settings_preset_openai option[value="${escaped}"]`);
+        if (optionExists && typeof jQuery === 'function') {
+            jQuery('#settings_preset_openai').val(ghostSelectValue).trigger('change');
+            return;
+        }
+        console.warn(
+            '[director] ghost option missing at restore, falling back to global',
+            { activeName, ghostSelectValue },
+        );
     }
 
     applyByName(activeName, { forceChange: true });

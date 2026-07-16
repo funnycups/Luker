@@ -8784,12 +8784,16 @@ jQuery(() => {
     }
     // Hook preset export: when the user clicks Export, ask whether to bundle
     // the preset-scope skills into the JSON before download fires. The hook
-    // listens on OAI_PRESET_EXPORT_READY which carries the preset body; we
-    // mutate the body in place to attach `extensions.luker.embedded_skills_source`.
+    // listens on OAI_PRESET_EXPORT_READY which carries `{data, presetName}`
+    // (aligned with OAI_PRESET_IMPORT_READY); we mutate `data` in place to
+    // attach `extensions.luker.embedded_skills_source`. `presetName` is the
+    // real slot name so the hook resolves the correct preset-scope skills
+    // even under card-bound selection (where oai_settings.preset_settings_openai
+    // is stale global).
     if (context.eventTypes?.OAI_PRESET_EXPORT_READY) {
-        context.eventSource.on(context.eventTypes.OAI_PRESET_EXPORT_READY, async (presetBody) => {
+        context.eventSource.on(context.eventTypes.OAI_PRESET_EXPORT_READY, async ({ data, presetName } = {}) => {
             try {
-                await maybeAttachSkillsToPresetExport({ context, presetBody, t: i18n });
+                await maybeAttachSkillsToPresetExport({ context, data, presetName, t: i18n });
             } catch (err) {
                 console.warn(`[${MODULE_NAME}] preset export skills attachment failed:`, err);
             }

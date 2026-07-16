@@ -5,6 +5,7 @@ import {
     applyDirectorPresetSwap,
     restoreDirectorPresetSwap,
     __resetDirectorPresetSwapForTests,
+    __getPendingDirectorPresetSnapshotForTests,
 } from '../../public/scripts/extensions/orchestrator/director-preset-swap.js';
 import { DIRECTOR_PURE_PRESET_NAME, DIRECTOR_PURE_PRESET_BODY } from '../../public/scripts/extensions/orchestrator/pure-preset-body.js';
 
@@ -221,5 +222,159 @@ describe('applyDirectorPresetSwap — unsaved-changes guard', () => {
         await applyDirectorPresetSwap(ctx);
         expect(savePreset).not.toHaveBeenCalled();
         expect(ctx.openai.applyByName.mock.calls[0][0]).toBe(DIRECTOR_PURE_PRESET_NAME);
+    });
+});
+
+describe('applyDirectorPresetSwap / restoreDirectorPresetSwap — card-bound origin', () => {
+    // 这些 case 依赖 module-scope DOM globals(document / jQuery / CSS)。
+    // 现有测试用 default node env(无 jsdom),我们只在 case 内手工 stub
+    // 需要的最小面,`afterEach` 立即还原,不污染其他测试。
+    let savedDocument;
+    let savedJQuery;
+    let savedCSS;
+
+    function installDomStubs({ selectValue, hasOption }) {
+        savedDocument = globalThis.document;
+        savedJQuery = globalThis.jQuery;
+        savedCSS = globalThis.CSS;
+
+        // querySelector 对 ghost option 的存在性回答 hasOption;
+        // getElementById 对 #settings_preset_openai 返回 { value }。
+        const fakeSelect = { value: selectValue };
+        globalThis.document = {
+            getElementById: (id) => (id === 'settings_preset_openai' ? fakeSelect : null),
+            querySelector: (sel) => {
+                // 只识别 restoreDirectorPresetSwap 里那条 query。
+                if (sel.startsWith('#settings_preset_openai option[value=')) {
+                    return hasOption ? { value: selectValue } : null;
+                }
+                return null;
+            },
+        };
+
+        const jqSpy = jest.fn((selector) => {
+            expect(selector).toBe('#settings_preset_openai');
+            return {
+                val: jest.fn(function (v) { jqSpy._lastVal = v; return this; }),
+                trigger: jest.fn(function (evt) { jqSpy._lastTrigger = evt; return this; }),
+            };
+        });
+        // jQuery 也当函数用(不需要静态方法)。
+        globalThis.jQuery = jqSpy;
+
+        globalThis.CSS = { escape: (s) => String(s).replace(/[^\w-]/g, (c) => '\\' + c) };
+        return { jqSpy };
+    }
+
+    function restoreDomStubs() {
+        globalThis.document = savedDocument;
+        globalThis.jQuery = savedJQuery;
+        globalThis.CSS = savedCSS;
+    }
+
+    afterEach(() => {
+        restoreDomStubs();
+    });
+
+    test('apply 捕获 ghost select value 且 pendingSnapshot.origin === "character"', async () => {
+        // 卡绑场景:activeName 是 stale 全局名,但 select 上是 ghost value。
+        const ctx = makeCtx({ activeName: 'StaleGlobal' });
+        // 注册 stale 全局到 settingNames/settings 让 applyByName 后续 restore
+        // 分支不 throw(即便本 case 不走它)。
+        ctx.openai.settingNames['StaleGlobal'] = 0;
+        ensureDirectorPureSyntheticPreset(ctx);
+
+        const ghostValue = '__luker_card__::' + encodeURIComponent('Aria.png') + '::' + encodeURIComponent('CardBoundSlot');
+        installDomStubs({ selectValue: ghostValue, hasOption: true });
+
+        await applyDirectorPresetSwap(ctx);
+
+        const snapshot = __getPendingDirectorPresetSnapshotForTests();
+        expect(snapshot).toEqual({
+            activeName: 'StaleGlobal',
+            ghostSelectValue: ghostValue,
+            origin: 'character',
+        });
+        // apply 仍然把 director-pure 挂上去(与 global 分支一致)。
+        expect(ctx.openai.applyByName).toHaveBeenCalledWith(DIRECTOR_PURE_PRESET_NAME, { forceChange: true });
+    });
+
+    test('restore 走 jQuery.val().trigger("change") 分支,不调 applyByName(activeName)', async () => {
+        const ctx = makeCtx({ activeName: 'StaleGlobal' });
+        ctx.openai.settingNames['StaleGlobal'] = 0;
+        ensureDirectorPureSyntheticPreset(ctx);
+
+        const ghostValue = '__luker_card__::' + encodeURIComponent('Aria.png') + '::' + encodeURIComponent('CardBoundSlot');
+        const { jqSpy } = installDomStubs({ selectValue: ghostValue, hasOption: true });
+
+        await applyDirectorPresetSwap(ctx);
+        // apply 触发了 1 次 applyByName(director-pure)。清空以观察 restore 行为。
+        ctx.openai.applyByName.mockClear();
+
+        restoreDirectorPresetSwap(ctx);
+
+        // 关键断言:restore 走 jQuery 分支,**未**调 applyByName(避免落到 stale 全局)。
+        expect(ctx.openai.applyByName).not.toHaveBeenCalled();
+        expect(jqSpy).toHaveBeenCalledWith('#settings_preset_openai');
+        expect(jqSpy._lastVal).toBe(ghostValue);
+        expect(jqSpy._lastTrigger).toBe('change');
+    });
+
+    test('restore 遇到 ghost <option> missing 时降级到 applyByName(activeName) 并 console.warn', async () => {
+        const ctx = makeCtx({ activeName: 'StaleGlobal' });
+        ctx.openai.settingNames['StaleGlobal'] = 0;
+        ensureDirectorPureSyntheticPreset(ctx);
+
+        const ghostValue = '__luker_card__::' + encodeURIComponent('Aria.png') + '::' + encodeURIComponent('CardBoundSlot');
+        installDomStubs({ selectValue: ghostValue, hasOption: false });
+
+        await applyDirectorPresetSwap(ctx);
+        ctx.openai.applyByName.mockClear();
+
+        // Use a wrapper on globalThis.console to bypass any spyOn quirks with ESM.
+        const origWarn = console.warn;
+        const warnCalls = [];
+        console.warn = (...args) => { warnCalls.push(args); };
+        try {
+            restoreDirectorPresetSwap(ctx);
+        } finally {
+            console.warn = origWarn;
+        }
+
+        // Fallback:apply stale 全局。
+        expect(ctx.openai.applyByName).toHaveBeenCalledTimes(1);
+        expect(ctx.openai.applyByName.mock.calls[0][0]).toBe('StaleGlobal');
+        // 记录了一条 warn(至少含 '[director]' 前缀 + ghostSelectValue)。
+        expect(warnCalls.length).toBeGreaterThanOrEqual(1);
+        const warnArgs = warnCalls[0];
+        expect(String(warnArgs[0])).toMatch(/\[director\].*ghost option missing/);
+        expect(warnArgs[1]).toMatchObject({ activeName: 'StaleGlobal', ghostSelectValue: ghostValue });
+    });
+
+    test('character origin skips unsaved-changes popup even when hasUnsavedChanges returns true', async () => {
+        // Guard for the Task-3 popup-skip fix (assertion (a) in e2e 49).
+        // Pre-fix, director-preset-swap called hasUnsavedChanges(activeName)
+        // with the stale global name → global branch inside Task 2's
+        // origin-aware detector saw live-vs-global diff and returned true →
+        // popup fired and its "Save" branch would write the card slot body
+        // into the wrong global preset. Fix: skip the guard entirely in
+        // character origin (auto-sync already protects the user's edits).
+        const callGenericPopup = jest.fn(async () => 0);
+        const ctx = makeCtx({
+            activeName: 'StaleGlobal',
+            hasUnsavedChanges: () => true,
+            callGenericPopup,
+        });
+        ctx.openai.settingNames['StaleGlobal'] = 0;
+        ensureDirectorPureSyntheticPreset(ctx);
+
+        const ghostValue = '__luker_card__::' + encodeURIComponent('Aria.png') + '::' + encodeURIComponent('CardBoundSlot');
+        installDomStubs({ selectValue: ghostValue, hasOption: true });
+
+        await applyDirectorPresetSwap(ctx);
+
+        expect(callGenericPopup).not.toHaveBeenCalled();
+        // Swap still happens.
+        expect(ctx.openai.applyByName).toHaveBeenCalledWith(DIRECTOR_PURE_PRESET_NAME, { forceChange: true });
     });
 });

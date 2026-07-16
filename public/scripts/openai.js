@@ -118,6 +118,8 @@ import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNa
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 import { encodeCardBoundOptionValue, decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
 import { readSelectedPresetRef, decideSavePresetDispatch } from './character/save-dispatch.js';
+import { hasUnsavedOpenAIPresetChanges as hasUnsavedOpenAIPresetChangesImpl } from './character/has-unsaved-openai-preset-changes.js';
+import { updateCharacterBoundPresetActiveState, clearCharacterBoundActiveAfterRemoval } from './character/character-bound-preset-state-sync.js';
 import {
     listCharacterBoundPresets,
     readCharacterBoundState,
@@ -272,6 +274,21 @@ const characterBoundPresetState = {
     // (Task 3 replaces single runtimeOptionValue/runtimePresetName/runtimePresetBody.)
     runtimeOptions: new Map(),
 };
+
+// Test observability hook. Exposed as read-only reference so e2e specs can
+// assert invariants I / III (characterBoundPresetState.active ≡ ghost DOM-
+// selected; previousPreset preserved across ghost ↔ global toggles) against
+// the live in-memory field the refactor is defined against. The `__` prefix
+// signals "internal, don't consume from third-party extensions" — Luker's
+// other preset e2es (39/40/41/42/45/46/49) assert on the DOM signal
+// (`option[data-luker-char-bound="1"]`); this hook only exists because
+// Invariant III cannot be observed from the DOM alone.
+if (typeof window !== 'undefined') {
+    Object.defineProperty(window, '__characterBoundPresetState', {
+        get() { return characterBoundPresetState; },
+        configurable: true,
+    });
+}
 let lastOpenAIPresetSelectValue = '';
 
 function scheduleOpenAIPresetChangeNotifications(presetName) {
@@ -6159,7 +6176,7 @@ async function maybeApplyCharacterBoundPreset() {
     }
 
     if (selected_group) {
-        if (characterBoundPresetState.active) {
+        if (characterBoundPresetState.previousPreset) {
             const restored = restoreOpenAIPresetAfterCharacterBound(characterBoundPresetState.previousPreset);
             if (!restored && characterBoundPresetState.previousPreset) {
                 console.warn(`Failed to restore previous chat completion preset: ${characterBoundPresetState.previousPreset}`);
@@ -6167,7 +6184,14 @@ async function maybeApplyCharacterBoundPreset() {
             characterBoundPresetState.active = false;
             characterBoundPresetState.previousPreset = '';
         } else {
+            // Fall-through: no restore target, but we still strip ghost DOM.
+            // removeCharacterBoundRuntimeOptions() removes the ghost <option>,
+            // so isCharacterBoundPresetOptionSelected() becomes false and
+            // Invariant I demands active follow suit. Without this clear,
+            // a stranded active=true after a ghost auto-apply with an
+            // unresolvable stale name would violate Invariant I.
             removeCharacterBoundRuntimeOptions();
+            clearCharacterBoundActiveAfterRemoval(characterBoundPresetState);
         }
         updateCharacterBoundPresetBadge(false);
         return;
@@ -6185,7 +6209,7 @@ async function maybeApplyCharacterBoundPreset() {
     const defaultName = String(boundState?.defaultPresetName || '').trim();
 
     if (boundList.length === 0 && !defaultName) {
-        if (characterBoundPresetState.active) {
+        if (characterBoundPresetState.previousPreset) {
             const restored = restoreOpenAIPresetAfterCharacterBound(characterBoundPresetState.previousPreset);
             if (!restored && characterBoundPresetState.previousPreset) {
                 console.warn(`Failed to restore previous chat completion preset: ${characterBoundPresetState.previousPreset}`);
@@ -6193,7 +6217,15 @@ async function maybeApplyCharacterBoundPreset() {
             characterBoundPresetState.active = false;
             characterBoundPresetState.previousPreset = '';
         } else {
+            // Fall-through: no restore target, but we still strip ghost DOM.
+            // Same rationale as the selected_group branch above — Invariant I
+            // requires active to follow the ghost DOM signal, and
+            // removeCharacterBoundRuntimeOptions() has just made that signal
+            // false. Without this clear, a character switch from a card-bound
+            // char (whose ghost auto-applied against an unresolvable stale
+            // global name) to a non-bound char would strand active=true.
             removeCharacterBoundRuntimeOptions();
+            clearCharacterBoundActiveAfterRemoval(characterBoundPresetState);
         }
         updateCharacterBoundPresetBadge(false);
         return;
@@ -6881,24 +6913,50 @@ async function onPresetImportFileChange(e) {
 }
 
 async function onExportPresetClick() {
-    const presetName = String(oai_settings.preset_settings_openai || '').trim();
+    const currentRef = readSelectedPresetRef({
+        selectValue: String($('#settings_preset_openai').val() ?? ''),
+        fallbackName: oai_settings?.preset_settings_openai || '',
+    });
+    const presetName = currentRef?.name ? String(currentRef.name).trim() : '';
     if (!presetName) {
         toastr.error(t`No preset selected`);
         return;
     }
 
-    let preset = getOpenAIPresetByName(presetName);
-    if (!preset) {
-        await ensureFullSettingsLoaded();
+    let preset;
+    if (currentRef.origin?.kind === 'character') {
+        const ctx = getContext();
+        const character = ctx?.characters?.find(c => c && c.avatar === currentRef.origin.avatar);
+        if (!character) {
+            toastr.error(t`Card no longer available for export`);
+            return;
+        }
+        const hit = getCharacterBoundPreset(character, presetName);
+        if (!hit || typeof hit.preset !== 'object') {
+            toastr.error(t`Card-bound preset '${presetName}' not found`);
+            return;
+        }
+        preset = hit.preset;
+    } else {
         preset = getOpenAIPresetByName(presetName);
-    }
-    if (!preset || typeof preset !== 'object') {
-        toastr.error(t`Failed to resolve preset for export`);
-        return;
+        if (!preset) {
+            await ensureFullSettingsLoaded();
+            preset = getOpenAIPresetByName(presetName);
+        }
+        if (!preset || typeof preset !== 'object') {
+            toastr.error(t`Failed to resolve preset for export`);
+            return;
+        }
     }
 
     const presetBody = structuredClone(preset);
-    await eventSource.emit(event_types.OAI_PRESET_EXPORT_READY, presetBody);
+    // Payload shape mirrors OAI_PRESET_IMPORT_READY (see :6910) —
+    // listeners receive `{data, presetName}` and may mutate `data` in
+    // place before download. The real slot name (card-bound or global)
+    // travels alongside the body so hooks don't have to re-derive it
+    // from `oai_settings.preset_settings_openai` (that variable is stale
+    // global while a card-bound ghost is selected).
+    await eventSource.emit(event_types.OAI_PRESET_EXPORT_READY, { data: presetBody, presetName });
     const presetJsonString = JSON.stringify(presetBody, null, 4);
     const presetFileName = `${presetName}.json`;
     download(presetJsonString, presetFileName, 'application/json');
@@ -6958,6 +7016,18 @@ function onLogitBiasPresetExportClick() {
 }
 
 async function onDeletePresetClick() {
+    // 卡绑 ghost 选中态下,oai_settings.preset_settings_openai 保留的是
+    // 进入 ghost 前的 stale 全局名。无 guard 时后续 nameToDelete 会指
+    // 向那个 stale 全局 preset,/api/presets/delete 会真的删掉磁盘上
+    // 用户没打算删的文件(数据破坏级)。这里直接拒绝并提示用户改走
+    // "Manage Bound Chat Completion Presets" dialog 显式操作 card 内
+    // slot 删除。读 DOM 而非 characterBoundPresetState.active,与
+    // #update_oai_preset 的 guard 保持一致 —— 抗回归,不依赖内存字段。
+    if (isCharacterBoundPresetOptionSelected()) {
+        toastr.error(t`Cannot delete card-bound preset from this button. Use the "Manage Bound Chat Completion Presets" dialog instead.`);
+        return;
+    }
+
     const confirm = await callGenericPopup(t`Delete the preset? This action is irreversible and your current settings will be overwritten.`, POPUP_TYPE.CONFIRM);
 
     if (!confirm) {
@@ -7200,23 +7270,14 @@ export function areComparableOpenAIPresetBodiesEqual(leftPresetBody, rightPreset
     return JSON.stringify(canonicalLeft) === JSON.stringify(canonicalRight);
 }
 
-function hasUnsavedOpenAIPresetChanges(presetName) {
-    const normalizedName = String(presetName || '').trim();
-    if (!normalizedName) {
-        return false;
-    }
-
-    const presetIndex = openai_setting_names?.[normalizedName];
-    if (!Number.isInteger(presetIndex)) {
-        return false;
-    }
-
-    const savedPresetBody = openai_settings?.[presetIndex];
-    if (!savedPresetBody || typeof savedPresetBody !== 'object') {
-        return false;
-    }
-
-    return !areComparableOpenAIPresetBodiesEqual(getChatCompletionPreset(oai_settings, { clone: false }), savedPresetBody);
+function hasUnsavedOpenAIPresetChanges(presetName, options) {
+    return hasUnsavedOpenAIPresetChangesImpl(presetName, options, {
+        openaiSettingNames: openai_setting_names,
+        openaiSettings: openai_settings,
+        oaiSettings: oai_settings,
+        getChatCompletionPreset,
+        areComparableOpenAIPresetBodiesEqual,
+    });
 }
 
 async function confirmOpenAIPresetSwitch(presetNameBefore) {
@@ -7255,7 +7316,7 @@ async function onSettingsPresetChange(event) {
     const usingCharacterBoundPreset = selectedOption.attr('data-luker-char-bound') === '1';
     const presetName = selectedOption.text();
 
-    if (Boolean(event?.originalEvent) && !wasCharacterBoundPreset && !usingCharacterBoundPreset && presetNameBefore && presetName !== presetNameBefore && hasUnsavedOpenAIPresetChanges(presetNameBefore)) {
+    if (Boolean(event?.originalEvent) && !wasCharacterBoundPreset && !usingCharacterBoundPreset && presetNameBefore && presetName !== presetNameBefore && hasUnsavedOpenAIPresetChanges(presetNameBefore, { selectValue: previousSelectValue })) {
         try {
             const shouldSwitch = await confirmOpenAIPresetSwitch(presetNameBefore);
             if (!shouldSwitch) {
@@ -7284,6 +7345,17 @@ async function onSettingsPresetChange(event) {
         preset = structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
     }
     updateCharacterBoundPresetBadge(usingCharacterBoundPreset);
+    // Invariant I: keep characterBoundPresetState.active ≡ ghost DOM-selected
+    // (see public/scripts/character/character-bound-preset-state-sync.js).
+    // Also stashes the stale global name into previousPreset on first entry
+    // into ghost selection so the restore path inside
+    // maybeApplyCharacterBoundPreset has a target.
+    updateCharacterBoundPresetActiveState({
+        state: characterBoundPresetState,
+        usingCharacterBoundPreset,
+        oaiSettingsPresetName: oai_settings.preset_settings_openai,
+        resolveExistingOpenAIPresetName,
+    });
 
     if (!preset || typeof preset !== 'object') {
         lastOpenAIPresetSelectValue = currentSelectValue;
@@ -9663,7 +9735,7 @@ export function initOpenAI() {
     });
 
     $('#update_oai_preset').on('click', async function () {
-        if (characterBoundPresetState.active) {
+        if (isCharacterBoundPresetOptionSelected()) {
             // The "update preset" button targets oai_settings.preset_settings_openai,
             // which during character-bound mode still points to the pre-bind preset
             // (onSettingsPresetChange skips updating it). Writing to that name would
