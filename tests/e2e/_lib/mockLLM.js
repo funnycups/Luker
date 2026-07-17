@@ -257,7 +257,28 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         for await (const chunk of req) body += chunk;
         let parsed = {};
         try { parsed = JSON.parse(body || '{}'); } catch {}
-        requests.push({ url: req.url, method: req.method, body: parsed, headers: req.headers });
+        // Track when the mock received this request and when it emitted
+        // the first response byte. Barrier / cache-warmup tests use
+        // these to assert follower-request timing relative to lead
+        // first-chunk delivery — see tests/e2e/orchestrator/
+        // 81-dispatch-barrier-*.e2e.js. The record is appended before
+        // any await so `mock.requests` reflects arrival order.
+        const record = { url: req.url, method: req.method, body: parsed, headers: req.headers, receivedAt: Date.now(), firstByteAt: null };
+        requests.push(record);
+
+        // Patch res.write / res.end once per request so the FIRST byte
+        // sent for this response stamps firstByteAt. This is transparent
+        // to callers that don't inspect the field.
+        const origWrite = res.write.bind(res);
+        const origEnd = res.end.bind(res);
+        res.write = (chunk, ...rest) => {
+            if (record.firstByteAt === null) record.firstByteAt = Date.now();
+            return origWrite(chunk, ...rest);
+        };
+        res.end = (chunk, ...rest) => {
+            if (chunk && record.firstByteAt === null) record.firstByteAt = Date.now();
+            return origEnd(chunk, ...rest);
+        };
 
         if (latencyMs > 0) await new Promise(r => setTimeout(r, latencyMs));
 
