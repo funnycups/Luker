@@ -861,6 +861,39 @@ export async function openSchemaIterationStudio(deps) {
     // feedback paths; the bus is now the single trigger.
     // ──────────────────────────────────────────────────────────────────
     let drainScheduled = false;
+
+    // Turn-scope gate helper. See orchestrator/iter-studio/studio.js
+    // hasPendingInSameAssistantTurnAs for the full rationale.
+    function hasPendingInSameAssistantTurnAs(outcomes) {
+        const outcomeCallIds = new Set();
+        for (const o of outcomes || []) {
+            const cid = String(o?.sourceCallId || '');
+            if (cid) outcomeCallIds.add(cid);
+        }
+        if (outcomeCallIds.size === 0) return false;
+        const callIdToMsg = new Map();
+        const msgs = state.session?.messages || [];
+        for (const m of msgs) {
+            if (!m || m.role !== 'assistant') continue;
+            const calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+            for (const tc of calls) {
+                const id = String(tc?.id || '');
+                if (id) callIdToMsg.set(id, String(m.id || ''));
+            }
+        }
+        const owningMsgs = new Set();
+        for (const cid of outcomeCallIds) {
+            const mid = callIdToMsg.get(cid);
+            if (mid) owningMsgs.add(mid);
+        }
+        if (owningMsgs.size === 0) return false;
+        for (const p of bus.listPending()) {
+            const mid = callIdToMsg.get(p.sourceCallId);
+            if (mid && owningMsgs.has(mid)) return true;
+        }
+        return false;
+    }
+
     async function drainBusOutcomes() {
         if (drainScheduled) return;
         const outcomes = bus.drainOutcomes();
@@ -870,6 +903,13 @@ export async function openSchemaIterationStudio(deps) {
             // back via the bus, so the next idle drain picks them up.
             // The bus exposes no public re-queue; we keep a stash here
             // and replay on the next call.
+            __pendingDrainStash.push(...outcomes);
+            return;
+        }
+        // Batch gate: same-turn siblings still pending → hold. See
+        // orchestrator/iter-studio/studio.js drainBusOutcomes for the
+        // full rationale.
+        if (hasPendingInSameAssistantTurnAs(outcomes)) {
             __pendingDrainStash.push(...outcomes);
             return;
         }

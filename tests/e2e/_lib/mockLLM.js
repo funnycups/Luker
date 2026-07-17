@@ -144,6 +144,8 @@ const MAIN_ONLY_TOOL_NAMES = new Set([
  *   scriptToolCall:(t:object)=>void,
  *   scriptDirectorRun:(opts:{route:Function})=>void,
  *   clearDirectorRun:()=>void,
+ *   scriptCompletion:(route:Function|null)=>void,
+ *   clearScriptedCompletion:()=>void,
  *   requests:object[],
  *   stop:()=>Promise<void>,
  * }>}
@@ -169,6 +171,22 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         directorRoute = typeof fn === 'function' ? fn : null;
         turnCounters['director-main'] = 0;
         turnCounters['subagent'] = 0;
+    }
+
+    // Generic completion route — invoked for every /chat/completions
+    // request AFTER the director-role router has passed (i.e. director
+    // returned null OR the request didn't classify as director). Unlike
+    // scriptDirectorRun, this one does NOT gate on role classification,
+    // so it's the right tool for iter-studio-style specs that need to
+    // return a MULTI-toolCall payload on turn 0 and plain text on turn 1
+    // without the director protocol fingerprint. Return shape matches
+    // scriptDirectorRun: { text } | { tool, arguments } | { toolCalls: [...] }
+    // | null (fall through to queue).
+    let genericRoute = null;
+    let genericTurn = 0;
+    function setGenericRoute(fn) {
+        genericRoute = typeof fn === 'function' ? fn : null;
+        genericTurn = 0;
     }
 
     function classifyRequest(parsed) {
@@ -368,6 +386,38 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                 return;
             }
 
+            // Generic completion route (role-agnostic). Runs after the
+            // director router has passed. Useful for iter-studio specs
+            // that need multi-toolCall payloads per turn.
+            if (genericRoute) {
+                let generic = null;
+                try {
+                    generic = genericRoute({
+                        turn: genericTurn,
+                        body: parsed,
+                        stream: isStream,
+                        systemPrompts: (parsed?.messages || [])
+                            .filter((m) => m && m.role === 'system')
+                            .map((m) => stringifyMessageContent(m.content)),
+                        userMessages: (parsed?.messages || [])
+                            .filter((m) => m && m.role === 'user')
+                            .map((m) => stringifyMessageContent(m.content)),
+                        toolNames: (Array.isArray(parsed?.tools) ? parsed.tools : [])
+                            .map((t) => String(t?.function?.name || t?.name || ''))
+                            .filter(Boolean),
+                    });
+                } catch (err) {
+                    res.writeHead(500, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ error: { message: `mock generic route threw: ${err?.message || err}` } }));
+                    return;
+                }
+                if (generic !== null && generic !== undefined) {
+                    genericTurn += 1;
+                    respondFromRouter(res, parsed, generic, isStream);
+                    return;
+                }
+            }
+
             // Fallback: existing queue-based behavior.
             // Tool calls take precedence — when a tool is scripted next,
             // don't also pop a reply (they were ending up out of sync, so
@@ -437,6 +487,8 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         setStreamChunkDelayMs(ms) { setChunkDelay(ms); },
         scriptDirectorRun({ route } = {}) { setDirectorRoute(route); },
         clearDirectorRun() { setDirectorRoute(null); },
+        scriptCompletion(route) { setGenericRoute(route); },
+        clearScriptedCompletion() { setGenericRoute(null); },
         requests,
         stop: () => new Promise((resolve) => server.close(() => resolve())),
     };

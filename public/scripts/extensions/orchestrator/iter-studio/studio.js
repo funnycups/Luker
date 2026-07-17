@@ -1388,11 +1388,73 @@ export async function openOrchestratorIterationStudio(deps) {
     // any batch of proposals. Replaces the legacy continueAfterReviewDecision.
     let drainScheduled = false;
     const __pendingDrainStash = [];
+
+    // Turn-scope gate helper. Given the outcomes about to be drained,
+    // decide whether the assistant message(s) they belong to still have
+    // any pending proposal entries. If yes, the drain must stash + wait
+    // — firing the next LLM round now would send a "user reviewed 1
+    // proposal" synthetic message that mis-reports the batch. Returns
+    // false when either the outcomes don't map to any known assistant
+    // turn (e.g. legacy entries without sourceCallId) or every sibling
+    // has already been resolved.
+    function hasPendingInSameAssistantTurnAs(outcomes) {
+        const outcomeCallIds = new Set();
+        for (const o of outcomes || []) {
+            const cid = String(o?.sourceCallId || '');
+            if (cid) outcomeCallIds.add(cid);
+        }
+        if (outcomeCallIds.size === 0) return false;
+        // Build tool_call.id -> owning assistant message id.
+        const callIdToMsg = new Map();
+        const msgs = state.session?.messages || [];
+        for (const m of msgs) {
+            if (!m || m.role !== 'assistant') continue;
+            const calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+            for (const tc of calls) {
+                const id = String(tc?.id || '');
+                if (id) callIdToMsg.set(id, String(m.id || ''));
+            }
+        }
+        // Owning messages for the outcomes.
+        const owningMsgs = new Set();
+        for (const cid of outcomeCallIds) {
+            const mid = callIdToMsg.get(cid);
+            if (mid) owningMsgs.add(mid);
+        }
+        if (owningMsgs.size === 0) return false;
+        // Any still-pending entry whose owning message overlaps → gate.
+        for (const p of bus.listPending()) {
+            const mid = callIdToMsg.get(p.sourceCallId);
+            if (mid && owningMsgs.has(mid)) return true;
+        }
+        return false;
+    }
+
     async function drainBusOutcomes() {
         if (drainScheduled) return;
         const outcomes = bus.drainOutcomes();
         if (!outcomes.length) return;
         if (state.isBusy) {
+            __pendingDrainStash.push(...outcomes);
+            return;
+        }
+        // Batch gate: hold the next LLM round until every proposal card
+        // the current assistant turn produced has been decided. A single
+        // approve/reject on one card must NOT immediately fire another
+        // completion request while cards 2..N from the same turn are
+        // still pending — that was the "clicked once, model talked back"
+        // regression AND the "Approve all pending only counted the first
+        // card" regression (same root cause).
+        //
+        // Grouping is by owning ASSISTANT MESSAGE (many tool_calls per
+        // message → many propose entries per message), NOT by
+        // sourceCallId alone. If the just-drained outcomes' owning
+        // assistant message still has any pending entries in the bus,
+        // stash and wait for the last decision to trigger the drain.
+        //
+        // Cross-turn pending entries the user chose to abandon in an
+        // earlier drain do NOT gate a fresh drain — ADR: 只看本轮.
+        if (hasPendingInSameAssistantTurnAs(outcomes)) {
             __pendingDrainStash.push(...outcomes);
             return;
         }
