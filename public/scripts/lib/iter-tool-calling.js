@@ -183,6 +183,15 @@ export async function requestToolCallsWithRetry(context, settings, {
     onControlCall = null,
     onUsage = null,
     isControlCall = null,
+    // Fires once per attempt on the FIRST upstream stream chunk (text or
+    // reasoning). Streaming path only — a non-streaming preset never
+    // produces incremental chunks so the callback stays silent. Barrier
+    // consumers (spec parallel, agenda round) wire this to their
+    // cache-warmup slot's signalFirstChunk so followers can proceed the
+    // moment the lead's upstream request commits — see
+    // extensions/orchestrator/dispatch-barrier.js. Callback errors are
+    // swallowed with a console.warn, matching the other observer hooks.
+    onFirstChunk = null,
 } = {}) {
     if (!Array.isArray(tools) || tools.length === 0) {
         throw new Error('Tools are required.');
@@ -230,7 +239,47 @@ export async function requestToolCallsWithRetry(context, settings, {
                 substituteMacros: false,
                 abortSignal: attemptSignal,
             };
-            const result = await context.generateTask(generateTaskOpts);
+            // Streaming path (when the caller's preset has stream_openai
+            // enabled AND the context exposes generateTaskStream): drain
+            // chunks so we can fire onFirstChunk on the first upstream
+            // delta. iter-studio popups don't actually consume the chunks
+            // for rendering — they only need the terminal result — but
+            // the barrier consumers (spec/agenda) DO need first-chunk
+            // timing, and taking the stream path uniformly for both
+            // keeps the wire behavior consistent (see director-tools.js
+            // runOneRound for the same pattern on the main-agent path).
+            const streamEnabled = typeof context.isStreamingPresetEnabled === 'function'
+                && typeof context.generateTaskStream === 'function'
+                && context.isStreamingPresetEnabled(generateTaskOpts.llmPresetName || '');
+            let result;
+            if (streamEnabled) {
+                const { stream, result: resultPromise } = context.generateTaskStream(generateTaskOpts);
+                let firstChunkFired = false;
+                for await (const chunk of stream) {
+                    // Any chunk (text or reasoning) means upstream has
+                    // committed to processing — fire the barrier signal
+                    // exactly once per attempt. The check-and-set is
+                    // safe under JS's single-threaded consumer because
+                    // for-await serializes chunk delivery.
+                    if (!firstChunkFired && chunk && typeof chunk === 'object' && typeof chunk.delta === 'string') {
+                        firstChunkFired = true;
+                        if (typeof onFirstChunk === 'function') {
+                            try {
+                                onFirstChunk();
+                            } catch (cbErr) {
+                                console.warn('[iter-tool-calling] onFirstChunk threw', cbErr);
+                            }
+                        }
+                    }
+                    // We intentionally do NOT forward chunks anywhere —
+                    // iter-studio consumers work off the terminal result,
+                    // and the stream is just a plumbing detail for the
+                    // first-chunk signal. Draining prevents back-pressure.
+                }
+                result = await resultPromise;
+            } else {
+                result = await context.generateTask(generateTaskOpts);
+            }
             throwIfAborted(abortSignal, 'Orchestration aborted.');
             const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
             const normalizedCalls = rawCalls.map(call => ({

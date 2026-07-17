@@ -44,6 +44,7 @@ import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
 import { computeDepthsFromEnd, regexChatMessageForAgent } from './regex-chat.js';
+import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import {
     AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE,
     ORCH_NODE_TYPE_REVIEW,
@@ -764,8 +765,7 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             ].filter(Boolean).join('\n\n');
 
             const systemText = String(preset.systemPrompt || '').trim();
-            const systemWithSkills = systemText && nodeSystemSuffix
-                ? systemText + '\n\n' + nodeSystemSuffix
+            const systemWithSkills = systemText && nodeSystemSuffix                ? systemText + '\n\n' + nodeSystemSuffix
                 : (systemText || nodeSystemSuffix);
             const taskMessages = [
                 ...(systemWithSkills ? [{ role: 'system', content: systemWithSkills }] : []),
@@ -784,6 +784,16 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
                 abortSignal,
                 includeAssistantText: true,
                 allowNoToolCalls: false,
+                // Fire the cache-warmup barrier signal only on round 1
+                // — subsequent rounds of this same worker node don't
+                // race sibling worker nodes for the same cache slot
+                // (siblings warmed it on their own round 1 or moved
+                // past it). See dispatch-barrier.js and the
+                // Promise.all(nodes.map(...)) parallel-stage fan-out
+                // in runStage for the caller side.
+                onFirstChunk: round === 1 && typeof options?.onFirstChunk === 'function'
+                    ? options.onFirstChunk
+                    : null,
                 onUsage: options?.runtime?.runId
                     ? (usage) => {
                         try { addTokenUsage({ runId: options.runtime.runId, usage }); } catch (_) { /* store may have been cleared */ }
@@ -1285,6 +1295,17 @@ export async function executeStage(context, payload, messages, profile, runtime,
     try {
         if (effectiveMode === 'parallel' && isFullStage) {
             const stageWorkerOutputs = mergeNodeOutputMaps(seedStageWorkerOutputs);
+            // Cache-warmup barrier scoped to this parallel stage — same
+            // rationale as director sub-agent fan-out (see
+            // dispatch-barrier.js): nodes that share the same resolved
+            // connection profile serialize their upstream first-chunk
+            // moment so the second/third sibling sees a warmed prompt
+            // cache instead of racing a cold cache-write. Scope is
+            // per-stage (not per-run) because different stages are
+            // sequential and cache-warmth naturally carries across from
+            // the previous stage's write; barrier only helps within
+            // the concurrent Promise.all fan-out here.
+            const stageBarrier = createFirstChunkBarrier();
             const outputs = await Promise.all(nodes
                 .map((nodeSpec, nodeIndex) => ({ nodeSpec, nodeIndex }))
                 .filter(({ nodeSpec }) => shouldRunWorkerNode(nodeSpec.id) || !stageWorkerOutputs.has(nodeSpec.id))
@@ -1295,8 +1316,28 @@ export async function executeStage(context, payload, messages, profile, runtime,
                     const sectionId = panelRunId
                         ? ensureSection({ runId: panelRunId, roundId: panelRoundId, section: { id: `node-${nodeSpec.id}`, kind: 'text', title: i18n('Text') } })
                         : null;
+                    // Resolve this node's connection profile as barrier
+                    // grouping key. Falsy → barrier opt-out (see
+                    // dispatch-barrier.js). We also skip barrier when
+                    // the preset isn't streaming, because a
+                    // non-streaming lead can't fire an early
+                    // first-chunk signal — followers would only unblock
+                    // when the lead's whole response finishes, which
+                    // is worse than the pre-barrier baseline.
+                    const nodePreset = profile.presets[nodeSpec.preset] || {};
+                    const resolvedLlmPresetName = resolveOrchestrationAgentPromptPresetName(extension_settings[MODULE_NAME], nodePreset)?.name || '';
+                    const resolvedApiPresetName = resolveOrchestrationAgentApiPresetName(extension_settings[MODULE_NAME], nodePreset)?.name || '';
+                    const streamEnabledForBarrier = typeof context?.isStreamingPresetEnabled === 'function'
+                        && context.isStreamingPresetEnabled(resolvedLlmPresetName);
+                    const barrierKey = streamEnabledForBarrier ? resolvedApiPresetName : '';
+                    const barrierSlot = stageBarrier.acquire(barrierKey);
                     try {
-                        const result = await runWorkerNode(context, payload, nodeSpec, profile.presets[nodeSpec.preset] || {}, messages, previousNodeOutputs, abortSignal, {
+                        if (barrierSlot.role === 'follower') {
+                            // wait cannot reject by contract
+                            try { await barrierSlot.wait; } catch { /* unreachable */ }
+                            throwIfAborted(abortSignal, 'Orchestration aborted.');
+                        }
+                        const result = await runWorkerNode(context, payload, nodeSpec, nodePreset, messages, previousNodeOutputs, abortSignal, {
                             isFinalStage,
                             rerunReason: resolveRerunReasonForNode(nodeSpec.id),
                             stageIndex,
@@ -1304,6 +1345,7 @@ export async function executeStage(context, payload, messages, profile, runtime,
                             nodeIndex,
                             runtime,
                             defaultTools: runtime?.specDefaultTools || null,
+                            onFirstChunk: barrierSlot.role === 'lead' ? barrierSlot.signalFirstChunk : null,
                         });
                         if (panelRunId && sectionId) {
                             try {
@@ -1319,6 +1361,12 @@ export async function executeStage(context, payload, messages, profile, runtime,
                             } catch (_) { /* run may have been cleared */ }
                         }
                         throw err;
+                    } finally {
+                        // Fail-open release: even if runWorkerNode threw
+                        // or aborted before firing signalFirstChunk,
+                        // followers must not hang. release() resolves
+                        // any still-waiting followers by contract.
+                        try { barrierSlot.release(); } catch { /* barrier release must never throw */ }
                     }
                 }));
             for (const [nodeId, output] of outputs) {

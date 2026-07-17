@@ -46,6 +46,7 @@ import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
 import { computeDepthsFromEnd, regexChatMessageForAgent } from './regex-chat.js';
+import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import {
     AGENDA_PLANNER_TOOL,
     AGENDA_RESULT_TOOL,
@@ -682,6 +683,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     customToolRegistry = null,
     panelRunId = null,
     activeOrchPresetName = '',
+    onFirstChunk = null,
 }, abortSignal = null) {
     const settings = extension_settings[MODULE_NAME];
     const planner = createAgendaPlannerDraft(profile?.planner);
@@ -889,6 +891,15 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
             abortSignal,
             includeAssistantText: true,
             allowNoToolCalls: false,
+            // Fire the cache-warmup barrier signal only on round 1 —
+            // subsequent rounds of this same agenda-agent dispatch
+            // don't race sibling dispatches (siblings warmed the
+            // cache on their own round 1 or moved past it). See
+            // dispatch-barrier.js and the Promise.all(dispatches.map)
+            // fan-out in the agenda main loop for the caller side.
+            onFirstChunk: round === 1 && typeof onFirstChunk === 'function'
+                ? onFirstChunk
+                : null,
             onUsage: panelRunId
                 ? (usage) => {
                     try { addTokenUsage({ runId: panelRunId, usage }); } catch (_) { /* store may have been cleared */ }
@@ -1104,6 +1115,14 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                 finalizeReason = finalizeReasonText || 'Planner produced no further dispatches.';
                 break;
             }
+            // Cache-warmup barrier scoped to this planner round's
+            // Promise.all fan-out. Same rationale as director sub-
+            // agent fan-out and spec parallel stage (see
+            // dispatch-barrier.js): dispatches on the same resolved
+            // connection profile serialize their upstream first-chunk
+            // moment so followers hit warm cache instead of racing a
+            // cold cache-write.
+            const roundBarrier = createFirstChunkBarrier();
             const newRuns = await Promise.all(dispatches.map(async (dispatch, dispatchIndex) => {
                 const attempt = beginRuntimeNodeAttempt(trace, {
                     stageIndex: round - 1,
@@ -1117,8 +1136,31 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                 });
                 const workerRoundId = `node-${dispatch.agent}-${dispatch.todoId}-${round}`;
                 appendRound({ runId, round: { id: workerRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', `${dispatch.agent}:${dispatch.todoId}`, round) } });
+                // Cache-warmup barrier grouping: resolve this dispatch's
+                // connection profile so sibling dispatches on the same
+                // profile can share cache-warmth. Falsy key or
+                // non-streaming preset → barrier opt-out (see
+                // dispatch-barrier.js). Same rationale as director sub-
+                // agent fan-out and spec parallel stage.
+                const dispatchPreset = profile?.agents?.[dispatch.agent] || {};
+                const resolvedLlmPresetName = resolveOrchestrationAgentPromptPresetName(settings, dispatchPreset)?.name || '';
+                const resolvedApiPresetName = resolveOrchestrationAgentApiPresetName(settings, dispatchPreset)?.name || '';
+                const streamEnabledForBarrier = typeof context?.isStreamingPresetEnabled === 'function'
+                    && context.isStreamingPresetEnabled(resolvedLlmPresetName);
+                const barrierKey = streamEnabledForBarrier ? resolvedApiPresetName : '';
+                const barrierSlot = roundBarrier.acquire(barrierKey);
                 try {
-                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, { kind: 'agent', customToolRegistry, panelRunId: runId, activeOrchPresetName }, abortSignal);
+                    if (barrierSlot.role === 'follower') {
+                        try { await barrierSlot.wait; } catch { /* wait cannot reject */ }
+                        throwIfAborted(abortSignal, 'Orchestration aborted.');
+                    }
+                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, {
+                        kind: 'agent',
+                        customToolRegistry,
+                        panelRunId: runId,
+                        activeOrchPresetName,
+                        onFirstChunk: barrierSlot.role === 'lead' ? barrierSlot.signalFirstChunk : null,
+                    }, abortSignal);
                     finishRuntimeNodeAttempt(trace, attempt, {
                         status: 'completed',
                         output: result.outputText,
@@ -1139,6 +1181,12 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                     });
                     setRoundStatus({ runId, roundId: workerRoundId, status: 'failed' });
                     throw error;
+                } finally {
+                    // Fail-open barrier release — even if runAgendaTextAgent
+                    // threw or aborted before firing signalFirstChunk,
+                    // followers must not hang. release() resolves any
+                    // still-waiting followers by contract.
+                    try { barrierSlot.release(); } catch { /* barrier release must never throw */ }
                 }
             }));
             state.runs.push(...newRuns);

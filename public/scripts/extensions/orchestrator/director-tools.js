@@ -49,6 +49,7 @@ import {
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { regexAgentPluginOutput } from './regex-chat.js';
+import { createFirstChunkBarrier } from './dispatch-barrier.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -542,6 +543,19 @@ export function createSubagentDispatcher({
     let nextHandleId = 0;
     let totalRuns = 0;
 
+    // Cache-warmup barrier scoped to this dispatcher's lifetime (one per
+    // director run). When the main agent fan-outs multiple sub-agents in
+    // a single assistant turn (typical pattern: three concurrent
+    // analysis / planning sub-agents), sibling dispatches that share a
+    // resolved connection profile serialize their upstream first-chunk
+    // moment through this barrier: the first arrival becomes lead and
+    // streams normally, followers await the lead's first upstream chunk
+    // before firing their own request so the provider's prompt cache is
+    // warmed and they hit cache-read instead of racing cold cache-writes.
+    // See dispatch-barrier.js for the full contract (fail-open on
+    // release, follower.release is no-op, etc.).
+    const firstChunkBarrier = createFirstChunkBarrier();
+
     const maxTotalSubagentRuns = Number.isFinite(limits?.maxTotalSubagentRuns)
         ? Number(limits.maxTotalSubagentRuns)
         : 16;
@@ -626,7 +640,7 @@ export function createSubagentDispatcher({
         return ctrl;
     }
 
-    async function runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas) {
+    async function runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas, onFirstChunk = null) {
         const callOpts = {
             ...baseOpts,
             taskMessages: subMessages,
@@ -643,6 +657,23 @@ export function createSubagentDispatcher({
             let roundText = '';
             let roundReasoning = '';
             let roundResult;
+            // First-chunk callback: fired ONCE per successful streaming
+            // attempt on the first delta of any type. Non-streaming
+            // path doesn't fire it — barrier callers must skip barrier
+            // acquisition for non-streaming presets (see
+            // dispatch-barrier.js). Retries reset firstChunkFired so a
+            // fresh attempt can re-fire the signal (idempotent on the
+            // barrier side).
+            let firstChunkFired = false;
+            const maybeFireFirstChunk = () => {
+                if (firstChunkFired) return;
+                firstChunkFired = true;
+                if (typeof onFirstChunk === 'function') {
+                    try { onFirstChunk(); } catch (cbErr) {
+                        console.warn('[orchestrator-director] onFirstChunk threw', cbErr);
+                    }
+                }
+            };
             try {
                 const streamChunks = typeof generateTaskStream === 'function'
                     && typeof isStreamingPresetEnabled === 'function'
@@ -663,6 +694,7 @@ export function createSubagentDispatcher({
                         }
                         if (!chunk || typeof chunk !== 'object') continue;
                         if (typeof chunk.delta !== 'string') continue;
+                        maybeFireFirstChunk();
                         if (chunk.type === 'text') {
                             roundText += chunk.delta;
                             panelAppendToSection(roundId, textSectionId, chunk.delta);
@@ -999,6 +1031,22 @@ export function createSubagentDispatcher({
             // stream into the right slot even though the dispatch may be
             // pumping rounds in a loop.
             const panelCtx = { roundId, textSectionId, reasoningSectionId };
+            // Cache-warmup barrier acquisition — skipped when the
+            // preset isn't streaming (there's no first-chunk signal to
+            // wait on, so followers would just block until the whole
+            // response completes — worse than the pre-barrier baseline)
+            // OR when there's no resolved apiPresetName (nothing to
+            // group by; falsy keys are opt-out in the barrier by design).
+            //
+            // Only round 0 gates on the barrier: subsequent rounds are
+            // this sub-agent's own iteration and can't cache-race
+            // siblings — the sibling's cache slot was warmed on round 0
+            // already, or the sibling has moved past it.
+            const streamEnabledForBarrier = typeof isStreamingPresetEnabled === 'function'
+                && typeof generateTaskStream === 'function'
+                && isStreamingPresetEnabled(baseOpts.llmPresetName || '');
+            const barrierKey = streamEnabledForBarrier ? String(apiPresetName || '').trim() : '';
+            const barrierSlot = firstChunkBarrier.acquire(barrierKey);
             try {
                 let finalText = '';
                 let converged = false;
@@ -1006,7 +1054,19 @@ export function createSubagentDispatcher({
                     if (childSignal.aborted) {
                         break;
                     }
-                    const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas);
+                    if (r === 0 && barrierSlot.role === 'follower') {
+                        // Wait for the lead's upstream first chunk before
+                        // firing. `wait` never rejects — a lead that
+                        // errors or aborts still resolves us so we
+                        // proceed cold (identical to the pre-barrier
+                        // baseline, no regression).
+                        try { await barrierSlot.wait; } catch { /* wait cannot reject */ }
+                        if (childSignal.aborted) break;
+                    }
+                    const onFirstChunk = r === 0 && barrierSlot.role === 'lead'
+                        ? barrierSlot.signalFirstChunk
+                        : null;
+                    const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas, onFirstChunk);
                     if (roundToolCalls.length === 0) {
                         // Apply user-authored plugin-scoped AI_OUTPUT
                         // regex to the sub-agent's output before it
@@ -1243,6 +1303,13 @@ export function createSubagentDispatcher({
                 return { handleId, subagentId: displayId, error: msg };
             } finally {
                 childAborts.delete(handleId);
+                // Release the barrier slot so a subsequent batch of
+                // sibling dispatches on the same preset can elect a
+                // fresh lead. Lead release resolves any still-waiting
+                // followers (fail-open) — safe to call after every
+                // exit path (success, converge failure, abort, throw).
+                // Follower release is a no-op by contract.
+                try { barrierSlot.release(); } catch { /* barrier release must never throw */ }
             }
         })();
         inflight.set(handleId, promise);
