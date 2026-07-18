@@ -103,8 +103,11 @@ import {
 } from './system-prompts.js';
 import {
     isReplayableIterationMessage,
-    DRAIN_SUMMARY_KIND,
 } from '../../../iteration-library/iter-message-filter.js';
+import {
+    buildEditToolResultPayload,
+    buildPayloadForOutcome,
+} from '../../orchestrator/iter-studio/edit-tool-result-envelope.js';
 import { buildCpaSkillsBlock } from './skill-prompt.js';
 const skillsApi = Luker.getContext().skills;
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
@@ -747,6 +750,116 @@ export async function openCpaIterationStudio(deps) {
         return false;
     }
 
+    // Build the assistant-message index used by the drain-outcome
+    // tool_result updater. Returns two maps:
+    //   - callIdToMsg: tool_call_id → owning assistant message id
+    //   - msgById:     assistant message id → the message object
+    // Walk state.session.messages once so applyOutcomesToToolResults can
+    // reuse both maps; they stay valid until the next mutation of the
+    // messages array. Mirror of orchestrator/iter-studio/studio.js's
+    // helper of the same name.
+    function buildAssistantMessageIndex() {
+        const callIdToMsg = new Map();
+        const msgById = new Map();
+        const msgs = state.session?.messages || [];
+        for (const m of msgs) {
+            if (!m || m.role !== 'assistant') continue;
+            const mid = String(m.id || '');
+            if (mid) msgById.set(mid, m);
+            const calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+            for (const tc of calls) {
+                const id = String(tc?.id || '');
+                if (id) callIdToMsg.set(id, mid);
+            }
+        }
+        return { callIdToMsg, msgById };
+    }
+
+    // Apply a batch of bus outcomes to persisted assistant-message
+    // tool_results. Two passes:
+    //
+    //   1. Direct 1:1 update by sourceCallId — for every outcome, find
+    //      the tool_result matching outcome.sourceCallId and (if the
+    //      envelope is currently `proposal_pending`) swap it to the
+    //      resolved payload. Gate on `proposal_pending` so partial /
+    //      error envelopes (e.g. CPA's `{status:'partial', ...}` for a
+    //      call whose ops partially conflicted) stay intact.
+    //   2. Cascade for `kind === 'profile-edit'` — CPA collapses N
+    //      chained preset_* edit tool calls per turn into ONE
+    //      profile-edit proposal keyed to the first callId (see the
+    //      `bus.propose` site in processRoundOutcome). The outcome
+    //      fires once with sourceCallId=firstCallId; the N-1 sibling
+    //      edit tool_results need the same resolved status so the
+    //      LLM's next round sees a fully-resolved batch.
+    //
+    // Cascade is gated on `content._proposal_kind === 'profile-edit'`
+    // — set at emission on ONLY edit-tool pending envelopes — so
+    // skill-author and preset-clone pending envelopes (which live in
+    // the same assistant message when the LLM mixes edit + skill/clone
+    // calls in one turn) are NEVER clobbered by a profile-edit
+    // outcome. Their own outcomes flow through the direct 1:1 pass.
+    // Read tool_results (status:'ok' with concrete payloads) are
+    // preserved because they don't carry a proposal_pending status.
+    function applyOutcomesToToolResults(outcomes) {
+        if (!Array.isArray(outcomes) || outcomes.length === 0) return;
+        const { callIdToMsg, msgById } = buildAssistantMessageIndex();
+        const profileEditOutcomeByMsg = new Map();
+        for (const outcome of outcomes) {
+            const sourceCallId = String(outcome?.sourceCallId || '');
+            if (!sourceCallId) continue;
+            const mid = callIdToMsg.get(sourceCallId);
+            if (!mid) continue;
+            // Track profile-edit outcomes for cascade BEFORE the direct
+            // 1:1 pass — if firstCallId's envelope is a partial-outcome
+            // (status:'partial', not proposal_pending), the direct pass
+            // skips it, but the batch still needs cascade to fire on
+            // the sibling proper-pending edit envelopes.
+            if (outcome?.kind === 'profile-edit') {
+                profileEditOutcomeByMsg.set(mid, outcome);
+            }
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const idx = results.findIndex((r) => String(r?.tool_call_id || '') === sourceCallId);
+            if (idx < 0) continue;
+            const current = results[idx];
+            const isPending = current?.content
+                && typeof current.content === 'object'
+                && current.content.status === 'proposal_pending';
+            if (!isPending) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            results[idx] = {
+                tool_call_id: sourceCallId,
+                content: payload,
+                status: nextStatus,
+            };
+        }
+        for (const [mid, outcome] of profileEditOutcomeByMsg) {
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i];
+                const content = r?.content;
+                const isPending = content
+                    && typeof content === 'object'
+                    && content.status === 'proposal_pending'
+                    && content._proposal_kind === 'profile-edit';
+                if (!isPending) continue;
+                results[i] = {
+                    tool_call_id: String(r?.tool_call_id || ''),
+                    content: payload,
+                    status: nextStatus,
+                };
+            }
+        }
+    }
+
     async function drainBusOutcomes() {
         if (drainScheduled) return;
         const outcomes = bus.drainOutcomes();
@@ -770,30 +883,19 @@ export async function openCpaIterationStudio(deps) {
         const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
         const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
         if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
-        const fmt = (o) => `  - ${o.kind}${o.target ? ` (${o.target})` : ''}${o.error ? ` — ${o.error}` : ''}`;
-        const total = committed.length + rejected.length + conflicts.length + rolledBack.length;
-        const lines = [`[User reviewed ${total} proposal(s):`];
-        if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
-        if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
-        if (conflicts.length) { lines.push(`Skipped — target had been changed since you captured the diff, so the write was NOT applied (${conflicts.length}). If still needed, re-read the current state and re-issue:`); for (const o of conflicts) lines.push(fmt(o)); }
-        if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        // Update the per-tool_call_id tool_result envelopes in place so
+        // the next round's role:'tool' replay carries the user's
+        // decision. Every edit/skill/clone tool_call that routes through
+        // the bus has a persisted `proposal_pending` tool_result from
+        // emission time (see processRoundOutcome's edit/skill/read
+        // loops) that we swap to committed / rejected / conflict /
+        // rolled_back per the outcome. Replaces the pre-refactor
+        // `[User reviewed N proposal(s): ...]` synthetic user message
+        // push tagged with DRAIN_SUMMARY_KIND — the tool_result
+        // envelopes carry the same information at the protocol layer.
+        applyOutcomesToToolResults(allOutcomes);
         drainScheduled = true;
         try {
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'user',
-                content: lines.join('\n'),
-                at: Date.now(),
-                auto: true,
-                // Drain summaries carry real user-decision signal (which
-                // proposals were committed vs rejected vs conflicted) that
-                // the AI must see on its next round to correct course.
-                // Tag with DRAIN_SUMMARY_KIND so the read-first replay
-                // filter (`isReplayableIterationMessage`) keeps them while
-                // still dropping legacy untagged auto:true fillers.
-                kind: DRAIN_SUMMARY_KIND,
-            });
             state.isBusy = true;
             state.abortController = new AbortController();
             await persistSession();
@@ -1655,9 +1757,12 @@ export async function openCpaIterationStudio(deps) {
         const messages = [{ role: 'system', content: systemPrompt }];
         // Replay filter — drop legacy `auto:true` "AUTO CONTINUE" fillers
         // from pre-refactor sessions while preserving assistant turns and
-        // real user typing. `drainBusOutcomes` tags its outcome-summary
-        // pushes with `kind: DRAIN_SUMMARY_KIND` so this predicate keeps
-        // them (they carry user-decision signal the AI must react to).
+        // real user typing. Legacy drain-summary user messages tagged
+        // `kind: DRAIN_SUMMARY_KIND` still slip through this predicate;
+        // Task 5 will drop them once the DRAIN_SUMMARY_KIND channel is
+        // fully retired. Until then, the LLM may see mild duplication
+        // between the legacy prose and the resolved tool_result envelope
+        // for the same batch — consistent signal, not conflicting.
         // The pure tool-call loop is program-driven — tool call presence
         // is the continue signal, no synthetic user filler between rounds.
         const history = (state.session.messages || []).filter(isReplayableIterationMessage);
@@ -1676,16 +1781,23 @@ export async function openCpaIterationStudio(deps) {
             const content = idx === lastUserIdx && role === 'user'
                 ? buildAugmentedUserPrompt(String(m.content || ''), skillsBlock)
                 : String(m.content || '');
-            // OpenAI-protocol replay: if this assistant turn ran read tools,
-            // surface them as `tool_calls` on the assistant message + one
-            // `role: 'tool'` reply per tool_call_id. Without this, a model
-            // that read in round N has no record of WHAT it read by round
-            // N+1 and re-emits the same read call (or worse, hallucinates).
+            // OpenAI-protocol replay: EVERY persisted tool_call gets a
+            // matching role:'tool' reply. Without this, providers 400 on
+            // a request whose assistant message has tool_calls but no
+            // paired tool results, and (more importantly) the LLM's
+            // protocol view loses the record of what it proposed/read/
+            // edited — which is the bug this refactor fixes. Edit tools
+            // that were routed through the proposal bus have a
+            // `proposal_pending` (or resolved) envelope persisted at
+            // emission time; read tools have their live executor result;
+            // skill tools have their proposed-or-immediate result. Legacy
+            // pre-refactor sessions may have tool_calls with no matching
+            // toolResults entry — synthesize a `committed` payload inline
+            // so the protocol stays valid (the edit is on disk if the
+            // user is resuming, therefore was committed at some point).
             const toolCalls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
             const toolResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
-            const readCallIds = new Set(toolResults.map(r => String(r?.tool_call_id || '')));
-            const readToolCalls = toolCalls.filter(c => readCallIds.has(String(c?.id || '')));
-            if (role === 'assistant' && readToolCalls.length > 0) {
+            if (role === 'assistant' && toolCalls.length > 0) {
                 const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
                 const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
                     ? m.reasoningBlocks
@@ -1699,7 +1811,7 @@ export async function openCpaIterationStudio(deps) {
                     ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
                     ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
                     ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
-                    tool_calls: readToolCalls.map(c => ({
+                    tool_calls: toolCalls.map(c => ({
                         id: String(c.id || ''),
                         type: 'function',
                         function: {
@@ -1708,13 +1820,29 @@ export async function openCpaIterationStudio(deps) {
                         },
                     })),
                 });
+                const resultById = new Map();
                 for (const r of toolResults) {
-                    if (!readCallIds.has(String(r?.tool_call_id || ''))) continue;
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: String(r.tool_call_id || ''),
-                        content: serializeToolResultContent(r?.content),
-                    });
+                    const rid = String(r?.tool_call_id || '');
+                    if (rid) resultById.set(rid, r);
+                }
+                for (const c of toolCalls) {
+                    const cid = String(c?.id || '');
+                    if (!cid) continue;
+                    const r = resultById.get(cid);
+                    if (r) {
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: cid,
+                            content: serializeToolResultContent(r?.content),
+                        });
+                    } else {
+                        // Legacy fill: assume committed. See comment above.
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: cid,
+                            content: JSON.stringify(buildEditToolResultPayload('committed')),
+                        });
+                    }
                 }
             } else {
                 messages.push({ role, content });
@@ -1935,12 +2063,18 @@ export async function openCpaIterationStudio(deps) {
                             sourceCallId: callId,
                             meta: { op, ...(out.pendingCloneEdit || {}) },
                         });
-                        // Annotate the AI's tool result with the pending_id
-                        // so a future tool call could reference it.
-                        const base = (resultPayload && typeof resultPayload === 'object' && !Array.isArray(resultPayload))
-                            ? resultPayload
-                            : { value: resultPayload };
-                        resultPayload = { ...base, pending_id: pendingId };
+                        // Annotate the AI's tool result with a canonical
+                        // `proposal_pending` envelope so the drain-time
+                        // in-place update (applyOutcomesToToolResults) can
+                        // find and swap it once the user acts on the
+                        // clone card. The pending_id is preserved on the
+                        // envelope so a future tool call could reference
+                        // it explicitly while the review is in flight.
+                        resultPayload = {
+                            ...buildEditToolResultPayload('pending'),
+                            pending_id: pendingId,
+                        };
+                        statusLabel = 'pending';
                     }
                 } else {
                     // Failures may also carry a tagged-text envelope (e.g. the
@@ -2028,23 +2162,25 @@ export async function openCpaIterationStudio(deps) {
                                 extras: pendingSkillEdit.extras || null,
                             },
                         });
-                        // Slim ack to the LLM: keep the dispatcher's own
-                        // result fields (proposed:true / kind / skill /
-                        // scope / path / tool / message) so the
-                        // proposal-mode contract stays intact, and add the
-                        // pending_id so a future tool call could reference
-                        // it explicitly. The big before/after blobs stay
-                        // on the bus's entry meta only — never sent back
-                        // through tool_results to avoid bloating prompt
-                        // budget round-over-round.
-                        const baseResult = (out.result && typeof out.result === 'object' && !Array.isArray(out.result))
-                            ? out.result
-                            : { value: out.result };
+                        // Emit a canonical `proposal_pending` envelope so
+                        // the drain-time in-place update
+                        // (applyOutcomesToToolResults) can find and swap
+                        // it once the user acts on the skill-author card.
+                        // The pending_id is preserved so a future tool
+                        // call could reference it explicitly while the
+                        // review is in flight. The big before/after
+                        // blobs (and the dispatcher's original result
+                        // fields) stay on the bus's entry meta only —
+                        // never sent back through tool_results to avoid
+                        // bloating prompt budget round-over-round; the
+                        // assistant's persisted toolCalls[].args carries
+                        // enough context for the LLM to remember what it
+                        // proposed.
                         resultPayload = {
-                            ...baseResult,
-                            proposed: true,
+                            ...buildEditToolResultPayload('pending'),
                             pending_id: pendingId,
                         };
+                        statusLabel = 'pending';
                     } else {
                         resultPayload = out.result;
                     }
@@ -2170,11 +2306,32 @@ export async function openCpaIterationStudio(deps) {
                             status: 'fail',
                         });
                     }
-                    // Don't push a clean-success toolResult for queued edits —
-                    // the post-review synthetic user message carries the
-                    // real outcome (applied vs skipped). Adding a "queued"
-                    // reply here would create two pieces of feedback per
-                    // tool call and double the prompt budget.
+                    // Clean success: no conflicts, no already-done. Push
+                    // a canonical `proposal_pending` envelope keyed to
+                    // this call so every tool_call has a matching
+                    // role:'tool' message in the LLM's protocol history.
+                    // drainBusOutcomes' applyOutcomesToToolResults will
+                    // swap this envelope in place to committed /
+                    // rejected / conflict / rolled_back when the user
+                    // acts on the profile-edit proposal. The
+                    // `_proposal_kind: 'profile-edit'` marker gates
+                    // cascade so a same-message skill-author or
+                    // preset-clone pending envelope is never clobbered.
+                    // Partial-outcome envelopes above have status:
+                    // 'partial' (not 'proposal_pending') and stay as-is
+                    // through drain — the per-call conflicts/already-
+                    // done detail is orthogonal to the batch-level
+                    // user decision.
+                    if (chainConflicts.length === 0 && chainAlreadyDone.length === 0) {
+                        editToolResults.push({
+                            tool_call_id: callId,
+                            content: {
+                                ...buildEditToolResultPayload('pending'),
+                                _proposal_kind: 'profile-edit',
+                            },
+                            status: 'pending',
+                        });
+                    }
                 } else {
                     // No edits emitted. The most common cause for prompt-
                     // aware tools is "sandbox == live" — the desired state
