@@ -70,7 +70,9 @@ export const LOOP_ITERATION_CONTRACT_LINES = Object.freeze([
     '2. Fix at the ROOT level. Edit the loop system_prompt directive, enable the missing tool namespace, or adjust budget limits so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
     '3. Simulate again after the fix to verify the root cause was addressed.',
     'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
-    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Multi-round iteration control: the popup runs another round whenever the previous round emitted ANY tool call (read or edit); tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Reading live loop-profile state: call `luker_orch_read_loop_fields({paths: [...]})` before any anchor-based patch (`luker_orch_patch_loop_system_prompt`) to see the exact current text. Common paths: `system_prompt`, `max_rounds`, `wall_clock_budget_ms`, `tools.<ns>.<verb>`. Values > 5KB return `{__truncated__: true, length, preview, hint}` — narrow to a subfield.',
+    '- Anchor patch failures: a `not_found` reply carries `match_diagnosis` with kind ∈ {whitespace_drift, similar_snippet, no_similar, too_long_to_diagnose}. Whitespace drift = your oldString has different indentation / trailing space; re-read the target field for exact text via `luker_orch_read_loop_fields`. `already matches` means the call was a no-op — not a failure; don\'t re-issue.',
     '- Keep output practical and concise for real RP usage.',
 ]);
 

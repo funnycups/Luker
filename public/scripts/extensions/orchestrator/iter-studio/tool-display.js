@@ -213,6 +213,35 @@ export const ORCH_TOOL_DISPLAY = {
             return input ? input.slice(0, 60) : '';
         },
     },
+    // Per-mode `luker_orch_read_<mode>_fields` — read exact live
+    // working-profile values by lodash paths. Registered under each of
+    // the four mode names since the popup shows the concrete tool
+    // string, not a family prefix. Summarize surfaces the joined paths
+    // so the chip preview shows what the AI is inspecting.
+    luker_orch_read_director_fields: {
+        icon: '🔎',
+        label: 'Read director fields',
+        type: 'read',
+        summarize: (a) => Array.isArray(a?.paths) ? a.paths.join(', ') : '',
+    },
+    luker_orch_read_loop_fields: {
+        icon: '🔎',
+        label: 'Read loop fields',
+        type: 'read',
+        summarize: (a) => Array.isArray(a?.paths) ? a.paths.join(', ') : '',
+    },
+    luker_orch_read_agenda_fields: {
+        icon: '🔎',
+        label: 'Read agenda fields',
+        type: 'read',
+        summarize: (a) => Array.isArray(a?.paths) ? a.paths.join(', ') : '',
+    },
+    luker_orch_read_spec_fields: {
+        icon: '🔎',
+        label: 'Read spec fields',
+        type: 'read',
+        summarize: (a) => Array.isArray(a?.paths) ? a.paths.join(', ') : '',
+    },
 
     // ── Control tools (character scope) ───────────────────────────
     luker_orch_reset_live_to_blank: {

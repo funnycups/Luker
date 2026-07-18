@@ -215,7 +215,7 @@ export function buildEditCallReply({ outcome, callId }) {
             content: {
                 ok: false,
                 reason: 'VALIDATION_TARGET',
-                hint: 'Target state already matches the requested value. Re-read live profile before retrying — do not re-issue the same call.',
+                hint: 'Target already matches — this call was a no-op, not a failure. If you intended a change, re-read via luker_orch_read_<mode>_fields([...]) first; if you only wanted to confirm the current state, move on.',
             },
             status: 'fail',
         },

@@ -68,8 +68,6 @@
  *   - sanitizeLoopProfile, sanitizeAgendaWorkingProfile, sanitizeDirectorProfile
  *   - buildAiIterationToolSet(session)
  *   - buildAiIterationSystemPrompt(settings, session)
- *   - buildAiIterationUserPrompt(settings, session, userText, opts)
- *   - buildAiIterationAutoContinuePrompt(executionResult)
  *   - executeAiIterationToolCalls(ctx, session, calls, signal)
  *   - renderAiIterationWorkingProfile(session, opts)
  *   - resolveOrchestrationRuntimeWorldInfo(ctx, settings, opts)
@@ -244,6 +242,22 @@ function isSimulateTool(name) {
     return String(name || '') === SIMULATE_TOOL_NAME;
 }
 
+// Per-mode `luker_orch_read_<mode>_fields` tools. Read the live working
+// profile by lodash paths so the iterating AI can verify anchor
+// context before issuing anchor-based patches. Purely inline-executed
+// (no sandbox / no proposal bus): the executor pipes them straight
+// through `dispatchReadFields` (main.js) → the shared
+// `readFieldsByPaths` helper.
+const PROFILE_READ_TOOLS = new Set([
+    'luker_orch_read_director_fields',
+    'luker_orch_read_loop_fields',
+    'luker_orch_read_agenda_fields',
+    'luker_orch_read_spec_fields',
+]);
+function isProfileReadTool(name) {
+    return PROFILE_READ_TOOLS.has(String(name || ''));
+}
+
 // "Inline-executed" means the popup dispatches the call synchronously and
 // persists the tool_result on the assistant message (so the next round's
 // taskMessages replay carries it back to the model). Lorebook reads,
@@ -259,13 +273,16 @@ function isSimulateTool(name) {
 // `pendingCustomToolEdit` blobs) also dispatch inline so writes can
 // stage proposals on the bus and reads return verbatim without ever
 // hitting the sandbox-diff path.
+// Profile-read tools (`luker_orch_read_<mode>_fields`) also dispatch
+// inline — pure reads returning the live-profile lookup result.
 function isInlineExecutedTool(name) {
     return isLorebookReadTool(name)
         || isLorebookWriteTool(name)
         || isSimulateTool(name)
         || isSkillIterStudioTool(name)
         || isCustomToolIterStudioTool(name)
-        || isCharacterPresetReadTool(name);
+        || isCharacterPresetReadTool(name)
+        || isProfileReadTool(name);
 }
 
 /**
@@ -1009,8 +1026,6 @@ export async function openOrchestratorIterationStudio(deps) {
         sanitizeDirectorProfile,
         buildAiIterationToolSet,
         buildAiIterationSystemPrompt,
-        buildAiIterationUserPrompt,
-        buildAiIterationAutoContinuePrompt,
         executeAiIterationToolCalls,
         resolveOrchestrationRuntimeWorldInfo,
         applyAiIterationSessionToGlobal,
@@ -1487,7 +1502,7 @@ export async function openOrchestratorIterationStudio(deps) {
                     await persistSession();
                     await render();
                     if (state.abortController?.signal?.aborted) break;
-                    turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                    turn = await runIterationTurn();
                 }
             } catch (err) {
                 if (!isAbortError(err, state.abortController?.signal)) {
@@ -2279,34 +2294,25 @@ export async function openOrchestratorIterationStudio(deps) {
 
     /**
      * Build the conversation history sent to the runner. Replays prior
-     * user/assistant turns so the model has context. The orchestrator's
-     * `buildAiIterationUserPrompt` is used to format the latest user
-     * turn (mirrors what the per-mode adapter used to do).
+     * user/assistant turns so the model has context. Under the read-first
+     * refactor the last-user message is passed VERBATIM (no per-mode
+     * `buildAiIterationUserPrompt` wrapper injecting `working_profile` /
+     * `latest_simulation` / etc.) — the iterating AI reads live state
+     * on demand via `luker_orch_read_<mode>_fields`.
+     *
+     * `lastUserText` and `lastUserOpts` are kept in the signature for
+     * call-site compatibility but no longer consulted.
      */
-    function buildTaskMessages(systemPrompt, lastUserText, lastUserOpts) {
+    // eslint-disable-next-line no-unused-vars
+    function buildTaskMessages(systemPrompt, _lastUserText, _lastUserOpts) {
         const messages = [{ role: 'system', content: systemPrompt }];
         const history = (state.session.messages || []).filter(m => {
             const role = String(m?.role || '').toLowerCase();
             return role === 'user' || role === 'assistant';
         });
-        let lastUserIdx = -1;
-        for (let i = history.length - 1; i >= 0; i--) {
-            if (String(history[i].role).toLowerCase() === 'user') {
-                lastUserIdx = i;
-                break;
-            }
-        }
-        history.forEach((m, idx) => {
+        history.forEach((m) => {
             const role = String(m.role).toLowerCase();
-            const isLastUser = idx === lastUserIdx && role === 'user';
-            const content = isLastUser
-                ? buildAiIterationUserPrompt(
-                    settings,
-                    buildHelperSession(state.live),
-                    String(lastUserText ?? m.content ?? ''),
-                    lastUserOpts || {},
-                )
-                : String(m.content || '');
+            const content = String(m.content || '');
 
             // Replay assistant message's tool calls that produced a
             // persisted tool result — read tools (lorebook + simulate)
@@ -2390,21 +2396,18 @@ export async function openOrchestratorIterationStudio(deps) {
         // routing lived in main.js). Popup-side CONTROL_TOOL_DEFS is the
         // single source of truth; drop the upstream copies so the provider
         // doesn't reject the request with "Tool names must be unique."
-        // The popup explicitly hides both continue and finalize legacy tools
-        // — the multi-round loop is program-driven by tool-call presence,
+        // The popup explicitly hides continue / finalize legacy tools —
+        // the multi-round loop is program-driven by tool-call presence,
         // so neither AI-driven control tool participates in the catalog.
+        // Main.js's mode-specific tool builders no longer emit them, so
+        // filtering only needs to drop the popup-side control tools.
         const controlNames = new Set(
             CONTROL_TOOL_DEFS.map((t) => t?.function?.name).filter(Boolean),
         );
-        const droppedNames = new Set([
-            'luker_orch_continue_iteration',
-            'luker_orch_finalize_iteration',
-        ]);
         const editToolsDeduped = editTools.filter((t) => {
             const name = t?.function?.name;
             if (!name) return true;
             if (controlNames.has(name)) return false;
-            if (droppedNames.has(name)) return false;
             return true;
         });
         // Lorebook read + write tools work in BOTH scopes:
@@ -2448,7 +2451,7 @@ export async function openOrchestratorIterationStudio(deps) {
         return [...editToolsDeduped, ...lorebookReadTools, ...lorebookWriteTools, ...characterPresetReadTools, ...controlTools, ...SKILL_ITER_STUDIO_TOOL_DEFS];
     }
 
-    async function runIterationTurn({ autoContinueFromResult = null } = {}) {
+    async function runIterationTurn() {
         // Reuse the caller-owned AbortController when present so a Stop
         // click during handleSendMessage / continueAfterReviewDecision's
         // pre-await (persistSession + render) is honored. Fall back to a
@@ -2487,28 +2490,13 @@ export async function openOrchestratorIterationStudio(deps) {
             { defaultScope: skillDefaultScope || null },
         );
 
-        // For auto-continue turns, the user-facing "latest user text" is
-        // replaced with the synthesized auto-continue prompt; the rest of
-        // the history is replayed verbatim.
-        let lastUserText;
-        let lastUserOpts = {};
-        if (autoContinueFromResult) {
-            lastUserText = buildAiIterationAutoContinuePrompt(autoContinueFromResult);
-            lastUserOpts = { auto: true };
-            // Push a synthetic user message into the visible history so the
-            // model has context AND the user can see the auto-continue turn.
-            // Marked `auto:true` so Regenerate skips them when walking back
-            // to the human user turn.
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'user',
-                content: lastUserText,
-                at: Date.now(),
-                auto: true,
-            });
-        }
+        // Read-first refactor: continuation turns replay the existing
+        // history verbatim (no AUTO CONTINUE user filler / no injected
+        // working_profile block). The outer loop keeps running as long
+        // as the previous turn emitted any tool call — that's the sole
+        // continuation signal now, program-driven.
 
-        const taskMessages = buildTaskMessages(systemPrompt, lastUserText, lastUserOpts);
+        const taskMessages = buildTaskMessages(systemPrompt);
 
         const tools = buildToolCatalog();
         // Iter studio is the orchestration *designer*, not a runtime RP
@@ -3223,26 +3211,10 @@ export async function openOrchestratorIterationStudio(deps) {
         // forcing a tab switch.
         bumpChatBadge();
 
-        // Build a synthetic execution result the auto-continue prompt
-        // builder can consume. We pass a minimal shape — the orchestrator's
-        // builder tolerates missing fields. `finalized` is true only when
-        // the model emitted no tool calls at all (pure-prose response =
-        // loop exit). Pure-read rounds with no edits still mark
-        // `hadAnyToolCall` true via the onToolCall callback, so they
-        // naturally trigger another round without a special branch.
-        const syntheticExecutionResult = {
-            actions: [],
-            simulations: [],
-            toolResults: [],
-            finalized: !hadAnyToolCall,
-            changed: combinedEdits.length > 0,
-            hasPending: combinedEdits.length > 0,
-        };
-
-        return {
-            hadAnyToolCall,
-            executionResult: syntheticExecutionResult,
-        };
+        // The read-first loop's sole continuation signal is
+        // `hadAnyToolCall`. When the LLM emits any tool call this round,
+        // the outer loop reruns; a pure-text response ends the iteration.
+        return { hadAnyToolCall };
     }
 
 
@@ -3465,7 +3437,7 @@ export async function openOrchestratorIterationStudio(deps) {
                 await persistSession();
                 await render();   // progressive: prior round visible before next
                 if (state.abortController?.signal?.aborted) break;
-                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                turn = await runIterationTurn();
             }
         } catch (err) {
             // Stop button → don't push an error bubble; user knows they cancelled.

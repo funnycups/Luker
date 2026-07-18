@@ -52,7 +52,6 @@ import {
     defaultLoopProfile,
     defaultSettings,
     getCriticPromptReminderLines,
-    getCriticReviewNodeContractShape,
     getDefaultRequestSystemPrompt,
     getLegacyDefaultRequestSystemPromptForMigration,
     LOREBOOK_READ_GUIDANCE_LINES,
@@ -74,9 +73,6 @@ import {
     normalizeTemplateForAiPrompt,
     normalizeTemplateForRuntime,
 } from './template-vars.js';
-import {
-    toReadableYamlText,
-} from './output-formatting.js';
 import {
     cloneDefault,
     normalizeNodeSpec,
@@ -142,8 +138,6 @@ import {
     storeCompletedOrchestrationSnapshot,
 } from './snapshot-cache.js';
 import {
-    buildAgentApiRoutingPromptData,
-    buildAgentPromptPresetRoutingPromptData,
     getPresetApiPresetName,
     getPresetPromptPresetName,
     refreshOpenAIPresetSelectors,
@@ -268,7 +262,6 @@ import {
     LOOP_ITERATION_CONTRACT_LINES,
     applyLoopProfilePatchArgs,
 } from './loop-iteration.js';
-import { sanitizeProfileForAiPrompt } from './profile-projection.js';
 import {
     SYSTEM_PROMPT_PATCH_SCHEMA_FIELDS,
     applyStringPatch,
@@ -332,6 +325,8 @@ import {
 } from './editor-persist.js';
 import { collectResolvedSkillsForOrchPreset } from './collect-active-skills.js';
 import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
+import { dispatchReadFields } from './iter-studio/read-fields-dispatcher.js';
+import { diagnoseAnchorMiss } from '../../iteration-library/anchor-diagnostic.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
 import { captureDryRunPayload } from '../../iteration-library/simulation-review/dry-run-capture.js';
@@ -2624,50 +2619,6 @@ function trimAiIterationMessages(session) {
     }
 }
 
-function stringifyIterationSimulationForPrompt(simulation) {
-    if (!simulation || typeof simulation !== 'object') {
-        return '(none)';
-    }
-    if (typeof simulation.toolResultText === 'string' && simulation.toolResultText) {
-        return simulation.toolResultText;
-    }
-    // Legacy fallback for older snapshots stored before this upgrade.
-    try {
-        return JSON.stringify({
-            ok: Boolean(simulation.ok),
-            summary: String(simulation.summary || ''),
-            detail: simulation.detail && typeof simulation.detail === 'object' ? simulation.detail : {},
-        });
-    } catch {
-        return String(simulation.summary || '(simulation)');
-    }
-}
-
-function stringifyIterationSimulationListForPrompt(simulations) {
-    const list = Array.isArray(simulations) ? simulations : [];
-    if (list.length === 0) {
-        return '(none)';
-    }
-    return list.map(item => stringifyIterationSimulationForPrompt(item)).join('\n\n---\n\n');
-}
-
-function buildAiIterationAutoContinuePrompt(executionResult) {
-    const simulationText = stringifyIterationSimulationListForPrompt(executionResult?.simulations);
-    return [
-        'AUTO CONTINUE',
-        'Previous tool execution is complete. Review the result and continue iteration.',
-        '',
-        buildFriendlyIterationExecutionSummary(executionResult),
-        '',
-        '<simulation_results>',
-        simulationText,
-        '</simulation_results>',
-        '',
-        'If all requested work is complete, respond with plain text and emit no tool calls — the loop will exit.',
-        'Otherwise, emit the next focused tool calls.',
-    ].join('\n');
-}
-
 function cloneWorkingProfileFromEditor(editor) {
     ensureEditorIntegrity(editor);
     return {
@@ -2762,9 +2713,7 @@ function renderAgendaIterationWorkingProfile(session, { profileOverride = null, 
     <div class="luker_orch_iter_preset_line"><b>Preset:</b> ${escapeHtml(getPresetPromptPresetName(preset) || i18n('(Current preset)'))}</div>
     <div class="luker_orch_iter_stage_nodes">${escapeHtml(truncateOrchestrationRuntimePreview(preset?.systemPrompt || '', 180) || '(empty)')}</div>
 </div>`).join('');
-    const simulationSummary = session?.lastSimulation
-        ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
-        : '';
+    const simulationSummary = '';
     return `
 <div class="luker_orch_iter_profile_meta">
     <div><b>${escapeHtml(i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile')))}</b></div>
@@ -2843,9 +2792,7 @@ function renderLoopIterationWorkingProfile(session, { profileOverride = null, pr
         enabledTools.push(name);
     }
     enabledTools.push('finalize');
-    const simulationSummary = session?.lastSimulation
-        ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
-        : '';
+    const simulationSummary = '';
     return `
 <div class="luker_orch_iter_profile_meta">
     <div><b>${escapeHtml(i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile')))}</b></div>
@@ -2909,9 +2856,7 @@ function renderDirectorIterationWorkingProfile(session, { profileOverride = null
     const defaultVerbs = collectEnabledVerbs(d.tools);
     const mainAgentHasOverride = d.mainAgent?.tools && typeof d.mainAgent.tools === 'object';
     const mainAgentVerbs = mainAgentHasOverride ? collectEnabledVerbs(d.mainAgent.tools) : defaultVerbs;
-    const simulationSummary = session?.lastSimulation
-        ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
-        : '';
+    const simulationSummary = '';
     const formatVerbsLine = (verbs) => verbs.length ? verbs.join(', ') : '(none)';
     const subAgentCards = (Array.isArray(d.subAgents) ? d.subAgents : []).map((a) => {
         const hasOverride = a.tools && typeof a.tools === 'object';
@@ -2990,9 +2935,7 @@ function renderAiIterationWorkingProfile(session, { profileOverride = null, prev
                 : presetId;
         }).join(', ')
         : '(none)';
-    const simulationSummary = session?.lastSimulation
-        ? `${i18n('Simulation')}: ${String(session.lastSimulation.summary || '')}`
-        : '';
+    const simulationSummary = '';
     return `
 <div class="luker_orch_iter_profile_meta">
     <div><b>${escapeHtml(i18nFormat('Iteration source: ${0}', session?.sourceName || i18n('Global profile')))}</b></div>
@@ -3204,7 +3147,9 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '2. Fix at the ROOT level. Edit the underlying agent role, sub-agent set, dispatch policy, or capsule shape so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
     '3. Simulate again after the fix to verify the root cause was addressed.',
     'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
-    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Multi-round iteration control: the popup runs another round whenever the previous round emitted ANY tool call (read or edit); tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Reading live director-profile state: call `luker_orch_read_director_fields({paths: [...]})` before any anchor-based patch (`luker_orch_patch_director_main_agent_system_prompt`, `luker_orch_patch_director_subagent_system_prompt`) to see the exact current text. Common paths: `mainAgent.systemPrompt`, `subAgents`, `subAgents[N].systemPrompt`, `tools.<ns>.<verb>`. Values > 5KB return `{__truncated__: true, length, preview, hint}` — narrow to a subfield.',
+    '- Anchor patch failures: a `not_found` reply carries `match_diagnosis` with kind ∈ {whitespace_drift, similar_snippet, no_similar, too_long_to_diagnose}. Whitespace drift = your oldString has different indentation / trailing space; re-read the target field for exact text via `luker_orch_read_director_fields`. `already matches` means the call was a no-op — not a failure; don\'t re-issue.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
 
@@ -3257,7 +3202,9 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '2. Fix at the ROOT level. Edit the underlying agent role, planner preset, dispatch policy, finalizer prompt, or capsule shape so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
     '3. Simulate again after the fix to verify the root cause was addressed.',
     'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
-    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Multi-round iteration control: the popup runs another round whenever the previous round emitted ANY tool call (read or edit); tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Reading live agenda-profile state: call `luker_orch_read_agenda_fields({paths: [...]})` before any anchor-based patch (`luker_orch_patch_agenda_planner_system_prompt`, `luker_orch_patch_agenda_agent_system_prompt`) to see the exact current text. Common paths: `planner.systemPrompt`, `agents.<agent_id>.systemPrompt`, `finalAgentId`, `limits.plannerMaxRounds`. Values > 5KB return `{__truncated__: true, length, preview, hint}` — narrow to a subfield.',
+    '- Anchor patch failures: a `not_found` reply carries `match_diagnosis` with kind ∈ {whitespace_drift, similar_snippet, no_similar, too_long_to_diagnose}. Whitespace drift = your oldString has different indentation / trailing space; re-read the target field for exact text via `luker_orch_read_agenda_fields`. `already matches` means the call was a no-op — not a failure; don\'t re-issue.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
 
@@ -3315,7 +3262,9 @@ export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '2. Fix at the ROOT level. Edit the underlying node role, add or sharpen a review node after the responsible worker layer, restructure the stage layering, or adjust the capsule shape so the same class of issue won\'t recur in a different scene. Prefer general directives over hyper-specific ones. NEVER add a literal countermand to the exact annotated phrase ("do not say X", "avoid \'Y\' when …"); that\'s whack-a-mole and signals you skipped diagnosis.',
     '3. Simulate again after the fix to verify the root cause was addressed.',
     'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
-    '- Multi-round iteration control: the popup auto-continues whenever you emit any tool call this round, so tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Multi-round iteration control: the popup runs another round whenever the previous round emitted ANY tool call (read or edit); tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
+    '- Reading live spec-profile state: call `luker_orch_read_spec_fields({paths: [...]})` before any anchor-based patch to see the exact current text. Common paths: `spec.stages`, `spec.stages[N].nodes`, `spec.stages[N].nodes[M].preset`, `presets.<preset_id>.systemPrompt`. Values > 5KB return `{__truncated__: true, length, preview, hint}` — narrow to a subfield.',
+    '- Anchor patch failures: a `not_found` reply carries `match_diagnosis` with kind ∈ {whitespace_drift, similar_snippet, no_similar, too_long_to_diagnose}. Whitespace drift = your oldString has different indentation / trailing space; re-read the target field for exact text via `luker_orch_read_spec_fields`. `already matches` means the call was a no-op — not a failure; don\'t re-issue.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
 
@@ -3355,268 +3304,6 @@ function buildAiIterationSystemPrompt(settings, session = null) {
 // public path mentioned in the plan ("export from main.js") intact.
 export { augmentStudioPromptWithCustomTools };
 
-function buildAiIterationUserPrompt(settings, session, userInputText, {
-    globalProfile = null,
-    sourceScope = '',
-    sourceName = '',
-} = {}) {
-    if (isLoopIterationSession(session)) {
-        const recentConversation = (Array.isArray(session?.messages) ? session.messages : [])
-            .map(item => `${String(item?.role || 'assistant').toUpperCase()}: ${String(item?.content || '')}`)
-            .join('\n\n');
-        const workingProfileValue = sanitizeLoopProfile(session?.workingProfile);
-        const globalProfileValue = sanitizeLoopProfile(globalProfile);
-        const latestSimulationText = stringifyIterationSimulationForPrompt(session?.lastSimulation);
-        const latestSnapshotText = toReadableYamlText(normalizeOrchestrationSnapshot(getActiveSnapshot()) || {}, '{}');
-        return [
-            '# iteration_input',
-            'You are in a multi-turn loop-mode orchestration iteration session.',
-            'Apply focused edits through tools only. Keep edits minimal and high-impact.',
-            '',
-            '## source_scope',
-            String(sourceScope || session?.sourceScope || 'global'),
-            '',
-            '## source_name',
-            String(sourceName || session?.sourceName || ''),
-            '',
-            '## global_profile_baseline',
-            '```yaml',
-            toReadableYamlText(globalProfileValue, '{}'),
-            '```',
-            '',
-            '## working_profile',
-            '```yaml',
-            toReadableYamlText(workingProfileValue, '{}'),
-            '```',
-            '',
-            '## agent_api_routing',
-            '```yaml',
-            toReadableYamlText(buildAgentApiRoutingPromptData(settings), '{}'),
-            '```',
-            '',
-            '## agent_prompt_preset_routing',
-            '```yaml',
-            toReadableYamlText(buildAgentPromptPresetRoutingPromptData(getContext(), settings), '{}'),
-            '```',
-            '',
-            '## conversation_history',
-            '```text',
-            recentConversation || '(empty)',
-            '```',
-            '',
-            '## latest_simulation',
-            '```text',
-            latestSimulationText,
-            '```',
-            '',
-            '## latest_orchestration_snapshot',
-            '```yaml',
-            latestSnapshotText,
-            '```',
-            '',
-            '## user_request',
-            String(userInputText || '').trim(),
-        ].join('\n');
-    }
-    if (isAgendaIterationSession(session)) {
-        const recentConversation = (Array.isArray(session?.messages) ? session.messages : [])
-            .map(item => `${String(item?.role || 'assistant').toUpperCase()}: ${String(item?.content || '')}`)
-            .join('\n\n');
-        const workingProfileValue = sanitizeAgendaWorkingProfile(session?.workingProfile);
-        const globalProfileValue = sanitizeAgendaWorkingProfile(globalProfile);
-        const latestSimulationText = stringifyIterationSimulationForPrompt(session?.lastSimulation);
-        const latestSnapshotText = toReadableYamlText(normalizeOrchestrationSnapshot(getActiveSnapshot()) || {}, '{}');
-        return [
-            '# iteration_input',
-            'You are in a multi-turn agenda orchestration iteration session.',
-            'Apply focused edits through tools only. Keep edits minimal and high-impact.',
-            '',
-            '## source_scope',
-            String(sourceScope || session?.sourceScope || 'global'),
-            '',
-            '## source_name',
-            String(sourceName || session?.sourceName || ''),
-            '',
-            '## global_profile_baseline',
-            '```yaml',
-            toReadableYamlText(globalProfileValue, '{}'),
-            '```',
-            '',
-            '## working_profile',
-            '```yaml',
-            toReadableYamlText(workingProfileValue, '{}'),
-            '```',
-            '',
-            '## agent_api_routing',
-            '```yaml',
-            toReadableYamlText(buildAgentApiRoutingPromptData(settings), '{}'),
-            '```',
-            '',
-            '## agent_prompt_preset_routing',
-            '```yaml',
-            toReadableYamlText(buildAgentPromptPresetRoutingPromptData(getContext(), settings), '{}'),
-            '```',
-            '',
-            '## conversation_history',
-            '```text',
-            recentConversation || '(empty)',
-            '```',
-            '',
-            '## latest_simulation',
-            '```text',
-            latestSimulationText,
-            '```',
-            '',
-            '## latest_orchestration_snapshot',
-            '```yaml',
-            latestSnapshotText,
-            '```',
-            '',
-            '## user_request',
-            String(userInputText || '').trim(),
-        ].join('\n');
-    }
-    if (isDirectorIterationSession(session)) {
-        const recentConversation = (Array.isArray(session?.messages) ? session.messages : [])
-            .map(item => `${String(item?.role || 'assistant').toUpperCase()}: ${String(item?.content || '')}`)
-            .join('\n\n');
-        const workingProfileValue = sanitizeDirectorProfile(session?.workingProfile);
-        const globalProfileValue = sanitizeDirectorProfile(globalProfile);
-        const latestSimulationText = stringifyIterationSimulationForPrompt(session?.lastSimulation);
-        // Director mode does not consume the orchestration capsule — its
-        // main agent runs in GENERATE_TAKEOVER_DISPATCH and writes the
-        // assistant message body directly, so there is no capsule
-        // channel to reference. Deliberately omit `latest_orchestration_snapshot`
-        // here: the capsule store (`getActiveSnapshot`) is mode-agnostic
-        // and would surface a stale loop/spec/agenda capsule from an
-        // earlier run in this same chat, which is meaningless to the
-        // director iterator and pollutes the prompt.
-        return [
-            '# iteration_input',
-            'You are in a multi-turn director-mode orchestration iteration session.',
-            'Apply focused edits through tools only. Keep edits minimal and high-impact.',
-            '',
-            '## source_scope',
-            String(sourceScope || session?.sourceScope || 'global'),
-            '',
-            '## source_name',
-            String(sourceName || session?.sourceName || ''),
-            '',
-            '## global_profile_baseline',
-            '```yaml',
-            toReadableYamlText(globalProfileValue, '{}'),
-            '```',
-            '',
-            '## working_profile',
-            '```yaml',
-            toReadableYamlText(workingProfileValue, '{}'),
-            '```',
-            '',
-            '## agent_api_routing',
-            '```yaml',
-            toReadableYamlText(buildAgentApiRoutingPromptData(settings), '{}'),
-            '```',
-            '',
-            '## agent_prompt_preset_routing',
-            '```yaml',
-            toReadableYamlText(buildAgentPromptPresetRoutingPromptData(getContext(), settings), '{}'),
-            '```',
-            '',
-            '## conversation_history',
-            '```text',
-            recentConversation || '(empty)',
-            '```',
-            '',
-            '## latest_simulation',
-            '```text',
-            latestSimulationText,
-            '```',
-            '',
-            '## user_request',
-            String(userInputText || '').trim(),
-        ].join('\n');
-    }
-    const recentConversation = (Array.isArray(session?.messages) ? session.messages : [])
-        .map(item => `${String(item?.role || 'assistant').toUpperCase()}: ${String(item?.content || '')}`)
-        .join('\n\n');
-    const workingProfileValue = {
-        spec: session?.workingProfile?.spec || { stages: [] },
-        presets: session?.workingProfile?.presets || {},
-    };
-    const globalProfileValue = {
-        spec: globalProfile?.spec || { stages: [] },
-        presets: globalProfile?.presets || {},
-    };
-    const aiVisibleWorkingProfile = sanitizeProfileForAiPrompt(workingProfileValue);
-    const aiVisibleGlobalProfile = sanitizeProfileForAiPrompt(globalProfileValue);
-    const latestSimulationText = stringifyIterationSimulationForPrompt(session?.lastSimulation);
-    const latestSnapshotText = toReadableYamlText(normalizeOrchestrationSnapshot(getActiveSnapshot()) || {}, '{}');
-    return [
-        '# iteration_input',
-        'You are in a multi-turn orchestration iteration session.',
-        'Apply focused edits through tools only. Keep edits minimal and high-impact.',
-        'If source_scope is character, treat global_profile_baseline as canonical reference and keep character edits as targeted overrides.',
-        '',
-        '## source_scope',
-        String(sourceScope || session?.sourceScope || 'global'),
-        '',
-        '## source_name',
-        String(sourceName || session?.sourceName || ''),
-        '',
-        '## global_profile_baseline',
-        '```yaml',
-        toReadableYamlText(aiVisibleGlobalProfile, '{}'),
-        '```',
-        '',
-        '## working_profile',
-        '```yaml',
-        toReadableYamlText(aiVisibleWorkingProfile, '{}'),
-        '```',
-        '',
-        '## agent_api_routing',
-        '```yaml',
-        toReadableYamlText(buildAgentApiRoutingPromptData(settings), '{}'),
-        '```',
-        '',
-        '## agent_prompt_preset_routing',
-        '```yaml',
-        toReadableYamlText(buildAgentPromptPresetRoutingPromptData(getContext(), settings), '{}'),
-        '```',
-        '',
-        '## review_node_contract',
-        '```yaml',
-        toReadableYamlText({
-            type_field: {
-                worker: ORCH_NODE_TYPE_WORKER,
-                review: ORCH_NODE_TYPE_REVIEW,
-            },
-            runtime_behavior: `Treat review nodes as auditing only the directly adjacent previous worker layer. They request rerun only for specific node ids from that adjacent layer when needed, and must emit mandatory \`${ORCH_REVIEW_FEEDBACK_FIELD}\` on both approve and rerun decisions.`,
-            downstream_behavior: `Later stages keep receiving passthrough worker outputs plus approved \`${ORCH_REVIEW_FEEDBACK_FIELD}\`; critic/review nodes do not replace them with summaries.`,
-            topology_rule: 'Prefer dedicated serial review stages immediately after the workers being audited. If multiple layers need audit, add multiple review stages. Do not place review nodes in the final stage or back-to-back with another review stage.',
-            ...getCriticReviewNodeContractShape(),
-        }, '{}'),
-        '```',
-        '',
-        '## conversation_history',
-        '```text',
-        recentConversation || '(empty)',
-        '```',
-        '',
-        '## latest_simulation',
-        '```text',
-        latestSimulationText,
-        '```',
-        '',
-        '## latest_orchestration_snapshot',
-        '```yaml',
-        latestSnapshotText,
-        '```',
-        '',
-        '## user_request',
-        String(userInputText || '').trim(),
-    ].join('\n');
-}
-
 // Iter-studio lorebook-filter tool schemas. `set_*` accepts a multiline
 // regex string (one JS RegExp per non-empty line, any-line match filters);
 // empty string clears the field. `clear_*` takes no args. Shared across
@@ -3637,6 +3324,44 @@ const LOREBOOK_FILTER_CLEAR_SCHEMA = {
     properties: {},
     additionalProperties: false,
 };
+
+/**
+ * Build the per-mode `luker_orch_read_<mode>_fields` tool schema. Same
+ * shape across all four modes — only the name and the mode-specific
+ * example paths in the description change. Returned tool definitions
+ * are spliced into the mode-specific tool catalogs in
+ * `buildAiIterationToolSet` so the iterating AI can read exact live
+ * values before issuing anchor-based patches (avoids stale-mental-model
+ * drift on long-running iter sessions).
+ */
+function buildReadFieldsToolDef(mode, exampleHint) {
+    return {
+        type: 'function',
+        function: {
+            name: `luker_orch_read_${mode}_fields`,
+            description: `Read exact values from the current live ${mode}-mode working profile by lodash-style paths. Read-only; no side effects. Use before anchor-based patches to avoid stale-mental-model drift. Returns {[path]: value|null, missing_paths: []}. Values exceeding 5KB are returned as {__truncated__: true, length, preview, hint} so callers can narrow to subfields. Example paths: ${exampleHint}.`,
+            parameters: {
+                type: 'object',
+                properties: {
+                    paths: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Lodash-style paths into the working profile.',
+                    },
+                },
+                required: ['paths'],
+                additionalProperties: false,
+            },
+        },
+    };
+}
+
+const READ_FIELDS_TOOL_NAMES = new Set([
+    'luker_orch_read_director_fields',
+    'luker_orch_read_loop_fields',
+    'luker_orch_read_agenda_fields',
+    'luker_orch_read_spec_fields',
+]);
 
 /**
  * Shared iter-studio dispatcher for the four `luker_orch_{set,clear}_lorebook_{book,entry}_filter`
@@ -4023,6 +3748,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            buildReadFieldsToolDef('director', '\'mainAgent.systemPrompt\', \'subAgents\', \'subAgents[N].systemPrompt\', \'tools.<ns>.<verb>\''),
             ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
@@ -4077,6 +3803,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            buildReadFieldsToolDef('loop', '\'system_prompt\', \'max_rounds\', \'wall_clock_budget_ms\', \'tools.<ns>.<verb>\''),
             ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
@@ -4256,6 +3983,7 @@ function buildAiIterationToolSet(session = null) {
                     },
                 },
             },
+            buildReadFieldsToolDef('agenda', '\'planner.systemPrompt\', \'agents.<agent_id>.systemPrompt\', \'finalAgentId\', \'limits.plannerMaxRounds\''),
             ...lorebookFilterToolDefs,
             ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
         ];
@@ -4427,6 +4155,7 @@ function buildAiIterationToolSet(session = null) {
                 },
             },
         },
+        buildReadFieldsToolDef('spec', '\'spec.stages\', \'spec.stages[N].nodes\', \'spec.stages[N].nodes[M].preset\', \'presets.<preset_id>.systemPrompt\''),
         ...lorebookFilterToolDefs,
         ...CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
     ];
@@ -4970,24 +4699,6 @@ function applyIndexReorder(list, currentIndex, position) {
     list.splice(targetIndex, 0, item);
 }
 
-function buildFriendlyIterationExecutionSummary(result) {
-    const lines = [];
-    const actionCount = Array.isArray(result?.actions) ? result.actions.length : 0;
-    if (actionCount > 0) {
-        lines.push(`已执行 ${actionCount} 项操作。`);
-    }
-    const simulations = Array.isArray(result?.simulations) ? result.simulations : [];
-    if (simulations.length > 0) {
-        for (const sim of simulations) {
-            lines.push(String(sim?.summary || '模拟已执行。'));
-        }
-    }
-    if (result?.finalizeSummary) {
-        lines.push(`总结：${String(result.finalizeSummary)}`);
-    }
-    return lines.join('\n').trim() || '已执行。';
-}
-
 /**
  * Shared dispatch shim for the orchestrator iter-studio's custom-tool
  * authoring tools (see custom-tool-iter-studio.js). Each per-mode
@@ -5032,14 +4743,45 @@ async function dispatchCustomToolIterStudioCall({ call, profile }) {
     };
 }
 
+/**
+ * Build the extended failure payload for a `applyStringPatch` miss.
+ * Attaches `match_diagnosis` (fuzzy layers over the live text) and
+ * `next_step` (name-drop the per-mode read tool + target path) so the
+ * iterating AI sees WHY its anchor missed and knows exactly which read
+ * call resolves it without a second reasoning round-trip.
+ *
+ * Called from every `applyStringPatch` failure site inside the four
+ * mode dispatchers. `mode` is one of 'director' / 'loop' / 'agenda' /
+ * 'spec'; `targetPath` is a lodash-style hint of the path the AI can
+ * pass to `luker_orch_read_<mode>_fields` to re-read the field it
+ * tried to patch.
+ */
+function buildPatchFailureEnvelope({ mode, targetPath, actionText, currentText, oldString, error, detail }) {
+    if (error === 'not_found') {
+        const diagnosis = diagnoseAnchorMiss(currentText, oldString);
+        return {
+            ok: false,
+            error: 'not_found',
+            detail: detail || 'oldString not present in the current text',
+            currentLength: currentText.length,
+            match_diagnosis: diagnosis,
+            next_step: `Call luker_orch_read_${mode}_fields(['${targetPath}']) to see the current text, then re-issue the patch.`,
+            action: actionText,
+        };
+    }
+    return {
+        ok: false,
+        error,
+        detail,
+        action: actionText,
+    };
+}
+
 async function executeAgendaIterationToolCalls(context, session, toolCalls, abortSignal = null) {
     const actions = [];
     const simulations = [];
     const toolResults = [];
     const pendingCustomToolEdits = [];
-    let finalized = false;
-    let finalizeSummary = '';
-    let continueRequested = false;
     let changed = false;
     session.workingProfile = sanitizeAgendaWorkingProfile(session.workingProfile);
 
@@ -5107,7 +4849,15 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             if (!result.ok) {
                 const actionText = `Agenda planner system-prompt patch failed: ${result.error}.`;
                 actions.push(actionText);
-                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                pushToolResult(buildPatchFailureEnvelope({
+                    mode: 'agenda',
+                    targetPath: 'planner.systemPrompt',
+                    actionText,
+                    currentText: currentPrompt,
+                    oldString: String(args?.oldString || ''),
+                    error: result.error,
+                    detail: result.detail,
+                }));
                 continue;
             }
             const profileChanged = result.nextText !== currentPrompt;
@@ -5187,7 +4937,15 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             if (!result.ok) {
                 const actionText = `Agenda agent "${agentId}" system-prompt patch failed: ${result.error}.`;
                 actions.push(actionText);
-                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                pushToolResult(buildPatchFailureEnvelope({
+                    mode: 'agenda',
+                    targetPath: `agents.${agentId}.systemPrompt`,
+                    actionText,
+                    currentText: currentPrompt,
+                    oldString: String(args?.oldString || ''),
+                    error: result.error,
+                    detail: result.detail,
+                }));
                 continue;
             }
             const profileChanged = result.nextText !== currentPrompt;
@@ -5354,10 +5112,20 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
             if (hadOverride) changed = true;
             continue;
         }
+        if (READ_FIELDS_TOOL_NAMES.has(name)) {
+            try {
+                const result = await dispatchReadFields({ session, args });
+                pushToolResult({ ok: true, ...result });
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped ${name}: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped ${name}: ${detail}` });
+            }
+            continue;
+        }
         if (name === 'luker_orch_simulate') {
             const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
             simulations.push(simulation);
-            session.lastSimulation = simulation;
             const actionText = simulation.ok
                 ? `Simulation finished: ${simulation.summary}`
                 : `Simulation failed: ${simulation.summary}`;
@@ -5366,32 +5134,6 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
                 ok: Boolean(simulation?.ok),
                 action: actionText,
                 simulation,
-            });
-            continue;
-        }
-        if (name === 'luker_orch_continue_iteration') {
-            continueRequested = true;
-            const note = String(args.note || '').trim();
-            const actionText = `Continue requested.${note ? ` ${note}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({
-                ok: true,
-                action: actionText,
-                continueRequested: true,
-                note,
-            });
-            continue;
-        }
-        if (name === 'luker_orch_finalize_iteration') {
-            finalized = true;
-            finalizeSummary = String(args.summary || '').trim();
-            const actionText = `Iteration finalized.${finalizeSummary ? ` ${finalizeSummary}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({
-                ok: true,
-                action: actionText,
-                finalized: true,
-                summary: finalizeSummary,
             });
             continue;
         }
@@ -5409,9 +5151,6 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
         actions,
         simulations,
         toolResults,
-        finalized,
-        finalizeSummary,
-        continueRequested,
         changed,
         pendingCustomToolEdits,
     };
@@ -5422,9 +5161,6 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
     const simulations = [];
     const toolResults = [];
     const pendingCustomToolEdits = [];
-    let finalized = false;
-    let finalizeSummary = '';
-    let continueRequested = false;
     let changed = false;
     session.workingProfile = sanitizeLoopProfile(session.workingProfile);
 
@@ -5501,7 +5237,15 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
             if (!result.ok) {
                 const actionText = `Loop system-prompt patch failed: ${result.error}.`;
                 actions.push(actionText);
-                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                pushToolResult(buildPatchFailureEnvelope({
+                    mode: 'loop',
+                    targetPath: 'system_prompt',
+                    actionText,
+                    currentText: currentPrompt,
+                    oldString: String(args?.oldString || ''),
+                    error: result.error,
+                    detail: result.detail,
+                }));
                 continue;
             }
             const after = applyLoopProfilePatchArgs(before, { system_prompt: result.nextText });
@@ -5515,10 +5259,20 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
             if (profileChanged) changed = true;
             continue;
         }
+        if (READ_FIELDS_TOOL_NAMES.has(name)) {
+            try {
+                const result = await dispatchReadFields({ session, args });
+                pushToolResult({ ok: true, ...result });
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped ${name}: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped ${name}: ${detail}` });
+            }
+            continue;
+        }
         if (name === 'luker_orch_simulate') {
             const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
             simulations.push(simulation);
-            session.lastSimulation = simulation;
             const actionText = simulation.ok
                 ? `Simulation finished: ${simulation.summary}`
                 : `Simulation failed: ${simulation.summary}`;
@@ -5527,32 +5281,6 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
                 ok: Boolean(simulation?.ok),
                 action: actionText,
                 simulation,
-            });
-            continue;
-        }
-        if (name === 'luker_orch_continue_iteration') {
-            continueRequested = true;
-            const note = String(args.note || '').trim();
-            const actionText = `Continue requested.${note ? ` ${note}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({
-                ok: true,
-                action: actionText,
-                continueRequested: true,
-                note,
-            });
-            continue;
-        }
-        if (name === 'luker_orch_finalize_iteration') {
-            finalized = true;
-            finalizeSummary = String(args.summary || '').trim();
-            const actionText = `Iteration finalized.${finalizeSummary ? ` ${finalizeSummary}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({
-                ok: true,
-                action: actionText,
-                finalized: true,
-                summary: finalizeSummary,
             });
             continue;
         }
@@ -5570,9 +5298,6 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
         actions,
         simulations,
         toolResults,
-        finalized,
-        finalizeSummary,
-        continueRequested,
         changed,
         pendingCustomToolEdits,
     };
@@ -5583,9 +5308,6 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
     const simulations = [];
     const toolResults = [];
     const pendingCustomToolEdits = [];
-    let finalized = false;
-    let finalizeSummary = '';
-    let continueRequested = false;
     let changed = false;
 
     // Working profile shape: { director: { mainAgent, subAgents, ... } }
@@ -5728,7 +5450,15 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
             if (!result.ok) {
                 const actionText = `Director main-agent system-prompt patch failed: ${result.error}.`;
                 actions.push(actionText);
-                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                pushToolResult(buildPatchFailureEnvelope({
+                    mode: 'director',
+                    targetPath: 'mainAgent.systemPrompt',
+                    actionText,
+                    currentText: currentPrompt,
+                    oldString: String(args?.oldString || ''),
+                    error: result.error,
+                    detail: result.detail,
+                }));
                 continue;
             }
             const profileChanged = result.nextText !== currentPrompt;
@@ -5763,7 +5493,19 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
             if (!result.ok) {
                 const actionText = `Sub-agent "${id}" system-prompt patch failed: ${result.error}.`;
                 actions.push(actionText);
-                pushToolResult({ ok: false, error: result.error, detail: result.detail, action: actionText });
+                pushToolResult(buildPatchFailureEnvelope({
+                    mode: 'director',
+                    // The AI resolves sub-agents by id, but the read tool
+                    // exposes the underlying array. Point to the array
+                    // and let the AI find its index — that's cheaper than
+                    // scanning to compute the numeric index here.
+                    targetPath: 'subAgents',
+                    actionText,
+                    currentText: currentPrompt,
+                    oldString: String(args?.oldString || ''),
+                    error: result.error,
+                    detail: result.detail,
+                }));
                 continue;
             }
             const profileChanged = result.nextText !== currentPrompt;
@@ -5969,10 +5711,20 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
             continue;
         }
 
+        if (READ_FIELDS_TOOL_NAMES.has(name)) {
+            try {
+                const result = await dispatchReadFields({ session, args });
+                pushToolResult({ ok: true, ...result });
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped ${name}: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped ${name}: ${detail}` });
+            }
+            continue;
+        }
         if (name === 'luker_orch_simulate') {
             const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
             simulations.push(simulation);
-            session.lastSimulation = simulation;
             const actionText = simulation.ok
                 ? `Simulation finished: ${simulation.summary}`
                 : `Simulation failed: ${simulation.summary}`;
@@ -5982,24 +5734,6 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
                 action: actionText,
                 simulation,
             });
-            continue;
-        }
-
-        if (name === 'luker_orch_continue_iteration') {
-            continueRequested = true;
-            const note = String(args.note || '').trim();
-            const actionText = `Continue requested.${note ? ` ${note}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, action: actionText, continueRequested: true, note });
-            continue;
-        }
-
-        if (name === 'luker_orch_finalize_iteration') {
-            finalized = true;
-            finalizeSummary = String(args.summary || '').trim();
-            const actionText = `Iteration finalized.${finalizeSummary ? ` ${finalizeSummary}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({ ok: true, action: actionText, finalized: true, summary: finalizeSummary });
             continue;
         }
 
@@ -6017,9 +5751,6 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
         actions,
         simulations,
         toolResults,
-        finalized,
-        finalizeSummary,
-        continueRequested,
         changed,
         pendingCustomToolEdits,
     };
@@ -6039,9 +5770,6 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
     const simulations = [];
     const toolResults = [];
     const pendingCustomToolEdits = [];
-    let finalized = false;
-    let finalizeSummary = '';
-    let continueRequested = false;
     let changed = false;
     const allowedPresetFallback = Object.keys(session?.workingProfile?.presets || {})[0] || 'distiller';
     const pendingPresetRemovalActions = new Map();
@@ -6386,10 +6114,20 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
             if (hadOverride) changed = true;
             continue;
         }
+        if (READ_FIELDS_TOOL_NAMES.has(name)) {
+            try {
+                const result = await dispatchReadFields({ session, args });
+                pushToolResult({ ok: true, ...result });
+            } catch (err) {
+                const detail = String(err?.message || err || 'invalid_args');
+                actions.push(`Skipped ${name}: ${detail}`);
+                pushToolResult({ ok: false, error: 'invalid_args', detail, action: `Skipped ${name}: ${detail}` });
+            }
+            continue;
+        }
         if (name === 'luker_orch_simulate') {
             const simulation = await runAiIterationSimulation(context, session, args, abortSignal);
             simulations.push(simulation);
-            session.lastSimulation = simulation;
             const actionText = simulation.ok
                 ? `Simulation finished: ${simulation.summary}`
                 : `Simulation failed: ${simulation.summary}`;
@@ -6398,32 +6136,6 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
                 ok: Boolean(simulation?.ok),
                 action: actionText,
                 simulation,
-            });
-            continue;
-        }
-        if (name === 'luker_orch_continue_iteration') {
-            continueRequested = true;
-            const note = String(args.note || '').trim();
-            const actionText = `Continue requested.${note ? ` ${note}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({
-                ok: true,
-                action: actionText,
-                continueRequested: true,
-                note,
-            });
-            continue;
-        }
-        if (name === 'luker_orch_finalize_iteration') {
-            finalized = true;
-            finalizeSummary = String(args.summary || '').trim();
-            const actionText = `Iteration finalized.${finalizeSummary ? ` ${finalizeSummary}` : ''}`;
-            actions.push(actionText);
-            pushToolResult({
-                ok: true,
-                action: actionText,
-                finalized: true,
-                summary: finalizeSummary,
             });
             continue;
         }
@@ -6470,9 +6182,6 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
         actions,
         simulations,
         toolResults,
-        finalized,
-        finalizeSummary,
-        continueRequested,
         changed,
         pendingCustomToolEdits,
     };
@@ -6888,8 +6597,6 @@ async function openAiIterationStudio(context, settings, root) {
         sanitizeDirectorProfile,
         buildAiIterationToolSet,
         buildAiIterationSystemPrompt,
-        buildAiIterationUserPrompt,
-        buildAiIterationAutoContinuePrompt,
         executeAiIterationToolCalls,
         renderAiIterationWorkingProfile,
         resolveOrchestrationRuntimeWorldInfo,
