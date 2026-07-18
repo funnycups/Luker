@@ -124,6 +124,7 @@ export async function withRetry(fetcher, options = {}) {
 
         if (!thrownError) {
             if (result instanceof Response && !result.ok && isRetriableStatus(result.status)) {
+                if (signal?.aborted) throw makeAbortError();
                 if (attempt >= maxRetries) {
                     return result;
                 }
@@ -136,6 +137,11 @@ export async function withRetry(fetcher, options = {}) {
             return result;
         }
 
+        // Signal-first check: some provider generators catch the aborted fetch
+        // and re-throw as a plain Error (e.g. `throw new Error(text)`), which
+        // strips the AbortError name. Trust the signal over the error shape so
+        // a user-triggered abort never leaks into the retry path.
+        if (signal?.aborted) throw makeAbortError();
         if (isAbortError(thrownError)) throw thrownError;
         if (thrownError?.skipRetry) throw thrownError;
 
