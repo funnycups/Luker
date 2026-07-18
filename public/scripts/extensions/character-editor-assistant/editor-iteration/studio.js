@@ -16,12 +16,13 @@
  *                with CPA / MG schema / Orchestrator iter popups
  *
  * The CEA editor exposes BOTH edit tools (cea_*) AND read tools
- * (lorebook_query / lorebook_get / lorebook_list / world_book_list /
- * simulate_prompt / web_search) in the same tool catalog. When the LLM
- * calls a read tool, the popup runs it synchronously and threads the
- * result back into the next round's taskMessages as a `role: 'tool'`
- * message so the model can use it to decide what to edit. Edit calls
- * stack in state.pendingEdits and surface in the Apply row.
+ * (cea_read_card_fields / lorebook_query / lorebook_get / lorebook_list /
+ * world_book_list / simulate_prompt / web_search) in the same tool
+ * catalog. When the LLM calls a read tool, the popup runs it
+ * synchronously and threads the result back into the next round's
+ * taskMessages as a `role: 'tool'` message so the model can use it to
+ * decide what to edit. Edit calls stack in state.pendingEdits and
+ * surface in the Apply row.
  *
  * Multi-round caller-side loop:
  *   1. Push user message to state.session.messages.
@@ -71,6 +72,10 @@ import { registerTarget, resolveTarget } from '../../../iteration-library/storag
 import { decodeBackward } from '../../../iteration-library/storage/patch-codec.js';
 import { safeClone } from '../../../iteration-library/storage/safe-clone.js';
 import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
+import {
+    isReplayableIterationMessage,
+    DRAIN_SUMMARY_KIND,
+} from '../../../iteration-library/iter-message-filter.js';
 import {
     commitCharacterEditorOperations,
     commitLorebookOperations,
@@ -467,7 +472,7 @@ async function processRoundOutcome({
         try {
             const out = await runCeaEditorReadTool(
                 { id: callId, name: call?.name, args },
-                { context, settings, helperApis },
+                { context, settings, helperApis, state },
             );
             if (out?.ok) {
                 resultPayload = out.result;
@@ -543,9 +548,17 @@ async function processRoundOutcome({
         } catch (err) {
             // eslint-disable-next-line no-console
             console.warn(`[${MODULE}] normalizeToolCallToEdit failed for ${name}`, err);
+            // `buildAnchorMissError` (tools.js) attaches a structured
+            // `envelope` — `{error:'not_found', match_diagnosis, next_step,
+            // ...}` — so the AI sees a fuzzy-drift diagnosis in the
+            // tool_result, not just a plain error string. Fall back to
+            // `{error: <message>}` for every other throw.
+            const structured = (err && typeof err === 'object' && err.envelope && typeof err.envelope === 'object')
+                ? err.envelope
+                : null;
             editToolResults.push({
                 tool_call_id: callId,
-                content: { error: String(err?.message || err || 'normalize failed') },
+                content: structured ?? { error: String(err?.message || err || 'normalize failed') },
                 status: 'fail',
             });
         }
@@ -644,9 +657,23 @@ async function processRoundOutcome({
  */
 function buildSeedTaskMessages(state, systemPrompt) {
     const messages = [{ role: 'system', content: String(systemPrompt || '') }];
-    for (const m of (state.session.messages || [])) {
+    // Rebuild-time filter — drop legacy `{role:'user', auto:true}` fillers
+    // (pre-refactor "AUTO CONTINUE" / "[User reviewed …]" scaffolding
+    // pushed by drainBusOutcomes / continueAfterReviewDecision / auto-apply
+    // BEFORE the read-first loop was pure-tool-call-driven). Post-refactor
+    // drain-summary messages tag themselves with `kind:'drain_summary'`
+    // via DRAIN_SUMMARY_KIND so this filter keeps them but drops the
+    // legacy fillers that carry no useful signal (their body is stale
+    // "Continue with the next step …" prose that misleads the model).
+    // See iteration-library/iter-message-filter.js for the discriminator.
+    const persistedMessages = Array.isArray(state.session.messages) ? state.session.messages : [];
+    for (const m of persistedMessages) {
         const role = String(m?.role || '').toLowerCase();
         if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
+        // Assistant + system messages always replay; user messages go
+        // through the discriminator (drop legacy auto:true, keep
+        // drain_summary-tagged auto:true, keep everything else).
+        if (role === 'user' && !isReplayableIterationMessage(m)) continue;
         const content = String(m?.content || '');
 
         // Replay an assistant message with its read tool_calls + tool_results
@@ -717,11 +744,12 @@ const DEFAULT_SYSTEM_PROMPT = [
     'Rationale: `system_prompt` and `post_history_instructions` are power-user prompt-engineering fields most cards leave empty; people who use them know they\'re using them. `scenario` content belongs in world book entries so it can be disabled, swapped, or layered per chat without editing the card PNG. When you would naturally reach for one of these three (to add setting, rules, persona constraints, narrative framing, output-shape instructions, etc.), put that content into a world book entry on the character\'s bound book instead — use worldinfo_create_entry / worldinfo_update_entry. If no book is bound and the user wants content added, surface that gap to the user rather than silently writing to the restricted fields.',
     '',
     'You also have read tools:',
+    '- cea_read_card_fields — exact values from the current live character card by field name. The field enum is fixed (name / description / personality / scenario / first_mes / mes_example / system_prompt / post_history_instructions / creator_notes / alternate_greetings); anything else (including `extensions` or subkeys like `extensions.world`) is rejected. Call this before cea_str_replace_card_field so your oldString matches the live text byte-for-byte — the tool_result on a str_replace anchor miss carries a `match_diagnosis` (whitespace / dedent / similar-substring hints) plus the exact re-read call to run.',
     '- world_book_list — list visible world books with their scope tags.',
     '- lorebook_list / lorebook_query / lorebook_get — explore entries in a named book.',
     '- simulate_prompt — preview current prompt assembly.',
     '- web_search — search the public web for facts (only when needed).',
-    'Read-tool results are returned synchronously in the next round; use them to decide what to edit.',
+    'Read-tool results are returned synchronously in the next round; use them to decide what to edit. Extension surfaces (character-bound world books, regex scripts, orchestrator profile, …) each have their own dedicated tools — do not try to read them through cea_read_card_fields.',
     '',
     'The simulate_prompt tool now opens a popup so the user can review the actual model output produced under the current chat, world-info, and preset. The user may annotate parts they\'re unhappy with. The tool result you receive will be a tagged text envelope:',
     '- <simulation_chain> contains the full chain; any span wrapped in <<<ANNOTATION id=N>>>...<<</ANNOTATION>>> is flagged by the user.',
@@ -2074,6 +2102,14 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
                 content: lines.join('\n'),
                 at: Date.now(),
                 auto: true,
+                // Tag distinguishes legitimate post-approval drain
+                // summaries (replayed to the LLM so it sees what the
+                // user decided about each proposal) from legacy
+                // pre-refactor AUTO CONTINUE fillers (also `auto:true`,
+                // no `kind`) that must be dropped when a pre-refactor
+                // session is resumed under the read-first loop
+                // contract. See iteration-library/iter-message-filter.js.
+                kind: DRAIN_SUMMARY_KIND,
             });
             state.isBusy = true;
             const ac = new AbortController();
@@ -2849,6 +2885,14 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
                     content: text,
                     at: Date.now(),
                     auto: true,
+                    // Same discriminator as drainBusOutcomes: auto-apply
+                    // outcomes carry real user-decision signal (which
+                    // edits landed vs skipped/conflicted) that the AI
+                    // must see to correct its next round. Legacy
+                    // untagged `auto:true` fillers get dropped by
+                    // `isReplayableIterationMessage` in
+                    // buildSeedTaskMessages.
+                    kind: DRAIN_SUMMARY_KIND,
                 });
             }
             return true;
@@ -2934,6 +2978,12 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
             content: userText,
             at: Date.now(),
             auto: true,
+            // Post-review-decision summary carries real user-decision
+            // signal (approved vs discarded, per-edit conflict/no-op
+            // detail). Tag with DRAIN_SUMMARY_KIND so the read-first
+            // filter keeps it while still dropping legacy untagged
+            // `auto:true` fillers on resumed sessions.
+            kind: DRAIN_SUMMARY_KIND,
         });
 
         state.isBusy = true;

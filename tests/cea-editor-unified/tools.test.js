@@ -60,13 +60,23 @@ describe('unified CEA editor tools.js', () => {
     });
 
     it('normalizeToolCallToEdit annotates character target for cea_str_replace_card_field', async () => {
+        // Use the correct arg names (oldString/newString, not the legacy
+        // engine-op find/replace) and make sure the anchor is present in
+        // the live value exactly once — pre-refactor this test slipped
+        // through with find:'a' / description:'abc' and a silent
+        // expected_count:1 fallback that would have failed at the
+        // engine layer. That silent coercion is now the anchor-drift
+        // diagnosis path ([[project_iter_studio_noop_error_contract]]).
         const edits = await tools.normalizeToolCallToEdit(
-            { id: 'c1b', name: 'cea_str_replace_card_field', args: { field: 'description', find: 'a', replace: 'b' } },
-            { context: {}, live: { character: { description: 'abc' } } },
+            { id: 'c1b', name: 'cea_str_replace_card_field', args: { field: 'description', oldString: 'unique-phrase', newString: 'zz' } },
+            { context: {}, live: { character: { description: 'prefix unique-phrase suffix' } } },
         );
         expect(Array.isArray(edits)).toBe(true);
         expect(edits.length).toBeGreaterThan(0);
         expect(edits[0].target?.kind).toBe('character');
+        expect(edits[0].op).toBe('str_replace');
+        expect(edits[0].find).toBe('unique-phrase');
+        expect(edits[0].replace).toBe('zz');
     });
 
     it('normalizeToolCallToEdit annotates lorebook target with bookName when book_name is present', async () => {
@@ -147,6 +157,53 @@ describe('unified CEA editor tools.js', () => {
             { id: 'a1', name: 'cea_str_replace_lorebook_entry_field', args: { book_name: 'BookA', uid: 3, field: 'content', oldString: 'absent', newString: 'x' } },
             { context: {}, live: { lorebooks: { BookA: { entries: { 3: { content: 'hello world' } } } } } },
         )).rejects.toThrow(/not_found/);
+    });
+
+    it('cea_str_replace_lorebook_entry_field not_found error carries structured envelope (anchor-drift diagnosis)', async () => {
+        // The thrown Error must carry an `envelope` property so
+        // studio.js's catch arm surfaces a machine-readable
+        // `{error:'not_found', match_diagnosis, next_step, currentLength}`
+        // payload instead of a flat `{error: '<message>'}` string. This
+        // is the read-first refactor's structural contract — the AI has
+        // to see WHY the anchor missed and which read call resolves
+        // it, without a second reasoning round-trip.
+        let caught = null;
+        try {
+            await tools.normalizeToolCallToEdit(
+                { id: 'diag1', name: 'cea_str_replace_lorebook_entry_field', args: { book_name: 'BookA', uid: 3, field: 'content', oldString: 'absent', newString: 'x' } },
+                { context: {}, live: { lorebooks: { BookA: { entries: { 3: { content: 'hello world' } } } } } },
+            );
+        } catch (err) {
+            caught = err;
+        }
+        expect(caught).toBeTruthy();
+        expect(caught.envelope).toBeTruthy();
+        expect(caught.envelope.error).toBe('not_found');
+        expect(typeof caught.envelope.currentLength).toBe('number');
+        expect(caught.envelope.match_diagnosis).toBeTruthy();
+        expect(typeof caught.envelope.next_step).toBe('string');
+        expect(caught.envelope.next_step.length).toBeGreaterThan(0);
+    });
+
+    it('cea_str_replace_card_field throws not_found + envelope on anchor miss (pre-refactor: silent expected_count:1 fallback)', async () => {
+        // Pre-refactor: `find:'nope' / expected_count: 0 → Math.max(1,0)=1`
+        // fell through and let the engine reject the edit with a
+        // generic conflict — no structured diagnosis for the AI. Now
+        // the tools.js normalize step pre-validates and throws with
+        // an envelope carrying the match_diagnosis.
+        let caught = null;
+        try {
+            await tools.normalizeToolCallToEdit(
+                { id: 'diag2', name: 'cea_str_replace_card_field', args: { field: 'description', oldString: 'never-in-source', newString: 'zz' } },
+                { context: {}, live: { character: { description: 'a completely different string' } } },
+            );
+        } catch (err) {
+            caught = err;
+        }
+        expect(caught).toBeTruthy();
+        expect(caught.envelope?.error).toBe('not_found');
+        expect(caught.envelope?.match_diagnosis).toBeTruthy();
+        expect(caught.envelope?.next_step).toContain('cea_read_card_fields');
     });
 
     it('cea_str_replace_lorebook_entry_field throws multiple_matches when oldString is ambiguous without replaceAll', async () => {
@@ -290,11 +347,19 @@ describe('CEA editor tool-display map', () => {
         expect(String(out)).toContain('2');
     });
 
-    it('contains exactly the 13 tools spec\'d (7 edit + 6 read, no control)', () => {
+    it('contains exactly the 14 tools spec\'d (7 edit + 7 read, no control)', () => {
+        // 7 edit tools (cea_set_card_field, cea_str_replace_card_field,
+        // cea_add_lorebook_entry, cea_update_lorebook_entry,
+        // cea_str_replace_lorebook_entry_field, cea_remove_lorebook_entry,
+        // cea_set_lorebook_metadata) + 7 read tools (cea_read_card_fields,
+        // lorebook_query, lorebook_list, lorebook_get, world_book_list,
+        // web_search, simulate_prompt). No control tools — the
+        // multi-round loop is program-driven by tool-call presence.
         const keys = Object.keys(map);
-        expect(keys.length).toBe(13);
+        expect(keys.length).toBe(14);
         expect(keys.filter(k => map[k].type === 'edit').length).toBe(7);
-        expect(keys.filter(k => map[k].type === 'read').length).toBe(6);
+        expect(keys.filter(k => map[k].type === 'read').length).toBe(7);
         expect(keys.filter(k => map[k].type === 'control').length).toBe(0);
+        expect(keys).toContain('cea_read_card_fields');
     });
 });

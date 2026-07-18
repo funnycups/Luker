@@ -89,6 +89,23 @@ export const CEA_EDITOR_TOOL_DISPLAY = {
     },
 
     // ----- Read ------------------------------------------------------------
+    cea_read_card_fields: {
+        icon: '📖',
+        label: 'Read card fields',
+        type: 'read',
+        summarize: (a, r, i18n) => {
+            if (r && typeof r === 'object') {
+                // Count concretely-returned fields (everything under the
+                // result object minus the `missing_fields` bookkeeping
+                // key). Uses the shared `${0} fields` template so the
+                // chip stays terse.
+                const keys = Object.keys(r).filter(k => k !== 'missing_fields');
+                return fmt(i18n, '${0} fields', keys.length);
+            }
+            const fields = Array.isArray(a?.fields) ? a.fields : [];
+            return fields.length ? fields.join(', ') : '';
+        },
+    },
     lorebook_query: {
         icon: '🔍',
         label: 'Search lorebook',

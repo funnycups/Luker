@@ -24,6 +24,8 @@
 
 import { runCharacterEditorHelperToolCall } from '../main.js';
 import { CHARACTER_PRESET_READ_TOOL_DEFS } from '/scripts/iteration-library/tools/character-presets-reads.js';
+import { readFieldsByEnum } from '/scripts/iteration-library/read-fields-helper.js';
+import { diagnoseAnchorMiss } from '/scripts/iteration-library/anchor-diagnostic.js';
 
 // Canonical list of character-card fields the unified editor knows how to
 // commit. Mirrors the union of:
@@ -56,6 +58,75 @@ export const CEA_CARD_FIELD_ENUM = Object.freeze([
 
 export function isKnownCardField(name) {
     return CEA_CARD_FIELD_ENUM.includes(String(name || ''));
+}
+
+/**
+ * Executor for the `cea_read_card_fields` read tool. Reads exact values
+ * from the live character card, restricted to `CEA_CARD_FIELD_ENUM`.
+ *
+ * Contract:
+ *   - `args.fields` MUST be a string[] whose entries are all members
+ *     of `CEA_CARD_FIELD_ENUM`. Any deviation (non-array, non-string
+ *     entry, or a name not in the enum — including anything shaped
+ *     like `extensions` or `extensions.<subkey>`) throws
+ *     `invalid_args: unknown field(s) …` BEFORE any read happens.
+ *   - The enum is the same whitelist `cea_set_card_field` /
+ *     `cea_str_replace_card_field` write to, so the read surface and
+ *     the write surface stay in lockstep.
+ *   - `character.extensions` is intentionally NOT in the enum. Its
+ *     sub-surfaces (world, regex_scripts, depth_prompt, orchestrator
+ *     profile, …) each have their own dedicated tools; letting the AI
+ *     read `extensions` here would (a) drown the round context with a
+ *     large opaque blob and (b) leak internal plumbing outside the
+ *     author-facing card model.
+ *   - Values whose JSON exceeds 5KB return `{__truncated__, length,
+ *     preview, hint}` envelopes so the AI narrows to a subfield instead
+ *     of trying to consume the whole payload in one round.
+ *
+ * @param {{state?: {live?: {character?: object}}, args?: {fields?: any}}} params
+ * @returns {Promise<object>} `{[field]: value|null|envelope, missing_fields: string[]}`
+ */
+export async function dispatchCeaReadCardFields({ state, args } = {}) {
+    const character = (state && state.live && typeof state.live.character === 'object' && state.live.character !== null)
+        ? state.live.character
+        : {};
+    return readFieldsByEnum(character, args?.fields, CEA_CARD_FIELD_ENUM);
+}
+
+/**
+ * Build a structured `not_found` Error for a str_replace anchor miss.
+ * The thrown Error carries a plain-text message for the fallback path
+ * (studio.js's catch arm defaults to `{ error: String(err.message) }`)
+ * AND a machine-readable `envelope` property so studio.js can prefer
+ * the structured envelope when present. The envelope embeds:
+ *   - `error: 'not_found'`
+ *   - `detail`: which field / entry the anchor missed on
+ *   - `currentLength`: how big the live text is
+ *   - `match_diagnosis`: the shared `diagnoseAnchorMiss` result (fuzzy
+ *      layers over the live text — whitespace drift, dedent, similar
+ *      substring, or `no_similar`), never > 800 chars total.
+ *   - `next_step`: the exact read tool + field/uid the AI should call
+ *      before retrying.
+ *
+ * Never mutates the caller. Never dumps full text (diagnosis payload
+ * is bounded). Used by every str_replace failure site in CEA so the
+ * iter AI gets the same structured drift feedback the orchestrator
+ * iter-studio gets via `buildPatchFailureEnvelope`.
+ */
+function buildAnchorMissError({ toolName, currentText, oldString, nextStepHint, detail }) {
+    const cur = String(currentText ?? '');
+    const diagnosis = diagnoseAnchorMiss(cur, String(oldString ?? ''));
+    const err = new Error(`${toolName}: not_found — ${detail || 'oldString not present in the current text.'} ${nextStepHint}`);
+    err.envelope = {
+        ok: false,
+        error: 'not_found',
+        detail: detail || 'oldString not present in the current text.',
+        currentLength: cur.length,
+        match_diagnosis: diagnosis,
+        next_step: nextStepHint,
+    };
+    err.code = 'not_found';
+    return err;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,14 +334,39 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
         // engine's conflict gate still rejects external drift while
         // replacing every current match. `replaceAll: false` (default) →
         // expected_count: 1, the engine's unique-or-fail invariant.
+        //
+        // Pre-validate the anchor here (not just at the engine layer) so
+        // the AI gets a structured `not_found` + `match_diagnosis` payload
+        // in the tool_result envelope — otherwise the engine's generic
+        // "already-in-desired-state" noop swallows a real anchor miss
+        // (see [[project_iter_studio_noop_error_contract]]).
+        const field = String(args.field ?? '');
+        if (!field) {
+            throw new Error(`${name}: invalid_args — field is required.`);
+        }
         const find = String(args.oldString ?? '');
         const replace = String(args.newString ?? '');
-        const liveValue = String(live?.character?.[args.field] ?? '');
-        const occurrences = find ? liveValue.split(find).length - 1 : 0;
+        if (find === '') {
+            throw new Error(`${name}: invalid_args — oldString must be a non-empty string.`);
+        }
+        const liveValue = String(live?.character?.[field] ?? '');
+        const occurrences = liveValue.split(find).length - 1;
+        if (occurrences === 0) {
+            throw buildAnchorMissError({
+                toolName: name,
+                currentText: liveValue,
+                oldString: find,
+                nextStepHint: `Call cea_read_card_fields(['${field}']) to see the current text, then re-issue the patch.`,
+                detail: `oldString is not present in card field "${field}".`,
+            });
+        }
+        if (!args.replaceAll && occurrences !== 1) {
+            throw new Error(`${name}: multiple_matches — oldString occurs ${occurrences} times in card field "${field}". Widen oldString with surrounding context until it matches exactly once, or pass replaceAll: true.`);
+        }
         const expectedCount = Boolean(args.replaceAll) ? Math.max(1, occurrences) : 1;
         return [{
             op: 'str_replace',
-            path: `card.${args.field}`,
+            path: `card.${field}`,
             find,
             replace,
             expected_count: expectedCount,
@@ -333,7 +429,13 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
         // `oldString` must occur exactly once unless `replaceAll: true`.
         const occurrences = currentValue.split(find).length - 1;
         if (occurrences === 0) {
-            throw new Error(`${name}: not_found — oldString is not present in lorebook entry "${args.uid}".${field} (book "${bookName}"). Re-read the current field with cea_read_live_fields before retrying.`);
+            throw buildAnchorMissError({
+                toolName: name,
+                currentText: currentValue,
+                oldString: find,
+                nextStepHint: `Call lorebook_get({ book_name: '${bookName}', uids: [${args.uid}] }) to see the current entry text, then re-issue the patch.`,
+                detail: `oldString is not present in lorebook entry "${args.uid}".${field} (book "${bookName}").`,
+            });
         }
         if (!args.replaceAll && occurrences !== 1) {
             throw new Error(`${name}: multiple_matches — oldString occurs ${occurrences} times in lorebook entry "${args.uid}".${field} (book "${bookName}"). Widen oldString with surrounding context until it matches exactly once, or pass replaceAll: true.`);
@@ -398,6 +500,12 @@ export const CONTROL_TOOL_DEFS = [];
 // etc.), so we translate when invoking. The model only ever sees the short
 // names so the wire surface stays consistent across the iter popups.
 const READ_TOOL_LEGACY_NAMES = Object.freeze({
+    // `cea_read_card_fields` is native to the CEA card iter-studio — no
+    // legacy `luker_card_*` alias. `runCeaEditorReadTool` short-circuits
+    // this name and calls `dispatchCeaReadCardFields` directly against
+    // the live snapshot; the `null` value keeps the classification set
+    // aligned with tool-def registration.
+    cea_read_card_fields: null,
     lorebook_query: 'luker_card_query_lorebook_entries',
     lorebook_list: 'luker_card_list_lorebook_entries',
     lorebook_get: 'luker_card_get_lorebook_entries',
@@ -423,6 +531,26 @@ export function isCeaEditorReadTool(name) {
 // WorldBookListToolApi in main.js, but with the short canonical names so
 // the model sees a clean surface. Web-search is gated on `hasSearchTools`.
 const READ_TOOL_DEFS = [
+    {
+        type: 'function',
+        function: {
+            name: 'cea_read_card_fields',
+            description: 'Read exact values from the current live character card by field name. Whitelisted to the canonical author-facing fields; the field enum is fixed and any other name (including anything under `extensions`) is rejected. Use this before cea_str_replace_card_field so your oldString matches the live text byte-for-byte. Extension surfaces (character-bound world books, regex scripts, orchestrator profile, …) have their own dedicated tools — do not try to read them through this one.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    fields: {
+                        type: 'array',
+                        items: { type: 'string', enum: [...CEA_CARD_FIELD_ENUM] },
+                        description: 'Card field names to read. Values > 5KB are returned as a truncation envelope with a preview.',
+                        minItems: 1,
+                    },
+                },
+                required: ['fields'],
+                additionalProperties: false,
+            },
+        },
+    },
     {
         type: 'function',
         function: {
@@ -699,6 +827,23 @@ export async function runCeaEditorReadTool(call, opts = {}) {
     const shortName = String(call?.name || '');
     if (!isCeaEditorReadTool(shortName)) {
         return { ok: false, error: `Not a read tool: ${shortName || '(empty)'}` };
+    }
+    // `cea_read_card_fields` is native to this iter-studio — dispatched
+    // inline against `state.live.character` with whitelist enforcement,
+    // never through the legacy `luker_card_*` helper runner. The helper
+    // runner has no matching handler and would return "unknown tool";
+    // this branch keeps the pure `dispatchCeaReadCardFields` executor
+    // reachable to the multi-round loop.
+    if (shortName === 'cea_read_card_fields') {
+        try {
+            const result = await dispatchCeaReadCardFields({
+                state: opts?.state,
+                args: call?.args && typeof call.args === 'object' ? call.args : {},
+            });
+            return { ok: true, result };
+        } catch (err) {
+            return { ok: false, error: String(err?.message || err || 'unknown error') };
+        }
     }
     const helperApis = Array.isArray(opts?.helperApis) ? opts.helperApis : [];
     let legacyName = READ_TOOL_LEGACY_NAMES[shortName];
