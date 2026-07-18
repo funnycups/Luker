@@ -129,7 +129,17 @@ export async function dispatchClaude(ctx) {
 
     try {
         const additionalHeaders = {};
-        const betaHeaders = ['output-128k-2025-02-19', 'context-1m-2025-08-07'];
+        // Upstream ST hard-coded 'output-128k-2025-02-19' (added with Sonnet 3.7) and
+        // 'context-1m-2025-08-07' (added with Opus 4.6) as unconditional defaults. Per
+        // platform.claude.com docs, both are now dead flags for every current Claude model:
+        //   - 128k output is native on Fable 5 / Opus 4.6+ / Sonnet 4.6+; older models
+        //     (Sonnet 4.5 = 64k, Opus 4.5 = 64k, Opus 4.1 = 32k) never supported 128k
+        //     regardless of this beta, so it was never useful on them either.
+        //   - 1M context is GA (no beta required) on Opus 4.6+ / Sonnet 4.6+ / Fable 5;
+        //     it was retired on Sonnet 4.5 / Sonnet 4 on 2026-04-30.
+        // AWS Bedrock rejects unknown beta names with `ValidationException: invalid beta
+        // flag`, breaking Fable 5 on Bedrock proxies. Removed.
+        const betaHeaders = [];
         const useTools = Array.isArray(body.tools) && body.tools.length > 0;
         const useSystemPrompt = Boolean(body.use_sysprompt);
         const convertedPrompt = convertClaudeMessages(
