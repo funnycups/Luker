@@ -62,8 +62,11 @@ export function makeMessageId() {
  * Normalize a message read from disk into the shape rendered today.
  * Legacy sessions persisted only `{role, content}`; the upgraded schema
  * adds `id`, `at`, optional `toolCalls`, `edits`, `appliedAt`,
- * `appliedTarget`, `rolledBackAt`, and an `auto` flag for synthetic
- * auto-continue user messages.
+ * `appliedTarget`, `rolledBackAt`, an `auto` flag for synthetic
+ * post-decision drain-summary user messages, and a `kind` discriminator
+ * (`DRAIN_SUMMARY_KIND`) that separates legit drain summaries from
+ * pre-refactor "AUTO CONTINUE" fillers so the read-first replay filter
+ * (`isReplayableIterationMessage`) can drop the latter.
  *
  * Tolerance: missing `id` regenerates one, missing `at` falls back to
  * the session's updatedAt, missing arrays stay undefined (renderer
@@ -84,6 +87,7 @@ export function normalizeMessageShape(m, fallbackAt = Date.now()) {
     if (m.appliedTarget) out.appliedTarget = String(m.appliedTarget);
     if (typeof m.rolledBackAt === 'number') out.rolledBackAt = m.rolledBackAt;
     if (m.auto) out.auto = true;
+    if (typeof m.kind === 'string' && m.kind) out.kind = m.kind;
     return out;
 }
 

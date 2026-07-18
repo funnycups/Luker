@@ -280,6 +280,21 @@ describe('CPA — normalizeMessageShape (legacy message migration)', () => {
         expect(n.auto).toBe(true);
     });
 
+    test('preserves the kind discriminator on auto:true drain-summary messages', () => {
+        // The read-first replay filter (isReplayableIterationMessage) drops
+        // untagged auto:true fillers but keeps auto:true messages tagged
+        // with a non-empty `kind`. If normalizeMessageShape dropped `kind`
+        // on the round-trip, resumed sessions would lose their drain
+        // summaries and the AI would miss user-decision signal.
+        const n = normalizeMessageShape({
+            id: 'a', role: 'user', content: '[User reviewed …]', at: 100,
+            auto: true,
+            kind: 'drain_summary',
+        }, 1);
+        expect(n.auto).toBe(true);
+        expect(n.kind).toBe('drain_summary');
+    });
+
     test('returns input unchanged for non-object', () => {
         expect(normalizeMessageShape(null)).toBeNull();
         expect(normalizeMessageShape(undefined)).toBeUndefined();

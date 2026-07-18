@@ -13,15 +13,18 @@
  *   - buildOrchestratorOptimizeModeBlock:    mode-specific tail block
  *   - buildJailbreakOnlyModeBlock:           mode-specific tail block
  *   - buildPresetStructureGuideText:         static structure description
- *   - buildPresetSettingsOutlineText:        renders a preset's generation/
- *                                            context settings as a text list
- *   - buildPresetPromptOutlineText:          renders a preset's prompts[] +
- *                                            prompt_order[] as a text outline
- *   - formatPromptPreview:                   short preview of a prompt body
- *   - getPresetPromptEntries:                normalized prompts[] view
- *   - getPresetPromptOrderGroups:            normalized prompt_order[] view
  *
  * Pure string-building. No DOM, no lodash, no Luker globals.
+ *
+ * Note (read-first refactor): the up-front live-preset outline builders
+ * (`buildPresetSettingsOutlineText` / `buildPresetPromptOutlineText`)
+ * and their prompt-normalization helpers (`getPresetPromptEntries` /
+ * `getPresetPromptOrderGroups` / `formatPromptPreview`) were removed
+ * once the last-user turn stopped dumping preset state. The AI now
+ * pulls the fields it needs via `preset_read_live_fields` (lodash-path
+ * read tool) on demand — matching the orch / MG-schema / CEA-card iter-
+ * studios. If a future feature needs to render the live outline in a UI
+ * pane (not the LLM prompt), re-add the helpers from Luker git history.
  */
 
 /**
@@ -38,181 +41,6 @@ export const SESSION_MODE_DEFAULT = 'general';
 export function sanitizeSessionMode(value) {
     const v = String(value || '').trim();
     return SESSION_MODES.includes(v) ? v : SESSION_MODE_DEFAULT;
-}
-
-function isPlainObject(v) {
-    return v !== null && typeof v === 'object' && !Array.isArray(v);
-}
-
-function normalizePromptIdentifier(value, fallback = '') {
-    return String(value ?? fallback ?? '').trim();
-}
-
-export function getPresetPromptEntries(body) {
-    if (!Array.isArray(body?.prompts)) return [];
-    return body.prompts.map((entry, index) => {
-        const s = entry && typeof entry === 'object' ? entry : {};
-        const identifier = normalizePromptIdentifier(s.identifier, s.id);
-        if (!identifier) return null;
-        // Intentionally NOT exposing `entry.enabled` here: the OpenAI preset
-        // runtime ignores prompts[].enabled — the authoritative enabled flag
-        // is prompt_order[*].order[*].enabled. Surfacing it would re-introduce
-        // the bug where outline renderers and consumers reason about a field
-        // the runtime doesn't read.
-        return {
-            identifier, index,
-            content: String(s.content ?? ''),
-            role: String(s.role ?? '').trim(),
-            name: String(s.name ?? '').trim(),
-            marker: Boolean(s.marker),
-            injection_position: s.injection_position ?? null,
-            injection_depth: s.injection_depth ?? null,
-            injection_order: s.injection_order ?? null,
-        };
-    }).filter(Boolean);
-}
-
-export function getPresetPromptOrderGroups(body) {
-    if (!Array.isArray(body?.prompt_order)) return [];
-    return body.prompt_order.map((group) => {
-        const s = group && typeof group === 'object' ? group : {};
-        const characterId = String(s.character_id ?? '').trim();
-        const order = Array.isArray(s.order)
-            ? s.order.map((item) => {
-                const o = item && typeof item === 'object' ? item : {};
-                const identifier = normalizePromptIdentifier(o.identifier);
-                if (!identifier) return null;
-                return { identifier, enabled: o.enabled !== false };
-            }).filter(Boolean)
-            : [];
-        return { character_id: characterId, order };
-    });
-}
-
-export function formatPromptPreview(content) {
-    const norm = String(content ?? '').replace(/\r\n/g, '\n').trim();
-    if (!norm) return '(empty)';
-    const lines = norm.split('\n').slice(0, 3).map((l) => l.trim()).filter(Boolean);
-    const preview = lines.join(' / ');
-    return preview.length > 180 ? `${preview.slice(0, 177)}...` : preview;
-}
-
-/**
- * Render the live preset's prompts and prompt_order as a textual outline
- * for the AI to read alongside its task. Highlights the prompts[] entries
- * that DO NOT appear in any prompt_order group — those are the silent
- * "exists but does nothing" entries that the bug used to produce.
- *
- * Each ordered entry includes an `@prompts[N]` marker, where N is the
- * entry's index in the live prompts[] array. The path-based string-edit
- * tools (preset_str_replace etc) need this N when targeting an entry's
- * content; the *_in_prompt tool family does not, since it takes the
- * identifier directly. Surfacing N here lets the AI use either tool
- * family correctly. The marker is intentionally placed at end-of-line so
- * normal reads (which key off identifier / role / content) ignore it.
- */
-export function buildPresetPromptOutlineText(body) {
-    const entries = getPresetPromptEntries(body);
-    const promptMap = new Map(entries.map((e) => [e.identifier, e]));
-    const orderedIds = new Set();
-    const groups = getPresetPromptOrderGroups(body);
-
-    const sections = [
-        'Prompt layout:',
-        `- new_chat_prompt: ${formatPromptPreview(body?.new_chat_prompt)}`,
-        `- new_group_chat_prompt: ${formatPromptPreview(body?.new_group_chat_prompt)}`,
-    ];
-    if (groups.length === 0) {
-        sections.push('- ordered prompt groups: none');
-    } else {
-        sections.push('- ordered prompt groups:');
-        for (const g of groups) {
-            sections.push(`  character_id=${g.character_id || '(empty)'}`);
-            if (g.order.length === 0) { sections.push('    (empty)'); continue; }
-            g.order.forEach((item, i) => {
-                orderedIds.add(item.identifier);
-                const promptEntry = promptMap.get(item.identifier) || { content: '', role: '', index: -1 };
-                const indexHint = Number.isInteger(promptEntry.index) && promptEntry.index >= 0
-                    ? ` @prompts[${promptEntry.index}]`
-                    : '';
-                sections.push(
-                    `  ${i + 1}. ${item.identifier} [${item.enabled ? 'enabled' : 'disabled'}] role=${promptEntry.role || 'n/a'}${indexHint}`,
-                );
-                sections.push(`     ${formatPromptPreview(promptEntry.content)}`);
-            });
-        }
-    }
-
-    const orphans = entries.filter((e) => !orderedIds.has(e.identifier));
-    if (orphans.length > 0) {
-        sections.push('- prompts NOT in any prompt_order (inert — never reach the model regardless of any other flag):');
-        for (const e of orphans) {
-            const indexHint = Number.isInteger(e.index) && e.index >= 0
-                ? ` @prompts[${e.index}]`
-                : '';
-            sections.push(`  - ${e.identifier} role=${e.role || 'n/a'}${indexHint}`);
-            sections.push(`    ${formatPromptPreview(e.content)}`);
-        }
-    }
-    return sections.join('\n');
-}
-
-export function buildPresetSettingsOutlineText(body) {
-    const src = isPlainObject(body) ? body : {};
-    const keys = [
-        ['temperature', 'temperature'],
-        ['top_p', 'top_p'],
-        ['top_k', 'top_k'],
-        ['top_a', 'top_a'],
-        ['min_p', 'min_p'],
-        ['presence_penalty', 'presence_penalty'],
-        ['frequency_penalty', 'frequency_penalty'],
-        ['repetition_penalty', 'repetition_penalty'],
-        ['openai_max_context', 'context_limit'],
-        ['openai_max_tokens', 'output_tokens'],
-        ['names_behavior', 'names_behavior'],
-        ['send_if_empty', 'send_if_empty'],
-        ['impersonation_prompt', 'impersonation_prompt'],
-        ['continue_nudge_prompt', 'continue_nudge_prompt'],
-        ['new_example_chat_prompt', 'new_example_chat_prompt'],
-        ['group_nudge_prompt', 'group_nudge_prompt'],
-        ['wi_format', 'wi_format'],
-        ['scenario_format', 'scenario_format'],
-        ['personality_format', 'personality_format'],
-        ['squash_system_messages', 'squash_system_messages'],
-        ['stream_openai', 'stream_openai'],
-        ['use_sysprompt', 'use_sysprompt'],
-        ['assistant_prefill', 'assistant_prefill'],
-        ['assistant_impersonation', 'assistant_impersonation'],
-        ['continue_prefill', 'continue_prefill'],
-        ['continue_postfix', 'continue_postfix'],
-        ['function_calling', 'function_calling'],
-        ['tool_call_recurse_limit', 'tool_call_recurse_limit'],
-        ['tool_reasoning_mode', 'tool_reasoning_mode'],
-        ['show_thoughts', 'show_thoughts'],
-        ['reasoning_effort', 'reasoning_effort'],
-        ['verbosity', 'verbosity'],
-        ['enable_web_search', 'enable_web_search'],
-        ['seed', 'seed'],
-        ['n', 'n'],
-        ['bias_preset_selected', 'bias_preset_selected'],
-        ['media_inlining', 'media_inlining'],
-        ['inline_image_quality', 'inline_image_quality'],
-        ['request_images', 'request_images'],
-        ['request_image_aspect_ratio', 'request_image_aspect_ratio'],
-        ['request_image_resolution', 'request_image_resolution'],
-    ];
-    const lines = [];
-    for (const [k, label] of keys) {
-        if (!Object.hasOwn(src, k)) continue;
-        const v = src[k];
-        if (v === '' || v === null || v === undefined) continue;
-        const text = typeof v === 'string' ? v : JSON.stringify(v);
-        lines.push(`- ${label}: ${text}`);
-    }
-    return lines.length > 0
-        ? ['Generation/context settings:', ...lines].join('\n')
-        : 'Generation/context settings: none';
 }
 
 export function buildPresetStructureGuideText() {
@@ -599,10 +427,18 @@ export function buildOrchestratorOptimizeModeBlock() {
         '  permissions, not output formatters. Preserve.',
         '',
         'Approach:',
-        '- Always read the live preset\'s full structure first',
-        '  (preset_read_live_fields, preset_simulate). Variable-composition',
-        '  patterns are invisible without seeing every entry\'s content',
-        '  side-by-side.',
+        '- Read the live preset\'s prompts + prompt_order + generation',
+        '  settings on demand with preset_read_live_fields (lodash-style',
+        '  paths — `prompts`, `prompt_order`, `prompts[N].content`,',
+        '  `temperature`, etc). There is no up-front outline dump: the',
+        '  last-user turn only names the target + reference + skills, so',
+        '  the AI is expected to shape its read queries incrementally',
+        '  based on the task. Variable-composition patterns are invisible',
+        '  without seeing every entry\'s content side-by-side, so when the',
+        '  request touches variable macros, read prompts[*].content across',
+        '  all ordered entries before proposing edits. Use preset_simulate',
+        '  to see the assembled model output when structural review is',
+        '  needed.',
         '- Run the wrong-layer scan early: skim every entry\'s content for the',
         '  agent-identity tells listed above (tool roster, turn-loop steps,',
         '  tool-channel prohibitions, named-skill references, sub-agent ids,',

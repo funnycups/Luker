@@ -97,12 +97,14 @@ import {
 } from './tools.js';
 import {
     buildModelSystemPrompt,
-    buildPresetSettingsOutlineText,
-    buildPresetPromptOutlineText,
     sanitizeSessionMode,
     SESSION_MODES,
     SESSION_MODE_DEFAULT,
 } from './system-prompts.js';
+import {
+    isReplayableIterationMessage,
+    DRAIN_SUMMARY_KIND,
+} from '../../../iteration-library/iter-message-filter.js';
 import { buildCpaSkillsBlock } from './skill-prompt.js';
 const skillsApi = Luker.getContext().skills;
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
@@ -784,6 +786,13 @@ export async function openCpaIterationStudio(deps) {
                 content: lines.join('\n'),
                 at: Date.now(),
                 auto: true,
+                // Drain summaries carry real user-decision signal (which
+                // proposals were committed vs rejected vs conflicted) that
+                // the AI must see on its next round to correct course.
+                // Tag with DRAIN_SUMMARY_KIND so the read-first replay
+                // filter (`isReplayableIterationMessage`) keeps them while
+                // still dropping legacy untagged auto:true fillers.
+                kind: DRAIN_SUMMARY_KIND,
             });
             state.isBusy = true;
             state.abortController = new AbortController();
@@ -795,7 +804,7 @@ export async function openCpaIterationStudio(deps) {
                     await persistSession();
                     await render();
                     if (state.abortController?.signal?.aborted) break;
-                    turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                    turn = await runIterationTurn();
                 }
             } catch (err) {
                 if (!isAbortError(err, state.abortController?.signal)) {
@@ -1554,26 +1563,29 @@ export async function openCpaIterationStudio(deps) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Build the augmented user prompt — same shape as the adapter's
-    // `buildUserPrompt` (cpa-iteration-adapter.js L1223-L1256). Injects:
-    //   - target preset name
-    //   - live preset settings outline
-    //   - live preset prompt-layout outline
-    //   - reference-preset context (or "none")
-    //   - skill discipline + catalog (only in orchestrator-optimize mode)
-    //   - the user's actual text
-    // The model sees this as part of the conversation, so it doesn't need
-    // to spend tool calls just to see what's already in the live preset.
+    // Build the augmented user prompt (read-first shape).
     //
-    // The skill block lives here (user message) rather than in the system
+    // The prior implementation dumped a full `buildPresetSettingsOutlineText`
+    // + `buildPresetPromptOutlineText` snapshot on every last-user turn so
+    // the AI could "see" the live preset without spending a read tool.
+    // That defeated the read-first contract shared with orchestrator / MG
+    // schema / CEA card iter-studios: the AI is expected to pull only the
+    // slices it needs via `preset_read_live_fields`, keeping the last-user
+    // turn compact + stable across long sessions.
+    //
+    // Kept: target-preset name (one line — orients the AI without dumping
+    // state), reference-preset pointer (only names the reference + which
+    // read tools reach it — no body dump), and the skills block (mode-
+    // gated cognitive guidance + skill catalog, unchanged from before).
+    //
+    // The skill block lives in the user message rather than the system
     // prompt so the base system stays byte-stable across rounds — Anthropic
     // prompt cache is a prefix match and the catalog mutates on every
     // skill_create / skill_rename / skill_delete. Keeping it on the user
-    // side means only the last-user-message segment of the cache invalidates
-    // per skill mutation, not the entire system prompt.
+    // side means only the last-user-message segment of the cache
+    // invalidates per skill mutation, not the entire system prompt.
     // ──────────────────────────────────────────────────────────────────
     function buildAugmentedUserPrompt(userText, skillsBlock = '') {
-        const live = state.live || {};
         const referenceName = String(state.session.surfaceState?.referencePresetName || '').trim();
         const referenceSection = referenceName
             ? [
@@ -1584,10 +1596,6 @@ export async function openCpaIterationStudio(deps) {
             : 'Selected reference preset: none.';
         const parts = [
             `Target preset: ${getTargetRef()?.name || ''}`,
-            '',
-            buildPresetSettingsOutlineText(live),
-            '',
-            buildPresetPromptOutlineText(live),
             '',
             referenceSection,
         ];
@@ -1645,10 +1653,14 @@ export async function openCpaIterationStudio(deps) {
 
     function buildTaskMessages(systemPrompt, skillsBlock = '') {
         const messages = [{ role: 'system', content: systemPrompt }];
-        const history = (state.session.messages || []).filter(m => {
-            const role = String(m?.role || '').toLowerCase();
-            return role === 'user' || role === 'assistant';
-        });
+        // Replay filter — drop legacy `auto:true` "AUTO CONTINUE" fillers
+        // from pre-refactor sessions while preserving assistant turns and
+        // real user typing. `drainBusOutcomes` tags its outcome-summary
+        // pushes with `kind: DRAIN_SUMMARY_KIND` so this predicate keeps
+        // them (they carry user-decision signal the AI must react to).
+        // The pure tool-call loop is program-driven — tool call presence
+        // is the continue signal, no synthetic user filler between rounds.
+        const history = (state.session.messages || []).filter(isReplayableIterationMessage);
         // Find the last user message — only that one gets the augmented
         // outline prefix, so the prompt budget isn't bloated on every turn.
         let lastUserIdx = -1;
@@ -1710,7 +1722,7 @@ export async function openCpaIterationStudio(deps) {
         return messages;
     }
 
-    async function runIterationTurn({ autoContinueFromResult = null } = {}) {
+    async function runIterationTurn() {
         // Reuse the caller-owned AbortController when present so a Stop
         // click during handleSendMessage / continueAfterReviewDecision's
         // pre-await (persistSession + render) is honored. Fall back to a
@@ -1759,21 +1771,12 @@ export async function openCpaIterationStudio(deps) {
         );
         const tools = buildToolCatalog({ hasReference });
 
-        // For auto-continue rounds, splice a synthetic user message into the
-        // visible history so the model has a fresh prompt to react to and the
-        // chat doesn't look like the model spoke twice in a row. Auto-continue
-        // fires whenever the prior round emitted any tool call — the runner
-        // already preserves prior tool_calls/tool_results in context, so this
-        // synthetic prompt just nudges the model to proceed or stop.
-        if (autoContinueFromResult) {
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'user',
-                content: 'Continue with the next iteration step. Respond with plain text and no tool calls when the request is fully addressed.',
-                at: Date.now(),
-                auto: true,
-            });
-        }
+        // Pure tool-call loop: no synthetic "AUTO CONTINUE" user filler
+        // between rounds. The runner preserves prior tool_calls +
+        // tool_results in taskMessages, and the outer loop drives
+        // continuation off `hadAnyToolCall` alone. Any tool call → next
+        // round. Plain text (no tool calls) → the loop exits and control
+        // returns to the user. Matches orch/MG/CEA iter-studio contract.
 
         const taskMessages = buildTaskMessages(baseSystemPrompt, skillsBlock);
 
@@ -2303,14 +2306,7 @@ export async function openCpaIterationStudio(deps) {
         // forcing a tab switch.
         bumpChatBadge();
 
-        return {
-            hadAnyToolCall,
-            executionResult: {
-                finalized: !hadAnyToolCall,
-                changed: edits.length > 0,
-                hasPending: edits.length > 0,
-            },
-        };
+        return { hadAnyToolCall };
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -2616,7 +2612,7 @@ export async function openCpaIterationStudio(deps) {
                 await persistSession();
                 await render();   // progressive: prior round visible before next
                 if (state.abortController?.signal?.aborted) break;
-                turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                turn = await runIterationTurn();
             }
         } catch (err) {
             // Stop button → don't push an error bubble; user knows they cancelled.
