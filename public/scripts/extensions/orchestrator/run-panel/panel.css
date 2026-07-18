@@ -158,6 +158,26 @@
     cursor: pointer;
     font-size: 12px;
     user-select: none;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
+#luker-orch-run-panel .round > details > summary .round-elapsed {
+    margin-left: auto;
+    opacity: 0.55;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    /* Keep the seconds column from wrapping mid-value on narrow panels. */
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+#luker-orch-run-panel .round[data-status="failed"] > details > summary .round-elapsed {
+    /* Failed rounds already tint their whole summary red; ease the
+       elapsed span back toward neutral so it stays legible against
+       the accent color rather than reinforcing it. */
+    opacity: 0.75;
 }
 
 #luker-orch-run-panel .round[data-status="failed"] > details > summary {

@@ -48,8 +48,40 @@ export class PanelRenderer {
         // interaction.
         this._manualToggles = new Set();
         this._elapsedTimer = null;
+        // Per-round wall-clock tickers. Same 200ms cadence as the global
+        // header timer so displayed seconds stay in sync. Terminal status
+        // events / run finish / clear all sweep this map.
+        this._roundTimers = new Map();
 
         this._bindScrollPin();
+    }
+
+    /**
+     * Format wall-clock milliseconds for the per-round elapsed display.
+     * Sub-minute keeps 100 ms precision so short agents don't look frozen;
+     * >= 60s switches to `Xm YYs` because the panel row is narrow and
+     * trailing decimals just add noise at that scale.
+     */
+    _formatElapsed(ms) {
+        if (!Number.isFinite(ms) || ms < 0) ms = 0;
+        const totalSec = ms / 1000;
+        if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
+        const m = Math.floor(totalSec / 60);
+        const s = Math.floor(totalSec - m * 60);
+        return `${m}m ${String(s).padStart(2, '0')}s`;
+    }
+
+    _stopRoundTimer(roundId) {
+        const t = this._roundTimers.get(roundId);
+        if (t != null) {
+            clearInterval(t);
+            this._roundTimers.delete(roundId);
+        }
+    }
+
+    _sweepRoundTimers() {
+        for (const t of this._roundTimers.values()) clearInterval(t);
+        this._roundTimers.clear();
     }
 
     /**
@@ -117,6 +149,7 @@ export class PanelRenderer {
         this.root.dataset.state = 'open';
         this.roundsListEl.innerHTML = '';
         this._manualToggles.clear();
+        this._sweepRoundTimers();
         // Clear any "no active run" empty-state that may have been planted
         // by a prior menu-triggered openRunPanel() call.
         const empty = this.bodyEl.querySelector(':scope > .empty-state');
@@ -179,7 +212,26 @@ export class PanelRenderer {
         const details = document.createElement('details');
         details.open = true; // running round defaults open
         const summary = document.createElement('summary');
-        summary.textContent = `● ${round.label} · ${round.status}`;
+        // Structured children so status/elapsed can be updated in place
+        // without wiping the label. Direct textContent assignment (the
+        // old approach) also erased whatever elapsed span we appended,
+        // making the timing invisible one status tick later.
+        const dot = document.createElement('span');
+        dot.className = 'round-dot';
+        dot.textContent = '●';
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'round-label';
+        labelSpan.textContent = ` ${round.label} · `;
+        const statusSpan = document.createElement('span');
+        statusSpan.className = 'round-status';
+        statusSpan.textContent = round.status;
+        const elapsedSpan = document.createElement('span');
+        elapsedSpan.className = 'round-elapsed';
+        elapsedSpan.textContent = this._formatElapsed(0);
+        summary.appendChild(dot);
+        summary.appendChild(labelSpan);
+        summary.appendChild(statusSpan);
+        summary.appendChild(elapsedSpan);
         details.appendChild(summary);
 
         const ol = document.createElement('ol');
@@ -199,6 +251,28 @@ export class PanelRenderer {
 
         li.appendChild(details);
         this.roundsListEl.appendChild(li);
+
+        // If this round is already terminal (replayFromStore path re-
+        // running _renderRoundAppended for a finished round), freeze
+        // elapsed to endedAt and skip the ticker entirely. Otherwise
+        // start a 200 ms ticker; it self-stops when the round hits
+        // terminal via _renderRoundStatus, or gets swept on run finish.
+        if (round.endedAt != null) {
+            elapsedSpan.textContent = this._formatElapsed(round.endedAt - round.startedAt);
+        } else {
+            this._stopRoundTimer(roundId); // paranoid: avoid duplicate on re-append
+            const tick = () => {
+                const r = getCurrentRun();
+                const rd = r?.rounds.find(x => x.id === roundId);
+                if (!rd) { this._stopRoundTimer(roundId); return; }
+                const end = rd.endedAt ?? performance.now();
+                elapsedSpan.textContent = this._formatElapsed(end - rd.startedAt);
+                if (rd.endedAt != null) this._stopRoundTimer(roundId);
+            };
+            tick();
+            this._roundTimers.set(roundId, setInterval(tick, 200));
+        }
+
         this._renderHeader();
         this._maybeScroll();
     }
@@ -304,11 +378,23 @@ export class PanelRenderer {
         li.dataset.status = status;
         const summary = li.querySelector(':scope > details > summary');
         if (summary) {
-            const run = getCurrentRun();
-            const round = run?.rounds.find(r => r.id === roundId);
-            if (round) summary.textContent = `● ${round.label} · ${status}`;
+            const statusSpan = summary.querySelector('.round-status');
+            if (statusSpan) statusSpan.textContent = status;
+            // Freeze the elapsed display to endedAt (store already wrote
+            // it on terminal transition — see run-state/store.js
+            // setRoundStatus). Ticker gets stopped below so this final
+            // value sticks.
+            if (status === 'done' || status === 'failed') {
+                const run = getCurrentRun();
+                const round = run?.rounds.find(r => r.id === roundId);
+                const elapsedSpan = summary.querySelector('.round-elapsed');
+                if (round && elapsedSpan && round.endedAt != null) {
+                    elapsedSpan.textContent = this._formatElapsed(round.endedAt - round.startedAt);
+                }
+            }
         }
         if (status === 'done' || status === 'failed') {
+            this._stopRoundTimer(roundId);
             if (!this._manualToggles.has(`round:${roundId}`)) {
                 const details = li.querySelector(':scope > details');
                 this._setDetailsOpen(details, false);
@@ -319,11 +405,26 @@ export class PanelRenderer {
     _renderRunFinished(status) {
         const run = getCurrentRun();
         if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+        this._sweepRoundTimers();
         // Tick the timer one final time so the displayed elapsed reflects endedAt.
         if (run && this.elapsedEl) {
             const end = run.endedAt ?? performance.now();
             const sec = ((end - run.startedAt) / 1000).toFixed(1);
             this.elapsedEl.textContent = `${sec}s`;
+        }
+        // Freeze per-round elapsed to endedAt for anything still visible.
+        // Covers aborted rounds whose SECTION/ROUND_STATUS never fired
+        // (store's setRoundStatus is the only place endedAt gets written,
+        // so for those we fall back to the run's endedAt as an
+        // approximation — matches how the header .elapsed reads).
+        if (run) {
+            for (const round of run.rounds) {
+                const li = this.roundsListEl.querySelector(`[data-round-id="${CSS.escape(round.id)}"]`);
+                const elapsedSpan = li?.querySelector(':scope > details > summary > .round-elapsed');
+                if (!elapsedSpan) continue;
+                const end = round.endedAt ?? run.endedAt ?? performance.now();
+                elapsedSpan.textContent = this._formatElapsed(end - round.startedAt);
+            }
         }
         this.headerStatusEl.dataset.status = status;
         this.stopBtnEl.hidden = true;
@@ -354,6 +455,7 @@ export class PanelRenderer {
 
     _renderCleared() {
         if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+        this._sweepRoundTimers();
         this.roundsListEl.innerHTML = '';
         this._manualToggles.clear();
         if (this.finalOutputEl) this.finalOutputEl.hidden = true;
@@ -420,6 +522,11 @@ export class PanelRenderer {
         // click-time freeze is speculative.
         if (this.stopBtnEl) this.stopBtnEl.disabled = true;
         if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+        // Freeze per-round tickers too so their displayed seconds stop
+        // climbing while we wait for the runtime to actually reject.
+        // _renderRunFinished will overwrite these with endedAt-based
+        // final values once the store transitions.
+        this._sweepRoundTimers();
         if (this.headerStatusEl) this.headerStatusEl.dataset.status = 'stopping';
         // Prefer the fast-unwind `stopFn` over the raw `abortFn` when
         // the run was registered with one: it resolves the main.js
