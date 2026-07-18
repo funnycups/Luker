@@ -1628,10 +1628,10 @@ export async function openCpaIterationStudio(deps) {
     /**
      * Build the conversation history sent to the runner. Replays prior
      * user/assistant turns so the model has context. The last user turn is
-     * replaced with the augmented version (live state outline + request)
-     * the first time it appears in the array — subsequent turns reuse the
-     * raw user text since they're already part of an ongoing conversation
-     * the model has been steering.
+     * replaced with the augmented version (target + reference + skills +
+     * request) the first time it appears in the array — subsequent turns
+     * reuse the raw user text since they're already part of an ongoing
+     * conversation the model has been steering.
      */
     function serializeToolResultContent(result) {
         if (typeof result === 'string') return result;
@@ -1662,7 +1662,8 @@ export async function openCpaIterationStudio(deps) {
         // is the continue signal, no synthetic user filler between rounds.
         const history = (state.session.messages || []).filter(isReplayableIterationMessage);
         // Find the last user message — only that one gets the augmented
-        // outline prefix, so the prompt budget isn't bloated on every turn.
+        // prefix (target + reference + skills block), so replayed earlier
+        // user turns stay lean.
         let lastUserIdx = -1;
         for (let i = history.length - 1; i >= 0; i--) {
             if (String(history[i].role).toLowerCase() === 'user') {
