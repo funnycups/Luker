@@ -2,19 +2,19 @@
 // Copyright (C) 2026 FunnyCups
 
 /**
- * Pure predicate + drain-summary tag constant for the orchestrator
- * iter-studio's persisted message replay. Extracted from studio.js so
- * it can be unit-tested without dragging studio.js's DOM / ST-context
- * import graph into jest (studio.js reads `Luker.getContext()` at
- * module-load and its transitive deps hit `document.addEventListener`).
+ * Pure predicate + drain-summary tag constant for iter-studio
+ * persisted-message replay. Shared across iter-studios (orchestrator,
+ * memory-graph schema, …) so their `buildTaskMessages` implementations
+ * apply the same rebuild-time filter without importing each other.
  *
- * `buildTaskMessages` (studio.js) filters `state.session.messages`
- * through `isReplayableIterationMessage` before rebuilding the
- * conversation sent to the runner. `drainBusOutcomes` (studio.js) tags
- * its post-approval outcomes summary with `kind: DRAIN_SUMMARY_KIND` so
- * the filter distinguishes it from the pre-refactor "AUTO CONTINUE\n..."
- * user-role filler that used to sit between assistant tool-call rounds
- * (also `auto:true`, but no `kind`).
+ * `buildTaskMessages` filters `state.session.messages` through
+ * `isReplayableIterationMessage` before rebuilding the conversation
+ * sent to the runner. Post-approval drain summaries (pushed by each
+ * studio's equivalent of orchestrator's `drainBusOutcomes`) tag their
+ * message with `kind: DRAIN_SUMMARY_KIND` so the filter distinguishes
+ * them from the pre-refactor "AUTO CONTINUE\n..." user-role filler
+ * that used to sit between assistant tool-call rounds (also
+ * `auto:true`, but no `kind`).
  *
  * Contract:
  *   - `role === 'user'` or `role === 'assistant'`     → replay-candidate

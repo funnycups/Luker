@@ -127,7 +127,7 @@ import { buildDrainOutcomesMessage } from './drain-outcomes-message.js';
 import {
     isReplayableIterationMessage,
     DRAIN_SUMMARY_KIND,
-} from './iter-message-filter.js';
+} from '../../../iteration-library/iter-message-filter.js';
 // auto-continue gate is now `bus.hasOutstanding()` — the standalone
 // gate module + its unit test were retired during the ProposalBus migration.
 // Character-editor-assistant publishes its helper-tool surface via

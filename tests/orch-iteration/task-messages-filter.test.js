@@ -19,15 +19,16 @@
 // Structural assertions only — never grep the AUTO CONTINUE prose (that
 // would violate the no-prompt-body-regex constraint).
 //
-// The predicate lives in its own module (iter-message-filter.js) so it
-// can be tested without dragging studio.js's DOM / ST-context import
-// graph into jest.
+// The predicate lives in its own module (iteration-library/iter-message-filter.js)
+// so it can be tested without dragging studio.js's DOM / ST-context import
+// graph into jest, and so the MG schema iter-studio can share it without
+// creating a plugin-to-plugin import.
 
 import { describe, test, expect } from '@jest/globals';
 import {
     isReplayableIterationMessage,
     DRAIN_SUMMARY_KIND,
-} from '../../public/scripts/extensions/orchestrator/iter-studio/iter-message-filter.js';
+} from '../../public/scripts/iteration-library/iter-message-filter.js';
 
 describe('isReplayableIterationMessage — read-first replay filter', () => {
     test('regular user message → replay', () => {

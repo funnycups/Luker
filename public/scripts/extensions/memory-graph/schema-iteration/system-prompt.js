@@ -6,19 +6,28 @@
  *
  * Ported verbatim from schema-adapter.js (the buildSystemPrompt block inside
  * defineAdapter). The prompt describes the node-type schema fields and the
- * three editing tools the model can call. Pure string-building, no DOM and
- * no i18n binding — the popup that consumes this module is responsible for
+ * editing tools the model can call. Pure string-building, no DOM and no
+ * i18n binding — the popup that consumes this module is responsible for
  * any wrapping or interpolation if needed.
+ *
+ * Read-first contract: the popup no longer injects the working schema
+ * as an `[Current working schema]` outline block on every user turn.
+ * The AI is expected to call `mg_schema_read_fields([...])` to pull
+ * exact values from the live schema on demand before proposing set /
+ * remove / reorder tool calls.
  */
 
 const TOOL_SET_NODE_TYPE = 'mg_schema_set_node_type';
 const TOOL_REMOVE_NODE_TYPE = 'mg_schema_remove_node_type';
 const TOOL_REORDER_NODE_TYPES = 'mg_schema_reorder_node_types';
+const TOOL_READ_FIELDS = 'mg_schema_read_fields';
 
 export const DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT = [
     'You are editing the Memory Graph node-type schema for a SillyTavern chat.',
     '',
-    'The schema is an array of node-type definitions. Each entry describes a kind of fact the memory graph stores about the chat — characters, locations, events, relationships, etc. The runtime extracts these from the conversation and feeds them back to the writing model when relevant.',
+    'The schema is a JSON array of node-type definitions. Each entry describes a kind of fact the memory graph stores about the chat — characters, locations, events, relationships, etc. The runtime extracts these from the conversation and feeds them back to the writing model when relevant.',
+    '',
+    'Top-level shape: `schema = [{id, label, tableName, tableColumns, embeddingColumns, columnHints, requiredColumns, primaryKeyColumns, forceUpdate, editable, level, extractHint, extractionInstructions, extractEveryN, keywords, alwaysInject, latestOnly, compression}, ...]`. Nested `compression` is `{mode, threshold, fanIn, maxDepth, keepRecentLeaves, summarizeInstruction}`.',
     '',
     'Key fields per entry:',
     '- id (snake_case): stable identifier, unique. Renaming an id loses prior data, so prefer leaving existing ids alone.',
@@ -38,7 +47,11 @@ export const DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT = [
     '- latestOnly (BOOL): only the most recent entry is retained — appropriate for state-like data (e.g. current_emotional_state).',
     '- compression: hierarchical/flat fold-up rules (mode, threshold, fanIn, maxDepth, keepRecentLeaves, summarizeInstruction).',
     '',
-    'Tools you can call:',
+    'Reading the live schema:',
+    `- ${TOOL_READ_FIELDS}({paths: [...]}): pull exact values from the live schema array by lodash-style paths. Read-only. Common paths: "[N].id", "[N].label", "[N].tableColumns", "[N].tableColumns[K]", "[N].extractionInstructions", "[N].compression.mode", "length". Values whose JSON exceeds 5KB return a truncation envelope with a preview — narrow to a specific subfield to see the full value.`,
+    `- There is no up-front dump of the current schema in this prompt or in the user turn. Call ${TOOL_READ_FIELDS} on demand to see exactly what is stored before you propose changes; do not rely on a stale mental model between rounds.`,
+    '',
+    'Editing tools you can call:',
     `- ${TOOL_SET_NODE_TYPE}: upsert a single node type by id. Pass ALL fields you want set; existing values for the same id are replaced.`,
     `- ${TOOL_REMOVE_NODE_TYPE}: remove a node type by id. Refuses to remove the last remaining type.`,
     `- ${TOOL_REORDER_NODE_TYPES}: reorder by full list of ids in new order. All current ids must appear.`,
@@ -71,9 +84,9 @@ export const DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT = [
     '',
     'When the user asks for a change, call the appropriate tools to enact it. If multiple changes apply, you may emit multiple tool calls in one turn.',
     '',
-    'Multi-round iteration control:',
-    '- The popup auto-continues whenever you emit any tool call this round — your tool results become context for the next round so you can react to them.',
-    '- To end the iteration, simply respond with a plain text message and emit no tool calls. The loop exits and control returns to the user.',
+    'Multi-round loop:',
+    '- Any tool call this round (read or edit) keeps the loop running so you can react to the result next round.',
+    '- Respond with plain text and no tool calls when the request is fully addressed; that ends the loop and returns control to the user.',
 ].join('\n');
 
 export function buildSystemPrompt() {

@@ -83,6 +83,11 @@ import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
 import { buildSystemPrompt, DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { migrateMgSchemaSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
+import { dispatchMgSchemaReadFields } from './read-fields-dispatcher.js';
+import {
+    isReplayableIterationMessage,
+    DRAIN_SUMMARY_KIND,
+} from '../../../iteration-library/iter-message-filter.js';
 
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
@@ -94,6 +99,37 @@ const { isLorebookReadTool, LOREBOOK_READ_TOOL_DEFS, runLorebookReadTool: runLor
 
 async function runLorebookReadTool(call, avatar = '') {
     return runLorebookReadToolShared(call, { context: __ctx, avatar });
+}
+
+// MG schema iter-studio's read-fields tool. Lets the iterating AI pull
+// exact values from `state.live` (the schema array) by lodash-style
+// paths before proposing set / remove / reorder tool calls. Purely
+// inline-executed — the popup dispatches it synchronously and persists
+// the tool_result on the assistant message so the next round's
+// taskMessages replay carries it back to the model. See
+// read-fields-dispatcher.js for the sanitization-boundary call-out.
+const SCHEMA_READ_TOOL_NAME = 'mg_schema_read_fields';
+const SCHEMA_READ_TOOL_DEF = {
+    type: 'function',
+    function: {
+        name: SCHEMA_READ_TOOL_NAME,
+        description: 'Read exact values from the current live MG node-type schema by lodash-style paths. Read-only. The root is the schema array; common paths: "[N].id", "[N].label", "[N].tableColumns", "[N].tableColumns[K]", "[N].extractionInstructions", "[N].compression.mode", "length". Values whose JSON exceeds 5KB return a {__truncated__, length, preview, hint} envelope — narrow to a specific subfield.',
+        parameters: {
+            type: 'object',
+            properties: {
+                paths: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Lodash-style paths into the schema array.',
+                },
+            },
+            required: ['paths'],
+            additionalProperties: false,
+        },
+    },
+};
+function isSchemaReadTool(name) {
+    return String(name || '') === SCHEMA_READ_TOOL_NAME;
 }
 const STYLESHEET_HREF = '/scripts/extensions/memory-graph/schema-iteration/studio.css';
 const PROPOSAL_BUS_STYLESHEET_ID = 'mg_schema_it_proposal_bus_stylesheet';
@@ -931,6 +967,14 @@ export async function openSchemaIterationStudio(deps) {
                 content: text,
                 at: Date.now(),
                 auto: true,
+                // Tag distinguishes legitimate post-approval drain
+                // summaries (replayed to the LLM so it sees what the
+                // user decided about each proposal) from legacy
+                // pre-refactor AUTO CONTINUE fillers (also `auto:true`,
+                // no `kind`) that must be dropped when a pre-refactor
+                // session is resumed under the read-first loop
+                // contract. See iteration-library/iter-message-filter.js.
+                kind: DRAIN_SUMMARY_KIND,
             });
             state.isBusy = true;
             state.abortController = new AbortController();
@@ -942,7 +986,7 @@ export async function openSchemaIterationStudio(deps) {
                     await persistSession();
                     await render();
                     if (state.abortController?.signal?.aborted) break;
-                    turn = await runIterationTurn({ autoContinueFromResult: turn.executionResult });
+                    turn = await runIterationTurn();
                 }
             } catch (err) {
                 if (!isAbortError(err, state.abortController?.signal)) {
@@ -1038,19 +1082,22 @@ export async function openSchemaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     // Tool catalog assembly. The static catalog from `tools.js`
     // (`buildToolCatalog`) covers schema edits + the two reset control
-    // tools. The lorebook read tools are character-scoped — they dispatch
-    // through the CEA helper API which is per-character, so we splice
-    // them in only when scope is `character` AND an avatar is selected.
-    // Without an avatar `helperApis` would be empty and every read would
-    // return a "no character bound" error, so silently hiding the tools
-    // is clearer than offering them in global scope.
+    // tools. `mg_schema_read_fields` is always available (it reads the
+    // in-memory `state.live` schema and does not depend on any character
+    // binding). The lorebook read tools are character-scoped — they
+    // dispatch through the CEA helper API which is per-character, so we
+    // splice them in only when scope is `character` AND an avatar is
+    // selected. Without an avatar `helperApis` would be empty and every
+    // read would return a "no character bound" error, so silently hiding
+    // the tools is clearer than offering them in global scope.
     // ──────────────────────────────────────────────────────────────────
     function buildCatalogForScope(turnSnapshot) {
         const base = buildToolCatalog();
+        const withSchemaRead = [...base, SCHEMA_READ_TOOL_DEF];
         if (turnSnapshot?.helperSession?.scope === 'character' && turnSnapshot?.avatar) {
-            return [...base, ...LOREBOOK_READ_TOOL_DEFS];
+            return [...withSchemaRead, ...LOREBOOK_READ_TOOL_DEFS];
         }
-        return base;
+        return withSchemaRead;
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1612,54 +1659,23 @@ export async function openSchemaIterationStudio(deps) {
     }
 
     /**
-     * Build the augmented user prompt. Injects:
-     *   - iteration scope (character override vs global)
-     *   - current working schema (JSON, what the AI is editing)
-     *   - global baseline schema (only when it differs from the current)
-     *   - the user's actual request
-     * The model sees this as part of the conversation so it doesn't have
-     * to call tools just to see what's already there.
-     */
-    function stringifyForPrompt(value) {
-        try {
-            return JSON.stringify(value, null, 2);
-        } catch {
-            return String(value);
-        }
-    }
-
-    function buildAugmentedUserPrompt(userText, snapshot) {
-        const sourceScope = snapshot?.sourceScope
-            || (String(context?.characters?.[context?.characterId]?.avatar || '').trim() ? 'character' : 'global');
-        const characterName = typeof snapshot?.characterName === 'string'
-            ? snapshot.characterName
-            : (String(context?.characters?.[context?.characterId]?.avatar || '').trim()
-                ? String(context?.characters?.[context?.characterId]?.name
-                    || context?.characters?.[context?.characterId]?.avatar)
-                : '');
-        const currentSchema = stringifyForPrompt(state.live);
-        const baselineSource = Array.isArray(snapshot?.globalSchema)
-            ? snapshot.globalSchema
-            : normalizeNodeTypeSchema(settings?.nodeTypeSchema || []);
-        const baselineSchema = stringifyForPrompt(baselineSource);
-        const lines = [
-            `[Iteration scope] ${sourceScope}${characterName ? ` — ${characterName}` : ''}`,
-            '',
-            '[Current working schema]',
-            currentSchema,
-        ];
-        if (baselineSchema && baselineSchema !== currentSchema) {
-            lines.push('', '[Global baseline schema for reference]', baselineSchema);
-        }
-        lines.push('', '[User request]', String(userText || '').trim());
-        return lines.join('\n');
-    }
-
-    /**
      * Build the conversation history sent to the runner. Replays prior
-     * user/assistant turns so the model has context. Only the last user
-     * turn gets the augmented schema-outline prefix so the prompt budget
-     * doesn't bloat on every turn.
+     * user/assistant turns so the model has context. Under the read-first
+     * refactor the last-user message is passed VERBATIM (no injected
+     * `[Current working schema]` / `[Global baseline schema]` outline) —
+     * the iterating AI reads live state on demand via
+     * `mg_schema_read_fields`.
+     *
+     * `snapshot` is kept in the signature for call-site compatibility
+     * (some existing callers threaded the per-turn snapshot in for the
+     * old outline injection) but is no longer consulted.
+     *
+     * Legacy pre-refactor sessions carry `{role:'user', auto:true}`
+     * AUTO CONTINUE fillers between assistant tool-call rounds; those
+     * are dropped by `isReplayableIterationMessage` so a resumed
+     * pre-refactor session doesn't replay dead filler to the LLM.
+     * Legitimate drain-outcomes summaries (tagged `kind: 'drain_summary'`)
+     * are kept.
      *
      * Assistant messages that carry `toolCalls` + matching `toolResults`
      * (read-tool rounds) get the OpenAI tool-protocol replay shape:
@@ -1667,35 +1683,26 @@ export async function openSchemaIterationStudio(deps) {
      * per tool_call_id. Without this replay, "act on what you just read"
      * prompts couldn't see prior read results across user-driven turns.
      */
-    function buildTaskMessages(systemPrompt, snapshot) {
+    // eslint-disable-next-line no-unused-vars
+    function buildTaskMessages(systemPrompt, _snapshot) {
         const messages = [{ role: 'system', content: systemPrompt }];
-        const history = (state.session.messages || []).filter(m => {
-            const role = String(m?.role || '').toLowerCase();
-            return role === 'user' || role === 'assistant';
-        });
-        let lastUserIdx = -1;
-        for (let i = history.length - 1; i >= 0; i--) {
-            if (String(history[i].role).toLowerCase() === 'user') {
-                lastUserIdx = i;
-                break;
-            }
-        }
-        history.forEach((m, idx) => {
+        const history = (state.session.messages || []).filter(isReplayableIterationMessage);
+        history.forEach((m) => {
             const role = String(m.role).toLowerCase();
-            const content = idx === lastUserIdx && role === 'user'
-                ? buildAugmentedUserPrompt(String(m.content || ''), snapshot)
-                : String(m.content || '');
+            const content = String(m.content || '');
 
             // Replay read-tool calls + their results for assistant turns
             // that have them. Edit-tool calls intentionally NOT replayed:
             // they're sandbox-diff proposals the user reviews + applies
             // via the popup, not part of the OpenAI-protocol round-trip
-            // the model expects to see.
+            // the model expects to see. Both lorebook reads and schema
+            // reads are replay-eligible so the model can act on what it
+            // just read across user-driven turns.
             if (role === 'assistant') {
                 const toolResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
                 const resultIds = new Set(toolResults.map(r => String(r?.tool_call_id || '')).filter(Boolean));
                 const readCalls = Array.isArray(m?.toolCalls)
-                    ? m.toolCalls.filter(tc => isLorebookReadTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
+                    ? m.toolCalls.filter(tc => isLorebookReadTool(tc?.name) || isSchemaReadTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
                     : [];
                 if (readCalls.length > 0 && toolResults.length > 0) {
                     const toolCallsForHistory = readCalls.map((tc) => ({
@@ -1751,7 +1758,7 @@ export async function openSchemaIterationStudio(deps) {
         return messages;
     }
 
-    async function runIterationTurn({ autoContinueFromResult = null } = {}) {
+    async function runIterationTurn() {
         // Reuse the caller-owned AbortController when present so a Stop
         // click during handleSendMessage / continueAfterReviewDecision's
         // pre-await (persistSession + render) is honored. Fall back to a
@@ -1769,21 +1776,13 @@ export async function openSchemaIterationStudio(deps) {
         const turnSnapshot = captureTurnSnapshot();
         const systemPrompt = appendScopeHintIfNeeded(turnSnapshot.schemaIterSystemPrompt, turnSnapshot.helperSession);
 
-        // For auto-continue rounds, splice a synthetic user message into the
-        // visible history so the model has a fresh prompt to react to and the
-        // chat doesn't look like the model spoke twice in a row. Auto-continue
-        // fires whenever the prior round emitted any tool call — the runner
-        // already preserves prior tool_calls/tool_results in context, so this
-        // synthetic prompt just nudges the model to proceed or stop.
-        if (autoContinueFromResult) {
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'user',
-                content: 'Continue with the next iteration step. Respond with plain text and no tool calls when the request is fully addressed.',
-                at: Date.now(),
-                auto: true,
-            });
-        }
+        // Read-first refactor: continuation rounds replay the existing
+        // history verbatim (no AUTO CONTINUE user filler / no injected
+        // current-schema block). The outer loop keeps running as long
+        // as the previous round emitted any tool call — that's the sole
+        // continuation signal now, program-driven. The iterating AI is
+        // expected to call `mg_schema_read_fields` on demand to see any
+        // live-schema slice it needs.
 
         const taskMessages = buildTaskMessages(systemPrompt, turnSnapshot);
 
@@ -1887,8 +1886,14 @@ export async function openSchemaIterationStudio(deps) {
         // tools (schema mutations). Reads execute inline so their results
         // can be threaded back into the next round's task messages; edits
         // normalize into pending Edit ops the user reviews + applies.
-        const readToolCalls = nonControlCalls.filter((c) => isLorebookReadTool(c?.name));
-        const editToolCalls = nonControlCalls.filter((c) => !isLorebookReadTool(c?.name));
+        //
+        // Read tools split into two dispatchers: lorebook reads (call the
+        // shared iteration-library helper against the character's bound
+        // world books) and schema reads (`mg_schema_read_fields`, which
+        // pulls from `state.live` directly). Both return `{result, ok}`
+        // shape so the persisted tool_result envelope is uniform.
+        const readToolCalls = nonControlCalls.filter((c) => isLorebookReadTool(c?.name) || isSchemaReadTool(c?.name));
+        const editToolCalls = nonControlCalls.filter((c) => !isLorebookReadTool(c?.name) && !isSchemaReadTool(c?.name));
         const assistantText = firstAssistantText.trim();
 
         // Execute read tools synchronously. Each call gets a stable id so
@@ -1906,12 +1911,23 @@ export async function openSchemaIterationStudio(deps) {
             let resultPayload;
             let statusLabel = 'ok';
             try {
-                const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, avatarForReads);
-                if (out?.ok) {
-                    resultPayload = out.result;
+                if (isSchemaReadTool(call?.name)) {
+                    // Schema read — pure read against `state.live`.
+                    // `dispatchMgSchemaReadFields` throws `invalid_args`
+                    // on a non-array `paths`; anything else lands here
+                    // as a tool reply the AI can inspect and retry.
+                    resultPayload = await dispatchMgSchemaReadFields({
+                        liveSchema: state.live,
+                        args: call?.args,
+                    });
                 } else {
-                    resultPayload = { error: String(out?.error || 'unknown error') };
-                    statusLabel = 'fail';
+                    const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, avatarForReads);
+                    if (out?.ok) {
+                        resultPayload = out.result;
+                    } else {
+                        resultPayload = { error: String(out?.error || 'unknown error') };
+                        statusLabel = 'fail';
+                    }
                 }
             } catch (err) {
                 resultPayload = { error: String(err?.message || err || 'unknown error') };
