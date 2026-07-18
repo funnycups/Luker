@@ -86,8 +86,11 @@ import { migrateMgSchemaSessionsV2ToSidecar } from './session-migration-v2-to-si
 import { dispatchMgSchemaReadFields } from './read-fields-dispatcher.js';
 import {
     isReplayableIterationMessage,
-    DRAIN_SUMMARY_KIND,
 } from '../../../iteration-library/iter-message-filter.js';
+import {
+    buildEditToolResultPayload,
+    buildPayloadForOutcome,
+} from '../../orchestrator/iter-studio/edit-tool-result-envelope.js';
 
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';
@@ -930,6 +933,95 @@ export async function openSchemaIterationStudio(deps) {
         return false;
     }
 
+    // Build the assistant-message index used by the drain-outcome
+    // tool_result updater. Returns two maps:
+    //   - callIdToMsg: tool_call_id → owning assistant message id
+    //   - msgById:     assistant message id → the message object
+    // Walk state.session.messages once so applyOutcomesToToolResults can
+    // reuse both maps; they stay valid until the next mutation of the
+    // messages array. Mirror of orchestrator/iter-studio/studio.js's
+    // helper of the same name.
+    function buildAssistantMessageIndex() {
+        const callIdToMsg = new Map();
+        const msgById = new Map();
+        const msgs = state.session?.messages || [];
+        for (const m of msgs) {
+            if (!m || m.role !== 'assistant') continue;
+            const mid = String(m.id || '');
+            if (mid) msgById.set(mid, m);
+            const calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+            for (const tc of calls) {
+                const id = String(tc?.id || '');
+                if (id) callIdToMsg.set(id, mid);
+            }
+        }
+        return { callIdToMsg, msgById };
+    }
+
+    // Apply a batch of bus outcomes to persisted assistant-message
+    // tool_results. For each outcome, find the owning assistant message
+    // (via sourceCallId → callIdToMsg) and swap the pending tool_result
+    // envelope at matching tool_call_id to the resolved payload.
+    //
+    // Multi-edit cascade: MG schema iter-studio coalesces N chained
+    // edit-tool calls per turn into ONE bus entry keyed to the first
+    // callId (see runIterationTurn's `bus.propose` site — one profile-edit
+    // proposal per turn regardless of how many set/remove/reorder tool
+    // calls landed). When a profile-edit outcome fires, cascade its
+    // resolved status to every other still-`pending` edit tool_result in
+    // the same assistant message so the batch shares fate in the LLM's
+    // protocol view. Read-tool results (status:'ok' with concrete
+    // payloads) are never clobbered because the cascade only touches
+    // envelopes whose current content.status === 'proposal_pending'.
+    function applyOutcomesToToolResults(outcomes) {
+        if (!Array.isArray(outcomes) || outcomes.length === 0) return;
+        const { callIdToMsg, msgById } = buildAssistantMessageIndex();
+        const profileEditOutcomeByMsg = new Map();
+        for (const outcome of outcomes) {
+            const sourceCallId = String(outcome?.sourceCallId || '');
+            if (!sourceCallId) continue;
+            const mid = callIdToMsg.get(sourceCallId);
+            if (!mid) continue;
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const idx = results.findIndex((r) => String(r?.tool_call_id || '') === sourceCallId);
+            if (idx < 0) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            results[idx] = {
+                tool_call_id: sourceCallId,
+                content: payload,
+                status: nextStatus,
+            };
+            if (outcome?.kind === 'profile-edit') {
+                profileEditOutcomeByMsg.set(mid, outcome);
+            }
+        }
+        for (const [mid, outcome] of profileEditOutcomeByMsg) {
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i];
+                const content = r?.content;
+                const isPending = content
+                    && typeof content === 'object'
+                    && content.status === 'proposal_pending';
+                if (!isPending) continue;
+                results[i] = {
+                    tool_call_id: String(r?.tool_call_id || ''),
+                    content: payload,
+                    status: nextStatus,
+                };
+            }
+        }
+    }
+
     async function drainBusOutcomes() {
         if (drainScheduled) return;
         const outcomes = bus.drainOutcomes();
@@ -952,30 +1044,24 @@ export async function openSchemaIterationStudio(deps) {
         const allOutcomes = __pendingDrainStash.length
             ? [...__pendingDrainStash.splice(0), ...outcomes]
             : outcomes;
-        const committed = allOutcomes.filter((o) => o.status === 'committed');
-        const rejected = allOutcomes.filter((o) => o.status === 'rejected');
-        const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
-        const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
-        if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
-        const text = buildBusOutcomeUserText({ committed, rejected, conflicts, rolledBack });
-        if (!text) return;
+        // Update the per-tool_call_id tool_result envelopes in place so
+        // the next round's role:'tool' replay carries the user's
+        // decision. Every edit tool_call has a persisted `pending`
+        // tool_result from emission time (see runIterationTurn's edit
+        // loop) that we swap to committed / rejected / conflict /
+        // rolled_back per the outcome.
+        //
+        // Multi-edit-per-turn cascade: MG collapses N chained edit calls
+        // per turn into ONE bus `profile-edit` entry keyed to the first
+        // callId. The outcome fires once and covers the whole batch, so
+        // cascade the same status to every other still-pending edit
+        // tool_result in the same assistant message. Only profile-edit
+        // outcomes cascade; 1:1 kinds match by sourceCallId alone.
+        applyOutcomesToToolResults(allOutcomes);
+        const hadUpdate = allOutcomes.length > 0;
+        if (!hadUpdate) return;
         drainScheduled = true;
         try {
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'user',
-                content: text,
-                at: Date.now(),
-                auto: true,
-                // Tag distinguishes legitimate post-approval drain
-                // summaries (replayed to the LLM so it sees what the
-                // user decided about each proposal) from legacy
-                // pre-refactor AUTO CONTINUE fillers (also `auto:true`,
-                // no `kind`) that must be dropped when a pre-refactor
-                // session is resumed under the read-first loop
-                // contract. See iteration-library/iter-message-filter.js.
-                kind: DRAIN_SUMMARY_KIND,
-            });
             state.isBusy = true;
             state.abortController = new AbortController();
             await persistSession();
@@ -1011,33 +1097,6 @@ export async function openSchemaIterationStudio(deps) {
         }
     }
     const __pendingDrainStash = [];
-
-    function buildBusOutcomeUserText({ committed, rejected, conflicts, rolledBack }) {
-        const lines = [];
-        const total = committed.length + rejected.length + conflicts.length + rolledBack.length;
-        lines.push(`[User reviewed ${total} proposal(s) for the schema:`);
-        if (committed.length) {
-            lines.push(`Committed (${committed.length}):`);
-            for (const o of committed) lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}`);
-        }
-        if (rejected.length) {
-            lines.push(`Rejected (${rejected.length}):`);
-            for (const o of rejected) lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}`);
-        }
-        if (conflicts.length) {
-            lines.push(`Skipped — target had been changed since you captured the diff, so the write was NOT applied (${conflicts.length}). If still needed, re-read the current state and re-issue:`);
-            for (const o of conflicts) {
-                const err = o.error ? ` — ${o.error}` : '';
-                lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}${err}`);
-            }
-        }
-        if (rolledBack.length) {
-            lines.push(`Rolled back (${rolledBack.length}):`);
-            for (const o of rolledBack) lines.push(`  - ${o.kind}${o.target ? ` (${o.target})` : ''}`);
-        }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
-        return lines.join('\n');
-    }
 
     // ──────────────────────────────────────────────────────────────────
     // Live state — re-read on each turn so external edits (user manually
@@ -1691,51 +1750,59 @@ export async function openSchemaIterationStudio(deps) {
             const role = String(m.role).toLowerCase();
             const content = String(m.content || '');
 
-            // Replay read-tool calls + their results for assistant turns
-            // that have them. Edit-tool calls intentionally NOT replayed:
-            // they're sandbox-diff proposals the user reviews + applies
-            // via the popup, not part of the OpenAI-protocol round-trip
-            // the model expects to see. Both lorebook reads and schema
-            // reads are replay-eligible so the model can act on what it
-            // just read across user-driven turns.
-            if (role === 'assistant') {
-                const toolResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
-                const resultIds = new Set(toolResults.map(r => String(r?.tool_call_id || '')).filter(Boolean));
-                const readCalls = Array.isArray(m?.toolCalls)
-                    ? m.toolCalls.filter(tc => isLorebookReadTool(tc?.name) || isSchemaReadTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
-                    : [];
-                if (readCalls.length > 0 && toolResults.length > 0) {
-                    const toolCallsForHistory = readCalls.map((tc) => ({
-                        id: String(tc?.id || ''),
-                        type: 'function',
-                        function: {
-                            name: String(tc?.name || ''),
-                            arguments: JSON.stringify(tc?.args || {}),
-                        },
-                    }));
-                    const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
-                    const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
-                        ? m.reasoningBlocks
-                        : null;
-                    const persistedReasoningDetails = Array.isArray(m?.reasoningDetails) && m.reasoningDetails.length > 0
-                        ? m.reasoningDetails
-                        : null;
-                    messages.push({
-                        role: 'assistant',
-                        content,
-                        ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
-                        ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
-                        ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
-                        tool_calls: toolCallsForHistory,
-                    });
-                    const resultById = new Map();
-                    for (const r of toolResults) {
-                        if (r && r.tool_call_id != null) resultById.set(String(r.tool_call_id), r);
-                    }
-                    for (const tc of readCalls) {
-                        const r = resultById.get(String(tc?.id || ''));
-                        if (!r) continue;
-                        let serialized = '';
+            // Replay assistant message's tool calls with their matching
+            // persisted tool_results. Every tool_call MUST have a
+            // corresponding role:'tool' message or the provider 400s
+            // ("tool_use ids must have matching tool_result").
+            //
+            // Read tools carry their real result (executed synchronously
+            // at emission time). Edit tools carry a `proposal_pending`
+            // envelope at emission time that `drainBusOutcomes` updates
+            // in place to committed / rejected / conflict / rolled_back
+            // once the user acts.
+            //
+            // Legacy sessions (pre tool_call/tool_result round-trip) may
+            // have persisted edit tool_calls WITHOUT a matching
+            // toolResults entry (the old code stripped edit calls from
+            // history entirely). Synthesize a `committed` payload inline
+            // for those — best-effort, since the edit is on disk when
+            // the user is resuming the session it was committed at some
+            // point.
+            const persistedResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
+            const persistedCalls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
+            if (role === 'assistant' && persistedCalls.length > 0) {
+                const toolCallsForHistory = persistedCalls.map((tc) => ({
+                    id: String(tc?.id || ''),
+                    type: 'function',
+                    function: {
+                        name: String(tc?.name || ''),
+                        arguments: JSON.stringify(tc?.args || {}),
+                    },
+                }));
+                const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
+                const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
+                    ? m.reasoningBlocks
+                    : null;
+                const persistedReasoningDetails = Array.isArray(m?.reasoningDetails) && m.reasoningDetails.length > 0
+                    ? m.reasoningDetails
+                    : null;
+                messages.push({
+                    role: 'assistant',
+                    content,
+                    ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
+                    ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
+                    ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
+                    tool_calls: toolCallsForHistory,
+                });
+                const resultById = new Map();
+                for (const r of persistedResults) {
+                    if (r && r.tool_call_id != null) resultById.set(String(r.tool_call_id), r);
+                }
+                for (const tc of persistedCalls) {
+                    const callId = String(tc?.id || '');
+                    const r = resultById.get(callId);
+                    let serialized;
+                    if (r) {
                         try {
                             serialized = typeof r.content === 'string'
                                 ? r.content
@@ -1743,14 +1810,19 @@ export async function openSchemaIterationStudio(deps) {
                         } catch {
                             serialized = '';
                         }
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: String(tc?.id || ''),
-                            content: serialized,
-                        });
+                    } else {
+                        // Legacy fill: assume committed. See
+                        // edit-tool-result-envelope.js for the parallel
+                        // emission-time shape.
+                        serialized = JSON.stringify(buildEditToolResultPayload('committed'));
                     }
-                    return;
+                    messages.push({
+                        role: 'tool',
+                        tool_call_id: callId,
+                        content: serialized,
+                    });
                 }
+                return;
             }
 
             messages.push({ role, content });
@@ -1984,10 +2056,18 @@ export async function openSchemaIterationStudio(deps) {
                     // MG normalize only emits path:'' set edits, so the
                     // cumulative state is just the last edit's newValue.
                     chainedLive = normalized[normalized.length - 1].newValue;
-                    // Successful queued edits don't push a toolResult here —
-                    // the post-review synthetic user message carries the
-                    // real outcome (applied vs skipped). Adding "queued"
-                    // would double the per-tool feedback.
+                    // Successful sandbox-diff — edit is queued for user
+                    // review via `bus.propose` below. Persist a `pending`
+                    // tool_result envelope keyed to this call so every
+                    // tool_call has a matching role:'tool' message in
+                    // the LLM's protocol history. `drainBusOutcomes`
+                    // updates this in place to committed / rejected /
+                    // conflict / rolled_back when the user acts.
+                    editToolResults.push({
+                        tool_call_id: callId,
+                        content: buildEditToolResultPayload('pending'),
+                        status: 'pending',
+                    });
                 } else {
                     // Genuine noop: the executor accepted the call but
                     // the post-call schema matched the pre-call schema
