@@ -280,12 +280,14 @@ describe('CPA — normalizeMessageShape (legacy message migration)', () => {
         expect(n.auto).toBe(true);
     });
 
-    test('preserves the kind discriminator on auto:true drain-summary messages', () => {
-        // The read-first replay filter (isReplayableIterationMessage) drops
-        // untagged auto:true fillers but keeps auto:true messages tagged
-        // with a non-empty `kind`. If normalizeMessageShape dropped `kind`
-        // on the round-trip, resumed sessions would lose their drain
-        // summaries and the AI would miss user-decision signal.
+    test('preserves the kind discriminator on legacy auto:true messages', () => {
+        // Legacy pre-refactor sessions may carry `{auto:true, kind:'drain_summary'}`
+        // user messages from the retired drain-summary channel. The
+        // read-first replay filter (isReplayableIterationMessage) now
+        // drops ALL auto:true user messages regardless of tag, but
+        // normalizeMessageShape must still preserve `kind` on disk
+        // for backward-compat inspection tooling and to keep session
+        // shape stable across schema versions.
         const n = normalizeMessageShape({
             id: 'a', role: 'user', content: '[User reviewed …]', at: 100,
             auto: true,

@@ -1730,11 +1730,12 @@ export async function openSchemaIterationStudio(deps) {
      * old outline injection) but is no longer consulted.
      *
      * Legacy pre-refactor sessions carry `{role:'user', auto:true}`
-     * AUTO CONTINUE fillers between assistant tool-call rounds; those
-     * are dropped by `isReplayableIterationMessage` so a resumed
+     * AUTO CONTINUE fillers and drain-summary `[User reviewed …]`
+     * messages between assistant tool-call rounds; all of them are
+     * dropped by `isReplayableIterationMessage` so a resumed
      * pre-refactor session doesn't replay dead filler to the LLM.
-     * Legitimate drain-outcomes summaries (tagged `kind: 'drain_summary'`)
-     * are kept.
+     * Post-refactor iter-studio never emits auto:true user messages;
+     * edit outcomes flow through in-place role:'tool' result updates.
      *
      * Assistant messages that carry `toolCalls` + matching `toolResults`
      * (read-tool rounds) get the OpenAI tool-protocol replay shape:

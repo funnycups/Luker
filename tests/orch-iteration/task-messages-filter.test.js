@@ -1,34 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups
 //
-// Pins the pre-refactor-safe replay filter used by studio.js's
-// `buildTaskMessages`. Under the read-first refactor the iter-studio no
-// longer emits a synthetic `AUTO CONTINUE\n...` user message between
-// assistant tool-call rounds — the loop is program-driven by tool-call
-// presence. But sessions persisted before the refactor still carry
-// those `{role:'user', auto:true, content:'AUTO CONTINUE\n...'}` filler
-// messages in settings, and replaying them would (a) mislead the LLM
-// and (b) break the pure tool-call loop contract for anyone resuming a
-// pre-refactor session.
-//
-// The filter (isReplayableIterationMessage) drops legacy fillers via
-// the (auto === true && kind !== DRAIN_SUMMARY_KIND) check, while
-// keeping the legitimate drain-outcomes summaries pushed by
-// drainBusOutcomes (tagged `kind: 'drain_summary'`).
+// Pins the read-first replay filter used by studio.js's
+// `buildTaskMessages`. After the 2026-07-18 edit tool_call/tool_result
+// round-trip refactor, iter-studio never emits `auto:true` user
+// messages — edit outcomes flow through in-place `role:'tool'` result
+// envelopes keyed by tool_call_id. But sessions persisted before that
+// refactor still carry two flavours of legacy auto:true user filler:
+// (a) `AUTO CONTINUE\n...` filler between assistant tool-call rounds,
+// (b) `[User reviewed N proposal(s): ...]` drain summaries tagged
+// `kind:'drain_summary'`. Both must be dropped on rebuild so a resumed
+// pre-refactor session doesn't replay dead filler to the LLM.
 //
 // Structural assertions only — never grep the AUTO CONTINUE prose (that
 // would violate the no-prompt-body-regex constraint).
 //
 // The predicate lives in its own module (iteration-library/iter-message-filter.js)
 // so it can be tested without dragging studio.js's DOM / ST-context import
-// graph into jest, and so the MG schema iter-studio can share it without
-// creating a plugin-to-plugin import.
+// graph into jest, and so all four iter-studios can share it without
+// creating plugin-to-plugin imports.
 
 import { describe, test, expect } from '@jest/globals';
-import {
-    isReplayableIterationMessage,
-    DRAIN_SUMMARY_KIND,
-} from '../../public/scripts/iteration-library/iter-message-filter.js';
+import { isReplayableIterationMessage } from '../../public/scripts/iteration-library/iter-message-filter.js';
 
 describe('isReplayableIterationMessage — read-first replay filter', () => {
     test('regular user message → replay', () => {
@@ -48,20 +41,25 @@ describe('isReplayableIterationMessage — read-first replay filter', () => {
         })).toBe(false);
     });
 
-    test('drain_summary user message (auto:true, kind:drain_summary) → replay', () => {
-        // drainBusOutcomes tags its post-approval summary so it replays
-        // even though it's `auto:true`.
+    test('legacy drain-summary user message (auto:true, kind:drain_summary) → DROP', () => {
+        // Pre-tool-call-round-trip-refactor drain summaries used to be
+        // pushed by drainBusOutcomes. Now iter-studio uses in-place
+        // role:'tool' result updates instead; the summary channel is
+        // retired. Legacy sessions may still carry these on disk; they
+        // are dropped so the LLM only sees the resolved tool_result
+        // envelopes going forward.
         expect(isReplayableIterationMessage({
             role: 'user',
             auto: true,
-            kind: DRAIN_SUMMARY_KIND,
+            kind: 'drain_summary',
             content: '[User reviewed 2 proposal(s): ...]',
-        })).toBe(true);
+        })).toBe(false);
     });
 
-    test('legacy filler with a foreign kind tag → still DROP', () => {
-        // Forward-compat: any auto:true user message that isn't
-        // specifically drain_summary is dropped.
+    test('any auto:true user message regardless of kind → DROP', () => {
+        // Post-refactor: no legit auto:true user messages exist. Any
+        // tag (drain_summary / arbitrary future kinds / no kind at all)
+        // is treated identically and dropped.
         expect(isReplayableIterationMessage({
             role: 'user',
             auto: true,
@@ -79,7 +77,7 @@ describe('isReplayableIterationMessage — read-first replay filter', () => {
     });
 
     test('assistant with auto:true → replay (auto only gates user role)', () => {
-        // The filter only drops legacy AUTO CONTINUE on `role === 'user'`.
+        // The filter only drops legacy fillers on `role === 'user'`.
         // Assistant messages are never gated by `auto`.
         expect(isReplayableIterationMessage({ role: 'assistant', auto: true, content: 'x' })).toBe(true);
     });
@@ -92,31 +90,20 @@ describe('isReplayableIterationMessage — read-first replay filter', () => {
 
     test('end-to-end shape: mixed history filters to correct set (count-based assertion, no prose grep)', () => {
         // Realistic pre-refactor session mix: 1 normal user, 1 assistant,
-        // 1 legacy AUTO CONTINUE filler, 1 drain_summary. Expected
-        // replay set: [normal-user, assistant, drain_summary] — 3 items.
+        // 1 legacy AUTO CONTINUE filler, 1 legacy drain_summary. Expected
+        // replay set: [normal-user, assistant] — 2 items.
         const persisted = [
             { role: 'user', content: 'iterate on my prompt' },
             { role: 'assistant', content: 'reading fields...' },
             { role: 'user', auto: true, content: 'AUTO CONTINUE\n\n<simulation_results>(none)</simulation_results>' },
-            { role: 'user', auto: true, kind: DRAIN_SUMMARY_KIND, content: '[User reviewed 1 proposal(s): ...]' },
+            { role: 'user', auto: true, kind: 'drain_summary', content: '[User reviewed 1 proposal(s): ...]' },
         ];
         const replayed = persisted.filter(isReplayableIterationMessage);
-        expect(replayed).toHaveLength(3);
-        // Structural identity: the AUTO CONTINUE entry (index 2) is gone,
-        // the drain_summary entry (index 3) survives.
+        expect(replayed).toHaveLength(2);
+        // Structural identity: both auto:true entries are gone.
         expect(replayed[0]).toBe(persisted[0]);
         expect(replayed[1]).toBe(persisted[1]);
-        expect(replayed[2]).toBe(persisted[3]);
-        // Explicit: legacy filler NOT in output.
-        expect(replayed.find((m) => m.auto === true && m.kind !== DRAIN_SUMMARY_KIND)).toBeUndefined();
-    });
-
-    test('DRAIN_SUMMARY_KIND constant stable identity (contract with drainBusOutcomes push site)', () => {
-        // Guard: if this constant drifts, the drain-summary tag on the
-        // studio.js push site (drainBusOutcomes) and this filter must
-        // move together. String value is not part of the runtime API
-        // (only ever compared internally), but keeping it stable makes
-        // debugging via dumped settings.json easier.
-        expect(DRAIN_SUMMARY_KIND).toBe('drain_summary');
+        // Explicit: no auto:true user message survives.
+        expect(replayed.find((m) => m.role === 'user' && m.auto === true)).toBeUndefined();
     });
 });

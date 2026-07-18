@@ -682,17 +682,16 @@ function buildSeedTaskMessages(state, systemPrompt) {
     // pushed by drainBusOutcomes / maybeAutoApply / continueAfterReviewDecision
     // BEFORE the tool_call/tool_result round-trip refactor). The read-first
     // pure-tool-call loop no longer pushes these — user-decision signal
-    // now rides on the resolved tool_result envelopes. Legacy tagged
-    // drain-summary messages (`kind:'drain_summary'`) still replay via
-    // the discriminator until Task 5 retires the tag entirely.
-    // See iteration-library/iter-message-filter.js for the discriminator.
+    // now rides on the resolved tool_result envelopes. All `auto:true`
+    // user-role messages are now dropped regardless of tag.
+    // See iteration-library/iter-message-filter.js.
     const persistedMessages = Array.isArray(state.session.messages) ? state.session.messages : [];
     for (const m of persistedMessages) {
         const role = String(m?.role || '').toLowerCase();
         if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
         // Assistant + system messages always replay; user messages go
-        // through the discriminator (drop legacy auto:true, keep
-        // drain_summary-tagged auto:true, keep everything else).
+        // through the discriminator (drop legacy auto:true fillers, keep
+        // real user typing).
         if (role === 'user' && !isReplayableIterationMessage(m)) continue;
         const content = String(m?.content || '');
 

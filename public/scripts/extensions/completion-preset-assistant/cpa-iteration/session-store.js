@@ -62,11 +62,12 @@ export function makeMessageId() {
  * Normalize a message read from disk into the shape rendered today.
  * Legacy sessions persisted only `{role, content}`; the upgraded schema
  * adds `id`, `at`, optional `toolCalls`, `edits`, `appliedAt`,
- * `appliedTarget`, `rolledBackAt`, an `auto` flag for synthetic
- * post-decision drain-summary user messages, and a `kind` discriminator
- * (`DRAIN_SUMMARY_KIND`) that separates legit drain summaries from
- * pre-refactor "AUTO CONTINUE" fillers so the read-first replay filter
- * (`isReplayableIterationMessage`) can drop the latter.
+ * `appliedTarget`, `rolledBackAt`, and an `auto` flag for legacy
+ * pre-refactor synthetic user messages. Legacy sessions may also carry
+ * a `kind` discriminator on those auto messages (`drain_summary`); it
+ * is preserved for backward compat but no longer influences replay —
+ * `isReplayableIterationMessage` now drops every `auto:true` user
+ * message regardless of tag.
  *
  * Tolerance: missing `id` regenerates one, missing `at` falls back to
  * the session's updatedAt, missing arrays stay undefined (renderer

@@ -337,22 +337,33 @@ test.describe('#118 — iter-studio batch approval gate (orchestrator custom-too
             'exactly one follow-up round should fire after "Approve all pending" — >1 means the drain fired mid-batch',
         ).toBe(1);
 
-        // The synthetic message the studio pushed to the mock LLM must
-        // report "reviewed 3 proposal(s)" — this is the *user-visible*
-        // form of the bulk-approval bug. If we count fewer than 3, the
-        // LLM saw a partial batch (the exact symptom of the pre-fix
-        // rAF-mid-loop drain).
+        // The follow-up request must carry three `role:'tool'`
+        // messages whose payloads report `status:'committed'` — one per
+        // approved card. This is the post-refactor channel: instead of
+        // pushing a synthetic "[User reviewed 3 proposal(s): …]" user
+        // message, `drainBusOutcomes` updates the pending tool_result
+        // envelopes in place. If fewer than 3 committed tool_results
+        // appear, the drain fired mid-batch (the exact pre-fix symptom
+        // of the rAF-mid-loop drain).
         const followupReq = mock.requests
             .slice()
             .reverse()
             .find((r) => String(r.url || '').includes('chat/completions'));
         expect(followupReq, 'must have captured the follow-up chat request body').toBeTruthy();
         const followupBody = followupReq?.body || {};
-        const userMessages = (followupBody.messages || []).filter((m) => m && m.role === 'user');
-        const lastUser = userMessages.length ? String(userMessages[userMessages.length - 1].content || '') : '';
-        expect(lastUser,
-            'the follow-up round\'s last user message should be the studio-injected batch-outcome summary — a missing "reviewed 3" means the drain fired before the bulk-approve loop finished',
-        ).toMatch(/reviewed\s+3\s+proposal/i);
+        const toolMessages = (followupBody.messages || []).filter((m) => m && m.role === 'tool');
+        const committedToolResults = toolMessages.filter((m) => {
+            const raw = typeof m.content === 'string' ? m.content : '';
+            try {
+                const parsed = JSON.parse(raw);
+                return parsed && parsed.status === 'committed';
+            } catch {
+                return false;
+            }
+        });
+        expect(committedToolResults.length,
+            'the follow-up round must contain three role:\'tool\' messages with status:\'committed\' — a smaller count means the drain fired before the bulk-approve loop finished',
+        ).toBe(3);
 
         // Also assert every bulk tool made it to disk.
         const stagedNames = await page.evaluate(() => {

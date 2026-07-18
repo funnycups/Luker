@@ -2,23 +2,21 @@
 // Copyright (C) 2026 FunnyCups
 
 // Pins the read-first refactor's rebuild-time message filter for CEA
-// card iter-studio. Same discriminator contract as
-// `iteration-library/iter-message-filter.js` (shared with orchestrator
-// iter-studio and MG schema iter-studio):
+// card iter-studio. Same contract as the shared
+// `iteration-library/iter-message-filter.js`:
 //
-//   role == 'user' + auto == true + kind !== DRAIN_SUMMARY_KIND  → DROP
-//   role == 'user' + auto == true + kind == DRAIN_SUMMARY_KIND   → KEEP
-//   role == 'user' + auto missing/false                          → KEEP
-//   role == 'assistant'                                          → KEEP
-//   role == 'system'                                             → KEEP
-//   any other role                                               → DROP
+//   role == 'user' + auto == true          → DROP (all legacy fillers)
+//   role == 'user' + auto missing/false    → KEEP
+//   role == 'assistant'                    → KEEP
+//   role == 'system'                       → KEEP
+//   any other role                         → DROP
 //
-// Legacy pre-refactor sessions have untagged `auto:true` user fillers
-// (from drainBusOutcomes / continueAfterReviewDecision / auto-apply)
-// that must be silently dropped when a session is resumed under the
-// read-first pure-tool-call loop — replaying them would poison the
-// model with stale "[User reviewed …]" scaffolding whose context the
-// current round no longer matches.
+// Legacy pre-refactor sessions carry two flavours of `auto:true` user
+// filler: (a) untagged AUTO CONTINUE, (b) `[User reviewed …]` drain
+// summaries tagged `kind:'drain_summary'`. Both are dropped on rebuild
+// so a resumed session doesn't replay dead scaffolding to the LLM.
+// Post-refactor iter-studio never emits `auto:true` user messages;
+// edit outcomes flow through in-place role:'tool' result envelopes.
 
 import { jest } from '@jest/globals';
 
@@ -69,10 +67,8 @@ jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assis
 }));
 
 let studio;
-let filterModule;
 beforeAll(async () => {
     studio = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/studio.js');
-    filterModule = await import('../../public/scripts/iteration-library/iter-message-filter.js');
 });
 
 describe('buildSeedTaskMessages — read-first legacy filler filter', () => {
@@ -103,12 +99,15 @@ describe('buildSeedTaskMessages — read-first legacy filler filter', () => {
         expect(out.some(m => String(m?.content || '').includes('Legacy filler'))).toBe(false);
     });
 
-    test('drain-summary-tagged auto:true user message is KEPT (post-approval outcomes are real signal)', () => {
-        // Post-refactor drainBusOutcomes / auto-apply /
-        // continueAfterReviewDecision tag their summary message with
-        // `kind: DRAIN_SUMMARY_KIND`. These carry real user-decision
-        // signal (which proposals were committed, which conflicted)
-        // and MUST replay so the model knows what state it moved.
+    test('legacy drain-summary-tagged auto:true user message is also DROPPED (channel retired)', () => {
+        // Pre-refactor drainBusOutcomes / auto-apply /
+        // continueAfterReviewDecision used to tag their summary message
+        // with `kind: 'drain_summary'` to distinguish it from
+        // AUTO CONTINUE fillers. After the 2026-07-18 edit tool_call
+        // round-trip refactor, that channel is retired — edit outcomes
+        // ride on in-place role:'tool' result envelopes. Legacy tagged
+        // summaries on disk are now treated exactly like untagged
+        // fillers: dropped on rebuild.
         const state = {
             session: {
                 messages: [
@@ -118,16 +117,15 @@ describe('buildSeedTaskMessages — read-first legacy filler filter', () => {
                         role: 'user',
                         content: '[User reviewed 1 proposal(s): Committed (1): cea-character-edits]',
                         auto: true,
-                        kind: filterModule.DRAIN_SUMMARY_KIND,
+                        kind: 'drain_summary',
                     },
                 ],
             },
         };
         const out = studio._internalBuildSeedTaskMessages(state, 'SYSTEM');
-        expect(out).toHaveLength(4);
-        // The drain-summary content survives at the tail.
-        expect(out[3].role).toBe('user');
-        expect(String(out[3].content)).toContain('User reviewed');
+        // [0] system, [1] user (real), [2] assistant. Drain summary dropped.
+        expect(out).toHaveLength(3);
+        expect(out.some(m => String(m?.content || '').includes('User reviewed'))).toBe(false);
     });
 
     test('non-auto user messages always survive (regular human turns)', () => {

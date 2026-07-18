@@ -891,8 +891,8 @@ export async function openCpaIterationStudio(deps) {
         // loops) that we swap to committed / rejected / conflict /
         // rolled_back per the outcome. Replaces the pre-refactor
         // `[User reviewed N proposal(s): ...]` synthetic user message
-        // push tagged with DRAIN_SUMMARY_KIND — the tool_result
-        // envelopes carry the same information at the protocol layer.
+        // push — the tool_result envelopes carry the same information
+        // at the protocol layer.
         applyOutcomesToToolResults(allOutcomes);
         drainScheduled = true;
         try {
@@ -1755,16 +1755,14 @@ export async function openCpaIterationStudio(deps) {
 
     function buildTaskMessages(systemPrompt, skillsBlock = '') {
         const messages = [{ role: 'system', content: systemPrompt }];
-        // Replay filter — drop legacy `auto:true` "AUTO CONTINUE" fillers
-        // from pre-refactor sessions while preserving assistant turns and
-        // real user typing. Legacy drain-summary user messages tagged
-        // `kind: DRAIN_SUMMARY_KIND` still slip through this predicate;
-        // Task 5 will drop them once the DRAIN_SUMMARY_KIND channel is
-        // fully retired. Until then, the LLM may see mild duplication
-        // between the legacy prose and the resolved tool_result envelope
-        // for the same batch — consistent signal, not conflicting.
-        // The pure tool-call loop is program-driven — tool call presence
-        // is the continue signal, no synthetic user filler between rounds.
+        // Replay filter — drop legacy `auto:true` user messages (both
+        // pre-refactor "AUTO CONTINUE" fillers and pre-refactor drain
+        // summaries) while preserving assistant turns and real user
+        // typing. Post-refactor iter-studio never emits auto:true user
+        // messages; edit outcomes flow through in-place role:'tool'
+        // result envelopes. The pure tool-call loop is program-driven —
+        // tool call presence is the continue signal, no synthetic user
+        // filler between rounds.
         const history = (state.session.messages || []).filter(isReplayableIterationMessage);
         // Find the last user message — only that one gets the augmented
         // prefix (target + reference + skills block), so replayed earlier

@@ -5,7 +5,7 @@
 // EVERY persisted tool_call with a matching role:'tool' message, and
 // `drainBusOutcomes` must update the persisted tool_result envelope in
 // place instead of pushing a synthetic `[User reviewed N proposal(s):
-// ...]` user message tagged `DRAIN_SUMMARY_KIND`.
+// ...]` user message.
 //
 // Mirrors tests/mg-schema-iteration/task-messages-toolcall-roundtrip.test.js
 // but adds CPA-specific coverage for the THREE bus proposal kinds CPA

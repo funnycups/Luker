@@ -2411,11 +2411,12 @@ export async function openOrchestratorIterationStudio(deps) {
     function buildTaskMessages(systemPrompt, _lastUserText, _lastUserOpts) {
         const messages = [{ role: 'system', content: systemPrompt }];
         // Message replay filter — see isReplayableIterationMessage
-        // (module scope) for the drop rules. Legacy pre-refactor AUTO
-        // CONTINUE fillers (auto:true with no `kind`) are dropped so
-        // resumed pre-refactor sessions don't replay dead filler to
-        // the LLM; drain-outcomes summaries (auto:true, kind:'drain_summary')
-        // are kept.
+        // (module scope). All `auto:true` user-role messages are dropped
+        // (both legacy AUTO CONTINUE fillers and legacy drain-summary
+        // `[User reviewed …]` messages from before the 2026-07-18 edit
+        // tool_call round-trip refactor). Post-refactor iter-studio
+        // never emits auto:true user messages; edit outcomes flow
+        // through in-place role:'tool' result updates.
         const history = (state.session.messages || []).filter(isReplayableIterationMessage);
         history.forEach((m) => {
             const role = String(m.role).toLowerCase();

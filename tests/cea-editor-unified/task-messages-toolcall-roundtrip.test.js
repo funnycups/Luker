@@ -6,10 +6,10 @@
 // `drainBusOutcomes` must update the persisted tool_result envelope in
 // place instead of pushing a synthetic user message, and the dead
 // legacy helpers (`maybeAutoApply`, `continueAfterReviewDecision`) must
-// no longer push a `DRAIN_SUMMARY_KIND` user message either — auto-apply
-// outcomes flow through the same in-place tool_result update path as
-// review-mode approvals, and discard-flow post-review rejects the
-// still-pending tool_result envelopes in place.
+// no longer push a synthetic user message either — auto-apply outcomes
+// flow through the same in-place tool_result update path as review-mode
+// approvals, and discard-flow post-review rejects the still-pending
+// tool_result envelopes in place.
 //
 // Mirrors tests/mg-schema-iteration/task-messages-toolcall-roundtrip.test.js
 // but adds CEA-specific describes for:
