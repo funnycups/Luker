@@ -5114,7 +5114,12 @@ async function executeAgendaIterationToolCalls(context, session, toolCalls, abor
         }
         if (READ_FIELDS_TOOL_NAMES.has(name)) {
             try {
-                const result = await dispatchReadFields({ session, args });
+                // Sanitize before exposing to the LLM so any future
+                // scratch field / debug slot on `session.workingProfile`
+                // never leaks into a read-fields response envelope. This
+                // executor is the agenda-mode handler.
+                const sanitizedProfile = sanitizeAgendaWorkingProfile(session?.workingProfile || {});
+                const result = await dispatchReadFields({ sanitizedProfile, args });
                 pushToolResult({ ok: true, ...result });
             } catch (err) {
                 const detail = String(err?.message || err || 'invalid_args');
@@ -5261,7 +5266,12 @@ async function executeLoopIterationToolCalls(context, session, toolCalls, abortS
         }
         if (READ_FIELDS_TOOL_NAMES.has(name)) {
             try {
-                const result = await dispatchReadFields({ session, args });
+                // Sanitize before exposing to the LLM so any future
+                // scratch field / debug slot on `session.workingProfile`
+                // never leaks into a read-fields response envelope. This
+                // executor is the loop-mode handler.
+                const sanitizedProfile = sanitizeLoopProfile(session?.workingProfile || {});
+                const result = await dispatchReadFields({ sanitizedProfile, args });
                 pushToolResult({ ok: true, ...result });
             } catch (err) {
                 const detail = String(err?.message || err || 'invalid_args');
@@ -5495,11 +5505,11 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
                 actions.push(actionText);
                 pushToolResult(buildPatchFailureEnvelope({
                     mode: 'director',
-                    // The AI resolves sub-agents by id, but the read tool
-                    // exposes the underlying array. Point to the array
-                    // and let the AI find its index — that's cheaper than
-                    // scanning to compute the numeric index here.
-                    targetPath: 'subAgents',
+                    // Point at the specific sub-agent slot the AI must
+                    // re-read to recover — its index is already resolved
+                    // above, so the diagnostic can name the exact leaf
+                    // instead of dumping the whole subAgents array.
+                    targetPath: `subAgents[${subIndex}].systemPrompt`,
                     actionText,
                     currentText: currentPrompt,
                     oldString: String(args?.oldString || ''),
@@ -5713,7 +5723,12 @@ async function executeDirectorIterationToolCalls(context, session, toolCalls, ab
 
         if (READ_FIELDS_TOOL_NAMES.has(name)) {
             try {
-                const result = await dispatchReadFields({ session, args });
+                // Sanitize before exposing to the LLM so any future
+                // scratch field / debug slot on `session.workingProfile`
+                // never leaks into a read-fields response envelope. This
+                // executor is the director-mode handler.
+                const sanitizedProfile = sanitizeDirectorProfile(session?.workingProfile || {});
+                const result = await dispatchReadFields({ sanitizedProfile, args });
                 pushToolResult({ ok: true, ...result });
             } catch (err) {
                 const detail = String(err?.message || err || 'invalid_args');
@@ -6116,7 +6131,18 @@ async function executeAiIterationToolCalls(context, session, toolCalls, abortSig
         }
         if (READ_FIELDS_TOOL_NAMES.has(name)) {
             try {
-                const result = await dispatchReadFields({ session, args });
+                // Sanitize before exposing to the LLM so any future
+                // scratch field / debug slot on `session.workingProfile`
+                // never leaks into a read-fields response envelope. Spec
+                // mode's sanitized root must carry BOTH `spec` (routed
+                // through sanitizeSpec) and `presets` (routed through
+                // sanitizePresetMap) since spec-mode read tests exercise
+                // paths like `presets.p1.systemPrompt`.
+                const sanitizedProfile = {
+                    spec: sanitizeSpec(session?.workingProfile?.spec),
+                    presets: sanitizePresetMap(session?.workingProfile?.presets),
+                };
+                const result = await dispatchReadFields({ sanitizedProfile, args });
                 pushToolResult({ ok: true, ...result });
             } catch (err) {
                 const detail = String(err?.message || err || 'invalid_args');

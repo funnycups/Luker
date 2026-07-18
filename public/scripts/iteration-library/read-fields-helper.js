@@ -13,9 +13,17 @@
  * whole payload in one round.
  *
  * Invalid_args contract: `paths` MUST be an array; anything else throws
- * `invalid_args`. Empty strings inside paths are reported in
- * `missing_paths`. Unknown paths (lodash resolves to `undefined`)
- * return `null` at their key and append to `missing_paths`.
+ * `invalid_args`. Non-string / empty-string entries inside the array
+ * are silently skipped (they carry no addressable target — reporting
+ * them under `missing_paths` gives the AI no actionable retry path and
+ * only clutters the response). Unknown paths (lodash resolves to
+ * `undefined`) return `null` at their key and append to `missing_paths`.
+ *
+ * Unserializable-value contract: if `JSON.stringify(value)` throws
+ * (circular reference, BigInt, throwing `toJSON`, etc.), the field
+ * returns the truncation envelope with `preview: '(unserializable)'`
+ * so the downstream tool_result serializer doesn't blow up on
+ * JSON.stringify a second time.
  */
 
 const TRUNCATE_AT = 5 * 1024;
@@ -37,12 +45,13 @@ export function readFieldsByPaths(root, paths) {
     }
     const out = { missing_paths: [] };
     for (const path of paths) {
-        const p = String(path || '');
-        if (!p) {
-            out.missing_paths.push(p);
-            out[p] = null;
-            continue;
-        }
+        // Skip non-string / empty entries silently instead of polluting
+        // the response with `out[''] = null`. A caller that hands us `''`
+        // has no valid target — reporting it under `missing_paths` gives
+        // the AI no actionable path to retry with and clutters every
+        // batch that happens to include a trailing comma.
+        if (typeof path !== 'string' || path === '') continue;
+        const p = path;
         const value = _basicLodashGet(root, p);
         if (value === undefined) {
             out[p] = null;
@@ -50,9 +59,28 @@ export function readFieldsByPaths(root, paths) {
             continue;
         }
         let serializedLen = 0;
-        try { serializedLen = JSON.stringify(value).length; } catch { serializedLen = 0; }
+        let serialized = null;
+        try {
+            serialized = JSON.stringify(value);
+            serializedLen = serialized == null ? 0 : serialized.length;
+        } catch {
+            // JSON.stringify threw (circular reference, BigInt, throwing
+            // toJSON, etc). Return the truncation envelope with an
+            // explicit "unserializable" preview so the downstream
+            // tool_result serializer doesn't blow up on JSON.stringify a
+            // second time. Without this, the raw value would fall
+            // through the untruncated branch and re-throw when the
+            // executor wrapped its result for the LLM.
+            out[p] = {
+                __truncated__: true,
+                length: 0,
+                preview: '(unserializable)',
+                hint: 'value could not be JSON-serialized (circular reference or non-serializable type)',
+            };
+            continue;
+        }
         if (serializedLen > TRUNCATE_AT) {
-            const previewSource = typeof value === 'string' ? value : JSON.stringify(value);
+            const previewSource = typeof value === 'string' ? value : (serialized ?? '');
             out[p] = {
                 __truncated__: true,
                 length: previewSource.length,

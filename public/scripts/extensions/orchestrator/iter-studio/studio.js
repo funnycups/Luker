@@ -124,6 +124,10 @@ import { migrateOrchSessionsV2ToSidecar } from './session-migration-v2-to-sideca
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
 import { interpretSandboxOutcome, buildEditCallReply } from './sandbox-result.js';
 import { buildDrainOutcomesMessage } from './drain-outcomes-message.js';
+import {
+    isReplayableIterationMessage,
+    DRAIN_SUMMARY_KIND,
+} from './iter-message-filter.js';
 // auto-continue gate is now `bus.hasOutstanding()` — the standalone
 // gate module + its unit test were retired during the ProposalBus migration.
 // Character-editor-assistant publishes its helper-tool surface via
@@ -1491,6 +1495,13 @@ export async function openOrchestratorIterationStudio(deps) {
                 content: message,
                 at: Date.now(),
                 auto: true,
+                // Tag distinguishes legitimate post-approval drain summaries
+                // (replay to the LLM so it sees what the user decided about
+                // each proposal) from legacy pre-refactor AUTO CONTINUE
+                // fillers (also `auto:true`, no `kind`) that must be dropped
+                // when a pre-refactor session is resumed under the
+                // read-first loop contract. See iter-message-filter.js.
+                kind: DRAIN_SUMMARY_KIND,
             });
             state.isBusy = true;
             state.abortController = new AbortController();
@@ -2306,10 +2317,13 @@ export async function openOrchestratorIterationStudio(deps) {
     // eslint-disable-next-line no-unused-vars
     function buildTaskMessages(systemPrompt, _lastUserText, _lastUserOpts) {
         const messages = [{ role: 'system', content: systemPrompt }];
-        const history = (state.session.messages || []).filter(m => {
-            const role = String(m?.role || '').toLowerCase();
-            return role === 'user' || role === 'assistant';
-        });
+        // Message replay filter — see isReplayableIterationMessage
+        // (module scope) for the drop rules. Legacy pre-refactor AUTO
+        // CONTINUE fillers (auto:true with no `kind`) are dropped so
+        // resumed pre-refactor sessions don't replay dead filler to
+        // the LLM; drain-outcomes summaries (auto:true, kind:'drain_summary')
+        // are kept.
+        const history = (state.session.messages || []).filter(isReplayableIterationMessage);
         history.forEach((m) => {
             const role = String(m.role).toLowerCase();
             const content = String(m.content || '');
