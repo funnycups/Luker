@@ -74,8 +74,11 @@ import { safeClone } from '../../../iteration-library/storage/safe-clone.js';
 import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
     isReplayableIterationMessage,
-    DRAIN_SUMMARY_KIND,
 } from '../../../iteration-library/iter-message-filter.js';
+import {
+    buildEditToolResultPayload,
+    buildPayloadForOutcome,
+} from '../../orchestrator/iter-studio/edit-tool-result-envelope.js';
 import {
     commitCharacterEditorOperations,
     commitLorebookOperations,
@@ -494,11 +497,16 @@ async function processRoundOutcome({
 
     // Edit calls normalize into Edit ops (with `target` annotation) and
     // stack on top of state.pendingEdits. Multi-round flows can accumulate
-    // edits across rounds before the user applies. Per-call failures and
-    // no-op normalizations push a `role: 'tool'`-shaped result onto the
-    // round's toolResults so buildSeedTaskMessages re-emits them as tool
-    // replies in the next round — the model needs structured feedback to
-    // recover, not a system-message prose snippet that's easy to ignore.
+    // edits across rounds before the user applies. Every successful edit
+    // call ALSO persists a `pending` tool_result envelope keyed by callId
+    // so every tool_call in the LLM's protocol history has a matching
+    // role:'tool' message (providers 400 otherwise). `drainBusOutcomes`
+    // updates these envelopes in place to committed / rejected / conflict
+    // / rolled_back once the user (or auto-approve) acts on the proposal.
+    // Per-call failures and no-op normalizations push structured error /
+    // noop envelopes here so the model gets recovery signal in the same
+    // tool_result channel — a system-message prose snippet would be easy
+    // to ignore.
     const persistedEditCalls = [];
     const roundEdits = [];
     const editToolResults = [];
@@ -514,10 +522,19 @@ async function processRoundOutcome({
             );
             if (Array.isArray(normalized) && normalized.length > 0) {
                 roundEdits.push(...normalized);
-                // Successful queued edits get no toolResult — the post-
-                // review synthetic user message carries the real outcome
-                // (applied vs skipped). Adding "queued" would double the
-                // per-tool feedback the model has to digest.
+                // Successful sandbox-diff — edit is queued for user
+                // review via `bus.propose` (see mirrorPendingEditsToBus).
+                // Persist a `pending` tool_result envelope keyed to this
+                // call so every tool_call has a matching role:'tool'
+                // message in the LLM's protocol history.
+                // `drainBusOutcomes` updates this in place to committed /
+                // rejected / conflict / rolled_back when the outcome
+                // fires (either from user click OR bus auto-approve).
+                editToolResults.push({
+                    tool_call_id: callId,
+                    content: buildEditToolResultPayload('pending'),
+                    status: 'pending',
+                });
             } else {
                 // Shape note: the orch iter-studio uses the shared
                 // `interpretSandboxOutcome` + `buildEditCallReply`
@@ -637,17 +654,20 @@ async function processRoundOutcome({
  * normal chat history; for the LLM call we replay role+content for
  * user/assistant/system turns and the system prompt up front.
  *
- * Tool-call history from prior turns IS replayed when an assistant message
- * carries `toolCalls` + matching `toolResults` for read tools. Mirrors the
- * CPA pattern: emit an `assistant` message with `tool_calls` (OpenAI
- * function-calling shape), followed by one `role: 'tool'` message per
- * result. Without this replay, "edit what you just read" prompts couldn't
- * see the read results across user-driven turns and the model would have
- * to re-read the same lorebook on every send.
+ * EVERY persisted tool_call from prior assistant turns is replayed with
+ * a matching `role:'tool'` message (OpenAI function-calling shape).
+ * Read tools carry their real result (executed synchronously at emission
+ * time). Edit tools carry a `proposal_pending` envelope at emission time
+ * that `drainBusOutcomes` updates in place to committed / rejected /
+ * conflict / rolled_back once the user (or auto-approve) acts.
  *
- * Edit tool_calls are intentionally NOT replayed: they have no matching
- * tool_result (the apply commit happens client-side), so injecting them
- * would leave dangling tool_calls the provider rejects.
+ * Legacy sessions (pre tool_call/tool_result round-trip) may have
+ * persisted edit tool_calls WITHOUT a matching toolResults entry (the
+ * old code stripped edit calls from history entirely). Synthesize a
+ * `committed` payload inline for those — best-effort, since the edit is
+ * on disk when the user is resuming the session it was committed at
+ * some point. Without the fill the provider would 400 on the dangling
+ * tool_call.
  *
  * `system`-role messages from `session.messages` are forwarded too —
  * `_internalSeedSystemMessage` uses this channel to prime the first turn
@@ -659,12 +679,12 @@ function buildSeedTaskMessages(state, systemPrompt) {
     const messages = [{ role: 'system', content: String(systemPrompt || '') }];
     // Rebuild-time filter — drop legacy `{role:'user', auto:true}` fillers
     // (pre-refactor "AUTO CONTINUE" / "[User reviewed …]" scaffolding
-    // pushed by drainBusOutcomes / continueAfterReviewDecision / auto-apply
-    // BEFORE the read-first loop was pure-tool-call-driven). Post-refactor
-    // drain-summary messages tag themselves with `kind:'drain_summary'`
-    // via DRAIN_SUMMARY_KIND so this filter keeps them but drops the
-    // legacy fillers that carry no useful signal (their body is stale
-    // "Continue with the next step …" prose that misleads the model).
+    // pushed by drainBusOutcomes / maybeAutoApply / continueAfterReviewDecision
+    // BEFORE the tool_call/tool_result round-trip refactor). The read-first
+    // pure-tool-call loop no longer pushes these — user-decision signal
+    // now rides on the resolved tool_result envelopes. Legacy tagged
+    // drain-summary messages (`kind:'drain_summary'`) still replay via
+    // the discriminator until Task 5 retires the tag entirely.
     // See iteration-library/iter-message-filter.js for the discriminator.
     const persistedMessages = Array.isArray(state.session.messages) ? state.session.messages : [];
     for (const m of persistedMessages) {
@@ -676,20 +696,14 @@ function buildSeedTaskMessages(state, systemPrompt) {
         if (role === 'user' && !isReplayableIterationMessage(m)) continue;
         const content = String(m?.content || '');
 
-        // Replay an assistant message with its read tool_calls + tool_results
-        // when both are present and linked by tool_call_id. We only emit
-        // tool_calls that have a matching result so the provider never sees
-        // a dangling call (which would error out).
-        const toolCalls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
-        const toolResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
-        const resultCallIds = new Set(
-            toolResults
-                .map(r => String(r?.tool_call_id || ''))
-                .filter(Boolean),
-        );
-        const readToolCalls = toolCalls.filter(c => resultCallIds.has(String(c?.id || '')));
+        // Replay EVERY persisted tool_call as an assistant + tool_result
+        // pair. Missing toolResults entries (legacy sessions from before
+        // this refactor stripped edit calls entirely) get filled with a
+        // `committed` payload inline so no tool_call ships dangling.
+        const persistedCalls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
+        const persistedResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
 
-        if (role === 'assistant' && readToolCalls.length > 0) {
+        if (role === 'assistant' && persistedCalls.length > 0) {
             const persistedReasoning = typeof m?.reasoning === 'string' ? m.reasoning : '';
             const persistedReasoningBlocks = Array.isArray(m?.reasoningBlocks) && m.reasoningBlocks.length > 0
                 ? m.reasoningBlocks
@@ -703,22 +717,35 @@ function buildSeedTaskMessages(state, systemPrompt) {
                 ...(persistedReasoning ? { reasoning: persistedReasoning } : {}),
                 ...(persistedReasoningBlocks ? { reasoning_blocks: persistedReasoningBlocks } : {}),
                 ...(persistedReasoningDetails ? { reasoning_details: persistedReasoningDetails } : {}),
-                tool_calls: readToolCalls.map(c => ({
-                    id: String(c.id || ''),
+                tool_calls: persistedCalls.map(c => ({
+                    id: String(c?.id || ''),
                     type: 'function',
                     function: {
-                        name: String(c.name || ''),
-                        arguments: JSON.stringify(c.args || {}),
+                        name: String(c?.name || ''),
+                        arguments: JSON.stringify(c?.args || {}),
                     },
                 })),
             });
-            for (const r of toolResults) {
-                const id = String(r?.tool_call_id || '');
-                if (!resultCallIds.has(id)) continue;
+            const resultById = new Map();
+            for (const r of persistedResults) {
+                if (r && r.tool_call_id != null) resultById.set(String(r.tool_call_id), r);
+            }
+            for (const tc of persistedCalls) {
+                const callId = String(tc?.id || '');
+                const r = resultById.get(callId);
+                let payload;
+                if (r) {
+                    payload = r.content;
+                } else {
+                    // Legacy fill: assume committed. See
+                    // edit-tool-result-envelope.js for the parallel
+                    // emission-time shape.
+                    payload = buildEditToolResultPayload('committed');
+                }
                 messages.push({
                     role: 'tool',
-                    tool_call_id: id,
-                    content: serializeToolResultContent(r?.content),
+                    tool_call_id: callId,
+                    content: serializeToolResultContent(payload),
                 });
             }
         } else {
@@ -2063,6 +2090,104 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         return false;
     }
 
+    // Build the assistant-message index used by the drain-outcome
+    // tool_result updater. Returns two maps:
+    //   - callIdToMsg: tool_call_id → owning assistant message id
+    //   - msgById:     assistant message id → the message object
+    // Walk state.session.messages once so applyOutcomesToToolResults can
+    // reuse both maps; they stay valid until the next mutation of the
+    // messages array. Mirror of orchestrator/iter-studio/studio.js's
+    // helper of the same name.
+    function buildAssistantMessageIndex() {
+        const callIdToMsg = new Map();
+        const msgById = new Map();
+        const msgs = state.session?.messages || [];
+        for (const m of msgs) {
+            if (!m || m.role !== 'assistant') continue;
+            const mid = String(m.id || '');
+            if (mid) msgById.set(mid, m);
+            const calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+            for (const tc of calls) {
+                const id = String(tc?.id || '');
+                if (id) callIdToMsg.set(id, mid);
+            }
+        }
+        return { callIdToMsg, msgById };
+    }
+
+    // Apply a batch of bus outcomes to persisted assistant-message
+    // tool_results. For each outcome, find the owning assistant message
+    // (via sourceCallId → callIdToMsg) and swap the pending tool_result
+    // envelope at matching tool_call_id to the resolved payload.
+    //
+    // Multi-edit cascade: CEA collapses N chained edit calls per turn
+    // (character-field edits AND per-book lorebook edits) into one bus
+    // proposal per target keyed to the first callId (see
+    // mirrorPendingEditsToBus below — grouped.character → one
+    // `cea-character-edits` proposal; each book in grouped.lorebooks →
+    // one `cea-lorebook-edits` proposal). When such an outcome fires,
+    // cascade its resolved status to every other still-`pending` edit
+    // tool_result in the same assistant message so the batch shares
+    // fate in the LLM's protocol view. Read-tool results (status:'ok'
+    // with concrete payloads) are never clobbered because the cascade
+    // only touches envelopes whose current content.status is
+    // 'proposal_pending'.
+    function applyOutcomesToToolResults(outcomes) {
+        if (!Array.isArray(outcomes) || outcomes.length === 0) return;
+        const { callIdToMsg, msgById } = buildAssistantMessageIndex();
+        const cascadeOutcomeByMsg = new Map();
+        for (const outcome of outcomes) {
+            const sourceCallId = String(outcome?.sourceCallId || '');
+            if (!sourceCallId) continue;
+            const mid = callIdToMsg.get(sourceCallId);
+            if (!mid) continue;
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const idx = results.findIndex((r) => String(r?.tool_call_id || '') === sourceCallId);
+            if (idx < 0) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            results[idx] = {
+                tool_call_id: sourceCallId,
+                content: payload,
+                status: nextStatus,
+            };
+            // Both CEA bus kinds collapse many edit calls into one
+            // proposal, so both cascade to sibling pending envelopes.
+            const kind = String(outcome?.kind || '');
+            if (kind === 'cea-character-edits' || kind === 'cea-lorebook-edits') {
+                // Retain the LATEST outcome per message; if a message
+                // spawned both character and lorebook proposals they'll
+                // each drive their own sweep and cascade only the
+                // still-pending siblings, so processing order is safe.
+                cascadeOutcomeByMsg.set(mid + ':' + kind, { mid, outcome });
+            }
+        }
+        for (const { mid, outcome } of cascadeOutcomeByMsg.values()) {
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i];
+                const content = r?.content;
+                const isPending = content
+                    && typeof content === 'object'
+                    && content.status === 'proposal_pending';
+                if (!isPending) continue;
+                results[i] = {
+                    tool_call_id: String(r?.tool_call_id || ''),
+                    content: payload,
+                    status: nextStatus,
+                };
+            }
+        }
+    }
+
     async function drainBusOutcomes() {
         if (drainScheduled) return;
         const outcomes = bus.drainOutcomes();
@@ -2086,31 +2211,23 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         const conflicts = allOutcomes.filter((o) => o.status === 'conflict');
         const rolledBack = allOutcomes.filter((o) => o.status === 'rolledBack');
         if (!committed.length && !rejected.length && !conflicts.length && !rolledBack.length) return;
-        const fmt = (o) => `  - ${o.kind}${o.target ? ` (${o.target})` : ''}${o.error ? ` — ${o.error}` : ''}`;
-        const total = allOutcomes.length;
-        const lines = [`[User reviewed ${total} proposal(s):`];
-        if (committed.length) { lines.push(`Committed (${committed.length}):`); for (const o of committed) lines.push(fmt(o)); }
-        if (rejected.length) { lines.push(`Rejected (${rejected.length}):`); for (const o of rejected) lines.push(fmt(o)); }
-        if (conflicts.length) { lines.push(`Conflict — disk changed externally; retry or reject (${conflicts.length}):`); for (const o of conflicts) lines.push(fmt(o)); }
-        if (rolledBack.length) { lines.push(`Rolled back (${rolledBack.length}):`); for (const o of rolledBack) lines.push(fmt(o)); }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
+        // Update the per-tool_call_id tool_result envelopes in place so
+        // the next round's role:'tool' replay carries the user's
+        // decision. Every edit tool_call has a persisted `pending`
+        // tool_result from emission time (see processRoundOutcome's edit
+        // loop) that we swap to committed / rejected / conflict /
+        // rolled_back per the outcome.
+        //
+        // Multi-edit-per-turn cascade: CEA collapses N chained edit
+        // calls per turn into ONE bus entry per target
+        // (`cea-character-edits` for character-field edits, one
+        // `cea-lorebook-edits` per book). The outcome fires once per
+        // proposal and covers that whole target's batch, so cascade
+        // the same status to every other still-pending edit
+        // tool_result in the same assistant message.
+        applyOutcomesToToolResults(allOutcomes);
         drainScheduled = true;
         try {
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'user',
-                content: lines.join('\n'),
-                at: Date.now(),
-                auto: true,
-                // Tag distinguishes legitimate post-approval drain
-                // summaries (replayed to the LLM so it sees what the
-                // user decided about each proposal) from legacy
-                // pre-refactor AUTO CONTINUE fillers (also `auto:true`,
-                // no `kind`) that must be dropped when a pre-refactor
-                // session is resumed under the read-first loop
-                // contract. See iteration-library/iter-message-filter.js.
-                kind: DRAIN_SUMMARY_KIND,
-            });
             state.isBusy = true;
             const ac = new AbortController();
             state.abortController = ac;
@@ -2856,9 +2973,8 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
     async function maybeAutoApply() {
         if (!state.session?.surfaceState?.autoApply) return false;
         if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return false;
-        const autoCount = state.pendingEdits.length;
         try {
-            const outcome = await applyPendingEdits(state, {
+            await applyPendingEdits(state, {
                 persistSession,
                 render,
                 i18n: { t, tf },
@@ -2866,35 +2982,11 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
                 settings,
                 avatar,
             });
-            // Push a synthetic apply-outcome user message so the next
-            // round's buildSeedTaskMessages can replay it and the model
-            // sees which edits actually took effect — same truthful
-            // signal review-mode gets via continueAfterReviewDecision.
-            if (outcome) {
-                const text = buildApplyOutcomeUserText({
-                    count: autoCount,
-                    applied: outcome.applied,
-                    conflicts: outcome.conflicts,
-                    alreadyDone: outcome.alreadyDone,
-                    cleanEdits: outcome.cleanEdits,
-                    autoApply: true,
-                });
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'user',
-                    content: text,
-                    at: Date.now(),
-                    auto: true,
-                    // Same discriminator as drainBusOutcomes: auto-apply
-                    // outcomes carry real user-decision signal (which
-                    // edits landed vs skipped/conflicted) that the AI
-                    // must see to correct its next round. Legacy
-                    // untagged `auto:true` fillers get dropped by
-                    // `isReplayableIterationMessage` in
-                    // buildSeedTaskMessages.
-                    kind: DRAIN_SUMMARY_KIND,
-                });
-            }
+            // No synthetic user message push — auto-apply outcomes flow
+            // through the same tool_call/tool_result round-trip channel
+            // as review-mode approvals: bus.setAutoApprove fires a
+            // `committed` outcome, drainBusOutcomes updates the pending
+            // envelope in place. See applyOutcomesToToolResults above.
             return true;
         } catch (err) {
             // eslint-disable-next-line no-console
@@ -2907,84 +2999,46 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
      * Fire the next AI round after the user reviewed a paused batch
      * (clicked Apply or Discard). The loop in `runIterationTurn` exits
      * the moment it sees pendingEdits, so without this resumer the AI
-     * never sees the outcome — even though its prior round was clearly
-     * "propose edits, then continue based on review". This pushes a
-     * synthetic user message describing the decision and re-enters the
-     * loop, mirroring the IDE pattern (approve → tool result lands →
-     * agent continues; reject → agent reconsiders).
+     * never sees the outcome. Post-refactor, the outcome signal rides
+     * on in-place tool_result updates (drainBusOutcomes /
+     * applyOutcomesToToolResults) — no synthetic user prose is pushed.
+     * On the DISCARD path we also flip the discarded tool_results to
+     * `rejected` so the next round's replay reflects the user's decision.
      */
-    /**
-     * Build the synthetic user-message text the next round sees after a
-     * batch is applied (review-mode click or auto-apply). The model reads
-     * this verbatim — keep the per-edit "skipped because X" detail intact
-     * so the LLM can correct its next round (fix the path / args / value)
-     * instead of looping the same broken call.
-     */
-    function buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits, target = 'character + lorebooks', autoApply = false }) {
-        const conflictArr = Array.isArray(conflicts) ? conflicts : [];
-        const alreadyArr = Array.isArray(alreadyDone) ? alreadyDone : [];
-        const cleanArr = Array.isArray(cleanEdits) ? cleanEdits : [];
-        const appliedNum = Number.isInteger(applied) ? applied : count;
-        const skipped = conflictArr.length + alreadyArr.length;
-        const prefix = autoApply ? 'Auto-apply ran' : 'User reviewed this round';
-        const lines = [];
-        if (skipped === 0) {
-            lines.push(`[${prefix}: all ${count} pending edit(s) took effect on the ${target}.`);
-        } else {
-            lines.push(`[${prefix}: ${appliedNum}/${count} edits took effect on the ${target}, ${skipped} skipped.`);
-            if (conflictArr.length > 0) {
-                lines.push('Skipped (conflicts):');
-                for (const c of conflictArr) {
-                    const edit = c?.edit || {};
-                    const op = String(edit.op || '?');
-                    const path = String(edit.path || edit.uid != null ? `entries.${edit.uid}` : '<root>');
-                    const reason = String(c?.reason || 'unknown');
-                    lines.push(`  - ${op}(${path}): ${reason}`);
-                }
-            }
-            if (alreadyArr.length > 0) {
-                lines.push('Already in desired state (no-op):');
-                for (const e of alreadyArr) {
-                    const op = String(e?.op || '?');
-                    const path = String(e?.path || e?.uid != null ? `entries.${e.uid}` : '<root>');
-                    lines.push(`  - ${op}(${path})`);
-                }
-            }
-            lines.push('Revise your approach for any skipped edit that was essential (re-read current state, fix the anchor / path / value).');
-        }
-        // List the edits that actually moved state this round so the AI
-        // doesn't re-issue toggles it already applied in an earlier round.
-        if (cleanArr.length > 0 && appliedNum > 0) {
-            lines.push('Applied paths (state that moved this round):');
-            for (const e of cleanArr) {
-                const op = String(e?.op || '?');
-                const path = String(e?.path || (e?.uid != null ? `entries.${e.uid}` : '<root>'));
-                lines.push(`  - ${op}(${path})`);
-            }
-        }
-        lines.push('Continue with the next step if more changes are needed; respond with plain text and no tool calls when done.]');
-        return lines.join('\n');
-    }
-
-    async function continueAfterReviewDecision({ action, count, applied, conflicts, alreadyDone, cleanEdits }) {
+    async function continueAfterReviewDecision({ action, count }) {
         if (state.isBusy) return;
-        const userText = action === 'apply'
-            ? buildApplyOutcomeUserText({ count, applied, conflicts, alreadyDone, cleanEdits })
-            : `[User reviewed and discarded ${count} pending edit(s). Reconsider your approach — propose different edits or respond with plain text and no tool calls when finished.]`;
+        void count; // count is no longer surfaced in prose; kept in signature for caller-shape stability.
 
-        state.session.messages.push({
-            id: makeMessageId(),
-            role: 'user',
-            content: userText,
-            at: Date.now(),
-            auto: true,
-            // Post-review-decision summary carries real user-decision
-            // signal (approved vs discarded, per-edit conflict/no-op
-            // detail). Tag with DRAIN_SUMMARY_KIND so the read-first
-            // filter keeps it while still dropping legacy untagged
-            // `auto:true` fillers on resumed sessions.
-            kind: DRAIN_SUMMARY_KIND,
-        });
+        if (action !== 'apply') {
+            // Discard: bulk-reject every still-pending edit tool_result
+            // in the latest assistant turn(s) that contributed to the
+            // just-discarded batch. Without this, the model would see
+            // dangling `proposal_pending` envelopes on its next round
+            // and re-issue the same edits.
+            const rejectedPayload = buildEditToolResultPayload('rejected');
+            const msgs = state.session?.messages || [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                if (!m || m.role !== 'assistant') continue;
+                if (m.appliedAt || m.rolledBackAt) break;
+                const results = Array.isArray(m.toolResults) ? m.toolResults : null;
+                if (!results) continue;
+                let touched = false;
+                for (let j = 0; j < results.length; j++) {
+                    const r = results[j];
+                    const content = r?.content;
+                    if (content && typeof content === 'object' && content.status === 'proposal_pending') {
+                        results[j] = {
+                            tool_call_id: String(r?.tool_call_id || ''),
+                            content: rejectedPayload,
+                            status: 'fail',
+                        };
+                        touched = true;
+                    }
+                }
+                if (!touched && !(Array.isArray(m.edits) && m.edits.length > 0)) break;
+            }
+        }
 
         state.isBusy = true;
         const ac = new AbortController();
@@ -2994,7 +3048,7 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
 
         try {
             await runIterationTurn(state, {
-                userText,
+                userText: '',
                 context,
                 settings,
                 helperApis,

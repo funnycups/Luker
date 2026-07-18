@@ -167,7 +167,13 @@ describe('CEA-2: buildSeedTaskMessages replays prior turn tool history', () => {
         expect(out[5]).toEqual({ role: 'user', content: 'now edit BookA entry 0' });
     });
 
-    test('toolCalls without matching toolResults are NOT emitted (dangling tool_calls would error the provider)', () => {
+    test('legacy toolCalls without matching toolResults ARE emitted with a committed fill (protocol contract: every tool_call needs a tool_result)', () => {
+        // Pre-refactor sessions stripped edit calls from history and the
+        // filter dropped dangling calls to avoid a provider 400. Post
+        // tool_call/tool_result round-trip refactor, we synthesize a
+        // committed payload inline for legacy holes so the provider
+        // contract holds. Best-effort: the edit is on disk (the user is
+        // resuming the session), therefore was committed at some point.
         const state = {
             session: {
                 messages: [
@@ -182,9 +188,15 @@ describe('CEA-2: buildSeedTaskMessages replays prior turn tool history', () => {
             },
         };
         const out = studio._internalBuildSeedTaskMessages(state, 'SYSTEM');
-        expect(out).toHaveLength(2);
-        // Falls back to plain role+content (no tool_calls).
-        expect(out[1].tool_calls).toBeUndefined();
+        // [0] system, [1] assistant + tool_calls, [2] tool result (legacy-filled committed).
+        expect(out).toHaveLength(3);
+        expect(out[1].tool_calls).toBeDefined();
+        expect(out[1].tool_calls).toHaveLength(1);
+        expect(out[1].tool_calls[0].id).toBe('e1');
+        expect(out[2].role).toBe('tool');
+        expect(out[2].tool_call_id).toBe('e1');
+        const parsed = JSON.parse(String(out[2].content));
+        expect(parsed.status).toBe('committed');
     });
 
     test('mixed assistant messages: only those with linked tool_calls + tool_results get the protocol shape', () => {
