@@ -67,20 +67,14 @@ describe('dispatchMgSchemaReadFields — schema-array shape', () => {
         expect(out.missing_paths.sort()).toEqual(['[0].nonexistent_field', '[99].id'].sort());
     });
 
-    test('value > 5KB returns truncation envelope', async () => {
+    test('value > 5KB is returned verbatim (no size-based truncation)', async () => {
         const schema = cloneSchema();
         schema[0].extractionInstructions = 'x'.repeat(6000);
         const out = await dispatchMgSchemaReadFields({
             liveSchema: schema,
             args: { paths: ['[0].extractionInstructions'] },
         });
-        const val = out['[0].extractionInstructions'];
-        expect(val).toEqual(expect.objectContaining({
-            __truncated__: true,
-            length: 6000,
-        }));
-        expect(typeof val.preview).toBe('string');
-        expect(val.preview).toHaveLength(200);
+        expect(out['[0].extractionInstructions']).toBe('x'.repeat(6000));
     });
 
     test('empty paths array returns empty map with missing_paths=[]', async () => {

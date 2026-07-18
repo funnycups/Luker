@@ -113,7 +113,7 @@ const SCHEMA_READ_TOOL_DEF = {
     type: 'function',
     function: {
         name: SCHEMA_READ_TOOL_NAME,
-        description: 'Read exact values from the current live MG node-type schema by lodash-style paths. Read-only. The root is the schema array; common paths: "[N].id", "[N].label", "[N].tableColumns", "[N].tableColumns[K]", "[N].extractionInstructions", "[N].compression.mode", "length". Values whose JSON exceeds 5KB return a {__truncated__, length, preview, hint} envelope — narrow to a specific subfield.',
+        description: 'Read exact values from the current live MG node-type schema by lodash-style paths. Read-only. The root is the schema array; common paths: "[N].id", "[N].label", "[N].tableColumns", "[N].tableColumns[K]", "[N].extractionInstructions", "[N].compression.mode", "length". Prefer specific indexed paths over reading the whole schema so the response stays focused.',
         parameters: {
             type: 'object',
             properties: {

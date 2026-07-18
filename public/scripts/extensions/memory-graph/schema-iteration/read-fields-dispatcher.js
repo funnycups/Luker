@@ -39,8 +39,8 @@ import { readFieldsByPaths } from '../../../iteration-library/read-fields-helper
  *        every indexed path resolves to `missing_paths`).
  * @param {{paths?: any}} params.args — must contain a `paths` array of
  *        lodash-style path strings.
- * @returns {object} `{[path]: value|null|{__truncated__,length,preview,hint},
- *          missing_paths: string[]}` — throws `invalid_args` when
+ * @returns {object} `{[path]: value|null, missing_paths: string[]}` —
+ *          throws `invalid_args` when
  *          `args.paths` is not an array (contract enforced by
  *          `readFieldsByPaths`).
  */

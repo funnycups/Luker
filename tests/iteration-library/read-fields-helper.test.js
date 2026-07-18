@@ -29,14 +29,17 @@ describe('readFieldsByPaths', () => {
         expect(out.missing_paths).toEqual(['subAgents[99].id']);
     });
 
-    test('value > 5KB → truncation envelope', () => {
+    // Size-based truncation was pulled from thin air and produced a
+    // pathological failure mode: any string field > 5 KB (typical for
+    // `systemPrompt`) became a 200-char preview envelope with no
+    // subfield to narrow to, wedging anchor-based patch loops. This
+    // helper now returns raw values regardless of size — the read
+    // tool's contract is that the caller picks the exact path.
+    test('value > 5KB is returned verbatim (no size-based truncation)', () => {
         const bigRoot = { field: 'x'.repeat(6000) };
         const out = readFieldsByPaths(bigRoot, ['field']);
-        expect(out['field']).toEqual(expect.objectContaining({
-            __truncated__: true,
-            length: 6000,
-        }));
-        expect(out['field'].preview).toHaveLength(200);
+        expect(out['field']).toBe('x'.repeat(6000));
+        expect(out.missing_paths).toEqual([]);
     });
 
     test('non-array paths throws invalid_args', () => {

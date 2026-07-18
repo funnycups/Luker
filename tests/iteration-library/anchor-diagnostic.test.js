@@ -38,28 +38,46 @@ describe('diagnoseAnchorMiss', () => {
         expect(out.snippets[0].current).toContain('brown');
     });
 
-    test('kind=too_long_to_diagnose when currentText > 20KB', () => {
-        const bigText = 'a'.repeat(21000);
-        const out = diagnoseAnchorMiss(bigText, 'anchor that misses');
-        expect(out.kind).toBe('too_long_to_diagnose');
-        expect(out.snippets).toHaveLength(0);
+    // The 20 KB input cap was pulled from thin air. It turned
+    // legitimate patch attempts against long `systemPrompt` fields
+    // into a `too_long_to_diagnose` reply that gave the AI nothing
+    // actionable. Fuzzy diagnosis now runs regardless of input size —
+    // string search is linear and cheap enough that a diagnostic
+    // round-trip against a 21 KB field costs nothing worth capping.
+    test('long currentText is still diagnosed (no input-size cap)', () => {
+        const bigText = 'a'.repeat(21000) + 'ANCHOR-HERE' + 'b'.repeat(1000);
+        const out = diagnoseAnchorMiss(bigText, 'ANCHOR-HERE');
+        // ANCHOR-HERE occurs verbatim so the whitespace-normalized
+        // layer trivially hits.
+        expect(out.kind).not.toBe('too_long_to_diagnose');
+        expect(out.snippets.length).toBeGreaterThan(0);
     });
 
-    test('kind=too_long_to_diagnose when oldString > 20KB', () => {
-        const bigOld = 'x'.repeat(21000);
-        const out = diagnoseAnchorMiss('short current text', bigOld);
-        expect(out.kind).toBe('too_long_to_diagnose');
-    });
-
-    test('truncated=true when snippets would exceed 800-char total payload', () => {
-        // Force similar_snippet path with a very long current text
-        const current = 'A B C D '.repeat(500); // 4000 chars
-        const oldString = 'A B C D'; // matches many places
+    test('long oldString is still diagnosed (no input-size cap)', () => {
+        // oldString repeats a distinctive marker so the 40-char probe
+        // layer finds it inside a matching current text.
+        const marker = 'MARKER-XYZ-THAT-DOES-NOT-COLLIDE-BUT-IS-40+CHARS!!';
+        const oldString = marker + 'y'.repeat(21000);
+        const current = 'preamble ' + marker + 'DIFFERENT TAIL';
         const out = diagnoseAnchorMiss(current, oldString);
-        expect(out.snippets.length).toBeLessThanOrEqual(2);
-        // Verify total snippet length is bounded
-        const totalLen = out.snippets.reduce((s, x) => s + x.current.length, 0);
-        expect(totalLen).toBeLessThanOrEqual(800);
+        expect(out.kind).not.toBe('too_long_to_diagnose');
+        expect(out.snippets.length).toBeGreaterThan(0);
+    });
+
+    // The 800-char / 2-snippet payload cap silently swallowed matches
+    // that would have pinpointed the drift. All hits are now surfaced.
+    test('all similar-snippet hits are surfaced (no snippet-count or payload cap)', () => {
+        // Layer 3.5 (40-char prefix probe) is deterministic — every
+        // occurrence of the probe in the current text becomes a
+        // snippet. Use a prose-like current that has the 40-char
+        // prefix ≥3 times so we can prove no 2-hit cap.
+        const probe = 'The quick brown fox jumps over the lazy do'; // exactly 42 chars, > PROBE_PREFIX_LEN=40
+        const current = `${probe}g. ${probe}g. ${probe}g. tail`;
+        const oldString = `${probe}g. DIVERGES HERE`;
+        const out = diagnoseAnchorMiss(current, oldString);
+        expect(out.kind).toBe('similar_snippet');
+        // Three occurrences of the prefix — all surfaced.
+        expect(out.snippets.length).toBe(3);
     });
 
     test('empty oldString returns no_similar', () => {

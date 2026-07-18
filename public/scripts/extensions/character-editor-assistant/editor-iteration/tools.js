@@ -79,9 +79,10 @@ export function isKnownCardField(name) {
  *     read `extensions` here would (a) drown the round context with a
  *     large opaque blob and (b) leak internal plumbing outside the
  *     author-facing card model.
- *   - Values whose JSON exceeds 5KB return `{__truncated__, length,
- *     preview, hint}` envelopes so the AI narrows to a subfield instead
- *     of trying to consume the whole payload in one round.
+ *   - No size-based truncation. `readFieldsByEnum` returns each
+ *     requested field's value verbatim; only unserializable values
+ *     (circular / throwing toJSON) get an envelope, as a downstream
+ *     JSON.stringify guard.
  *
  * @param {{state?: {live?: {character?: object}}, args?: {fields?: any}}} params
  * @returns {Promise<object>} `{[field]: value|null|envelope, missing_fields: string[]}`
@@ -542,7 +543,7 @@ const READ_TOOL_DEFS = [
                     fields: {
                         type: 'array',
                         items: { type: 'string', enum: [...CEA_CARD_FIELD_ENUM] },
-                        description: 'Card field names to read. Values > 5KB are returned as a truncation envelope with a preview.',
+                        description: 'Card field names to read. Only names from the fixed enum are accepted; extension surfaces are exposed through their own dedicated tools.',
                         minItems: 1,
                     },
                 },

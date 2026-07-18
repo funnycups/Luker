@@ -63,20 +63,17 @@ describe('dispatchReadFields — director profile shape', () => {
         expect(out.missing_paths.sort()).toEqual(['subAgents[99].id', 'tools.nonexistent.verb'].sort());
     });
 
-    test('value > 5KB returns truncation envelope', async () => {
+    test('value > 5KB is returned verbatim (no size-based truncation)', async () => {
         const sanitizedProfile = makeSanitizedDirectorProfile();
         sanitizedProfile.subAgents[0].systemPrompt = 'x'.repeat(6000);
         const out = await dispatchReadFields({
             sanitizedProfile,
             args: { paths: ['subAgents[0].systemPrompt'] },
         });
-        const val = out['subAgents[0].systemPrompt'];
-        expect(val).toEqual(expect.objectContaining({
-            __truncated__: true,
-            length: 6000,
-        }));
-        expect(typeof val.preview).toBe('string');
-        expect(val.preview.length).toBe(200);
+        // Read tools are narrow contracts — the caller named the exact
+        // path, so it gets the exact value. No preview envelope, no
+        // size cap; the caller is responsible for asking precisely.
+        expect(out['subAgents[0].systemPrompt']).toBe('x'.repeat(6000));
     });
 
     test('empty paths array returns empty map with missing_paths=[]', async () => {

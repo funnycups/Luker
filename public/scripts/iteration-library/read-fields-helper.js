@@ -18,14 +18,27 @@
  *     `character.extensions` has dedicated tools (`world_book_list`,
  *     `regex_list_scripts`, …) and must stay off-limits here.
  *
- * Both variants share `truncateForRead(value)` for the 5KB envelope
- * contract: values whose JSON-stringify exceeds 5KB become
- * `{__truncated__, length, preview, hint}` so the AI narrows to a
- * subfield instead of trying to consume the whole payload in one round.
- * If JSON.stringify throws (circular reference, BigInt, throwing
- * `toJSON`, …), both variants return the same envelope with
- * `preview: '(unserializable)'` so the downstream tool_result serializer
- * doesn't blow up on JSON.stringify a second time.
+ * Both variants call `truncateForRead(value)` only to guard against a
+ * value that cannot be JSON-serialized (circular reference, throwing
+ * `toJSON`, BigInt, …). In that case the caller stores an
+ * `{__truncated__, length: 0, preview: '(unserializable)', hint}`
+ * envelope under the field's key so the downstream `tool_result`
+ * serializer doesn't blow up on JSON.stringify a second time.
+ *
+ * Size-based truncation is intentionally NOT applied. An earlier
+ * revision capped values at 5 KB and returned a 200-char preview
+ * envelope with `hint: 'value exceeds 5KB, narrow to specific subfield'`.
+ * That cap was pulled from thin air (no downstream context-window /
+ * transport / storage requirement forced it) and produced a
+ * pathological failure mode: an AI that read a >5 KB `systemPrompt`
+ * for anchor-based patching only ever saw the 200-char preview, so
+ * every `str_replace` anchor missed, every re-read returned the same
+ * preview, and the loop wedged. Strings have no "subfield" the AI
+ * could narrow to. The read tool is already a NARROW contract — the
+ * caller names the exact path(s) it wants — and it is the caller's
+ * judgement, not this helper's, whether to read one big field or
+ * several small ones. See `.opencode/memory/feedback_no_arbitrary_max_limits.md`
+ * for the general rule this violated.
  *
  * Invalid_args contract (both variants):
  *   - non-array `paths` / `fields` throws `invalid_args`.
@@ -36,8 +49,6 @@
  *     `invalid_args` fail-closed BEFORE any read — the read surface is
  *     small and the whitelist enforcement is the tool's core promise.
  */
-
-const TRUNCATE_AT = 5 * 1024;
 
 function _basicLodashGet(obj, path) {
     if (obj == null || !path) return undefined;
@@ -51,26 +62,25 @@ function _basicLodashGet(obj, path) {
 }
 
 /**
- * Truncate one field's value into the shared 5KB envelope shape used by
- * every iter-studio read tool. Returns:
- *   - `{ take: 'raw', value }` when the value is small enough — the
- *     caller stores `value` under the field's key directly.
- *   - `{ take: 'envelope', envelope }` when the value's JSON exceeds
- *     5KB or JSON-stringify throws (circular, BigInt, throwing toJSON) —
- *     the caller stores `envelope` under the field's key so downstream
- *     `tool_result` serialization can't blow up on a second stringify.
+ * Wrap one field's value for placement in an iter-studio read tool's
+ * response object. Returns:
+ *   - `{ take: 'raw', value }` — the caller stores `value` directly.
+ *     This is the normal path. There is NO size-based truncation:
+ *     read tools are narrow contracts (caller names the exact path)
+ *     and it is the CALLER's judgement, not this helper's, whether
+ *     a given path is too big to read.
+ *   - `{ take: 'envelope', envelope }` — only when `JSON.stringify`
+ *     throws (circular reference, BigInt, throwing `toJSON`). The
+ *     envelope keeps downstream `tool_result` serialization from
+ *     blowing up on a second stringify. Shape:
+ *     `{__truncated__: true, length: 0, preview: '(unserializable)', hint}`.
  *
- * Extracted so `readFieldsByPaths` (lodash-path variant) and
- * `readFieldsByEnum` (whitelisted-flat-field variant) share the exact
- * same truncation semantics. Changing the byte budget here changes it
- * for every iter-studio read tool at once.
+ * Shared by `readFieldsByPaths` and `readFieldsByEnum` so the
+ * unserializable-guard behaviour is identical across studios.
  */
 export function truncateForRead(value) {
-    let serialized = null;
-    let serializedLen = 0;
     try {
-        serialized = JSON.stringify(value);
-        serializedLen = serialized == null ? 0 : serialized.length;
+        JSON.stringify(value);
     } catch {
         return {
             take: 'envelope',
@@ -79,18 +89,6 @@ export function truncateForRead(value) {
                 length: 0,
                 preview: '(unserializable)',
                 hint: 'value could not be JSON-serialized (circular reference or non-serializable type)',
-            },
-        };
-    }
-    if (serializedLen > TRUNCATE_AT) {
-        const previewSource = typeof value === 'string' ? value : (serialized ?? '');
-        return {
-            take: 'envelope',
-            envelope: {
-                __truncated__: true,
-                length: previewSource.length,
-                preview: previewSource.slice(0, 200),
-                hint: 'value exceeds 5KB, narrow to specific subfield',
             },
         };
     }
@@ -149,8 +147,11 @@ export function readFieldsByPaths(root, paths) {
  *     able to observe (an empty `system_prompt` is different from an
  *     unset one only for author intent, but the AI's read tool need
  *     not care about that distinction).
- *   - Values > 5KB get the same truncation envelope as
- *     `readFieldsByPaths` (via `truncateForRead`).
+ *   - Values that cannot be JSON-serialized get an unserializable
+ *     envelope via `truncateForRead` (defense against a downstream
+ *     `JSON.stringify` throwing on the response). Size-based
+ *     truncation is intentionally absent — see the file header for
+ *     the rationale.
  *   - The response object's own key set is `fields[]` + `missing_fields`
  *     and NOTHING else. Even if `whitelist` grew to include a new
  *     sensitive-looking name, only fields the caller EXPLICITLY

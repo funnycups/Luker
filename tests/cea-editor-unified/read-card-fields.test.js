@@ -130,18 +130,13 @@ describe('cea_read_card_fields — enum-whitelist contract', () => {
         ).rejects.toThrow(/invalid_args/);
     });
 
-    test('field > 5KB returns truncation envelope with preview and length', async () => {
+    test('field > 5KB is returned verbatim (no size-based truncation)', async () => {
         const big = 'x'.repeat(6000);
         const out = await tools.dispatchCeaReadCardFields({
             state: { live: { character: makeCard({ description: big }) } },
             args: { fields: ['description'] },
         });
-        expect(out.description).toEqual(expect.objectContaining({
-            __truncated__: true,
-            length: 6000,
-        }));
-        expect(typeof out.description.preview).toBe('string');
-        expect(out.description.preview.length).toBeLessThanOrEqual(200);
+        expect(out.description).toBe(big);
     });
 
     test('missing state.live.character resolves every field to null and populates missing_fields', async () => {

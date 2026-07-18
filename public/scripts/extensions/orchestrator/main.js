@@ -3148,7 +3148,7 @@ export const DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK = [
     '3. Simulate again after the fix to verify the root cause was addressed.',
     'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
     '- Multi-round iteration control: the popup runs another round whenever the previous round emitted ANY tool call (read or edit); tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
-    '- Reading live director-profile state: call `luker_orch_read_director_fields({paths: [...]})` before any anchor-based patch (`luker_orch_patch_director_main_agent_system_prompt`, `luker_orch_patch_director_subagent_system_prompt`) to see the exact current text. Common paths: `mainAgent.systemPrompt`, `subAgents`, `subAgents[N].systemPrompt`, `tools.<ns>.<verb>`. Values > 5KB return `{__truncated__: true, length, preview, hint}` — narrow to a subfield.',
+    '- Reading live director-profile state: call `luker_orch_read_director_fields({paths: [...]})` before any anchor-based patch (`luker_orch_patch_director_main_agent_system_prompt`, `luker_orch_patch_director_subagent_system_prompt`) to see the exact current text. Common paths: `mainAgent.systemPrompt`, `subAgents`, `subAgents[N].systemPrompt`, `tools.<ns>.<verb>`. Prefer specific indexed paths over reading the whole `subAgents` array so the response stays focused.',
     '- Anchor patch failures: a `not_found` reply carries `match_diagnosis` with kind ∈ {whitespace_drift, similar_snippet, no_similar, too_long_to_diagnose}. Whitespace drift = your oldString has different indentation / trailing space; re-read the target field for exact text via `luker_orch_read_director_fields`. `already matches` means the call was a no-op — not a failure; don\'t re-issue.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -3203,7 +3203,7 @@ export const DEFAULT_AGENDA_ITERATION_MODE_BLOCK = [
     '3. Simulate again after the fix to verify the root cause was addressed.',
     'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
     '- Multi-round iteration control: the popup runs another round whenever the previous round emitted ANY tool call (read or edit); tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
-    '- Reading live agenda-profile state: call `luker_orch_read_agenda_fields({paths: [...]})` before any anchor-based patch (`luker_orch_patch_agenda_planner_system_prompt`, `luker_orch_patch_agenda_agent_system_prompt`) to see the exact current text. Common paths: `planner.systemPrompt`, `agents.<agent_id>.systemPrompt`, `finalAgentId`, `limits.plannerMaxRounds`. Values > 5KB return `{__truncated__: true, length, preview, hint}` — narrow to a subfield.',
+    '- Reading live agenda-profile state: call `luker_orch_read_agenda_fields({paths: [...]})` before any anchor-based patch (`luker_orch_patch_agenda_planner_system_prompt`, `luker_orch_patch_agenda_agent_system_prompt`) to see the exact current text. Common paths: `planner.systemPrompt`, `agents.<agent_id>.systemPrompt`, `finalAgentId`, `limits.plannerMaxRounds`. Prefer specific paths over reading the whole `agents` object so the response stays focused.',
     '- Anchor patch failures: a `not_found` reply carries `match_diagnosis` with kind ∈ {whitespace_drift, similar_snippet, no_similar, too_long_to_diagnose}. Whitespace drift = your oldString has different indentation / trailing space; re-read the target field for exact text via `luker_orch_read_agenda_fields`. `already matches` means the call was a no-op — not a failure; don\'t re-issue.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -3263,7 +3263,7 @@ export const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
     '3. Simulate again after the fix to verify the root cause was addressed.',
     'Symptom-level patches are explicitly off-limits when they target the annotated text. If the only viable fix really is local, explain to the user why a structural fix isn\'t possible before reaching for the patch.',
     '- Multi-round iteration control: the popup runs another round whenever the previous round emitted ANY tool call (read or edit); tool results become context for the next round. To end the iteration, respond with plain text and emit no tool calls.',
-    '- Reading live spec-profile state: call `luker_orch_read_spec_fields({paths: [...]})` before any anchor-based patch to see the exact current text. Common paths: `spec.stages`, `spec.stages[N].nodes`, `spec.stages[N].nodes[M].preset`, `presets.<preset_id>.systemPrompt`. Values > 5KB return `{__truncated__: true, length, preview, hint}` — narrow to a subfield.',
+    '- Reading live spec-profile state: call `luker_orch_read_spec_fields({paths: [...]})` before any anchor-based patch to see the exact current text. Common paths: `spec.stages`, `spec.stages[N].nodes`, `spec.stages[N].nodes[M].preset`, `presets.<preset_id>.systemPrompt`. Prefer specific indexed paths over reading `spec.stages` wholesale so the response stays focused.',
     '- Anchor patch failures: a `not_found` reply carries `match_diagnosis` with kind ∈ {whitespace_drift, similar_snippet, no_similar, too_long_to_diagnose}. Whitespace drift = your oldString has different indentation / trailing space; re-read the target field for exact text via `luker_orch_read_spec_fields`. `already matches` means the call was a no-op — not a failure; don\'t re-issue.',
     '- Keep output practical and concise for real RP usage.',
 ].join('\n');
@@ -3339,7 +3339,7 @@ function buildReadFieldsToolDef(mode, exampleHint) {
         type: 'function',
         function: {
             name: `luker_orch_read_${mode}_fields`,
-            description: `Read exact values from the current live ${mode}-mode working profile by lodash-style paths. Read-only; no side effects. Use before anchor-based patches to avoid stale-mental-model drift. Returns {[path]: value|null, missing_paths: []}. Values exceeding 5KB are returned as {__truncated__: true, length, preview, hint} so callers can narrow to subfields. Example paths: ${exampleHint}.`,
+            description: `Read exact values from the current live ${mode}-mode working profile by lodash-style paths. Read-only; no side effects. Use before anchor-based patches to avoid stale-mental-model drift. Returns {[path]: value|null, missing_paths: []}. Prefer specific indexed paths — the response contains whatever you ask for, so ask precisely. Example paths: ${exampleHint}.`,
             parameters: {
                 type: 'object',
                 properties: {

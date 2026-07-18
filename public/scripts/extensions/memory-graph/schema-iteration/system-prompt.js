@@ -48,7 +48,7 @@ export const DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT = [
     '- compression: hierarchical/flat fold-up rules (mode, threshold, fanIn, maxDepth, keepRecentLeaves, summarizeInstruction).',
     '',
     'Reading the live schema:',
-    `- ${TOOL_READ_FIELDS}({paths: [...]}): pull exact values from the live schema array by lodash-style paths. Read-only. Common paths: "[N].id", "[N].label", "[N].tableColumns", "[N].tableColumns[K]", "[N].extractionInstructions", "[N].compression.mode", "length". Values whose JSON exceeds 5KB return a truncation envelope with a preview — narrow to a specific subfield to see the full value.`,
+    `- ${TOOL_READ_FIELDS}({paths: [...]}): pull exact values from the live schema array by lodash-style paths. Read-only. Common paths: "[N].id", "[N].label", "[N].tableColumns", "[N].tableColumns[K]", "[N].extractionInstructions", "[N].compression.mode", "length". Prefer specific indexed paths over reading the whole schema array so the response stays focused.`,
     `- There is no up-front dump of the current schema in this prompt or in the user turn. Call ${TOOL_READ_FIELDS} on demand to see exactly what is stored before you propose changes; do not rely on a stale mental model between rounds.`,
     '',
     'Editing tools you can call:',
