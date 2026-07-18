@@ -363,3 +363,54 @@ describe('director-mode iteration: luker_orch_simulate is wired through', () => 
         expect(mainSrc).toMatch(/isDirectorIterationSession\(session\)\s*\)\s*\{[\s\S]+?runDirectorSimulationLoop/);
     });
 });
+
+// ORCH-Post-Refactor: `luker_orch_read_<mode>_fields` tool calls must
+// reach `dispatchReadFields` in the popup executor. The tool schema
+// existed and the AI could see + call it, but the executor's
+// if/else-if dispatch chain missed the `isProfileReadTool` branch,
+// so calls fell through to `runLorebookReadTool` which returned
+// `{error: 'Not a lorebook read tool: <name>'}`. AI wasted rounds
+// pattern-matching around a dead tool. Locked here as a code-shape
+// contract on the popup's executor: (1) `isProfileReadTool` is imported
+// and exported for the umbrella predicate, (2) `dispatchReadFields`
+// is imported from the sibling module, (3) the dispatch chain has
+// an `else if (isProfileReadTool(call?.name))` branch that awaits
+// `dispatchReadFields`. Sibling studios (MG / CEA / CPA) have their
+// own read-tool routes; this test covers only the orchestrator popup.
+describe('ORCH-post-refactor: profile read tool dispatch is wired to dispatchReadFields', () => {
+    let studioSrc;
+
+    beforeAll(async () => {
+        studioSrc = await readOrch('iter-studio/studio.js');
+    });
+
+    test('studio.js imports dispatchReadFields from the sibling read-fields-dispatcher module', () => {
+        expect(studioSrc).toMatch(
+            /import\s*\{\s*dispatchReadFields\s*\}\s*from\s*['"]\.\/read-fields-dispatcher\.js['"]/,
+        );
+    });
+
+    test('studio.js dispatch chain routes isProfileReadTool calls to dispatchReadFields', () => {
+        // The bug: profile-read calls (luker_orch_read_<mode>_fields)
+        // fell into the terminal `else { runLorebookReadTool(...) }`
+        // branch and got "Not a lorebook read tool" back.
+        // Fix: add `else if (isProfileReadTool(call?.name)) { ... await
+        // dispatchReadFields(...) }` before the terminal else. This
+        // shape check locks in that both the predicate AND the executor
+        // call co-occur in the dispatch chain in that order.
+        expect(studioSrc).toMatch(
+            /else\s+if\s*\(\s*isProfileReadTool\s*\(\s*call\?\.name\s*\)\s*\)\s*\{[\s\S]+?dispatchReadFields\s*\(/,
+        );
+    });
+
+    test('studio.js sanitizes the live profile per-mode before dispatchReadFields sees it', () => {
+        // The dispatcher takes a pre-sanitized profile (see the
+        // read-fields.test.js contract). The popup call site must
+        // route state.live through `sanitizeForMode` so any future
+        // scratch/debug field on the working profile cannot leak
+        // to the LLM through the read tool.
+        expect(studioSrc).toMatch(
+            /else\s+if\s*\(\s*isProfileReadTool\s*\(\s*call\?\.name\s*\)\s*\)\s*\{[\s\S]+?sanitizeForMode\s*\(\s*state\.live\s*\)[\s\S]+?dispatchReadFields\s*\(/,
+        );
+    });
+});

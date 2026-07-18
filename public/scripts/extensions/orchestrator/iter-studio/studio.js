@@ -122,6 +122,7 @@ import {
 } from './session-store.js';
 import { migrateOrchSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
+import { dispatchReadFields } from './read-fields-dispatcher.js';
 import { interpretSandboxOutcome, buildEditCallReply } from './sandbox-result.js';
 import { buildDrainOutcomesMessage } from './drain-outcomes-message.js';
 import {
@@ -2999,6 +3000,17 @@ export async function openOrchestratorIterationStudio(deps) {
                         resultPayload = { error: String(out?.error || 'unknown error') };
                         statusLabel = 'fail';
                     }
+                } else if (isProfileReadTool(call?.name)) {
+                    // Per-mode `luker_orch_read_<mode>_fields` — pure lookup
+                    // against the sanitized live working profile via the
+                    // shared `readFieldsByPaths` helper. Sanitize first so
+                    // any future scratch/debug fields on state.live cannot
+                    // leak to the LLM. `dispatchReadFields` throws on
+                    // `invalid_args` (non-array `paths`); the outer try
+                    // catches and shapes into the `{error}` envelope the AI
+                    // sees for every other read failure.
+                    const sanitizedProfile = sanitizeForMode(state.live);
+                    resultPayload = await dispatchReadFields({ sanitizedProfile, args: call?.args });
                 } else {
                     const out = await runLorebookReadTool({ id: callId, name: call?.name, args: call?.args }, avatarForReads);
                     if (out?.ok) {
