@@ -782,7 +782,7 @@ export function buildToolCatalog({ hasReference = false } = {}) {
             type: 'function',
             function: {
                 name: 'preset_read_live_fields',
-                description: 'Read exact values from the current live preset by lodash-style paths, without modifying anything.',
+                description: 'Read exact values from the current live preset by lodash-style paths, without modifying anything. The root is the preset object; common paths include sampling ("temp_openai", "freq_pen_openai", "pres_pen_openai", "top_p_openai", "top_k_openai", "openai_max_tokens", "openai_max_context", "stream_openai", "seed", "n"), prompt catalogs ("prompts", "prompts[N]", "prompts[N].content", "prompts[N].identifier", "prompt_order", "prompt_order[N]"), Claude/Gemini cache flags ("claude_enable_system_prompt_cache", "claude_caching_at_depth", "claude_extended_ttl", "gemini_enable_system_prompt_cache"), squash/prefill/sysprompt ("squash_system_messages", "assistant_prefill", "assistant_impersonation", "continue_prefill", "use_sysprompt"), function calling / reasoning ("function_calling", "tool_call_recurse_limit", "reasoning_effort", "verbosity", "show_thoughts"), and web/image ("enable_web_search", "request_images", "media_inlining", "inline_image_quality"). Preset shape is SillyTavern openai settings — read the top-level object to discover other fields when needed. Values whose JSON exceeds 5KB return a {__truncated__, length, preview, hint} envelope — narrow to a specific subfield.',
                 parameters: {
                     type: 'object',
                     properties: {
