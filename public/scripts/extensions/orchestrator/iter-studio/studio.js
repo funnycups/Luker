@@ -124,10 +124,12 @@ import { migrateOrchSessionsV2ToSidecar } from './session-migration-v2-to-sideca
 import { ORCH_TOOL_DISPLAY } from './tool-display.js';
 import { dispatchReadFields } from './read-fields-dispatcher.js';
 import { interpretSandboxOutcome, buildEditCallReply } from './sandbox-result.js';
-import { buildDrainOutcomesMessage } from './drain-outcomes-message.js';
+import {
+    buildEditToolResultPayload,
+    buildPayloadForOutcome,
+} from './edit-tool-result-envelope.js';
 import {
     isReplayableIterationMessage,
-    DRAIN_SUMMARY_KIND,
 } from '../../../iteration-library/iter-message-filter.js';
 // auto-continue gate is now `bus.hasOutstanding()` — the standalone
 // gate module + its unit test were retired during the ProposalBus migration.
@@ -1450,6 +1452,98 @@ export async function openOrchestratorIterationStudio(deps) {
         return false;
     }
 
+    // Build the assistant-message index used by the drain-outcome
+    // tool_result updater. Returns two maps:
+    //   - callIdToMsg: tool_call_id → owning assistant message id
+    //   - msgById:     assistant message id → the message object
+    // Walk state.session.messages once so applyOutcomesToToolResults can
+    // reuse both maps; they stay valid until the next mutation of the
+    // messages array.
+    function buildAssistantMessageIndex() {
+        const callIdToMsg = new Map();
+        const msgById = new Map();
+        const msgs = state.session?.messages || [];
+        for (const m of msgs) {
+            if (!m || m.role !== 'assistant') continue;
+            const mid = String(m.id || '');
+            if (mid) msgById.set(mid, m);
+            const calls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+            for (const tc of calls) {
+                const id = String(tc?.id || '');
+                if (id) callIdToMsg.set(id, mid);
+            }
+        }
+        return { callIdToMsg, msgById };
+    }
+
+    // Apply a batch of bus outcomes to persisted assistant-message
+    // tool_results. For each outcome, find the owning assistant message
+    // (via sourceCallId → callIdToMsg) and swap the pending tool_result
+    // envelope at matching tool_call_id to the resolved payload.
+    //
+    // Multi-edit cascade: the orchestrator's profile-edit proposal
+    // collapses N chained edit calls per turn into ONE bus entry keyed
+    // to the first callId. When a profile-edit outcome fires, cascade
+    // its resolved status to every other still-`pending` edit
+    // tool_result in the same assistant message so the batch shares
+    // fate in the LLM's protocol view. Lorebook-write / skill-author /
+    // custom-tool-author kinds are 1:1 (one proposal per call), so
+    // sourceCallId-only matching covers them without any cascade.
+    function applyOutcomesToToolResults(outcomes) {
+        if (!Array.isArray(outcomes) || outcomes.length === 0) return;
+        const { callIdToMsg, msgById } = buildAssistantMessageIndex();
+        const profileEditOutcomeByMsg = new Map();
+        for (const outcome of outcomes) {
+            const sourceCallId = String(outcome?.sourceCallId || '');
+            if (!sourceCallId) continue;
+            const mid = callIdToMsg.get(sourceCallId);
+            if (!mid) continue;
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const idx = results.findIndex((r) => String(r?.tool_call_id || '') === sourceCallId);
+            if (idx < 0) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            results[idx] = {
+                tool_call_id: sourceCallId,
+                content: payload,
+                status: nextStatus,
+            };
+            if (outcome?.kind === 'profile-edit') {
+                profileEditOutcomeByMsg.set(mid, outcome);
+            }
+        }
+        // Cascade profile-edit outcome to sibling still-pending edit
+        // tool_results in the same assistant message. Only touch
+        // envelopes whose current payload.status === 'proposal_pending'
+        // — read-tool results (status:'ok'), lorebook-write proposals
+        // (status:'ok'), and skill/custom-tool proposal results all
+        // carry their own resolved shape and must not be clobbered.
+        for (const [mid, outcome] of profileEditOutcomeByMsg) {
+            const msg = msgById.get(mid);
+            if (!msg) continue;
+            const results = Array.isArray(msg.toolResults) ? msg.toolResults : null;
+            if (!results) continue;
+            const payload = buildPayloadForOutcome(outcome);
+            const nextStatus = outcome?.status === 'committed' ? 'ok' : 'fail';
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i];
+                const content = r?.content;
+                const isPending = content
+                    && typeof content === 'object'
+                    && content.status === 'proposal_pending';
+                if (!isPending) continue;
+                results[i] = {
+                    tool_call_id: String(r?.tool_call_id || ''),
+                    content: payload,
+                    status: nextStatus,
+                };
+            }
+        }
+    }
+
     async function drainBusOutcomes() {
         if (drainScheduled) return;
         const outcomes = bus.drainOutcomes();
@@ -1481,29 +1575,27 @@ export async function openOrchestratorIterationStudio(deps) {
         const allOutcomes = __pendingDrainStash.length
             ? [...__pendingDrainStash.splice(0), ...outcomes]
             : outcomes;
-        // Pure formatter — pins agent-facing wording (reason-grouped
-        // section headers + hint-over-error preference) under unit
-        // test at tests/orch-iteration/drain-outcomes-message.test.js.
-        // Returns null when every outcome was filtered out so we keep
-        // the original "nothing worth surfacing" early-return shape.
-        const message = buildDrainOutcomesMessage(allOutcomes, { tf });
-        if (message == null) return;
+        // Update the per-tool_call_id tool_result envelopes in place so
+        // the next round's role:'tool' replay carries the user's
+        // decision. Every edit tool_call has a persisted `pending`
+        // tool_result from emission time (see runIterationTurn's edit
+        // loop) that we swap to committed / rejected / conflict /
+        // rolled_back per the outcome.
+        //
+        // Multi-edit-per-turn cascade: the orchestrator's profile-edit
+        // bus proposal collapses N chained edit calls per turn into ONE
+        // bus entry keyed to the first callId. The outcome fires once
+        // and covers the whole batch, so cascade the same status to
+        // every other still-pending edit tool_result in the same
+        // assistant message. Lorebook-write / skill-author / custom-
+        // tool-author kinds are 1:1 (one proposal per call), so
+        // sourceCallId-only matching covers them; the cascade only
+        // fires for profile-edit outcomes.
+        applyOutcomesToToolResults(allOutcomes);
+        const hadUpdate = allOutcomes.length > 0;
+        if (!hadUpdate) return;
         drainScheduled = true;
         try {
-            state.session.messages.push({
-                id: makeMessageId(),
-                role: 'user',
-                content: message,
-                at: Date.now(),
-                auto: true,
-                // Tag distinguishes legitimate post-approval drain summaries
-                // (replay to the LLM so it sees what the user decided about
-                // each proposal) from legacy pre-refactor AUTO CONTINUE
-                // fillers (also `auto:true`, no `kind`) that must be dropped
-                // when a pre-refactor session is resumed under the
-                // read-first loop contract. See iter-message-filter.js.
-                kind: DRAIN_SUMMARY_KIND,
-            });
             state.isBusy = true;
             state.abortController = new AbortController();
             await persistSession();
@@ -2329,21 +2421,29 @@ export async function openOrchestratorIterationStudio(deps) {
             const role = String(m.role).toLowerCase();
             const content = String(m.content || '');
 
-            // Replay assistant message's tool calls that produced a
-            // persisted tool result — read tools (lorebook + simulate)
-            // AND rejected reset control calls (their fail tool_result
-            // is how the next round's model learns the rejection
-            // reason). Edit tool calls are intentionally NOT replayed:
-            // they're sandbox-diff proposals the user reviews + applies
-            // via the popup, not part of the OpenAI-protocol round-trip
-            // the model expects to see.
-            const readResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
-            const resultIds = new Set(readResults.map(r => String(r?.tool_call_id || '')).filter(Boolean));
-            const readCalls = Array.isArray(m?.toolCalls)
-                ? m.toolCalls.filter(tc => isInlineExecutedTool(tc?.name) || (tc?.id && resultIds.has(String(tc.id))))
-                : [];
-            if (role === 'assistant' && readCalls.length > 0 && readResults.length > 0) {
-                const toolCallsForHistory = readCalls.map((tc) => ({
+            // Replay assistant message's tool calls with their matching
+            // persisted tool_results. Every tool_call MUST have a
+            // corresponding role:'tool' message or the provider 400s
+            // ("tool_use ids must have matching tool_result").
+            //
+            // Read tools carry their real result (executed synchronously
+            // at emission time). Edit tools carry a `proposal_pending`
+            // envelope at emission time that drainBusOutcomes updates
+            // in place to committed / rejected / conflict / rolled_back
+            // once the user acts. Rejected reset control calls carry a
+            // fail-status envelope with the rejection reason.
+            //
+            // Legacy sessions (pre tool_call/tool_result round-trip) may
+            // have persisted edit tool_calls WITHOUT a matching
+            // toolResults entry (the old code stripped edit calls from
+            // history entirely). Synthesize a `committed` payload inline
+            // for those — best-effort, since the edit is on disk when
+            // the user is resuming the session it was committed at some
+            // point.
+            const persistedResults = Array.isArray(m?.toolResults) ? m.toolResults : [];
+            const persistedCalls = Array.isArray(m?.toolCalls) ? m.toolCalls : [];
+            if (role === 'assistant' && persistedCalls.length > 0) {
+                const toolCallsForHistory = persistedCalls.map((tc) => ({
                     id: String(tc?.id || ''),
                     type: 'function',
                     function: {
@@ -2367,23 +2467,29 @@ export async function openOrchestratorIterationStudio(deps) {
                     tool_calls: toolCallsForHistory,
                 });
                 const resultById = new Map();
-                for (const r of readResults) {
+                for (const r of persistedResults) {
                     if (r && r.tool_call_id != null) resultById.set(String(r.tool_call_id), r);
                 }
-                for (const tc of readCalls) {
-                    const r = resultById.get(String(tc?.id || ''));
-                    if (!r) continue;
-                    let serialized = '';
-                    try {
-                        serialized = typeof r.content === 'string'
-                            ? r.content
-                            : JSON.stringify(r.content ?? '');
-                    } catch {
-                        serialized = '';
+                for (const tc of persistedCalls) {
+                    const callId = String(tc?.id || '');
+                    const r = resultById.get(callId);
+                    let serialized;
+                    if (r) {
+                        try {
+                            serialized = typeof r.content === 'string'
+                                ? r.content
+                                : JSON.stringify(r.content ?? '');
+                        } catch {
+                            serialized = '';
+                        }
+                    } else {
+                        // Legacy fill: assume committed. See buildEditToolPendingPayload
+                        // for the parallel emission-time shape.
+                        serialized = JSON.stringify(buildEditToolResultPayload('committed'));
                     }
                     messages.push({
                         role: 'tool',
-                        tool_call_id: String(tc?.id || ''),
+                        tool_call_id: callId,
                         content: serialized,
                     });
                 }
@@ -3090,6 +3196,18 @@ export async function openOrchestratorIterationStudio(deps) {
                 const reply = buildEditCallReply({ outcome, callId });
                 if (reply.edits.length > 0) {
                     edits.push(...reply.edits);
+                    // Successful sandbox-diff — edit is queued for user
+                    // review via bus.propose below. Persist a `pending`
+                    // tool_result envelope keyed to this call so every
+                    // tool_call has a matching role:'tool' message in
+                    // the LLM's protocol history. `drainBusOutcomes`
+                    // updates this in place to committed / rejected /
+                    // conflict / rolled_back when the user acts.
+                    editToolResults.push({
+                        tool_call_id: callId,
+                        content: buildEditToolResultPayload('pending'),
+                        status: 'pending',
+                    });
                 }
                 if (reply.toolResult) {
                     editToolResults.push(reply.toolResult);
