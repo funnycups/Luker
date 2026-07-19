@@ -2223,14 +2223,25 @@ function getOpenRouterModelTemplate(option) {
         return option.text;
     }
 
-    let tokens_dollar = Number(1 / (1000 * model.pricing?.prompt));
-    let tokens_rounded = (Math.round(tokens_dollar * 1000) / 1000).toFixed(0);
+    const promptPrice = Number(model.pricing?.prompt);
+    let price = 'Unknown';
+    if (Number.isFinite(promptPrice)) {
+        if (promptPrice === 0) {
+            price = 'Free';
+        } else {
+            const tokens_rounded = Math.round(1 / promptPrice / 1000).toFixed(0);
+            price = `${tokens_rounded}k t/$ `;
+        }
+    }
 
-    const price = 0 === Number(model.pricing?.prompt) ? 'Free' : `${tokens_rounded}k t/$ `;
+    const contextLength = Number(model.context_length);
+    const ctxSegment = Number.isFinite(contextLength) && contextLength > 0
+        ? `${contextLength} ctx | `
+        : '';
 
     return $((`
         <div class="flex-container flexFlowColumn" title="${DOMPurify.sanitize(model.id)}">
-            <div><strong>${DOMPurify.sanitize(model.name)}</strong> | ${model.context_length} ctx | <small>${price}</small></div>
+            <div><strong>${DOMPurify.sanitize(model.name || model.id)}</strong> | ${ctxSegment}<small>${price}</small></div>
         </div>
     `));
 }
@@ -2487,7 +2498,7 @@ function mergeModelRecordsWithCustom(models, source = oai_settings.chat_completi
     const existing = new Set(merged.map(model => String(model?.id || '').trim()).filter(Boolean));
     for (const modelId of customModels) {
         if (!existing.has(modelId)) {
-            merged.push({ id: modelId });
+            merged.push({ id: modelId, name: modelId, isCustom: true });
             existing.add(modelId);
         }
     }
@@ -2782,13 +2793,17 @@ function saveModelList(data) {    model_list = mergeModelRecordsWithCustom(data,
             groupModelsByVendor(model_list, chat_completion_sources.OPENROUTER).forEach((models, vendor) => {
                 const optgroup = $('<optgroup>').attr('label', vendor);
                 models.forEach((model) => {
-                    optgroup.append($('<option>', { value: model.id, text: model.name }));
+                    const $option = $('<option>', { value: model.id, text: model.name || model.id });
+                    if (model.isCustom) $option.attr('data-custom-model', '1');
+                    optgroup.append($option);
                 });
                 $('#model_openrouter_select').append(optgroup);
             });
         } else {
             model_list.forEach((model) => {
-                $('#model_openrouter_select').append($('<option>', { value: model.id, text: model.name }));
+                const $option = $('<option>', { value: model.id, text: model.name || model.id });
+                if (model.isCustom) $option.attr('data-custom-model', '1');
+                $('#model_openrouter_select').append($option);
             });
         }
 
