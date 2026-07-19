@@ -1,0 +1,411 @@
+/**
+ * Skill manager subpanel — visual styles.
+ *
+ * Built on the shared `.luker-studio` design tokens (see public/css/luker-studio.css)
+ * so colors flow through `--SmartTheme*` automatically instead of being hardcoded —
+ * the panel picks up whatever theme the user has SillyTavern set to.
+ *
+ * Before this file existed the panel had NO dedicated stylesheet at all (it only
+ * inherited generic `.menu_button`/`.text_pole` rules), so most of this is filling
+ * in real layout for classes that already existed in the markup, not just the
+ * additions below marked "NEW".
+ */
+
+.luker_skill_manager {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-sm);
+}
+
+/* ---------- tab strip ---------- */
+.luker_skill_manager_tabs {
+    display: flex;
+    gap: var(--ls-space-2xs);
+    border-bottom: var(--ls-border-soft);
+}
+.luker_skill_tab {
+    padding: var(--ls-space-xs) var(--ls-space-sm);
+    font-size: 0.9rem;
+    cursor: pointer;
+    opacity: var(--ls-text-muted);
+    border-bottom: 2px solid transparent;
+}
+.luker_skill_tab_active {
+    opacity: var(--ls-text-strong);
+    font-weight: 600;
+    border-bottom-color: var(--ls-accent-primary);
+}
+
+/* ---------- toolbar ---------- */
+.luker_skill_manager_toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-sm);
+    padding-bottom: var(--ls-space-sm);
+    border-bottom: var(--ls-border-soft);
+}
+.luker_skill_filter_label {
+    display: flex;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    font-size: 0.88rem;
+}
+.luker_skill_filter_label_text {
+    opacity: var(--ls-text-muted);
+    white-space: nowrap;
+}
+.luker_skill_filter_select {
+    flex: 1;
+    min-width: 0;
+}
+.luker_skill_manager_toolbar_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ls-space-xs) var(--ls-space-md);
+    align-items: center;
+}
+.luker_skill_toolbar_group {
+    display: flex;
+    gap: var(--ls-space-2xs);
+    flex-wrap: wrap;
+    position: relative; /* anchors .luker_skill_import_menu */
+}
+
+/* NEW — merged "Import skill" button's dropdown (still contains the three
+   original import-bundled/import-file/import-url buttons as real, clickable
+   children so existing wiring + tests keep working; only the presentation
+   collapses them behind one toggle). */
+.luker_skill_import_menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 5;
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--ls-space-2xs);
+    min-width: 200px;
+    background: var(--ls-shell-bg);
+    border: var(--ls-border);
+    border-radius: var(--ls-radius-md);
+    box-shadow: var(--ls-shadow-md);
+}
+.luker_skill_import_menu.luker_skill_import_menu_open {
+    display: flex;
+}
+.luker_skill_import_menu_item {
+    justify-content: flex-start !important;
+    width: 100% !important;
+}
+
+/* ---------- body / groups ---------- */
+.luker_skill_manager_body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-md);
+}
+.luker_skill_group {
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    overflow: hidden;
+    background: var(--ls-panel-bg);
+}
+.luker_skill_group_header {
+    display: flex;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    padding: var(--ls-space-xs) var(--ls-space-sm);
+    border-bottom: var(--ls-border-soft);
+}
+/* NEW — preset/character section headers double as a collapse toggle */
+.luker_skill_group_header_toggle {
+    cursor: pointer;
+    user-select: none;
+}
+.luker_skill_group_header_toggle:hover {
+    background: var(--ls-hover-bg);
+}
+.luker_skill_group_header_chevron {
+    margin-left: auto;
+    opacity: var(--ls-text-hint);
+    font-size: 0.8rem;
+}
+
+.luker_skill_scope_badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: var(--ls-radius-pill);
+    background: var(--ls-chip-bg);
+    border: var(--ls-border-soft);
+}
+.luker_skill_scope_badge_sep {
+    opacity: var(--ls-text-hint);
+}
+.luker_skill_group_count {
+    font-size: 0.8rem;
+    opacity: var(--ls-text-muted);
+}
+.luker_skill_group_header_toggle .luker_skill_group_count {
+    margin-left: auto;
+}
+.luker_skill_group_header_toggle .luker_skill_group_header_chevron {
+    margin-left: 0;
+}
+
+/* Compact list — used for the "picker rows" (name selection), NOT the
+   skill cards themselves. */
+.luker_skill_group_rows {
+    display: flex;
+    flex-direction: column;
+}
+
+/* NEW — skill cards: each skill gets its own bordered/rounded block with a
+   gap between siblings, instead of the old shared-border contiguous rows. */
+.luker_skill_group_rows_cards {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-xs);
+    padding: var(--ls-space-sm);
+}
+.luker_skill_row_card {
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-sm);
+    background: var(--ls-card-bg);
+}
+.luker_skill_row_card_source {
+    font-size: 0.74rem;
+    opacity: var(--ls-text-hint);
+    margin-top: 2px;
+}
+
+.luker_skill_row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--ls-space-xs);
+    padding: var(--ls-space-sm);
+    border-bottom: var(--ls-border-soft);
+}
+.luker_skill_group_rows .luker_skill_row:last-child {
+    border-bottom: none;
+}
+.luker_skill_row_card {
+    border-bottom: var(--ls-border-soft); /* full border on cards, set above */
+}
+.luker_skill_row_main {
+    flex: 1;
+    min-width: 0;
+}
+.luker_skill_row_head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--ls-space-xs);
+    flex-wrap: wrap;
+}
+.luker_skill_row_name {
+    font-weight: 600;
+    font-size: 0.92rem;
+}
+.luker_skill_row_meta {
+    display: flex;
+    gap: 5px;
+}
+.luker_skill_meta_chip {
+    font-size: 0.7rem;
+    opacity: var(--ls-text-muted);
+    background: var(--ls-chip-bg);
+    border: var(--ls-border-soft);
+    padding: 1px 6px;
+    border-radius: var(--ls-radius-pill);
+}
+.luker_skill_meta_chip_warn {
+    opacity: var(--ls-text-strong);
+    color: var(--ls-accent-system);
+    border-color: color-mix(in oklab, var(--ls-accent-system) 50%, transparent);
+}
+.luker_skill_row_desc {
+    font-size: 0.8rem;
+    opacity: var(--ls-text-muted);
+    margin-top: 4px;
+    line-height: 1.5;
+}
+
+/* NEW — row actions collapse behind a native <details>/<summary> disclosure
+   (the ⋮). Keeps the same data-skill-action buttons in the DOM (nothing
+   about delete/rename/move/edit wiring changes), just hides them until
+   the user opens the disclosure — a native widget needs no extra JS. */
+.luker_skill_row_actions_disclosure {
+    flex-shrink: 0;
+}
+.luker_skill_row_actions_disclosure > summary {
+    list-style: none;
+    cursor: pointer;
+}
+.luker_skill_row_actions_disclosure > summary::-webkit-details-marker {
+    display: none;
+}
+.luker_skill_row_kebab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2em;
+    height: 2em;
+    border-radius: var(--ls-radius-pill);
+    background: var(--ls-chip-bg);
+    border: var(--ls-border-soft);
+    font-weight: 700;
+}
+.luker_skill_row_kebab:hover {
+    background: var(--ls-hover-bg);
+}
+.luker_skill_row_actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    margin-top: var(--ls-space-xs);
+}
+.luker_skill_row_actions_group {
+    display: flex;
+    gap: 4px;
+}
+.luker_skill_row_btn_primary {
+    border-color: color-mix(in oklab, var(--ls-accent-primary) 55%, transparent);
+}
+.luker_skill_row_btn_danger,
+.luker_skill_row_delete {
+    color: var(--ls-accent-danger);
+    border-color: color-mix(in oklab, var(--ls-accent-danger) 45%, transparent);
+}
+
+/* NEW — the preset/character name-picker rows (reuse .luker_skill_row's
+   layout, just add pointer + active/all styling). */
+.luker_skill_picker_row {
+    cursor: pointer;
+}
+.luker_skill_picker_row:hover {
+    background: var(--ls-hover-bg);
+}
+.luker_skill_picker_row_active {
+    background: color-mix(in oklab, var(--ls-accent-primary) 14%, transparent);
+}
+.luker_skill_picker_row_all .luker_skill_row_name::before {
+    content: '★ ';
+    opacity: var(--ls-text-hint);
+}
+.luker_skill_picker_row_count {
+    font-size: 0.78rem;
+    opacity: var(--ls-text-muted);
+    flex-shrink: 0;
+}
+.luker_skill_picker_hint {
+    padding: var(--ls-space-sm);
+    font-size: 0.8rem;
+    opacity: var(--ls-text-hint);
+    font-style: italic;
+    text-align: center;
+}
+
+.luker_skill_empty {
+    padding: var(--ls-space-md) var(--ls-space-sm);
+    font-size: 0.85rem;
+    opacity: var(--ls-text-muted);
+    text-align: center;
+}
+.luker_skill_empty_root {
+    padding: var(--ls-space-xl) var(--ls-space-sm);
+}
+.luker_skill_empty_title {
+    font-size: 0.94rem;
+    margin-bottom: 4px;
+}
+.luker_skill_empty_hint {
+    font-size: 0.82rem;
+    opacity: var(--ls-text-hint);
+}
+
+/* ---------- view popup ---------- */
+.luker_skill_view_pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.85rem;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* ---------- NEW: export picker ---------- */
+.luker_skill_export_dialog {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-sm);
+}
+.luker_skill_export_toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ls-space-sm);
+    font-size: 0.86rem;
+}
+.luker_skill_export_select_all {
+    display: flex;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    cursor: pointer;
+    user-select: none;
+}
+.luker_skill_export_scroll {
+    /* Bound the scroller directly with max-height so it always owns its own
+       overflow — robust on mobile, no dependency on the popup's flex chain
+       (the earlier flex:1 + min-height:0 approach didn't scroll on phones). */
+    max-height: 55vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ls-space-sm);
+    padding-right: 2px;
+}
+/* per-category "select all" checkbox sits in the group header */
+.luker_skill_export_group_head input[type="checkbox"] {
+    flex-shrink: 0;
+    margin: 0;
+}
+.luker_skill_export_group {
+    border: var(--ls-border-soft);
+    border-radius: var(--ls-radius-md);
+    overflow: hidden;
+}
+.luker_skill_export_group_head {
+    display: flex;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    padding: var(--ls-space-xs) var(--ls-space-sm);
+    background: var(--ls-panel-bg);
+    border-bottom: var(--ls-border-soft);
+    cursor: pointer;
+}
+.luker_skill_export_row {
+    display: flex;
+    align-items: center;
+    gap: var(--ls-space-xs);
+    padding: var(--ls-space-xs) var(--ls-space-sm);
+    border-bottom: var(--ls-border-soft);
+    cursor: pointer;
+}
+.luker_skill_export_row:last-child {
+    border-bottom: none;
+}
+.luker_skill_export_row_name {
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+.luker_skill_export_row_desc {
+    font-size: 0.76rem;
+    opacity: var(--ls-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
