@@ -14009,10 +14009,23 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
             }
         }
 
-        throw new Error(result.statusText);
+        // Surface server-side error body (e.g. "file_name exceeds 128 bytes",
+        // "file_name contains characters that cannot appear in a stored name")
+        // so users see the real reason instead of a generic connection toast.
+        // resolveChatWriteConflictForTarget only reads the body on 409, so on
+        // 4xx/5xx the body is still consumable here.
+        let serverError = '';
+        try {
+            const payload = await result.json();
+            if (payload && typeof payload.error === 'string') {
+                serverError = payload.error.trim();
+            }
+        } catch { /* not JSON */ }
+        throw new Error(serverError || result.statusText);
     } catch (error) {
         console.error(error);
-        toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Chat could not be saved`);
+        const detail = error?.message ? String(error.message).trim() : '';
+        toastr.error(detail || t`Check the server connection and reload the page to prevent data loss.`, t`Chat could not be saved`);
         // Fetch threw after the optimistic snapshot commit — drop the snapshot
         // so the next save re-syncs from BE. See appendChatMessagesInternal
         // for the full rationale.
