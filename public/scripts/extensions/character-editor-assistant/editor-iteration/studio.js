@@ -2491,53 +2491,20 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
             }
             return -1;
         })();
-        // Pre-compute latest-unapplied id so inline Apply/Reject row only
-        // attaches to the most recent unapplied assistant turn.
-        // `state.pendingEdits` is the source of truth for "staged batch
-        // awaiting review". When it's empty (Discard cleared it, or
-        // Apply landed with zero clean edits), no message should carry
-        // an Apply/Reject row — even though `m.edits` is still retained
-        // on the message for diff history / rollback.
-        let latestUnappliedAssistantId = '';
-        if (Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0) {
-            for (let i = messages.length - 1; i >= 0; i--) {
-                const m = messages[i];
-                if (m && m.role === 'assistant' && !m.auto
-                    && Array.isArray(m.edits) && m.edits.length > 0
-                    && !m.appliedAt && !m.rolledBackAt) {
-                    latestUnappliedAssistantId = String(m.id || '');
-                    break;
-                }
-            }
-        }
-        state.__latestUnappliedAssistantId = latestUnappliedAssistantId;
         const html = messages
             .map((m, idx) => ITER_UI.message.renderMessageCard(m, {
                 toolDisplay: CEA_EDITOR_TOOL_DISPLAY,
-                renderEditCard: (e, msg) => {
-                    // Forward state.live to the diff renderer only when this
-                    // edit belongs to the latest unapplied assistant turn —
-                    // earlier turns' edits have already been folded into
-                    // state.live, so resolving their `edit.path` against it
-                    // gives a post-edit value. The renderer then falls back
-                    // to the focused find→replace card for those.
-                    //
-                    // CEA edits carry `card.<field>` / `lorebook.<field>` /
-                    // `entries.<uid>.<key>` paths that don't directly resolve
-                    // inside `state.live` (the rebase to per-target slots
-                    // happens at commit time). For the diff renderer we hand
-                    // it the matching per-target slice so `lodash.get` lines
-                    // up: character edits get `state.live.character`,
-                    // lorebook edits get the specific book.
-                    const isLatestUnapplied = !!msg
-                        && String(msg?.id || '') === state.__latestUnappliedAssistantId;
-                    const liveForEdit = isLatestUnapplied ? resolveLiveForEdit(e, state.live) : undefined;
-                    return ITER_UI.diff.renderDiffCard([e], {
-                        i18n: tf,
-                        fieldLabels: computeEditFieldLabels(e, state.live, t),
-                        live: liveForEdit,
-                    });
-                },
+                // Bus's proposal card (rendered by renderApplyControls
+                // below via bus.renderCardsForMessage) owns the full diff
+                // body for the current turn's edits. Rendering per-edit
+                // diff cards here would duplicate that body — the user
+                // would see "字段更新: entries.N.key" cards inline AND
+                // the same content again inside the "Lorebook edits"
+                // proposal card. Mirror orch's renderPendingEditCard
+                // (extensions/orchestrator/iter-studio/studio.js:1972-1984).
+                // message.edits is still persisted (rollbackBatch needs
+                // it); we just stop rendering diffs from it.
+                renderEditCard: () => '',
                 renderApplyControls: (msg) => {
                     // Bus owns per-card chrome + turn-actions. Legacy
                     // Apply / Discard / Rollback per-message button stack
