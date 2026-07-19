@@ -2611,7 +2611,13 @@ async function maybeRunPreRequestSearchAgent(payload) {
     }
 
     await loadSearchToolsChatState(context, { force: false });
+    if (payload?.signal?.aborted) {
+        return;
+    }
     await syncSharedLorebookForCurrentChat(context);
+    if (payload?.signal?.aborted) {
+        return;
+    }
     const chatKey = getChatKey(context);
     const generationType = String(payload?.type || '').trim().toLowerCase();
     const anchor = buildLastUserAnchor(context, payload.coreChat);
@@ -2678,6 +2684,7 @@ async function maybeRunPreRequestSearchAgent(payload) {
         if (runToken !== activeAgentRunToken) {
             return;
         }
+        throwIfAborted(effectivePayload?.signal, 'Search agent aborted.');
         await storeCompletedSearchAgentSnapshot(context, anchor, result);
         updateUiStatus(buildSearchAgentStatusText(result));
     } catch (error) {
