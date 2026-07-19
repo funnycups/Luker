@@ -2293,7 +2293,16 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         state.__suspendBusOnChange = true;
         try {
             if (grouped.character.length > 0) {
-                const charEdits = grouped.character.slice();
+                // Rebase legacy `card.` / `lorebook.` prefixes off before
+                // applyEdits — the bus base is the per-target slice
+                // (character object / book object), not `{ card: ..., lorebook: ... }`.
+                // Without rebase, built-in `set` on `card.<field>` writes to
+                // a bogus `card` branch (inverse non-empty but wrong), and
+                // `lorebook_entry_update` on `lorebook.entries` returns
+                // `not_found` — workingLive never mutates → newLive deep-
+                // equals before → encodeInverse returns []. Rollback button
+                // (render-card.js:60 `hasInverse` gate) then never renders.
+                const charEdits = grouped.character.slice().map(rebasePathToTarget);
                 // ST character objects are not structuredClone-able (the live
                 // record carries non-cloneable refs that throw DataCloneError);
                 // use the JSON-safe clone helper for the bus snapshot pair.
@@ -2307,7 +2316,7 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
                 }
                 await bus.propose({
                     kind: 'cea-character-edits',
-                    target: { type: 'character', _edits: charEdits },
+                    target: { type: 'character', _edits: grouped.character },
                     before: characterBefore,
                     after: characterAfter,
                     sourceCallId,
@@ -2315,7 +2324,7 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
             }
             for (const [bookName, edits] of Object.entries(grouped.lorebooks)) {
                 if (!edits.length) continue;
-                const bookEdits = edits.slice();
+                const bookEdits = edits.slice().map(rebasePathToTarget);
                 const bookBefore = safeClone(state.live?.lorebooks?.[bookName] || { entries: {} });
                 let bookAfter;
                 try {
@@ -2326,7 +2335,7 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
                 }
                 await bus.propose({
                     kind: 'cea-lorebook-edits',
-                    target: { type: 'lorebook', name: bookName, _edits: bookEdits },
+                    target: { type: 'lorebook', name: bookName, _edits: edits },
                     before: bookBefore,
                     after: bookAfter,
                     sourceCallId,
