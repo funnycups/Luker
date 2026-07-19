@@ -14361,6 +14361,17 @@ export async function refreshFirstMessageOnEmptyCharacterChat() {
 }
 
 export async function openCharacterChat(file_name) {
+    // API list endpoints return `file_name` with the `.jsonl` extension baked
+    // in (see src/endpoints/chats.js:3999 etc). Historical callers passed that
+    // raw string straight into here from DOM attributes on chat list rows and
+    // let it land in `characters[].chat` verbatim, contaminating the field
+    // with a trailing `.jsonl`. Subsequent branch/checkpoint operations then
+    // hit regexes anchored on `\d+$` and failed to strip the previous suffix,
+    // causing each cycle to accumulate a full `.jsonl` segment until the name
+    // blew past the 128-byte repo limit. Normalize once at the entry point so
+    // every caller (sidebar clicks, checkpoint links, branch snapshots,
+    // Timelines ext, merge/split) writes a clean base name.
+    file_name = String(file_name ?? '').replace(/\.jsonl$/i, '');
     if (!await waitForChatSwitchAvailability()) {
         return;
     }

@@ -128,8 +128,12 @@ async function getBookmarkName({ isReplace = false, forceName = null } = {}) {
     const mainChatName = (getCurrentChatDetails()).sessionName;
 
     function buildCheckpointName(name, i) {
+        // See buildBranchName: same `.jsonl` leak defeats the digit-anchored
+        // suffix regex below and causes each checkpoint cycle to accumulate a
+        // fresh extension segment.
+        let cleanName = name.replace(/\.jsonl$/i, '');
         // Strip off existing suffixes, then build new name
-        let cleanName = name.replace(new RegExp(` - ${bookmarkNameToken}\\d+$`), '');
+        cleanName = cleanName.replace(new RegExp(` - ${bookmarkNameToken}\\d+$`), '');
         // Strip off legacy old name prefix too
         cleanName = cleanName.replace(new RegExp(`^${bookmarkNameToken}\\d+ - `), '');
         return `${cleanName} - ${bookmarkNameToken}${i}`;
@@ -247,8 +251,14 @@ export async function createBranch(mesId, { swipeId = null } = {}) {
     }
 
     function buildBranchName(name, i) {
+        // Strip legacy `.jsonl` first. Historical callers of openCharacterChat
+        // let the raw API `file_name` (which includes the extension) leak into
+        // `characters[].chat`; without this line the ` - Branch #\d+$` regex
+        // below fails to match and every branch cycle re-appends a fresh
+        // ` - Branch #N.jsonl` segment, blowing past the 128-byte repo cap.
+        let cleanName = name.replace(/\.jsonl$/i, '');
         // Strip off existing suffixes, then build new name
-        let cleanName = name.replace(/ - Branch #\d+$/, '');
+        cleanName = cleanName.replace(/ - Branch #\d+$/, '');
         // Strip off legacy old name prefix too
         cleanName = cleanName.replace(/^Branch #\d+ - /, '');
         return `${cleanName} - Branch #${i}`;
