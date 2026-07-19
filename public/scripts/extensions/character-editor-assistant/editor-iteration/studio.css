@@ -220,20 +220,6 @@
     scroll-behavior: smooth;
 }
 
-/* ── Pending edits ─────────────────────────────────────────────────── */
-
-.cea_editor_pending {
-    flex: 0 0 auto;
-    border: 1px solid color-mix(in oklab, var(--it-accent-system) 40%, transparent);
-    border-left: 3px solid color-mix(in oklab, var(--it-accent-system) 70%, transparent);
-    padding: var(--it-space-sm) var(--it-space-md);
-    margin: 0;
-    border-radius: var(--it-radius-md);
-    background: color-mix(in oklab, var(--it-accent-system) 7%, transparent);
-    max-height: 320px;
-    overflow-y: auto;
-}
-
 /* ── Composer ──────────────────────────────────────────────────────── */
 
 .cea_editor_composer {

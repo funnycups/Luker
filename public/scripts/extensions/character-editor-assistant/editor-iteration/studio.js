@@ -2744,20 +2744,6 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         badge.hidden = false;
     }
 
-    function renderApplyRow() {
-        // Apply / Reject affordances now render inline on the assistant
-        // message that produced the pending edits — see renderMessageCard
-        // above (renderApplyControls hook). The bottom apply row is
-        // retired; this helper is a no-op kept so the existing callers
-        // (`render()` flow) keep compiling. Remove once those callers
-        // migrate.
-        if (!$root || $root.length === 0) return;
-        const pendingEl = $root.find('[data-cea-editor-pending]');
-        if (pendingEl && pendingEl.length > 0) {
-            pendingEl.empty().attr('hidden', true);
-        }
-    }
-
     async function renderHistory() {
         if (!$root || $root.length === 0) return;
         const itemsEl = $root.find('[data-cea-editor-history-items]');
@@ -2802,7 +2788,6 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
 
     async function render() {
         renderMessages();
-        renderApplyRow();
         renderPreviewPane();
         syncSendButtonLabel();
         syncAutoApplyCheckbox();
@@ -3496,7 +3481,6 @@ function buildPopupHtml({
     <div class="luker-iter-workspace-grid">
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="cea_editor_messages" data-cea-editor-messages></div>
-            <div class="cea_editor_pending" data-cea-editor-pending hidden></div>
             <div class="cea_editor_composer">
                 <textarea class="text_pole" rows="2" data-cea-editor-input data-iter-input placeholder="${esc(composerPlaceholder)}"></textarea>
                 <div class="cea_editor_composer_actions">
