@@ -2484,15 +2484,8 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         // screen diff via the topbar "View full replace diff" button
         // instead, so the raw prose bubble is pure chat noise for them.
         const messages = (state.session.messages || []).filter(m => !(m?.role === 'user' && m?.auto) && !m?.hiddenFromUi);
-        const lastAssistantIdx = (() => {
-            for (let i = messages.length - 1; i >= 0; i--) {
-                const m = messages[i];
-                if (m?.role === 'assistant' && !m?.auto) return i;
-            }
-            return -1;
-        })();
         const html = messages
-            .map((m, idx) => ITER_UI.message.renderMessageCard(m, {
+            .map((m) => ITER_UI.message.renderMessageCard(m, {
                 toolDisplay: CEA_EDITOR_TOOL_DISPLAY,
                 // Bus's proposal card (rendered by renderApplyControls
                 // below via bus.renderCardsForMessage) owns the full diff
@@ -2516,7 +2509,6 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
                     if (!cards && !turn) return '';
                     return cards + turn;
                 },
-                isLast: idx === lastAssistantIdx,
                 i18n: tf,
                 renderMarkdown: ITER_RENDER && typeof ITER_RENDER.renderMessageMarkdown === 'function'
                     ? ITER_RENDER.renderMessageMarkdown

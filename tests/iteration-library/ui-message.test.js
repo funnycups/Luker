@@ -102,22 +102,22 @@ describe('renderMessageCard', () => {
         expect(html).toMatch(/Rolled back|回滚|回退/);
     });
 
-    it('shows Regenerate button on non-last assistant message, hides on last + on auto-continue', () => {
-        const last = renderMessageCard(
+    it('shows Regenerate button on every non-auto assistant message', () => {
+        const first = renderMessageCard(
             { id: 'm9', role: 'assistant', content: 'x' },
-            { toolDisplay: {}, renderEditCard: noopEdit, isLast: true, i18n: ident },
+            { toolDisplay: {}, renderEditCard: noopEdit, i18n: ident },
         );
-        expect(last).not.toContain('regenerate');
+        expect(first).toContain('regenerate');
 
         const mid = renderMessageCard(
             { id: 'm10', role: 'assistant', content: 'x' },
-            { toolDisplay: {}, renderEditCard: noopEdit, isLast: false, i18n: ident },
+            { toolDisplay: {}, renderEditCard: noopEdit, i18n: ident },
         );
         expect(mid).toContain('regenerate');
 
         const auto = renderMessageCard(
             { id: 'm11', role: 'assistant', content: 'x', auto: true },
-            { toolDisplay: {}, renderEditCard: noopEdit, isLast: false, i18n: ident },
+            { toolDisplay: {}, renderEditCard: noopEdit, i18n: ident },
         );
         expect(auto).not.toContain('regenerate');
     });

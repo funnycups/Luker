@@ -27,13 +27,6 @@ import { STR } from './strings.js';
  *                                               When omitted, message turns with edits
  *                                               do not render Apply/Reject affordances
  *                                               (suitable for read-only renders or tests).
- * @param {boolean} opts.isLast                  true when this assistant is the LAST ASSISTANT turn
- *                                               in the visible message list — i.e. no later message
- *                                               has role === 'assistant'. Caller must skip trailing
- *                                               user/system/auto messages when computing this.
- *                                               Drives Regenerate visibility (last assistant cannot
- *                                               regenerate because re-sending recomputes from the
- *                                               same prompt anyway).
  * @param {Function} opts.i18n                   (template, ...args) => string. Templates use
  *                                               `${0}` / `${1}` positional placeholders. The caller
  *                                               supplies a function that both translates and
@@ -153,7 +146,7 @@ export function renderMessageCard(message, opts = {}) {
         ? opts.renderApplyControls(message)
         : '';
 
-    const showRegen = !opts.isLast && !message.auto;
+    const showRegen = !message.auto;
     const regenHtml = showRegen
         ? `<div class="luker_lib_message_actions">
             <button class="menu_button menu_button_small" ${actionAttr}="regenerate" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">

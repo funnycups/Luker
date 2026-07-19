@@ -2114,20 +2114,6 @@ export async function openOrchestratorIterationStudio(deps) {
                 : 'orch_it_msg_system';
         const autoCls = message.auto ? ' orch_it_msg_auto' : '';
 
-        // Last-assistant predicate: true only when this assistant turn has
-        // no later assistant in the visible message list. Trailing user /
-        // system / auto-continue turns are skipped so the actual final
-        // assistant reply (the one whose prompt is the live tail) hides
-        // its Regenerate button — re-sending from the same composer text
-        // is semantically equivalent.
-        let isLast = false;
-        if (role === 'assistant' && !message.auto) {
-            isLast = true;
-            for (let j = (allMessages?.length || 0) - 1; j > idx; j--) {
-                if (allMessages[j]?.role === 'assistant' && !allMessages[j]?.auto) { isLast = false; break; }
-            }
-        }
-
         // The shared component renders the applied-target line as
         // "✓ Applied to ${0} at ${1}" when `message.appliedTarget` is
         // truthy. Orch persists `appliedTarget = 'character' | 'global'`,
@@ -2160,7 +2146,6 @@ export async function openOrchestratorIterationStudio(deps) {
                 if (!cards && !turn) return '';
                 return cards + turn;
             },
-            isLast,
             i18n: tf,
             renderMarkdown: ITER_RENDER.renderMessageMarkdown,
             actionAttribute: 'data-orch-it-action',
