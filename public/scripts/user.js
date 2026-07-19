@@ -13,6 +13,8 @@ import { copyText, debounce, ensureImageFormatSupported, getBase64Async, humanFi
 import { formatAnnouncementBody } from './announcements.js';
 import { buildStorageBackendCreds } from './admin-storage-backend.js';
 import { openLanSyncPanel } from './lan-sync.js';
+import { openStorageInspector, mountStorageInspector } from './storage-inspector.js';
+import { openBrowserStorageInspector } from './browser-storage-inspector.js';
 
 /**
  * @type {import('../../src/users.js').UserViewModel} Logged in user
@@ -2387,6 +2389,8 @@ async function openUserProfile() {
     template.find('.hasPassword').toggle(currentUser.password);
     template.find('.noPassword').toggle(!currentUser.password);
     template.find('.userSettingsSnapshotsButton').on('click', () => viewSettingsSnapshots());
+    template.find('.userStorageInspectorButton').on('click', () => openStorageInspector({ kind: 'self' }));
+    template.find('.userBrowserStorageInspectorButton').on('click', () => openBrowserStorageInspector());
     template.find('.userChangeNameButton').on('click', async () => changeName(currentUser.handle, currentUser.name, async () => {
         await getCurrentUser();
         template.find('.userName').text(currentUser.name);
@@ -3097,6 +3101,79 @@ async function openAdminPanel() {
         }
     }
 
+    async function renderStorageManagement() {
+        const container = template.find('.storageManagementTab')[0];
+        const picker = container.querySelector('.storageInspectorAdminUserPicker');
+        const searchInput = container.querySelector('.storageInspectorAdminUserSearch');
+        const inspectorMount = container.querySelector('.storageInspectorAdminInspectorContainer');
+
+        // 加载用户列表:复用 /api/users/overview(admin only · 已返回 storageBytes)
+        picker.innerHTML = `<div class="storageInspectorLoadingRow"></div>`.repeat(3);
+        let overview;
+        try {
+            const res = await fetch('/api/users/overview', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({}),
+            });
+            if (!res.ok) throw new Error('failed');
+            overview = await res.json();
+        } catch (err) {
+            picker.innerHTML = `<div class="storageInspectorError">${t`Failed to load users.`}</div>`;
+            return;
+        }
+
+        let currentTarget = null;
+
+        function selectTarget(target, label) {
+            if (currentTarget === target) return;
+            currentTarget = target;
+            // 高亮
+            picker.querySelectorAll('.storageInspectorAdminUserRow').forEach(row => {
+                row.classList.toggle('storageInspectorAdminUserRowActive', row.dataset.target === target);
+            });
+            // Mount Inspector(replace)
+            inspectorMount.innerHTML = '';
+            const c = document.createElement('div');
+            inspectorMount.appendChild(c);
+            mountStorageInspector({ kind: 'any', target }, c);
+        }
+
+        function renderPicker(filter) {
+            picker.innerHTML = '';
+            // Virtual aggregate row
+            const aggregateRow = document.createElement('div');
+            aggregateRow.className = 'storageInspectorAdminUserRow storageInspectorAdminUserAggregate';
+            aggregateRow.dataset.target = '__all__';
+            aggregateRow.innerHTML = `<i class="fa-fw fa-solid fa-star"></i> <span data-i18n="* All Users *">* All Users *</span>`;
+            aggregateRow.addEventListener('click', () => selectTarget('__all__', '* All Users *'));
+            picker.appendChild(aggregateRow);
+
+            // Per-user rows
+            const users = (overview.users ?? [])
+                .filter(u => !filter || u.handle.toLowerCase().includes(filter));
+            for (const u of users) {
+                const row = document.createElement('div');
+                row.className = 'storageInspectorAdminUserRow';
+                row.dataset.target = u.handle;
+                row.innerHTML = `
+                    <i class="fa-fw fa-solid fa-user"></i>
+                    <span class="storageInspectorAdminUserHandle">${$('<div/>').text(u.handle).html()}</span>
+                    <span class="storageInspectorAdminUserSize">${humanFileSize(u.storageBytes ?? 0)}</span>
+                    ${u.admin ? '<span class="storageInspectorAdminUserAdminBadge" data-i18n="(admin)">(admin)</span>' : ''}
+                    ${u.enabled === false ? '<span class="storageInspectorAdminUserDisabledBadge" data-i18n="(disabled)">(disabled)</span>' : ''}
+                `;
+                row.addEventListener('click', () => selectTarget(u.handle, u.handle));
+                picker.appendChild(row);
+            }
+        }
+
+        renderPicker('');
+        searchInput.addEventListener('input', (ev) => {
+            renderPicker(ev.target.value.toLowerCase().trim());
+        });
+    }
+
     async function renderUsers() {
         const users = await getUsers();
         template.find('.usersList').empty();
@@ -3176,6 +3253,8 @@ async function openAdminPanel() {
             renderAnnouncements();
         } else if (target === 'storageBackendTab') {
             renderStorageBackend();
+        } else if (target === 'storageManagementTab') {
+            renderStorageManagement();
         }
     });
 

@@ -1581,7 +1581,7 @@
     "Character Expressions": "角色情緒立繪",
     "Character Node Color": "角色節點顏色",
     "character_names_none": "避免使用角色名稱作為前綴。此功能在群組中可能表現不理想，需謹慎考慮。",
-    "Characters": "角色",
+    "Characters": "角色卡",
     "Chat Message Visibility (by source)": "聊天訊息可見性（按來源）",
     "Chat vectorization settings": "聊天向量化設定",
     "Checked: all entries except ❌ status can be activated.": "勾選：除 ❌ 狀態外的所有條目均可啟動。",
@@ -3447,7 +3447,7 @@
     "Global extensions imported: ${result?.importedCount ?? 0} files.": "全域性擴充套件已匯入：${result?.importedCount ?? 0} 個檔案。",
     "Grayed-out options have no effect when Chat Completion API is used.": "使用聊天補全 API 時，灰顯選項不會生效。",
     "Group Chat could not be saved": "群聊無法儲存",
-    "Group Chats": "群聊",
+    "Group Chats": "群組聊天",
     "Group Created": "群組已建立",
     "Group Deleted": "群組已刪除",
     "Group Validation": "群組驗證",
@@ -3475,7 +3475,7 @@
     "Image Generation Notice": "影象生成提示",
     "Image Swipe Behavior:": "圖片滑動行為：",
     "Image deleted successfully.": "圖片刪除成功。",
-    "Images": "圖片",
+    "Images": "圖片資源",
     "Images that are not associated with chat messages. WILL DELETE MANUAL UPLOADS!": "未與聊天訊息關聯的圖片。會刪除手動上傳的檔案！",
     "Import aborted": "匯入已中止",
     "Import all tags from selected characters": "從所選角色匯入全部標籤",
@@ -4049,7 +4049,7 @@
     "An update task is already running. Attaching to the current task...": "已有更新任務在執行，正在附加到當前任務…",
     "Android update bridge is unavailable.": "Android 更新橋接不可用。",
     "Are you sure you want to delete selected messages?": "確認刪除已選擇的訊息嗎？",
-    "Backgrounds": "背景",
+    "Backgrounds": "背景圖",
     "Bind Character Preset": "繫結角色預設",
     "Bind Current Chat Completion Preset": "繫結當前對話補全預設",
     "Bind Model to Templates": "將模型與模板繫結",
@@ -5969,4 +5969,47 @@
     ,"Invalid log filter": "無效的日誌篩選"
     ,"Start time must be earlier than end time.": "起始時間必須早於結束時間。"
     ,"Card-bound": "本卡內嵌"
+    ,"Storage Inspector": "儲存審查"
+    ,"Inspect your storage usage.": "查看你的儲存使用情況。"
+    ,"Loading…": "載入中……"
+    ,"No data in this category.": "此類別下無資料。"
+    ,"Retry": "重試"
+    ,"Worldbooks": "世界書"
+    ,"Attachments": "附件與工作流"
+    ,"Presets & Settings": "預設與設定"
+    ,"Vector Stores": "向量庫"
+    ,"Storage": "儲存"
+    ,"Chat Images": "聊天圖片"
+    ,"Persona Avatars": "使用者頭像"
+    ,"ComfyUI Workflows": "ComfyUI 工作流"
+    ,"API Presets": "API 預設"
+    ,"UI Elements": "UI 元素"
+    ,"Instruct Templates": "指令範本"
+    ,"Main Settings": "主設定"
+    ,"Chat Metadata": "聊天元資料"
+    ,"Contains API keys · not inspectable": "含 API 金鑰，不可檢視內容"
+    ,"Sprites": "表情圖"
+    ,"Walk exceeded time limit; refresh to retry.": "目錄遍歷逾時，請重新整理重試。"
+    ,"Storage · All Users": "儲存 · 全平台彙總"
+    ,"Storage Management": "儲存管理"
+    ,"View:": "檢視："
+    ,"Search users...": "搜尋使用者……"
+    ,"* All Users *": "* 全平台彙總 *"
+    ,"(admin)": "（管理員）"
+    ,"(disabled)": "（已停用）"
+    ,"Failed to load users.": "載入使用者清單失敗。"
+    ,"Browser Storage": "瀏覽器儲存"
+    ,"Inspect this browser's storage.": "查看目前瀏覽器的儲存使用情況。"
+    ,"localStorage": "localStorage"
+    ,"sessionStorage": "sessionStorage"
+    ,"IndexedDB": "IndexedDB"
+    ,"Cache Storage": "Cache Storage"
+    ,"Browser did not report a quota.": "瀏覽器未上報配額。"
+    ,"Delete %s?": "刪除 %s？"
+    ,"This will permanently remove %s from your browser. This action cannot be undone.": "此操作將從瀏覽器中永久刪除 %s，且無法復原。"
+    ,"Deleted": "已刪除"
+    ,"Failed to delete: %s": "刪除失敗：%s"
+    ,"stores": "儲存"
+    ,"records": "條"
+    ,"requests": "請求"
 }

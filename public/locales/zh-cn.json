@@ -1010,7 +1010,7 @@
     "stscript_parser_flag_replace_getvar_label": "防止 {{getvar::}} {{getglobalvar::}} 宏具有自动评估的文字宏类值。\n例如，“{{newline}}”保留为文字字符串“{{newline}}”\n\n（这是通过在内部用范围变量替换 {{getvar::}} {{getglobalvar::}} 宏来实现的。）",
     "REPLACE_GETVAR": "替换GETVAR",
     "Change Background Image": "更改背景图片",
-    "Backgrounds": "背景",
+    "Backgrounds": "背景图",
     "Background Fitting": "背景图片尺寸",
     "Classic": "经典",
     "Cover": "填充",
@@ -1681,11 +1681,11 @@
     "Failed to import chat": "导入聊天失败",
     "Files": "文件",
     "Files that are not associated with chat messages or Data Bank. WILL DELETE MANUAL UPLOADS!": "未与聊天消息或数据银行关联的文件。会删除手动上传的文件！",
-    "Images": "图片",
+    "Images": "图片资源",
     "Images that are not associated with chat messages. WILL DELETE MANUAL UPLOADS!": "未与聊天消息关联的图片。会删除手动上传的文件！",
     "Chats": "聊天",
     "Chat files associated with deleted characters.": "与已删除角色相关联的聊天文件。",
-    "Group Chats": "群聊",
+    "Group Chats": "群组聊天",
     "Chat files associated with deleted groups.": "与已删除群组相关联的聊天文件。",
     "Avatar Thumbnails": "头像缩略图",
     "Thumbnails for avatars of missing or deleted characters.": "缺失或已删除角色头像的缩略图。",
@@ -1761,7 +1761,7 @@
     "Install": "安装",
     "Install for all users": "为所有用户安装",
     "Branch or tag name (optional)": "分支或标签名称（可选）",
-    "Characters": "人物",
+    "Characters": "角色卡",
     "Ambient sounds": "环境音效",
     "Background music": "背景音乐",
     "Blip sounds": "提示音",
@@ -2201,7 +2201,7 @@
     "Only Format Prompt": "仅格式提示词",
     "Only Format Plugin": "仅格式插件",
     "Run on Edit": "在编辑时运行",
-    "Unlimited": "无限",
+    "Unlimited": "无限制",
     "Unknown preset": "未知预设",
     "Unnamed regex script": "未命名正则脚本",
     "Already exists": "已存在",
@@ -6130,4 +6130,47 @@
     ,"Invalid log filter": "无效的日志筛选"
     ,"Start time must be earlier than end time.": "起始时间必须早于结束时间。"
     ,"Card-bound": "本卡内嵌"
+    ,"Storage Inspector": "存储审查"
+    ,"Inspect your storage usage.": "查看你的存储使用情况。"
+    ,"Loading…": "加载中……"
+    ,"No data in this category.": "此类别下无数据。"
+    ,"Retry": "重试"
+    ,"Worldbooks": "世界书"
+    ,"Attachments": "附件与工作流"
+    ,"Presets & Settings": "预设与设置"
+    ,"Vector Stores": "向量库"
+    ,"Storage": "存储"
+    ,"Chat Images": "聊天图片"
+    ,"Persona Avatars": "用户头像"
+    ,"ComfyUI Workflows": "ComfyUI 工作流"
+    ,"API Presets": "API 预设"
+    ,"UI Elements": "UI 元素"
+    ,"Instruct Templates": "指令模板"
+    ,"Main Settings": "主设置"
+    ,"Chat Metadata": "聊天元数据"
+    ,"Contains API keys · not inspectable": "含 API 密钥，不可查看内容"
+    ,"Sprites": "表情图"
+    ,"Walk exceeded time limit; refresh to retry.": "目录遍历超时，请刷新重试。"
+    ,"Storage · All Users": "存储 · 全平台聚合"
+    ,"Storage Management": "存储管理"
+    ,"View:": "查看："
+    ,"Search users...": "搜索用户……"
+    ,"* All Users *": "* 全平台聚合 *"
+    ,"(admin)": "（管理员）"
+    ,"(disabled)": "（已停用）"
+    ,"Failed to load users.": "加载用户列表失败。"
+    ,"Browser Storage": "浏览器存储"
+    ,"Inspect this browser's storage.": "查看当前浏览器的存储使用情况。"
+    ,"localStorage": "localStorage"
+    ,"sessionStorage": "sessionStorage"
+    ,"IndexedDB": "IndexedDB"
+    ,"Cache Storage": "Cache Storage"
+    ,"Browser did not report a quota.": "浏览器未上报配额。"
+    ,"Delete %s?": "删除 %s？"
+    ,"This will permanently remove %s from your browser. This action cannot be undone.": "此操作将从浏览器中永久删除 %s，且无法撤销。"
+    ,"Deleted": "已删除"
+    ,"Failed to delete: %s": "删除失败：%s"
+    ,"stores": "存储"
+    ,"records": "条"
+    ,"requests": "请求"
 }

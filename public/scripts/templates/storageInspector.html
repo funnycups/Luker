@@ -1,0 +1,34 @@
+<div class="storageInspectorContainer flex-container flexFlowColumn">
+    <div class="storageInspectorHeader flex-container alignItemsCenter spaceBetween">
+        <nav class="storageInspectorBreadcrumbs flex-container alignItemsCenter"></nav>
+        <div class="flex-container alignItemsCenter">
+            <div class="storageInspectorRefreshButton menu_button menu_button_icon" title="Refresh" data-i18n="[title]Refresh">
+                <i class="fa-fw fa-solid fa-rotate-right"></i>
+            </div>
+        </div>
+    </div>
+
+    <div class="storageInspectorQuota flex-container alignItemsCenter">
+        <span class="storageInspectorQuotaUsed"></span>
+        <span> / </span>
+        <span class="storageInspectorQuotaTotal"></span>
+    </div>
+
+    <div class="storageInspectorStackedBar"></div>
+    <div class="storageInspectorLegend flex-container flexWrap"></div>
+
+    <div class="storageInspectorList flex-container flexFlowColumn flexNoGap"></div>
+
+    <div class="storageInspectorLoading displayNone">
+        <span data-i18n="Loading…">Loading…</span>
+    </div>
+    <div class="storageInspectorEmpty displayNone">
+        <span data-i18n="No data in this category.">No data in this category.</span>
+    </div>
+    <div class="storageInspectorError displayNone">
+        <div class="storageInspectorErrorMessage"></div>
+        <div class="storageInspectorRetryButton menu_button">
+            <span data-i18n="Retry">Retry</span>
+        </div>
+    </div>
+</div>

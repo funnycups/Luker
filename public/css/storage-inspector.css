@@ -1,0 +1,182 @@
+:root {
+    --storage-cat-chats:      hsl(210, 60%, 55%);
+    --storage-cat-characters: hsl(280, 55%, 60%);
+    --storage-cat-worlds:     hsl( 30, 65%, 55%);
+    --storage-cat-images:     hsl(150, 55%, 50%);
+    --storage-cat-attach:     hsl(340, 50%, 55%);
+    --storage-cat-presets:    hsl(190, 50%, 50%);
+    --storage-cat-ext:        hsl( 60, 55%, 50%);
+    --storage-cat-vectors:    hsl(250, 55%, 60%);
+    --storage-cat-backups:    hsl(  0, 45%, 55%);
+    --storage-cat-other:      hsl(  0,  0%, 55%);
+    --storage-cat-localstorage:   hsl(200, 55%, 55%);
+    --storage-cat-sessionstorage: hsl(220, 45%, 55%);
+    --storage-cat-indexeddb:      hsl(160, 55%, 50%);
+    --storage-cat-cachestorage:   hsl( 45, 60%, 55%);
+    --storage-cat-quota:          hsl(  0,  0%, 65%);
+}
+
+.storageInspectorContainer {
+    gap: 12px;
+    padding: 8px;
+    min-height: 400px;
+}
+
+.storageInspectorHeader { gap: 8px; }
+
+.storageInspectorBreadcrumbs {
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.storageInspectorBreadcrumbCrumb {
+    cursor: pointer;
+    color: var(--SmartThemeBodyColor);
+    text-decoration: none;
+}
+.storageInspectorBreadcrumbCrumb:hover { text-decoration: underline; }
+.storageInspectorBreadcrumbSep { opacity: 0.4; margin: 0 2px; }
+.storageInspectorBreadcrumbCurrent { font-weight: 600; }
+
+.storageInspectorQuota {
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 0.9em;
+    color: var(--SmartThemeBodyColor);
+}
+.storageInspectorQuotaUsed { font-weight: 600; }
+.storageInspectorQuotaOver { color: var(--warning, #d43); }
+
+.storageInspectorStackedBar {
+    display: flex;
+    width: 100%;
+    height: 14px;
+    background: var(--SmartThemeBlurTintColor);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.storageInspectorBarSegment {
+    height: 100%;
+    transition: opacity 0.2s;
+}
+.storageInspectorBarSegment:hover { opacity: 0.7; }
+
+.storageInspectorLegend { gap: 8px; margin-top: -4px; font-size: 0.85em; }
+.storageInspectorLegendItem { display: inline-flex; align-items: center; gap: 4px; }
+.storageInspectorLegendSwatch { width: 10px; height: 10px; border-radius: 2px; }
+
+.storageInspectorList {
+    gap: 4px;
+    max-height: 60vh;
+    overflow-y: auto;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    padding-top: 8px;
+}
+.storageInspectorEntry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 6px;
+    border-radius: 4px;
+    cursor: default;
+}
+.storageInspectorEntry.storageInspectorEntryDrillable {
+    cursor: pointer;
+}
+.storageInspectorEntry.storageInspectorEntryDrillable:hover {
+    background: var(--SmartThemeShadowColor);
+}
+.storageInspectorEntryIcon { width: 24px; text-align: center; font-size: 1.1em; }
+.storageInspectorEntryLabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storageInspectorEntrySize { font-variant-numeric: tabular-nums; opacity: 0.85; }
+.storageInspectorEntryDots {
+    display: inline-flex;
+    gap: 2px;
+    margin: 0 8px;
+    width: 48px;
+}
+.storageInspectorEntryDot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--SmartThemeBorderColor);
+}
+.storageInspectorEntryDot.storageInspectorEntryDotFilled {
+    background: currentColor;
+}
+.storageInspectorEntryChevron { opacity: 0.6; }
+.storageInspectorEntryNote { font-size: 0.75em; opacity: 0.7; margin-top: 2px; }
+
+.storageInspectorSensitiveBlob .storageInspectorEntryIcon { color: var(--warning, #d43); }
+.storageInspectorSensitiveBlob { cursor: help; }
+
+/* Loading skeleton */
+.storageInspectorLoading::before,
+.storageInspectorLoading::after,
+.storageInspectorLoadingRow {
+    display: block;
+    height: 24px;
+    background: linear-gradient(90deg,
+        var(--SmartThemeBlurTintColor) 0%,
+        var(--SmartThemeShadowColor) 50%,
+        var(--SmartThemeBlurTintColor) 100%);
+    background-size: 200% 100%;
+    animation: storageInspectorShimmer 1.6s infinite linear;
+    border-radius: 4px;
+    margin: 8px 0;
+}
+@keyframes storageInspectorShimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Admin user picker */
+.storageInspectorAdminUserPicker {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+    padding: 6px;
+    margin-bottom: 12px;
+}
+.storageInspectorAdminUserRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.storageInspectorAdminUserRow:hover,
+.storageInspectorAdminUserRow.storageInspectorAdminUserRowActive {
+    background: var(--SmartThemeShadowColor);
+}
+.storageInspectorAdminUserAggregate { font-weight: 600; }
+
+/* Mobile 断点 */
+@media (max-width: 720px) {
+    .storageInspectorEntry {
+        flex-wrap: wrap;
+    }
+    .storageInspectorEntryDots { display: none; }
+    .storageInspectorEntrySize { font-size: 0.85em; }
+}
+
+/* Delete button per row (v2 mutable providers).
+ * Sizing (padding 0.25em 0.5em, margin-inline-start 0.25em) matches other
+ * .menu_button_icon icon-only buttons in the UI; keep in sync if that base changes.
+ */
+.storageInspectorEntryDeleteButton {
+    padding: 0.25em 0.5em;
+    margin-inline-start: 0.25em;
+}
+.storageInspectorEntryDeleteButton:hover {
+    color: var(--warning, hsl(0, 60%, 55%));
+}
+.storageInspectorEntryDeleteButton[disabled] {
+    opacity: 0.4;
+    cursor: not-allowed;
+}

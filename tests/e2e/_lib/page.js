@@ -827,3 +827,88 @@ export async function installMinimalDirectorProfile(page, {
         ctx.saveSettingsDebounced?.();
     }, { mainSystemPrompt, subAgents, tools });
 }
+
+/**
+ * Open the Admin Panel popup. Assumes the current user is admin (default
+ * user in single-user mode is auto-admin; in multi-user mode the caller
+ * must have logged in as an admin). Idempotent w.r.t. the User Settings
+ * drawer state — checks the closedIcon class before toggling.
+ */
+export async function openAdminPanel(page) {
+    const settingsDrawer = page.locator('#user-settings-button');
+    // 10s covers cold-start settings-drawer mount on CI.
+    await settingsDrawer.waitFor({ state: 'visible', timeout: 10_000 });
+    const drawerClosed = await page.locator('#user-settings-button .drawer-icon.closedIcon').count().then(n => n > 0);
+    if (drawerClosed) {
+        await page.locator('#user-settings-button .drawer-toggle').click();
+        // 5s: drawer open animation is short but CSS transitions vary.
+        await page.waitForFunction(() => {
+            const el = document.getElementById('user-settings-block');
+            return el && !el.classList.contains('closedDrawer');
+        }, { timeout: 5_000 });
+    }
+    const adminButton = page.locator('#admin_button');
+    await adminButton.waitFor({ state: 'visible', timeout: 10_000 });
+    await adminButton.click();
+    // 10s covers cold-start admin popup mount on CI.
+    await page.locator('button[data-target-tab="usersList"]').last().waitFor({ state: 'visible', timeout: 10_000 });
+}
+
+/**
+ * Create a new user via the real Admin Panel New User form. Follows the
+ * exact click path a real admin would take:
+ *
+ *   1. Open Admin Panel (drawer → #admin_button).
+ *   2. Click "New User" nav tab (`data-target-tab="registerNewUserBlock"`).
+ *   3. Fill display name → slugify handler auto-populates the handle;
+ *      overwrite it with the desired handle explicitly (in case slugify
+ *      picks a different one).
+ *   4. Fill password + confirm password.
+ *   5. Submit the form.
+ *   6. Wait until the user appears in the Manage Users list (proves the
+ *      create round-tripped through the /api/users/create endpoint and
+ *      the list re-rendered from /api/users/get).
+ *
+ * Requires `enableUserAccounts:true` at server boot; on single-user mode
+ * the admin popup still opens but the create form would create a user
+ * that can never actually log in.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {{ handle: string, name: string, password?: string }} spec
+ */
+export async function createUserViaAdminUI(page, { handle, name, password = '' }) {
+    await openAdminPanel(page);
+    const popup = page.locator('dialog.popup[open]').last();
+    // Click the New User tab.
+    await popup.locator('button[data-target-tab="registerNewUserBlock"]').click();
+    const form = popup.locator('.userCreateForm').last();
+    await form.waitFor({ state: 'visible', timeout: 5_000 });
+    // Fill name; the input handler auto-slugifies into the handle field.
+    await form.locator('.createUserDisplayName').fill(name);
+    // Overwrite the handle explicitly (slugify roundtrip has a tiny delay
+    // and might not match if the display name contains chars slugify
+    // drops).
+    await form.locator('.createUserHandle').fill(handle);
+    if (password) {
+        await form.locator('.createUserPassword').fill(password);
+        await form.locator('.createUserConfirmPassword').fill(password);
+    }
+    await form.locator('.newUserRegisterFinalizeButton').click();
+    // Success drops back to the Manage Users tab (see form submit handler
+    // in public/scripts/user.js). Wait for the new user row to render.
+    const usersList = popup.locator('.navTab.usersList');
+    await usersList.waitFor({ state: 'visible', timeout: 10_000 });
+    // The .userAccount block's small.userHandle carries the handle text
+    // after renderUsers() re-fetches /api/users/get and re-renders. Poll
+    // via a JS-level check because filter({has:}) has been unreliable
+    // here — the DOM has alice but the has-filter times out; suspect
+    // an initial `&nbsp;`-only render is being observed and cached.
+    await page.waitForFunction((h) => {
+        const rows = document.querySelectorAll('.userAccount .userHandle');
+        for (const r of rows) {
+            if ((r.textContent || '').trim() === h) return true;
+        }
+        return false;
+    }, handle, { timeout: 15_000 });
+}
+

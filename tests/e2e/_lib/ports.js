@@ -25,6 +25,8 @@ export const PORT_RANGES = {
     personas:       { base: 8561, count: 6 },
     regression:     { base: 8571, count: 4 },
     storage:        { base: 8581, count: 6 },
+    'storage-inspector': { base: 8641, count: 6 },
+    'browser-storage-inspector': { base: 8651, count: 6 },
     sync:           { base: 8591, count: 4 },
     xmode:          { base: 8601, count: 8 }, // cross-mode-recovery specs need 2 servers per pair
     generation:     { base: 8621, count: 6 },

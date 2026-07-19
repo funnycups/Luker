@@ -25,6 +25,12 @@ import {
     getUserDirectories,
     ensurePublicDirectoriesExist,
 } from '../users.js';
+import {
+    resolvePath,
+    enumerateAggregateRoot,
+    enumerateAggregateCategory,
+    StorageInspectorError,
+} from '../storage/inspector.js';
 import { DEFAULT_USER, PUBLIC_DIRECTORIES } from '../constants.js';
 import { clearCapturedLogs, getCapturedLogs } from '../log-capture.js';
 import {
@@ -1313,4 +1319,74 @@ router.post('/storage/migrate/reset', requireAdminMiddleware, async (request, re
     _migrationState = null;
     setReadOnly(false);
     return response.send({ ok: true });
+});
+
+/**
+ * POST /storage/inspect-any — admin Storage Inspector · 看任意用户或全平台聚合。
+ *
+ * Body: { target: string, path?: string[] }
+ *   target = '<handle>'   → 看该 user
+ *   target = '__all__'    → 全平台聚合(depth ≤ 2 · depth ≥ 3 返回 redirect 让前端跳该 user)
+ *
+ * Response 200: InspectorResponse · 或 { redirect: { target, path } }(aggregate 深钻时)
+ * Response 400: { error: { code, message } }  E_INVALID_PATH · E_NOT_INSPECTABLE
+ * Response 404: { error: { code: 'E_TARGET_NOT_FOUND', message } } 用户不存在
+ * Response 500: { error: { code: 'E_INTERNAL', message } }
+ * (403 由 requireAdminMiddleware 触发 · 不在本 handler 内处理)
+ */
+router.post('/storage/inspect-any', requireAdminMiddleware, async (request, response) => {
+    try {
+        const { target, path: rawPath } = request.body ?? {};
+        if (typeof target !== 'string' || target.length === 0) {
+            return response.status(400).json({ error: { code: 'E_INVALID_PATH', message: 'target required' } });
+        }
+        const pathArr = Array.isArray(rawPath) ? rawPath : [];
+        const adminSettings = await getAdminSettings();
+
+        if (target === '__all__') {
+            // Aggregate 模式
+            if (pathArr.length >= 2) {
+                // depth ≥ 3(L2 是 [categoryKey, userHandle],再深就 redirect 到该 user)
+                const [categoryKey, userHandle, ...rest] = pathArr;
+                if (categoryKey && userHandle) {
+                    return response.json({ redirect: { target: userHandle, path: [categoryKey, ...rest] } });
+                }
+            }
+            const handles = await getAllUserHandles();
+            const users = handles.map(h => {
+                const dirs = getUserDirectories(h);
+                return { handle: h, root: dirs.root };
+            });
+            if (pathArr.length === 0) {
+                return response.json(await enumerateAggregateRoot(users, adminSettings));
+            }
+            // L1 aggregate(单类别下的用户 top 排列)
+            return response.json(await enumerateAggregateCategory(users, pathArr[0]));
+        }
+
+        // Specific user 模式
+        const dirs = getUserDirectories(target);
+        try {
+            await fsPromises.access(dirs.root);
+        } catch {
+            return response.status(404).json({ error: { code: 'E_TARGET_NOT_FOUND', message: `user ${target} not found` } });
+        }
+        // 无 quota 语义(admin 视图不套配额) · 传 -1 表示 unlimited
+        const pseudoUser = { handle: target, storageQuotaBytes: -1 };
+        const result = await resolvePath(dirs.root, pathArr, {
+            target: { type: 'user', handle: target },
+            user: pseudoUser,
+            adminSettings,
+        });
+        // pure lib 默认 target.handle:null · 这里补齐当前 admin 指定的目标
+        result.target = { type: 'user', handle: target };
+        return response.json(result);
+    } catch (err) {
+        if (err instanceof StorageInspectorError) {
+            const status = err.code === 'E_TARGET_NOT_FOUND' ? 404 : 400;
+            return response.status(status).json({ error: { code: err.code, message: err.message } });
+        }
+        console.error('storage-inspector /inspect-any error:', err);
+        return response.status(500).json({ error: { code: 'E_INTERNAL', message: String(err?.message ?? err) } });
+    }
 });

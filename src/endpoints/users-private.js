@@ -27,6 +27,8 @@ import {
     CrossModeScratchConnectionError,
     CrossModeConversionFailedError,
 } from '../storage/migration/cross-mode-errors.js';
+import { resolvePath, StorageInspectorError } from '../storage/inspector.js';
+import { getAdminSettings } from '../admin-settings.js';
 
 // Two sentinel filenames the backup ZIP carries when the storage engine isn't
 // fs (spec §5.1/§5.2). The meta entry is captured during the analyze pass for
@@ -1646,5 +1648,42 @@ router.post('/announcements/me/mark-read', async (request, response) => {
     } catch (error) {
         console.error('Announcements me/mark-read failed:', error);
         return response.sendStatus(500);
+    }
+});
+
+/**
+ * POST /storage/inspect — Storage Inspector 自看 endpoint。
+ * 永远看当前登录用户 · 无 admin 权限判断。
+ *
+ * Body: { path?: string[] } — 默认 [] · path 前端从上一层 response 里的 entry.key 拿。
+ * Response 200: InspectorResponse(见 src/storage/inspector.js)· target 强制 { type:'self', handle:<current> }
+ * Response 400: { error: { code, message } } · code ∈ E_INVALID_PATH / E_NOT_INSPECTABLE
+ * Response 401: 未登录
+ * Response 500: { error: { code: 'E_INTERNAL', message } }
+ */
+router.post('/storage/inspect', async (request, response) => {
+    try {
+        const user = request.user?.profile;
+        if (!user) {
+            return response.status(401).json({ error: { code: 'E_UNAUTHORIZED', message: 'not logged in' } });
+        }
+        const pathArr = Array.isArray(request.body?.path) ? request.body.path : [];
+        const dirs = request.user?.directories ?? getUserDirectories(user.handle);
+        const adminSettings = await getAdminSettings();
+
+        const result = await resolvePath(dirs.root, pathArr, {
+            target: { type: 'self', handle: user.handle },
+            user,
+            adminSettings,
+        });
+        // pure lib 默认 target.handle:null · 这里补齐当前用户 handle
+        result.target = { type: 'self', handle: user.handle };
+        return response.json(result);
+    } catch (err) {
+        if (err instanceof StorageInspectorError) {
+            return response.status(400).json({ error: { code: err.code, message: err.message } });
+        }
+        console.error('storage-inspector /inspect error:', err);
+        return response.status(500).json({ error: { code: 'E_INTERNAL', message: String(err?.message ?? err) } });
     }
 });

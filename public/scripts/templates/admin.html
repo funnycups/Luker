@@ -21,6 +21,9 @@
         <button type="button" class="storageBackendButton menu_button menu_button_icon" data-target-tab="storageBackendTab">
             <h4 data-i18n="Storage Backend">Storage Backend</h4>
         </button>
+        <button type="button" class="storageManagementButton menu_button menu_button_icon" data-target-tab="storageManagementTab">
+            <h4 data-i18n="Storage Management">Storage Management</h4>
+        </button>
         <button type="button" class="newUserButton menu_button menu_button_icon" data-target-tab="registerNewUserBlock">
             <h4 data-i18n="New User">New User</h4>
         </button>
@@ -296,6 +299,15 @@
 
         <h4 class="margin0" data-i18n="Result">Result</h4>
         <pre class="storageBackendResult" style="white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow: auto; padding: 8px;"></pre>
+    </div>
+
+    <div class="navTab storageManagementTab flex-container flexFlowColumn flexGap10" style="display: none;">
+        <div class="storageInspectorAdminPickerHeader flex-container alignItemsCenter spaceBetween">
+            <h4 data-i18n="View:">View:</h4>
+            <input type="search" class="storageInspectorAdminUserSearch text_pole flex1" data-i18n="[placeholder]Search users..." placeholder="Search users..." />
+        </div>
+        <div class="storageInspectorAdminUserPicker"></div>
+        <div class="storageInspectorAdminInspectorContainer"></div>
     </div>
 
     <div class="navTab registerNewUserBlock" style="display: none;">
