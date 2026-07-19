@@ -26,7 +26,8 @@ import {
 } from '../util.js';
 import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
 import { getChatRepo, getGroupRepo, getStorageEngine } from '../storage/index.js';
-import { ConflictError, NotFoundError } from '../storage/errors.js';
+import { ConflictError, InvalidArgumentError, NotFoundError } from '../storage/errors.js';
+import { assertSafeRepoName } from '../storage/name-validation.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
 const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
@@ -2140,6 +2141,7 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         const cardName = String(request.body.avatar_url).replace('.png', '');
         const chatData = request.body.chat;
         const fileNameKey = stripJsonlExt(request.body.file_name);
+        assertSafeRepoName(fileNameKey, { field: 'file_name' });
         const chatFileName = `${fileNameKey}.jsonl`;
         const chatFilePath = path.join(request.user.directories.chats, cardName, sanitize(chatFileName));
         if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
@@ -2193,6 +2195,9 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         acknowledgeGenerationFromValueOrPersistTarget(request, chatData, buildCharacterPersistTargetHint(request));
         return response.send({ ok: true, integrity });
     } catch (error) {
+        if (error instanceof InvalidArgumentError) {
+            return response.status(400).send({ error: error.message });
+        }
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
         }
@@ -3467,6 +3472,7 @@ router.post('/group/save', async function (request, response) {
         }
 
         const id = String(request.body.id);
+        assertSafeRepoName(id, { field: 'id' });
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatData = request.body.chat;
@@ -3518,6 +3524,9 @@ router.post('/group/save', async function (request, response) {
         acknowledgeGenerationFromValueOrPersistTarget(request, chatData, buildGroupPersistTargetHint(request));
         return response.send({ ok: true, integrity: result.integrity });
     } catch (error) {
+        if (error instanceof InvalidArgumentError) {
+            return response.status(400).send({ error: error.message });
+        }
         if (error instanceof IntegrityMismatchError) {
             return sendIntegrityConflict(response, error);
         }
