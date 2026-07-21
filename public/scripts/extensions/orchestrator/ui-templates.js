@@ -675,16 +675,17 @@ export function renderAgendaWorkspace(deps, scope, editor, title = '') {
 </div>`;
     const toolsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
-    <details class="luker_orch_tools_section">
+    <details class="luker_orch_tools_section" open>
         <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
-        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. Leave empty to keep tools off for all agents.'))}</div>
         ${editor?.defaultTools
-        ? `${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool', {}, { profileCustomTools: editor?.customTools || null })}
+        ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('Every agent can call these tools across multiple rounds by default. Override per agent on the Agents tab.'))}</div>
+        ${renderToolFlagsGrid(deps, safeScope, editor.defaultTools, 'luker-agenda-default-tool', {}, { profileCustomTools: editor?.customTools || null })}
         <div class="luker-studio-actions-row">
             <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
             <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
         </div>`
-        : `<div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
+        : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No default tools set — every agent runs without tools. Enable defaults here to let agents call tools across multiple rounds; each agent can still override on the Agents tab.'))}</div>
+        <div class="menu_button menu_button_small" data-luker-action="agenda-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
     </details>
     ${renderCustomToolsSection(deps, safeScope, 'agenda', editor?.customTools || [], (editor?.defaultTools && editor.defaultTools.custom) || {})}
     ${renderLorebookFilterSection(deps, 'agenda', editor?.lorebookFilter || {})}
@@ -722,16 +723,17 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
 </div>`;
     const toolsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${scope}">
-    <details class="luker_orch_tools_section">
+    <details class="luker_orch_tools_section" open>
         <summary>${escapeHtml(i18n('Default tools for all nodes'))}</summary>
-        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each node can override these defaults below. Leave empty to keep tools off for all nodes.'))}</div>
         ${specDefaultTools
-        ? `${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool', {}, { profileCustomTools: editor?.spec?.customTools || null })}
+        ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('Every node can call these tools across multiple rounds by default. Override per node on the Agents tab.'))}</div>
+        ${renderToolFlagsGrid(deps, safeScope, specDefaultTools, 'luker-spec-default-tool', {}, { profileCustomTools: editor?.spec?.customTools || null })}
         <div class="luker-studio-actions-row">
             <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
             <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-disable-all" data-scope="${safeScope}">${escapeHtml(i18n('Clear'))}</div>
         </div>`
-        : `<div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
+        : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No default tools set — every node runs without tools. Enable defaults here to let nodes call tools across multiple rounds; each node can still override on the Agents tab.'))}</div>
+        <div class="menu_button menu_button_small" data-luker-action="spec-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable defaults'))}</div>`}
     </details>
     ${renderCustomToolsSection(deps, safeScope, 'spec', editor?.spec?.customTools || [], (editor?.spec?.defaultTools && editor.spec.defaultTools.custom) || {})}
     ${renderLorebookFilterSection(deps, 'spec', editor?.spec?.lorebookFilter || {})}
@@ -1024,9 +1026,9 @@ export function renderDirectorWorkspace(deps, scope, profile, title = '') {
 </div>`;
     const toolsHtml = `
 <div class="luker-studio-workspace" data-luker-scope-root="${safeScope}">
-    <details class="luker_orch_tools_section">
+    <details class="luker_orch_tools_section" open>
         <summary>${escapeHtml(i18n('Default tools for all agents'))}</summary>
-        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Each agent can override these defaults below. The main agent inherits unless it has its own override.'))}</div>
+        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Every agent can call these tools by default. Override per agent on the Agents tab; the main agent inherits unless it has its own override.'))}</div>
         ${renderToolFlagsGrid(deps, safeScope, directorDefaultTools || {}, 'luker-director-default-tool', {}, { includeCollab: true, includeMessage: true, profileCustomTools: profile?.customTools || null })}
         <div class="luker-studio-actions-row">
             <div class="menu_button menu_button_small" data-luker-action="director-default-tools-enable-all" data-scope="${safeScope}">${escapeHtml(i18n('Enable all'))}</div>
