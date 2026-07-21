@@ -413,8 +413,24 @@ test.describe('#43 — Bind (add + set-default) and Manage Bound Presets dialog'
             .toBeCloseTo(UPDATED_B_TEMP, 5);
 
         // ── Delete SlotA. ─────────────────────────────────────────────
+        // The remove flow now shows a three-way choice:
+        //   OK        → "Save to global preset" (promote card snapshot)
+        //   CUSTOM1   → "Discard" (legacy behavior — just drop the slot)
+        //   Cancel    → abort
+        // #43 covers the *slot management* matrix, not the promote flow —
+        // click Discard so the assertion below (SlotA gone, no global
+        // preset side-effects) still holds. The promote flow has its own
+        // dedicated test file.
         await dialog3.locator('.luker-mbp-row[data-preset-name="SlotA"] .luker-mbp-remove').click();
-        await acceptPopup(page);   // confirm-remove
+        {
+            const popup = page.locator('dialog.popup[open]').last();
+            await popup.waitFor({ state: 'visible', timeout: 5000 });
+            const dataId = await popup.getAttribute('data-id');
+            await popup.locator('.popup-button-custom[data-result="1001"]').first().click();
+            if (dataId) {
+                await page.locator(`dialog.popup[data-id="${dataId}"]`).waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+            }
+        }
         await waitForCardSlotCount(page, 1);
         // Default was SlotA → now null after remove.
         {

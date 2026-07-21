@@ -28,7 +28,7 @@
  * read-spread-overlay dance in `writeExtensionField`.
  */
 
-import { Popup, POPUP_TYPE } from '/scripts/popup.js';
+import { Popup, POPUP_TYPE, POPUP_RESULT } from '/scripts/popup.js';
 import { t } from '/scripts/i18n.js';
 import { getContext } from '/scripts/st-context.js';
 import {
@@ -38,6 +38,7 @@ import {
     removeCharacterBoundPreset,
     setCharacterBoundDefault,
     renameCharacterBoundPreset,
+    getCharacterBoundPreset,
 } from './presets.js';
 import { getCurrentPresetBodyForBinding, maybeApplyCharacterBoundPreset } from '/scripts/openai.js';
 import { decodeCardBoundOptionValue } from './preset-ref-codec.js';
@@ -126,6 +127,86 @@ function renderDialogHtml(character) {
     <!-- data-character-name kept purely for debugging / e2e sanity check -->
     <input type="hidden" data-character-name="${characterName}">
 </div>`;
+}
+
+/**
+ * Interactive: promote a card-snapshot preset body to the global preset
+ * library. Prompts the user for a global preset name, defaulting to the
+ * slot's own name, and handles name collisions with an Overwrite / Rename
+ * / Cancel popup that loops until the user resolves it.
+ *
+ * @param {string} slotName default name suggested for the global preset
+ * @param {object} presetBody snapshot body to save (already stripped of
+ *   connection fields by Layer 1 read)
+ * @returns {Promise<string|null>} the final name persisted to global, or
+ *   null if the user cancelled at any step
+ */
+async function promoteCardSnapshotToGlobal(slotName, presetBody) {
+    const mgr = getContext().getPresetManager?.('openai');
+    if (!mgr) {
+        toastr.error(t`Preset manager unavailable.`);
+        return null;
+    }
+
+    let candidate = String(slotName || '').trim();
+    // Loop to handle Rename-then-collide-again cycles.
+    // Cap at a modest number — the user cancelling always exits, this cap
+    // only guards against a UI bug that would otherwise spin the popup.
+    for (let i = 0; i < 32; i++) {
+        const raw = await Popup.show.input(
+            t`Save to Global Preset`,
+            t`Enter a name for the global preset. The card-bound slot will be removed after saving.`,
+            candidate,
+        );
+        const proposed = String(raw ?? '').trim();
+        if (!proposed) return null;
+
+        const localNames = getLocalPresetNames();
+        const collides = localNames.includes(proposed);
+        if (!collides) {
+            try {
+                await mgr.savePreset(proposed, presetBody);
+            } catch (err) {
+                console.error('promoteCardSnapshotToGlobal: savePreset failed', err);
+                toastr.error(String(err?.message || err));
+                return null;
+            }
+            return proposed;
+        }
+
+        const action = await Popup.show.confirm(
+            t`Preset name already exists`,
+            t`A global preset named '${proposed}' already exists.`,
+            {
+                okButton: t`Overwrite`,
+                cancelButton: t`Cancel`,
+                customButtons: [{
+                    text: t`Rename`,
+                    result: POPUP_RESULT.CUSTOM1,
+                }],
+                defaultResult: POPUP_RESULT.CUSTOM1,
+            },
+        );
+
+        if (action === POPUP_RESULT.AFFIRMATIVE) {
+            try {
+                await mgr.savePreset(proposed, presetBody);
+            } catch (err) {
+                console.error('promoteCardSnapshotToGlobal: overwrite savePreset failed', err);
+                toastr.error(String(err?.message || err));
+                return null;
+            }
+            return proposed;
+        }
+        if (action === POPUP_RESULT.CUSTOM1) {
+            candidate = proposed;
+            continue;
+        }
+        // CANCELLED / NEGATIVE — user backed out.
+        return null;
+    }
+    toastr.warning(t`Save to global preset cancelled.`);
+    return null;
 }
 
 /**
@@ -247,11 +328,58 @@ export async function openManageBoundPresetsDialog(character) {
 
     $dlg.on('click', `#${DIALOG_ID} .luker-mbp-remove`, async (ev) => {
         await withRowName(ev, async (name) => {
-            const ok = await Popup.show.confirm(
+            const snapshot = getCharacterBoundPreset(character, name);
+            const snapshotBody = snapshot?.preset && typeof snapshot.preset === 'object' ? snapshot.preset : null;
+
+            // First popup: three-way choice for what to do with the card snapshot.
+            // The historical flow was a plain confirm → immediately discard the
+            // slot, which silently threw away every Prompt-Manager edit made
+            // while the preset was card-bound (they only lived in the card
+            // snapshot, not the global preset library). Offer to promote the
+            // snapshot to a global preset instead.
+            const choice = await Popup.show.confirm(
                 t`Delete Bound Preset`,
-                t`Delete card-bound preset '${name}'?`,
+                t`Delete card-bound preset '${name}'. What should happen to its current contents?`,
+                {
+                    okButton: t`Save to global preset`,
+                    cancelButton: t`Cancel`,
+                    customButtons: [{
+                        text: t`Discard`,
+                        result: POPUP_RESULT.CUSTOM1,
+                    }],
+                    defaultResult: POPUP_RESULT.AFFIRMATIVE,
+                },
             );
-            if (!ok) return;
+
+            if (choice !== POPUP_RESULT.AFFIRMATIVE && choice !== POPUP_RESULT.CUSTOM1) {
+                // CANCELLED (null) or NEGATIVE — user backed out entirely.
+                return;
+            }
+
+            if (choice === POPUP_RESULT.AFFIRMATIVE) {
+                if (!snapshotBody) {
+                    toastr.error(t`Cannot read snapshot for '${name}'.`);
+                    return;
+                }
+                const savedName = await promoteCardSnapshotToGlobal(name, snapshotBody);
+                if (!savedName) {
+                    // User cancelled the name / conflict popup — abort the
+                    // whole unbind so their edits stay intact on the card.
+                    return;
+                }
+                try {
+                    await removeCharacterBoundPreset(character, name);
+                    await maybeApplyCharacterBoundPreset();
+                    toastr.success(t`Saved '${name}' to global preset '${savedName}' and unbound from character.`);
+                    rerender();
+                } catch (err) {
+                    console.error('manage-bound-presets: remove-after-promote failed', err);
+                    toastr.error(String(err?.message || err));
+                }
+                return;
+            }
+
+            // choice === CUSTOM1 → Discard (legacy behavior).
             try {
                 await removeCharacterBoundPreset(character, name);
                 await maybeApplyCharacterBoundPreset();
