@@ -7,7 +7,14 @@ import { getConfigFilePath, reloadConfigCache, setConfigFilePath } from '../src/
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const configPath = path.resolve(__dirname, '../config.yaml');
+// On dev machines the repo-root `config.yaml` exists (created by server.js
+// first-run via `addMissingConfigValues`, then gitignored). On CI it does
+// not — the workflow only checks out tracked files. Fall back to the
+// committed `default/config.yaml` so `getConfig()` finds a valid file and
+// doesn't `process.exit(1)` from every Jest worker on setup.
+const localConfigPath = path.resolve(__dirname, '../config.yaml');
+const defaultConfigPath = path.resolve(__dirname, '../default/config.yaml');
+const configPath = fs.existsSync(localConfigPath) ? localConfigPath : defaultConfigPath;
 
 if (!getConfigFilePath()) {
     setConfigFilePath(configPath);
