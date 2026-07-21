@@ -714,6 +714,7 @@ export function renderEditorWorkspace(deps, scope, editor, title) {
     </div>
     <div class="luker-studio-workspace-col">
         <div class="luker-studio-workspace-col-title">${escapeHtml(i18n('Agent Presets'))}</div>
+        <div class="luker-studio-empty-hint">${escapeHtml(i18n('Identity templates — tools attach to nodes, not to presets.'))}</div>
         <div>${renderPresetBoard(scope, editor)}</div>
         <div class="luker-studio-add-row">
             <input class="text_pole" data-luker-new-preset="${scope}" placeholder="${escapeHtml(i18n('new_preset_id'))}" />

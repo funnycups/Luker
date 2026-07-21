@@ -1642,7 +1642,29 @@ function renderPresetBoard(scope, editor) {
         return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No presets yet.'))}</div>`;
     }
 
-    return entries.map(([presetId, preset]) => `
+    // Reverse index: presetId -> [nodeId, ...] so each preset card can show
+    // which spec nodes bind it. Tools attach to nodes (not presets), so this
+    // makes the identity-vs-slot split visible instead of having to hunt
+    // through the Workflow column.
+    const presetUsage = new Map();
+    const stages = Array.isArray(editor?.spec?.stages) ? editor.spec.stages : [];
+    for (const stage of stages) {
+        const nodes = Array.isArray(stage?.nodes) ? stage.nodes : [];
+        for (const node of nodes) {
+            const presetName = node?.preset;
+            const nodeId = node?.id;
+            if (!presetName || !nodeId) continue;
+            if (!presetUsage.has(presetName)) presetUsage.set(presetName, []);
+            presetUsage.get(presetName).push(nodeId);
+        }
+    }
+
+    return entries.map(([presetId, preset]) => {
+        const usedBy = presetUsage.get(presetId) || [];
+        const usageLine = usedBy.length
+            ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('Used by nodes:'))} ${escapeHtml(usedBy.join(', '))}</div>`
+            : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('Not referenced by any node.'))}</div>`;
+        return `
 <div class="luker-studio-card">
     <div class="luker-studio-card-header">
         <b>${escapeHtml(presetId)}</b>
@@ -1650,6 +1672,7 @@ function renderPresetBoard(scope, editor) {
             <div class="menu_button menu_button_small" data-luker-action="preset-delete" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">${escapeHtml(i18n('Delete'))}</div>
         </div>
     </div>
+    ${usageLine}
     <label>${escapeHtml(i18n('Agent API preset (Connection profile, empty = global orchestration API preset)'))}</label>
     <select class="text_pole" data-luker-field="preset-api-preset" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">
         ${renderConnectionProfileOptions(preset?.apiPresetName, i18n('(Global orchestration API preset)'))}
@@ -1662,7 +1685,8 @@ function renderPresetBoard(scope, editor) {
     <textarea class="text_pole textarea_compact" rows="4" data-luker-field="preset-system-prompt" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">${escapeHtml(preset.systemPrompt)}</textarea>
     <label>${escapeHtml(i18n('User Prompt Template'))}</label>
     <textarea class="text_pole textarea_compact" rows="5" data-luker-field="preset-user-template" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">${escapeHtml(preset.userPromptTemplate)}</textarea>
-</div>`).join('');
+</div>`;
+    }).join('');
 }
 
 function getOrchestratorUiTemplateDeps() {
