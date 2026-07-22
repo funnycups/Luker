@@ -104,7 +104,8 @@ import {
     getEnabledToolSchemas,
     resolveToolSource,
 } from './loop-tools.js';
-import { attachToolContext, isStructuredToolError } from './loop-runtime.js';
+import { attachToolContext, attachNotesFloorState, isStructuredToolError } from './loop-runtime.js';
+import { loadOpenNotesBlock } from './open-notes-injection.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
 // Skill-resolution helpers are loaded lazily (script.js → lib.js dep makes
@@ -603,9 +604,21 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
         || 'Return concise guidance through function-call fields.';
     const userText = promptText.trim()
         || 'Use function-call fields only. Do not put JSON strings into summary.';
+    // Persistent Open Notes surfaced to the planner too — dispatch
+    // decisions depend on knowing which plot threads are already open
+    // (so the planner doesn't dispatch a notes_curator to open something
+    // that's already there, and can weigh whether a scout should pick
+    // up a specific thread this round). Appended to the system prompt
+    // rather than a trailing user message so the taskMessages shape
+    // stays [system, user] — some chat-completion providers reject
+    // consecutive same-role messages.
+    const openNotesBlock = await loadOpenNotesBlock(context);
+    const systemWithNotes = openNotesBlock
+        ? `${systemText}\n\n${openNotesBlock}`
+        : systemText;
     const plannerStep = await requestToolCallWithRetry(context, settings, {
         taskMessages: [
-            { role: 'system', content: systemText },
+            { role: 'system', content: systemWithNotes },
             { role: 'user', content: userText },
         ],
         runtimeWorldInfo,
@@ -664,7 +677,7 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
     });
     const conversation = {
         messages: [
-            { role: 'system', content: systemText },
+            { role: 'system', content: systemWithNotes },
             { role: 'user', content: userText },
             {
                 role: 'assistant',
@@ -812,9 +825,22 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     };
 
     if (!enableLoopTools) {
+        // Persistent Open Notes surfaced to single-round agents too.
+        // Even a one-shot agent that only fills the result tool benefits
+        // from knowing which plot threads are open (it may need to
+        // reason about them to draft the correct text). Appended to the
+        // system prompt (loop-mode style) rather than a trailing user
+        // message so agenda-mode's already-user-terminated shape (the
+        // task brief IS the last user message) stays legal for all
+        // providers — chat-completion APIs reject consecutive same-role
+        // messages.
+        const openNotesBlock = await loadOpenNotesBlock(context);
+        const systemWithNotes = openNotesBlock
+            ? `${systemTextWithSkills}\n\n${openNotesBlock}`
+            : systemTextWithSkills;
         const result = await requestToolCallWithRetry(context, settings, {
             taskMessages: [
-                { role: 'system', content: systemTextWithSkills },
+                { role: 'system', content: systemWithNotes },
                 { role: 'user', content: userText },
             ],
             runtimeWorldInfo,
@@ -827,7 +853,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         });
         const conversation = {
             messages: [
-                { role: 'system', content: systemTextWithSkills },
+                { role: 'system', content: systemWithNotes },
                 { role: 'user', content: userText },
                 {
                     role: 'assistant',
@@ -867,9 +893,22 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     const maxRounds = Math.max(1, getNodeIterationMaxRounds(settings));
     const runtimeToolMessages = [];
     let outputText = '';
+    // Persistent Open Notes appended to the system prompt (loop-mode
+    // style). Rendered ONCE per dispatch so the round loop keeps a
+    // stable prefix — the block is re-read for the next dispatch via
+    // the outer `runAgendaOrchestration` `contextForNotes` overlay,
+    // which reflects any `note_open` / `note_close` an earlier agent
+    // fired. Not a trailing user message because the agenda round loop
+    // ends every taskMessages with a user role (the task brief) —
+    // consecutive same-role messages are rejected by some chat-
+    // completion providers.
+    const openNotesBlock = await loadOpenNotesBlock(context);
+    const systemWithNotes = openNotesBlock
+        ? `${systemTextWithSkills}\n\n${openNotesBlock}`
+        : systemTextWithSkills;
     const conversation = {
         messages: [
-            { role: 'system', content: systemTextWithSkills },
+            { role: 'system', content: systemWithNotes },
             { role: 'user', content: userText },
         ],
     };
@@ -877,7 +916,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     for (let round = 1; round <= maxRounds; round += 1) {
         throwIfAborted(abortSignal, 'Orchestration aborted.');
         const taskMessages = [
-            { role: 'system', content: systemTextWithSkills },
+            { role: 'system', content: systemWithNotes },
             ...runtimeToolMessages,
             { role: 'user', content: userText },
         ];
@@ -1024,6 +1063,19 @@ export async function runAgendaOrchestration(context, payload, messages, profile
     const settings = extension_settings[MODULE_NAME];
     const activeOrchPresetName = String(deps?.activeOrchPresetName || '').trim();
     const abortSignal = isAbortSignalLike(payload?.signal) ? payload.signal : null;
+    // Notes adapter overlay — same shape loop-runtime / director mount.
+    // Prototype-chain overlay so downstream consumers still see the live
+    // ST APIs on the base context (createFloorState factory, chat, etc.).
+    // Threaded to planner + agent dispatches so every agenda agent sees
+    // the same `## Open Notes` block the loop / director agents see,
+    // regardless of whether the agent has the `note` toolset enabled.
+    // Best-effort: mount failure degrades to no Open Notes block, never
+    // aborts orchestration.
+    const contextForNotes = await (async () => {
+        const notesCtx = Object.create(context);
+        try { await attachNotesFloorState(notesCtx); } catch (_) { /* best-effort */ }
+        return notesCtx;
+    })();
     const trace = createRuntimeTrace(context, payload, { mode: ORCH_EXECUTION_MODE_AGENDA, note: 'Agenda mode runtime' });
     const chatKey = String(trace.chatKey || '');
     const runId = startRun({
@@ -1077,7 +1129,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
             });
             const plannerRoundId = `node-agenda_planner-${round}`;
             appendRound({ runId, round: { id: plannerRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', 'agenda_planner', round) } });
-            const { plannerStep, conversation: plannerConversation } = await runAgendaPlannerStep(context, payload, messages, profile, state, abortSignal);
+            const { plannerStep, conversation: plannerConversation } = await runAgendaPlannerStep(contextForNotes, payload, messages, profile, state, abortSignal);
             finishRuntimeNodeAttempt(trace, plannerAttempt, {
                 status: 'completed',
                 output: plannerStep,
@@ -1154,7 +1206,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
                         try { await barrierSlot.wait; } catch { /* wait cannot reject */ }
                         throwIfAborted(abortSignal, 'Orchestration aborted.');
                     }
-                    const result = await runAgendaTextAgent(context, payload, messages, profile, state, dispatch, {
+                    const result = await runAgendaTextAgent(contextForNotes, payload, messages, profile, state, dispatch, {
                         kind: 'agent',
                         customToolRegistry,
                         panelRunId: runId,
@@ -1219,7 +1271,7 @@ export async function runAgendaOrchestration(context, payload, messages, profile
         });
         const finalRoundId = `node-${finalAgentId}-final`;
         appendRound({ runId, round: { id: finalRoundId, label: i18nFormat('Node: ${0} (attempt ${1})', finalAgentId, plannerMaxRounds + 1) } });
-        const finalRun = await runAgendaTextAgent(context, payload, messages, profile, state, finalDispatch, {
+        const finalRun = await runAgendaTextAgent(contextForNotes, payload, messages, profile, state, finalDispatch, {
             kind: 'final',
             finalReason: finalizeReason,
             customToolRegistry,

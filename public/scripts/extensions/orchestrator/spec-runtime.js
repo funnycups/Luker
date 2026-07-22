@@ -102,7 +102,8 @@ import {
     getEnabledToolSchemas,
     resolveToolSource,
 } from './loop-tools.js';
-import { attachToolContext, isStructuredToolError } from './loop-runtime.js';
+import { attachToolContext, attachNotesFloorState, isStructuredToolError } from './loop-runtime.js';
+import { loadOpenNotesBlock } from './open-notes-injection.js';
 import { buildPerRunCustomToolRegistry } from './per-run-custom-tools.js';
 
 // Skill-resolution helpers are loaded lazily (script.js → lib.js dep makes
@@ -767,8 +768,21 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             const systemText = String(preset.systemPrompt || '').trim();
             const systemWithSkills = systemText && nodeSystemSuffix                ? systemText + '\n\n' + nodeSystemSuffix
                 : (systemText || nodeSystemSuffix);
+            // Persistent Open Notes are surfaced to every worker node
+            // regardless of whether the node enables loop tools. Appended
+            // to the system prompt (loop-mode style) rather than a
+            // trailing user message so the taskMessages tail stays legal
+            // — spec-mode's iterationPrompt is already a user role, and
+            // some chat-completion providers reject consecutive same-
+            // role messages. Rendered per-round because notes flip mid-
+            // run as `note_open` / `note_close` fire in other nodes or
+            // other modes on the same chat.
+            const openNotesBlockForNode = await loadOpenNotesBlock(options?.runtime?.contextForNotes);
+            const systemForRound = openNotesBlockForNode
+                ? (systemWithSkills ? `${systemWithSkills}\n\n${openNotesBlockForNode}` : openNotesBlockForNode)
+                : systemWithSkills;
             const taskMessages = [
-                ...(systemWithSkills ? [{ role: 'system', content: systemWithSkills }] : []),
+                ...(systemForRound ? [{ role: 'system', content: systemForRound }] : []),
                 ...runtimeToolMessages,
                 { role: 'user', content: iterationPrompt },
             ];
@@ -1118,8 +1132,18 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             ].filter(Boolean).join('\n\n');
 
             const systemText = String(preset.systemPrompt || '').trim();
+            // Persistent Open Notes surfaced to review nodes too. Review
+            // agents don't produce prose but they DO reason about plot
+            // continuity — knowing which threads are open helps them
+            // catch missed-payoff regressions. Appended to system prompt
+            // to keep the taskMessages tail (user role iterationPrompt)
+            // legal for providers that reject consecutive user messages.
+            const openNotesBlockForNode = await loadOpenNotesBlock(options?.runtime?.contextForNotes);
+            const systemForRound = openNotesBlockForNode
+                ? (systemText ? `${systemText}\n\n${openNotesBlockForNode}` : openNotesBlockForNode)
+                : systemText;
             const taskMessages = [
-                ...(systemText ? [{ role: 'system', content: systemText }] : []),
+                ...(systemForRound ? [{ role: 'system', content: systemForRound }] : []),
                 ...runtimeToolMessages,
                 { role: 'user', content: iterationPrompt },
             ];
@@ -1524,6 +1548,18 @@ export async function runSpecOrchestration(context, payload, messages, profile, 
             : null,
         quiet: Boolean(payload?.__lukerSimulate),
     });
+    // Notes adapter overlay — same shape loop-runtime / director mount.
+    // Threaded into runtime.contextForNotes so every worker node injects
+    // the `## Open Notes` block into its task messages regardless of
+    // whether the node has loop tools enabled. Prototype-chain overlay
+    // keeps live ST APIs (createFloorState factory, etc.) reachable.
+    // Best-effort: mount failure degrades to no Open Notes block, never
+    // aborts orchestration.
+    const contextForNotes = await (async () => {
+        const notesCtx = Object.create(context);
+        try { await attachNotesFloorState(notesCtx); } catch (_) { /* best-effort */ }
+        return notesCtx;
+    })();
     const runtime = {
         stages,
         stageOutputs: [],
@@ -1553,6 +1589,13 @@ export async function runSpecOrchestration(context, payload, messages, profile, 
         // Per-node `preset` at runWorkerNode is the per-NODE preset from
         // profile.presets[nodeSpec.preset] — not the top-level orch preset.
         activeOrchPresetName: String(deps?.activeOrchPresetName || '').trim(),
+        // Prototype-chain overlay with the persistent notes floor-state
+        // adapter mounted on it. Worker nodes read this to inject the
+        // `## Open Notes` block into their task messages so every spec
+        // agent sees the same plot-author threads the loop / director
+        // main agent sees. Visibility is universal; mutation still
+        // requires `tools.note` on the per-node preset.
+        contextForNotes,
     };
     let previousNodeOutputs = new Map();
     throwIfAborted(abortSignal, 'Orchestration aborted.');

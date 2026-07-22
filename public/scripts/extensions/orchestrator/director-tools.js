@@ -50,6 +50,7 @@ import {
 import { i18n, i18nFormat } from './i18n.js';
 import { regexAgentPluginOutput } from './regex-chat.js';
 import { createFirstChunkBarrier } from './dispatch-barrier.js';
+import { loadOpenNotesBlock } from './open-notes-injection.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -1406,22 +1407,10 @@ function stringifyForSection(value) {
  *           dispatcher's runtime-state assembly path.
  */
 export async function loadSubAgentOpenNotesBlock(contextForNotes) {
-    const fs = contextForNotes && contextForNotes.__floorStateForNotes;
-    if (!fs || typeof fs.listAcrossFloors !== 'function') return '';
-    let all;
-    try {
-        all = await fs.listAcrossFloors();
-    } catch (_) {
-        return '';
-    }
-    if (!Array.isArray(all) || all.length === 0) return '';
-    const open = all.filter(e => e && typeof e === 'object' && (e.status ?? 'open') === 'open');
-    if (open.length === 0) return '';
-    const lines = ['## Open Notes (your plot-author threads — close with note_close when deployed)'];
-    for (const e of open) {
-        lines.push(`- [${String(e.id || '')}] ${String(e.text || '')}`);
-    }
-    return lines.join('\n');
+    // Canonical implementation lives in `open-notes-injection.js` so all
+    // four orchestration modes render an identical Open Notes block.
+    // Kept as a named export because tests import this symbol directly.
+    return loadOpenNotesBlock(contextForNotes);
 }
 
 /**

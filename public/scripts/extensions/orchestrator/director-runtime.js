@@ -315,58 +315,14 @@ export async function handleDirectorDispatch(eventData, deps) {
 }
 
 /**
- * Read open notes from a `contextForNotes` adapter for prepending to
- * the main agent's system prompt. Mirrors the loop-runtime and sub-
- * agent renderer semantics: an entry without an explicit `status`
- * field is treated as open (legacy data shape from before the
- * open/closed state machine landed). Returns `[]` for any unhappy
- * path — missing adapter, adapter without `listAcrossFloors`,
- * thrown listAcrossFloors, non-array return — so callers can blindly
- * pass the result to `renderMainAgentSystemPromptWithOpenNotes`
- * without further null-checking.
- *
- * @internal exported for tests.
- *
- * @param {object|null|undefined} contextForNotes
- * @returns {Promise<Array<{id: string, text: string}>>}
+ * Back-compat re-export: canonical implementation lives in
+ * `open-notes-injection.js` (shared across all four orchestration
+ * modes so visibility is uniform). Tests still import these names
+ * from director-runtime; new call sites should import from
+ * `open-notes-injection.js` directly.
  */
-export async function readOpenNotesFromContextForNotes(contextForNotes) {
-    const fs = contextForNotes && contextForNotes.__floorStateForNotes;
-    if (!fs || typeof fs.listAcrossFloors !== 'function') return [];
-    let all;
-    try {
-        all = await fs.listAcrossFloors();
-    } catch (_) {
-        return [];
-    }
-    if (!Array.isArray(all)) return [];
-    return all
-        .filter(e => e && typeof e === 'object' && (e.status ?? 'open') === 'open')
-        .map(e => ({ id: String(e.id || ''), text: String(e.text || '') }));
-}
-
-/**
- * Render the "## Open Notes" block for the main agent. Returns an empty
- * string when there are no open notes so callers can compose it into a
- * runtime-state body without conditional guards. Format mirrors the
- * loop-runtime and sub-agent renderers (`- [id] text` per entry) so the
- * same close-by-id contract applies everywhere notes appear in the
- * prompt stack.
- *
- * @internal exported for tests.
- *
- * @param {Array<{id: string, text: string}>|null|undefined} openNotes
- * @returns {string}
- */
-export function renderOpenNotesBlock(openNotes) {
-    const open = Array.isArray(openNotes) ? openNotes : [];
-    if (open.length === 0) return '';
-    const lines = ['## Open Notes (your plot-author threads — close with note_close when deployed)'];
-    for (const n of open) {
-        lines.push(`- [${String(n.id || '')}] ${String(n.text || '')}`);
-    }
-    return lines.join('\n');
-}
+export { readOpenNotes as readOpenNotesFromContextForNotes, renderOpenNotesBlock } from './open-notes-injection.js';
+import { readOpenNotes as readOpenNotesFromContextForNotesImpl, renderOpenNotesBlock as renderOpenNotesBlockImpl } from './open-notes-injection.js';
 
 /**
  * Back-compat wrapper kept for tests that still target the prior
@@ -381,7 +337,7 @@ export function renderOpenNotesBlock(openNotes) {
  * @returns {string}
  */
 export function renderMainAgentSystemPromptWithOpenNotes(systemPrompt, openNotes) {
-    const block = renderOpenNotesBlock(openNotes);
+    const block = renderOpenNotesBlockImpl(openNotes);
     if (!block) return systemPrompt;
     return systemPrompt ? `${systemPrompt}\n\n${block}` : block;
 }
@@ -538,8 +494,8 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // every cache breakpoint downstream of it. The system prompt now
     // stays byte-identical across dispatches so the upstream prompt
     // cache holds.
-    const openNotesForMain = await readOpenNotesFromContextForNotes(deps?.contextForNotes);
-    const openNotesBlock = renderOpenNotesBlock(openNotesForMain);
+    const openNotesForMain = await readOpenNotesFromContextForNotesImpl(deps?.contextForNotes);
+    const openNotesBlock = renderOpenNotesBlockImpl(openNotesForMain);
 
     // Resolve visible skills for the main agent. The resolver loads the
     // inventory lazily so test environments that never reach this branch

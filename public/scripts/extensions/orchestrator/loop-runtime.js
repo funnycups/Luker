@@ -54,6 +54,7 @@ import {
     finishRun, setRoundStatus, setSectionStatus, startRun, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
+import { renderOpenNotesBlock as renderOpenNotesBlockShared } from './open-notes-injection.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -312,26 +313,22 @@ function attachLoopConversation(trace, conversation) {
 
 /**
  * Render the `## Open Notes` block injected into the loop-mode system
- * prompt. The block opens with a one-line header explaining what the
- * thread list is for and then enumerates every open note with its
- * stable id prefix (`[id]`) so the agent can refer back to the entry
- * by id when calling `note_close`. Closed notes never appear here —
- * `attachNotesFloorState` filters to `status === 'open'` before this
- * function runs.
+ * prompt. Delegates to the shared renderer in `open-notes-injection.js`
+ * so loop / director / spec / agenda all emit identical block formatting
+ * (same header, same `- [id] text` per-entry shape, same close-by-id
+ * contract). Closed notes never appear here — `attachNotesFloorState`
+ * filters to `status === 'open'` before this function runs.
+ *
+ * Loop-runtime prepends a leading blank line so the block visually
+ * separates from the user's `system_prompt` when concatenated (see
+ * `buildInitialMessages`). Empty in / empty out is preserved so
+ * callers can concat unconditionally.
  *
  * @internal — exposed for tests via `__testBuildInitialMessages`.
  */
 function renderOpenNotesSection(rawNotes) {
-    const open = Array.isArray(rawNotes) ? rawNotes : [];
-    if (open.length === 0) return '';
-    const lines = ['', '## Open Notes (your plot-author threads — close with note_close when deployed)'];
-    for (const n of open) {
-        const id = String(n?.id ?? '').trim();
-        const text = String(n?.text ?? '');
-        if (!id && !text) continue;
-        lines.push(`- [${id}] ${text}`);
-    }
-    return lines.join('\n');
+    const block = renderOpenNotesBlockShared(rawNotes);
+    return block ? '\n' + block : '';
 }
 
 function buildInitialMessages(context, _payload, profile) {
