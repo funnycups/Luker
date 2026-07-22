@@ -766,27 +766,28 @@ export async function runWorkerNode(context, payload, nodeSpec, preset, messages
             ].filter(Boolean).join('\n\n');
 
             const systemText = String(preset.systemPrompt || '').trim();
-            const systemWithSkills = systemText && nodeSystemSuffix                ? systemText + '\n\n' + nodeSystemSuffix
+            // System prefix is kept stable (preset.systemPrompt + skills
+            // catalog): both are node-attempt-level constants that don't
+            // change across rounds of the same node. Volatile per-round
+            // context (Open Notes) is inlined into the trailing user
+            // `iterationPrompt` so the system prefix stays byte-identical
+            // and upstream prompt cache holds — pushing a trailing user
+            // `<runtime_state>` message instead would violate the
+            // consecutive-user-role constraint (iterationPrompt is
+            // already user role and some providers reject that).
+            const systemForRound = systemText && nodeSystemSuffix
+                ? systemText + '\n\n' + nodeSystemSuffix
                 : (systemText || nodeSystemSuffix);
-            // Persistent Open Notes are surfaced to every worker node
-            // regardless of whether the node enables loop tools. Appended
-            // to the system prompt (loop-mode style) rather than a
-            // trailing user message so the taskMessages tail stays legal
-            // — spec-mode's iterationPrompt is already a user role, and
-            // some chat-completion providers reject consecutive same-
-            // role messages. Rendered per-round because notes flip mid-
-            // run as `note_open` / `note_close` fire in other nodes or
-            // other modes on the same chat.
             const openNotesBlockForNode = await loadOpenNotesBlock(options?.runtime?.contextForNotes);
-            const systemForRound = openNotesBlockForNode
-                ? (systemWithSkills ? `${systemWithSkills}\n\n${openNotesBlockForNode}` : openNotesBlockForNode)
-                : systemWithSkills;
+            const iterationPromptWithNotes = openNotesBlockForNode
+                ? iterationPrompt + '\n\n' + openNotesBlockForNode
+                : iterationPrompt;
             const taskMessages = [
                 ...(systemForRound ? [{ role: 'system', content: systemForRound }] : []),
                 ...runtimeToolMessages,
-                { role: 'user', content: iterationPrompt },
+                { role: 'user', content: iterationPromptWithNotes },
             ];
-            conversation.messages.push({ role: 'user', content: iterationPrompt, _round: round });
+            conversation.messages.push({ role: 'user', content: iterationPromptWithNotes, _round: round });
 
             const detailed = await requestToolCallsWithRetry(context, settings, {
                 taskMessages,
@@ -1135,17 +1136,21 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             // Persistent Open Notes surfaced to review nodes too. Review
             // agents don't produce prose but they DO reason about plot
             // continuity — knowing which threads are open helps them
-            // catch missed-payoff regressions. Appended to system prompt
-            // to keep the taskMessages tail (user role iterationPrompt)
-            // legal for providers that reject consecutive user messages.
+            // catch missed-payoff regressions. Inlined at the tail of
+            // the trailing user `iterationPrompt` so the system prefix
+            // stays byte-identical across rounds when notes flip mid-
+            // run (upstream prompt cache holds). A trailing user
+            // `<runtime_state>` message would violate the consecutive-
+            // user-role constraint (iterationPrompt is already user
+            // role and some providers reject that).
             const openNotesBlockForNode = await loadOpenNotesBlock(options?.runtime?.contextForNotes);
-            const systemForRound = openNotesBlockForNode
-                ? (systemText ? `${systemText}\n\n${openNotesBlockForNode}` : openNotesBlockForNode)
-                : systemText;
+            const iterationPromptWithNotes = openNotesBlockForNode
+                ? iterationPrompt + '\n\n' + openNotesBlockForNode
+                : iterationPrompt;
             const taskMessages = [
-                ...(systemForRound ? [{ role: 'system', content: systemForRound }] : []),
+                ...(systemText ? [{ role: 'system', content: systemText }] : []),
                 ...runtimeToolMessages,
-                { role: 'user', content: iterationPrompt },
+                { role: 'user', content: iterationPromptWithNotes },
             ];
             if (systemText) conversation.messages.push({ role: 'system', content: systemText });
             // Carry forward any prior runtimeToolMessages from earlier
@@ -1153,7 +1158,7 @@ export async function runReviewNode(context, payload, profile, nodeSpec, preset,
             for (const carried of runtimeToolMessages) {
                 conversation.messages.push({ ...carried });
             }
-            conversation.messages.push({ role: 'user', content: iterationPrompt, _round: round });
+            conversation.messages.push({ role: 'user', content: iterationPromptWithNotes, _round: round });
             const detailed = await requestToolCallsWithRetry(context, settings, {
                 taskMessages,
                 runtimeWorldInfo,

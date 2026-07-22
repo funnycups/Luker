@@ -608,18 +608,20 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
     // decisions depend on knowing which plot threads are already open
     // (so the planner doesn't dispatch a notes_curator to open something
     // that's already there, and can weigh whether a scout should pick
-    // up a specific thread this round). Appended to the system prompt
-    // rather than a trailing user message so the taskMessages shape
-    // stays [system, user] — some chat-completion providers reject
-    // consecutive same-role messages.
+    // up a specific thread this round). Inlined at the tail of the
+    // trailing user `userText` so the system prefix stays byte-
+    // identical across planner rounds when notes flip mid-run
+    // (upstream prompt cache holds). A trailing user `<runtime_state>`
+    // message would violate the consecutive-user-role constraint
+    // (userText is already user role and some providers reject that).
     const openNotesBlock = await loadOpenNotesBlock(context);
-    const systemWithNotes = openNotesBlock
-        ? `${systemText}\n\n${openNotesBlock}`
-        : systemText;
+    const userTextWithNotes = openNotesBlock
+        ? userText + '\n\n' + openNotesBlock
+        : userText;
     const plannerStep = await requestToolCallWithRetry(context, settings, {
         taskMessages: [
-            { role: 'system', content: systemWithNotes },
-            { role: 'user', content: userText },
+            { role: 'system', content: systemText },
+            { role: 'user', content: userTextWithNotes },
         ],
         runtimeWorldInfo,
         apiPresetName,
@@ -677,8 +679,8 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
     });
     const conversation = {
         messages: [
-            { role: 'system', content: systemWithNotes },
-            { role: 'user', content: userText },
+            { role: 'system', content: systemText },
+            { role: 'user', content: userTextWithNotes },
             {
                 role: 'assistant',
                 content: '',
@@ -828,20 +830,21 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         // Persistent Open Notes surfaced to single-round agents too.
         // Even a one-shot agent that only fills the result tool benefits
         // from knowing which plot threads are open (it may need to
-        // reason about them to draft the correct text). Appended to the
-        // system prompt (loop-mode style) rather than a trailing user
-        // message so agenda-mode's already-user-terminated shape (the
-        // task brief IS the last user message) stays legal for all
-        // providers — chat-completion APIs reject consecutive same-role
-        // messages.
+        // reason about them to draft the correct text). Inlined at the
+        // tail of the trailing user `userText` so the system prefix
+        // (preset systemPrompt + skills catalog) stays byte-identical
+        // across dispatches for prompt-cache reuse. A trailing user
+        // `<runtime_state>` message would violate the consecutive-
+        // user-role constraint (userText is already user role and some
+        // providers reject that).
         const openNotesBlock = await loadOpenNotesBlock(context);
-        const systemWithNotes = openNotesBlock
-            ? `${systemTextWithSkills}\n\n${openNotesBlock}`
-            : systemTextWithSkills;
+        const userTextWithNotes = openNotesBlock
+            ? userText + '\n\n' + openNotesBlock
+            : userText;
         const result = await requestToolCallWithRetry(context, settings, {
             taskMessages: [
-                { role: 'system', content: systemWithNotes },
-                { role: 'user', content: userText },
+                { role: 'system', content: systemTextWithSkills },
+                { role: 'user', content: userTextWithNotes },
             ],
             runtimeWorldInfo,
             apiPresetName,
@@ -853,8 +856,8 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
         });
         const conversation = {
             messages: [
-                { role: 'system', content: systemWithNotes },
-                { role: 'user', content: userText },
+                { role: 'system', content: systemTextWithSkills },
+                { role: 'user', content: userTextWithNotes },
                 {
                     role: 'assistant',
                     content: '',
@@ -893,15 +896,35 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     const maxRounds = Math.max(1, getNodeIterationMaxRounds(settings));
     const runtimeToolMessages = [];
     let outputText = '';
-    // Persistent Open Notes appended to the system prompt (loop-mode
-    // style). Rendered ONCE per dispatch so the round loop keeps a
-    // stable prefix — the block is re-read for the next dispatch via
-    // the outer `runAgendaOrchestration` `contextForNotes` overlay,
-    // which reflects any `note_open` / `note_close` an earlier agent
-    // fired. Not a trailing user message because the agenda round loop
-    // ends every taskMessages with a user role (the task brief) —
-    // consecutive same-role messages are rejected by some chat-
-    // completion providers.
+    // Multi-round agenda agents are the ONE cache-alignment exception in
+    // the orchestrator: Open Notes stay concatenated onto the system
+    // prompt (the historical shape) instead of being inlined at the tail
+    // of `userText` (the pattern loop / director / spec / agenda planner
+    // / agenda single-round now use for cache friendliness).
+    //
+    // Why: the multi-round taskMessages is `[system, ...runtimeToolMessages,
+    // user]` — the trailing user message (`userText`) is BUILT ONCE before
+    // the round loop and reused verbatim across every round of this
+    // dispatch (only `runtimeToolMessages` grows between rounds). Inlining
+    // volatile Open Notes into that trailing user message would flip
+    // `userText` every time notes change → cache miss on the [system,
+    // ...pre-round-N tool messages, userText] prefix for round N+1, then
+    // again for N+2, etc. Keeping notes in system loses the initial cache
+    // when notes change, but preserves cache across every subsequent
+    // round of the same dispatch.
+    //
+    // We can't push a trailing user `<runtime_state>` message either
+    // (`userText` is already user role → consecutive-user-role is
+    // rejected by some providers) and can't push a trailing system
+    // message (Anthropic only allows one leading system message). The
+    // clean fix would be to restructure the round loop to director's
+    // `[system, user_task, ...round history]` shape where tail is
+    // assistant / tool — that's a larger refactor deferred out of this
+    // cache-alignment pass.
+    //
+    // Notes ARE rendered once per dispatch here (not once per round) so
+    // the next dispatch sees any `note_open` / `note_close` an earlier
+    // agent fired on the same round.
     const openNotesBlock = await loadOpenNotesBlock(context);
     const systemWithNotes = openNotesBlock
         ? `${systemTextWithSkills}\n\n${openNotesBlock}`

@@ -54,7 +54,7 @@ import {
     finishRun, setRoundStatus, setSectionStatus, startRun, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
-import { renderOpenNotesBlock as renderOpenNotesBlockShared } from './open-notes-injection.js';
+import { renderOpenNotesBlock, readOpenNotes } from './open-notes-injection.js';
 
 // Skill-resolution helpers are loaded lazily so the transitive import chain
 // (skill-resolution → skillsApi → script.js → lib.js) stays out of module
@@ -311,32 +311,15 @@ function attachLoopConversation(trace, conversation) {
     trace.loop.conversation = conversation;
 }
 
-/**
- * Render the `## Open Notes` block injected into the loop-mode system
- * prompt. Delegates to the shared renderer in `open-notes-injection.js`
- * so loop / director / spec / agenda all emit identical block formatting
- * (same header, same `- [id] text` per-entry shape, same close-by-id
- * contract). Closed notes never appear here — `attachNotesFloorState`
- * filters to `status === 'open'` before this function runs.
- *
- * Loop-runtime prepends a leading blank line so the block visually
- * separates from the user's `system_prompt` when concatenated (see
- * `buildInitialMessages`). Empty in / empty out is preserved so
- * callers can concat unconditionally.
- *
- * @internal — exposed for tests via `__testBuildInitialMessages`.
- */
-function renderOpenNotesSection(rawNotes) {
-    const block = renderOpenNotesBlockShared(rawNotes);
-    return block ? '\n' + block : '';
-}
-
 function buildInitialMessages(context, _payload, profile) {
     const systemContent = String(profile?.system_prompt || '').trim();
-    const openNotesBlock = renderOpenNotesSection(context?.__openNotes);
-    const body = systemContent + (openNotesBlock ? '\n' + openNotesBlock : '');
-    return body
-        ? [{ role: 'system', content: body }]
+    // Note: Open Notes are NOT concatenated here anymore. They ride on a
+    // trailing `<runtime_state>` user message pushed once at loop start
+    // (see runLoopOrchestration below) so the system prefix stays byte-
+    // identical when notes flip mid-run — upstream prompt cache holds.
+    // The same trailing message also carries the visible-skills catalog.
+    return systemContent
+        ? [{ role: 'system', content: systemContent }]
         : [];
 }
 
@@ -912,13 +895,13 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     const wallClockBudgetMs = Math.max(0, Math.floor(Number(profile?.wall_clock_budget_ms) || 0));
     const deadline = wallClockBudgetMs > 0 ? Date.now() + wallClockBudgetMs : null;
 
-    // Resolve skills visible to the loop agent and append the
-    // `<available_skills>` catalog block to its system prompt. Loop is a
-    // single-agent mode, so the resolver sees only the mode-level
-    // `profile.skills` (no per-agent overlay). Failure falls back to an
-    // empty list — the agent runs without a catalog and any skill_* tool
-    // call rejects (the exec requires a populated __visibleSkillsForAgent).
+    // Resolve skills visible to the loop agent. Loop is a single-agent
+    // mode, so the resolver sees only the mode-level `profile.skills`
+    // (no per-agent overlay). Failure falls back to an empty list — the
+    // agent runs without a catalog and any skill_* tool call rejects
+    // (the exec requires a populated __visibleSkillsForAgent).
     let visibleSkillsForLoop = [];
+    let availableSkillsBlock = '';
     try {
         const skillRes = await loadSkillResolution();
         visibleSkillsForLoop = await skillRes.resolveAgentVisibleSkills({
@@ -930,14 +913,7 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 { mode: 'loop', name: String(deps?.activeOrchPresetName || '').trim() },
             ),
         });
-        const block = skillRes.buildAvailableSkillsBlock(visibleSkillsForLoop);
-        if (block && messages.length > 0 && messages[0]?.role === 'system') {
-            messages[0].content = (messages[0].content || '') + '\n\n' + block;
-        } else if (block) {
-            // No system message — buildInitialMessages returns [] when
-            // both the prompt and notes block are empty. Insert one.
-            messages.unshift({ role: 'system', content: block });
-        }
+        availableSkillsBlock = skillRes.buildAvailableSkillsBlock(visibleSkillsForLoop) || '';
     } catch (e) {
         console.warn('[orchestrator-loop] skill resolution failed:', e?.message || e);
     }
@@ -945,6 +921,52 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
     // tool dispatch context so skill_list / skill_read / skill_search
     // see the scoped visibility.
     toolContext.__visibleSkillsForAgent = visibleSkillsForLoop;
+
+    // Emit the trailing `<runtime_state>` user message that carries the
+    // volatile per-run context (open notes + visible-skills catalog).
+    // Kept OUT of the system prompt so the system prefix stays byte-
+    // identical when notes flip mid-run (via `note_open` / `note_close`)
+    // — mirrors director sub-agent's runtime_state message. The loop
+    // rebuilds this message before each LLM call (see the round loop
+    // below) so notes flipped by tool calls in the previous round are
+    // reflected before the next request. `readOpenNotes` reads the
+    // adapter directly so the block always reflects live state (the
+    // initial `__openNotes` snapshot is only used at attach time).
+    //
+    // Loop's `messages` array starts as `[system?]` here, so the first
+    // push of a user role at the tail is safe. On subsequent rebuilds
+    // we splice the previous runtime_state out before pushing the new
+    // one — the array shape is `[system?, ...assistant/tool pairs,
+    // runtime_state]` so agent output naturally interleaves between
+    // the initial user runtime_state and each subsequent rebuild.
+    async function renderRuntimeStateContent() {
+        const openNotes = await readOpenNotes(toolContext);
+        const openNotesBlock = renderOpenNotesBlock(openNotes);
+        const parts = [openNotesBlock, availableSkillsBlock].filter(Boolean);
+        return parts.length > 0
+            ? '<runtime_state>\n' + parts.join('\n\n') + '\n</runtime_state>'
+            : '';
+    }
+    // Track the pushed runtime_state message so each rebuild can
+    // remove-then-repush (splice + push) instead of mutating in place —
+    // splice keeps the message at the tail even if the assistant emitted
+    // tool_calls between rebuilds.
+    let runtimeStateMessage = null;
+    async function refreshRuntimeStateMessage() {
+        // Remove the previous runtime_state (if any) so we can push a
+        // fresh one at the tail. Skip when the previous render was empty
+        // (no message pushed) and the new render is also empty.
+        if (runtimeStateMessage) {
+            const idx = messages.indexOf(runtimeStateMessage);
+            if (idx >= 0) messages.splice(idx, 1);
+            runtimeStateMessage = null;
+        }
+        const content = await renderRuntimeStateContent();
+        if (!content) return;
+        runtimeStateMessage = { role: 'user', content };
+        messages.push(runtimeStateMessage);
+    }
+    await refreshRuntimeStateMessage();
 
     // Alias the running messages array onto the trace so the popup's
     // loop-conversation panel reflects the agent's history as it grows.
@@ -971,6 +993,14 @@ export async function runLoopOrchestration(context, payload, profile, deps = {})
                 break;
             }
             totalRounds = round;
+            // Refresh the trailing `<runtime_state>` user message so
+            // notes flipped by tool calls in the previous round are
+            // reflected in this round's LLM view. `refreshRuntimeState-
+            // Message` splices any previous runtime_state out (it was
+            // pushed BEFORE the previous round's assistant / tool
+            // messages appended to the tail) and re-pushes the new one
+            // so it stays at the tail regardless of history growth.
+            await refreshRuntimeStateMessage();
             recordToTrace(trace, 'llm_request', {
                 round,
                 max_rounds: maxRounds,

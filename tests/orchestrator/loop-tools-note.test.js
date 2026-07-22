@@ -357,8 +357,16 @@ describe('note_close tool', () => {
     });
 });
 
-describe('buildInitialMessages renders ## Open Notes', () => {
-    test('renders open notes with id prefix, omits closed and floor', () => {
+describe('buildInitialMessages keeps ## Open Notes OUT of the system prompt', () => {
+    // Cache-alignment refactor: Open Notes and the skills catalog are
+    // no longer concatenated onto the system prompt. They ride on a
+    // trailing `<runtime_state>` user message pushed by
+    // `runLoopOrchestration` around the LLM call, so the system prefix
+    // stays byte-identical when notes flip mid-run. `buildInitialMessages`
+    // now only carries the profile's `system_prompt` verbatim.
+    // Cross-mode e2e coverage of the injection itself lives in
+    // `open-notes-cross-mode-injection.test.js`.
+    test('leaves system_prompt as-is when notes are present (they ride on runtime_state)', () => {
         const ctx = {
             __openNotes: [
                 { id: 'o_a3f2', text: 'planted key', status: 'open' },
@@ -368,30 +376,20 @@ describe('buildInitialMessages renders ## Open Notes', () => {
         const profile = { system_prompt: 'You are a writer.' };
         const messages = __testBuildInitialMessages(ctx, null, profile);
         const sys = messages.find(m => m.role === 'system')?.content || '';
-        expect(sys).toContain('## Open Notes');
-        expect(sys).toContain('[o_a3f2] planted key');
-        expect(sys).toContain('[o_b8c1] sanctum oath');
-        expect(sys).not.toMatch(/floor\s+\d+/);
-    });
-
-    test('omits the Open Notes block when nothing is open', () => {
-        const ctx = { __openNotes: [] };
-        const profile = { system_prompt: 'You are a writer.' };
-        const messages = __testBuildInitialMessages(ctx, null, profile);
-        const sys = messages.find(m => m.role === 'system')?.content || '';
+        expect(sys).toBe('You are a writer.');
         expect(sys).not.toContain('## Open Notes');
-        expect(sys).not.toContain('## Previous Notes');
     });
 
-    test('preserves the system_prompt body when no notes are open', () => {
+    test('leaves system_prompt as-is when notes are empty', () => {
         const ctx = { __openNotes: [] };
         const profile = { system_prompt: 'You are a writer.' };
         const messages = __testBuildInitialMessages(ctx, null, profile);
         const sys = messages.find(m => m.role === 'system')?.content || '';
         expect(sys).toBe('You are a writer.');
+        expect(sys).not.toContain('## Open Notes');
     });
 
-    test('treats missing __openNotes as empty', () => {
+    test('treats missing __openNotes as empty (no crash, no injection)', () => {
         const ctx = {};
         const profile = { system_prompt: 'You are a writer.' };
         const messages = __testBuildInitialMessages(ctx, null, profile);
@@ -399,7 +397,7 @@ describe('buildInitialMessages renders ## Open Notes', () => {
         expect(sys).toBe('You are a writer.');
     });
 
-    test('returns no messages when both system prompt and notes are empty', () => {
+    test('returns no messages when system prompt is empty', () => {
         const ctx = { __openNotes: [] };
         const profile = { system_prompt: '' };
         const messages = __testBuildInitialMessages(ctx, null, profile);

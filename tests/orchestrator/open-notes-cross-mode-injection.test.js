@@ -155,7 +155,7 @@ beforeEach(() => {
 });
 
 describe('agenda mode: Open Notes reach planner + agent (single-round path)', () => {
-    test('agenda planner receives the ## Open Notes block in its system prompt', async () => {
+    test('agenda planner receives the ## Open Notes block inlined at the tail of userText (cache-aligned)', async () => {
         const profile = {
             mode: 'agenda',
             planner: { systemPrompt: 'Plan the round.', userPromptTemplate: 'plan' },
@@ -174,16 +174,23 @@ describe('agenda mode: Open Notes reach planner + agent (single-round path)', ()
         );
 
         expect(capturedCalls.length).toBe(1);
+        // Cache-alignment: system prefix stays byte-identical (Open
+        // Notes NOT in system), volatile block rides on the trailing
+        // user message.
         const sys = capturedCalls[0].taskMessages.find(m => m.role === 'system');
         expect(sys).toBeDefined();
-        expect(sys.content).toContain('Plan the round.');
-        expect(sys.content).toContain('## Open Notes');
-        expect(sys.content).toContain('[note_alpha] planted foreshadowing about the storm');
-        expect(sys.content).toContain('[note_beta] promise: reunion by chapter 5');
-        expect(sys.content).not.toContain('already-paid-off');
+        expect(sys.content).toBe('Plan the round.');
+        expect(sys.content).not.toContain('## Open Notes');
+
+        const userMsg = capturedCalls[0].taskMessages.find(m => m.role === 'user');
+        expect(userMsg).toBeDefined();
+        expect(userMsg.content).toContain('## Open Notes');
+        expect(userMsg.content).toContain('[note_alpha] planted foreshadowing about the storm');
+        expect(userMsg.content).toContain('[note_beta] promise: reunion by chapter 5');
+        expect(userMsg.content).not.toContain('already-paid-off');
     });
 
-    test('agenda single-round agent receives the ## Open Notes block appended to its system prompt', async () => {
+    test('agenda single-round agent receives the ## Open Notes block inlined at the tail of userText (cache-aligned)', async () => {
         const profile = {
             mode: 'agenda',
             planner: { systemPrompt: 'Plan.', userPromptTemplate: 'plan' },
@@ -213,13 +220,19 @@ describe('agenda mode: Open Notes reach planner + agent (single-round path)', ()
         const sys = capturedCalls[0].taskMessages.find(m => m.role === 'system');
         expect(sys).toBeDefined();
         expect(sys.content).toContain('Write the scene.');
-        expect(sys.content).toContain('## Open Notes');
-        expect(sys.content).toContain('[note_alpha]');
-        expect(sys.content).toContain('[note_beta]');
-        expect(sys.content).not.toContain('already-paid-off');
-        // Also assert the taskMessages tail is user role (not consecutive
-        // same-role) — the reason we append to system instead of pushing
-        // a trailing user runtime_state message in agenda.
+        // System prefix must NOT carry Open Notes anymore — cache
+        // alignment goal is a stable system prefix across dispatches.
+        expect(sys.content).not.toContain('## Open Notes');
+
+        const userMsg = capturedCalls[0].taskMessages.find(m => m.role === 'user');
+        expect(userMsg).toBeDefined();
+        expect(userMsg.content).toContain('## Open Notes');
+        expect(userMsg.content).toContain('[note_alpha]');
+        expect(userMsg.content).toContain('[note_beta]');
+        expect(userMsg.content).not.toContain('already-paid-off');
+        // Tail is still user role (not consecutive same-role) — Open
+        // Notes are inlined into the existing user message, not pushed
+        // as a new one.
         const last = capturedCalls[0].taskMessages[capturedCalls[0].taskMessages.length - 1];
         expect(last.role).toBe('user');
     });
@@ -254,11 +267,14 @@ describe('agenda mode: Open Notes reach planner + agent (single-round path)', ()
         const sys = capturedCalls[0].taskMessages.find(m => m.role === 'system');
         expect(sys).toBeDefined();
         expect(sys.content).not.toContain('## Open Notes');
+        const userMsg = capturedCalls[0].taskMessages.find(m => m.role === 'user');
+        expect(userMsg).toBeDefined();
+        expect(userMsg.content).not.toContain('## Open Notes');
     });
 });
 
 describe('spec mode: Open Notes reach every worker node', () => {
-    test('spec worker node receives the ## Open Notes block in its system prompt', async () => {
+    test('spec worker node receives the ## Open Notes block inlined at the tail of iterationPrompt (cache-aligned)', async () => {
         const nodeSpec = { id: 'n1', preset: 'p1', type: 'worker' };
         const preset = {
             id: 'p1',
@@ -299,13 +315,17 @@ describe('spec mode: Open Notes reach every worker node', () => {
         const sys = capturedCalls[0].taskMessages.find(m => m.role === 'system');
         expect(sys).toBeDefined();
         expect(sys.content).toContain('You are a spec worker.');
-        expect(sys.content).toContain('## Open Notes');
-        expect(sys.content).toContain('[note_alpha]');
-        expect(sys.content).toContain('[note_beta]');
-        expect(sys.content).not.toContain('already-paid-off');
-        // Tail must still be user role (iterationPrompt) — appending
-        // to system, not pushing a trailing user runtime_state, keeps
-        // this true.
+        // System prefix stays stable across rounds — Open Notes must
+        // NOT be there.
+        expect(sys.content).not.toContain('## Open Notes');
+
+        const userMsg = capturedCalls[0].taskMessages.find(m => m.role === 'user');
+        expect(userMsg).toBeDefined();
+        expect(userMsg.content).toContain('## Open Notes');
+        expect(userMsg.content).toContain('[note_alpha]');
+        expect(userMsg.content).toContain('[note_beta]');
+        expect(userMsg.content).not.toContain('already-paid-off');
+        // Tail is still user role.
         const last = capturedCalls[0].taskMessages[capturedCalls[0].taskMessages.length - 1];
         expect(last.role).toBe('user');
     });
@@ -354,5 +374,8 @@ describe('spec mode: Open Notes reach every worker node', () => {
         const sys = capturedCalls[0].taskMessages.find(m => m.role === 'system');
         expect(sys.content).toBe('You are a spec worker.');
         expect(sys.content).not.toContain('## Open Notes');
+        const userMsg = capturedCalls[0].taskMessages.find(m => m.role === 'user');
+        expect(userMsg).toBeDefined();
+        expect(userMsg.content).not.toContain('## Open Notes');
     });
 });

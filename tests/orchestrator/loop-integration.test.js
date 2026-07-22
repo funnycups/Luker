@@ -279,15 +279,22 @@ describe('loop mode end-to-end: complete 6-round happy path (Task 15a)', () => {
 
         // Each subsequent round's messages array should grow as
         // assistant + tool result entries get appended, proving the
-        // tool-message threading works end-to-end. Round 1 starts at
-        // 1 (system prompt) and each round adds 2 (assistant + tool).
+        // tool-message threading works end-to-end. Cache-alignment
+        // refactor: a trailing `<runtime_state>` user message rides
+        // at the tail whenever there are open notes (rebuilt in place
+        // each round). Round 1 starts at 1 (system prompt) — no notes
+        // yet — so no runtime_state. Round 1's `note_open` populates
+        // the adapter → round 2 pushes runtime_state at the tail, so
+        // counts jump to 4 (system + assistant + tool + runtime_state)
+        // and each subsequent round adds 2 (assistant + tool; the
+        // runtime_state splices out + repushes in place).
         const counts = observedRounds.map(r => r.messageCount);
         expect(counts[0]).toBe(1);
-        expect(counts[1]).toBe(3);
-        expect(counts[2]).toBe(5);
-        expect(counts[3]).toBe(7);
-        expect(counts[4]).toBe(9);
-        expect(counts[5]).toBe(11);
+        expect(counts[1]).toBe(4);
+        expect(counts[2]).toBe(6);
+        expect(counts[3]).toBe(8);
+        expect(counts[4]).toBe(10);
+        expect(counts[5]).toBe(12);
 
         // The note we wrote in round 1 made it through the adapter; this
         // is what would be injected into the next run's system prompt.
@@ -553,17 +560,25 @@ describe('loop mode end-to-end: note persistence across runs (Task 15d)', () => 
         expect(result2.status).toBe('completed');
         expect(observedRun2Messages).toBeTruthy();
 
-        // The first message is the system prompt; loop-runtime weaves the
-        // historical open-notes block in after the user-authored body, with
-        // each entry tagged by its stable id so note_close can reference it.
+        // Cache-alignment refactor: the historical open-notes block now
+        // rides on a trailing `<runtime_state>` user message pushed by
+        // `runLoopOrchestration` before each LLM call, instead of being
+        // concatenated onto the system prompt. This keeps the system
+        // prefix byte-identical when notes flip mid-run so upstream
+        // prompt caches hold. The block still tags each entry with its
+        // stable id so note_close can reference it by id.
         const sysMsg = observedRun2Messages.find(m => m.role === 'system');
         expect(sysMsg).toBeTruthy();
-        expect(sysMsg.content).toMatch(/Open Notes/);
-        expect(sysMsg.content).toMatch(/crimson sash/);
-        // The system prompt also tags the entry with its stable id so the
-        // agent can call note_close(id, reason) without positional aliasing.
+        expect(sysMsg.content).not.toMatch(/Open Notes/);
+
+        const runtimeStateMsg = observedRun2Messages.find(
+            m => m.role === 'user' && String(m.content || '').includes('<runtime_state>'),
+        );
+        expect(runtimeStateMsg).toBeTruthy();
+        expect(runtimeStateMsg.content).toMatch(/Open Notes/);
+        expect(runtimeStateMsg.content).toMatch(/crimson sash/);
         const persistedId = (await notesAdapter.listAcrossFloors())[0].id;
-        expect(sysMsg.content).toContain(`[${persistedId}]`);
+        expect(runtimeStateMsg.content).toContain(`[${persistedId}]`);
     });
 });
 
