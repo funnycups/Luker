@@ -132,6 +132,7 @@ const bundle = await mg.findEventBundleBySeq(ctx, 17);
 
 const seq = mg.getAssistantSeqForMessageIndex(ctx, messageIndex);
 const injection = mg.getCurrentInjection(ctx);
+const projection = await mg.getLastRecallProjection(ctx);
 ```
 
 | 方法 | 回傳 | 用途 |
@@ -142,8 +143,25 @@ const injection = mg.getCurrentInjection(ctx);
 | `findEventBundleBySeq(ctx, seq)` | `Promise<{ event: NodeView, location: NodeView \| null, characters: NodeView[] } \| null>` | 與 `findEventBySeq` 同一次查找，並把透過 `occurred_at` 關聯的 `location_state` 與透過 `involved_in` 關聯的 `character_sheet` 一起取回。 |
 | `getAssistantSeqForMessageIndex(ctx, messageIndex)` | `number \| null` | 把聊天訊息索引翻譯為「到 `messageIndex` 為止可抽取 assistant 訊息的 1-based 計數」；`messageIndex` 之前沒有可抽取的 assistant 訊息時回傳 `null`。 |
 | `getCurrentInjection(ctx)` | `InjectionState \| null` | 當前主流注入狀態的防禦性拷貝；見 [InjectionState](#injectionstate)。 |
+| `getLastRecallProjection(ctx)` | `Promise<LastRecallProjection \| null>` | 上一輪召回實際注入的 `corePacket` + `focusPacket` 文字的凍結快照；見 [LastRecallProjection](#lastrecallprojection)。 |
 
 每次查詢都會針對活動 store 開啟一個短生命週期的 read-api 工廠。一次性發起多次查詢的呼叫端應改走 `openSession()` —— 一個工廠可以服務所有讀取。
+
+### 讀取上一輪召回投影
+
+`getLastRecallProjection(ctx)` 回傳的資料與「檢視最近注入」UI 按鈕顯示的一致 —— 就是上一輪召回時記憶圖交給主聊天 prompt 的那段文字。第三方擴展想要複用與主 LLM 相同的記憶上下文時非常有用（例如內聯插圖生成器希望圖像 prompt LLM 看到與主 LLM 相同的世界狀態）。
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+const projection = await mg?.getLastRecallProjection?.(ctx);
+if (projection) {
+    // projection.blocks.corePacket  —— always-inject 文字（持久記憶）
+    // projection.blocks.focusPacket —— 召回選中文字（markdown 表格）
+    // projection.at                 —— 召回落地時的毫秒時間戳
+}
+```
+
+runtime store 無法載入或該聊天從未跑過召回時回傳 `null`。回傳物件為凍結的防禦性拷貝；`blocks` 的兩個欄位始終為字串（packet 為空時也是空字串，不會是 `undefined`）。
 
 ## 變更訂閱
 
@@ -292,6 +310,20 @@ interface InjectionState {
 ```
 
 注入側的觀察面。`alwaysInjectIds` 是被節點類型 `alwaysInject` 旗標固定下來的節點。`recallSelectedIds` 是路由 LLM 為上一輪選中的節點。`visibleIds` 是路由 LLM 看到的候選池 —— *在召回流水線至少跑過一次之前為空*。
+
+### LastRecallProjection
+
+```ts
+interface LastRecallProjection {
+    at: number;                     // 召回落地時的毫秒時間戳
+    blocks: {
+        corePacket: string;         // always-inject 文字（持久記憶）
+        focusPacket: string;        // 召回選中文字（markdown 表格）
+    };
+}
+```
+
+上一輪召回時記憶圖實際注入到主聊天 prompt 的預渲染文字。`corePacket` 承載 always-inject 節點，`focusPacket` 承載被召回選中的節點（markdown 表格形式）。兩個字串始終存在（packet 為空時也是空字串）。透過 [`getLastRecallProjection`](#讀取上一輪召回投影) 獲取。
 
 ### SchemaSpecView
 

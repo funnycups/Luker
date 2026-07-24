@@ -223,6 +223,40 @@ registerExtensionApi('memory-graph', {
         return getCurrentlyInjectedNodeIds(context);
     },
 
+    /**
+     * Frozen snapshot of the last recall projection — the actual `corePacket`
+     * and `focusPacket` text that memory-graph injected into the main chat's
+     * prompt during the previous recall pass. Same data the "View Last
+     * Injection" UI button visualises.
+     *
+     * Returns `null` when:
+     *   - `context` is invalid
+     *   - the runtime store cannot be loaded
+     *   - no recall has run for this chat yet
+     *
+     * The returned object is a defensive frozen copy — callers cannot leak
+     * mutations back into the live store.
+     */
+    getLastRecallProjection: async (context) => {
+        if (!context || typeof context !== 'object') return null;
+        let store;
+        try {
+            store = await ensureMemoryStoreLoaded(context);
+        } catch (err) {
+            console.warn('[memory-graph] getLastRecallProjection: failed to load runtime store', err);
+            return null;
+        }
+        if (!store || !store.lastRecallProjection) return null;
+        const { at, blocks } = store.lastRecallProjection;
+        return Object.freeze({
+            at,
+            blocks: Object.freeze({
+                corePacket: blocks?.corePacket ?? '',
+                focusPacket: blocks?.focusPacket ?? '',
+            }),
+        });
+    },
+
     // ── Change subscriptions ────────────────────────────────────────────
 
     /**

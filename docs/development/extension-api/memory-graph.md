@@ -132,6 +132,7 @@ const bundle = await mg.findEventBundleBySeq(ctx, 17);
 
 const seq = mg.getAssistantSeqForMessageIndex(ctx, messageIndex);
 const injection = mg.getCurrentInjection(ctx);
+const projection = await mg.getLastRecallProjection(ctx);
 ```
 
 | Method | Returns | Purpose |
@@ -142,8 +143,25 @@ const injection = mg.getCurrentInjection(ctx);
 | `findEventBundleBySeq(ctx, seq)` | `Promise<{ event: NodeView, location: NodeView \| null, characters: NodeView[] } \| null>` | Same lookup as `findEventBySeq`, plus the `location_state` linked via `occurred_at` and the `character_sheet` nodes linked via `involved_in`. |
 | `getAssistantSeqForMessageIndex(ctx, messageIndex)` | `number \| null` | Translate a chat message index into the 1-based count of extractable assistant messages up to and including that index. `null` when no extractable assistant message exists at/before `messageIndex`. |
 | `getCurrentInjection(ctx)` | `InjectionState \| null` | Defensive copy of the current main-flow injection state. See [InjectionState](#injectionstate). |
+| `getLastRecallProjection(ctx)` | `Promise<LastRecallProjection \| null>` | Frozen snapshot of the actual `corePacket` + `focusPacket` text injected during the previous recall pass. See [LastRecallProjection](#lastrecallprojection). |
 
 Each lookup opens a short-lived read-api factory against the active store. Callers that issue many lookups in a row should batch through `openSession()` instead — it lets one factory serve every read.
+
+### Reading the last recall projection
+
+`getLastRecallProjection(ctx)` returns the same data the "View Last Injection" UI button visualises — the exact text memory-graph handed to the main chat's prompt during the previous recall pass. Useful for third-party extensions that want to reuse the same memory context (e.g. an inline-illustration generator that wants the image-prompt LLM to see the same world state the main LLM saw).
+
+```js
+const mg = ctx.getExtensionApi('memory-graph');
+const projection = await mg?.getLastRecallProjection?.(ctx);
+if (projection) {
+    // projection.blocks.corePacket  — always-inject text (persistent memory)
+    // projection.blocks.focusPacket — recall-selected text (markdown tables)
+    // projection.at                 — ms timestamp when recall settled
+}
+```
+
+Returns `null` when the runtime store cannot be loaded or no recall has run for the current chat yet. The returned object is a frozen defensive copy; the two `blocks` fields are always strings (empty string when the packet was blank), never `undefined`.
 
 ## Change subscriptions
 
@@ -292,6 +310,20 @@ interface InjectionState {
 ```
 
 The injection-side observation surface. `alwaysInjectIds` are nodes pinned by their type's `alwaysInject` flag. `recallSelectedIds` are nodes the route LLM picked for the last turn. `visibleIds` is the candidate pool the route LLM saw — *empty until the recall pipeline has run at least once*.
+
+### LastRecallProjection
+
+```ts
+interface LastRecallProjection {
+    at: number;                     // ms since epoch when recall settled
+    blocks: {
+        corePacket: string;         // always-inject text (persistent memory)
+        focusPacket: string;        // recall-selected text (markdown tables)
+    };
+}
+```
+
+The pre-rendered text memory-graph actually injected into the main chat's prompt during the previous recall pass. `corePacket` carries always-inject nodes; `focusPacket` carries recall-selected nodes as markdown tables. Both strings are always present (empty string when the packet was blank). Retrieved via [`getLastRecallProjection`](#reading-the-last-recall-projection).
 
 ### SchemaSpecView
 
