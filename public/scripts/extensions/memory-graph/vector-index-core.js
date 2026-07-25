@@ -189,7 +189,7 @@ function getEligibleVectorNodes(store, schema) {
     const nodes = store.nodes || {};
     return Object.values(nodes)
         .filter(node => !node.archived)
-        .filter(node => !(node?.type === 'event' && (Number(node.semanticDepth) > 0 || node.semanticRollup)))
+        .filter(node => !(Number(node.semanticDepth) > 0 || node.semanticRollup))
         .filter(node => buildNodeVectorText(node, schema).length > 0);
 }
 

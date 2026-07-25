@@ -383,10 +383,10 @@ describe('computeVectorSyncPlan', () => {
     });
 });
 
-describe('computeVectorSyncPlan — rollup event exclusion', () => {
+describe('computeVectorSyncPlan — rollup exclusion', () => {
     const profile = { source: 'openai', model: 'm' };
 
-    test('excludes rollup events (semanticDepth > 0) from toInsert', () => {
+    test('excludes rollup nodes (semanticDepth > 0) from toInsert', () => {
         const store = {
             nodes: {
                 leaf: { id: 'leaf', type: 'event', seqTo: 1, semanticDepth: 0, fields: { summary: 'leaf summary' } },
@@ -401,7 +401,7 @@ describe('computeVectorSyncPlan — rollup event exclusion', () => {
         expect(ids).not.toContain('rollup2');
     });
 
-    test('excludes rollup events tagged via semanticRollup boolean', () => {
+    test('excludes rollup nodes tagged via semanticRollup boolean', () => {
         const store = {
             nodes: {
                 leaf: { id: 'leaf', type: 'event', seqTo: 1, fields: { summary: 'leaf summary' } },
@@ -414,7 +414,7 @@ describe('computeVectorSyncPlan — rollup event exclusion', () => {
         expect(ids).not.toContain('taggedRollup');
     });
 
-    test('keeps non-event nodes regardless of depth or rollup flag', () => {
+    test('excludes rollup nodes of non-event types (custom hierarchical/flat compression schemas)', () => {
         const store = {
             nodes: {
                 charSheet: { id: 'charSheet', type: 'character_sheet', seqTo: 3, semanticDepth: 1, fields: { identity: 'someone' } },
@@ -424,7 +424,22 @@ describe('computeVectorSyncPlan — rollup event exclusion', () => {
         };
         const plan = computeVectorSyncPlan(store, profile);
         const ids = plan.toInsert.map(e => e.nodeId).sort();
-        expect(ids).toEqual(['charSheet', 'loc', 'thread']);
+        expect(ids).toEqual(['thread']);
+        expect(ids).not.toContain('charSheet');
+        expect(ids).not.toContain('loc');
+    });
+
+    test('keeps leaf nodes of custom types alongside their rollups being excluded', () => {
+        const store = {
+            nodes: {
+                reportLeaf: { id: 'reportLeaf', type: 'report', seqTo: 1, semanticDepth: 0, fields: { summary: 'daily report' } },
+                reportRollup: { id: 'reportRollup', type: 'report', seqTo: 5, semanticDepth: 1, semanticRollup: true, fields: { summary: 'weekly rollup' } },
+            },
+        };
+        const plan = computeVectorSyncPlan(store, profile);
+        const ids = plan.toInsert.map(e => e.nodeId).sort();
+        expect(ids).toEqual(['reportLeaf']);
+        expect(ids).not.toContain('reportRollup');
     });
 
     test('semanticDepth=0 leaf events stay eligible (numeric 0 is not > 0)', () => {
