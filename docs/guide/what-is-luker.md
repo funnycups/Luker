@@ -77,7 +77,7 @@ Character cards can bind dedicated chat completion presets and user personas. Bo
 
 ### Request Inspector
 
-A per-user generation request diagnostic tool that can trace request details for all backends (including image generation), making debugging and troubleshooting easy.
+A per-user generation request diagnostic tool that can trace request details for all backends (including image generation and vector embedding / rerank calls), making debugging and troubleshooting easy.
 
 ### Authentication and Quotas
 

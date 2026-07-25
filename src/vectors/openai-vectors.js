@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 import { OPENROUTER_HEADERS } from '../constants.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 const SOURCES = {
     'togetherai': {
@@ -77,9 +78,10 @@ const SOURCES = {
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
  * @param {object} [sourceSettings] - Resolved source settings; may include `urlOverride`, `reverseProxy`, `proxyPassword`, `secretId`
+ * @param {import('express').Request} [request] - Inspector-carrying request (null skips inspection attach)
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getOpenAIBatchVector(texts, source, directories, model = '', sourceSettings = null) {
+export async function getOpenAIBatchVector(texts, source, directories, model = '', sourceSettings = null, request = null) {
     const config = SOURCES[source];
 
     if (!config) {
@@ -130,7 +132,10 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
         config.processBody(body);
     }
 
-    const response = await fetch(`${url}/embeddings`, {
+    const embeddingsUrl = `${url}/embeddings`;
+    if (request) attachInspectionEndpoint(request, embeddingsUrl, key, body);
+
+    const response = await fetch(embeddingsUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -168,9 +173,10 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
  * @param {object} [sourceSettings] - Resolved source settings; may include `urlOverride`, `reverseProxy`, `proxyPassword`, `secretId`
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getOpenAIVector(text, source, directories, model = '', sourceSettings = null) {
-    const vectors = await getOpenAIBatchVector([text], source, directories, model, sourceSettings);
+export async function getOpenAIVector(text, source, directories, model = '', sourceSettings = null, request = null) {
+    const vectors = await getOpenAIBatchVector([text], source, directories, model, sourceSettings, request);
     return vectors[0];
 }

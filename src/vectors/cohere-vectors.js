@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
 
@@ -10,9 +11,10 @@ const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
  * @param {object} [sourceSettings] - Resolved source settings; may include `reverseProxy`, `proxyPassword`, `secretId`
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getCohereBatchVector(texts, isQuery, directories, model, sourceSettings = null) {
+export async function getCohereBatchVector(texts, isQuery, directories, model, sourceSettings = null, request = null) {
     const settings = sourceSettings || {};
     const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
     const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
@@ -30,20 +32,24 @@ export async function getCohereBatchVector(texts, isQuery, directories, model, s
     }
 
     const baseUrl = (reverseProxy || DEFAULT_COHERE_URL).replace(/\/+$/, '');
+    const embedUrl = `${baseUrl}/embed`;
+    const body = {
+        texts: texts,
+        model: model,
+        embedding_types: ['float'],
+        input_type: isQuery ? 'search_query' : 'search_document',
+        truncate: 'END',
+    };
 
-    const response = await fetch(`${baseUrl}/embed`, {
+    if (request) attachInspectionEndpoint(request, embedUrl, key, body);
+
+    const response = await fetch(embedUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${key}`,
         },
-        body: JSON.stringify({
-            texts: texts,
-            model: model,
-            embedding_types: ['float'],
-            input_type: isQuery ? 'search_query' : 'search_document',
-            truncate: 'END',
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -69,9 +75,10 @@ export async function getCohereBatchVector(texts, isQuery, directories, model, s
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {string} model - The model to use for the embedding
  * @param {object} [sourceSettings] - Resolved source settings
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getCohereVector(text, isQuery, directories, model, sourceSettings = null) {
-    const vectors = await getCohereBatchVector([text], isQuery, directories, model, sourceSettings);
+export async function getCohereVector(text, isQuery, directories, model, sourceSettings = null, request = null) {
+    const vectors = await getCohereBatchVector([text], isQuery, directories, model, sourceSettings, request);
     return vectors[0];
 }

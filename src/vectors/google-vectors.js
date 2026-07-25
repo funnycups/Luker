@@ -1,11 +1,12 @@
 import fetch from 'node-fetch';
 import { getGoogleApiConfig } from '../endpoints/google.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from Google AI Studio
  * @param {string[]} texts - The array of texts to get the vector for
  * @param {string} model - The model to use for embedding
- * @param {import('express').Request} request - The request object to get API key and URL
+ * @param {import('express').Request} request - The request object to get API key and URL (also used as the inspector-carrying request)
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
 export async function getMakerSuiteBatchVector(texts, model, request) {
@@ -17,6 +18,12 @@ export async function getMakerSuiteBatchVector(texts, model, request) {
             content: { parts: [{ text }] },
         })),
     };
+
+    // The auth header value carries the Google API key for AI Studio; the
+    // inspector fingerprint strips it down to a redacted preview so nothing
+    // leaks into the ring buffer, even for header-based auth.
+    const authForFingerprint = headers?.['x-goog-api-key'] || headers?.['X-goog-api-key'] || headers?.['Authorization'] || '';
+    if (request) attachInspectionEndpoint(request, url, String(authForFingerprint), body);
 
     const response = await fetch(url, {
         body: JSON.stringify(body),
@@ -44,7 +51,7 @@ export async function getMakerSuiteBatchVector(texts, model, request) {
  * Gets the vector for the given text from Google Vertex AI
  * @param {string[]} texts - The array of texts to get the vector for
  * @param {string} model - The model to use for embedding
- * @param {import('express').Request} request - The request object to get API key and URL
+ * @param {import('express').Request} request - The request object to get API key and URL (also used as the inspector-carrying request)
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
 export async function getVertexBatchVector(texts, model, request) {
@@ -53,6 +60,9 @@ export async function getVertexBatchVector(texts, model, request) {
     const body = {
         instances: texts.map(text => ({ content: text })),
     };
+
+    const authForFingerprint = headers?.['Authorization'] || headers?.['x-goog-api-key'] || '';
+    if (request) attachInspectionEndpoint(request, url, String(authForFingerprint), body);
 
     const response = await fetch(url, {
         body: JSON.stringify(body),

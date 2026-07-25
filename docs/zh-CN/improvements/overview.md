@@ -78,7 +78,7 @@ Luker 内置了统一的函数调用（Function Calling）运行时，支持两�
 
 ### 请求检查器
 
-调试 AI 对话时，用户经常需要知道「到底发了什么给 API」。Luker 的请求检查器追踪每个 AI 生成请求从发起到完成的完整生命周期，记录 prompt token、completion token 和总用量。它支持流式响应的 Token 统计（从 SSE 事件中提取 usage 信息），也覆盖图像生成请求的追踪。请求检查器追踪的 Token 用量是独立的统计功能，与存储配额管理是两个独立的系统。详见 [请求检查器](/zh-CN/improvements/request-inspector)。
+调试 AI 对话时，用户经常需要知道「到底发了什么给 API」。Luker 的请求检查器追踪每个 AI 生成请求从发起到完成的完整生命周期，记录 prompt token、completion token 和总用量。它支持流式响应的 Token 统计（从 SSE 事件中提取 usage 信息），也覆盖图像生成、向量嵌入和重排请求的追踪。请求检查器追踪的 Token 用量是独立的统计功能，与存储配额管理是两个独立的系统。详见 [请求检查器](/zh-CN/improvements/request-inspector)。
 
 ### Skill
 

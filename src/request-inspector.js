@@ -1116,14 +1116,6 @@ export function extractImageMeta(source, body) {
             break;
     }
 
-    // Truncate long strings
-    if (typeof meta.prompt === 'string' && meta.prompt.length > 500) {
-        meta.prompt = meta.prompt.slice(0, 500);
-    }
-    if (typeof meta.negativePrompt === 'string' && meta.negativePrompt.length > 200) {
-        meta.negativePrompt = meta.negativePrompt.slice(0, 200);
-    }
-
     return meta;
 }
 
@@ -1200,6 +1192,205 @@ export function failImageInspection(request, errorMessage, httpStatus) {
     entry.error = String(errorMessage || 'Unknown error');
 }
 
+// ---- Embedding / Rerank Inspection ----
+
+/**
+ * Deep-clone a text list into per-item records suitable for `inputTexts`.
+ * Inspector never truncates AI-facing content (matches how chat `fullMessages`
+ * and `wireRequest` snapshots preserve the entire request verbatim), so this
+ * intentionally keeps the full string. Ring-buffer growth is bounded by
+ * `RING_BUFFER_SIZE` at the entry level — see the top of this file.
+ *
+ * @param {string[]} texts
+ * @returns {{index:number, text:string}[]}
+ */
+function snapshotTexts(texts) {
+    if (!Array.isArray(texts)) return [];
+    return texts.map((t, i) => ({ index: i, text: String(t ?? '') }));
+}
+
+/**
+ * Extract normalized embedding / rerank metadata from a vectors router body
+ * or the kobold /embed body. `routeKind` disambiguates the body shape:
+ *   - 'insert' / 'query' / 'query-multi' / 'rerank': /api/vector/* bodies
+ *   - 'kobold-embed': /api/backends/kobold/embed body
+ *
+ * @param {string} routeKind
+ * @param {object} body
+ * @returns {object}
+ */
+export function extractEmbeddingMeta(routeKind, body = {}) {
+    const meta = {
+        routeKind,
+        operation: routeKind === 'rerank' ? 'rerank' : 'embed',
+        source: '',
+        model: '',
+        collectionId: null,
+        collectionIds: null,
+        inputCount: 0,
+        inputCharTotal: 0,
+        inputTexts: [],
+        query: '',
+        topK: null,
+        threshold: null,
+    };
+
+    switch (routeKind) {
+        case 'insert': {
+            meta.source = String(body.source || 'unknown');
+            meta.model = String(body.model || '');
+            meta.collectionId = body.collectionId != null ? String(body.collectionId) : null;
+            const items = Array.isArray(body.items) ? body.items : [];
+            const texts = items.map(it => String(it?.text ?? ''));
+            meta.inputCount = texts.length;
+            meta.inputCharTotal = texts.reduce((s, t) => s + t.length, 0);
+            meta.inputTexts = snapshotTexts(texts);
+            break;
+        }
+        case 'query': {
+            meta.source = String(body.source || 'unknown');
+            meta.model = String(body.model || '');
+            meta.collectionId = body.collectionId != null ? String(body.collectionId) : null;
+            const searchText = String(body.searchText ?? '');
+            meta.inputCount = 1;
+            meta.inputCharTotal = searchText.length;
+            meta.inputTexts = snapshotTexts([searchText]);
+            meta.topK = Number(body.topK) || null;
+            meta.threshold = Number(body.threshold) || 0;
+            break;
+        }
+        case 'query-multi': {
+            meta.source = String(body.source || 'unknown');
+            meta.model = String(body.model || '');
+            meta.collectionIds = Array.isArray(body.collectionIds)
+                ? body.collectionIds.map(String)
+                : null;
+            const searchText = String(body.searchText ?? '');
+            meta.inputCount = 1;
+            meta.inputCharTotal = searchText.length;
+            meta.inputTexts = snapshotTexts([searchText]);
+            meta.topK = Number(body.topK) || null;
+            meta.threshold = Number(body.threshold) || 0;
+            break;
+        }
+        case 'rerank': {
+            meta.source = String(body.source || 'unknown');
+            meta.model = String(body.model || '');
+            meta.query = String(body.query ?? '');
+            const documents = Array.isArray(body.documents) ? body.documents : [];
+            const docTexts = documents.map(d => (typeof d === 'string' ? d : String(d?.text ?? '')));
+            meta.inputCount = docTexts.length;
+            meta.inputCharTotal = docTexts.reduce((s, t) => s + t.length, 0);
+            meta.inputTexts = snapshotTexts(docTexts);
+            meta.topK = Number(body.topK) || null;
+            break;
+        }
+        case 'kobold-embed': {
+            meta.source = 'koboldcpp';
+            meta.model = '';
+            const items = Array.isArray(body.items) ? body.items.map(String) : [];
+            meta.inputCount = items.length;
+            meta.inputCharTotal = items.reduce((s, t) => s + t.length, 0);
+            meta.inputTexts = snapshotTexts(items);
+            break;
+        }
+        default:
+            meta.source = String(body.source || 'unknown');
+            meta.model = String(body.model || '');
+            break;
+    }
+
+    return meta;
+}
+
+/**
+ * Start tracking an embedding / rerank request. Attaches
+ * `request.__inspectorId` so provider layers can call
+ * `attachInspectionEndpoint` before their upstream `fetch`.
+ *
+ * @param {import('express').Request} request
+ * @param {object} meta from extractEmbeddingMeta()
+ */
+export function startEmbeddingInspection(request, meta) {
+    const handle = String(request?.user?.profile?.handle || '');
+    if (!handle) return;
+
+    const entry = {
+        id: randomUUID(),
+        type: 'embedding',
+        handle,
+        timestamp: Date.now(),
+        source: String(meta.source || 'unknown'),
+        operation: meta.operation === 'rerank' ? 'rerank' : 'embed',
+        routeKind: String(meta.routeKind || ''),
+        model: String(meta.model || ''),
+        endpoint: '',
+        apiKeyFingerprint: '',
+        collectionId: meta.collectionId ?? null,
+        collectionIds: Array.isArray(meta.collectionIds) ? meta.collectionIds.slice() : null,
+        inputCount: Number.isFinite(meta.inputCount) ? meta.inputCount : 0,
+        inputCharTotal: Number.isFinite(meta.inputCharTotal) ? meta.inputCharTotal : 0,
+        inputTexts: Array.isArray(meta.inputTexts) ? meta.inputTexts : [],
+        query: String(meta.query || ''),
+        topK: meta.topK ?? null,
+        threshold: meta.threshold ?? null,
+        wireRequest: null,
+        durationMs: null,
+        status: 'running',
+        httpStatus: null,
+        error: '',
+        resultCount: null,
+        vectorDim: null,
+        hits: null,
+    };
+
+    pushEntry(handle, entry);
+    request.__inspectorId = entry.id;
+    request.__inspectorTimestamp = entry.timestamp;
+}
+
+/**
+ * Complete an embedding / rerank inspection with success.
+ *
+ * `resultMeta` fields (all optional):
+ *   - `resultCount` — number of vectors / hits / reranked docs returned
+ *   - `vectorDim`   — dimensionality of the first returned vector (embed only)
+ *   - `hits`        — full list of returned hits (query / rerank);
+ *                     [{hash, score, text}], never truncated
+ *
+ * @param {import('express').Request} request
+ * @param {object} [resultMeta]
+ */
+export function completeEmbeddingInspection(request, resultMeta) {
+    const entry = findEntry(request);
+    if (!entry) return;
+
+    entry.status = 'success';
+    entry.durationMs = Date.now() - entry.timestamp;
+    entry.httpStatus = 200;
+    if (resultMeta) {
+        if (Number.isFinite(resultMeta.resultCount)) entry.resultCount = resultMeta.resultCount;
+        if (Number.isFinite(resultMeta.vectorDim)) entry.vectorDim = resultMeta.vectorDim;
+        if (Array.isArray(resultMeta.hits)) entry.hits = resultMeta.hits;
+    }
+}
+
+/**
+ * Mark an embedding / rerank inspection as failed.
+ * @param {import('express').Request} request
+ * @param {string} errorMessage
+ * @param {number} [httpStatus]
+ */
+export function failEmbeddingInspection(request, errorMessage, httpStatus) {
+    const entry = findEntry(request);
+    if (!entry) return;
+
+    entry.status = 'error';
+    entry.durationMs = Date.now() - entry.timestamp;
+    entry.httpStatus = httpStatus ?? null;
+    entry.error = String(errorMessage || 'Unknown error');
+}
+
 // ---- Express Router ----
 
 export const router = express.Router();
@@ -1207,6 +1398,26 @@ export const router = express.Router();
 function buildSearchSnippet(entry) {
  if (entry.type === 'image') {
  return [entry.source, entry.model, entry.prompt, entry.negativePrompt, entry.error].filter(Boolean).join(' ');
+ }
+ if (entry.type === 'embedding') {
+ const inputText = Array.isArray(entry.inputTexts)
+ ? entry.inputTexts.map(s => s?.text || '').join(' ')
+ : '';
+ const hitsText = Array.isArray(entry.hits)
+ ? entry.hits.map(h => String(h?.text ?? '')).join(' ')
+ : '';
+ const combined = [
+ entry.source,
+ entry.model,
+ entry.operation,
+ entry.collectionId,
+ Array.isArray(entry.collectionIds) ? entry.collectionIds.join(' ') : '',
+ entry.query,
+ inputText,
+ hitsText,
+ entry.error,
+ ].filter(Boolean).join(' ');
+ return combined.length > 8192 ? combined.slice(0, 8192) : combined;
  }
  const messageText = Array.isArray(entry.fullMessages)
  ? entry.fullMessages.map(m => {
@@ -1244,6 +1455,16 @@ router.get('/list', (req, res) => {
  base.height = e.height;
  base.outputFormat = e.outputFormat;
  base.outputSizeBytes = e.outputSizeBytes;
+ } else if (e.type === 'embedding') {
+ base.operation = e.operation;
+ base.routeKind = e.routeKind;
+ base.collectionId = e.collectionId;
+ base.inputCount = e.inputCount;
+ base.inputCharTotal = e.inputCharTotal;
+ base.query = (e.query || '').slice(0, 80);
+ base.topK = e.topK;
+ base.resultCount = e.resultCount;
+ base.vectorDim = e.vectorDim;
  } else {
  base.stream = e.stream;
  base.messageCount = e.messageCount;

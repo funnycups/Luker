@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
 const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
@@ -22,16 +23,17 @@ const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
  * @param {Array<{text: string, index: number, hash: number, score?: number}>} documents - Documents to rerank
  * @param {number} topK - Number of top results to return
  * @param {import('../users.js').UserDirectoryList} directories - User directories
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<Array<{text: string, index: number, hash: number, score: number, relevance_score: number}>>} Reranked documents
  */
-export async function rerank(source, settings, query, documents, topK, directories) {
+export async function rerank(source, settings, query, documents, topK, directories, request = null) {
     switch (source) {
         case 'cohere':
-            return rerankCohere(settings, query, documents, topK, directories);
+            return rerankCohere(settings, query, documents, topK, directories, request);
         case 'jina':
-            return rerankJina(settings, query, documents, topK, directories);
+            return rerankJina(settings, query, documents, topK, directories, request);
         case 'custom':
-            return rerankCustom(settings, query, documents, topK, directories);
+            return rerankCustom(settings, query, documents, topK, directories, request);
         default:
             throw new Error(`Unknown rerank source: ${source}`);
     }
@@ -50,7 +52,7 @@ function resolveTriplet(settings) {
  * Reranks using Cohere Rerank API v2.
  * @param {RerankSettings} settings
  */
-async function rerankCohere(settings, query, documents, topK, directories) {
+async function rerankCohere(settings, query, documents, topK, directories, request = null) {
     const { reverseProxy, proxyPassword, secretId } = resolveTriplet(settings);
     const key = reverseProxy
         ? proxyPassword
@@ -60,19 +62,23 @@ async function rerankCohere(settings, query, documents, topK, directories) {
     }
 
     const baseUrl = (reverseProxy || DEFAULT_COHERE_URL).replace(/\/+$/, '');
+    const rerankUrl = `${baseUrl}/rerank`;
+    const body = {
+        model: settings.model || 'rerank-v3.5',
+        query: query,
+        documents: documents.map(d => d.text),
+        top_n: topK,
+    };
 
-    const response = await fetch(`${baseUrl}/rerank`, {
+    if (request) attachInspectionEndpoint(request, rerankUrl, key, body);
+
+    const response = await fetch(rerankUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${key}`,
         },
-        body: JSON.stringify({
-            model: settings.model || 'rerank-v3.5',
-            query: query,
-            documents: documents.map(d => d.text),
-            top_n: topK,
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -92,7 +98,7 @@ async function rerankCohere(settings, query, documents, topK, directories) {
  * Reranks using Jina Rerank API.
  * @param {RerankSettings} settings
  */
-async function rerankJina(settings, query, documents, topK, directories) {
+async function rerankJina(settings, query, documents, topK, directories, request = null) {
     const { reverseProxy, proxyPassword, secretId } = resolveTriplet(settings);
     const key = reverseProxy
         ? proxyPassword
@@ -102,19 +108,23 @@ async function rerankJina(settings, query, documents, topK, directories) {
     }
 
     const baseUrl = (reverseProxy || DEFAULT_JINA_URL).replace(/\/+$/, '');
+    const rerankUrl = `${baseUrl}/rerank`;
+    const body = {
+        model: settings.model || 'jina-reranker-v2-base-multilingual',
+        query: query,
+        documents: documents.map(d => d.text),
+        top_n: topK,
+    };
 
-    const response = await fetch(`${baseUrl}/rerank`, {
+    if (request) attachInspectionEndpoint(request, rerankUrl, key, body);
+
+    const response = await fetch(rerankUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${key}`,
         },
-        body: JSON.stringify({
-            model: settings.model || 'jina-reranker-v2-base-multilingual',
-            query: query,
-            documents: documents.map(d => d.text),
-            top_n: topK,
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -137,7 +147,7 @@ async function rerankJina(settings, query, documents, topK, directories) {
  * Expects Cohere-compatible request/response format.
  * @param {RerankSettings} settings
  */
-async function rerankCustom(settings, query, documents, topK, directories) {
+async function rerankCustom(settings, query, documents, topK, directories, request = null) {
     const { reverseProxy, proxyPassword } = resolveTriplet(settings);
     const apiUrl = reverseProxy || settings.apiUrl || '';
     const apiKey = reverseProxy ? proxyPassword : (settings.apiKey || '');
@@ -160,15 +170,19 @@ async function rerankCustom(settings, query, documents, topK, directories) {
         url.pathname = url.pathname.replace(/\/$/, '') + '/rerank';
     }
 
+    const body = {
+        model: settings.model || '',
+        query: query,
+        documents: documents.map(d => d.text),
+        top_n: topK,
+    };
+
+    if (request) attachInspectionEndpoint(request, url.toString(), apiKey || '', body);
+
     const response = await fetch(url.toString(), {
         method: 'POST',
         headers: headers,
-        body: JSON.stringify({
-            model: settings.model || '',
-            query: query,
-            documents: documents.map(d => d.text),
-            top_n: topK,
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {

@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import { setAdditionalHeadersByType } from '../additional-headers.js';
 import { TEXTGEN_TYPES } from '../constants.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from Ollama
@@ -10,9 +11,10 @@ import { TEXTGEN_TYPES } from '../constants.js';
  * @param {boolean} keep - Keep the model loaded in memory
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings; may include `secretId`, `reverseProxy`, `proxyPassword`
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getOllamaBatchVector(texts, apiUrl, model, keep, directories, sourceSettings = null) {
+export async function getOllamaBatchVector(texts, apiUrl, model, keep, directories, sourceSettings = null, request = null) {
     const settings = sourceSettings || {};
     const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
     const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
@@ -31,18 +33,23 @@ export async function getOllamaBatchVector(texts, apiUrl, model, keep, directori
         setAdditionalHeadersByType(headers, TEXTGEN_TYPES.OLLAMA, baseUrl, directories, secretId);
     }
 
+    const body = {
+        input: texts,
+        model: model,
+        keep_alive: keep ? -1 : undefined,
+        truncate: true,
+    };
+
+    const authForFingerprint = headers['Authorization'] || '';
+    if (request) attachInspectionEndpoint(request, url.toString(), String(authForFingerprint), body);
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             ...headers,
         },
-        body: JSON.stringify({
-            input: texts,
-            model: model,
-            keep_alive: keep ? -1 : undefined,
-            truncate: true,
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -68,9 +75,10 @@ export async function getOllamaBatchVector(texts, apiUrl, model, keep, directori
  * @param {boolean} keep - Keep the model loaded in memory
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getOllamaVector(text, apiUrl, model, keep, directories, sourceSettings = null) {
-    const vectors = await getOllamaBatchVector([text], apiUrl, model, keep, directories, sourceSettings);
+export async function getOllamaVector(text, apiUrl, model, keep, directories, sourceSettings = null, request = null) {
+    const vectors = await getOllamaBatchVector([text], apiUrl, model, keep, directories, sourceSettings, request);
     return vectors[0];
 }

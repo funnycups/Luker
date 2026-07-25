@@ -6,6 +6,13 @@ import { setAdditionalHeaders, setAdditionalHeadersByType } from '../../addition
 import { TEXTGEN_TYPES } from '../../constants.js';
 import { runLukerDispatch } from '../../luker-dispatch/runner.js';
 import { dispatchKobold } from '../../luker-dispatch/providers/kobold.js';
+import {
+    attachInspectionEndpoint,
+    startEmbeddingInspection,
+    completeEmbeddingInspection,
+    failEmbeddingInspection,
+    extractEmbeddingMeta,
+} from '../../request-inspector.js';
 
 export const router = express.Router();
 
@@ -120,11 +127,13 @@ router.post('/transcribe-audio', async function (request, response) {
 });
 
 router.post('/embed', async function (request, response) {
+    startEmbeddingInspection(request, extractEmbeddingMeta('kobold-embed', request.body));
     try {
         const { server, items } = request.body;
 
         if (!server) {
             console.warn('KoboldCpp URL is not set');
+            failEmbeddingInspection(request, 'KoboldCpp URL is not set', 400);
             return response.sendStatus(400);
         }
 
@@ -134,14 +143,16 @@ router.post('/embed', async function (request, response) {
         const embeddingsUrl = new URL(server);
         embeddingsUrl.pathname = '/api/extra/embeddings';
 
+        const wireBody = { input: items };
+        const authForFingerprint = headers['Authorization'] || '';
+        attachInspectionEndpoint(request, embeddingsUrl.toString(), String(authForFingerprint), wireBody);
+
         const embeddingsResult = await fetch(embeddingsUrl, {
             method: 'POST',
             headers: {
                 ...headers,
             },
-            body: JSON.stringify({
-                input: items,
-            }),
+            body: JSON.stringify(wireBody),
         });
 
         /** @type {any} */
@@ -149,14 +160,20 @@ router.post('/embed', async function (request, response) {
 
         if (!Array.isArray(data?.data)) {
             console.warn('KoboldCpp API response was not an array');
+            failEmbeddingInspection(request, 'KoboldCpp API response was not an array', embeddingsResult.status || 500);
             return response.sendStatus(500);
         }
 
         const model = data.model || 'unknown';
         const embeddings = data.data.map(x => Array.isArray(x) ? x[0] : x).sort((a, b) => a.index - b.index).map(x => x.embedding);
+        completeEmbeddingInspection(request, {
+            resultCount: embeddings.length,
+            vectorDim: Array.isArray(embeddings[0]) ? embeddings[0].length : null,
+        });
         return response.json({ model, embeddings });
     } catch (error) {
         console.error('KoboldCpp embedding failed', error);
+        failEmbeddingInspection(request, error?.message || String(error), 500);
         response.status(500).send('Internal server error');
     }
 });

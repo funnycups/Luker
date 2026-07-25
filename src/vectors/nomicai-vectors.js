@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 const SOURCES = {
     'nomicai': {
@@ -15,9 +16,10 @@ const SOURCES = {
  * @param {string} source - The source of the vector
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings; may include `reverseProxy`, `proxyPassword`, `secretId`
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getNomicAIBatchVector(texts, source, directories, sourceSettings = null) {
+export async function getNomicAIBatchVector(texts, source, directories, sourceSettings = null, request = null) {
     const config = SOURCES[source];
 
     if (!config) {
@@ -45,16 +47,20 @@ export async function getNomicAIBatchVector(texts, source, directories, sourceSe
         ? reverseProxy.replace(/\/+$/, '')
         : config.url;
 
+    const body = {
+        texts: texts,
+        model: config.model,
+    };
+
+    if (request) attachInspectionEndpoint(request, url, key, body);
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${key}`,
         },
-        body: JSON.stringify({
-            texts: texts,
-            model: config.model,
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -79,9 +85,10 @@ export async function getNomicAIBatchVector(texts, source, directories, sourceSe
  * @param {string} source - The source of the vector
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getNomicAIVector(text, source, directories, sourceSettings = null) {
-    const vectors = await getNomicAIBatchVector([text], source, directories, sourceSettings);
+export async function getNomicAIVector(text, source, directories, sourceSettings = null, request = null) {
+    const vectors = await getNomicAIBatchVector([text], source, directories, sourceSettings, request);
     return vectors[0];
 }

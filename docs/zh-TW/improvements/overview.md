@@ -78,7 +78,7 @@ Luker 內建了統一的函數呼叫（Function Calling）執行時，支援兩�
 
 ### 請求檢查器
 
-除錯 AI 對話時，使用者經常需要知道「到底發了什麼給 API」。Luker 的請求檢查器追蹤每個 AI 生成請求從發起到完成的完整生命週期，記錄 prompt token、completion token 和總用量。它支援串流回應的 Token 統計（從 SSE 事件中提取 usage 資訊），也覆蓋圖像生成請求的追蹤。請求檢查器追蹤的 Token 用量是獨立的統計功能，與儲存配額管理是兩個獨立的系統。詳見 [請求檢查器](/zh-TW/improvements/request-inspector)。
+除錯 AI 對話時，使用者經常需要知道「到底發了什麼給 API」。Luker 的請求檢查器追蹤每個 AI 生成請求從發起到完成的完整生命週期，記錄 prompt token、completion token 和總用量。它支援串流回應的 Token 統計（從 SSE 事件中提取 usage 資訊），也涵蓋圖像生成、向量嵌入和重排請求的追蹤。請求檢查器追蹤的 Token 用量是獨立的統計功能，與儲存配額管理是兩個獨立的系統。詳見 [請求檢查器](/zh-TW/improvements/request-inspector)。
 
 ### Skill
 

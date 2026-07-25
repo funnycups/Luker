@@ -392,6 +392,10 @@
     opacity: 0.85;
 }
 
+.ri-type-embedding {
+    opacity: 0.85;
+}
+
 /* ---- Info Cell ---- */
 
 .ri-info-cell {
@@ -411,6 +415,68 @@
     font-size: 0.8em;
     opacity: 0.6;
     margin-left: 4px;
+}
+
+.ri-info-op {
+    font-weight: 600;
+    color: var(--SmartThemeQuoteColor, #4fc3f7);
+    text-transform: uppercase;
+    font-size: 0.75em;
+    letter-spacing: 0.5px;
+}
+
+.ri-info-inputstat {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.8em;
+    opacity: 0.7;
+    margin-left: 4px;
+}
+
+.ri-info-collection {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.8em;
+    opacity: 0.65;
+    margin-left: 6px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 50%, transparent);
+}
+
+.ri-info-query {
+    opacity: 0.75;
+    font-style: italic;
+    font-size: 0.85em;
+}
+
+/* ---- Embedding Detail ---- */
+
+.ri-hit-collection {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.8em;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 50%, transparent);
+    opacity: 0.75;
+}
+
+.ri-hit-hash {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.8em;
+    opacity: 0.6;
+}
+
+.ri-hit-index {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.8em;
+    opacity: 0.55;
+}
+
+.ri-hit-score {
+    font-family: var(--monoFontFamily, monospace);
+    font-size: 0.85em;
+    font-weight: 600;
+    color: var(--SmartThemeQuoteColor, #4fc3f7);
+    margin-left: auto;
 }
 
 /* ---- Image Detail ---- */

@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
 
@@ -11,9 +12,10 @@ const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
  * @param {string} model - The model to use for the embedding
  * @param {object} options - Additional options (late_chunking, dimensions, task)
  * @param {object} [sourceSettings] - Resolved source settings; may include `reverseProxy`, `proxyPassword`, `secretId`
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getJinaBatchVector(texts, isQuery, directories, model, options = {}, sourceSettings = null) {
+export async function getJinaBatchVector(texts, isQuery, directories, model, options = {}, sourceSettings = null, request = null) {
     const settings = sourceSettings || {};
     const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
     const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
@@ -65,7 +67,10 @@ export async function getJinaBatchVector(texts, isQuery, directories, model, opt
         requestBody.embedding_type = options.embedding_type;
     }
 
-    const response = await fetch(`${baseUrl}/embeddings`, {
+    const embedUrl = `${baseUrl}/embeddings`;
+    if (request) attachInspectionEndpoint(request, embedUrl, key, requestBody);
+
+    const response = await fetch(embedUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -73,7 +78,6 @@ export async function getJinaBatchVector(texts, isQuery, directories, model, opt
         },
         body: JSON.stringify(requestBody),
     });
-
     if (!response.ok) {
         const text = await response.text();
         console.warn('API request failed', response.statusText, text);
@@ -98,9 +102,10 @@ export async function getJinaBatchVector(texts, isQuery, directories, model, opt
  * @param {string} model - The model to use for the embedding
  * @param {object} options - Additional options (late_chunking, dimensions, task)
  * @param {object} [sourceSettings] - Resolved source settings
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getJinaVector(text, isQuery, directories, model, options = {}, sourceSettings = null) {
-    const vectors = await getJinaBatchVector([text], isQuery, directories, model, options, sourceSettings);
+export async function getJinaVector(text, isQuery, directories, model, options = {}, sourceSettings = null, request = null) {
+    const vectors = await getJinaBatchVector([text], isQuery, directories, model, options, sourceSettings, request);
     return vectors[0];
 }

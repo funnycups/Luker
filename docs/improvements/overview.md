@@ -78,7 +78,7 @@ The Chat Persona Lock feature binds user personas to specific chats, automatical
 
 ### Request Inspector
 
-When debugging AI conversations, users often need to know "what exactly was sent to the API." Luker's Request Inspector tracks the complete lifecycle of each AI generation request from initiation to completion, recording prompt tokens, completion tokens, and total usage. It supports token statistics for streaming responses (extracting usage information from SSE events) and also covers image generation request tracking. The token usage tracked by the Request Inspector is an independent statistics feature, separate from the storage quota management system. See [Request Inspector](/improvements/request-inspector) for details.
+When debugging AI conversations, users often need to know "what exactly was sent to the API." Luker's Request Inspector tracks the complete lifecycle of each AI generation request from initiation to completion, recording prompt tokens, completion tokens, and total usage. It supports token statistics for streaming responses (extracting usage information from SSE events) and also covers image generation, vector embedding, and rerank request tracking. The token usage tracked by the Request Inspector is an independent statistics feature, separate from the storage quota management system. See [Request Inspector](/improvements/request-inspector) for details.
 
 ### Skills
 

@@ -6,7 +6,7 @@ The Request Inspector is one of Luker's core backend modules, used to track the 
 
 In SillyTavern, after an AI generation request is sent, the backend does not systematically record the request's token consumption. Users cannot know how many tokens each generation actually cost, and administrators cannot track resource usage in multi-user scenarios.
 
-Luker implements a complete request lifecycle tracking system, covering both text generation and image generation requests.
+Luker implements a complete request lifecycle tracking system, covering text generation, image generation, and vector-embedding / rerank requests.
 
 ## Core Capabilities
 
@@ -14,10 +14,10 @@ Luker implements a complete request lifecycle tracking system, covering both tex
 
 Each AI generation request goes through the following state transitions:
 
-1. **Start** (`startInspection`) — Records request metadata, marks the request as being tracked
-2. **Complete** (`completeInspection`) — Request returns successfully, records token usage
-3. **Fail** (`failInspection`) — Request errors out, records error information
-4. **Abort** (`abortInspection`) — User actively cancels generation
+1. **Start** — Records request metadata, marks the request as being tracked
+2. **Complete** — Request returns successfully, records token usage
+3. **Fail** — Request errors out, records error information
+4. **Abort** — User actively cancels generation
 
 ```d2
 direction: down
@@ -37,15 +37,15 @@ end_: "" {
   style.fill: "#222"
 }
 
-note: "Streaming responses also call completeInspectionFromStream\nto extract usage from the SSE event stream" {
+note: "Streaming responses extract usage from the final SSE event of the stream" {
   shape: text
   style.fill: "#fff8d4"
 }
 
-start -> in_progress: "startInspection records metadata"
-in_progress -> done: "completeInspection records token usage"
-in_progress -> failed: "failInspection records error message"
-in_progress -> aborted: "abortInspection user cancels"
+start -> in_progress: "records metadata"
+in_progress -> done: "records token usage"
+in_progress -> failed: "records error message"
+in_progress -> aborted: "user cancels"
 done -> end_
 failed -> end_
 aborted -> end_
@@ -64,35 +64,17 @@ This data is extracted from API responses and associated with user accounts for 
 
 ### Token Statistics for Streaming Responses
 
-For streaming (SSE) responses, token usage information is typically contained in the last SSE event. The Request Inspector extracts the `usage` field from SSE event streams through the `completeInspectionFromStream` and `extractUsageFromStreamEvents` functions, ensuring accurate token consumption statistics for streaming generation as well.
+For streaming (SSE) responses, token usage information is typically contained in the last SSE event. The Request Inspector extracts the `usage` field from the SSE event stream, ensuring accurate token consumption statistics for streaming generation as well.
 
 ### Image Generation Request Tracking
 
-Beyond text generation, the Request Inspector also supports tracking image generation requests. Through independent `startImageInspection` / `completeImageInspection` / `failImageInspection` functions, it covers request recording for all image generation backends.
+Beyond text generation, the Request Inspector also tracks image generation requests, covering every image generation backend.
 
-## Key Functions
+### Embedding & Rerank Request Tracking
 
-| Function | Purpose |
-|----------|--------|
-| `startInspection(request)` | Start tracking a generation request |
-| `completeInspection(request, payload, rawApiResponse?)` | Mark request as complete and record results |
-| `failInspection(request, errorMessage, httpStatus?)` | Mark request as failed |
-| `abortInspection(request)` | Mark request as aborted |
-| `completeInspectionFromStream(request, events)` | Extract usage from streaming events and complete tracking |
-| `extractUsageFromStreamEvents(events, source)` | Extract token usage from SSE event arrays |
-| `startImageInspection(request, meta)` | Start tracking an image generation request |
-| `completeImageInspection(request, resultMeta?)` | Complete image generation tracking |
-| `failImageInspection(request, errorMessage, httpStatus?)` | Mark image generation as failed |
+The Request Inspector also spans the vector subsystem, recording embedding, query, and rerank calls sent to every remote vector provider (OpenAI, Cohere, Jina, Ollama, VLLM, Voyage, and so on) and the KoboldCpp direct-embed bridge. Local-only inference sources that never leave the process are skipped so the ring buffer stays focused on actual upstream traffic.
 
-## Integration Points
-
-The Request Inspector is called by the following modules:
-
-- **`chat-completions.js`** — Records token usage in OpenAI-compatible API calls
-- **Unified Generation Layer** — Called uniformly within the [Unified Generation Layer](/improvements/generation-layer)
-- **`chats.js`** — Associates generation results in the `acknowledge-generation` endpoint
-
-## Token Usage Statistics
+## Relation to Storage Quotas
 
 The token usage tracked by the Request Inspector is an independent statistics feature that helps users and administrators understand the resource consumption of AI generation. This is separate from the storage quota management in [Auth & Quota](/improvements/auth-and-quota):
 
@@ -100,4 +82,4 @@ The token usage tracked by the Request Inspector is an independent statistics fe
 - **Storage quota management**: Manages the allocation and limits of file storage space
 
 > [!TIP]
-> The Request Inspector is automatically initialized through `server-startup.js` when the server starts, requiring no additional configuration.
+> The Request Inspector starts automatically with the server; no additional configuration is required.

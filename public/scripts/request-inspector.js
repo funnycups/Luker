@@ -11,7 +11,7 @@ const MODULE_NAME = 'RequestInspector';
 let cachedList = [];
 let cachedDetail = null;
 let currentDetailId = null;
-let currentFilter = 'all'; // 'all' | 'chat' | 'image'
+let currentFilter = 'all'; // 'all' | 'chat' | 'image' | 'embedding'
 let currentSearch = '';
 let currentDetailSearch = '';
 
@@ -50,9 +50,9 @@ function statusIcon(status) {
 }
 
 function typeIcon(type) {
- return type === 'image'
- ? '<span class="ri-type-badge ri-type-image" title="Image">\uD83C\uDFA8</span>'
- : '<span class="ri-type-badge ri-type-chat" title="Chat">\uD83D\uDCAC</span>';
+ if (type === 'image') return '<span class="ri-type-badge ri-type-image" title="Image">\uD83C\uDFA8</span>';
+ if (type === 'embedding') return '<span class="ri-type-badge ri-type-embedding" title="Embedding">\uD83D\uDD22</span>';
+ return '<span class="ri-type-badge ri-type-chat" title="Chat">\uD83D\uDCAC</span>';
 }
 
 function escapeHtml(str) {
@@ -325,6 +325,7 @@ function buildFilterBar() {
  <button class="ri-filter-btn menu_button ${currentFilter === 'all' ? 'active' : ''}" data-filter="all">${t`All`}</button>
  <button class="ri-filter-btn menu_button ${currentFilter === 'chat' ? 'active' : ''}" data-filter="chat">\uD83D\uDCAC ${t`Chat`}</button>
  <button class="ri-filter-btn menu_button ${currentFilter === 'image' ? 'active' : ''}" data-filter="image">\uD83C\uDFA8 ${t`Image`}</button>
+ <button class="ri-filter-btn menu_button ${currentFilter === 'embedding' ? 'active' : ''}" data-filter="embedding">\uD83D\uDD22 ${t`Embedding`}</button>
  <input type="text" class="ri-search-input text_pole" placeholder="${t`Search source / model / messages / response...`}" value="${q}" />
  </div>`;
 }
@@ -345,6 +346,16 @@ function buildInfoCell(item) {
  const dims = (item.width && item.height) ? `${item.width}\u00D7${item.height}` : '';
  const promptSnippet = escapeHtml((item.prompt || '').slice(0, 40));
  return `<span class="ri-info-prompt" title="${escapeHtml(item.prompt || '')}">${promptSnippet}</span>${dims ? ` <span class="ri-info-dims">${dims}</span>` : ''}`;
+ }
+ if (type === 'embedding') {
+ const op = escapeHtml(item.operation || 'embed');
+ const inputStat = `${(item.inputCount || 0)}\u00D7${(item.inputCharTotal || 0).toLocaleString()}c`;
+ const collection = item.collectionId
+ ? ` <span class="ri-info-collection" title="${escapeHtml(item.collectionId)}">${escapeHtml(String(item.collectionId).slice(0, 20))}</span>`
+ : '';
+ const query = item.query ? ` \u00B7 <span class="ri-info-query" title="${escapeHtml(item.query)}">${escapeHtml(item.query.slice(0, 40))}</span>` : '';
+ const result = item.resultCount != null ? ` \u2192 ${item.resultCount}` : '';
+ return `<span class="ri-info-op">${op}</span> <span class="ri-info-inputstat">${inputStat}</span>${collection}${query}${result}`;
  }
  const msgs = item.messageCount != null ? `${item.messageCount} ${t`msgs`}` : '';
  const tokens = item.usage?.prompt_tokens != null ? ` \u00B7 ${formatTokens(item.usage.prompt_tokens)}\u2192${formatTokens(item.usage.completion_tokens)}` : '';
@@ -739,10 +750,170 @@ function buildImageDetailHtml(detail) {
  </div>`;
 }
 
+function buildEmbeddingDetailBody(detail) {
+ const q = currentDetailSearch;
+ const qLower = q ? q.trim().toLowerCase() : '';
+ const isRerank = detail.operation === 'rerank';
+
+ // Every foldable row uses the same <details> pattern as chat's
+ // renderMessageItem: default-collapsed so the DOM stays cheap even for
+ // rerank runs that ship hundreds of documents, and auto-open only when
+ // the row's content matches the detail-panel search. Content itself is
+ // stored verbatim (no truncation) — matches how chat `fullMessages` and
+ // `wireRequest` snapshots preserve request bodies untouched.
+ function foldedRow({ index, label, extras, body }) {
+ const bodyStr = String(body || '');
+ const hit = !!(qLower && bodyStr.toLowerCase().includes(qLower));
+ const bodyHtml = bodyStr
+ ? `<pre class="ri-msg-content">${highlightHtml(bodyStr, q)}</pre>`
+ : `<pre class="ri-msg-content">${escapeHtml(t`(empty)`)}</pre>`;
+ return `
+ <details class="ri-msg${hit ? ' ri-msg-hit' : ''}"${hit ? ' open' : ''}>
+ <summary class="ri-msg-summary">
+ ${index != null ? `<span class="ri-msg-index">#${escapeHtml(String(index))}</span>` : ''}
+ ${label ? `<span class="ri-msg-role">${escapeHtml(label)}</span>` : ''}
+ ${extras || ''}
+ <span class="ri-msg-len">${bodyStr.length.toLocaleString()} ${t`chars`}</span>
+ </summary>
+ ${bodyHtml}
+ </details>`;
+ }
+
+ // Rerank ships a distinct top-level `query` string alongside its documents;
+ // for insert/query/query-multi the sole input text lives in inputTexts so
+ // there is no separate Query section to render.
+ const querySection = isRerank && detail.query
+ ? `<div class="ri-detail-section"><h4>${t`Rerank Query`} (${detail.query.length.toLocaleString()} ${t`chars`})</h4><pre class="ri-msg-content">${highlightHtml(detail.query, q)}</pre></div>`
+ : '';
+
+ let inputLabel;
+ if (isRerank) inputLabel = t`Documents`;
+ else if (detail.routeKind === 'query' || detail.routeKind === 'query-multi') inputLabel = t`Search Text`;
+ else inputLabel = t`Input Items`;
+
+ const inputTexts = Array.isArray(detail.inputTexts) ? detail.inputTexts : [];
+ const inputTextsHtml = inputTexts.length
+ ? inputTexts.map(s => foldedRow({
+ index: s.index,
+ label: '',
+ extras: '',
+ body: s.text,
+ })).join('\n')
+ : `<div class="ri-empty">${t`(no input captured)`}</div>`;
+
+ const hits = Array.isArray(detail.hits) ? detail.hits : [];
+ const hitsHtml = hits.length
+ ? hits.map((h, i) => {
+ const scoreStr = typeof h.score === 'number' ? h.score.toFixed(4) : '\u2014';
+ const extras = [];
+ if (h.collectionId) extras.push(`<span class="ri-hit-collection">${escapeHtml(String(h.collectionId))}</span>`);
+ if (h.hash != null) extras.push(`<span class="ri-hit-hash">#${escapeHtml(String(h.hash))}</span>`);
+ if (h.index != null) extras.push(`<span class="ri-hit-index">${t`idx`} ${escapeHtml(String(h.index))}</span>`);
+ extras.push(`<span class="ri-hit-score">${escapeHtml(scoreStr)}</span>`);
+ return foldedRow({
+ index: i,
+ label: '',
+ extras: extras.join(' '),
+ body: h.text,
+ });
+ }).join('\n')
+ : '';
+
+ let wireRequestJson = '';
+ if (detail.wireRequest != null) {
+ try { wireRequestJson = JSON.stringify(detail.wireRequest, null, 2); }
+ catch { wireRequestJson = String(detail.wireRequest); }
+ }
+ const wireHit = !!(qLower && wireRequestJson.toLowerCase().includes(qLower));
+
+ return `
+ ${querySection}
+
+ <div class="ri-detail-section">
+ <h4>${inputLabel} (${(detail.inputCount || 0).toLocaleString()})</h4>
+ <div class="ri-messages">${inputTextsHtml}</div>
+ </div>
+
+ ${hits.length ? `
+ <div class="ri-detail-section">
+ <h4>${isRerank ? t`Reranked Results` : t`Top Hits`} (${detail.resultCount ?? hits.length})</h4>
+ <div class="ri-messages">${hitsHtml}</div>
+ </div>` : ''}
+
+ ${wireRequestJson ? `
+ <div class="ri-detail-section">
+ <details class="ri-wire-meta"${wireHit ? ' open' : ''}>
+ <summary><h4 style="display:inline;">${t`Wire Request`} (${wireRequestJson.length.toLocaleString()} ${t`chars`})</h4></summary>
+ <pre class="ri-msg-content">${highlightHtml(wireRequestJson, q)}</pre>
+ </details>
+ </div>` : ''}
+ `;
+}
+
+function buildEmbeddingDetailHtml(detail) {
+ const isRerank = detail.operation === 'rerank';
+
+ const endpointRow = detail.endpoint
+ ? `<tr><td>${t`Endpoint URL`}</td><td class="ri-mono" title="${escapeHtml(detail.endpoint)}">${escapeHtml(detail.endpoint)}</td></tr>`
+ : '';
+ const keyRow = detail.apiKeyFingerprint
+ ? `<tr><td>${t`API Key`}</td><td class="ri-mono" title="${escapeHtml(detail.apiKeyFingerprint)}">${escapeHtml(detail.apiKeyFingerprint)}</td></tr>`
+ : '';
+ const collectionRow = detail.collectionId != null
+ ? `<tr><td>${t`Collection`}</td><td class="ri-mono">${escapeHtml(String(detail.collectionId))}</td></tr>`
+ : (Array.isArray(detail.collectionIds) && detail.collectionIds.length
+ ? `<tr><td>${t`Collections`}</td><td class="ri-mono">${escapeHtml(detail.collectionIds.join(', '))}</td></tr>`
+ : '');
+
+ return `
+ <div class="ri-detail">
+ <div class="ri-detail-header">
+ <button class="ri-back menu_button">\u2190 ${t`Back`}</button>
+ <button class="ri-export menu_button" data-id="${escapeHtml(detail.id)}">${t`Export JSON`}</button>
+ <input type="text" class="ri-detail-search text_pole" placeholder="${t`Search in this request...`}" value="${escapeHtml(currentDetailSearch)}" />
+ </div>
+
+ <div class="ri-detail-grid">
+ <div class="ri-detail-section">
+ <h4>${isRerank ? t`Rerank` : t`Embedding`}</h4>
+ <table class="ri-kv">
+ <tr><td>${t`Source`}</td><td>${escapeHtml(detail.source)}</td></tr>
+ <tr><td>${t`Model`}</td><td>${escapeHtml(detail.model || '\u2014')}</td></tr>
+ <tr><td>${t`Operation`}</td><td>${escapeHtml(detail.operation || 'embed')}</td></tr>
+ <tr><td>${t`Route`}</td><td class="ri-mono">${escapeHtml(detail.routeKind || '\u2014')}</td></tr>
+ ${endpointRow}
+ ${keyRow}
+ ${collectionRow}
+ <tr><td>${t`Input Count`}</td><td>${(detail.inputCount || 0).toLocaleString()}</td></tr>
+ <tr><td>${t`Input Chars`}</td><td>${(detail.inputCharTotal || 0).toLocaleString()}</td></tr>
+ <tr><td>${t`Top K`}</td><td>${detail.topK ?? '\u2014'}</td></tr>
+ ${!isRerank ? `<tr><td>${t`Threshold`}</td><td>${detail.threshold ?? '\u2014'}</td></tr>` : ''}
+ </table>
+ </div>
+
+ <div class="ri-detail-section">
+ <h4>${t`Response`}</h4>
+ <table class="ri-kv">
+ <tr><td>${t`Status`}</td><td>${statusIcon(detail.status)} ${escapeHtml(detail.status)}</td></tr>
+ <tr><td>HTTP</td><td>${detail.httpStatus ?? '\u2014'}</td></tr>
+ <tr><td>${t`Duration`}</td><td>${formatDuration(detail.durationMs)}</td></tr>
+ <tr><td>${t`Result Count`}</td><td>${detail.resultCount ?? '\u2014'}</td></tr>
+ <tr><td>${t`Vector Dim`}</td><td>${detail.vectorDim ?? '\u2014'}</td></tr>
+ ${detail.error ? `<tr><td>${t`Error`}</td><td class="ri-error-text">${escapeHtml(detail.error)}</td></tr>` : ''}
+ </table>
+ </div>
+ </div>
+
+ <div class="ri-detail-body">${buildEmbeddingDetailBody(detail)}</div>
+ </div>`;
+}
+
 function buildDetailHtml(detail) {
  if (!detail) return `<div class="ri-empty">${t`Failed to load request details.`}</div>`;
  const type = detail.type || 'chat';
- return type === 'image' ? buildImageDetailHtml(detail) : buildChatDetailHtml(detail);
+ if (type === 'image') return buildImageDetailHtml(detail);
+ if (type === 'embedding') return buildEmbeddingDetailHtml(detail);
+ return buildChatDetailHtml(detail);
 }
 
 async function openInspectorPanel() {
@@ -784,8 +955,12 @@ async function openInspectorPanel() {
 
  content.on('input', '.ri-detail-search', function () {
  currentDetailSearch = $(this).val() || '';
- if (cachedDetail && (cachedDetail.type || 'chat') === 'chat') {
+ if (!cachedDetail) return;
+ const detailType = cachedDetail.type || 'chat';
+ if (detailType === 'chat') {
  content.find('.ri-detail-body').html(buildChatDetailBody(cachedDetail));
+ } else if (detailType === 'embedding') {
+ content.find('.ri-detail-body').html(buildEmbeddingDetailBody(cachedDetail));
  }
  });
 

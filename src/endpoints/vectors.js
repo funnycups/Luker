@@ -18,6 +18,25 @@ import { getVllmVector, getVllmBatchVector } from '../vectors/vllm-vectors.js';
 import { getOllamaVector, getOllamaBatchVector } from '../vectors/ollama-vectors.js';
 import { rerank } from '../vectors/rerank.js';
 import { getCommonCredentials, getSourceSettings } from '../vectors/source-settings.js';
+import {
+    startEmbeddingInspection,
+    completeEmbeddingInspection,
+    failEmbeddingInspection,
+    extractEmbeddingMeta,
+} from '../request-inspector.js';
+
+// Vector sources that never hit an upstream HTTP endpoint from the server:
+//   - transformers  → local xenova/transformers pipeline (in-process inference)
+//   - webllm        → client-side pre-computed vectors, server just receives
+//                     the dict via `sourceSettings.embeddings` and looks up
+//   - koboldcpp     → same pattern; client hits /api/backends/kobold/embed
+//                     separately (that endpoint IS inspected on its own)
+// For these sources the /api/vector/{insert,query,query-multi} handlers do
+// nothing over the wire — inspecting them would fill the ring buffer with
+// entries whose `endpoint` and `wireRequest` are permanently null and give
+// the user no debugging leverage. The three routes that DO hit upstream
+// (all other sources) get the full lifecycle wrap.
+const LOCAL_ONLY_SOURCES = new Set(['transformers', 'webllm', 'koboldcpp']);
 
 // Don't forget to add new sources to the SOURCES array
 const SOURCES = [
@@ -51,50 +70,56 @@ const SOURCES = [
  * @param {string} text - The text to get the vector for
  * @param {boolean} isQuery - If the text is a query for embedding search
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {import('express').Request} [request] - Inspector-carrying request (null skips inspection attach)
  * @returns {Promise<number[]>} - The vector for the text
  */
-async function getVector(source, sourceSettings, text, isQuery, directories) {
+async function getVector(source, sourceSettings, text, isQuery, directories, request = null) {
     switch (source) {
         case 'nomicai':
-            return getNomicAIVector(text, source, directories, sourceSettings);
+            return getNomicAIVector(text, source, directories, sourceSettings, request);
         case 'togetherai':
         case 'mistral':
         case 'openai':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings, request);
         case 'electronhub':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings, request);
         case 'openrouter':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings, request);
         case 'transformers':
             return getTransformersVector(text);
         case 'extras':
-            return getExtrasVector(text, sourceSettings.extrasUrl, sourceSettings.extrasKey);
+            return getExtrasVector(text, sourceSettings.extrasUrl, sourceSettings.extrasKey, request);
+        // palm/vertexai already receive the Express request via
+        // `sourceSettings.request` (they need it to derive URL + auth
+        // via getGoogleApiConfig). That IS the same object as `request`
+        // above — startEmbeddingInspection stamped `__inspectorId` on it —
+        // so no fourth parameter is needed for attach.
         case 'palm':
             return getMakerSuiteVector(text, sourceSettings.model, sourceSettings.request);
         case 'vertexai':
             return getVertexVector(text, sourceSettings.model, sourceSettings.request);
         case 'cohere':
-            return getCohereVector(text, isQuery, directories, sourceSettings.model, sourceSettings);
+            return getCohereVector(text, isQuery, directories, sourceSettings.model, sourceSettings, request);
         case 'jina':
-            return getJinaVector(text, isQuery, directories, sourceSettings.model, sourceSettings.options, sourceSettings);
+            return getJinaVector(text, isQuery, directories, sourceSettings.model, sourceSettings.options, sourceSettings, request);
         case 'llamacpp':
-            return getLlamaCppVector(text, sourceSettings.apiUrl, directories, sourceSettings);
+            return getLlamaCppVector(text, sourceSettings.apiUrl, directories, sourceSettings, request);
         case 'vllm':
-            return getVllmVector(text, sourceSettings.apiUrl, sourceSettings.model, directories, sourceSettings);
+            return getVllmVector(text, sourceSettings.apiUrl, sourceSettings.model, directories, sourceSettings, request);
         case 'ollama':
-            return getOllamaVector(text, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories, sourceSettings);
+            return getOllamaVector(text, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories, sourceSettings, request);
         case 'webllm':
             return sourceSettings.embeddings[text];
         case 'koboldcpp':
             return sourceSettings.embeddings[text];
         case 'chutes':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings, request);
         case 'nanogpt':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings, request);
         case 'siliconflow':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings, request);
         case 'workers_ai':
-            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings);
+            return getOpenAIVector(text, source, directories, sourceSettings.model, sourceSettings, request);
     }
 
     throw new Error(`Unknown vector source ${source}`);
@@ -107,9 +132,10 @@ async function getVector(source, sourceSettings, text, isQuery, directories) {
  * @param {string[]} texts - The array of texts to get the vector for
  * @param {boolean} isQuery - If the text is a query for embedding search
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
+ * @param {import('express').Request} [request] - Inspector-carrying request (null skips inspection attach)
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-async function getBatchVector(source, sourceSettings, texts, isQuery, directories) {
+async function getBatchVector(source, sourceSettings, texts, isQuery, directories, request = null) {
     const batchSize = 10;
     const batches = Array(Math.ceil(texts.length / batchSize)).fill(undefined).map((_, i) => texts.slice(i * batchSize, i * batchSize + batchSize));
 
@@ -117,24 +143,24 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
     for (let batch of batches) {
         switch (source) {
             case 'nomicai':
-                results.push(...await getNomicAIBatchVector(batch, source, directories, sourceSettings));
+                results.push(...await getNomicAIBatchVector(batch, source, directories, sourceSettings, request));
                 break;
             case 'togetherai':
             case 'mistral':
             case 'openai':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings, request));
                 break;
             case 'electronhub':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings, request));
                 break;
             case 'openrouter':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings, request));
                 break;
             case 'transformers':
                 results.push(...await getTransformersBatchVector(batch));
                 break;
             case 'extras':
-                results.push(...await getExtrasBatchVector(batch, sourceSettings.extrasUrl, sourceSettings.extrasKey));
+                results.push(...await getExtrasBatchVector(batch, sourceSettings.extrasUrl, sourceSettings.extrasKey, request));
                 break;
             case 'palm':
                 results.push(...await getMakerSuiteBatchVector(batch, sourceSettings.model, sourceSettings.request));
@@ -143,19 +169,19 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
                 results.push(...await getVertexBatchVector(batch, sourceSettings.model, sourceSettings.request));
                 break;
             case 'cohere':
-                results.push(...await getCohereBatchVector(batch, isQuery, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getCohereBatchVector(batch, isQuery, directories, sourceSettings.model, sourceSettings, request));
                 break;
             case 'jina':
-                results.push(...await getJinaBatchVector(batch, isQuery, directories, sourceSettings.model, sourceSettings.options, sourceSettings));
+                results.push(...await getJinaBatchVector(batch, isQuery, directories, sourceSettings.model, sourceSettings.options, sourceSettings, request));
                 break;
             case 'llamacpp':
-                results.push(...await getLlamaCppBatchVector(batch, sourceSettings.apiUrl, directories, sourceSettings));
+                results.push(...await getLlamaCppBatchVector(batch, sourceSettings.apiUrl, directories, sourceSettings, request));
                 break;
             case 'vllm':
-                results.push(...await getVllmBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, directories, sourceSettings));
+                results.push(...await getVllmBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, directories, sourceSettings, request));
                 break;
             case 'ollama':
-                results.push(...await getOllamaBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories, sourceSettings));
+                results.push(...await getOllamaBatchVector(batch, sourceSettings.apiUrl, sourceSettings.model, sourceSettings.keep, directories, sourceSettings, request));
                 break;
             case 'webllm':
                 results.push(...texts.map(x => sourceSettings.embeddings[x]));
@@ -164,16 +190,16 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
                 results.push(...texts.map(x => sourceSettings.embeddings[x]));
                 break;
             case 'chutes':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings, request));
                 break;
             case 'nanogpt':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings, request));
                 break;
             case 'siliconflow':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings, request));
                 break;
             case 'workers_ai':
-                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings));
+                results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model, sourceSettings, request));
                 break;
             default:
                 throw new Error(`Unknown vector source ${source}`);
@@ -219,13 +245,14 @@ async function getIndex(directories, collectionId, source, sourceSettings) {
  * @param {string} source - The source of the vector
  * @param {Object} sourceSettings - Settings for the source, if it needs any
  * @param {{ hash: number; text: string; index: number; metadata?: Object; }[]} items - The items to insert
+ * @param {import('express').Request} [request] - Inspector-carrying request
  */
-async function insertVectorItems(directories, collectionId, source, sourceSettings, items) {
+async function insertVectorItems(directories, collectionId, source, sourceSettings, items, request = null) {
     const store = await getIndex(directories, collectionId, source, sourceSettings);
 
     await store.beginUpdate();
 
-    const vectors = await getBatchVector(source, sourceSettings, items.map(x => x.text), false, directories);
+    const vectors = await getBatchVector(source, sourceSettings, items.map(x => x.text), false, directories, request);
 
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -234,6 +261,13 @@ async function insertVectorItems(directories, collectionId, source, sourceSettin
     }
 
     await store.endUpdate();
+
+    // Return first vector dim so the router can surface `vectorDim` on the
+    // inspector entry without a second pass over the vectors array.
+    return {
+        insertedCount: items.length,
+        vectorDim: Array.isArray(vectors[0]) ? vectors[0].length : null,
+    };
 }
 
 /**
@@ -283,11 +317,13 @@ async function deleteVectorItems(directories, collectionId, source, sourceSettin
  * @param {string} searchText - The text to search for
  * @param {number} topK - The number of results to return
  * @param {number} threshold - The threshold for the search
+ * @param {boolean} [includeVectors]
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<{hashes: number[], metadata: object[]}>} - The metadata of the items that match the search text
  */
-async function queryCollection(directories, collectionId, source, sourceSettings, searchText, topK, threshold, includeVectors = false) {
+async function queryCollection(directories, collectionId, source, sourceSettings, searchText, topK, threshold, includeVectors = false, request = null) {
     const store = await getIndex(directories, collectionId, source, sourceSettings);
-    const vector = await getVector(source, sourceSettings, searchText, true, directories);
+    const vector = await getVector(source, sourceSettings, searchText, true, directories, request);
 
     const result = await store.queryItems(vector, topK);
     const filtered = result.filter(x => x.score >= threshold);
@@ -315,11 +351,12 @@ async function queryCollection(directories, collectionId, source, sourceSettings
  * @param {string} searchText - The text to search for
  * @param {number} topK - The number of results to return
  * @param {number} threshold - The threshold for the search
+ * @param {import('express').Request} [request] - Inspector-carrying request
  *
  * @returns {Promise<Record<string, { hashes: number[], metadata: object[] }>>} - The top K results from each collection
  */
-async function multiQueryCollection(directories, collectionIds, source, sourceSettings, searchText, topK, threshold) {
-    const vector = await getVector(source, sourceSettings, searchText, true, directories);
+async function multiQueryCollection(directories, collectionIds, source, sourceSettings, searchText, topK, threshold, request = null) {
+    const vector = await getVector(source, sourceSettings, searchText, true, directories, request);
     const results = [];
 
     for (const collectionId of collectionIds) {
@@ -384,8 +421,12 @@ async function regenerateCorruptedIndexErrorHandler(req, res, error) {
 export const router = express.Router();
 
 router.post('/query', async (req, res) => {
+    const source = String(req.body.source) || 'transformers';
+    const inspect = !LOCAL_ONLY_SOURCES.has(source);
+    if (inspect) startEmbeddingInspection(req, extractEmbeddingMeta('query', req.body));
     try {
         if (!req.body.collectionId || !req.body.searchText) {
+            if (inspect) failEmbeddingInspection(req, 'Missing collectionId or searchText', 400);
             return res.sendStatus(400);
         }
 
@@ -393,13 +434,31 @@ router.post('/query', async (req, res) => {
         const searchText = String(req.body.searchText);
         const topK = Number(req.body.topK) || 10;
         const threshold = Number(req.body.threshold) || 0.0;
-        const source = String(req.body.source) || 'transformers';
         const sourceSettings = getSourceSettings(source, req);
         const includeVectors = Boolean(req.body.includeVectors);
 
-        const results = await queryCollection(req.user.directories, collectionId, source, sourceSettings, searchText, topK, threshold, includeVectors);
+        const results = await queryCollection(req.user.directories, collectionId, source, sourceSettings, searchText, topK, threshold, includeVectors, inspect ? req : null);
+        if (inspect) {
+            // Store every returned hit verbatim; the UI folds each entry
+            // behind a <details> so we never pay DOM cost until the user
+            // expands it. Never truncate here — matches the chat inspector,
+            // which snapshots `fullMessages` and `wireRequest` untouched.
+            const hits = Array.isArray(results.metadata)
+                ? results.metadata.map(m => ({
+                    hash: m?.hash,
+                    score: m?.score,
+                    text: String(m?.text ?? ''),
+                }))
+                : [];
+            completeEmbeddingInspection(req, {
+                resultCount: Array.isArray(results.hashes) ? results.hashes.length : 0,
+                vectorDim: Array.isArray(results.queryVector) ? results.queryVector.length : null,
+                hits,
+            });
+        }
         return res.json(results);
     } catch (error) {
+        if (inspect) failEmbeddingInspection(req, error?.message || String(error), 500);
         return regenerateCorruptedIndexErrorHandler(req, res, error);
     }
 });
@@ -436,8 +495,12 @@ router.post('/query-by-vector', async (req, res) => {
 });
 
 router.post('/query-multi', async (req, res) => {
+    const source = String(req.body.source) || 'transformers';
+    const inspect = !LOCAL_ONLY_SOURCES.has(source);
+    if (inspect) startEmbeddingInspection(req, extractEmbeddingMeta('query-multi', req.body));
     try {
         if (!Array.isArray(req.body.collectionIds) || !req.body.searchText) {
+            if (inspect) failEmbeddingInspection(req, 'Missing collectionIds or searchText', 400);
             return res.sendStatus(400);
         }
 
@@ -445,19 +508,48 @@ router.post('/query-multi', async (req, res) => {
         const searchText = String(req.body.searchText);
         const topK = Number(req.body.topK) || 10;
         const threshold = Number(req.body.threshold) || 0.0;
-        const source = String(req.body.source) || 'transformers';
         const sourceSettings = getSourceSettings(source, req);
 
-        const results = await multiQueryCollection(req.user.directories, collectionIds, source, sourceSettings, searchText, topK, threshold);
+        const results = await multiQueryCollection(req.user.directories, collectionIds, source, sourceSettings, searchText, topK, threshold, inspect ? req : null);
+        if (inspect) {
+            // multiQueryCollection returns { [collectionId]: { hashes, metadata } };
+            // flatten across collections into a single hits list so the UI
+            // renders the full set behind foldable <details> without paging
+            // through per-collection buckets. No truncation — everything the
+            // upstream returned gets stored verbatim.
+            const flatHits = [];
+            let totalHits = 0;
+            for (const [cid, group] of Object.entries(results || {})) {
+                if (!Array.isArray(group?.metadata)) continue;
+                totalHits += group.metadata.length;
+                for (const m of group.metadata) {
+                    flatHits.push({
+                        collectionId: cid,
+                        hash: m?.hash,
+                        score: m?.score,
+                        text: String(m?.text ?? ''),
+                    });
+                }
+            }
+            completeEmbeddingInspection(req, {
+                resultCount: totalHits,
+                hits: flatHits,
+            });
+        }
         return res.json(results);
     } catch (error) {
+        if (inspect) failEmbeddingInspection(req, error?.message || String(error), 500);
         return regenerateCorruptedIndexErrorHandler(req, res, error);
     }
 });
 
 router.post('/rerank', async (req, res) => {
+    // Rerank goes exclusively to remote providers (cohere / jina / custom);
+    // no local-only source path exists, so inspection is unconditional.
+    startEmbeddingInspection(req, extractEmbeddingMeta('rerank', req.body));
     try {
         if (!req.body.query || !Array.isArray(req.body.documents)) {
+            failEmbeddingInspection(req, 'Missing query or documents', 400);
             return res.sendStatus(400);
         }
 
@@ -473,17 +565,34 @@ router.post('/rerank', async (req, res) => {
             ...credentials,
         };
 
-        const results = await rerank(source, rerankSettings, query, documents, topK, req.user.directories);
+        const results = await rerank(source, rerankSettings, query, documents, topK, req.user.directories, req);
+        const hits = Array.isArray(results)
+            ? results.map(r => ({
+                index: r?.index,
+                hash: r?.hash,
+                score: r?.relevance_score,
+                text: String(r?.text ?? ''),
+            }))
+            : [];
+        completeEmbeddingInspection(req, {
+            resultCount: Array.isArray(results) ? results.length : 0,
+            hits,
+        });
         return res.json(results);
     } catch (error) {
         console.error('Rerank failed:', error);
+        failEmbeddingInspection(req, error?.message || String(error), 500);
         return res.status(500).json({ error: error.message });
     }
 });
 
 router.post('/insert', async (req, res) => {
+    const source = String(req.body.source) || 'transformers';
+    const inspect = !LOCAL_ONLY_SOURCES.has(source);
+    if (inspect) startEmbeddingInspection(req, extractEmbeddingMeta('insert', req.body));
     try {
         if (!Array.isArray(req.body.items) || !req.body.collectionId) {
+            if (inspect) failEmbeddingInspection(req, 'Missing items or collectionId', 400);
             return res.sendStatus(400);
         }
 
@@ -494,12 +603,18 @@ router.post('/insert', async (req, res) => {
             index: x.index,
             ...(x.metadata && typeof x.metadata === 'object' && !Array.isArray(x.metadata) ? { metadata: x.metadata } : {}),
         }));
-        const source = String(req.body.source) || 'transformers';
         const sourceSettings = getSourceSettings(source, req);
 
-        await insertVectorItems(req.user.directories, collectionId, source, sourceSettings, items);
+        const insertResult = await insertVectorItems(req.user.directories, collectionId, source, sourceSettings, items, inspect ? req : null);
+        if (inspect) {
+            completeEmbeddingInspection(req, {
+                resultCount: insertResult?.insertedCount ?? items.length,
+                vectorDim: insertResult?.vectorDim ?? null,
+            });
+        }
         return res.sendStatus(200);
     } catch (error) {
+        if (inspect) failEmbeddingInspection(req, error?.message || String(error), 500);
         return regenerateCorruptedIndexErrorHandler(req, res, error);
     }
 });

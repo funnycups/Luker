@@ -3,6 +3,7 @@ import urlJoin from 'url-join';
 import { setAdditionalHeadersByType } from '../additional-headers.js';
 import { TEXTGEN_TYPES } from '../constants.js';
 import { trimV1 } from '../util.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from LlamaCpp
@@ -10,9 +11,10 @@ import { trimV1 } from '../util.js';
  * @param {string} apiUrl - The API URL
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings; may include `secretId`, `reverseProxy`, `proxyPassword`
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getLlamaCppBatchVector(texts, apiUrl, directories, sourceSettings = null) {
+export async function getLlamaCppBatchVector(texts, apiUrl, directories, sourceSettings = null, request = null) {
     const settings = sourceSettings || {};
     const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
     const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
@@ -30,13 +32,17 @@ export async function getLlamaCppBatchVector(texts, apiUrl, directories, sourceS
         setAdditionalHeadersByType(headers, TEXTGEN_TYPES.LLAMACPP, baseUrl, directories, secretId);
     }
 
+    const body = { input: texts };
+    const authForFingerprint = headers['Authorization'] || '';
+    if (request) attachInspectionEndpoint(request, url.toString(), String(authForFingerprint), body);
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             ...headers,
         },
-        body: JSON.stringify({ input: texts }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -64,9 +70,10 @@ export async function getLlamaCppBatchVector(texts, apiUrl, directories, sourceS
  * @param {string} apiUrl - The API URL
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getLlamaCppVector(text, apiUrl, directories, sourceSettings = null) {
-    const vectors = await getLlamaCppBatchVector([text], apiUrl, directories, sourceSettings);
+export async function getLlamaCppVector(text, apiUrl, directories, sourceSettings = null, request = null) {
+    const vectors = await getLlamaCppBatchVector([text], apiUrl, directories, sourceSettings, request);
     return vectors[0];
 }

@@ -3,6 +3,7 @@ import urlJoin from 'url-join';
 import { setAdditionalHeadersByType } from '../additional-headers.js';
 import { TEXTGEN_TYPES } from '../constants.js';
 import { trimV1 } from '../util.js';
+import { attachInspectionEndpoint } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from VLLM
@@ -11,9 +12,10 @@ import { trimV1 } from '../util.js';
  * @param {string} model - The model to use
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings; may include `secretId`, `reverseProxy`, `proxyPassword`
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
-export async function getVllmBatchVector(texts, apiUrl, model, directories, sourceSettings = null) {
+export async function getVllmBatchVector(texts, apiUrl, model, directories, sourceSettings = null, request = null) {
     const settings = sourceSettings || {};
     const reverseProxy = typeof settings.reverseProxy === 'string' ? settings.reverseProxy.trim() : '';
     const proxyPassword = typeof settings.proxyPassword === 'string' ? settings.proxyPassword : '';
@@ -31,13 +33,17 @@ export async function getVllmBatchVector(texts, apiUrl, model, directories, sour
         setAdditionalHeadersByType(headers, TEXTGEN_TYPES.VLLM, baseUrl, directories, secretId);
     }
 
+    const body = { input: texts, model };
+    const authForFingerprint = headers['Authorization'] || '';
+    if (request) attachInspectionEndpoint(request, url.toString(), String(authForFingerprint), body);
+
     const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             ...headers,
         },
-        body: JSON.stringify({ input: texts, model }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -66,9 +72,10 @@ export async function getVllmBatchVector(texts, apiUrl, model, directories, sour
  * @param {string} model - The model to use
  * @param {import('../users.js').UserDirectoryList} directories - The directories object for the user
  * @param {object} [sourceSettings] - Resolved source settings
+ * @param {import('express').Request} [request] - Inspector-carrying request
  * @returns {Promise<number[]>} - The vector for the text
  */
-export async function getVllmVector(text, apiUrl, model, directories, sourceSettings = null) {
-    const vectors = await getVllmBatchVector([text], apiUrl, model, directories, sourceSettings);
+export async function getVllmVector(text, apiUrl, model, directories, sourceSettings = null, request = null) {
+    const vectors = await getVllmBatchVector([text], apiUrl, model, directories, sourceSettings, request);
     return vectors[0];
 }
