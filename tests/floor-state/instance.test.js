@@ -253,6 +253,51 @@ describe('createFloorStateWithDeps — basic operations', () => {
         await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
         expect((await fs.get()).state).toEqual({ x: 1 });
     });
+
+    test('getLogSize reflects the number of persisted commits', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        // Fresh namespace: no log sidecar yet.
+        expect(await fs.getLogSize()).toBe(0);
+
+        await fs.patch([{ op: 'add', path: '/a', value: 1 }]);
+        expect(await fs.getLogSize()).toBe(1);
+
+        chatRef.value.push(msg(0));
+        await fs.patch([{ op: 'add', path: '/b', value: 2 }]);
+        expect(await fs.getLogSize()).toBe(2);
+    });
+
+    test('getLogSize returns 0 after destroy', async () => {
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await fs.patch([{ op: 'add', path: '/a', value: 1 }]);
+        expect(await fs.getLogSize()).toBe(1);
+        await fs.destroy();
+        expect(await fs.getLogSize()).toBe(0);
+    });
+
+    test('getLogSize survives replay-empty state (log has commits but chat empty)', async () => {
+        // Regression: the whole point of the accessor is to distinguish
+        // "log genuinely empty" from "replay projected empty against a
+        // transient chat state". Log size must reflect on-disk truth
+        // regardless of chat contents.
+        const chatRef = { value: [msg(0)] };
+        const { deps } = makeDeps(chatRef);
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+
+        await fs.patch([{ op: 'add', path: '/x', value: 1 }]);
+        expect(await fs.getLogSize()).toBe(1);
+
+        // Chat array cleared (e.g. mid-load) — replay would return {},
+        // but the log sidecar on disk is untouched.
+        chatRef.value = [];
+        expect(await fs.getLogSize()).toBe(1);
+    });
 });
 
 describe('event reactions', () => {

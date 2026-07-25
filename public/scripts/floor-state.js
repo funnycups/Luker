@@ -860,12 +860,35 @@ export function createFloorStateWithDeps(options, deps) {
         return makeStateOk();
     }
 
+    /**
+     * Read-only accessor: how many commits are currently persisted in the
+     * private log sidecar. Read failure or destroyed instance → 0.
+     *
+     * Consumers use this to distinguish "genuinely empty state" from
+     * "replay returned empty because chat state can't project the log"
+     * (e.g. chat array is empty mid-load, all commits skipped by
+     * shouldKeepCommit's swipeMap check). When log has commits but
+     * replay is empty, callers should preserve their cache rather than
+     * overwriting with an empty payload — otherwise a subsequent write
+     * would diff `realLog → empty` and persist a graph-wiping commit.
+     */
+    async function getLogSize() {
+        if (destroyed) return 0;
+        try {
+            const log = await readLog();
+            return Array.isArray(log?.commits) ? log.commits.length : 0;
+        } catch {
+            return 0;
+        }
+    }
+
     const instance = Object.freeze({
         namespace,
         patch,
         update,
         reset,
         get,
+        getLogSize,
         ready,
         destroy,
         // Internal handlers driven by floor-state.settle* — not for plugin use.
