@@ -1418,8 +1418,36 @@ async function replaceGraphLogForTarget(context, store, seq, floor) {
     }
 
     // floor resolved but patches empty — the store is genuinely empty.
-    // Clear the log to the empty baseline so a freshly-cleared chat doesn't
-    // keep stale commits on disk.
+    // Guard: if the log has commits on disk, an empty-store write here is
+    // almost certainly a bug (cache got poisoned to empty by a mid-load
+    // refresh where replay's swipeMap projection returned {}). Never
+    // silently `fs.reset([])` a non-empty log — force user acknowledgement,
+    // because a wipe is irreversible and there is no snapshot to fall back
+    // on (the log is the source of truth).
+    const currentLogSize = typeof fs.getLogSize === 'function' ? await fs.getLogSize() : 0;
+    if (currentLogSize > 0) {
+        const confirmed = await context.callGenericPopup(
+            i18nFormat(
+                'About to wipe memory graph for the current chat. The on-disk log has ${0} commit(s) but the in-memory graph is empty — this usually means the chat was still loading when a write was triggered, not that you asked to clear the graph. Continuing will permanently delete all recorded nodes and edges. Continue anyway?',
+                currentLogSize,
+            ),
+            context.POPUP_TYPE.CONFIRM,
+            '',
+            {
+                okButton: i18n('Wipe anyway'),
+                cancelButton: i18n('Cancel (recommended)'),
+            },
+        );
+        if (confirmed !== context.POPUP_RESULT.AFFIRMATIVE) {
+            return {
+                payload: finalPayload,
+                hasCommit: false,
+                skipped: true,
+                reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+                hint: 'user declined to wipe non-empty log with an empty store',
+            };
+        }
+    }
     const result = await fs.reset([]);
     return {
         payload: finalPayload,
@@ -14727,6 +14755,7 @@ async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
     // than overwriting with an empty store (which would visually erase
     // the user's data).
     let payload;
+    let logSize = 0;
     try {
         const fs = await getFloorStateInstance(runtimeContext);
         await fs.ready();
@@ -14737,9 +14766,33 @@ async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
             return memoryStoreCache.get(chatKey) || null;
         }
         payload = getResult.state;
+        // Look up the on-disk log size so we can distinguish "graph
+        // genuinely empty" from "replay projected empty against a
+        // transient chat state" (e.g. chat array still loading, or all
+        // commits skipped by the swipeMap projection). The latter must
+        // NOT overwrite the cache with an empty store — the next
+        // replaceGraphLogForTarget would see an empty in-memory graph
+        // and fs.reset([]) the log entirely.
+        if (typeof fs.getLogSize === 'function') {
+            logSize = await fs.getLogSize();
+        }
     } catch (error) {
         console.error(`[${MODULE_NAME}] floor-state get threw during cache refresh`, error);
         notifyError(i18nFormat('Memory graph load failed: ${0}', error?.message || error));
+        return memoryStoreCache.get(chatKey) || null;
+    }
+    // Guard: log has commits on disk but replay produced an empty
+    // payload. This is the "chat state can't project the log" case; the
+    // graph is not really empty. Preserve the existing cache and warn
+    // the user, so they don't Rebuild/Import over a live graph they
+    // still hold.
+    const payloadHasNoNodes = !payload || !payload.nodes || Object.keys(payload.nodes).length === 0;
+    if (logSize > 0 && payloadHasNoNodes) {
+        console.warn(`[${MODULE_NAME}] cache refresh: log has ${logSize} commits but replay is empty — preserving old cache to avoid wipe on next write`);
+        notifyError(i18nFormat(
+            'Memory graph replay projected empty against ${0} log commit(s) — chat likely still loading. Kept the previous graph in memory. Do NOT trigger Rebuild / Import / Vector recompute until the chat is fully loaded, or the graph may be wiped.',
+            logSize,
+        ));
         return memoryStoreCache.get(chatKey) || null;
     }
     let meta = null;
@@ -14753,6 +14806,19 @@ async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
     if (meta) setCachedMeta(chatKey, meta);
     const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta || getCachedMeta(chatKey));
     memoryStoreCache.set(chatKey, runtimeStore);
+    // Post-recovery notice: if the log is empty on disk but __meta
+    // records that extraction previously processed messages, the log
+    // was almost certainly wiped by a broken-log recovery cycle. Tell
+    // the user their history was quarantined to __orphans so they can
+    // Import a backup instead of assuming the empty graph is normal.
+    const effectiveMeta = meta || getCachedMeta(chatKey);
+    const seenSourceCount = Number(effectiveMeta?.sourceMessageCount || 0);
+    if (logSize === 0 && payloadHasNoNodes && Number.isFinite(seenSourceCount) && seenSourceCount > 0) {
+        notifyError(i18nFormat(
+            'Memory graph is empty but state records ${0} previously-processed message(s). The log was likely cleared by a recovery cycle; the pre-recovery log is preserved in the __orphans backup. Use Import to restore from a backup if you have one.',
+            seenSourceCount,
+        ));
+    }
     return runtimeStore;
 }
 

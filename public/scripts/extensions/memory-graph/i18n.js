@@ -217,6 +217,14 @@ export function registerLocaleData() {
         'Memory log corrupted after commit, please reload chat.': '提交后记忆日志损坏，请重新加载聊天。',
         'Memory graph log replay failed, data may be unrecoverable. Use Reset or Import to recover.': '记忆图日志回放失败，数据可能无法恢复。可使用「重置」或「导入」恢复。',
         'Memory graph load failed: ${0}': '记忆图加载失败：${0}',
+        'About to wipe memory graph for the current chat. The on-disk log has ${0} commit(s) but the in-memory graph is empty — this usually means the chat was still loading when a write was triggered, not that you asked to clear the graph. Continuing will permanently delete all recorded nodes and edges. Continue anyway?':
+            '即将清空当前聊天的记忆图。磁盘上的 log 有 ${0} 条 commit，但内存中的图为空——通常这是聊天尚未完全加载时触发了写入，不是你主动要求清空。继续会永久删除所有节点和边。是否继续？',
+        'Wipe anyway': '仍要清空',
+        'Cancel (recommended)': '取消（推荐）',
+        'Memory graph replay projected empty against ${0} log commit(s) — chat likely still loading. Kept the previous graph in memory. Do NOT trigger Rebuild / Import / Vector recompute until the chat is fully loaded, or the graph may be wiped.':
+            '记忆图回放结果为空，但 log 里有 ${0} 条 commit——聊天可能还在加载中。已保留内存中原有的图。请勿在聊天完全加载前触发「重建」/「导入」/「重算向量」，否则图可能被清空。',
+        'Memory graph is empty but state records ${0} previously-processed message(s). The log was likely cleared by a recovery cycle; the pre-recovery log is preserved in the __orphans backup. Use Import to restore from a backup if you have one.':
+            '记忆图当前为空，但状态记录显示曾处理过 ${0} 条消息。log 可能被自动恢复流程清空了，清空前的 log 保留在 __orphans 备份中。如果有备份，可以用「导入」恢复。',
         'Memory save skipped: ${0}': '记忆保存已跳过：${0}',
         'Failed to apply graph JSON: ${0}': '应用图 JSON 失败：${0}',
         'Memory graph reset incomplete: ${0}': '记忆图重置未完全完成：${0}',
@@ -734,6 +742,14 @@ export function registerLocaleData() {
         'Memory log corrupted after commit, please reload chat.': '提交後記憶日誌損毀，請重新載入聊天。',
         'Memory graph log replay failed, data may be unrecoverable. Use Reset or Import to recover.': '記憶圖日誌重播失敗，資料可能無法復原。可使用「重設」或「匯入」復原。',
         'Memory graph load failed: ${0}': '記憶圖載入失敗：${0}',
+        'About to wipe memory graph for the current chat. The on-disk log has ${0} commit(s) but the in-memory graph is empty — this usually means the chat was still loading when a write was triggered, not that you asked to clear the graph. Continuing will permanently delete all recorded nodes and edges. Continue anyway?':
+            '即將清空目前聊天的記憶圖。磁碟上的 log 有 ${0} 條 commit，但記憶體中的圖為空——通常這是聊天尚未完全載入時觸發了寫入，不是你主動要求清空。繼續會永久刪除所有節點和邊。是否繼續？',
+        'Wipe anyway': '仍要清空',
+        'Cancel (recommended)': '取消（建議）',
+        'Memory graph replay projected empty against ${0} log commit(s) — chat likely still loading. Kept the previous graph in memory. Do NOT trigger Rebuild / Import / Vector recompute until the chat is fully loaded, or the graph may be wiped.':
+            '記憶圖重播結果為空，但 log 裡有 ${0} 條 commit——聊天可能還在載入中。已保留記憶體中原有的圖。請勿在聊天完全載入前觸發「重建」/「匯入」/「重算向量」，否則圖可能被清空。',
+        'Memory graph is empty but state records ${0} previously-processed message(s). The log was likely cleared by a recovery cycle; the pre-recovery log is preserved in the __orphans backup. Use Import to restore from a backup if you have one.':
+            '記憶圖目前為空，但狀態記錄顯示曾處理過 ${0} 條訊息。log 可能被自動復原流程清空了，清空前的 log 保留在 __orphans 備份中。如果有備份，可以用「匯入」復原。',
         'Memory save skipped: ${0}': '記憶儲存已跳過：${0}',
         'Failed to apply graph JSON: ${0}': '套用圖 JSON 失敗：${0}',
         'Memory graph reset incomplete: ${0}': '記憶圖重設未完全完成：${0}',
