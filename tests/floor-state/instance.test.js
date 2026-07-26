@@ -132,8 +132,43 @@ const event_types = {
 };
 
 async function buildObjectPatchOperationsAsync(prev, next) {
-    const { compare } = await import('../../public/scripts/util/fast-json-patch.js');
-    return compare(prev ?? {}, next ?? {});
+    const { compare, applyPatch } = await import('../../public/scripts/util/fast-json-patch.js');
+    const operations = compare(prev ?? {}, next ?? {});
+    // Match production buildObjectPatchOperations (script.js:11514) which
+    // attaches a `test` op before each `replace`/`remove` so incremental
+    // patches assert the pre-op state and fail loudly on concurrent
+    // divergence. Without this the log's replay silently applies
+    // out-of-order patches on top of stale state — race scenarios that
+    // ought to crash replay just quietly produce garbage state instead.
+    const workingState = structuredClone(prev ?? {});
+    const guarded = [];
+    let lastTestedPath = null;
+    for (const op of operations) {
+        const isReplaceOrRemove = (op.op === 'replace' || op.op === 'remove')
+            && typeof op.path === 'string'
+            && op.path !== lastTestedPath;
+        if (isReplaceOrRemove) {
+            const parts = op.path.split('/').slice(1)
+                .map((seg) => seg.replace(/~1/g, '/').replace(/~0/g, '~'));
+            let cur = workingState;
+            let found = true;
+            for (const seg of parts) {
+                if (cur == null || typeof cur !== 'object' || !(seg in cur)) {
+                    found = false;
+                    break;
+                }
+                cur = cur[seg];
+            }
+            if (found) {
+                guarded.push({ op: 'test', path: op.path, value: structuredClone(cur) });
+                lastTestedPath = op.path;
+            }
+        }
+        guarded.push(op);
+        try { applyPatch(workingState, [op], false, true); } catch { /* keep list intact */ }
+        if (op.op === 'add' || op.op === 'remove') lastTestedPath = null;
+    }
+    return guarded;
 }
 
 function makeDeps(chatRef) {
@@ -1558,5 +1593,190 @@ describe('envelope shape', () => {
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
         const result = await fs.get();
         expect(result).toEqual({ ok: true, state: null });
+    });
+});
+
+describe('concurrency: all write ops must serialize', () => {
+    // The `update()` internal `updateQueue` only serializes fellow `update()`
+    // calls. Historically, `patch()`, `reset()`, `handleMessageDeleted`,
+    // `handleSwipeDeleted`, `handleBranchCreated` all wrote the log without
+    // going through that queue, so any concurrent `update()` in flight would
+    // race with them — the update's `test` ops (built against a
+    // pre-race base state) end up appended after the log was reshaped by
+    // the racing write, and replay throws on the stale test. The recovery
+    // path then truncates the whole broken floor to `__orphans`, wiping
+    // real user data.
+    //
+    // Contract these tests enforce: any second write must observe the first
+    // write's fully-persisted log, not a mid-write intermediate. Manifested
+    // as: no `__orphans` sidecar (no recovery ever triggered) and the final
+    // log's replay produces a coherent state.
+
+    function stallFirstLogWrite(base) {
+        let releaseAppend;
+        let stallCount = 0;
+        const block = new Promise((r) => { releaseAppend = r; });
+        const stallingUpdate = async (ns, updater, options) => {
+            if (ns === 'foo__floor_log' && stallCount === 0) {
+                stallCount++;
+                await block;
+            }
+            return base.deps.updateChatState(ns, updater, options);
+        };
+        return { stallingUpdate, releaseAppend: () => releaseAppend() };
+    }
+
+    test('fs.update × fs.reset — reset must wait for stalled update', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const base = makeDeps(chatRef);
+        // Seed one commit so fs.update generates test ops against known state.
+        base.store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [{ floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/counter', value: 5 }] }],
+        });
+
+        const { stallingUpdate, releaseAppend } = stallFirstLogWrite(base);
+        const deps = { ...base.deps, updateChatState: stallingUpdate };
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        const updatePromise = fs.update(
+            (curr) => ({ ...curr, counter: (curr?.counter ?? 0) + 1 }),
+            { floor: 2 },
+        );
+        await flush();
+        const resetPromise = fs.reset([
+            { floor: 2, swipeId: 0, patches: [{ op: 'add', path: '/reset_baseline', value: true }] },
+        ]);
+        await flush();
+
+        releaseAppend();
+        await Promise.all([updatePromise, resetPromise]);
+        await fs.ready();
+
+        // Trigger replay so any broken-commit would surface + write __orphans.
+        const getResult = await fs.get();
+        expect(getResult.ok).toBe(true);
+        expect(base.store._raw.get('foo__orphans')).toBeUndefined();
+    });
+
+    test('fs.update × handleMessageDeleted — truncate must wait for stalled update', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const base = makeDeps(chatRef);
+        base.store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [{ floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/counter', value: 5 }] }],
+        });
+
+        const { stallingUpdate, releaseAppend } = stallFirstLogWrite(base);
+        const deps = { ...base.deps, updateChatState: stallingUpdate };
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        base.eventSource._bindInstance(fs);
+        await fs.ready();
+
+        // Update targets floor 2 (test /counter === 5 → replace 6).
+        const updatePromise = fs.update(
+            (curr) => ({ ...curr, counter: (curr?.counter ?? 0) + 1 }),
+            { floor: 2 },
+        );
+        await flush();
+
+        // Simulate "all messages deleted" mid-flight. Keep chatRef.value at
+        // length 3 so the update's { floor: 2 } stays in range; the event's
+        // newChatLength=0 is what handleMessageDeleted uses for truncation.
+        const deletePromise = base.eventSource.emit(event_types.MESSAGE_DELETED, 0);
+        await flush();
+
+        releaseAppend();
+        await Promise.all([updatePromise, deletePromise]);
+        await fs.ready();
+
+        const getResult = await fs.get();
+        expect(getResult.ok).toBe(true);
+        expect(base.store._raw.get('foo__orphans')).toBeUndefined();
+    });
+
+    test('fs.update × fs.patch (direct) — patch must wait for stalled update', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const base = makeDeps(chatRef);
+        base.store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [{ floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/counter', value: 5 }] }],
+        });
+
+        const { stallingUpdate, releaseAppend } = stallFirstLogWrite(base);
+        const deps = { ...base.deps, updateChatState: stallingUpdate };
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        // Update: read {counter:5} → reducer {counter:6} → attach-tests wraps
+        // to [test /counter 5, replace 6]
+        const updatePromise = fs.update(
+            (curr) => ({ ...curr, counter: (curr?.counter ?? 0) + 1 }),
+            { floor: 2 },
+        );
+        await flush();
+
+        // Concurrent direct patch. Uses a bare `add` (no test) so the caller
+        // isn't asserting a stale prev value — the point of this test is that
+        // the patch must observe the update's committed state, not race with
+        // its in-flight write.
+        const patchPromise = fs.patch(
+            [{ op: 'add', path: '/other', value: 'from_patch' }],
+            { floor: 2 },
+        );
+        await flush();
+
+        releaseAppend();
+        await Promise.all([updatePromise, patchPromise]);
+        await fs.ready();
+
+        const getResult = await fs.get();
+        expect(getResult.ok).toBe(true);
+        expect(base.store._raw.get('foo__orphans')).toBeUndefined();
+        // Both writes must have landed cleanly.
+        expect(getResult.state).toEqual({ counter: 6, other: 'from_patch' });
+    });
+
+    test('fs.reset × handleSwipeDeleted — swipe cleanup must wait for stalled reset', async () => {
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const base = makeDeps(chatRef);
+        base.store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+                { floor: 2, swipeId: 1, patches: [{ op: 'add', path: '/b', value: 2 }] },
+            ],
+        });
+
+        const { stallingUpdate, releaseAppend } = stallFirstLogWrite(base);
+        const deps = { ...base.deps, updateChatState: stallingUpdate };
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        base.eventSource._bindInstance(fs);
+        await fs.ready();
+
+        // Reset: overwrite log with a fresh baseline — will stall.
+        const resetPromise = fs.reset([
+            { floor: 2, swipeId: 0, patches: [{ op: 'add', path: '/baseline', value: 'reset' }] },
+        ]);
+        await flush();
+
+        // Concurrent swipe delete for the pre-reset log's floor-2 swipe-1 commit.
+        const swipePromise = base.eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId: 2, swipeId: 1 });
+        await flush();
+
+        releaseAppend();
+        await Promise.all([resetPromise, swipePromise]);
+        await fs.ready();
+
+        // Serialization contract: after both writes complete, the log must
+        // contain exactly the reset baseline. If they raced, the swipe cleanup
+        // would have read the pre-reset log, filtered out the floor-2 swipe-1
+        // commit, and written a filtered-but-stale log which either clobbers
+        // or is clobbered by the reset — either way the final log won't be
+        // just the reset baseline.
+        const finalLog = base.store._raw.get('foo__floor_log');
+        expect(finalLog.commits).toHaveLength(1);
+        expect(finalLog.commits[0].patches[0].path).toBe('/baseline');
     });
 });

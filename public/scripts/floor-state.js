@@ -213,15 +213,34 @@ export function createFloorStateWithDeps(options, deps) {
     let cachedReplay = CACHE_UNSET;
     let migrationDone = false;
     let migrationPromise = null;
-    // Serialize update() so each (get → reducer → diff → patch) sequence
-    // runs to completion before the next starts. Without this, two concurrent
-    // updates would both read the same materialized state, each compute a
-    // diff against it, and write two commits whose RFC 6902 `test` ops both
-    // assert the same prev value — the second commit's chain is invalid and
-    // a subsequent replay throws. Director sub-agent tool calls hit this in
-    // practice; the resulting broken log can only be recovered via the
-    // data-namespace migration path.
+    // Serialize every write op — update / patch / reset / handleMessageDeleted
+    // / handleSwipeDeleted / handleBranchCreated — so no two writes can
+    // observe an intermediate log state.
+    //
+    // Update alone was not enough: patch(), reset(), and the structural-event
+    // handlers all called runtime.updateChatState directly, so an in-flight
+    // update()'s (get → reducer → diff → patch) window overlapped with any of
+    // them. The update's precomputed test ops were built against the
+    // pre-race state; when reset / handleXxx reshaped the log first, the
+    // test ops appended after that reshape asserted values that no longer
+    // held, and replay threw. Recovery then truncated the whole broken floor
+    // to __orphans, wiping real user data. Symptom seen in production: two
+    // sibling commits on the same floor both asserting `test /nodeSeq === N`,
+    // one committing to the reshaped state and one to the pre-reshape state.
+    //
+    // The queue is a single-slot mutex: every public write enqueues an async
+    // task that runs after the previous slot resolves (success or failure).
+    // update() runs its (get → reducer → diff → patch) sequence inside its
+    // own queue slot; the patch step calls patchImpl() directly so it does
+    // not re-enqueue and deadlock. Same shape applies to reset/handleXxx —
+    // each has a public wrapper that enqueues around an internal `*Impl` fn.
     let updateQueue = Promise.resolve();
+
+    function enqueueWrite(run) {
+        const queued = updateQueue.then(run, run);
+        updateQueue = queued.catch(() => {});
+        return queued;
+    }
 
     function invalidateCache() {
         cachedReplay = CACHE_UNSET;
@@ -315,53 +334,64 @@ export function createFloorStateWithDeps(options, deps) {
 
     /**
      * Truncate commits at floor >= newChatLength, then invalidate the cache.
+     *
+     * Enqueued through `updateQueue` so it can't observe / clobber an
+     * in-flight update/patch/reset — same contract as every other write.
      */
     async function handleMessageDeleted(newChatLength) {
         if (destroyed) return;
-        beginPending();
-        try {
-            const log = await readLog();
-            const survivors = truncateCommits(log.commits, Number(newChatLength));
-            if (survivors.length !== log.commits.length) {
-                const writeResult = await writeLog({ version: LOG_VERSION, commits: survivors });
-                if (!writeResult.ok) {
-                    console.warn(`[floor-state:${namespace}] truncate write failed (${writeResult.reason}): ${writeResult.hint}`);
-                    return; // stale cache matches stale log on disk
+        return enqueueWrite(async () => {
+            if (destroyed) return;
+            beginPending();
+            try {
+                const log = await readLog();
+                const survivors = truncateCommits(log.commits, Number(newChatLength));
+                if (survivors.length !== log.commits.length) {
+                    const writeResult = await writeLog({ version: LOG_VERSION, commits: survivors });
+                    if (!writeResult.ok) {
+                        console.warn(`[floor-state:${namespace}] truncate write failed (${writeResult.reason}): ${writeResult.hint}`);
+                        return; // stale cache matches stale log on disk
+                    }
                 }
+                invalidateCache();
+            } catch (error) {
+                console.warn(`[floor-state:${namespace}] truncate failed`, error);
+            } finally {
+                endPending();
             }
-            invalidateCache();
-        } catch (error) {
-            console.warn(`[floor-state:${namespace}] truncate failed`, error);
-        } finally {
-            endPending();
-        }
+        });
     }
 
     /**
      * Drop deleted swipe and shift higher swipeIds down on that floor.
+     *
+     * Enqueued through `updateQueue`; see handleMessageDeleted note.
      */
     async function handleSwipeDeleted(payload) {
         if (destroyed) return;
         const messageId = Number(payload?.messageId);
         const swipeId = Number(payload?.swipeId);
         if (!Number.isInteger(messageId) || !Number.isInteger(swipeId)) return;
-        beginPending();
-        try {
-            const log = await readLog();
-            const next = removeSwipeFromCommits(log.commits, messageId, swipeId);
-            if (next.length !== log.commits.length || next.some((c, i) => c !== log.commits[i])) {
-                const writeResult = await writeLog({ version: LOG_VERSION, commits: next });
-                if (!writeResult.ok) {
-                    console.warn(`[floor-state:${namespace}] swipe-delete write failed (${writeResult.reason}): ${writeResult.hint}`);
-                    return; // stale cache matches stale log on disk
+        return enqueueWrite(async () => {
+            if (destroyed) return;
+            beginPending();
+            try {
+                const log = await readLog();
+                const next = removeSwipeFromCommits(log.commits, messageId, swipeId);
+                if (next.length !== log.commits.length || next.some((c, i) => c !== log.commits[i])) {
+                    const writeResult = await writeLog({ version: LOG_VERSION, commits: next });
+                    if (!writeResult.ok) {
+                        console.warn(`[floor-state:${namespace}] swipe-delete write failed (${writeResult.reason}): ${writeResult.hint}`);
+                        return; // stale cache matches stale log on disk
+                    }
                 }
+                invalidateCache();
+            } catch (error) {
+                console.warn(`[floor-state:${namespace}] swipe-delete failed`, error);
+            } finally {
+                endPending();
             }
-            invalidateCache();
-        } catch (error) {
-            console.warn(`[floor-state:${namespace}] swipe-delete failed`, error);
-        } finally {
-            endPending();
-        }
+        });
     }
 
     /**
@@ -384,24 +414,27 @@ export function createFloorStateWithDeps(options, deps) {
         if (!sourceTarget || typeof sourceTarget !== 'object') return;
         if (!targetTarget || typeof targetTarget !== 'object') return;
         if (!Number.isInteger(mesId) || mesId < 0) return;
-        try {
-            const sourceResult = await runtime.getChatState(logNamespace, { target: sourceTarget });
-            const raw = sourceResult?.ok ? sourceResult.state : null;
-            const sourceLog = normalizeLog(raw);
-            const survivors = truncateCommits(sourceLog.commits, mesId + 1);
-            if (survivors.length === 0) return;
-            const result = await runtime.updateChatState(
-                logNamespace,
-                () => ({ version: LOG_VERSION, commits: survivors }),
-                { target: targetTarget },
-            );
-            if (!result || result.ok === false) {
-                const hint = logWriteFailedHint(namespace, result?.hint);
-                console.warn(`[floor-state:${namespace}] branch inheritance write failed (${STATE_ERROR_REASONS.LOG_WRITE_FAILED}): ${hint}`);
+        return enqueueWrite(async () => {
+            if (destroyed) return;
+            try {
+                const sourceResult = await runtime.getChatState(logNamespace, { target: sourceTarget });
+                const raw = sourceResult?.ok ? sourceResult.state : null;
+                const sourceLog = normalizeLog(raw);
+                const survivors = truncateCommits(sourceLog.commits, mesId + 1);
+                if (survivors.length === 0) return;
+                const result = await runtime.updateChatState(
+                    logNamespace,
+                    () => ({ version: LOG_VERSION, commits: survivors }),
+                    { target: targetTarget },
+                );
+                if (!result || result.ok === false) {
+                    const hint = logWriteFailedHint(namespace, result?.hint);
+                    console.warn(`[floor-state:${namespace}] branch inheritance write failed (${STATE_ERROR_REASONS.LOG_WRITE_FAILED}): ${hint}`);
+                }
+            } catch (error) {
+                console.warn(`[floor-state:${namespace}] branch inheritance failed`, error);
             }
-        } catch (error) {
-            console.warn(`[floor-state:${namespace}] branch inheritance failed`, error);
-        }
+        });
     }
 
     // --- structural-event handlers (driven by core via settle* exports) ---
@@ -464,7 +497,29 @@ export function createFloorStateWithDeps(options, deps) {
         if (operations.length === 0) {
             return makeStateOk({ updated: false });
         }
+        return enqueueWrite(async () => {
+            if (destroyed) {
+                return makeStateError(STATE_ERROR_REASONS.INSTANCE_DESTROYED,
+                    `floor-state instance for namespace=${namespace} was destroyed`);
+            }
+            return patchImpl(operations, options);
+        });
+    }
 
+    /**
+     * Internal patch impl. Callers MUST already hold the updateQueue slot
+     * (either via `patch()`'s enqueue wrapper or `update()`'s enqueued
+     * run block). This is why `run` inside `update()` calls `patchImpl`
+     * rather than `patch` — re-enqueueing from inside the queued task
+     * would deadlock (Promise chain never resolves because the outer task
+     * is waiting on the inner enqueue slot, which waits on the outer task).
+     *
+     * Reads chat/log inline so target resolution and monotonicity checks
+     * observe queue-coherent state. Callers that computed target off a
+     * stale snapshot would otherwise land patches whose floor is below
+     * the log tail written by an earlier queued op.
+     */
+    async function patchImpl(operations, options) {
         const hasOverride = options !== null && options !== undefined
             && typeof options === 'object'
             && options.floor !== undefined && options.floor !== null;
@@ -536,8 +591,11 @@ export function createFloorStateWithDeps(options, deps) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
                 `updater must be a function (got: ${typeof reducer})`);
         }
-
-        const run = async () => {
+        return enqueueWrite(async () => {
+            if (destroyed) {
+                return makeStateError(STATE_ERROR_REASONS.INSTANCE_DESTROYED,
+                    `floor-state instance for namespace=${namespace} was destroyed`);
+            }
             const readResult = await get();
             if (!readResult.ok) return readResult;
             const current = readResult.state ?? {};
@@ -557,11 +615,10 @@ export function createFloorStateWithDeps(options, deps) {
             if (!Array.isArray(operations) || operations.length === 0) {
                 return makeStateOk({ updated: false });
             }
-            return patch(operations, options);
-        };
-        const queued = updateQueue.then(run, run);
-        updateQueue = queued.catch(() => {});
-        return queued;
+            // Call patchImpl directly — we already own the queue slot; going
+            // through patch() would re-enqueue and deadlock.
+            return patchImpl(operations, options);
+        });
     }
 
     /**
@@ -589,28 +646,34 @@ export function createFloorStateWithDeps(options, deps) {
         if (!Array.isArray(commits)) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'commits must be an array');
         }
-        const chat = runtime.getChat();
-        const chatLen = Array.isArray(chat) ? chat.length : 0;
-        for (let i = 0; i < commits.length; i++) {
-            const commit = commits[i];
-            if (!isValidCommit(commit)) {
-                return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
-                    `commit #${i}: malformed`);
+        return enqueueWrite(async () => {
+            if (destroyed) {
+                return makeStateError(STATE_ERROR_REASONS.INSTANCE_DESTROYED,
+                    `floor-state instance for namespace=${namespace} was destroyed`);
             }
-            if (commit.floor >= chatLen) {
-                return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
-                    `commit #${i}: floor=${commit.floor} out of range (chat.length=${chatLen})`);
+            const chat = runtime.getChat();
+            const chatLen = Array.isArray(chat) ? chat.length : 0;
+            for (let i = 0; i < commits.length; i++) {
+                const commit = commits[i];
+                if (!isValidCommit(commit)) {
+                    return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
+                        `commit #${i}: malformed`);
+                }
+                if (commit.floor >= chatLen) {
+                    return makeStateError(STATE_ERROR_REASONS.VALIDATION_COMMIT,
+                        `commit #${i}: floor=${commit.floor} out of range (chat.length=${chatLen})`);
+                }
             }
-        }
-        beginPending();
-        try {
-            const writeResult = await writeLog({ version: LOG_VERSION, commits });
-            if (!writeResult.ok) return writeResult;
-            invalidateCache();
-            return makeStateOk({ updated: true });
-        } finally {
-            endPending();
-        }
+            beginPending();
+            try {
+                const writeResult = await writeLog({ version: LOG_VERSION, commits });
+                if (!writeResult.ok) return writeResult;
+                invalidateCache();
+                return makeStateOk({ updated: true });
+            } finally {
+                endPending();
+            }
+        });
     }
 
     /**
