@@ -208,11 +208,21 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
 
     const state = ensureVectorIndexState(store);
     const collectionId = buildCollectionId(chatId);
-    const configChanged = state.source !== profile.source
-        || state.model !== (profile.model || '')
-        || state.collectionId !== collectionId;
+    const sourceDiff = state.source !== profile.source;
+    const modelDiff = state.model !== (profile.model || '');
+    const collectionDiff = state.collectionId !== collectionId;
+    const configChanged = sourceDiff || modelDiff || collectionDiff;
 
     if (purge || force || configChanged || state.dirty) {
+        const wipeReason = [
+            purge && 'purge',
+            force && 'force',
+            state.dirty && 'dirty',
+            sourceDiff && `source ${JSON.stringify(state.source)}→${JSON.stringify(profile.source)}`,
+            modelDiff && `model ${JSON.stringify(state.model)}→${JSON.stringify(profile.model || '')}`,
+            collectionDiff && `collection ${JSON.stringify(state.collectionId)}→${JSON.stringify(collectionId)}`,
+        ].filter(Boolean).join(', ');
+        console.warn(`[memory-graph/vector-index] full re-index: ${wipeReason} (had ${Object.keys(state.nodeToHash).length} indexed)`);
         await purgeVectorCollection(collectionId, signal);
         state.source = profile.source;
         state.model = profile.model || '';
@@ -264,8 +274,14 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
         }
     }
 
+    const insertedCount = plan.toInsert.length - failedNodeIds.length;
+    if (insertedCount > 0 || plan.toDelete.length > 0) {
+        const failedNote = failedNodeIds.length > 0 ? `, ${failedNodeIds.length} failed` : '';
+        console.log(`[memory-graph/vector-index] sync ${chatId}: +${insertedCount} -${plan.toDelete.length}${failedNote}, indexed=${Object.keys(state.nodeToHash).length}`);
+    }
+
     return {
-        insertedCount: plan.toInsert.length - failedNodeIds.length,
+        insertedCount,
         deletedCount: plan.toDelete.length,
         stats: plan.stats,
         failedNodeIds,
