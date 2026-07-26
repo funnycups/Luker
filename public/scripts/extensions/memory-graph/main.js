@@ -8102,11 +8102,14 @@ async function injectMemoryPrompts(context, payload) {
             // the freshly-built hash map would only live in memoryStoreCache
             // and the next refreshMemoryStoreCacheFromFloorState would wipe
             // it — forcing a re-embed on every chat reload.
-            try {
-                await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
-            } catch (persistError) {
-                console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after RAG-recall lazy sync`, persistError);
-            }
+            //
+            // No try/catch: silently warning here was the reason RAG chats
+            // re-embedded the full corpus every recall. If the persist
+            // fails, let injectMemoryPrompts' outer catch surface it as a
+            // "Recall injection failed" notice so the user can act on the
+            // real failure (auth, disk, target changed) instead of paying
+            // the full-corpus cost on every subsequent turn.
+            await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
         }
 
         let rewrittenQuery = null;
