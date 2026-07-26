@@ -495,13 +495,24 @@ let activeRecallToast = null;
 let activePersistentRuntimeNoticeToast = null;
 let activeRecallAbortController = null;
 let activeExtractionAbortController = null;
+// Scope of the in-flight scheduled extraction pass, keyed to
+// `activeExtractionAbortController`. Only `runScheduledExtractionPass`
+// populates it; fill / rebuild / rebuild_recent / compression passes
+// leave it null so `applyMutationInvalidationImpl` falls back to the
+// unconditional-abort branch for them.
+//   beginSeq:     preview.beginSeq at pass launch (immutable)
+//   latestSeq:    upper bound the loop actually respects; may be shrunk
+//                 by `applyMutationInvalidationImpl` when a mutation
+//                 lands inside the not-yet-committed tail
+//   committedSeq: highest endSeq that has been fully committed
+//                 (batch commit + compression commit both bump it)
+let activeExtractionScope = null;
 let activeRecallRunToken = 0;
 let nextActiveRecallRequestId = 0;
 const activeRecallRequestStates = new Map();
 let cytoscapeLoadPromise = null;
 let lastKnownChatKey = '';
 let latestRecallSnapshot = null;
-let generationInProgress = false;
 let generationVisibleHistoryRegexProvider = null;
 
 // Pending mutation-invalidation chain. Lives at module scope so the
@@ -5768,6 +5779,7 @@ async function runExtractionForStore(context, store, {
     onBatchApplied = null,
     onCompressionApplied = null,
     rebuildCreateOnly = false,
+    getEffectiveLatestSeq = null,
 } = {}) {
     const settings = getEffectiveSettings(context, getSettings());
     const window = computeExtractionWindow(context, store, startSeq, settings);
@@ -5820,12 +5832,25 @@ async function runExtractionForStore(context, store, {
     const historyChatKey = String(getChatKey(context) || '').trim();
     let extractedAny = false;
     let processedSeqTo = coveredSeqTo;
-    for (let i = beginSeq - 1; i < latestSeq; i += extractBatchTurns) {
+    for (let i = beginSeq - 1; ; i += extractBatchTurns) {
         if (isAbortSignalLike(abortSignal) && abortSignal.aborted) {
             throw new DOMException('Memory extraction aborted.', 'AbortError');
         }
+        // Re-read the effective upper bound every batch so external
+        // signals (currently `activeExtractionScope.latestSeq` shrunk
+        // by `applyMutationInvalidationImpl`) let the loop wind down
+        // gracefully instead of only responding to abort. Never lets
+        // it exceed the launch-time physical bound because `frames`
+        // is a snapshot from that moment; growing beyond it would
+        // dereference undefined frames.
+        const currentLatest = typeof getEffectiveLatestSeq === 'function'
+            ? Math.min(latestSeq, Math.max(0, Math.floor(Number(getEffectiveLatestSeq()) || 0)))
+            : latestSeq;
+        if (i >= currentLatest) {
+            break;
+        }
         const batchStartIndex = i;
-        const batchEndIndex = Math.min(latestSeq - 1, i + extractBatchTurns - 1);
+        const batchEndIndex = Math.min(currentLatest - 1, i + extractBatchTurns - 1);
         const startFrame = frames[batchStartIndex];
         const endFrame = frames[batchEndIndex];
         if (typeof onBatchStart === 'function') {
@@ -8389,6 +8414,16 @@ async function runScheduledExtractionPass(chatKey) {
         }
         const workingStore = normalizeStoreForRuntime(store);
         let committedStore = normalizeStoreForRuntime(store);
+        // Publish the pass's scope so `applyMutationInvalidationImpl`
+        // can decide per-mutation whether to abort, shrink the tail, or
+        // leave the pass alone. Stays live for the whole
+        // runExtractionForStore call and is cleared in the outer
+        // `finally` alongside `activeExtractionAbortController`.
+        activeExtractionScope = {
+            beginSeq: Number(preview.beginSeq || 0),
+            latestSeq: Number(preview.latestSeq || 0),
+            committedSeq: Number(preview.beginSeq || 0) - 1,
+        };
         const extractBatchTurns = Math.max(
             1,
             Math.floor(Number(settings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
@@ -8415,6 +8450,7 @@ async function runScheduledExtractionPass(chatKey) {
         // for the failure mode this avoids).
         await runExtractionForStore(runtimeContext, workingStore, {
             abortSignal: extractionAbortController.signal,
+            getEffectiveLatestSeq: () => activeExtractionScope?.latestSeq ?? Number(preview.latestSeq || 0),
             onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
                 updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
             },
@@ -8428,6 +8464,12 @@ async function runScheduledExtractionPass(chatKey) {
                     { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
                 );
                 committedStore = batchResult.store;
+                if (activeExtractionScope) {
+                    activeExtractionScope.committedSeq = Math.max(
+                        activeExtractionScope.committedSeq,
+                        Number(endSeq || 0),
+                    );
+                }
             },
             onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
                 const compactionResult = await commitMemoryStoreDiffByChatKey(
@@ -8439,6 +8481,12 @@ async function runScheduledExtractionPass(chatKey) {
                     { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, batchEndSeq) },
                 );
                 committedStore = compactionResult.store;
+                if (activeExtractionScope) {
+                    activeExtractionScope.committedSeq = Math.max(
+                        activeExtractionScope.committedSeq,
+                        Number(batchEndSeq || 0),
+                    );
+                }
             },
         });
         const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
@@ -8506,6 +8554,7 @@ async function runScheduledExtractionPass(chatKey) {
     } finally {
         if (activeExtractionAbortController === extractionAbortController) {
             activeExtractionAbortController = null;
+            activeExtractionScope = null;
         }
         clearRuntimeInfoToast('extraction');
     }
@@ -14956,7 +15005,7 @@ async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
  * `eventSource.emit`), so `refreshMemoryStoreCacheFromFloorState` replays
  * the post-truncate / post-swipe log.
  */
-async function applyMutationInvalidationImpl(fromSeq = null, { scheduleReplay = false } = {}) {
+async function applyMutationInvalidationImpl(fromSeq = null, { scheduleReplay = false, kind = 'delete' } = {}) {
     const liveContext = getContext();
     const chatKey = getChatKey(liveContext);
     if (!chatKey || chatKey === 'invalid_target') {
@@ -14971,15 +15020,52 @@ async function applyMutationInvalidationImpl(fromSeq = null, { scheduleReplay = 
     if (!preserveLatestRecallSnapshot) {
         latestRecallSnapshot = null;
     }
+    // The scheduled-extraction debounce timer holds a pass that hasn't
+    // started yet; it's targeting the pre-mutation chat shape, drop it.
+    // The rerun branch at the end re-arms one if this mutation warrants
+    // fresh work.
     if (extractionTimers.has(chatKey)) {
         clearTimeout(extractionTimers.get(chatKey));
         extractionTimers.delete(chatKey);
     }
+    // Classify how the mutation intersects the in-flight scheduled
+    // pass. Fill / rebuild / rebuild_recent / compression passes leave
+    // activeExtractionScope null; those get the conservative abort path.
+    //
+    //   noop:                fromSeq > scope.latestSeq — pass hasn't
+    //                        reached the affected region, let it run.
+    //   shrink:              committed < fromSeq <= latestSeq — the
+    //                        not-yet-committed tail is now stale; lower
+    //                        latestSeq so the loop winds down at
+    //                        fromSeq - 1 on its next batch check.
+    //   abort_committed_hit: fromSeq <= committed — already-committed
+    //                        work covers the affected region; abort and
+    //                        let the store refresh below re-materialize
+    //                        from the (core-settled) floor-state log.
+    //   abort_no_metadata:   no scope or no fromSeq; conservative abort
+    //                        preserves the pre-refactor behaviour.
     if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
-        if (isCurrentChat) {
-            clearRuntimeInfoToast('extraction');
+        const scope = activeExtractionScope;
+        let decision;
+        if (normalizedFromSeq === null || !scope) {
+            decision = 'abort_no_metadata';
+        } else if (normalizedFromSeq <= scope.committedSeq) {
+            decision = 'abort_committed_hit';
+        } else if (normalizedFromSeq <= scope.latestSeq) {
+            decision = 'shrink';
+        } else {
+            decision = 'noop';
         }
-        activeExtractionAbortController.abort();
+        if (decision === 'abort_no_metadata' || decision === 'abort_committed_hit') {
+            if (isCurrentChat) {
+                clearRuntimeInfoToast('extraction');
+            }
+            activeExtractionAbortController.abort();
+        } else if (decision === 'shrink') {
+            scope.latestSeq = normalizedFromSeq - 1;
+            // Keep the toast — the pass is winding down, not being killed.
+        }
+        // decision === 'noop' → leave the pass entirely alone.
     }
     let store = null;
     try {
@@ -15014,7 +15100,18 @@ async function applyMutationInvalidationImpl(fromSeq = null, { scheduleReplay = 
         }
     }
     refreshUiStats();
-    if (scheduleReplay && isCurrentChat && !generationInProgress) {
+    // Only 'refresh' kinds (swipe / continue / append / appendfinal)
+    // create new content that must be re-extracted; 'delete' just trims
+    // and produces nothing new.
+    //
+    // No generationInProgress gate: MESSAGE_RECEIVED / MESSAGE_SWIPED
+    // fire after the message body is persisted, so a fresh pass reading
+    // the live chat sees the new content immediately. Gating on
+    // generationInProgress here would defer refresh reruns to
+    // GENERATION_ENDED's abortedByUser path, which returns early and
+    // drops the rerun whenever streamingProcessor's abort signal is
+    // dirty from a prior turn.
+    if (scheduleReplay && isCurrentChat && kind === 'refresh') {
         scheduleExtraction(getContext());
     }
 }
@@ -15052,9 +15149,16 @@ function applyMutationInvalidation(fromSeq = null, opts = {}) {
 // returns immediately, and the heavy chain runs in the background.
 // Readers that depend on a settled post-mutation state still gate on
 // `pendingMutationInvalidation` — see `_handleWiBeforeScan` below.
-function scheduleMutationInvalidation(fromSeq) {
+//
+// `kind` distinguishes the two shapes of mutation:
+//   'delete':  fromSeq and everything after it disappeared. Nothing new
+//              to extract; only need to trim / abort in-flight work.
+//   'refresh': fromSeq's content changed in place (swipe / continue /
+//              append / appendfinal). That seq needs to be re-extracted
+//              against the new text, so we also flag a rerun.
+function scheduleMutationInvalidation(fromSeq, kind = 'delete') {
     queueMicrotask(() => {
-        applyMutationInvalidation(fromSeq, { scheduleReplay: true })
+        applyMutationInvalidation(fromSeq, { scheduleReplay: true, kind })
             .catch(error => {
                 console.error(`[${MODULE_NAME}] applyMutationInvalidation failed`, error);
             });
@@ -15290,14 +15394,8 @@ jQuery(() => {
             console.warn(`[${MODULE_NAME}] Failed to clear runtime lorebook projection after generation`, error);
         }
     };
-    if (context.eventTypes.GENERATION_STARTED) {
-        context.eventSource.on(context.eventTypes.GENERATION_STARTED, () => {
-            generationInProgress = true;
-        });
-    }
     if (context.eventTypes.GENERATION_ENDED) {
         context.eventSource.on(context.eventTypes.GENERATION_ENDED, async () => {
-            generationInProgress = false;
             await clearRuntimeProjectionAfterGeneration();
             clearRuntimeInfoToast('recall');
             const runtimeContext = getContext();
@@ -15331,12 +15429,12 @@ jQuery(() => {
         const fromSeq = Number.isFinite(assistantFromSeq) && assistantFromSeq > 0
             ? assistantFromSeq
             : findAssistantSeqFromPlayableSeq(runtimeContext, playableFromSeq);
-        scheduleMutationInvalidation(fromSeq);
+        scheduleMutationInvalidation(fromSeq, 'delete');
     });
     if (context.eventTypes.MESSAGE_SWIPED) {
         context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, (messageId, _meta) => {
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
-            scheduleMutationInvalidation(fromSeq);
+            scheduleMutationInvalidation(fromSeq, 'refresh');
         });
     }
     if (context.eventTypes.MESSAGE_RECEIVED) {
@@ -15346,7 +15444,7 @@ jQuery(() => {
                 return;
             }
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
-            scheduleMutationInvalidation(fromSeq);
+            scheduleMutationInvalidation(fromSeq, 'refresh');
         });
     }
     if (context.eventTypes.PRESET_CHANGED) {
