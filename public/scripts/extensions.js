@@ -819,15 +819,16 @@ function addExtensionScript(name, manifest) {
         return Promise.resolve();
     }
 
-    // Marker element for de-dup + DOM inspection; not used for loading.
-    // The actual load goes through import() below so browser-thrown errors
-    // (404 with URL, MIME mismatch, SyntaxError with line/col, unresolved
-    // specifier, or the specific transitive URL that failed) surface as
-    // real Error objects instead of the bare error Event that a
-    // <script type="module"> tag reports to onerror.
+    // Marker element for de-dup + DOM inspection. The real load semantics
+    // (error detail) still go through import() below; marker.src is set so
+    // third-party extensions that self-locate by scanning document.scripts
+    // for their own src (e.g. `for s of scripts: if s.src.includes('foo.js')`)
+    // keep working. Module map is URL-keyed and shared with import(), so the
+    // module still evaluates exactly once.
     const marker = document.createElement('script');
     marker.id = id;
     marker.type = 'module';
+    marker.src = url;
     marker.dataset.extensionSrc = url;
     document.body.appendChild(marker);
 
