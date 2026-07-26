@@ -122,6 +122,7 @@ import {
     graphPayloadFromStore,
     metaFieldsFromStore,
     buildRuntimeStoreFromGraphPayloadAndMeta,
+    normalizeVectorIndexState,
     synthesizePersistedStateFromStoreAndMeta,
     hasPersistedStoreMetadataChanges,
     getStoreCoveredSeqTo,
@@ -1958,6 +1959,19 @@ async function persistRecallMetadataByChatKey(context, chatKey, { trace, project
         throw new Error('Chat state update API is unavailable in extension context.');
     }
     const cached = getCachedMeta(chatKey) || {};
+    // Preserve vectorIndexState across recall meta writes. This function is
+    // called at the end of every recall (both LLM and RAG paths); using a
+    // trimmed meta shape here silently drops vectorIndexState from the
+    // sidecar, so the next refreshMemoryStoreCacheFromFloorState reloads
+    // an empty vector state and syncVectorIndex's configChanged branch
+    // wipes the backend collection and re-embeds every node. Prefer the
+    // live store's vectorIndexState (freshest — extraction/sync writes to
+    // it in place); fall back to the cached meta copy when the store hasn't
+    // been through a sync yet.
+    const liveStore = memoryStoreCache.get(chatKey);
+    const preservedVectorIndexState = normalizeVectorIndexState(
+        liveStore?.vectorIndexState || cached?.vectorIndexState || null,
+    );
     const nextMeta = {
         schemaVersion: META_SCHEMA_VERSION,
         sourceMessageCount: Math.max(0, Number(cached.sourceMessageCount || 0)),
@@ -1965,6 +1979,7 @@ async function persistRecallMetadataByChatKey(context, chatKey, { trace, project
         lastRecallProjection: projection && typeof projection === 'object'
             ? structuredClone(projection)
             : null,
+        vectorIndexState: preservedVectorIndexState,
     };
     setCachedMeta(chatKey, nextMeta);
     const result = await persistMetaFields(context, nextMeta, target);
