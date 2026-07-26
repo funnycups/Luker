@@ -48,7 +48,7 @@ import {
     appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
-import { regexAgentPluginOutput } from './regex-chat.js';
+import { regexAgentPluginOutput } from '../../lib/chat-regex.js';
 import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import { loadOpenNotesBlock } from './open-notes-injection.js';
 

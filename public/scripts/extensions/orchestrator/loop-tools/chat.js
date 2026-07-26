@@ -25,7 +25,7 @@
 
 import { ToolError } from '../loop-runtime.js';
 import { gatherGrepMatches } from '../grep-tool.js';
-import { computeDepthsFromEnd, regexChatMessageForAgent } from '../regex-chat.js';
+import { computeDepthsFromEnd, regexChatMessageForAgent } from '../../../lib/chat-regex.js';
 
 const MAX_RANGE = 50;
 

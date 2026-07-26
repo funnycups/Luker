@@ -45,7 +45,7 @@ const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
-import { computeDepthsFromEnd, regexChatMessageForAgent } from './regex-chat.js';
+import { computeDepthsFromEnd, regexChatMessageForAgent } from '../../lib/chat-regex.js';
 import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import {
     AGENDA_PLANNER_TOOL,

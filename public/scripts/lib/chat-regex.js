@@ -1,20 +1,26 @@
 /**
- * regex-chat.js — apply user-authored regex scripts to chat text that will
- * be fed to orchestrator agents.
+ * chat-regex.js — apply user-authored regex scripts to chat text that will
+ * be fed to plugin-driven LLM requests.
  *
  * Rationale: the main generation pipeline runs every chat message through
  * `getRegexedString(..., USER_INPUT|AI_OUTPUT, { isPrompt: true, depth })`
  * before shipping it to the model (see `public/script.js` in the
- * `coreChat.map` block). Orchestrator agents used to skip this step —
- * they pulled `message.mes` raw, so user regex scripts scoped to
- * "prompt" placements silently didn't apply to what the agent saw.
+ * `coreChat.map` block). Plugins that surface chat text to their own LLM
+ * requests (orchestrator agents, memory-graph extraction/recall, etc.)
+ * used to skip this step — they pulled `message.mes` raw, so user regex
+ * scripts scoped to "prompt" placements silently didn't apply to what
+ * the plugin saw.
  *
- * This module centralizes the transformation so every orchestrator entry
- * point that surfaces chat text to an LLM behaves the same way. Three
- * consumers today:
- *   - spec-runtime.js: `{{recent_chat}}` / `{{last_user}}` template vars
- *   - agenda-runtime.js: same, for agenda mode
- *   - loop-tools/chat.js: `chat_read_range` / `chat_search` tools
+ * This module centralizes the transformation so every plugin entry point
+ * that surfaces chat text to an LLM behaves the same way as the main
+ * pipeline. Current consumers:
+ *   - orchestrator/spec-runtime.js: `{{recent_chat}}` / `{{last_user}}` vars
+ *   - orchestrator/agenda-runtime.js: same, for agenda mode
+ *   - orchestrator/loop-tools/chat.js: `chat_read_range` / `chat_search` tools
+ *   - orchestrator/director-tools.js: agent output re-entering context via
+ *     tool-result envelopes (uses `regexAgentPluginOutput` only)
+ *   - memory-graph/main.js: extraction / recall route / recall finalize /
+ *     rewrite recall query (all four chat consumption points)
  *
  * Depth semantics match the main pipeline: `depth` is 0-based, counting
  * from the *end* of the "usable" chat (system messages skipped). The
@@ -24,16 +30,30 @@
  * Regex engine access:
  *   We consume the regex primitives through `Luker.getContext().regex`
  *   (three-layer API). Direct `import` from
- *   `../regex/engine.js` would transitively pull `public/script.js` and
- *   its DOM bootstrap chain — poison for the jest module graph. The
- *   context surface stays test-friendly because jest.setup.js already
- *   installs a Luker stub.
+ *   `../extensions/regex/engine.js` would transitively pull
+ *   `public/script.js` and its DOM bootstrap chain — poison for the
+ *   jest module graph. The context surface stays test-friendly because
+ *   jest.setup.js already installs a Luker stub.
  *
  *   Ctx resolution is lazy (first-call, memoized): reading
  *   `Luker.getContext()` at module load would fire before jest.setup.js
  *   finishes wiring `globalThis.Luker`, and in the browser it would
  *   fire before `st-context.js` finishes exposing the `regex` field.
  *   Lazy avoids both hazards.
+ *
+ * Double-apply note (rules with both scopes ticked):
+ *   A script with BOTH `promptOnly` AND `pluginOnly` ticked will be
+ *   applied TWICE when a plugin consumes chat this way:
+ *     - once here (via `regexChatMessageForAgent` with `isPrompt:true`),
+ *       matching the `promptOnly && isPrompt` branch in `getRegexedString`
+ *     - once downstream in `buildPresetAwarePromptMessages` →
+ *       `applyPluginRegexToPromptMessages` (with `isPluginPrompt:true`),
+ *       matching the `pluginOnly && isPluginPrompt` branch
+ *   The main generation pipeline only applies the promptOnly branch (it
+ *   doesn't route through `buildPresetAwarePromptMessages`), so for
+ *   dual-scope rules plugin requests will apply one extra pass compared
+ *   to the main pipeline. Accepted as a rare-edge behavior: users who
+ *   author dual-scope rules opt into "apply everywhere possible".
  */
 
 let __regexApiCache = undefined;
@@ -95,7 +115,7 @@ export function computeDepthsFromEnd(messages) {
 /**
  * Apply prompt-scoped regex scripts to a single chat message's text.
  * Returns raw `mes` when the regex API isn't reachable (e.g. bare unit
- * tests without a Luker stub) so orchestrator degrades gracefully rather
+ * tests without a Luker stub) so callers degrade gracefully rather
  * than crashing.
  *
  * @param {object} message — chat message object (needs `mes` + `is_user`)
@@ -139,7 +159,7 @@ export function regexChatMessageForAgent(message, depth) {
  *     `applyPluginRegexToPromptMessages` treats an undepthed message.
  *
  * Returns raw text when the regex API isn't reachable (bare unit tests
- * without a Luker stub) so orchestrator degrades gracefully.
+ * without a Luker stub) so callers degrade gracefully.
  *
  * @param {string} text — raw agent output text
  * @returns {string} text after plugin-scoped AI_OUTPUT regex application

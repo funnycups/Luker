@@ -43,7 +43,7 @@ const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
-import { computeDepthsFromEnd, regexChatMessageForAgent } from './regex-chat.js';
+import { computeDepthsFromEnd, regexChatMessageForAgent } from '../../lib/chat-regex.js';
 import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import {
     AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE,
@@ -604,7 +604,7 @@ export function extractReviewDecision(toolCalls = [], nodeId = '') {
  * Build the `{{recent_chat}}` / `{{last_user}}` template values for a
  * node run. Both go through prompt-scoped regex scripts so orchestrator
  * agents see the same rewritten text the main model would (see
- * `regex-chat.js` for rationale). `depth` is computed against the full
+ * `chat-regex.js` for rationale). `depth` is computed against the full
  * `messages` array so `minDepth` / `maxDepth` filters behave the same
  * way they do in Generate().
  *
