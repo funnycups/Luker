@@ -8970,6 +8970,28 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                     // merged final reply after the chain terminates.
                     await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage, { suppress: true });
                     streamingProcessor = null;
+                    // Re-check abort AFTER the suppress-finalize (which is
+                    // async and can await through several ticks: reasoning
+                    // finish, token count, DOM sync) and BEFORE the recursive
+                    // Generate() call. If the user clicked stop during that
+                    // window, entering Generate() would deactivateSendButtons
+                    // → showStopButton and flash the stop button on-screen
+                    // before the recursive Generate's own abort check kicks
+                    // in. Bail here to keep the stop click visually clean.
+                    if (abortController?.signal?.aborted) {
+                        console.debug('[auto-continue-on-truncated] aborted between middle-round finalize and recursive Generate; honoring stop');
+                        // Emit the events the suppressed path skipped so
+                        // extensions see the interrupted reply as a completed
+                        // message (matching the streaming-abort semantics of
+                        // the plain path where a stop mid-stream still fires
+                        // MESSAGE_RECEIVED for the partial).
+                        await eventSource.emit(event_types.MESSAGE_RECEIVED, chat.length - 1, type);
+                        await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat.length - 1, type);
+                        return Object.defineProperties(new String(getMessage), {
+                            'messageChunk': { value: messageChunk },
+                            'fromStream': { value: true },
+                        });
+                    }
                     return Generate('continue', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth: depth + 1 }, dryRun);
                 }
                 await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
@@ -9101,6 +9123,25 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 // Generate('continue') for the next round. The chain-final
                 // round will hit the else branch below and run persistence +
                 // events normally on the fully merged reply.
+                //
+                // Recheck abort here: saveReply above is async and awaits
+                // through several ticks (token count, DOM addOneMessage, image
+                // attach). If the user clicked stop during that window,
+                // entering Generate() would deactivateSendButtons +
+                // showStopButton and flash the stop button on-screen before
+                // the recursive Generate's own abort check kicks in. Bail to
+                // keep the stop click visually clean and honor user intent.
+                if (abortController?.signal?.aborted) {
+                    console.debug('[auto-continue-on-truncated] aborted between middle-round saveReply and recursive Generate; honoring stop');
+                    // Emit the events the suppressed saveReply skipped so
+                    // extensions see the interrupted reply as a finished
+                    // message (matching non-streaming abort semantics where
+                    // the request-inflight abort still surfaces MESSAGE_RECEIVED).
+                    await eventSource.emit(event_types.MESSAGE_RECEIVED, chat.length - 1, type);
+                    await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat.length - 1, type);
+                    unblockGeneration(type);
+                    return;
+                }
                 return Generate('continue', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth: depth + 1 }, dryRun);
             }
         }
