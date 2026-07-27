@@ -49,6 +49,7 @@ import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 import { extension_settings } from './extensions.js';
 import { acquire as acquireRequestSlot } from './extensions/connection-manager/request-throttler.js';
 import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
 import { withRetry } from './request-retry.js';
 
 import { getEventSourceStream } from './sse-stream.js';
@@ -4473,17 +4474,52 @@ async function sendOpenAIRequest(type, messages, signal, {
                     state.usage = mergeStreamingUsage(state.usage, usageDelta);
                 }
 
-                // Server-side chat-completion endpoints (src/endpoints/backends/chat-completions.js)
-                // normalize Claude / Gemini / Cohere raw stop reasons into the OAI vocabulary
-                // (stop / length / tool_calls / content_filter / function_call) before streaming
-                // to us. The finish_reason is only populated on the terminal chunk; keep the
-                // last non-null value observed. Some providers emit it on `delta.finish_reason`
-                // instead of `choices[i].finish_reason`, so check both.
-                const rawFinish = parsed?.choices?.[0]?.finish_reason
-                    ?? parsed?.choices?.[0]?.delta?.finish_reason
-                    ?? null;
-                if (rawFinish) {
-                    state.finishReason = String(rawFinish);
+                // Per-source terminal-frame finish/stop reason extraction.
+                // Server-side non-streaming normalizers
+                // (src/endpoints/backends/chat-completions.js) rewrite Claude
+                // stop_reason / Gemini finishReason / Cohere finish_reason into
+                // OAI finish_reason before returning, but streaming SSE frames
+                // pass through unchanged (see
+                // src/luker-dispatch/providers/chat-completions/claude.js:346-347
+                // for the Claude pipe-through). So this loop must locate the
+                // provider-native field AND remap to OAI vocabulary
+                // (stop/length/content_filter/tool_calls) so consumers stay
+                // symmetric with the non-streaming path.
+                //
+                // Fields checked (in priority order):
+                //   Claude:  event.type === 'message_delta' → delta.stop_reason
+                //            (also read message_start.message.stop_reason as a
+                //            defensive fallback for providers that surface it
+                //            early)
+                //   Gemini:  candidates[0].finishReason on the terminal frame
+                //   OAI/others: choices[0].finish_reason or delta.finish_reason
+                //   Cohere:  message-end event with delta.finish_reason
+                const src = String(requestSettings.chat_completion_source || '').toLowerCase();
+                let rawFinish = null;
+                if (src === 'claude') {
+                    // Anthropic Messages API SSE spec: the terminal event is
+                    // `message_delta` with { delta: { stop_reason, ... }, usage }.
+                    if (parsed?.type === 'message_delta' && parsed?.delta?.stop_reason) {
+                        rawFinish = parsed.delta.stop_reason;
+                    } else if (parsed?.type === 'message_start' && parsed?.message?.stop_reason) {
+                        rawFinish = parsed.message.stop_reason;
+                    }
+                } else if (src === 'makersuite' || src === 'google_ai_studio' || src === 'vertexai') {
+                    // Google generateContent SSE: each frame is a full candidate object
+                    // with `finishReason` populated only on the terminal chunk.
+                    const cand = Array.isArray(parsed?.candidates) ? parsed.candidates[0] : null;
+                    if (cand?.finishReason) rawFinish = cand.finishReason;
+                } else {
+                    // OpenAI-native / OpenRouter / DeepSeek / xAI / Cohere v2:
+                    // finish_reason on choices[0] (or under delta for Cohere).
+                    rawFinish = parsed?.choices?.[0]?.finish_reason
+                        ?? parsed?.choices?.[0]?.delta?.finish_reason
+                        ?? parsed?.delta?.finish_reason
+                        ?? null;
+                }
+                const normalized = normalizeStreamingFinishReason(src, rawFinish);
+                if (normalized) {
+                    state.finishReason = normalized;
                 }
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };

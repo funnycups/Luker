@@ -6428,7 +6428,7 @@ class StreamingProcessor {
      * @param {Object} options - Additional options for finalization.
      * @param {boolean} options.unlockUI - Whether to unlock the generation UI.
      */
-    async finalizeIntermediaryMessage(messageId, text, { unlockUI = true, deferEmit = false }) {
+    async finalizeIntermediaryMessage(messageId, text, { unlockUI = true, deferEmit = false, suppressEmit = false }) {
         await this.onProgressStreaming(messageId, text, true);
         const messageElement = chatElement.find(`.mes[mesid="${messageId}"]`);
         const message = chat[messageId];
@@ -6489,18 +6489,34 @@ class StreamingProcessor {
             // via BE content-dedup. The tool-call caller at line 8532 doesn't
             // defer because its emit ordering interacts with shouldStopGeneration
             // — the snapshot self-heal in commit 6c99b32d0 covers that path.
-            if (!deferEmit) {
+            //
+            // suppressEmit hard-skips these emits entirely; used by the
+            // auto-continue-on-truncated chain to hide intermediate rounds
+            // from extensions (they only see the merged final message).
+            if (!deferEmit && !suppressEmit) {
                 await eventSource.emit(event_types.MESSAGE_RECEIVED, this.messageId, this.type);
                 await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, this.messageId, this.type);
             }
-        } else {
+        } else if (!suppressEmit) {
             await eventSource.emit(event_types.IMPERSONATE_READY, text);
         }
 
         updateSwipeCounter(messageId, { message, messageElement });
     }
 
-    async onFinishStreaming(messageId, text) {
+    async onFinishStreaming(messageId, text, { suppress = false } = {}) {
+        // suppress=true is the auto-continue-on-truncated intermediate-round
+        // contract: the just-finished round's text is already accumulated in
+        // chat[i].mes via onProgressStreaming, but we must NOT emit
+        // MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED / GENERATION_ENDED,
+        // NOT persist to disk, NOT play the completion sound, and NOT release
+        // the send lock — the outer Generate() is about to recursively invoke
+        // Generate('continue') for another round.
+        if (suppress) {
+            await this.finalizeIntermediaryMessage(messageId, text, { unlockUI: false, deferEmit: true, suppressEmit: true });
+            return;
+        }
+
         // Defer the MESSAGE_RECEIVED/CHARACTER_MESSAGE_RENDERED emits to AFTER
         // the persist below so extension listeners can't race us into a
         // double-write that BE then dedups (producing a snapshot phantom).
@@ -8941,20 +8957,24 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
             if (isStreamFinished) {
                 const streamFinishReason = streamingProcessor?.finishReason ?? null;
+                const willAutoContinue = shouldAutoContinueOnTruncated(streamFinishReason, isImpersonate);
+                if (willAutoContinue) {
+                    // Middle round of an auto-continue-on-truncated chain.
+                    // Finalize DOM / chat[i].mes state locally but do NOT
+                    // emit MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED,
+                    // do NOT persist to disk, do NOT release the send lock,
+                    // do NOT play the completion sound. Then recursively
+                    // invoke Generate('continue') so the next round appends
+                    // to the same chat[i] via the existing continue path.
+                    // Downstream extensions see one MESSAGE_RECEIVED for the
+                    // merged final reply after the chain terminates.
+                    await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage, { suppress: true });
+                    streamingProcessor = null;
+                    return Generate('continue', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth: depth + 1 }, dryRun);
+                }
                 await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
                 streamingProcessor = null;
-                // Truncation-driven auto-continue takes precedence over the
-                // length-heuristic auto-continue: `length` finish_reason is a
-                // hard signal from the backend that the reply was cut off.
-                // Only fall through to the length heuristic when this didn't
-                // fire (so we don't stack two continues in one cycle).
-                // `messageChunk` here is the cleaned text of THIS round only
-                // (streamingProcessor.firstMessageText was reset to '' for
-                // continue types), so it's a valid "did anything come out"
-                // gate for the empty-content-filter loop guard.
-                if (!triggerAutoContinueOnTruncated(streamFinishReason, messageChunk, isImpersonate)) {
-                    triggerAutoContinue(messageChunk, isImpersonate);
-                }
+                triggerAutoContinue(messageChunk, isImpersonate);
                 return Object.defineProperties(new String(getMessage), {
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },
@@ -9056,15 +9076,33 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             unblockGeneration(type);
             return getMessage;
         } else {
+            // Auto-continue-on-truncated: decide BEFORE saveReply so we can
+            // pass suppressEmit and skip persistence + unblock below. Same
+            // shape as the streaming path — the goal is that extensions
+            // observe one MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED for
+            // the merged final message, not one per intermediate round.
+            const nonStreamFinishReason = data?.choices?.[0]?.finish_reason ?? null;
+            const willAutoContinue = shouldAutoContinueOnTruncated(nonStreamFinishReason, isImpersonate);
+
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue }));
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
             parseAndSaveLogprobs(data, continue_mag);
+
+            if (willAutoContinue) {
+                // Chain-middle round complete: chat[i].mes has the accumulated
+                // text via saveReply's mutation, but no MESSAGE_RECEIVED was
+                // emitted and nothing has been persisted. Recursively invoke
+                // Generate('continue') for the next round. The chain-final
+                // round will hit the else branch below and run persistence +
+                // events normally on the fully merged reply.
+                return Generate('continue', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth: depth + 1 }, dryRun);
+            }
         }
 
         if (canPerformToolCalls) {
@@ -9133,10 +9171,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         streamingProcessor = null;
 
         if (type !== 'quiet') {
-            const nonStreamFinishReason = data?.choices?.[0]?.finish_reason ?? null;
-            if (!triggerAutoContinueOnTruncated(nonStreamFinishReason, messageChunk, isImpersonate)) {
-                triggerAutoContinue(messageChunk, isImpersonate);
-            }
+            // Truncation-driven auto-continue was already handled above in the
+            // saveReply branch (before persistence) so it can suppress emits +
+            // skip persistence for chain-middle rounds. Only the length
+            // heuristic runs here on the chain-final round.
+            triggerAutoContinue(messageChunk, isImpersonate);
         }
 
         // Don't break the API chain that expects a single string in return
@@ -9285,7 +9324,15 @@ function flushWIInjections() {
  * Unblocks the UI after a generation is complete.
  * @param {string} [type] Generation type (optional)
  */
-function unblockGeneration(type) {
+function unblockGeneration(type, { suppress = false } = {}) {
+    // Auto-continue-on-truncated: intermediate rounds of a chain must keep
+    // is_send_press = true and NOT emit GENERATION_ENDED, otherwise the UI
+    // flashes send-enabled and extensions see one "ended" per round instead
+    // of one for the whole merged reply.
+    if (suppress) {
+        return;
+    }
+
     // Don't unblock if a parallel stream is still running
     if (type === 'quiet' && streamingProcessor && !streamingProcessor.isFinished) {
         return;
@@ -9411,11 +9458,23 @@ export function triggerAutoContinue(messageChunk, isImpersonate) {
 }
 
 // Per-connection-profile "auto-continue when finish_reason indicates
-// truncation (length)" support. Counter is runtime-only, per-tab, and reset
-// on:
+// truncation (length or content_filter)" support.
+//
+// Design: unlike the length-heuristic auto-continue (which fires a UI
+// #option_continue click AFTER the reply is persisted), truncation-driven
+// continue runs INSIDE Generate() itself as a recursive tail call with a
+// `continuationChain` marker. That marker suppresses the middle-round
+// MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED / GENERATION_ENDED emits +
+// persistence + UI unlock, so downstream extensions see exactly one finished
+// message spanning the whole chain — no "assistant sent, wait, actually
+// they're still typing, wait, another chunk" event thrash and no partial
+// snapshots written to disk mid-chain.
+//
+// Counter is runtime-only, per-tab, and reset on:
 //   - CHAT_CHANGED (loading a different chat)
-//   - MESSAGE_SENT (user sent a new message; a fresh generation cycle begins)
-//   - a normal-finish reply (finish_reason !== 'length' via `noteNormalFinishForAutoContinueOnTruncated`)
+//   - MESSAGE_SENT (user sent a new message; fresh generation cycle)
+//   - a normal-finish reply (finish_reason !== truncated) via
+//     `noteNormalFinishForAutoContinueOnTruncated`
 // Ceiling comes from the active connection profile; when the counter reaches
 // the ceiling further truncations do NOT auto-continue until reset.
 let autoContinueOnTruncatedCount = 0;
@@ -9429,55 +9488,31 @@ export function noteNormalFinishForAutoContinueOnTruncated(finishReason) {
     // clean landing and clears the streak. Unknown/null → don't touch it
     // (backend didn't tell us; don't assume).
     const v = String(finishReason || '');
-    if (v && v !== 'length') {
+    if (v && !isTruncatedFinishReason(v)) {
         autoContinueOnTruncatedCount = 0;
     }
 }
 
 /**
- * Trigger the auto-continue-on-truncated behavior for main chat, if enabled
- * on the active connection profile AND the last frame's finish_reason
- * indicates truncation AND we haven't exceeded the per-cycle attempt cap
- * AND this round actually produced non-empty output.
+ * Decide whether the just-finished generation round should trigger another
+ * automatic continue in the same chain.
  *
- * The "produced output" gate matters for two reasons:
- *   1. content_filter cutoffs can fire before any token streams; continuing
- *      would immediately re-trigger the filter and loop forever.
- *   2. Even for `length`, a prior auto-continue that yielded 0 new tokens
- *      means we're stuck (e.g. model refuses to add anything past what it
- *      already said); further continues won't unstick it.
- *
- * Distinct from `triggerAutoContinue` (length-based; power_user.auto_continue).
- * Both may be armed simultaneously — we run this one first so the truncation
- * signal takes precedence over the length heuristic, and only fall through
- * to the length heuristic when this one doesn't fire.
+ * Does NOT dispatch anything — the caller (inside Generate()) handles the
+ * actual recursive call so it can honor the middle-round emit/persist
+ * suppression contract. This function is pure judgment + counter bookkeeping.
  *
  * @param {string|null|undefined} finishReason Normalized OAI finish_reason
- *   from the last completed generation (may be null for backends that don't
- *   surface it — in which case we treat as "unknown" and do nothing).
- * @param {string|null|undefined} producedText The text this generation round
- *   actually produced (streaming: streamingProcessor.result; non-streaming:
- *   the freshly-cleaned messageChunk). Whitespace-only / empty → no progress.
+ *   from the last completed generation.
  * @param {boolean} isImpersonate
- * @returns {boolean} true if a continue was dispatched
+ * @returns {boolean} true if the caller should recursively invoke
+ *   Generate('continue', { continuationChain: true }); false otherwise.
  */
-export function triggerAutoContinueOnTruncated(finishReason, producedText, isImpersonate) {
+export function shouldAutoContinueOnTruncated(finishReason, isImpersonate) {
     if (selected_group) return false;
     if (isImpersonate) return false;
 
-    // Only fire on a real truncation signal from the backend.
     if (!isTruncatedFinishReason(finishReason)) {
         noteNormalFinishForAutoContinueOnTruncated(finishReason);
-        return false;
-    }
-
-    // No real content came out of this round — either the model refused
-    // outright (content_filter with empty body) or a previous continue is
-    // now stuck producing nothing. Either way, further continues will loop.
-    // Clear the streak so the next real user turn starts fresh.
-    if (typeof producedText !== 'string' || producedText.trim().length === 0) {
-        console.info(`[auto-continue-on-truncated] finish_reason=${finishReason} but this round produced no new content; not triggering`);
-        autoContinueOnTruncatedCount = 0;
         return false;
     }
 
@@ -9508,8 +9543,7 @@ export function triggerAutoContinueOnTruncated(finishReason, producedText, isImp
     if (!lastMessage || lastMessage.is_user) return false;
 
     autoContinueOnTruncatedCount += 1;
-    console.info(`[auto-continue-on-truncated] finish_reason=${finishReason}; dispatching continue (${autoContinueOnTruncatedCount}/${maxAttempts})`);
-    $('#option_continue').trigger('click');
+    console.info(`[auto-continue-on-truncated] finish_reason=${finishReason}; recursively continuing (${autoContinueOnTruncatedCount}/${maxAttempts})`);
     return true;
 }
 
@@ -10581,12 +10615,19 @@ function applyPostGenerationText(text, isImpersonate, isContinue) {
     return out;
 }
 
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null, reasoningDetails = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null, reasoningDetails = null, suppressEmit = false }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
         [type, getMessage, fromStreaming, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails] = arguments;
     }
+
+    // suppressEmit: auto-continue-on-truncated intermediate rounds still need
+    // saveReply's chat[i] mutation, DOM update, and stat bookkeeping, but the
+    // MESSAGE_RECEIVED / CHARACTER_MESSAGE_RENDERED emits belong to the
+    // chain-final round only. Combines with fromStreaming for the same net
+    // effect the streaming path already relies on.
+    const shouldEmit = !fromStreaming && !suppressEmit;
 
     const lastMessage = chat[chat.length - 1];
 
@@ -10641,9 +10682,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             }
             const chat_id = (chat.length - 1);
             extractMessageById(chat_id);
-            !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
+            shouldEmit && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
             addOneMessage(chat[chat_id], { type: 'swipe' });
-            !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
+            shouldEmit && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
         } else {
             lastMessage.mes = getMessage;
         }
@@ -10677,9 +10718,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         }
         const chat_id = (chat.length - 1);
         extractMessageById(chat_id);
-        !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
+        shouldEmit && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id], { type: 'swipe' });
-        !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
+        shouldEmit && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
     } else if (type === 'appendFinal') {
         oldMessage = lastMessage.mes;
         console.debug('Trying to appendFinal.');
@@ -10710,9 +10751,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         }
         const chat_id = (chat.length - 1);
         extractMessageById(chat_id);
-        !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
+        shouldEmit && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id], { type: 'swipe' });
-        !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
+        shouldEmit && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
     } else {
         console.debug('entering chat update routine for non-swipe post');
         const newMessage = {};
@@ -10760,9 +10801,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         const chat_id = (chat.length - 1);
 
         extractMessageById(chat_id);
-        !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
+        shouldEmit && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
         addOneMessage(chat[chat_id]);
-        !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
+        shouldEmit && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
     }
 
     const item = chat[chat.length - 1];
