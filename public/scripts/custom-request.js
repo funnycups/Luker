@@ -167,7 +167,7 @@ export class TextCompletionService {
         return async function* streamData() {
             let text = '';
             const swipes = [];
-            const state = { reasoning: '' };
+            const state = { reasoning: '', finishReason: null };
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) return;
@@ -184,6 +184,11 @@ export class TextCompletionService {
                     const newText = data?.choices?.[0]?.text || data?.content || '';
                     text += newText;
                     state.reasoning += data?.choices?.[0]?.reasoning ?? '';
+                }
+
+                const rawFinish = data?.choices?.[0]?.finish_reason ?? null;
+                if (rawFinish) {
+                    state.finishReason = String(rawFinish);
                 }
 
                 yield { text, swipes, state };
@@ -508,7 +513,7 @@ export class ChatCompletionService {
         return async function* streamData() {
             let text = '';
             const swipes = [];
-            const state = { reasoning: '', images: [], signature: '', toolSignatures: {} };
+            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, finishReason: null };
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) return;
@@ -526,6 +531,13 @@ export class ChatCompletionService {
                     swipes[swipeIndex] = (swipes[swipeIndex] || '') + reply;
                 } else {
                     text += reply;
+                }
+
+                const rawFinish = parsed?.choices?.[0]?.finish_reason
+                    ?? parsed?.choices?.[0]?.delta?.finish_reason
+                    ?? null;
+                if (rawFinish) {
+                    state.finishReason = String(rawFinish);
                 }
 
                 yield { text, swipes: swipes, state };

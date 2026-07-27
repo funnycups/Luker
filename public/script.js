@@ -246,6 +246,7 @@ import { markdownUnderscoreExt } from './scripts/showdown-underscore.js';
 import { NOTE_MODULE_NAME, initAuthorsNote, metadata_keys, setFloatingPrompt, shouldWIAddPrompt } from './scripts/authors-note.js';
 import { registerPromptManagerMigration } from './scripts/PromptManager.js';
 import { getRegexedString, regex_placement } from './scripts/extensions/regex/engine.js';
+import { getAutoContinueOnTruncated, isTruncatedFinishReason } from './scripts/extensions/connection-manager/auto-continue-truncated.js';
 import { initLogprobs, saveLogprobsForActiveMessage } from './scripts/logprobs.js';
 import { FILTER_STATES, FILTER_TYPES, FilterHelper, isFilterState } from './scripts/filters.js';
 import { getCfgPrompt, getGuidanceScale, initCfg } from './scripts/cfg-scale.js';
@@ -6242,6 +6243,10 @@ class StreamingProcessor {
         /** @type {import('./scripts/logprobs.js').TokenLogprobs[]} */
         this.messageLogprobs = [];
         this.toolCalls = [];
+        // Populated from the streamed `state.finishReason` on each frame; used
+        // by the auto-continue-on-truncated check after the stream settles.
+        // null until at least one frame reports a terminal finish_reason.
+        this.finishReason = null;
         // Initialize reasoning in its own handler
         this.reasoningHandler = new ReasoningHandler(timeStarted);
         /** @type {PromptReasoning} */
@@ -6633,6 +6638,9 @@ class StreamingProcessor {
                     : null;
                 if (Array.isArray(this.reasoningDetails) && this.reasoningDetails.length === 0) {
                     this.reasoningDetails = null;
+                }
+                if (state?.finishReason) {
+                    this.finishReason = String(state.finishReason);
                 }
                 await eventSource.emit(event_types.STREAM_TOKEN_RECEIVED, text);
                 await sw.tick(async () => await this.onProgressStreaming(this.messageId, this.continueMessage + text));
@@ -8932,9 +8940,21 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
 
             if (isStreamFinished) {
+                const streamFinishReason = streamingProcessor?.finishReason ?? null;
                 await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
                 streamingProcessor = null;
-                triggerAutoContinue(messageChunk, isImpersonate);
+                // Truncation-driven auto-continue takes precedence over the
+                // length-heuristic auto-continue: `length` finish_reason is a
+                // hard signal from the backend that the reply was cut off.
+                // Only fall through to the length heuristic when this didn't
+                // fire (so we don't stack two continues in one cycle).
+                // `messageChunk` here is the cleaned text of THIS round only
+                // (streamingProcessor.firstMessageText was reset to '' for
+                // continue types), so it's a valid "did anything come out"
+                // gate for the empty-content-filter loop guard.
+                if (!triggerAutoContinueOnTruncated(streamFinishReason, messageChunk, isImpersonate)) {
+                    triggerAutoContinue(messageChunk, isImpersonate);
+                }
                 return Object.defineProperties(new String(getMessage), {
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },
@@ -9113,7 +9133,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         streamingProcessor = null;
 
         if (type !== 'quiet') {
-            triggerAutoContinue(messageChunk, isImpersonate);
+            const nonStreamFinishReason = data?.choices?.[0]?.finish_reason ?? null;
+            if (!triggerAutoContinueOnTruncated(nonStreamFinishReason, messageChunk, isImpersonate)) {
+                triggerAutoContinue(messageChunk, isImpersonate);
+            }
         }
 
         // Don't break the API chain that expects a single string in return
@@ -9385,6 +9408,109 @@ export function triggerAutoContinue(messageChunk, isImpersonate) {
     if (shouldAutoContinue(messageChunk, isImpersonate)) {
         $('#option_continue').trigger('click');
     }
+}
+
+// Per-connection-profile "auto-continue when finish_reason indicates
+// truncation (length)" support. Counter is runtime-only, per-tab, and reset
+// on:
+//   - CHAT_CHANGED (loading a different chat)
+//   - MESSAGE_SENT (user sent a new message; a fresh generation cycle begins)
+//   - a normal-finish reply (finish_reason !== 'length' via `noteNormalFinishForAutoContinueOnTruncated`)
+// Ceiling comes from the active connection profile; when the counter reaches
+// the ceiling further truncations do NOT auto-continue until reset.
+let autoContinueOnTruncatedCount = 0;
+
+export function resetAutoContinueOnTruncatedCounter() {
+    autoContinueOnTruncatedCount = 0;
+}
+
+export function noteNormalFinishForAutoContinueOnTruncated(finishReason) {
+    // Any known finish_reason that isn't a truncation signal counts as a
+    // clean landing and clears the streak. Unknown/null → don't touch it
+    // (backend didn't tell us; don't assume).
+    const v = String(finishReason || '');
+    if (v && v !== 'length') {
+        autoContinueOnTruncatedCount = 0;
+    }
+}
+
+/**
+ * Trigger the auto-continue-on-truncated behavior for main chat, if enabled
+ * on the active connection profile AND the last frame's finish_reason
+ * indicates truncation AND we haven't exceeded the per-cycle attempt cap
+ * AND this round actually produced non-empty output.
+ *
+ * The "produced output" gate matters for two reasons:
+ *   1. content_filter cutoffs can fire before any token streams; continuing
+ *      would immediately re-trigger the filter and loop forever.
+ *   2. Even for `length`, a prior auto-continue that yielded 0 new tokens
+ *      means we're stuck (e.g. model refuses to add anything past what it
+ *      already said); further continues won't unstick it.
+ *
+ * Distinct from `triggerAutoContinue` (length-based; power_user.auto_continue).
+ * Both may be armed simultaneously — we run this one first so the truncation
+ * signal takes precedence over the length heuristic, and only fall through
+ * to the length heuristic when this one doesn't fire.
+ *
+ * @param {string|null|undefined} finishReason Normalized OAI finish_reason
+ *   from the last completed generation (may be null for backends that don't
+ *   surface it — in which case we treat as "unknown" and do nothing).
+ * @param {string|null|undefined} producedText The text this generation round
+ *   actually produced (streaming: streamingProcessor.result; non-streaming:
+ *   the freshly-cleaned messageChunk). Whitespace-only / empty → no progress.
+ * @param {boolean} isImpersonate
+ * @returns {boolean} true if a continue was dispatched
+ */
+export function triggerAutoContinueOnTruncated(finishReason, producedText, isImpersonate) {
+    if (selected_group) return false;
+    if (isImpersonate) return false;
+
+    // Only fire on a real truncation signal from the backend.
+    if (!isTruncatedFinishReason(finishReason)) {
+        noteNormalFinishForAutoContinueOnTruncated(finishReason);
+        return false;
+    }
+
+    // No real content came out of this round — either the model refused
+    // outright (content_filter with empty body) or a previous continue is
+    // now stuck producing nothing. Either way, further continues will loop.
+    // Clear the streak so the next real user turn starts fresh.
+    if (typeof producedText !== 'string' || producedText.trim().length === 0) {
+        console.info(`[auto-continue-on-truncated] finish_reason=${finishReason} but this round produced no new content; not triggering`);
+        autoContinueOnTruncatedCount = 0;
+        return false;
+    }
+
+    // User is composing another turn -> don't hijack their input.
+    const textareaText = String($('#send_textarea').val() || '');
+    if (textareaText.length > 0) {
+        console.debug('[auto-continue-on-truncated] user has pending input; not triggering');
+        return false;
+    }
+
+    // User clicked stop mid-generation.
+    if (abortController && abortController.signal.aborted) {
+        console.debug('[auto-continue-on-truncated] generation was aborted; not triggering');
+        return false;
+    }
+
+    const { enabled, maxAttempts } = getAutoContinueOnTruncated();
+    if (!enabled) return false;
+
+    if (autoContinueOnTruncatedCount >= maxAttempts) {
+        console.info(`[auto-continue-on-truncated] attempt cap reached (${autoContinueOnTruncatedCount}/${maxAttempts}); not triggering`);
+        autoContinueOnTruncatedCount = 0;
+        return false;
+    }
+
+    if (chat.length === 0) return false;
+    const lastMessage = chat[chat.length - 1];
+    if (!lastMessage || lastMessage.is_user) return false;
+
+    autoContinueOnTruncatedCount += 1;
+    console.info(`[auto-continue-on-truncated] finish_reason=${finishReason}; dispatching continue (${autoContinueOnTruncatedCount}/${maxAttempts})`);
+    $('#option_continue').trigger('click');
+    return true;
 }
 
 export function getBiasStrings(textareaText, type) {
@@ -20130,6 +20256,11 @@ jQuery(async function () {
     eventSource.on(event_types.MESSAGE_DELETED, refreshCurrentChatToolsOnUpdate);
     eventSource.on(event_types.CHAT_CHANGED, refreshCurrentChatToolsOnUpdate);
     eventSource.on(event_types.CHAT_LOADED, refreshCurrentChatToolsOnUpdate);
+
+    // Reset the auto-continue-on-truncated attempt counter on user-initiated
+    // boundaries so a fresh conversational turn always gets full credit.
+    eventSource.on(event_types.CHAT_CHANGED, resetAutoContinueOnTruncatedCounter);
+    eventSource.on(event_types.MESSAGE_SENT, resetAutoContinueOnTruncatedCounter);
 
     updateCurrentChatToolsButtons();
 

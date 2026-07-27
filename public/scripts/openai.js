@@ -4352,7 +4352,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, reasoningBlocks: [], reasoningDetails: [], usage: null };
+            const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, reasoningBlocks: [], reasoningDetails: [], usage: null, finishReason: null };
             const plainTextToolCallDetector = runtimeFunctionCallContext
                 ? new PlainTextFunctionCallStreamDetector({ triggerSignal: runtimeFunctionCallContext.triggerSignal })
                 : null;
@@ -4471,6 +4471,19 @@ async function sendOpenAIRequest(type, messages, signal, {
                 const usageDelta = extractStreamingUsage(parsed, requestSettings.chat_completion_source);
                 if (usageDelta) {
                     state.usage = mergeStreamingUsage(state.usage, usageDelta);
+                }
+
+                // Server-side chat-completion endpoints (src/endpoints/backends/chat-completions.js)
+                // normalize Claude / Gemini / Cohere raw stop reasons into the OAI vocabulary
+                // (stop / length / tool_calls / content_filter / function_call) before streaming
+                // to us. The finish_reason is only populated on the terminal chunk; keep the
+                // last non-null value observed. Some providers emit it on `delta.finish_reason`
+                // instead of `choices[i].finish_reason`, so check both.
+                const rawFinish = parsed?.choices?.[0]?.finish_reason
+                    ?? parsed?.choices?.[0]?.delta?.finish_reason
+                    ?? null;
+                if (rawFinish) {
+                    state.finishReason = String(rawFinish);
                 }
 
                 yield { text, swipes: swipes, logprobs: parseChatCompletionLogprobs(parsed), toolCalls: toolCalls, state: state };

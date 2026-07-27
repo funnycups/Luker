@@ -22,6 +22,7 @@ import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
 import { clampMaxRetries } from './max-retries.js';
+import { clampAutoContinueMaxAttempts, getAutoContinueMaxAttemptsCeiling } from './auto-continue-truncated.js';
 import {
     createEmbeddingProfileStub,
     deleteEmbeddingProfile,
@@ -167,6 +168,8 @@ const FANCY_NAMES = {
     'vertexai-express-project-id': 'Vertex AI Express Project',
     'rpm-limit': 'Requests per minute',
     'max-request-retries': 'Max request retries',
+    'auto-continue-on-truncated': 'Auto-continue on truncated',
+    'auto-continue-on-truncated-max-attempts': 'Max auto-continue attempts',
 };
 
 /**
@@ -272,6 +275,8 @@ const profilesProvider = () => [
  * @property {string} [secret-id] Secret ID
  * @property {number} [rpm-limit] Requests-per-minute limit. 0/missing = no limit.
  * @property {number} [max-request-retries] Network-layer retry count (0-5). 0/missing = disabled.
+ * @property {boolean|string} [auto-continue-on-truncated] Auto-continue main chat when finish_reason=length. Missing/false = disabled.
+ * @property {number} [auto-continue-on-truncated-max-attempts] Max successive auto-continue attempts (1-10). 0/missing = disabled.
  * @property {string[]} [exclude] Commands to exclude
  */
 
@@ -1180,6 +1185,8 @@ export async function init() {
     const plainTextFunctionCallingRetryAttemptsInput = document.getElementById('connection_profile_function_calling_plain_text_error_retry_max_attempts');
     const rpmLimitInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_rpm_limit'));
     const maxRequestRetriesInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_max_request_retries'));
+    const autoContinueOnTruncatedToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated'));
+    const autoContinueOnTruncatedMaxAttemptsInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated_max_attempts'));
     const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
     const claudeExtendedTtlToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_extended_ttl'));
     const claudeCachingAtDepthInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_caching_at_depth'));
@@ -1260,6 +1267,23 @@ export async function init() {
             maxRequestRetriesInput.disabled = !supportedForRetries;
             if (document.activeElement !== maxRequestRetriesInput) {
                 maxRequestRetriesInput.value = String(retriesValue);
+            }
+        }
+
+        if (autoContinueOnTruncatedToggle) {
+            const supportedForAC = !!profile && (profileMode === 'cc' || profileMode === 'tc');
+            const rawFlag = profile ? profile['auto-continue-on-truncated'] : null;
+            const enabled = rawFlag === true || rawFlag === 'true';
+            autoContinueOnTruncatedToggle.disabled = !supportedForAC;
+            autoContinueOnTruncatedToggle.checked = enabled;
+            if (autoContinueOnTruncatedMaxAttemptsInput) {
+                const rawAttempts = profile ? profile['auto-continue-on-truncated-max-attempts'] : null;
+                const attempts = clampAutoContinueMaxAttempts(rawAttempts) || 3;
+                autoContinueOnTruncatedMaxAttemptsInput.max = String(getAutoContinueMaxAttemptsCeiling());
+                autoContinueOnTruncatedMaxAttemptsInput.disabled = !supportedForAC || !enabled;
+                if (document.activeElement !== autoContinueOnTruncatedMaxAttemptsInput) {
+                    autoContinueOnTruncatedMaxAttemptsInput.value = String(attempts);
+                }
             }
         }
 
@@ -1499,6 +1523,62 @@ export async function init() {
             } else {
                 profile['max-request-retries'] = value;
             }
+            saveSettingsDebounced();
+            await renderDetailsContent(detailsContent);
+            await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+            syncProfileEditorControls();
+        });
+    }
+
+    if (autoContinueOnTruncatedToggle) {
+        autoContinueOnTruncatedToggle.addEventListener('change', async () => {
+            const profile = getSelectedProfile();
+            if (!profile) {
+                syncProfileEditorControls();
+                return;
+            }
+            const mode = resolveProfileMode(profile);
+            if (mode !== 'cc' && mode !== 'tc') {
+                syncProfileEditorControls();
+                return;
+            }
+
+            const oldProfile = structuredClone(profile);
+            const enabled = !!autoContinueOnTruncatedToggle.checked;
+            if (enabled) {
+                profile['auto-continue-on-truncated'] = true;
+                // Ensure a sane default attempts value on first enable.
+                if (!clampAutoContinueMaxAttempts(profile['auto-continue-on-truncated-max-attempts'])) {
+                    profile['auto-continue-on-truncated-max-attempts'] = 3;
+                }
+            } else {
+                delete profile['auto-continue-on-truncated'];
+            }
+            saveSettingsDebounced();
+            await renderDetailsContent(detailsContent);
+            await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+            syncProfileEditorControls();
+        });
+    }
+
+    if (autoContinueOnTruncatedMaxAttemptsInput) {
+        autoContinueOnTruncatedMaxAttemptsInput.addEventListener('change', async () => {
+            const value = clampAutoContinueMaxAttempts(autoContinueOnTruncatedMaxAttemptsInput.value) || 1;
+            autoContinueOnTruncatedMaxAttemptsInput.value = String(value);
+
+            const profile = getSelectedProfile();
+            if (!profile) {
+                syncProfileEditorControls();
+                return;
+            }
+            const mode = resolveProfileMode(profile);
+            if (mode !== 'cc' && mode !== 'tc') {
+                syncProfileEditorControls();
+                return;
+            }
+
+            const oldProfile = structuredClone(profile);
+            profile['auto-continue-on-truncated-max-attempts'] = value;
             saveSettingsDebounced();
             await renderDetailsContent(detailsContent);
             await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);

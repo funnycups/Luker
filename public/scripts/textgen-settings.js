@@ -1364,7 +1364,7 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
         let logprobs = null;
         const swipes = [];
         const toolCalls = [];
-        const state = { reasoning: '' };
+        const state = { reasoning: '', finishReason: null };
         while (true) {
             const { done, value } = await reader.read();
             if (done) return;
@@ -1397,6 +1397,13 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
                 text += newText;
                 logprobs = parseTextgenLogprobs(newText, data.choices?.[0]?.logprobs || data?.completion_probabilities);
                 state.reasoning += data?.choices?.[0]?.reasoning ?? data?.choices?.[0]?.thinking ?? '';
+            }
+
+            // Textgen backends surface finish_reason on the terminal frame; keep the last
+            // non-null value seen so downstream auto-continue-on-truncated can consult it.
+            const rawFinish = data?.choices?.[0]?.finish_reason ?? data?.stop_reason ?? null;
+            if (rawFinish) {
+                state.finishReason = String(rawFinish);
             }
 
             yield { text, swipes, logprobs, toolCalls, state };
