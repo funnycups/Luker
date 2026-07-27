@@ -61,14 +61,14 @@
         <div id="connection_profile_auto_continue_truncated_block" class="marginTop10">
             <label class="checkbox_label" for="connection_profile_auto_continue_on_truncated">
                 <input id="connection_profile_auto_continue_on_truncated" type="checkbox" />
-                <span data-i18n="Auto-continue when the response is truncated (finish_reason = length or content_filter)">Auto-continue when the response is truncated (finish_reason = length or content_filter)</span>
+                <span data-i18n="Auto-continue when the response is truncated">Auto-continue when the response is truncated</span>
             </label>
             <div id="connection_profile_auto_continue_truncated_max_attempts_block" class="flex-container alignItemsCenter gap10 marginTop5">
                 <label for="connection_profile_auto_continue_on_truncated_max_attempts" data-i18n="Max auto-continue attempts">Max auto-continue attempts</label>
                 <input id="connection_profile_auto_continue_on_truncated_max_attempts" class="text_pole widthUnset" type="number" min="1" max="10" step="1" value="3" />
             </div>
             <div class="marginTop5">
-                <small class="opacity50p" data-i18n="Only main-chat continuations. Fires on output-token cap or safety cutoff; stops if the last round produced no new content (avoids infinite loops on empty refusals). Counter resets on user input, chat switch, or a normal-finish reply.">Only main-chat continuations. Fires on output-token cap or safety cutoff; stops if the last round produced no new content (avoids infinite loops on empty refusals). Counter resets on user input, chat switch, or a normal-finish reply.</small>
+                <small class="opacity50p" data-i18n="Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.">Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.</small>
             </div>
         </div>
         <div id="connection_profile_claude_cache_block" class="marginTop10" data-source="claude,openrouter">
