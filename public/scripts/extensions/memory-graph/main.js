@@ -468,6 +468,7 @@ const defaultSettings = {
     extractExcludeRecentTurns: 0,
     recallQueryMessages: 2,
     recentRawTurns: 2,
+    persistentInjectionMaxPerType: 0,
     llmVisibleRecentMessages: 5,
     lorebookNameOverride: '',
     lorebookEntryOrderBase: 9800,
@@ -834,6 +835,7 @@ function ensureSettings() {
     const recallQueryMessagesRaw = Number(extension_settings[MODULE_NAME].recallQueryMessages);
     const recentRawTurnsRaw = Number(extension_settings[MODULE_NAME].recentRawTurns);
     const llmVisibleRecentMessagesRaw = Number(extension_settings[MODULE_NAME].llmVisibleRecentMessages);
+    const persistentInjectionMaxPerTypeRaw = Number(extension_settings[MODULE_NAME].persistentInjectionMaxPerType);
     extension_settings[MODULE_NAME].extractBatchTurns = Math.max(
         1,
         Math.floor(Number.isFinite(extractBatchTurnsRaw) ? extractBatchTurnsRaw : defaultSettings.extractBatchTurns),
@@ -856,6 +858,10 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].llmVisibleRecentMessages = Math.max(
         0,
         Math.min(200, Math.floor(Number.isFinite(llmVisibleRecentMessagesRaw) ? llmVisibleRecentMessagesRaw : defaultSettings.llmVisibleRecentMessages)),
+    );
+    extension_settings[MODULE_NAME].persistentInjectionMaxPerType = Math.max(
+        0,
+        Math.floor(Number.isFinite(persistentInjectionMaxPerTypeRaw) ? persistentInjectionMaxPerTypeRaw : defaultSettings.persistentInjectionMaxPerType),
     );
     extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
     extension_settings[MODULE_NAME].extractSystemPrompt = String(extension_settings[MODULE_NAME].extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
@@ -923,6 +929,7 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
     const recallQueryMessagesRaw = Number(input.recallQueryMessages);
     const recentRawTurnsRaw = Number(input.recentRawTurns);
     const llmVisibleRecentMessagesRaw = Number(input.llmVisibleRecentMessages);
+    const persistentInjectionMaxPerTypeRaw = Number(input.persistentInjectionMaxPerType);
     const recallIterationsRaw = Number(input.recallMaxIterations);
     const toolRetryRaw = Number(input.toolCallRetryMax);
     const rpmLimitRaw = Number(input.rpmLimit);
@@ -930,6 +937,10 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
         recentRawTurns: Math.max(
             0,
             Math.floor(Number.isFinite(recentRawTurnsRaw) ? recentRawTurnsRaw : Number(base.recentRawTurns ?? defaultSettings.recentRawTurns)),
+        ),
+        persistentInjectionMaxPerType: Math.max(
+            0,
+            Math.floor(Number.isFinite(persistentInjectionMaxPerTypeRaw) ? persistentInjectionMaxPerTypeRaw : Number(base.persistentInjectionMaxPerType ?? defaultSettings.persistentInjectionMaxPerType)),
         ),
         llmVisibleRecentMessages: Math.max(
             0,
@@ -983,6 +994,7 @@ function applyAdvancedSettings(target, values) {
     }
     const normalized = normalizeAdvancedSettings(values, target);
     target.recentRawTurns = normalized.recentRawTurns;
+    target.persistentInjectionMaxPerType = normalized.persistentInjectionMaxPerType;
     target.llmVisibleRecentMessages = normalized.llmVisibleRecentMessages;
     target.recallMaxIterations = normalized.recallMaxIterations;
     target.toolCallRetryMax = normalized.toolCallRetryMax;
@@ -6973,11 +6985,22 @@ function collectAlwaysInjectNodes(store, settings, context = null, options = {})
     // raw-visible region carry information the main context cannot otherwise
     // see.
     //
+    // `options.maxPerType?: number` — when > 0, keep only the K most-recent
+    // (by `seqTo` desc, id asc tiebreak) always-inject nodes per type; the
+    // rest are dropped from persistent injection. Dropped nodes remain in the
+    // recall candidate pool automatically because the caller derives the
+    // "always-inject id set" from THIS function's return value — a node not
+    // in that set is not excluded from recall route candidates
+    // (see `routeCandidates` filter in `runRecallPipeline`). Applied AFTER
+    // `seqWindowFrom` (so the raw-visible cap wins first). Applies uniformly
+    // to all always-inject types INCLUDING `event_table`.
+    //
     // latestOnly types (character_sheet / location_state / thread) are
-    // intentionally exempt from this filter — their picked nodes are
-    // current-truth snapshots that must inject even when their seqTo overlaps
-    // the raw-visible window, otherwise the main context loses authoritative
-    // state.
+    // intentionally exempt from BOTH `seqWindowFrom` AND `maxPerType` — their
+    // picked nodes are current-truth snapshots that must inject even when
+    // their seqTo overlaps the raw-visible window, and per-type-K makes no
+    // sense against types whose selector already yields at most one node
+    // per key.
     const alwaysSpecs = getEffectiveNodeTypeSchema(context, settings)
         .filter((spec) => {
             const tableName = String(spec?.tableName || '').trim().toLowerCase();
@@ -7028,7 +7051,47 @@ function collectAlwaysInjectNodes(store, settings, context = null, options = {})
         })
         : picked;
 
-    return windowed.sort(compareNodesByTimeline);
+    // Per-type top-K cap: within each non-latestOnly type, keep only the K most
+    // recent nodes (seqTo desc; ties broken by id asc for determinism). Nodes
+    // beyond K are dropped from persistent injection but remain candidates for
+    // recall (because the caller derives the "always-inject id set" from this
+    // function's return value — dropped nodes simply won't be in that set).
+    const maxPerTypeRaw = Number(options?.maxPerType);
+    const maxPerType = Number.isFinite(maxPerTypeRaw) && maxPerTypeRaw > 0
+        ? Math.floor(maxPerTypeRaw)
+        : 0;
+    let capped = windowed;
+    if (maxPerType > 0) {
+        const byType = new Map();
+        for (const node of windowed) {
+            const nodeType = String(node?.type || '').toLowerCase();
+            if (!byType.has(nodeType)) {
+                byType.set(nodeType, []);
+            }
+            byType.get(nodeType).push(node);
+        }
+        const kept = [];
+        for (const [nodeType, nodes] of byType.entries()) {
+            if (latestOnlyTypes.has(nodeType)) {
+                // latestOnly types bypass the K cap — their selector already
+                // yields at most one node per key and represents current truth.
+                for (const node of nodes) kept.push(node);
+                continue;
+            }
+            const sorted = nodes.slice().sort((a, b) => {
+                const aTo = Number.isFinite(Number(a?.seqTo)) ? Number(a.seqTo) : -Infinity;
+                const bTo = Number.isFinite(Number(b?.seqTo)) ? Number(b.seqTo) : -Infinity;
+                if (aTo !== bTo) return bTo - aTo;
+                return String(a?.id || '').localeCompare(String(b?.id || ''));
+            });
+            for (let i = 0; i < Math.min(maxPerType, sorted.length); i += 1) {
+                kept.push(sorted[i]);
+            }
+        }
+        capped = kept;
+    }
+
+    return capped.sort(compareNodesByTimeline);
 }
 
 function getNodeSeqRange(node) {
@@ -7496,11 +7559,28 @@ async function syncPersistentLorebookProjection(context, settings, store) {
     const seqWindowFrom = recentRawTurns > 0
         ? Math.max(0, getLatestSeqIndex(store) - recentRawTurns + 1)
         : undefined;
+    // Per-type cap for persistent injection. K = 0 (default) = no cap. K > 0 =
+    // keep only the K most-recent always-inject nodes per type; older siblings
+    // fall back to recall-only. See collectAlwaysInjectNodes' `maxPerType` doc
+    // for exemption rules (latestOnly types bypass; event_table is included).
+    // This is a persistent-injection-only knob — the recall pipeline sites
+    // that also call collectAlwaysInjectNodes (runRecallPipeline etc.) do
+    // NOT pass maxPerType, so recall candidates and recall-selected nodes
+    // remain unaffected. Enforced structurally by a source-scan test in
+    // tests/memory-graph/persistent-injection-max-per-type.test.js that
+    // asserts `maxPerType` appears only inside this function's body.
+    const persistentInjectionMaxPerType = Math.max(
+        0,
+        Math.floor(Number(settings.persistentInjectionMaxPerType ?? defaultSettings.persistentInjectionMaxPerType) || 0),
+    );
+    const collectOptions = {};
+    if (seqWindowFrom !== undefined) collectOptions.seqWindowFrom = seqWindowFrom;
+    if (persistentInjectionMaxPerType > 0) collectOptions.maxPerType = persistentInjectionMaxPerType;
     const alwaysInjectNodes = collectAlwaysInjectNodes(
         store,
         settings,
         context,
-        seqWindowFrom !== undefined ? { seqWindowFrom } : {},
+        collectOptions,
     );
     const corePacket = normalizeMultilineText(
         buildFocusTablesText(alwaysInjectNodes, settings, { tablePrefix: 'Core' }, context),
@@ -13709,6 +13789,7 @@ function hydrateAdvancedTabFields(root, source) {
     if (!root?.length || !source) return;
     root.find('#luker_rpg_memory_advanced_include_world_info').prop('checked', source.includeWorldInfoWithPreset !== false);
     root.find('#luker_rpg_memory_advanced_recent_raw_turns').val(String(Math.max(0, Number(source.recentRawTurns ?? defaultSettings.recentRawTurns))));
+    root.find('#luker_rpg_memory_advanced_persistent_injection_max_per_type').val(String(Math.max(0, Number(source.persistentInjectionMaxPerType ?? defaultSettings.persistentInjectionMaxPerType))));
     root.find('#luker_rpg_memory_advanced_recall_iterations').val(String(Math.max(2, Math.min(6, Number(source.recallMaxIterations ?? defaultSettings.recallMaxIterations)))));
     root.find('#luker_rpg_memory_advanced_tool_retries').val(String(Math.max(0, Math.min(10, Number(source.toolCallRetryMax ?? defaultSettings.toolCallRetryMax)))));
     root.find('#luker_rpg_memory_advanced_rpm_limit').val(String(Math.max(0, Math.min(600, Number(source.rpmLimit ?? defaultSettings.rpmLimit)))));
@@ -13731,6 +13812,7 @@ function readAdvancedTabFields(root) {
     return {
         includeWorldInfoWithPreset: Boolean(root.find('#luker_rpg_memory_advanced_include_world_info').prop('checked')),
         recentRawTurns: Number(root.find('#luker_rpg_memory_advanced_recent_raw_turns').val()),
+        persistentInjectionMaxPerType: Number(root.find('#luker_rpg_memory_advanced_persistent_injection_max_per_type').val()),
         recallMaxIterations: Number(root.find('#luker_rpg_memory_advanced_recall_iterations').val()),
         toolCallRetryMax: Number(root.find('#luker_rpg_memory_advanced_tool_retries').val()),
         rpmLimit: Number(root.find('#luker_rpg_memory_advanced_rpm_limit').val()),

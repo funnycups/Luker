@@ -235,6 +235,9 @@ function buildAdvancedTabHtml(deps) {
                 <input id="luker_rpg_memory_advanced_recent_raw_turns" class="text_pole" type="number" min="0" step="1" />
             </label>
             <small style="opacity:0.8">${escapeHtml(i18n('How many trailing assistant turns are visible as raw text. Recall excludes events derived from these turns; the same window also offsets always-injected snapshots (except latest-only types like character sheets and locations, which stay as current truth).'))}</small>
+            <label>${escapeHtml(i18n('Persistent injection: keep only latest K per type (0 = no limit)'))}${fh('About Persistent injection max per type', 'Persistent injection max per type help body')}
+                <input id="luker_rpg_memory_advanced_persistent_injection_max_per_type" class="text_pole" type="number" min="0" step="1" />
+            </label>
             <label id="luker_rpg_memory_advanced_recall_iterations_row">${escapeHtml(i18n('Recall max iterations'))}${fh('About Recall max iterations', 'Recall max iterations help body')}
                 <input id="luker_rpg_memory_advanced_recall_iterations" class="text_pole" type="number" min="2" max="6" step="1" />
             </label>
