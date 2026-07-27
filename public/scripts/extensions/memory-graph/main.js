@@ -6993,14 +6993,15 @@ function collectAlwaysInjectNodes(store, settings, context = null, options = {})
     // in that set is not excluded from recall route candidates
     // (see `routeCandidates` filter in `runRecallPipeline`). Applied AFTER
     // `seqWindowFrom` (so the raw-visible cap wins first). Applies uniformly
-    // to all always-inject types INCLUDING `event_table`.
+    // to ALL always-inject types INCLUDING `event_table` AND latestOnly
+    // types — the K cap is a hard main-context budget from the user, so no
+    // type is exempted.
     //
     // latestOnly types (character_sheet / location_state / thread) are
-    // intentionally exempt from BOTH `seqWindowFrom` AND `maxPerType` — their
-    // picked nodes are current-truth snapshots that must inject even when
-    // their seqTo overlaps the raw-visible window, and per-type-K makes no
-    // sense against types whose selector already yields at most one node
-    // per key.
+    // intentionally exempt from `seqWindowFrom` — their picked nodes are
+    // current-truth snapshots that must inject even when their seqTo
+    // overlaps the raw-visible window, otherwise the main context loses
+    // authoritative state. They are NOT exempt from `maxPerType`.
     const alwaysSpecs = getEffectiveNodeTypeSchema(context, settings)
         .filter((spec) => {
             const tableName = String(spec?.tableName || '').trim().toLowerCase();
@@ -7051,11 +7052,13 @@ function collectAlwaysInjectNodes(store, settings, context = null, options = {})
         })
         : picked;
 
-    // Per-type top-K cap: within each non-latestOnly type, keep only the K most
-    // recent nodes (seqTo desc; ties broken by id asc for determinism). Nodes
-    // beyond K are dropped from persistent injection but remain candidates for
-    // recall (because the caller derives the "always-inject id set" from this
+    // Per-type top-K cap: within each type, keep only the K most recent nodes
+    // (seqTo desc; ties broken by id asc for determinism). Nodes beyond K are
+    // dropped from persistent injection but remain candidates for recall
+    // (because the caller derives the "always-inject id set" from this
     // function's return value — dropped nodes simply won't be in that set).
+    // Applies to latestOnly types too — the K cap is a hard main-context
+    // budget from the user.
     const maxPerTypeRaw = Number(options?.maxPerType);
     const maxPerType = Number.isFinite(maxPerTypeRaw) && maxPerTypeRaw > 0
         ? Math.floor(maxPerTypeRaw)
@@ -7071,13 +7074,7 @@ function collectAlwaysInjectNodes(store, settings, context = null, options = {})
             byType.get(nodeType).push(node);
         }
         const kept = [];
-        for (const [nodeType, nodes] of byType.entries()) {
-            if (latestOnlyTypes.has(nodeType)) {
-                // latestOnly types bypass the K cap — their selector already
-                // yields at most one node per key and represents current truth.
-                for (const node of nodes) kept.push(node);
-                continue;
-            }
+        for (const [, nodes] of byType.entries()) {
             const sorted = nodes.slice().sort((a, b) => {
                 const aTo = Number.isFinite(Number(a?.seqTo)) ? Number(a.seqTo) : -Infinity;
                 const bTo = Number.isFinite(Number(b?.seqTo)) ? Number(b.seqTo) : -Infinity;

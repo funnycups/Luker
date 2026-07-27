@@ -18,7 +18,9 @@
  *      seqTo >= seqWindowFrom (latestOnly types exempt).
  *   4. POST-filter 2 (NEW): if `options.maxPerType` > 0, bucket the survivors
  *      by type, sort each bucket by seqTo DESC (id ASC tiebreak), keep the
- *      first K of each. latestOnly types bypass the K cap.
+ *      first K of each. This applies to ALL always-inject types — the K cap
+ *      is a hard main-context budget from the user, and latestOnly types
+ *      are NOT exempt.
  *   5. Sort by compareNodesByTimeline (seqTo asc → id asc tiebreak).
  *
  * The point of this test file is to lock the CONTRACT of the K cap, not
@@ -88,7 +90,8 @@ function collectAlwaysInjectNodesRef(store, schema, options = {}) {
         })
         : picked;
 
-    // POST-filter 2: maxPerType top-K per type
+    // POST-filter 2: maxPerType top-K per type (applies to ALL types,
+    // including latestOnly).
     const maxPerTypeRaw = Number(options?.maxPerType);
     const maxPerType = Number.isFinite(maxPerTypeRaw) && maxPerTypeRaw > 0 ? Math.floor(maxPerTypeRaw) : 0;
     let capped = windowed;
@@ -100,11 +103,7 @@ function collectAlwaysInjectNodesRef(store, schema, options = {}) {
             byType.get(t).push(node);
         }
         const kept = [];
-        for (const [t, nodes] of byType.entries()) {
-            if (latestOnlyTypes.has(t)) {
-                for (const n of nodes) kept.push(n);
-                continue;
-            }
+        for (const [, nodes] of byType.entries()) {
             const sorted = nodes.slice().sort((a, b) => {
                 const aTo = Number.isFinite(Number(a?.seqTo)) ? Number(a.seqTo) : -Infinity;
                 const bTo = Number.isFinite(Number(b?.seqTo)) ? Number(b.seqTo) : -Infinity;
@@ -213,21 +212,21 @@ describe('maxPerType default (0 / unset) — full always-inject set', () => {
 });
 
 describe('maxPerType > 0 — per-type top-K by seqTo desc', () => {
-    test('K = 2 → each non-latestOnly type keeps 2 most recent; latestOnly type keeps all its picks', () => {
+    test('K = 2 → each type keeps 2 most recent (including latestOnly)', () => {
         const out = collectAlwaysInjectNodesRef(buildMixedStore(), mixedSchema(), { maxPerType: 2 });
         const ids = out.map((n) => n.id);
         // event: {1,3,7,11,15} → keep 15, 11
         // world_constants: {2,5,10} → keep 10, 5
-        // character_sheet (latestOnly): {4, 12} → keep both (bypass K)
-        // Final sort ascending by seqTo: rule_5, evt_11, sheet_4, rule_10, sheet_12, evt_15
+        // character_sheet: {4, 12} → keep both (bucket size ≤ K)
+        // Final sort ascending by seqTo: sheet_4, rule_5, rule_10, evt_11, sheet_12, evt_15
         expect(ids).toEqual(['sheet_4', 'rule_5', 'rule_10', 'evt_11', 'sheet_12', 'evt_15']);
     });
 
-    test('K = 1 → each non-latestOnly type keeps only its most recent', () => {
+    test('K = 1 → each type keeps only its most recent (latestOnly included)', () => {
         const out = collectAlwaysInjectNodesRef(buildMixedStore(), mixedSchema(), { maxPerType: 1 });
         const ids = out.map((n) => n.id);
-        // event: 15; world_constants: 10; character_sheet: both (exempt)
-        expect(ids).toEqual(['sheet_4', 'rule_10', 'sheet_12', 'evt_15']);
+        // event: 15; world_constants: 10; character_sheet: 12 (sheet_4 dropped by K)
+        expect(ids).toEqual(['rule_10', 'sheet_12', 'evt_15']);
     });
 
     test('K larger than any bucket → no drops', () => {
@@ -306,13 +305,13 @@ describe('maxPerType composed with seqWindowFrom — window applies FIRST, then 
     });
 });
 
-describe('latestOnly types bypass the K cap unconditionally', () => {
-    test('character_sheet with 5 picks and K=2 still keeps all 5', () => {
+describe('latestOnly types participate in the K cap (no exemption)', () => {
+    test('character_sheet with 5 picks and K=2 keeps only 2 most recent', () => {
         const store = { nodes: {} };
         for (const s of [1, 2, 3, 4, 5]) store.nodes[`sheet_${s}`] = makeNode({ id: `sheet_${s}`, seqTo: s, type: 'character_sheet' });
         const schema = [{ id: 'character_sheet', tableName: 'sheet_table', alwaysInject: true, latestOnly: true }];
         const out = collectAlwaysInjectNodesRef(store, schema, { maxPerType: 2 });
-        expect(out.map((n) => n.id)).toEqual(['sheet_1', 'sheet_2', 'sheet_3', 'sheet_4', 'sheet_5']);
+        expect(out.map((n) => n.id)).toEqual(['sheet_4', 'sheet_5']);
     });
 });
 
