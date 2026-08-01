@@ -6971,7 +6971,7 @@ export function selectVisibleNodesForType(store, typeNodes, type, compressionMod
     return picked.sort(compareNodesByTimeline);
 }
 
-function collectAlwaysInjectNodes(store, settings, context = null, options = {}) {
+export function collectAlwaysInjectNodes(store, settings, context = null, options = {}) {
     // `options.seqWindowFrom?: number` — when set, post-filter the picked nodes
     // to DROP those whose `node.seqTo >= seqWindowFrom` (boundary exclusive on
     // the kept side: keep `seqTo < seqWindowFrom` only). When unset / non-finite,
@@ -7081,6 +7081,75 @@ function getNodeSeqRange(node) {
 
 export function getLatestSeqIndex(store) {
     return Math.max(-1, getStoreCoveredSeqTo(store));
+}
+
+// Compute the seq-based lower bound for the raw-visible recent-turns window.
+// Nodes whose seqTo lands at or above this bound are already covered by
+// raw dialogue in the main prompt, so persistent injection of their
+// semantic form is redundant.
+//
+// Returns `undefined` when `recentRawTurns <= 0` — callers should omit the
+// option from `collectAlwaysInjectNodes` in that case.
+//
+// PASSED BY: syncPersistentLorebookProjection only. Recall pipeline callers
+// intentionally do NOT pass this (recall candidate pool must remain
+// unaffected by the injection window so new always-inject nodes stay
+// recallable when relevant).
+export function computeRecentRawWindowFrom(store, settings) {
+    const recentRawTurns = Math.max(
+        0,
+        Math.floor(Number(settings?.recentRawTurns ?? defaultSettings.recentRawTurns)),
+    );
+    if (recentRawTurns <= 0) return undefined;
+    return Math.max(0, getLatestSeqIndex(store) - recentRawTurns + 1);
+}
+
+// Compute the seq-based lower bound for the persistent-injection recency
+// horizon. Nodes whose seqTo is strictly less than this bound drop out of
+// the always-inject set — meaning they leave the persistent lorebook
+// projection AND leave the alwaysInjectSet that recall pipelines use to
+// exclude nodes from the candidate pool. Old always-inject nodes therefore
+// fall back to being recallable (i18n label
+// "常驻注入最大回溯楼层数" / "Persistent injection recency horizon"
+// promises this explicitly: "仍可通过召回捞回").
+//
+// Returns `undefined` when `persistentInjectionMaxSeqDistance <= 0`
+// (unlimited) — callers should omit the option from
+// `collectAlwaysInjectNodes` in that case.
+//
+// PASSED BY: syncPersistentLorebookProjection AND all recall pipeline
+// call sites (runLLMDrivenRecall, injectMemoryPrompts). Keeping the two
+// sides in sync is what makes recency-horizon nodes fall back to recall
+// instead of vanishing from both channels.
+export function computePersistentInjectionSeqCutoff(store, settings) {
+    const persistentInjectionMaxSeqDistance = Math.max(
+        0,
+        Math.floor(
+            Number(
+                settings?.persistentInjectionMaxSeqDistance
+                    ?? defaultSettings.persistentInjectionMaxSeqDistance,
+            ) || 0,
+        ),
+    );
+    if (persistentInjectionMaxSeqDistance <= 0) return undefined;
+    return Math.max(0, getLatestSeqIndex(store) - persistentInjectionMaxSeqDistance + 1);
+}
+
+// Build the `options` object recall pipelines pass to
+// `collectAlwaysInjectNodes`. Includes `seqCutoffFrom` (persistent-injection
+// recency horizon, so horizon-dropped nodes leave the always-inject set and
+// become recall candidates) but NEVER `seqWindowFrom` — the recall
+// candidate pool must be unaffected by the raw-visible recent-turns window
+// so new always-inject nodes remain recallable when relevant.
+//
+// Sync-persistent-injection uses `computeRecentRawWindowFrom` +
+// `computePersistentInjectionSeqCutoff` directly, not this helper — it
+// passes BOTH windows.
+export function computeRecallAlwaysInjectOptions(store, settings) {
+    const options = {};
+    const seqCutoffFrom = computePersistentInjectionSeqCutoff(store, settings);
+    if (seqCutoffFrom !== undefined) options.seqCutoffFrom = seqCutoffFrom;
+    return options;
 }
 
 function getRecentMessagesByAssistantTurns(messages, keepAssistantTurns) {
@@ -7521,41 +7590,14 @@ async function syncPersistentLorebookProjection(context, settings, store) {
             alwaysInjectNodes: [],
         };
     }
-    // recentRawTurns governs "how many trailing assistant turns are visible as
-    // raw text" — anything derived from them is redundant for the main context.
-    // Use it as the snapshot offset for always-injected nodes too, instead of
-    // a separate window. latestOnly types (character_sheet / location_state /
-    // thread) are exempt from this offset inside collectAlwaysInjectNodes so
-    // their current-truth snapshots still inject.
-    //
-    // The raw-visible region spans seq `[latestSeq - N + 1, latestSeq]`
-    // (N seqs, inclusive on both ends — matches `isNodeInRecentExcludeWindow`
-    // which uses `cutoff = latestSeq - N + 1`). `seqWindowFrom` is that lower
-    // bound; collectAlwaysInjectNodes drops nodes whose seqTo lands at or
-    // above it, keeping only nodes that end strictly before the raw region.
-    const recentRawTurns = Math.max(0, Math.floor(Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)));
-    const seqWindowFrom = recentRawTurns > 0
-        ? Math.max(0, getLatestSeqIndex(store) - recentRawTurns + 1)
-        : undefined;
-    // Recency horizon for persistent injection. K = 0 (default) = no horizon
-    // (all always-inject nodes injected). K > 0 = only inject nodes whose
-    // seqTo is within the last K assistant turns (seqTo >= latestSeq − K + 1);
-    // older nodes fall back to recall-only. Applies to ALL always-inject
-    // types including latestOnly and event_table — a `character_sheet` whose
-    // entity has not been written to within the horizon becomes recall-only.
-    // This is a persistent-injection-only knob — the recall pipeline sites
-    // that also call collectAlwaysInjectNodes (runRecallPipeline etc.) do
-    // NOT pass seqCutoffFrom, so recall candidates and recall-selected nodes
-    // remain unaffected. Enforced structurally by a source-scan test in
-    // tests/memory-graph/persistent-injection-max-per-type.test.js that
-    // asserts `seqCutoffFrom` appears only inside this function's body.
-    const persistentInjectionMaxSeqDistance = Math.max(
-        0,
-        Math.floor(Number(settings.persistentInjectionMaxSeqDistance ?? defaultSettings.persistentInjectionMaxSeqDistance) || 0),
-    );
-    const seqCutoffFrom = persistentInjectionMaxSeqDistance > 0
-        ? Math.max(0, getLatestSeqIndex(store) - persistentInjectionMaxSeqDistance + 1)
-        : undefined;
+    // seqWindowFrom (raw-visible recent-turns window) and seqCutoffFrom
+    // (persistent-injection recency horizon) are both derived from settings
+    // via the exported helpers so recall pipeline call sites can compute
+    // the same seqCutoffFrom bound — that's how horizon-dropped nodes
+    // fall back to being recallable instead of vanishing from both
+    // channels. See computePersistentInjectionSeqCutoff docs.
+    const seqWindowFrom = computeRecentRawWindowFrom(store, settings);
+    const seqCutoffFrom = computePersistentInjectionSeqCutoff(store, settings);
     const collectOptions = {};
     if (seqWindowFrom !== undefined) collectOptions.seqWindowFrom = seqWindowFrom;
     if (seqCutoffFrom !== undefined) collectOptions.seqCutoffFrom = seqCutoffFrom;
@@ -7662,7 +7704,14 @@ async function runLLMDrivenRecall(context, store, payload) {
     const runtimeWorldInfo = buildRuntimeWorldInfoFromPayload(payload);
     const forceWorldInfoResimulate = Boolean(payload?.forceWorldInfoResimulate);
     const worldInfoMessages = Array.isArray(payload?.coreChat) ? payload.coreChat : [];
-    const alwaysInjectNodes = collectAlwaysInjectNodes(store, settings, context);
+    // Recall-side always-inject set is horizon-adjusted (seqCutoffFrom) but
+    // NOT window-adjusted (seqWindowFrom) — see computeRecallAlwaysInjectOptions.
+    const alwaysInjectNodes = collectAlwaysInjectNodes(
+        store,
+        settings,
+        context,
+        computeRecallAlwaysInjectOptions(store, settings),
+    );
     const latestSeqIndex = getLatestSeqIndex(store);
     const excludeMessages = Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns));
     const rootCandidates = collectRootCandidates(store, settings, queryBundle, alwaysInjectNodes, context, {
@@ -8155,8 +8204,14 @@ async function injectMemoryPrompts(context, payload) {
     // Persistent injection (alwaysInject nodes) ran above via
     // syncPersistentLorebookProjection. Collect here independently of recall
     // so __recordInjectedNodeIds publishes the real set even when recall is
-    // disabled or short-circuits.
-    const alwaysInjectNodes = collectAlwaysInjectNodes(store, settings, context);
+    // disabled or short-circuits. Same recall-side options shape as
+    // runLLMDrivenRecall — see computeRecallAlwaysInjectOptions.
+    const alwaysInjectNodes = collectAlwaysInjectNodes(
+        store,
+        settings,
+        context,
+        computeRecallAlwaysInjectOptions(store, settings),
+    );
     let selectedNodes = [];
     let trace = [];
 

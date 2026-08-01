@@ -4,12 +4,8 @@
  * Covers spec docs/superpowers/specs/2026-05-18-memory-graph-injection-window.md
  * §5 acceptance criteria + §6 boundary case.
  *
- * `collectAlwaysInjectNodes` is **not exported** from main.js — and main.js
- * itself transitively imports `../../../script.js` / `./lib.js` which touch
- * DOM at module-load (jQuery / Popper / webpack-bundled `lib.core.bundle.js`
- * that does not exist outside a build). We therefore re-implement the small
- * post-filter contract here as a reference helper, matching the production
- * semantics in main.js#collectAlwaysInjectNodes verbatim:
+ * The unit tests below use a reference `collectAlwaysInjectNodesRef` helper
+ * that mirrors production semantics verbatim for compact edge-case coverage:
  *
  *   1. Filter schema specs to those with `alwaysInject: true` or
  *      `tableName === 'event_table'`.
@@ -24,21 +20,16 @@
  *      main prompt, so injecting their semantic form is redundant.
  *   4. Sort by `compareNodesByTimeline` semantics (seqTo asc → id asc tiebreak).
  *
- * The point of these tests is to lock the **contract**, not exercise the
- * **internal** implementation. The Phase-3 UI/i18n changes are not separately
- * unit-tested — those are glue verified by the integration of the entries
- * existing (test §5.6 below).
- *
- * The recall-pool / recall-selected acceptance criteria (§5.3, §5.4) are
- * already enforced by code structure: the recall callers at
- * main.js:syncPersistentLorebookProjection are the **only** site that
- * passes the new `seqWindowFrom`; both recall paths
- * (`runLLMDrivenRecall` and `runRecallPipeline`) keep calling
- * `collectAlwaysInjectNodes(store, settings, context)` with three args.
- * Those are stated as test.todo with the structural-enforcement note.
+ * The §5.3 behavior test at the bottom imports the real
+ * `collectAlwaysInjectNodes` from main.js (via the shared module-stack shim)
+ * and asserts that a recall-context call without seqWindowFrom keeps a
+ * node that a sync-context call with seqWindowFrom would drop. This is
+ * stronger than the previous source-scan structural assertion (which was
+ * blind to whether the call actually behaves as intended).
  */
 
-import { describe, test, expect } from '@jest/globals';
+import { describe, test, expect, beforeAll } from '@jest/globals';
+import './_mocks/main-module-stack.js';
 
 // ---------------------------------------------------------------------------
 // Reference implementation — mirrors main.js#collectAlwaysInjectNodes
@@ -323,47 +314,58 @@ const MG_MAIN_SOURCE = readFileSync(
     'utf8',
 );
 
-describe('spec §5.3 — recall candidate pool unaffected by window', () => {
-    // The injection window is consumed by `syncPersistentLorebookProjection`
-    // (the legitimate main-context site), which DOES pass a 4th `options`
-    // argument carrying `seqWindowFrom`. Every OTHER call site —
-    // specifically the ones inside the recall pipeline
-    // (`runLLMDrivenRecall`, hybrid/rerank fall-through, etc.) — must
-    // NOT pass `options`, otherwise the recall pool would observe the
-    // window. Spec §5.3 forbids this.
+describe('recall candidate pool unaffected by window (behavior)', () => {
+    // The recall pipeline pipes seqCutoffFrom (persistent-injection recency
+    // horizon) into collectAlwaysInjectNodes — that's how horizon-dropped
+    // nodes fall back to being recallable. But it must NOT pipe
+    // seqWindowFrom (raw-visible recent-turns window) — new always-inject
+    // nodes covered by raw text remain valid recall candidates because
+    // their semantic form can still be selected for the focus packet.
     //
-    // We assert that every recall-context call uses the 3-arg shape by
-    // walking the source: any `collectAlwaysInjectNodes(...)` invocation
-    // NOT inside `syncPersistentLorebookProjection`'s body must be 3-arg.
-    test('every recall-context call site uses the 3-arg shape', () => {
-        // Extract syncPersistentLorebookProjection's body so we can subtract
-        // its lines from consideration. Any collectAlwaysInjectNodes call
-        // INSIDE it is the legitimate main-context site.
-        const mainSiteFn = MG_MAIN_SOURCE.match(
-            /async function syncPersistentLorebookProjection\([^)]*\)\s*\{([\s\S]*?)\n\}\n/,
-        );
-        expect(mainSiteFn).not.toBeNull();
-        const sourceWithoutMainSite = MG_MAIN_SOURCE.replace(mainSiteFn[0], '/* main-context site stripped */');
+    // We verify this by importing the real collectAlwaysInjectNodes from
+    // main.js and calling it with two option shapes: one mimicking the
+    // sync-persistent site (with seqWindowFrom), one mimicking the recall
+    // site (without seqWindowFrom). A node inside the raw-visible window
+    // must be dropped by the former and kept by the latter.
+    let collectAlwaysInjectNodes;
 
-        // Skip the function definition itself.
-        const callRe = /(?<!function\s)\bcollectAlwaysInjectNodes\s*\(([\s\S]*?)\)\s*;/g;
-        const calls = [...sourceWithoutMainSite.matchAll(callRe)];
-        expect(calls.length).toBeGreaterThan(0);
-        for (const m of calls) {
-            // Strip nested call commas by removing balanced parens / brackets
-            // contents first, then counting top-level commas in the arg list.
-            let args = m[1];
-            for (let i = 0; i < 8; i += 1) {
-                const before = args;
-                args = args.replace(/\([^()]*\)/g, '').replace(/\{[^{}]*\}/g, '').replace(/\[[^\[\]]*\]/g, '');
-                if (args === before) break;
-            }
-            const topLevelCommaCount = (args.match(/,/g) || []).length;
-            // 3 args = 2 commas. Anything else means a fourth `options` arg
-            // (or a missing arg) reached a recall-context call site — spec
-            // §5.3 forbids recall paths from observing the injection window.
-            expect({ call: m[0], commaCount: topLevelCommaCount }).toEqual({ call: m[0], commaCount: 2 });
-        }
+    beforeAll(async () => {
+        const mainMod = await import('../../public/scripts/extensions/memory-graph/main.js');
+        collectAlwaysInjectNodes = mainMod.collectAlwaysInjectNodes;
+    });
+
+    test('seqWindowFrom drops new always-inject nodes on sync side but not on recall side', () => {
+        // Two events: evt_old (seqTo=1, well below window) + evt_new (seqTo=14,
+        // inside window when seqWindowFrom=10).
+        const nodes = {
+            evt_old: {
+                id: 'evt_old', type: 'event', level: 'semantic', seqTo: 1,
+                archived: false, title: 'evt_old', fields: {}, parentId: '', childrenIds: [],
+                semanticRollup: false, semanticDepth: 0,
+            },
+            evt_new: {
+                id: 'evt_new', type: 'event', level: 'semantic', seqTo: 14,
+                archived: false, title: 'evt_new', fields: {}, parentId: '', childrenIds: [],
+                semanticRollup: false, semanticDepth: 0,
+            },
+        };
+        const store = { nodes, edges: [], appliedSeqTo: 15, loggedSeqTo: 0 };
+        const settings = {
+            nodeTypeSchema: [
+                {
+                    id: 'event', tableName: 'event_table', alwaysInject: true,
+                    latestOnly: false, compression: { mode: 'none' },
+                },
+            ],
+        };
+
+        // Sync-persistent call: passes seqWindowFrom=10 → drops evt_new (inside window).
+        const syncNodes = collectAlwaysInjectNodes(store, settings, null, { seqWindowFrom: 10 });
+        expect(syncNodes.map((n) => n.id).sort()).toEqual(['evt_old']);
+
+        // Recall call: omits seqWindowFrom → keeps evt_new.
+        const recallNodes = collectAlwaysInjectNodes(store, settings, null, {});
+        expect(recallNodes.map((n) => n.id).sort()).toEqual(['evt_new', 'evt_old']);
     });
 });
 

@@ -12,12 +12,15 @@
  * INCLUDING latestOnly (character_sheet etc.) AND event_table: a latestOnly
  * entity not written to within the horizon becomes recall-only.
  *
- * `collectAlwaysInjectNodes` is not exported from main.js (main.js touches
- * DOM at module load). We mirror the small post-filter contract here as a
- * reference helper, matching production semantics verbatim.
- *
- * Structural assertions at the bottom pin the property that the recall
- * pipeline never observes `seqCutoffFrom`.
+ * The unit tests below use a reference `collectAlwaysInjectNodesRef` helper
+ * that mirrors production semantics for compact edge-case coverage. The
+ * behavior tests at the bottom import the real `collectAlwaysInjectNodes`,
+ * `computePersistentInjectionSeqCutoff`, and `getLatestSeqIndex` from
+ * `main.js` (via the shared module-stack shim) to lock the contract that
+ * horizon-dropped always-inject nodes leave the alwaysInjectSet used by
+ * both persistent-injection AND recall pipelines — otherwise those old
+ * nodes vanish from both channels (persistent horizon drops them AND
+ * recall excludes them from the candidate pool as "always inject").
  */
 
 import { describe, test, expect } from '@jest/globals';
@@ -290,46 +293,172 @@ describe('persistentInjectionMaxSeqDistance settings clamp', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Structural assertions — recall pipeline must not observe seqCutoffFrom
+// Behavior tests — recall pipeline MUST observe seqCutoffFrom
+//
+// The i18n label "常驻注入最大回溯楼层数 / Persistent injection recency
+// horizon" promises that horizon-dropped nodes "仍可通过召回捞回". That
+// requires both channels (sync-persistent + recall) to compute the same
+// alwaysInjectSet — the recall pool then excludes only nodes currently in
+// persistent injection, so horizon-dropped old nodes automatically become
+// recall candidates. Prior to this contract being enforced, the recall
+// pipeline called `collectAlwaysInjectNodes(store, settings, context)`
+// with 3 args (no seqCutoffFrom), so it returned the FULL always-inject
+// type set — old horizon-dropped events were excluded from both channels.
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { beforeAll } from '@jest/globals';
+import './_mocks/main-module-stack.js';
 
-const __testDir = dirname(fileURLToPath(import.meta.url));
-const MG_MAIN_SOURCE = readFileSync(
-    resolvePath(__testDir, '..', '..', 'public', 'scripts', 'extensions', 'memory-graph', 'main.js'),
-    'utf8',
-);
+describe('recall pipeline observes seqCutoffFrom (behavior)', () => {
+    let collectAlwaysInjectNodes;
+    let computePersistentInjectionSeqCutoff;
+    let computeRecallAlwaysInjectOptions;
+    let getLatestSeqIndex;
 
-describe('recall pipeline is unaffected by seqCutoffFrom (structural)', () => {
-    test('only syncPersistentLorebookProjection references seqCutoffFrom', () => {
-        const mainSiteFn = MG_MAIN_SOURCE.match(
+    beforeAll(async () => {
+        const mainMod = await import('../../public/scripts/extensions/memory-graph/main.js');
+        collectAlwaysInjectNodes = mainMod.collectAlwaysInjectNodes;
+        computePersistentInjectionSeqCutoff = mainMod.computePersistentInjectionSeqCutoff;
+        computeRecallAlwaysInjectOptions = mainMod.computeRecallAlwaysInjectOptions;
+        getLatestSeqIndex = mainMod.getLatestSeqIndex;
+    });
+
+    function buildHorizonStore() {
+        // Semantic nodes at seqTo = 1 (old, past horizon), 5 (past horizon),
+        // 13, 14 (within horizon = latest-3+1 = 13). appliedSeqTo=15 => latest=15.
+        const nodes = {};
+        for (const s of [1, 5, 13, 14]) {
+            nodes[`evt_${s}`] = {
+                id: `evt_${s}`,
+                type: 'event',
+                level: 'semantic',
+                seqTo: s,
+                archived: false,
+                title: `evt_${s}`,
+                fields: {},
+                parentId: '',
+                childrenIds: [],
+                semanticRollup: false,
+                semanticDepth: 0,
+            };
+        }
+        return {
+            nodes,
+            edges: [],
+            appliedSeqTo: 15,
+            loggedSeqTo: 0,
+        };
+    }
+
+    function horizonSettings(persistentInjectionMaxSeqDistance) {
+        return {
+            persistentInjectionMaxSeqDistance,
+            recentRawTurns: 0,
+            nodeTypeSchema: [
+                {
+                    id: 'event',
+                    tableName: 'event_table',
+                    alwaysInject: true,
+                    latestOnly: false,
+                    compression: { mode: 'none' },
+                },
+            ],
+        };
+    }
+
+    test('computeRecallAlwaysInjectOptions returns {seqCutoffFrom} when K > 0', () => {
+        const store = buildHorizonStore();
+        const settings = horizonSettings(3);
+        expect(getLatestSeqIndex(store)).toBe(15);
+        // K=3 → cutoff = 15 - 3 + 1 = 13
+        expect(computePersistentInjectionSeqCutoff(store, settings)).toBe(13);
+        expect(computeRecallAlwaysInjectOptions(store, settings)).toEqual({ seqCutoffFrom: 13 });
+    });
+
+    test('computeRecallAlwaysInjectOptions returns empty options when K = 0 (default)', () => {
+        const store = buildHorizonStore();
+        const settings = horizonSettings(0);
+        expect(computePersistentInjectionSeqCutoff(store, settings)).toBeUndefined();
+        expect(computeRecallAlwaysInjectOptions(store, settings)).toEqual({});
+    });
+
+    test('computeRecallAlwaysInjectOptions does NOT include seqWindowFrom even when recentRawTurns > 0 (recall pool must ignore raw-visible window)', () => {
+        const store = buildHorizonStore();
+        // recentRawTurns > 0: would trigger seqWindowFrom in sync-side, but
+        // recall side must not observe it.
+        const settings = { ...horizonSettings(3), recentRawTurns: 5 };
+        const opts = computeRecallAlwaysInjectOptions(store, settings);
+        expect(opts).toEqual({ seqCutoffFrom: 13 });
+        expect('seqWindowFrom' in opts).toBe(false);
+    });
+
+    test('K > 0: recall-side call using computeRecallAlwaysInjectOptions drops horizon-aged nodes from the always-inject set', () => {
+        const store = buildHorizonStore();
+        const settings = horizonSettings(3);
+        // Real recall-side call shape (what runLLMDrivenRecall / injectMemoryPrompts
+        // do after this fix): pass the helper-built options.
+        const recallNodes = collectAlwaysInjectNodes(
+            store,
+            settings,
+            null,
+            computeRecallAlwaysInjectOptions(store, settings),
+        );
+        // Only the two events within the horizon remain in the always-inject
+        // set. evt_1 and evt_5 are now free to appear in the recall candidate
+        // pool (they no longer sit in alwaysInjectSet, so the routeCandidates
+        // filter can't exclude them).
+        expect(recallNodes.map((n) => n.id).sort()).toEqual(['evt_13', 'evt_14']);
+    });
+
+    test('regression: pre-fix recall-side call (3-arg, no options) returned the FULL set — trapping horizon-aged nodes in neither channel', () => {
+        // Before this contract was enforced, runLLMDrivenRecall +
+        // injectMemoryPrompts called collectAlwaysInjectNodes(store, settings,
+        // context) with no options — so horizon-aged nodes stayed in the
+        // always-inject set and got filtered out of the recall candidate pool,
+        // even though they'd already been dropped from persistent injection.
+        // This test documents that failure mode so future readers can see
+        // why the 4-arg shape matters.
+        const store = buildHorizonStore();
+        const settings = horizonSettings(3);
+        const legacyNodes = collectAlwaysInjectNodes(store, settings, null);
+        expect(legacyNodes.map((n) => n.id).sort()).toEqual(['evt_1', 'evt_13', 'evt_14', 'evt_5']);
+    });
+
+    test('recall-pipeline entry points wire computeRecallAlwaysInjectOptions into collectAlwaysInjectNodes', async () => {
+        // Guard: the two recall-side entry points (runLLMDrivenRecall +
+        // injectMemoryPrompts) must build their always-inject options via
+        // computeRecallAlwaysInjectOptions. The unit tests above prove the
+        // helper's contract; this test proves the entry points actually
+        // consume it — a regression to the 3-arg legacy call shape would
+        // silently drop horizon-aged nodes from both channels.
+        //
+        // We scan main.js source for every collectAlwaysInjectNodes(...)
+        // call outside syncPersistentLorebookProjection's body and require
+        // each one to reference computeRecallAlwaysInjectOptions somewhere
+        // in its argument list.
+        const fs = await import('node:fs/promises');
+        const path = await import('node:path');
+        const url = await import('node:url');
+        const here = path.dirname(url.fileURLToPath(import.meta.url));
+        const mainPath = path.resolve(here, '../../public/scripts/extensions/memory-graph/main.js');
+        const src = await fs.readFile(mainPath, 'utf8');
+
+        const syncMatch = src.match(
             /async function syncPersistentLorebookProjection\([^)]*\)\s*\{([\s\S]*?)\n\}\n/,
         );
-        expect(mainSiteFn).not.toBeNull();
-        const mainSiteBody = mainSiteFn[1];
-        // Main-context site must reference seqCutoffFrom.
-        expect(mainSiteBody).toMatch(/seqCutoffFrom/);
+        expect(syncMatch).not.toBeNull();
+        const outside = src.replace(syncMatch[0], '/* sync stripped */');
 
-        // No OTHER site in main.js should write seqCutoffFrom into a
-        // collectAlwaysInjectNodes options object. The function's own
-        // parameter destructuring / doc comment is fine — but no object-key
-        // assignment outside the main-context body should appear.
-        const sourceWithoutMainSite = MG_MAIN_SOURCE.replace(mainSiteFn[0], '/* main-context site stripped */');
-        const stray = sourceWithoutMainSite.match(/\bseqCutoffFrom\s*:/g);
-        expect(stray).toBeNull();
-    });
-
-    test('persistentInjectionMaxSeqDistance exists in defaultSettings', () => {
-        expect(MG_MAIN_SOURCE).toMatch(/persistentInjectionMaxSeqDistance\s*:\s*0/);
-    });
-
-    test('ensureSettings clamps persistentInjectionMaxSeqDistance (Math.max(0, ...))', () => {
-        expect(MG_MAIN_SOURCE).toMatch(
-            /extension_settings\[MODULE_NAME\]\.persistentInjectionMaxSeqDistance\s*=\s*Math\.max\(\s*0/,
-        );
+        // Skip the function definition line itself.
+        const callRe = /(?<!function\s)\bcollectAlwaysInjectNodes\s*\(([\s\S]*?)\)\s*;/g;
+        const calls = [...outside.matchAll(callRe)];
+        expect(calls.length).toBeGreaterThan(0);
+        for (const m of calls) {
+            expect({
+                call: m[0],
+                usesHelper: /computeRecallAlwaysInjectOptions\s*\(/.test(m[1]),
+            }).toEqual({ call: m[0], usesHelper: true });
+        }
     });
 });
 
