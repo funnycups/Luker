@@ -228,9 +228,9 @@ describe('normalizeQueryText', () => {
         expect(normalizeQueryText('  a   b\n\nc  ')).toBe('a b c');
     });
 
-    test('caps at maxLength', async () => {
+    test('does not truncate long input', async () => {
         const { normalizeQueryText } = await retrieverModulePromise;
-        expect(normalizeQueryText('x'.repeat(900))).toHaveLength(800);
+        expect(normalizeQueryText('x'.repeat(10000))).toHaveLength(10000);
     });
 
     test('handles null/undefined input safely', async () => {

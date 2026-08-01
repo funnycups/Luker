@@ -30,8 +30,8 @@ function throwIfAborted(signal) {
     }
 }
 
-export function normalizeQueryText(value, maxLength = 800) {
-    return String(value ?? '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+export function normalizeQueryText(value) {
+    return String(value ?? '').replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim();
 }
 
 function createEmptyMeta() {
