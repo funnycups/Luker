@@ -762,6 +762,15 @@ function normalizeExtractExcludeRecentTurns(value) {
     return Math.max(0, Math.floor(Number(value) || 0));
 }
 
+function sanitizeRecallQueryMessages(rawValue, fallback = defaultSettings.recallQueryMessages) {
+    const num = Number(rawValue);
+    const fallbackNum = Number(fallback);
+    const effective = Number.isFinite(num)
+        ? num
+        : (Number.isFinite(fallbackNum) ? fallbackNum : 2);
+    return Math.max(0, Math.min(64, Math.floor(effective)));
+}
+
 function getExtractableLatestSeq(totalTurns, settings = null) {
     const total = Math.max(0, Math.floor(Number(totalTurns || 0)));
     const excludedRecentTurns = normalizeExtractExcludeRecentTurns(
@@ -832,7 +841,6 @@ function ensureSettings() {
     const extractBatchTurnsRaw = Number(extension_settings[MODULE_NAME].extractBatchTurns);
     const extractContextTurnsRaw = Number(extension_settings[MODULE_NAME].extractContextTurns);
     const extractExcludeRecentTurnsRaw = Number(extension_settings[MODULE_NAME].extractExcludeRecentTurns);
-    const recallQueryMessagesRaw = Number(extension_settings[MODULE_NAME].recallQueryMessages);
     const recentRawTurnsRaw = Number(extension_settings[MODULE_NAME].recentRawTurns);
     const llmVisibleRecentMessagesRaw = Number(extension_settings[MODULE_NAME].llmVisibleRecentMessages);
     const persistentInjectionMaxSeqDistanceRaw = Number(extension_settings[MODULE_NAME].persistentInjectionMaxSeqDistance);
@@ -847,9 +855,8 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].extractExcludeRecentTurns = normalizeExtractExcludeRecentTurns(
         Number.isFinite(extractExcludeRecentTurnsRaw) ? extractExcludeRecentTurnsRaw : defaultSettings.extractExcludeRecentTurns,
     );
-    extension_settings[MODULE_NAME].recallQueryMessages = Math.max(
-        1,
-        Math.min(64, Math.floor(Number.isFinite(recallQueryMessagesRaw) ? recallQueryMessagesRaw : defaultSettings.recallQueryMessages)),
+    extension_settings[MODULE_NAME].recallQueryMessages = sanitizeRecallQueryMessages(
+        extension_settings[MODULE_NAME].recallQueryMessages,
     );
     extension_settings[MODULE_NAME].recentRawTurns = Math.max(
         0,
@@ -926,7 +933,6 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
     const extractBatchTurnsRaw = Number(input.extractBatchTurns);
     const extractContextTurnsRaw = Number(input.extractContextTurns);
     const extractExcludeRecentTurnsRaw = Number(input.extractExcludeRecentTurns);
-    const recallQueryMessagesRaw = Number(input.recallQueryMessages);
     const recentRawTurnsRaw = Number(input.recentRawTurns);
     const llmVisibleRecentMessagesRaw = Number(input.llmVisibleRecentMessages);
     const persistentInjectionMaxSeqDistanceRaw = Number(input.persistentInjectionMaxSeqDistance);
@@ -963,9 +969,9 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
             1,
             Math.min(32, Math.floor(Number.isFinite(extractContextTurnsRaw) ? extractContextTurnsRaw : Number(base.extractContextTurns || defaultSettings.extractContextTurns))),
         ),
-        recallQueryMessages: Math.max(
-            1,
-            Math.min(64, Math.floor(Number.isFinite(recallQueryMessagesRaw) ? recallQueryMessagesRaw : Number(base.recallQueryMessages || defaultSettings.recallQueryMessages))),
+        recallQueryMessages: sanitizeRecallQueryMessages(
+            input.recallQueryMessages,
+            Number.isFinite(Number(base.recallQueryMessages)) ? Number(base.recallQueryMessages) : defaultSettings.recallQueryMessages,
         ),
         extractBatchTurns: Math.max(
             1,
@@ -6117,13 +6123,41 @@ function buildRecallDebugCoreChat(context, queryText, settings = null) {
 function getRecallQueryBundle(payload, context, settings = null) {
     const payloadMessages = Array.isArray(payload?.coreChat) ? payload.coreChat : null;
     const source = payloadMessages || context.chat || [];
-    const recentAssistantTurns = Math.max(
-        1,
-        Math.min(
-            64,
-            Math.floor(Number(settings?.recallQueryMessages || defaultSettings.recallQueryMessages || 2)),
-        ),
-    );
+    const recentAssistantTurns = sanitizeRecallQueryMessages(settings?.recallQueryMessages);
+
+    // N=0: use the latest user message alone; skip prior turns entirely.
+    // recent_messages still carries that one message so query rewrite (if
+    // enabled) has an input; vector search reads fullText which equals
+    // last_user verbatim.
+    if (recentAssistantTurns === 0) {
+        let lastUser = '';
+        let lastUserIndex = -1;
+        for (let i = source.length - 1; i >= 0; i -= 1) {
+            const message = source[i];
+            if (!message || message.is_system || !message.is_user) continue;
+            const text = normalizeText(message.mes || '');
+            if (text) {
+                lastUser = text;
+                lastUserIndex = i;
+                break;
+            }
+        }
+        const recentMessages = lastUserIndex >= 0 ? [{
+            role: 'user',
+            is_user: true,
+            name: String(source[lastUserIndex].name || ''),
+            text: lastUser,
+            mes: lastUser,
+            source_index: lastUserIndex,
+        }] : [];
+        return {
+            last_user: lastUser,
+            last_assistant: '',
+            recent_messages: recentMessages,
+            fullText: lastUser,
+        };
+    }
+
     const recentWindow = getRecentMessagesByAssistantTurns(source, recentAssistantTurns);
     // getRecentMessagesByAssistantTurns always returns source.slice(startIndex),
     // so recentWindow's global start in `source` is length-length.
@@ -6624,7 +6658,7 @@ async function chooseRecallRoute(context, settings, recallState) {
             selectionConstraints: {
                 recent_message_window: Math.max(3, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
                 injection_exclude_recent_messages: Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
-                recall_query_recent_messages: Math.max(1, Number(settings.recallQueryMessages || defaultSettings.recallQueryMessages || 2)),
+                recall_query_recent_messages: sanitizeRecallQueryMessages(settings.recallQueryMessages),
             },
         });
         const roleSplitChatMessages = buildRoleSplitChatMessages(
@@ -6834,7 +6868,7 @@ async function chooseFocusNodes(context, settings, recallState) {
                 require_event_continuity: true,
                 recent_message_window: Math.max(3, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
                 injection_exclude_recent_messages: Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
-                recall_query_recent_messages: Math.max(1, Number(settings.recallQueryMessages || defaultSettings.recallQueryMessages || 2)),
+                recall_query_recent_messages: sanitizeRecallQueryMessages(settings.recallQueryMessages),
                 min_event_nodes_if_available: 2,
             },
         });
@@ -13833,7 +13867,7 @@ function hydrateAdvancedTabFields(root, source) {
     root.find('#luker_rpg_memory_advanced_rpm_limit').val(String(Math.max(0, Math.min(600, Number(source.rpmLimit ?? defaultSettings.rpmLimit)))));
     root.find('#luker_rpg_memory_advanced_extract_context_turns').val(String(Math.max(1, Math.min(32, Number(source.extractContextTurns ?? defaultSettings.extractContextTurns)))));
     root.find('#luker_rpg_memory_advanced_extract_exclude_recent_turns').val(String(normalizeExtractExcludeRecentTurns(source.extractExcludeRecentTurns ?? defaultSettings.extractExcludeRecentTurns)));
-    root.find('#luker_rpg_memory_advanced_recall_query_messages').val(String(Math.max(1, Math.min(64, Number(source.recallQueryMessages ?? defaultSettings.recallQueryMessages)))));
+    root.find('#luker_rpg_memory_advanced_recall_query_messages').val(String(sanitizeRecallQueryMessages(source.recallQueryMessages)));
     root.find('#luker_rpg_memory_advanced_llm_visible_recent_messages').val(String(Math.max(0, Math.min(200, Number(source.llmVisibleRecentMessages ?? defaultSettings.llmVisibleRecentMessages)))));
     root.find('#luker_rpg_memory_advanced_extract_batch_turns').val(String(Math.max(1, Number(source.extractBatchTurns ?? defaultSettings.extractBatchTurns))));
     root.find('#luker_rpg_memory_advanced_extract_system_prompt').val(String(source.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT));
