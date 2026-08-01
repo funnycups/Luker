@@ -10,7 +10,9 @@
  *     array/object/scalar field handling, omitted/empty fields
  *   - buildNodeVectorHash: composition, profile-sensitivity, seqTo handling
  *   - ensureVectorIndexState: idempotency, mutation in place
- *   - computeVectorSyncPlan: insert/delete classification, eligibility filter
+ *   - buildDesiredIndexEntries: eligibility filter, entry shape, rollup exclusion
+ *   - diffAgainstRemote: insert/delete classification against server-side truth,
+ *     ghost-recovery regression
  */
 
 import { describe, test, expect } from '@jest/globals';
@@ -21,7 +23,8 @@ import {
     buildNodeVectorText,
     buildNodeVectorHash,
     ensureVectorIndexState,
-    computeVectorSyncPlan,
+    buildDesiredIndexEntries,
+    diffAgainstRemote,
 } from '../../public/scripts/extensions/memory-graph/vector-index-core.js';
 
 describe('validateVectorConfig', () => {
@@ -298,7 +301,7 @@ describe('ensureVectorIndexState', () => {
     });
 });
 
-describe('computeVectorSyncPlan', () => {
+describe('buildDesiredIndexEntries', () => {
     function makeStore() {
         return {
             nodes: {
@@ -312,81 +315,40 @@ describe('computeVectorSyncPlan', () => {
 
     const profile = { source: 'openai', model: 'm' };
 
-    test('classifies all nodes as toInsert when state is empty', () => {
-        const store = makeStore();
-        const plan = computeVectorSyncPlan(store, profile);
-        const insertedIds = plan.toInsert.map(e => e.nodeId).sort();
-        expect(insertedIds).toEqual(['n1', 'n2']);
-        expect(plan.toDelete).toEqual([]);
-        expect(plan.stats).toEqual({ total: 2, indexed: 0, pending: 2, stale: 0 });
+    test('builds one entry per eligible node keyed by content hash', () => {
+        const desired = buildDesiredIndexEntries(makeStore(), profile);
+        const nodeIds = [...desired.values()].map(e => e.nodeId).sort();
+        expect(nodeIds).toEqual(['n1', 'n2']);
+        expect(desired.size).toBe(2);
     });
 
-    test('skips archived nodes and nodes with empty text', () => {
-        const store = makeStore();
-        const plan = computeVectorSyncPlan(store, profile);
-        const ids = plan.toInsert.map(e => e.nodeId);
+    test('skips archived nodes and nodes with empty vector text', () => {
+        const desired = buildDesiredIndexEntries(makeStore(), profile);
+        const ids = [...desired.values()].map(e => e.nodeId);
         expect(ids).not.toContain('archived');
         expect(ids).not.toContain('empty');
     });
 
-    test('counts already-indexed nodes', () => {
+    test('entry shape carries nodeId/hash/text/index (index mirrors seqTo, key equals hash)', () => {
         const store = makeStore();
-        const state = ensureVectorIndexState(store);
-        const h1 = buildNodeVectorHash(store.nodes.n1, profile);
-        state.nodeToHash['n1'] = h1;
-        state.hashToNodeId[h1] = 'n1';
-
-        const plan = computeVectorSyncPlan(store, profile);
-        expect(plan.stats).toEqual({ total: 2, indexed: 1, pending: 1, stale: 0 });
-        expect(plan.toInsert.map(e => e.nodeId)).toEqual(['n2']);
-    });
-
-    test('marks stale and re-inserts when content hash changes', () => {
-        const store = makeStore();
-        const state = ensureVectorIndexState(store);
-        const oldHash = 12345;
-        state.nodeToHash['n1'] = oldHash;
-        state.hashToNodeId[oldHash] = 'n1';
-
-        const plan = computeVectorSyncPlan(store, profile);
-        expect(plan.toDelete).toContain(oldHash);
-        expect(plan.toInsert.find(e => e.nodeId === 'n1')).toBeDefined();
-        expect(plan.stats.stale).toBe(1);
-    });
-
-    test('marks fully-orphaned hashes as toDelete', () => {
-        const store = { nodes: {} };
-        const state = ensureVectorIndexState(store);
-        state.nodeToHash['gone'] = 7777;
-        state.hashToNodeId[7777] = 'gone';
-
-        const plan = computeVectorSyncPlan(store, profile);
-        expect(plan.toDelete).toContain(7777);
-        expect(plan.toInsert).toEqual([]);
-        expect(plan.stats.stale).toBe(1);
-    });
-
-    test('toInsert entries carry nodeId/hash/text/index in correct shape', () => {
-        const store = makeStore();
-        const plan = computeVectorSyncPlan(store, profile);
-        for (const entry of plan.toInsert) {
+        const desired = buildDesiredIndexEntries(store, profile);
+        for (const [hash, entry] of desired) {
             expect(entry).toEqual(expect.objectContaining({
                 nodeId: expect.any(String),
                 hash: expect.any(Number),
                 text: expect.any(String),
                 index: expect.any(Number),
             }));
-            // index mirrors seqTo
-            const node = store.nodes[entry.nodeId];
-            expect(entry.index).toBe(node.seqTo);
+            expect(entry.hash).toBe(hash);
+            expect(entry.index).toBe(store.nodes[entry.nodeId].seqTo);
         }
     });
 });
 
-describe('computeVectorSyncPlan — rollup exclusion', () => {
+describe('buildDesiredIndexEntries — rollup exclusion', () => {
     const profile = { source: 'openai', model: 'm' };
 
-    test('excludes rollup nodes (semanticDepth > 0) from toInsert', () => {
+    test('excludes rollup nodes (semanticDepth > 0)', () => {
         const store = {
             nodes: {
                 leaf: { id: 'leaf', type: 'event', seqTo: 1, semanticDepth: 0, fields: { summary: 'leaf summary' } },
@@ -394,11 +356,8 @@ describe('computeVectorSyncPlan — rollup exclusion', () => {
                 rollup2: { id: 'rollup2', type: 'event', seqTo: 10, semanticDepth: 2, fields: { summary: 'rollup d2 summary' } },
             },
         };
-        const plan = computeVectorSyncPlan(store, profile);
-        const ids = plan.toInsert.map(e => e.nodeId).sort();
+        const ids = [...buildDesiredIndexEntries(store, profile).values()].map(e => e.nodeId).sort();
         expect(ids).toEqual(['leaf']);
-        expect(ids).not.toContain('rollup1');
-        expect(ids).not.toContain('rollup2');
     });
 
     test('excludes rollup nodes tagged via semanticRollup boolean', () => {
@@ -408,13 +367,12 @@ describe('computeVectorSyncPlan — rollup exclusion', () => {
                 taggedRollup: { id: 'taggedRollup', type: 'event', seqTo: 5, semanticRollup: true, fields: { summary: 'rollup via flag' } },
             },
         };
-        const plan = computeVectorSyncPlan(store, profile);
-        const ids = plan.toInsert.map(e => e.nodeId);
+        const ids = [...buildDesiredIndexEntries(store, profile).values()].map(e => e.nodeId);
         expect(ids).toContain('leaf');
         expect(ids).not.toContain('taggedRollup');
     });
 
-    test('excludes rollup nodes of non-event types (custom hierarchical/flat compression schemas)', () => {
+    test('excludes rollup nodes of non-event types (character_sheet, location_state)', () => {
         const store = {
             nodes: {
                 charSheet: { id: 'charSheet', type: 'character_sheet', seqTo: 3, semanticDepth: 1, fields: { identity: 'someone' } },
@@ -422,11 +380,8 @@ describe('computeVectorSyncPlan — rollup exclusion', () => {
                 thread: { id: 'thread', type: 'thread', seqTo: 5, fields: { note: 'an active thread' } },
             },
         };
-        const plan = computeVectorSyncPlan(store, profile);
-        const ids = plan.toInsert.map(e => e.nodeId).sort();
+        const ids = [...buildDesiredIndexEntries(store, profile).values()].map(e => e.nodeId).sort();
         expect(ids).toEqual(['thread']);
-        expect(ids).not.toContain('charSheet');
-        expect(ids).not.toContain('loc');
     });
 
     test('keeps leaf nodes of custom types alongside their rollups being excluded', () => {
@@ -436,10 +391,8 @@ describe('computeVectorSyncPlan — rollup exclusion', () => {
                 reportRollup: { id: 'reportRollup', type: 'report', seqTo: 5, semanticDepth: 1, semanticRollup: true, fields: { summary: 'weekly rollup' } },
             },
         };
-        const plan = computeVectorSyncPlan(store, profile);
-        const ids = plan.toInsert.map(e => e.nodeId).sort();
+        const ids = [...buildDesiredIndexEntries(store, profile).values()].map(e => e.nodeId).sort();
         expect(ids).toEqual(['reportLeaf']);
-        expect(ids).not.toContain('reportRollup');
     });
 
     test('semanticDepth=0 leaf events stay eligible (numeric 0 is not > 0)', () => {
@@ -448,7 +401,71 @@ describe('computeVectorSyncPlan — rollup exclusion', () => {
                 leafZero: { id: 'leafZero', type: 'event', seqTo: 1, semanticDepth: 0, fields: { summary: 'zero depth leaf' } },
             },
         };
-        const plan = computeVectorSyncPlan(store, profile);
-        expect(plan.toInsert.map(e => e.nodeId)).toEqual(['leafZero']);
+        const ids = [...buildDesiredIndexEntries(store, profile).values()].map(e => e.nodeId);
+        expect(ids).toEqual(['leafZero']);
+    });
+});
+
+describe('diffAgainstRemote', () => {
+    const profile = { source: 'openai', model: 'm' };
+
+    function makeStore() {
+        return {
+            nodes: {
+                n1: { id: 'n1', type: 'event', seqTo: 1, fields: { summary: 'first' } },
+                n2: { id: 'n2', type: 'event', seqTo: 2, fields: { summary: 'second' } },
+            },
+        };
+    }
+
+    test('empty remote → all desired go to toInsert', () => {
+        const desired = buildDesiredIndexEntries(makeStore(), profile);
+        const plan = diffAgainstRemote(desired, new Set());
+        expect(plan.toInsert.map(e => e.nodeId).sort()).toEqual(['n1', 'n2']);
+        expect(plan.toDelete).toEqual([]);
+        expect(plan.stats).toEqual({ total: 2, indexed: 0, pending: 2, stale: 0 });
+    });
+
+    test('remote fully matches desired → no ops', () => {
+        const desired = buildDesiredIndexEntries(makeStore(), profile);
+        const remote = new Set([...desired.keys()]);
+        const plan = diffAgainstRemote(desired, remote);
+        expect(plan.toInsert).toEqual([]);
+        expect(plan.toDelete).toEqual([]);
+        expect(plan.stats).toEqual({ total: 2, indexed: 2, pending: 0, stale: 0 });
+    });
+
+    test('remote has hashes desired does not → toDelete', () => {
+        const desired = buildDesiredIndexEntries(makeStore(), profile);
+        const remote = new Set([...desired.keys(), 999999]);
+        const plan = diffAgainstRemote(desired, remote);
+        expect(plan.toDelete).toEqual([999999]);
+        expect(plan.stats.stale).toBe(1);
+    });
+
+    test('partial overlap: some desired present, some missing → only missing re-inserted', () => {
+        const desired = buildDesiredIndexEntries(makeStore(), profile);
+        const hashes = [...desired.keys()];
+        const remote = new Set([hashes[0]]); // remote has n1 only
+        const plan = diffAgainstRemote(desired, remote);
+        expect(plan.stats.indexed).toBe(1);
+        expect(plan.stats.pending).toBe(1);
+        expect(plan.toInsert).toHaveLength(1);
+        expect(plan.toDelete).toEqual([]);
+    });
+
+    test('ghost recovery regression: legacy plan trusted client bookkeeping and let ghost entries evade re-insert; diffAgainstRemote reads server truth and re-inserts missing entries', () => {
+        // Scenario mirrors the production bug that motivated this refactor:
+        // client-side nodeToHash reported many entries as "indexed" while the
+        // server-side vector collection had lost them (external purge / silent
+        // partial insert failure / storage migration). The legacy plan derived
+        // its diff from nodeToHash and would output pending=0. diffAgainstRemote
+        // ignores nodeToHash entirely and reflects what the server actually holds.
+        const desired = buildDesiredIndexEntries(makeStore(), profile);
+        const remote = new Set(); // vectra empty despite bookkeeping claiming otherwise
+        const plan = diffAgainstRemote(desired, remote);
+        expect(plan.toInsert.map(e => e.nodeId).sort()).toEqual(['n1', 'n2']);
+        expect(plan.toDelete).toEqual([]);
+        expect(plan.stats.pending).toBe(2);
     });
 });

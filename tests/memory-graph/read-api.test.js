@@ -46,7 +46,8 @@ jest.unstable_mockModule(
         buildCollectionId: () => '',
         buildNodeVectorText: () => '',
         buildNodeVectorHash: () => '',
-        computeVectorSyncPlan: () => ({ inserts: [], deletes: [] }),
+        buildDesiredIndexEntries: () => new Map(),
+        diffAgainstRemote: () => ({ toInsert: [], toDelete: [], stats: { total: 0, indexed: 0, pending: 0, stale: 0 } }),
         // EmbeddingService-backed helpers used by retriever.js
         queryVectorCollection: async () => [],
         queryVectorCollectionByVector: async () => [],

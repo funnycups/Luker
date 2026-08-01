@@ -194,55 +194,61 @@ function getEligibleVectorNodes(store, schema) {
 }
 
 /**
- * Compute what needs to be inserted/deleted to sync the vector index.
+ * Build the desired set of vector index entries for the current store,
+ * keyed by content hash. Callers diff this against the server's actual hashes
+ * to decide what to insert / delete.
  *
  * @param {object} store
  * @param {object} profile
  * @param {Array} [schema]
- * @returns {{toInsert: Array, toDelete: number[], stats: {total: number, indexed: number, pending: number, stale: number}}}
+ * @returns {Map<number, {nodeId: string, hash: number, text: string, index: number}>}
  */
-export function computeVectorSyncPlan(store, profile, schema) {
-    const state = ensureVectorIndexState(store);
+export function buildDesiredIndexEntries(store, profile, schema) {
     const eligible = getEligibleVectorNodes(store, schema);
-    const desiredByNodeId = new Map();
-
+    const byHash = new Map();
     for (const node of eligible) {
         const hash = buildNodeVectorHash(node, profile, schema);
         const text = buildNodeVectorText(node, schema);
-        desiredByNodeId.set(node.id, { nodeId: node.id, hash, text, index: Number(node.seqTo) || 0 });
+        byHash.set(hash, { nodeId: node.id, hash, text, index: Number(node.seqTo) || 0 });
     }
+    return byHash;
+}
 
+/**
+ * Diff the desired index against the server's authoritative hash set.
+ * Nothing is read from `state.nodeToHash` — the client's bookkeeping is not
+ * a source of truth and can drift out of sync with the server (external
+ * purge, silent partial insert failure, storage migration, etc.). The server
+ * side answers "what hashes are actually stored" via `EmbeddingService.listHashes`.
+ *
+ * @param {Map<number, {nodeId: string, hash: number, text: string, index: number}>} desiredByHash
+ * @param {Set<number>} remoteHashes - Hashes currently stored server-side.
+ * @returns {{toInsert: Array, toDelete: number[], stats: {total: number, indexed: number, pending: number, stale: number}}}
+ */
+export function diffAgainstRemote(desiredByHash, remoteHashes) {
     const toInsert = [];
     const toDelete = [];
     let indexed = 0;
     let pending = 0;
-    let stale = 0;
 
-    for (const [nodeId, entry] of desiredByNodeId) {
-        const currentHash = state.nodeToHash[nodeId];
-        if (currentHash === entry.hash) {
-            indexed++;
-        } else {
-            if (currentHash !== undefined) {
-                toDelete.push(currentHash);
-                stale++;
-            }
-            toInsert.push(entry);
-            pending++;
-        }
+    for (const [hash, entry] of desiredByHash) {
+        if (remoteHashes.has(hash)) indexed++;
+        else { toInsert.push(entry); pending++; }
     }
 
-    for (const [nodeId, hash] of Object.entries(state.nodeToHash)) {
-        if (!desiredByNodeId.has(nodeId)) {
-            toDelete.push(hash);
-            stale++;
-        }
+    for (const hash of remoteHashes) {
+        if (!desiredByHash.has(hash)) toDelete.push(hash);
     }
 
     return {
         toInsert,
         toDelete,
-        stats: { total: eligible.length, indexed, pending, stale },
+        stats: {
+            total: desiredByHash.size,
+            indexed,
+            pending,
+            stale: toDelete.length,
+        },
     };
 }
 

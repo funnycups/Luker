@@ -17,7 +17,8 @@ import {
     buildNodeVectorText,
     buildNodeVectorHash,
     ensureVectorIndexState,
-    computeVectorSyncPlan,
+    buildDesiredIndexEntries,
+    diffAgainstRemote,
 } from './vector-index-core.js';
 
 export {
@@ -26,7 +27,8 @@ export {
     buildNodeVectorText,
     buildNodeVectorHash,
     ensureVectorIndexState,
-    computeVectorSyncPlan,
+    buildDesiredIndexEntries,
+    diffAgainstRemote,
 };
 
 // ---------------------------------------------------------------------------
@@ -213,6 +215,9 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
     const collectionDiff = state.collectionId !== collectionId;
     const configChanged = sourceDiff || modelDiff || collectionDiff;
 
+    // Explicit purge / config change: physically clear the server-side collection.
+    // After this, the listHashes call below sees an empty set and every eligible
+    // node goes into toInsert.
     if (purge || force || configChanged || state.dirty) {
         const wipeReason = [
             purge && 'purge',
@@ -222,28 +227,38 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
             modelDiff && `model ${JSON.stringify(state.model)}→${JSON.stringify(profile.model || '')}`,
             collectionDiff && `collection ${JSON.stringify(state.collectionId)}→${JSON.stringify(collectionId)}`,
         ].filter(Boolean).join(', ');
-        console.warn(`[memory-graph/vector-index] full re-index: ${wipeReason} (had ${Object.keys(state.nodeToHash).length} indexed)`);
+        console.warn(`[memory-graph/vector-index] purge before rebuild: ${wipeReason} (had ${Object.keys(state.nodeToHash).length} in mirror)`);
         await purgeVectorCollection(collectionId, signal);
         state.source = profile.source;
         state.model = profile.model || '';
         state.collectionId = collectionId;
-        state.nodeToHash = {};
-        state.hashToNodeId = {};
         state.dirty = false;
         state.lastWarning = '';
     }
 
-    const plan = computeVectorSyncPlan(store, profile, schema);
+    // Server-side hashes are the source of truth. state.nodeToHash was a legacy
+    // client-side cache that could silently drift out of sync with the collection
+    // (external purge, silent partial insert failure, storage migration, ST upgrade,
+    // user data path change). Ask the server what's actually stored instead.
+    let remoteHashes = new Set();
+    try {
+        const hashList = await EmbeddingService.listHashes({ profile, collectionId, signal });
+        remoteHashes = new Set((hashList || []).map(h => Number(h)));
+    } catch (error) {
+        console.warn('[memory-graph/vector-index] listHashes failed, treating remote as empty:', error);
+    }
+
+    const desiredByHash = buildDesiredIndexEntries(store, profile, schema);
+    const plan = diffAgainstRemote(desiredByHash, remoteHashes);
     const failedNodeIds = [];
 
     if (plan.toDelete.length > 0) {
-        await deleteVectorItems(collectionId, profile, plan.toDelete, signal);
-        for (const hash of plan.toDelete) {
-            const nodeId = state.hashToNodeId[hash];
-            if (nodeId) {
-                delete state.nodeToHash[nodeId];
-                delete state.hashToNodeId[hash];
-            }
+        try {
+            await deleteVectorItems(collectionId, profile, plan.toDelete, signal);
+            for (const h of plan.toDelete) remoteHashes.delete(h);
+        } catch (error) {
+            if (!tolerateErrors) throw error;
+            console.error('[memory-graph/vector-index] delete failed:', error);
         }
     }
 
@@ -256,21 +271,29 @@ export async function syncVectorIndex(store, profile, chatId, options = {}) {
             const batch = plan.toInsert.slice(i, i + BATCH_SIZE);
             try {
                 await insertVectorItems(collectionId, profile, batch, signal);
-                for (const entry of batch) {
-                    state.nodeToHash[entry.nodeId] = entry.hash;
-                    state.hashToNodeId[entry.hash] = entry.nodeId;
-                }
+                for (const entry of batch) remoteHashes.add(entry.hash);
             } catch (error) {
                 if (!tolerateErrors) throw error;
                 console.error('[memory-graph/vector-index] batch insert failed, skipping batch:', error, batch.map(b => b.nodeId));
-                for (const entry of batch) {
-                    failedNodeIds.push(entry.nodeId);
-                }
+                for (const entry of batch) failedNodeIds.push(entry.nodeId);
             }
             processed += batch.length;
             if (typeof onProgress === 'function') {
                 try { onProgress({ current: processed, total }); } catch (_) { /* noop */ }
             }
+        }
+    }
+
+    // Rebuild in-memory mirror from server truth (desired ∩ remoteHashes-after-sync).
+    // Consumers (query hit reverse lookup at line 313, export tooling) read from
+    // this mirror. Because we start from `desiredByHash` and filter by what
+    // actually made it onto the server, the mirror cannot drift into ghost entries.
+    state.nodeToHash = {};
+    state.hashToNodeId = {};
+    for (const [hash, entry] of desiredByHash) {
+        if (remoteHashes.has(hash)) {
+            state.nodeToHash[entry.nodeId] = hash;
+            state.hashToNodeId[hash] = entry.nodeId;
         }
     }
 
