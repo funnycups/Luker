@@ -224,8 +224,8 @@ export function registerLocaleData() {
         'Cancel (recommended)': '取消（推荐）',
         'Memory graph replay projected empty against ${0} log commit(s) — chat likely still loading. Kept the previous graph in memory. Do NOT trigger Rebuild / Import / Vector recompute until the chat is fully loaded, or the graph may be wiped.':
             '记忆图回放结果为空，但 log 里有 ${0} 条 commit——聊天可能还在加载中。已保留内存中原有的图。请勿在聊天完全加载前触发「重建」/「导入」/「重算向量」，否则图可能被清空。',
-        'Memory graph is empty but state records ${0} previously-processed message(s). The log was likely cleared by a recovery cycle; the pre-recovery log is preserved in the __orphans backup. Use Import to restore from a backup if you have one.':
-            '记忆图当前为空，但状态记录显示曾处理过 ${0} 条消息。log 可能被自动恢复流程清空了，清空前的 log 保留在 __orphans 备份中。如果有备份，可以用「导入」恢复。',
+        'Memory graph had a corrupted entry. The affected data was moved to an __orphans backup. It can be found alongside the chat data.':
+            '记忆图有一处损坏的记录。受影响的数据已移入 __orphans 备份，可在聊天数据旁找到。',
         'Memory save skipped: ${0}': '记忆保存已跳过：${0}',
         'Failed to apply graph JSON: ${0}': '应用图 JSON 失败：${0}',
         'Memory graph reset incomplete: ${0}': '记忆图重置未完全完成：${0}',
@@ -752,8 +752,8 @@ export function registerLocaleData() {
         'Cancel (recommended)': '取消（建議）',
         'Memory graph replay projected empty against ${0} log commit(s) — chat likely still loading. Kept the previous graph in memory. Do NOT trigger Rebuild / Import / Vector recompute until the chat is fully loaded, or the graph may be wiped.':
             '記憶圖重播結果為空，但 log 裡有 ${0} 條 commit——聊天可能還在載入中。已保留記憶體中原有的圖。請勿在聊天完全載入前觸發「重建」/「匯入」/「重算向量」，否則圖可能被清空。',
-        'Memory graph is empty but state records ${0} previously-processed message(s). The log was likely cleared by a recovery cycle; the pre-recovery log is preserved in the __orphans backup. Use Import to restore from a backup if you have one.':
-            '記憶圖目前為空，但狀態記錄顯示曾處理過 ${0} 條訊息。log 可能被自動復原流程清空了，清空前的 log 保留在 __orphans 備份中。如果有備份，可以用「匯入」復原。',
+        'Memory graph had a corrupted entry. The affected data was moved to an __orphans backup. It can be found alongside the chat data.':
+            '記憶圖有一處損壞的記錄。受影響的資料已移入 __orphans 備份，可在聊天資料旁找到。',
         'Memory save skipped: ${0}': '記憶儲存已跳過：${0}',
         'Failed to apply graph JSON: ${0}': '套用圖 JSON 失敗：${0}',
         'Memory graph reset incomplete: ${0}': '記憶圖重設未完全完成：${0}',

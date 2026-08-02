@@ -15093,6 +15093,7 @@ async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
     // the user's data).
     let payload;
     let logSize = 0;
+    let recoveryJustHappened = false;
     try {
         const fs = await getFloorStateInstance(runtimeContext);
         await fs.ready();
@@ -15103,6 +15104,14 @@ async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
             return memoryStoreCache.get(chatKey) || null;
         }
         payload = getResult.state;
+        // Floor-state sets `recovered: true` on the envelope exactly for the
+        // one call that drove `recoverByTruncatingBrokenFloor` — replay found
+        // a corrupted commit, backed the full log up to `<ns>__orphans`, and
+        // truncated the broken floor. Later refreshes hit fs.get()'s cache
+        // and never see this flag again, so the user notification below fires
+        // exactly once per real data-loss event instead of every time the
+        // leftover `<ns>__orphans` sidecar is observed on disk.
+        recoveryJustHappened = getResult.recovered === true;
         // Look up the on-disk log size so we can distinguish "graph
         // genuinely empty" from "replay projected empty against a
         // transient chat state" (e.g. chat array still loading, or all
@@ -15143,18 +15152,13 @@ async function refreshMemoryStoreCacheFromFloorState(runtimeContext, chatKey) {
     if (meta) setCachedMeta(chatKey, meta);
     const runtimeStore = buildRuntimeStoreFromGraphPayloadAndMeta(payload, meta || getCachedMeta(chatKey));
     memoryStoreCache.set(chatKey, runtimeStore);
-    // Post-recovery notice: if the log is empty on disk but __meta
-    // records that extraction previously processed messages, the log
-    // was almost certainly wiped by a broken-log recovery cycle. Tell
-    // the user their history was quarantined to __orphans so they can
-    // Import a backup instead of assuming the empty graph is normal.
-    const effectiveMeta = meta || getCachedMeta(chatKey);
-    const seenSourceCount = Number(effectiveMeta?.sourceMessageCount || 0);
-    if (logSize === 0 && payloadHasNoNodes && Number.isFinite(seenSourceCount) && seenSourceCount > 0) {
-        notifyError(i18nFormat(
-            'Memory graph is empty but state records ${0} previously-processed message(s). The log was likely cleared by a recovery cycle; the pre-recovery log is preserved in the __orphans backup. Use Import to restore from a backup if you have one.',
-            seenSourceCount,
-        ));
+    // One-shot post-recovery notice: floor-state just discarded a broken
+    // commit + everything on/after its floor, backing the full pre-truncate
+    // log up to `<ns>__orphans`. Users on that chat lost the nodes covered
+    // by the truncated commits. Tell them once (this branch only runs on
+    // the call that triggered the recovery — later refreshes never re-fire).
+    if (recoveryJustHappened) {
+        notifyError(i18n('Memory graph had a corrupted entry. The affected data was moved to an __orphans backup. It can be found alongside the chat data.'));
     }
     return runtimeStore;
 }

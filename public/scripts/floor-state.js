@@ -713,6 +713,7 @@ export function createFloorStateWithDeps(options, deps) {
             return { ok: true, state: null };
         }
         const swipeMap = buildSwipeMapFromChat(runtime.getChat());
+        let recoveredThisCall = false;
         try {
             cachedReplay = computeTargetState(log.commits, swipeMap);
         } catch (error) {
@@ -723,8 +724,17 @@ export function createFloorStateWithDeps(options, deps) {
                 return recovered;
             }
             cachedReplay = recovered;
+            recoveredThisCall = true;
         }
-        return { ok: true, state: cachedReplay === null ? null : structuredClone(cachedReplay) };
+        const envelope = { ok: true, state: cachedReplay === null ? null : structuredClone(cachedReplay) };
+        // One-shot signal: only the caller whose fs.get() actually drove the
+        // truncate-recovery sees `recovered: true`. Subsequent calls hit the
+        // `cachedReplay !== CACHE_UNSET` fast path above and get the plain
+        // envelope. Consumers use this to fire a one-time user-visible
+        // notification exactly when data was lost — not on every later refresh
+        // that happens to observe the leftover `<ns>__orphans` sidecar.
+        if (recoveredThisCall) envelope.recovered = true;
+        return envelope;
     }
 
     /**
