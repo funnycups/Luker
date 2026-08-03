@@ -820,9 +820,9 @@ function sanitizeRegexMacro(x) {
  * @param {regex_placement} placement The placement of the string
  * @param {RegexParams} params The parameters to use for the regex script
  * @returns {string} The regexed string
- * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isPluginPrompt?: boolean, isEdit?: boolean, depth?: number }} RegexParams The parameters to use for the regex script
+ * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isPluginPrompt?: boolean, isEdit?: boolean, depth?: number, userScriptsOnly?: boolean }} RegexParams The parameters to use for the regex script
  */
-export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isPluginPrompt, isEdit, depth } = {}) {
+export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isPluginPrompt, isEdit, depth, userScriptsOnly } = {}) {
     // WTF have you passed me?
     if (typeof rawString !== 'string') {
         console.warn('getRegexedString: rawString is not a string. Returning empty string.');
@@ -837,6 +837,16 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
     const allRegex = getRegexScripts({ allowedOnly: true });
     allRegex.forEach((script, index) => {
         if (!script || typeof script !== 'object') {
+            return;
+        }
+
+        // Engine-managed runtime scripts are code-generated context plumbing,
+        // not user-authored transforms. A consumer that reads chat text to
+        // feed its OWN LLM request wants the user's rules without the
+        // plumbing — otherwise a provider that trims the main model's view of
+        // history also trims the input of whatever is supposed to summarize
+        // that history.
+        if (userScriptsOnly && script.__runtime_owner) {
             return;
         }
 

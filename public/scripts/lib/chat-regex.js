@@ -27,6 +27,20 @@
  * last non-system message is depth 0. This lets a script authored with
  * `maxDepth: 4` do the same thing here that it does in Generate().
  *
+ * User-authored only (`userScriptsOnly: true`):
+ *   Engine-managed runtime providers are skipped. The one in tree is
+ *   memory-graph's "Memory Graph Visible Message Window"
+ *   (`/[\s\S]*&#47;g` -> '', `promptOnly`, `minDepth: llmVisibleRecentMessages`),
+ *   which exists to hide old turns from the MAIN model because memory
+ *   covers them. Without the flag it also fires here — at real depth,
+ *   with `isPrompt: true` — so every message at or beyond the window
+ *   arrives blank at the extractor that is supposed to summarize it.
+ *   Defaults make that reachable in normal use (window 5 vs a batch
+ *   spanning ~6 messages) and total for Rebuild / Fill, which walk the
+ *   whole history. Depth cannot express the exclusion: `undefined`
+ *   disables the min/maxDepth gate entirely and makes the blanking
+ *   unconditional.
+ *
  * Regex engine access:
  *   We consume the regex primitives through `Luker.getContext().regex`
  *   (three-layer API). Direct `import` from
@@ -129,7 +143,7 @@ export function regexChatMessageForAgent(message, depth) {
     const api = getRegexApi();
     if (!api) return raw;
     const placement = message?.is_user ? api.placement.USER_INPUT : api.placement.AI_OUTPUT;
-    return api.applyRegex(raw, placement, { isPrompt: true, depth });
+    return api.applyRegex(raw, placement, { isPrompt: true, depth, userScriptsOnly: true });
 }
 
 /**
