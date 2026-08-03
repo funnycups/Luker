@@ -4567,13 +4567,16 @@
                             </label>
                         </div>
 
-                        <div name="tokenizerSettingsBlock" data-cc-null>
+                        <div name="tokenizerSettingsBlock">
                             <div name="tokenizerSelectorBlock">
                                 <h4 class="standoutHeader"><span data-i18n="Tokenizer">Tokenizer</span>
                                     <a href="https://docs.sillytavern.app/usage/prompts/tokenizer/" class="notes-link" target="_blank">
                                         <span class="fa-solid fa-circle-question note-link-span"></span>
                                     </a>
                                 </h4>
+                                <label for="tokenizer">
+                                    <small data-i18n="Counting Tokenizer">Counting Tokenizer</small>
+                                </label>
                                 <select id="tokenizer">
                                     <option value="99">Best match (recommended)</option>
                                     <option value="0">None / Estimated</option>
@@ -4595,7 +4598,11 @@
                                     <option value="18">DeepSeek V3</option>
                                     <option value="6">API (WebUI / koboldcpp)</option>
                                 </select>
-                                <label class="checkbox_label" for="fast_token_preview" title="Use frontend byte-based estimate instead of calling the tokenizer endpoint. Faster but less accurate. Disables logprobs and /tokens slash command precision." data-i18n="[title]fast_token_preview_tooltip">
+                                <label for="encoding_tokenizer">
+                                    <small data-i18n="Encoding Tokenizer">Encoding Tokenizer</small>
+                                </label>
+                                <select id="encoding_tokenizer"></select>
+                                <label class="checkbox_label" for="fast_token_preview" title="Use a fast byte-based estimate instead of the Counting Tokenizer. Faster but less accurate. The Encoding Tokenizer is unaffected." data-i18n="[title]fast_token_preview_tooltip">
                                     <input id="fast_token_preview" type="checkbox" />
                                     <small data-i18n="Fast token preview">Fast token preview</small>
                                 </label>
