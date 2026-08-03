@@ -51,6 +51,7 @@
         "bowser": "^2.12.1",
         "bytes": "^3.1.2",
         "chalk": "^5.6.0",
+        "cheerio": "^1.2.0",
         "chevrotain": "^11.2.0",
         "command-exists": "^1.2.9",
         "compression": "^1.8.1",
