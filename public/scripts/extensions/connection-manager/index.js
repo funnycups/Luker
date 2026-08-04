@@ -15,7 +15,7 @@ import { SlashCommandScope } from '../../slash-commands/SlashCommandScope.js';
 import { collapseSpaces, getUniqueName, isFalseBoolean, isTrueBoolean, uuidv4, waitUntilCondition } from '../../utils.js';
 import { t } from '../../i18n.js';
 import { getSecretLabelById, SECRET_KEYS, writeSecret } from '../../secrets.js';
-import { applyProxyProfileEntry, chat_completion_sources, getCurrentProxyProfileEntry, oai_settings } from '../../openai.js';
+import { applyProxyProfileEntry, chat_completion_sources, getCurrentProxyProfileEntry, oai_settings, whenChatCompletionModelListReady } from '../../openai.js';
 import { initActionableSingleSelect } from '../../select2-actionable-single.js';
 import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
@@ -743,6 +743,24 @@ async function applyConnectionProfile(profile) {
             continue;
         }
         try {
+            // The /api command upstream of us triggers #chat_completion_source.change,
+            // which fires an async /status fetch (populates the model dropdown) that
+            // completes independently of this loop's await chain. If we let /model
+            // run before that fetch settles, modelCallback sees a stale (or
+            // datalist-only) option list and — even without Fuse fuzzy fallback —
+            // has to append the model as a custom entry when it's actually a
+            // real, remote model id. Waiting here lets exact-match win and keeps
+            // custom-entry semantics reserved for genuinely unknown ids.
+            if (command === 'model' && mode === 'cc') {
+                try {
+                    await whenChatCompletionModelListReady();
+                } catch (waitError) {
+                    console.warn('Model list readiness wait failed; proceeding with /model', waitError);
+                }
+                if (spinner.isAborted()) {
+                    throw new Error('Profile application aborted');
+                }
+            }
             const args = getNamedArguments(allowEmpty ? { force: 'true' } : {});
             await SlashCommandParser.commands[command].callback(args, argument);
         } catch (error) {

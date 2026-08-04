@@ -40,6 +40,14 @@ export const event_types = {
     SETTINGS_LOADED_AFTER: 'settings_loaded_after',
     CHATCOMPLETION_SOURCE_CHANGED: 'chatcompletion_source_changed',
     CHATCOMPLETION_MODEL_CHANGED: 'chatcompletion_model_changed',
+    // Emitted after the remote /status response for a chat-completion source
+    // has been consumed by saveModelList() and every source-specific picker
+    // has been repopulated. Consumers that need to react to a truly-populated
+    // model dropdown (e.g. connection-profile apply) should await
+    // whenChatCompletionModelListReady() instead of listening for this event
+    // directly, because whenChatCompletionModelListReady() handles the "no
+    // fetch currently in flight" case.
+    CHATCOMPLETION_MODEL_LIST_LOADED: 'chatcompletion_model_list_loaded',
     OAI_PRESET_CHANGED_BEFORE: 'oai_preset_changed_before',
     OAI_PRESET_CHANGED_AFTER: 'oai_preset_changed_after',
     OAI_PRESET_EXPORT_READY: 'oai_preset_export_ready',

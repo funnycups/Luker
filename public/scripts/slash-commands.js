@@ -6382,9 +6382,6 @@ function modelCallback(args, model) {
 
     let newSelectedOption = null;
 
-    const fuse = new Fuse(options, { keys: ['text', 'value'] });
-    const fuzzySearchResult = fuse.search(model);
-
     const exactValueMatch = options.find(x => x.value.trim().toLowerCase() === model.trim().toLowerCase());
     const exactTextMatch = options.find(x => x.text.trim().toLowerCase() === model.trim().toLowerCase());
 
@@ -6392,8 +6389,37 @@ function modelCallback(args, model) {
         newSelectedOption = exactValueMatch;
     } else if (exactTextMatch) {
         newSelectedOption = exactTextMatch;
-    } else if (fuzzySearchResult.length) {
-        newSelectedOption = fuzzySearchResult[0].item;
+    } else {
+        // NO FUZZY FALLBACK. Historically Fuse was used here to be forgiving
+        // about typos in interactive `/model` calls, but that same fallback
+        // also fires during connection-profile apply — where the caller
+        // passed an EXACT model id straight from stored settings. If the
+        // remote model list hasn't finished loading yet (or the id was
+        // recently renamed by the provider), Fuse would pick options[0]
+        // (e.g. claude-opus-4-7, the first datalist entry for Claude) and
+        // silently clobber the user's chosen model, then persist that wrong
+        // value via the select→input→oai_settings write chain.
+        //
+        // Instead, when the caller passes a value that doesn't match, treat
+        // it as a legitimate "unknown-to-us" model id — append it to the
+        // dropdown as a custom entry and select it. This mirrors the
+        // behavior of `reconcileModelSelection()` in openai.js for sources
+        // that already fetch a dynamic list. The API request will still be
+        // made with the user-provided id; if the provider rejects it, that
+        // failure surfaces on the actual request instead of being hidden by
+        // a silent substitution here.
+        const selectEl = modelSelectControl instanceof HTMLSelectElement ? modelSelectControl : null;
+        if (selectEl) {
+            const option = document.createElement('option');
+            option.value = model;
+            option.text = `${model} (custom)`;
+            option.setAttribute('data-user-model', '1');
+            selectEl.appendChild(option);
+            newSelectedOption = { value: model, text: option.text };
+        } else {
+            !quiet && toastr.warning(t`No model found with name "${model}"`);
+            return '';
+        }
     }
 
     if (newSelectedOption) {

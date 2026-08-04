@@ -233,6 +233,51 @@ let lastOpenAIReplyPersistedByServer = false;
 let lastOpenAIGenerationId = '';
 let openAIPresetChangeNotificationToken = 0;
 
+// Tracks the in-flight remote status check for the current chat-completion
+// source. Consumers that must observe a truly-populated model dropdown
+// (connection profile apply, iter-studio, /model slash command from scripts)
+// should `await whenChatCompletionModelListReady()` — which resolves as soon
+// as the current fetch settles (or immediately, when nothing is in flight).
+// Anything that starts a status check MUST call beginChatCompletionModelListLoad()
+// so the promise is armed; saveModelList() and the getStatusOpen() error path
+// both settle it. Without this, /model would race the fetch and Fuse-fallback
+// to the first datalist option (e.g. claude-opus-4-7). See modelCallback().
+let pendingChatCompletionModelListPromise = null;
+let pendingChatCompletionModelListResolve = null;
+
+function beginChatCompletionModelListLoad() {
+    // Replace any previous unresolved promise — cancelStatusCheck() will have
+    // aborted the corresponding fetch, so nothing will ever resolve it.
+    if (pendingChatCompletionModelListResolve) {
+        try { pendingChatCompletionModelListResolve(); } catch { /* noop */ }
+    }
+    pendingChatCompletionModelListPromise = new Promise((resolve) => {
+        pendingChatCompletionModelListResolve = resolve;
+    });
+    return pendingChatCompletionModelListPromise;
+}
+
+function settleChatCompletionModelListLoad() {
+    const resolve = pendingChatCompletionModelListResolve;
+    pendingChatCompletionModelListResolve = null;
+    pendingChatCompletionModelListPromise = null;
+    if (resolve) {
+        try { resolve(); } catch { /* noop */ }
+    }
+}
+
+/**
+ * Resolves when the current chat-completion source has a fully populated
+ * model dropdown — i.e. either no /status fetch is in flight, or the one
+ * that is in flight has finished calling saveModelList().
+ * @returns {Promise<void>}
+ */
+export async function whenChatCompletionModelListReady() {
+    if (pendingChatCompletionModelListPromise) {
+        await pendingChatCompletionModelListPromise;
+    }
+}
+
 function summarizeLukerPersistTargetForDebug(persistTarget) {
     if (!persistTarget || typeof persistTarget !== 'object') {
         return null;
@@ -3159,6 +3204,13 @@ function saveModelList(data) {    model_list = mergeModelRecordsWithCustom(data,
     }
 
     applyCustomModelsToCurrentSource({ includeSelected: false });
+
+    // Notify listeners that the source-specific model picker has been
+    // repopulated. Anything that needs an accurate options list to run
+    // (e.g. the /model slash command) should await
+    // whenChatCompletionModelListReady() rather than subscribing here —
+    // the helper additionally handles the "nothing in flight" case.
+    eventSource.emit(event_types.CHATCOMPLETION_MODEL_LIST_LOADED, oai_settings.chat_completion_source);
 }
 
 /**
@@ -6559,6 +6611,20 @@ function setToolReasoningControls() {
 }
 
 async function getStatusOpen() {
+    // Arm the readiness promise BEFORE any early-return path below, so that
+    // consumers who race us with `whenChatCompletionModelListReady()` between
+    // "we entered getStatusOpen" and "we bailed early" don't wait forever.
+    // Every code path in this function must settle it in `finally`.
+    beginChatCompletionModelListLoad();
+
+    try {
+        return await getStatusOpenInner();
+    } finally {
+        settleChatCompletionModelListLoad();
+    }
+}
+
+async function getStatusOpenInner() {
     const noValidateSources = [
         chat_completion_sources.AI21,
         chat_completion_sources.PERPLEXITY,
