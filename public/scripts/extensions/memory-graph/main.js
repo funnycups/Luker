@@ -8369,6 +8369,76 @@ async function injectMemoryPrompts(context, payload) {
             .filter(node => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages))
             .sort(compareNodesByTimeline);
 
+        // Structured recall diagnostic. Emits one row per RAG recall so users
+        // can grep `[memory_graph] rag_recall` in DevTools when injection ends
+        // up empty or lopsided. All numbers are counts so the payload stays
+        // small — actual candidate lists are already in `store.lastRecallTrace`.
+        // The three stages must add up for anyone reading the log to know
+        // WHERE candidates disappeared:
+        //   vector_hits   → returned by the embedding backend (post store-filter)
+        //   rag_candidates → after per-type bucketing + optional rerank + maxResults trim
+        //   selected      → after main-flow filters (alwaysInject exclusion + recent-turns window)
+        try {
+            const candByType = ragResult.candidates.reduce((acc, c) => {
+                const t = c.nodeType || 'unknown';
+                acc[t] = (acc[t] || 0) + 1;
+                return acc;
+            }, {});
+            const droppedAlwaysInject = ragResult.candidates.filter((c) => {
+                const n = store.nodes?.[c.nodeId];
+                return n && alwaysInjectSet.has(n.id);
+            }).length;
+            const droppedRecentWindow = ragResult.candidates.filter((c) => {
+                const n = store.nodes?.[c.nodeId];
+                return n && !alwaysInjectSet.has(n.id)
+                    && isNodeInRecentExcludeWindow(n, latestSeqIndex, excludeMessages);
+            }).length;
+            const droppedArchivedOrMissing = ragResult.candidates.filter((c) => {
+                const n = store.nodes?.[c.nodeId];
+                return !n || n.archived;
+            }).length;
+            const perBucketFinal = ragResult.meta?.perBucket
+                ? Object.fromEntries(
+                    Object.entries(ragResult.meta.perBucket)
+                        .map(([type, m]) => [type, m?.finalCount ?? 0]),
+                )
+                : null;
+            console.info(`[${MODULE_NAME}] rag_recall`, {
+                chatKey,
+                bucketing: {
+                    perTypeK: perTypeK || null,
+                    defaultPerTypeK,
+                    active: Boolean(perBucketFinal),
+                },
+                vector: {
+                    topKRequested: Number(settings.vectorTopK) || 20,
+                    hits: ragResult.meta?.vectorHits ?? 0,
+                },
+                rerank: {
+                    enabled: useRerank,
+                    applied: Boolean(ragResult.meta?.rerankApplied),
+                },
+                candidates: {
+                    total: ragResult.candidates.length,
+                    byType: candByType,
+                    perBucketFinal,
+                },
+                dropped: {
+                    archivedOrMissing: droppedArchivedOrMissing,
+                    alwaysInjectOverlap: droppedAlwaysInject,
+                    recentTurnsWindow: droppedRecentWindow,
+                },
+                selected: {
+                    count: selectedNodes.length,
+                    recentTurnsWindowSize: excludeMessages,
+                    alwaysInjectSetSize: alwaysInjectSet.size,
+                },
+                skipReasons: ragResult.meta?.skipReasons || [],
+            });
+        } catch (logErr) {
+            console.warn(`[${MODULE_NAME}] rag_recall log emit failed`, logErr);
+        }
+
         trace = [{
             step: 'rag_recall',
             method: 'rag',
