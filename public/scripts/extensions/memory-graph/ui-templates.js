@@ -109,6 +109,7 @@ function buildRecallTabHtml(deps) {
                 <select id="luker_rpg_memory_embedding_profile" class="text_pole flex1"></select>
                 <label>${escapeHtml(i18n('Vector pre-filter Top-K'))}${fh('About Vector pre-filter Top-K', 'Vector pre-filter Top-K help body')} <input id="luker_rpg_memory_vector_topk" class="text_pole" type="number" min="5" max="100" step="1" /></label>
                 <label>${escapeHtml(i18n('Max recall results'))}${fh('About Max recall results', 'Max recall results help body')} <input id="luker_rpg_memory_hybrid_max_results" class="text_pole" type="number" min="3" max="50" step="1" /></label>
+                <label>${escapeHtml(i18n('Default per-type quota'))}${fh('About Default per-type quota', 'Default per-type quota help body')} <input id="luker_rpg_memory_rag_default_per_type_k" class="text_pole" type="number" min="0" max="50" step="1" /></label>
                 <label class="checkbox_label"><input id="luker_rpg_memory_rag_use_rerank" type="checkbox" /> ${escapeHtml(i18n('Enable rerank'))}${fh('About Enable rerank', 'Enable rerank help body')}</label>
                 <div id="luker_rpg_memory_rag_rerank_block" style="display:none;padding-left:18px">
                     <label>${escapeHtml(i18n('Rerank profile'))}${fh('About Rerank profile', 'Rerank profile help body')}</label>

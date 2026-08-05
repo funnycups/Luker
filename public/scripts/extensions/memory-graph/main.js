@@ -477,6 +477,13 @@ const defaultSettings = {
     rerankProfileId: '',
     vectorTopK: 20,
     hybridMaxResults: 15,
+    // RAG per-type bucketing: default quota per node type. Each vector
+    // pre-filter hit is bucketed by node.type; each bucket takes at most
+    // ragDefaultPerTypeK hits (or the per-type override in
+    // schema.ragPerTypeK). Prevents one dominant type (typically `event`)
+    // from starving other types out of recall. Set to 0 to disable
+    // bucketing and use the legacy shared-pool topK behaviour.
+    ragDefaultPerTypeK: 3,
     ragUseRerank: false,
     ragUseQueryRewrite: false,
     ragRewriteApiPresetName: '',
@@ -694,6 +701,14 @@ export function normalizeNodeTypeSchema(schema) {
                 editable,
                 alwaysInject: Boolean(item.alwaysInject),
                 latestOnly,
+                // Optional per-type quota for RAG recall bucketing. When set to
+                // a finite non-negative number, overrides the global
+                // ragDefaultPerTypeK for this node type. Omitted (null / NaN)
+                // means "fall through to the global default" — this keeps old
+                // schemas working without migration.
+                ragPerTypeK: (Number.isFinite(Number(item.ragPerTypeK)) && Number(item.ragPerTypeK) >= 0)
+                    ? Math.floor(Number(item.ragPerTypeK))
+                    : null,
                 recordsFloorRange: Boolean(item?.recordsFloorRange),
                 primaryKeyColumns,
                 compression: {
@@ -869,6 +884,12 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].persistentInjectionMaxSeqDistance = Math.max(
         0,
         Math.floor(Number.isFinite(persistentInjectionMaxSeqDistanceRaw) ? persistentInjectionMaxSeqDistanceRaw : defaultSettings.persistentInjectionMaxSeqDistance),
+    );
+    // RAG per-type quota default. 0 disables bucketing (single shared pool).
+    const ragDefaultPerTypeKRaw = Number(extension_settings[MODULE_NAME].ragDefaultPerTypeK);
+    extension_settings[MODULE_NAME].ragDefaultPerTypeK = Math.max(
+        0,
+        Math.min(50, Math.floor(Number.isFinite(ragDefaultPerTypeKRaw) ? ragDefaultPerTypeKRaw : defaultSettings.ragDefaultPerTypeK)),
     );
     extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
     extension_settings[MODULE_NAME].extractSystemPrompt = String(extension_settings[MODULE_NAME].extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
@@ -2559,6 +2580,40 @@ function getNodeTypeSchemaMap(settings, context = null) {
         map.set(String(entry.id || '').toLowerCase(), entry);
     }
     return map;
+}
+
+// Build the { perTypeK, defaultPerTypeK } pair that runRagRecall consumes to
+// bucket vector hits by node type. Each schema spec may set `ragPerTypeK`
+// to override the global default for that type; unset (null) means "use the
+// global default", so old schemas keep working without any migration.
+//
+// When ragDefaultPerTypeK is 0 (bucketing disabled) AND no schema entry
+// overrides it, we return { perTypeK: null, defaultPerTypeK: null }, which
+// tells runRagRecall to run the legacy single-pool path.
+function buildRagPerTypeQuotas(context, settings) {
+    const schema = getEffectiveNodeTypeSchema(context, settings);
+    const perTypeK = {};
+    let anyOverride = false;
+    for (const entry of schema) {
+        const id = String(entry?.id || '').trim().toLowerCase();
+        if (!id) continue;
+        const override = Number(entry?.ragPerTypeK);
+        if (Number.isFinite(override) && override >= 0) {
+            perTypeK[id] = Math.floor(override);
+            anyOverride = true;
+        }
+    }
+    const rawDefault = Number(settings?.ragDefaultPerTypeK);
+    const defaultPerTypeK = Number.isFinite(rawDefault) && rawDefault > 0
+        ? Math.floor(rawDefault)
+        : null;
+    if (!anyOverride && defaultPerTypeK === null) {
+        return { perTypeK: null, defaultPerTypeK: null };
+    }
+    return {
+        perTypeK: anyOverride ? perTypeK : null,
+        defaultPerTypeK,
+    };
 }
 
 export function getSemanticTypeSpec(settings, type, context = null) {
@@ -8290,6 +8345,7 @@ async function injectMemoryPrompts(context, payload) {
 
         const useRerank = Boolean(settings.ragUseRerank);
         const rerankProfile = useRerank ? getRerankProfileFromSettings(settings) : null;
+        const { perTypeK, defaultPerTypeK } = buildRagPerTypeQuotas(context, settings);
 
         const ragResult = await runRagRecall(store, queryText, chatKey, settings, {
             maxResults: Number(settings.hybridMaxResults) || 15,
@@ -8297,6 +8353,8 @@ async function injectMemoryPrompts(context, payload) {
             useRerank,
             rerankProfile,
             rewrittenQuery,
+            perTypeK,
+            defaultPerTypeK,
             signal: payload?.signal,
         });
         throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
@@ -13454,6 +13512,10 @@ function renderNodeTypeSchemaCard(spec, index) {
         <small style="opacity:0.7">${escapeHtml(i18n('1 = every extraction pass (default). Larger N reduces frequency for slow-changing tables.'))}</small>
         <input data-field="extractEveryN" class="text_pole" type="number" min="1" step="1" value="${Number(spec.extractEveryN || 1)}" />
     </label>
+    <label>${escapeHtml(i18n('RAG per-type quota override'))}
+        <small style="opacity:0.7">${escapeHtml(i18n('Empty = use the global default from RAG settings. Non-negative integer overrides only this type. 0 = never surface this type via RAG.'))}</small>
+        <input data-field="ragPerTypeK" class="text_pole" type="number" min="0" step="1" value="${(Number.isFinite(Number(spec.ragPerTypeK)) && Number(spec.ragPerTypeK) >= 0) ? String(Math.floor(Number(spec.ragPerTypeK))) : ''}" placeholder="${escapeHtml(i18n('(use default)'))}" />
+    </label>
     <label class="checkbox_label luker-schema-checkbox"><input data-field="compression.enabled" type="checkbox" ${mode === 'hierarchical' ? 'checked' : ''} />${escapeHtml(i18n('Enable Hierarchical Compression'))}
     </label>
     <div class="luker-schema-grid-2 luker-schema-compression-hier" style="${mode === 'hierarchical' ? '' : 'display:none;'}">
@@ -13507,6 +13569,14 @@ function readSchemaCard(card) {
         extractHint: String(root.find('[data-field="extractHint"]').val() || '').trim(),
         extractionInstructions: String(root.find('[data-field="extractionInstructions"]').val() || '').trim(),
         extractEveryN: Math.max(1, Math.floor(Number(root.find('[data-field="extractEveryN"]').val()) || 1)),
+        // Empty string keeps ragPerTypeK unset (fall through to global default);
+        // otherwise clamp to a non-negative integer.
+        ragPerTypeK: (() => {
+            const raw = String(root.find('[data-field="ragPerTypeK"]').val() ?? '').trim();
+            if (raw === '') return null;
+            const n = Number(raw);
+            return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+        })(),
         keywords: splitCommaList(root.find('[data-field="keywords"]').val()),
         forceUpdate: Boolean(root.find('[data-field="forceUpdate"]').prop('checked')),
         editable: Boolean(root.find('[data-field="editable"]').prop('checked')),
@@ -14282,6 +14352,11 @@ function bindUi() {
 
     root.find('#luker_rpg_memory_vector_topk').val(String(settings.vectorTopK || 20));
     root.find('#luker_rpg_memory_hybrid_max_results').val(String(settings.hybridMaxResults || 15));
+    root.find('#luker_rpg_memory_rag_default_per_type_k').val(String(
+        Number.isFinite(Number(settings.ragDefaultPerTypeK))
+            ? Number(settings.ragDefaultPerTypeK)
+            : defaultSettings.ragDefaultPerTypeK,
+    ));
     root.find('#luker_rpg_memory_rag_use_rerank').prop('checked', Boolean(settings.ragUseRerank));
     root.find('#luker_rpg_memory_rag_use_query_rewrite').prop('checked', Boolean(settings.ragUseQueryRewrite));
 
@@ -14345,6 +14420,13 @@ function bindUi() {
     root.find('#luker_rpg_memory_hybrid_max_results').off('change input').on('change input', function () {
         settings.hybridMaxResults = Math.max(3, Math.min(50, Math.floor(Number(jQuery(this).val()) || 15)));
         jQuery(this).val(String(settings.hybridMaxResults));
+        saveSettingsDebounced();
+    });
+    root.find('#luker_rpg_memory_rag_default_per_type_k').off('change input').on('change input', function () {
+        const raw = Number(jQuery(this).val());
+        const next = Number.isFinite(raw) ? raw : defaultSettings.ragDefaultPerTypeK;
+        settings.ragDefaultPerTypeK = Math.max(0, Math.min(50, Math.floor(next)));
+        jQuery(this).val(String(settings.ragDefaultPerTypeK));
         saveSettingsDebounced();
     });
 
@@ -14708,6 +14790,7 @@ function bindUi() {
 
             const useRerank = Boolean(effectiveSettings.ragUseRerank);
             const rerankProfile = useRerank ? getRerankProfileFromSettings(effectiveSettings) : null;
+            const { perTypeK, defaultPerTypeK } = buildRagPerTypeQuotas(context, effectiveSettings);
 
             const ragResult = await runRagRecall(store, queryText, chatKey, effectiveSettings, {
                 maxResults: Number(effectiveSettings.hybridMaxResults) || 15,
@@ -14715,6 +14798,8 @@ function bindUi() {
                 useRerank,
                 rerankProfile,
                 rewrittenQuery,
+                perTypeK,
+                defaultPerTypeK,
                 signal: null,
             });
 

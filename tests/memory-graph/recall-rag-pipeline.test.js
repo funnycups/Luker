@@ -239,3 +239,228 @@ describe('normalizeQueryText', () => {
         expect(normalizeQueryText(undefined)).toBe('');
     });
 });
+
+// Per-type quota tests. The retriever must bucket vector hits by
+// store.nodes[nodeId].type, take the top K per bucket, and never let one
+// dominant type starve the others out of the final selection. This exists
+// because in real corpora `event` nodes vastly outnumber character_sheet /
+// location_state / thread; a shared topK pool always fills with events and
+// the other types never surface — even though they carry latest-truth state
+// that recall depends on.
+
+function makeMixedStore() {
+    return {
+        nodes: {
+            // 6 events with high vector scores
+            e1: { id: 'e1', type: 'event', title: 'E1', fields: { summary: 's1' } },
+            e2: { id: 'e2', type: 'event', title: 'E2', fields: { summary: 's2' } },
+            e3: { id: 'e3', type: 'event', title: 'E3', fields: { summary: 's3' } },
+            e4: { id: 'e4', type: 'event', title: 'E4', fields: { summary: 's4' } },
+            e5: { id: 'e5', type: 'event', title: 'E5', fields: { summary: 's5' } },
+            e6: { id: 'e6', type: 'event', title: 'E6', fields: { summary: 's6' } },
+            // 3 character_sheet with mid scores
+            c1: { id: 'c1', type: 'character_sheet', title: 'C1', fields: {} },
+            c2: { id: 'c2', type: 'character_sheet', title: 'C2', fields: {} },
+            c3: { id: 'c3', type: 'character_sheet', title: 'C3', fields: {} },
+            // 2 location_state with low scores
+            l1: { id: 'l1', type: 'location_state', title: 'L1', fields: {} },
+            l2: { id: 'l2', type: 'location_state', title: 'L2', fields: {} },
+        },
+    };
+}
+
+describe('runRagRecall — per-type bucketing', () => {
+    test('per-type quota takes top K within each type bucket, not from shared pool', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        // Vector returns 11 hits with events scoring highest overall.
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'e2', score: 0.98 },
+            { nodeId: 'e3', score: 0.97 },
+            { nodeId: 'e4', score: 0.96 },
+            { nodeId: 'e5', score: 0.95 },
+            { nodeId: 'e6', score: 0.94 },
+            { nodeId: 'c1', score: 0.70 },
+            { nodeId: 'c2', score: 0.60 },
+            { nodeId: 'c3', score: 0.55 },
+            { nodeId: 'l1', score: 0.40 },
+            { nodeId: 'l2', score: 0.30 },
+        ]);
+        const { candidates, meta } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 3, character_sheet: 2, location_state: 2 },
+            maxResults: 20,
+        });
+        const byType = candidates.reduce((acc, c) => {
+            const t = c.nodeType || '';
+            acc[t] = (acc[t] || 0) + 1;
+            return acc;
+        }, {});
+        expect(byType.event).toBe(3);
+        expect(byType.character_sheet).toBe(2);
+        expect(byType.location_state).toBe(2);
+        expect(candidates).toHaveLength(7);
+        // Per-bucket meta present
+        expect(meta.perBucket).toBeTruthy();
+        expect(meta.perBucket.event.finalCount).toBe(3);
+        expect(meta.perBucket.character_sheet.finalCount).toBe(2);
+        expect(meta.perBucket.location_state.finalCount).toBe(2);
+    });
+
+    test('vectorTopK auto-lifts to at least sum(perTypeK) so all buckets can fill', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([]);
+        await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 10, character_sheet: 5, location_state: 5 },
+            vectorTopK: 8, // Deliberately too small — must be auto-lifted.
+            maxResults: 20,
+        });
+        expect(findSimilarNodesMock).toHaveBeenCalledTimes(1);
+        // 4th arg to findSimilarNodes is chatId, options is 5th; look at options.topK
+        const passedOptions = findSimilarNodesMock.mock.calls[0][4];
+        expect(passedOptions.topK).toBeGreaterThanOrEqual(20);
+    });
+
+    test('defaultPerTypeK covers types not listed in perTypeK', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'e2', score: 0.98 },
+            { nodeId: 'e3', score: 0.97 },
+            { nodeId: 'c1', score: 0.70 },
+            { nodeId: 'c2', score: 0.60 },
+        ]);
+        const { candidates } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { character_sheet: 2 },
+            defaultPerTypeK: 2, // event has no explicit quota → falls back to 2
+            maxResults: 20,
+        });
+        const events = candidates.filter(c => c.nodeType === 'event');
+        const chars = candidates.filter(c => c.nodeType === 'character_sheet');
+        expect(events).toHaveLength(2);
+        expect(chars).toHaveLength(2);
+    });
+
+    test('no per-type config → single bucket, honours maxResults (legacy-equivalent)', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'e2', score: 0.98 },
+            { nodeId: 'c1', score: 0.70 },
+        ]);
+        const { candidates } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            maxResults: 2,
+        });
+        expect(candidates.map(c => c.nodeId)).toEqual(['e1', 'e2']);
+    });
+
+    test('maxResults still caps final total across buckets', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'e2', score: 0.98 },
+            { nodeId: 'e3', score: 0.97 },
+            { nodeId: 'c1', score: 0.70 },
+            { nodeId: 'c2', score: 0.60 },
+        ]);
+        const { candidates } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 3, character_sheet: 2 },
+            maxResults: 3,
+        });
+        expect(candidates).toHaveLength(3);
+    });
+
+    test('unknown node ids in vector hits are dropped', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'ghost', score: 0.98 },
+            { nodeId: 'c1', score: 0.70 },
+        ]);
+        const { candidates } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 5, character_sheet: 5 },
+        });
+        expect(candidates.map(c => c.nodeId).sort()).toEqual(['c1', 'e1']);
+    });
+});
+
+describe('runRagRecall — per-type rerank', () => {
+    test('rerank is called once per non-empty bucket, results merged', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'e2', score: 0.98 },
+            { nodeId: 'e3', score: 0.97 },
+            { nodeId: 'c1', score: 0.70 },
+            { nodeId: 'c2', score: 0.60 },
+        ]);
+        // Distinct rerank results per bucket call: event bucket inverts (e3 wins),
+        // character bucket keeps order (c1 wins).
+        rerankDocumentsMock
+            .mockResolvedValueOnce([
+                { index: 2, score: 0.9 },
+                { index: 1, score: 0.5 },
+                { index: 0, score: 0.1 },
+            ])
+            .mockResolvedValueOnce([
+                { index: 0, score: 0.8 },
+                { index: 1, score: 0.4 },
+            ]);
+        const { candidates, meta } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 3, character_sheet: 2 },
+            useRerank: true,
+            rerankProfile: { id: 'rk' },
+        });
+        expect(rerankDocumentsMock).toHaveBeenCalledTimes(2);
+        const events = candidates.filter(c => c.nodeType === 'event');
+        const chars = candidates.filter(c => c.nodeType === 'character_sheet');
+        expect(events.map(c => c.nodeId)).toEqual(['e3', 'e2', 'e1']);
+        expect(chars.map(c => c.nodeId)).toEqual(['c1', 'c2']);
+        expect(meta.perBucket.event.rerankApplied).toBe(true);
+        expect(meta.perBucket.character_sheet.rerankApplied).toBe(true);
+    });
+
+    test('one bucket rerank failure does not affect other buckets', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'e2', score: 0.98 },
+            { nodeId: 'c1', score: 0.70 },
+            { nodeId: 'c2', score: 0.60 },
+        ]);
+        // Event bucket fails, character bucket succeeds.
+        rerankDocumentsMock
+            .mockRejectedValueOnce(new Error('rerank event boom'))
+            .mockResolvedValueOnce([
+                { index: 1, score: 0.9 }, // c2 wins
+                { index: 0, score: 0.3 },
+            ]);
+        const { candidates, meta } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 2, character_sheet: 2 },
+            useRerank: true,
+            rerankProfile: { id: 'rk' },
+        });
+        const events = candidates.filter(c => c.nodeType === 'event');
+        const chars = candidates.filter(c => c.nodeType === 'character_sheet');
+        // Event bucket falls back to vector order
+        expect(events.map(c => c.nodeId)).toEqual(['e1', 'e2']);
+        // Character bucket applied rerank
+        expect(chars.map(c => c.nodeId)).toEqual(['c2', 'c1']);
+        expect(meta.perBucket.event.rerankApplied).toBe(false);
+        expect(meta.perBucket.event.skipReasons.some(r => /Rerank failed/.test(r))).toBe(true);
+        expect(meta.perBucket.character_sheet.rerankApplied).toBe(true);
+    });
+
+    test('useRerank=true without rerankProfile → no bucket rerank calls', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'c1', score: 0.70 },
+        ]);
+        await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 5, character_sheet: 5 },
+            useRerank: true,
+            rerankProfile: null,
+        });
+        expect(rerankDocumentsMock).not.toHaveBeenCalled();
+    });
+});
