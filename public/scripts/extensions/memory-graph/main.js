@@ -701,14 +701,12 @@ export function normalizeNodeTypeSchema(schema) {
                 editable,
                 alwaysInject: Boolean(item.alwaysInject),
                 latestOnly,
-                // Optional per-type quota for RAG recall bucketing. When set to
-                // a finite non-negative number, overrides the global
-                // ragDefaultPerTypeK for this node type. Omitted (null / NaN)
-                // means "fall through to the global default" — this keeps old
-                // schemas working without migration.
-                ragPerTypeK: (Number.isFinite(Number(item.ragPerTypeK)) && Number(item.ragPerTypeK) >= 0)
-                    ? Math.floor(Number(item.ragPerTypeK))
-                    : null,
+                // Per-type RAG recall quota. 0 (default) = follow the global
+                // ragDefaultPerTypeK. Positive integer = override just this
+                // type. Negative / NaN / null / undefined all collapse to 0.
+                ragPerTypeK: Math.max(0, Math.floor(
+                    Number.isFinite(Number(item.ragPerTypeK)) ? Number(item.ragPerTypeK) : 0,
+                )),
                 recordsFloorRange: Boolean(item?.recordsFloorRange),
                 primaryKeyColumns,
                 compression: {
@@ -2597,8 +2595,10 @@ function buildRagPerTypeQuotas(context, settings) {
     for (const entry of schema) {
         const id = String(entry?.id || '').trim().toLowerCase();
         if (!id) continue;
+        // Only positive values are overrides. 0 (the default and the value
+        // users leave when they don't care) means "follow the global".
         const override = Number(entry?.ragPerTypeK);
-        if (Number.isFinite(override) && override >= 0) {
+        if (Number.isFinite(override) && override > 0) {
             perTypeK[id] = Math.floor(override);
             anyOverride = true;
         }
@@ -13514,7 +13514,7 @@ function renderNodeTypeSchemaCard(spec, index) {
     </label>
     <label>${escapeHtml(i18n('RAG per-type quota override'))}
         <small style="opacity:0.7">${escapeHtml(i18n('Empty = use the global default from RAG settings. Non-negative integer overrides only this type. 0 = never surface this type via RAG.'))}</small>
-        <input data-field="ragPerTypeK" class="text_pole" type="number" min="0" step="1" value="${(Number.isFinite(Number(spec.ragPerTypeK)) && Number(spec.ragPerTypeK) >= 0) ? String(Math.floor(Number(spec.ragPerTypeK))) : ''}" placeholder="${escapeHtml(i18n('(use default)'))}" />
+        <input data-field="ragPerTypeK" class="text_pole" type="number" min="0" step="1" value="${Math.max(0, Math.floor(Number.isFinite(Number(spec.ragPerTypeK)) ? Number(spec.ragPerTypeK) : 0))}" />
     </label>
     <label class="checkbox_label luker-schema-checkbox"><input data-field="compression.enabled" type="checkbox" ${mode === 'hierarchical' ? 'checked' : ''} />${escapeHtml(i18n('Enable Hierarchical Compression'))}
     </label>
@@ -13569,14 +13569,9 @@ function readSchemaCard(card) {
         extractHint: String(root.find('[data-field="extractHint"]').val() || '').trim(),
         extractionInstructions: String(root.find('[data-field="extractionInstructions"]').val() || '').trim(),
         extractEveryN: Math.max(1, Math.floor(Number(root.find('[data-field="extractEveryN"]').val()) || 1)),
-        // Empty string keeps ragPerTypeK unset (fall through to global default);
-        // otherwise clamp to a non-negative integer.
-        ragPerTypeK: (() => {
-            const raw = String(root.find('[data-field="ragPerTypeK"]').val() ?? '').trim();
-            if (raw === '') return null;
-            const n = Number(raw);
-            return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
-        })(),
+        // 0 means "follow the global ragDefaultPerTypeK"; positive integer
+        // overrides only this type.
+        ragPerTypeK: Math.max(0, Math.floor(Number(root.find('[data-field="ragPerTypeK"]').val()) || 0)),
         keywords: splitCommaList(root.find('[data-field="keywords"]').val()),
         forceUpdate: Boolean(root.find('[data-field="forceUpdate"]').prop('checked')),
         editable: Boolean(root.find('[data-field="editable"]').prop('checked')),

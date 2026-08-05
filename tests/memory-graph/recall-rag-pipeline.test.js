@@ -381,6 +381,25 @@ describe('runRagRecall — per-type bucketing', () => {
         });
         expect(candidates.map(c => c.nodeId).sort()).toEqual(['c1', 'e1']);
     });
+
+    // Caller side (main.js: buildRagPerTypeQuotas) MUST strip 0-valued
+    // entries from perTypeK before invoking the retriever — the UI policy
+    // "0 = follow the global default" is enforced there, not here. This
+    // test pins the retriever's own behavior: an explicit 0 in perTypeK
+    // means "take 0 hits from this bucket". If a caller ever leaks
+    // 0-valued entries through, that whole node type disappears from
+    // recall — a regression a caller-side test cannot catch.
+    test('perTypeK map with explicit 0 for a type respects the 0 (caller must filter zeros)', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'c1', score: 0.70 },
+        ]);
+        const { candidates } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 0, character_sheet: 5 },
+        });
+        expect(candidates.map(c => c.nodeId)).toEqual(['c1']);
+    });
 });
 
 describe('runRagRecall — per-type rerank', () => {
