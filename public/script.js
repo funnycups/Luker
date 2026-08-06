@@ -314,7 +314,7 @@ import { getContext } from './scripts/st-context.js';
 // that consume ctx off the global.  Must import AFTER st-context.js so
 // getContext() returns a fully-populated object (character.presets et al).
 import './scripts/lukerContext.js';
-import { extractReasoningBlocksFromData, extractReasoningDetailsFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
+import { extractReasoningBlocksFromData, extractReasoningDetailsFromData, extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, ReasoningType, registerReasoningSlashCommands, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { fetchRecentChatsSnapshot, initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar, openWelcomeScreen, primeRecentChatsSnapshotPromise } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
@@ -7573,9 +7573,24 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         // In group chats, only include reasoning from the currently generating character
         const isOtherGroupMember = selected_group && coreChat[i].name !== name2;
 
+        // Skip <think> text-fallback when a native structured reasoning channel exists
+        // (Anthropic reasoning_blocks, OpenRouter reasoning_details, or provider-native
+        // reasoning field marked reasoning_type='model'). Structured channels replay
+        // reasoning verbatim; text-fallback would double it — for Claude that means
+        // signature-bearing thinking blocks plus a duplicate <think> in assistant text,
+        // which pollutes output format. On continue turns the isPrefix path used to
+        // bypass the add_to_prompts opt-out for text-completion fallback; that fallback
+        // is still needed for reasoning_type='parsed' (auto_parse from <think>-tag
+        // providers), 'manual', and 'edited', which have no verified native channel.
+        const extra = coreChat[i].extra || {};
+        const hasNativeReasoningChannel =
+            (Array.isArray(extra.reasoning_blocks) && extra.reasoning_blocks.length > 0)
+            || (Array.isArray(extra.reasoning_details) && extra.reasoning_details.length > 0)
+            || extra.reasoning_type === ReasoningType.Model;
+
         coreChat[i] = {
             ...coreChat[i],
-            mes: isOtherGroupMember
+            mes: (isOtherGroupMember || hasNativeReasoningChannel)
                 ? coreChat[i].mes
                 : promptReasoning.addToMessage(
                     coreChat[i].mes,
