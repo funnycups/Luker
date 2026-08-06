@@ -48,9 +48,9 @@ import { forceCharacterEditorTokenize, getCustomStoppingStrings, persona_descrip
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 import { extension_settings } from './extensions.js';
 import { acquire as acquireRequestSlot } from './extensions/connection-manager/request-throttler.js';
-import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
+import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
 import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
-import { withRetry } from './request-retry.js';
 
 import { getEventSourceStream } from './sse-stream.js';
 import {
@@ -4074,17 +4074,15 @@ function isChatCompletionResponseEmpty(data) {
  * @returns {Promise<PostChatCompletionResult>}
  */
 async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false, apiPresetName = '' } = {}) {
-    const maxRetries = getMaxRequestRetries(apiPresetName);
-    const retryBlacklist = getRetryStatusBlacklist(apiPresetName);
     const isStreamRequest = Boolean(requestBody?.stream);
     // Only peek body for empty-response detection when retries are enabled
     // and this is a non-stream request. Streaming responses have their own
     // consumer and must not have their body pre-read.
-    const shouldDetectEmpty = !isStreamRequest && maxRetries > 0;
+    const shouldDetectEmpty = !isStreamRequest && getMaxRequestRetries(apiPresetName) > 0;
 
     let cachedJson = null;
 
-    const response = await withRetry(async () => {
+    const response = await withProfileRetry(async () => {
         cachedJson = null;
         const r = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
@@ -4112,11 +4110,10 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
         cachedJson = parsed;
         return r;
     }, {
-        maxRetries,
-        retryBlacklist,
+        profileName: apiPresetName,
         signal,
         label: 'chat-completion',
-        onAttempt: (attempt) => {
+        onAttempt: (attempt, _err, _delay, maxRetries) => {
             if (quietErrors) return;
             toastr.info(
                 t`Retrying request… (${attempt}/${maxRetries})`,

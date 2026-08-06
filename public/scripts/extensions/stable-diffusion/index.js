@@ -58,8 +58,7 @@ import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnum
 import { ToolManager } from '../../tool-calling.js';
 import { macros, MacroCategory } from '../../macros/macro-system.js';
 import { t, translate } from '../../i18n.js';
-import { withRetry } from '../../request-retry.js';
-import { getMaxRequestRetries, getRetryStatusBlacklist } from '../connection-manager/max-retries.js';
+import { withProfileRetry } from '../connection-manager/profile-retry.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
 import { MacrosParser } from '/scripts/macros.js';
@@ -3425,10 +3424,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
     const currentChatId = getCurrentChatId();
 
     try {
-        const maxRetries = getMaxRequestRetries();
-        const retryBlacklist = getRetryStatusBlacklist();
-
-        result = await withRetry(async () => {
+        result = await withProfileRetry(async () => {
             let inner = { format: '', data: '' };
             switch (extension_settings.sd.source) {
                 case sources.horde:
@@ -3516,11 +3512,9 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
             }
             return inner;
         }, {
-            maxRetries,
-            retryBlacklist,
             signal,
             label: 'image-generation',
-            onAttempt: (attempt) => {
+            onAttempt: (attempt, _err, _delay, maxRetries) => {
                 toastr.info(
                     t`Retrying image generation… (${attempt}/${maxRetries})`,
                     t`Image generation failed`,

@@ -247,6 +247,7 @@ import { NOTE_MODULE_NAME, initAuthorsNote, metadata_keys, setFloatingPrompt, sh
 import { registerPromptManagerMigration } from './scripts/PromptManager.js';
 import { getRegexedString, regex_placement } from './scripts/extensions/regex/engine.js';
 import { getAutoContinueOnTruncated, isTruncatedFinishReason } from './scripts/extensions/connection-manager/auto-continue-truncated.js';
+import { withProfileRetry } from './scripts/extensions/connection-manager/profile-retry.js';
 import { initLogprobs, saveLogprobsForActiveMessage } from './scripts/logprobs.js';
 import { FILTER_STATES, FILTER_TYPES, FilterHelper, isFilterState } from './scripts/filters.js';
 import { getCfgPrompt, getGuidanceScale, initCfg } from './scripts/cfg-scale.js';
@@ -9951,12 +9952,29 @@ export async function sendGenerationRequest(type, data, options = {}) {
         ? { ...data, luker_generation: lukerGenerationOptions }
         : data;
 
-    const response = await fetch(getGenerateUrl(main_api), {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        cache: 'no-cache',
-        body: JSON.stringify(requestData),
+    // Non-streaming fallback for text-completion backends (textgenerationwebui /
+    // kobold / novel). Openai / koboldhorde branch off above through their own
+    // retry-wrapped transports; every other main-chat + auto-continue round
+    // funnels through this fetch, so it must respect the same per-profile
+    // retry policy (max-request-retries + retry-status-blacklist) as the rest.
+    const response = await withProfileRetry(async () => {
+        return await fetch(getGenerateUrl(main_api), {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            cache: 'no-cache',
+            body: JSON.stringify(requestData),
+            signal: abortController.signal,
+        });
+    }, {
         signal: abortController.signal,
+        label: `generic-non-stream:${main_api}`,
+        onAttempt: (attempt, _err, _delay, maxRetries) => {
+            toastr.info(
+                t`Retrying request… (${attempt}/${maxRetries})`,
+                t`Request failed`,
+                { timeOut: 3000 },
+            );
+        },
     });
 
     if (shouldTrackLukerGenerationState) {

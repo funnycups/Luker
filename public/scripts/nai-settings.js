@@ -24,8 +24,7 @@ import {
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 import { t } from './i18n.js';
-import { withRetry } from './request-retry.js';
-import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
+import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
 
 const default_preamble = '[ Style: chat, complex, sensory, visceral ]';
 const default_order = [1, 5, 0, 2, 3, 4];
@@ -751,10 +750,7 @@ function tryParseStreamingError(response, decoded) {
 export async function generateNovelWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
     generate_data.streaming = nai_settings.streaming_novel;
 
-    const maxRetries = getMaxRequestRetries();
-    const retryBlacklist = getRetryStatusBlacklist();
-
-    const response = await withRetry(async () => {
+    const response = await withProfileRetry(async () => {
         return await fetch('/api/novelai/generate', {
             headers: getRequestHeaders(),
             body: JSON.stringify(generate_data),
@@ -762,11 +758,9 @@ export async function generateNovelWithStreaming(generate_data, signal, { onLuke
             signal: signal,
         });
     }, {
-        maxRetries,
-        retryBlacklist,
         signal,
         label: 'novelai',
-        onAttempt: (attempt) => {
+        onAttempt: (attempt, _err, _delay, maxRetries) => {
             toastr.info(
                 t`Retrying request… (${attempt}/${maxRetries})`,
                 t`Request failed`,

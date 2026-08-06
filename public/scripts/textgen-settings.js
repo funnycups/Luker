@@ -18,8 +18,7 @@ import {
 import { deriveTemplatesFromChatTemplate } from './chat-templates.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
-import { withRetry } from './request-retry.js';
-import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
+import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
@@ -1316,10 +1315,7 @@ function setSettingByName(setting, value, trigger) {
 export async function generateTextGenWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
     generate_data.stream = true;
 
-    const maxRetries = getMaxRequestRetries();
-    const retryBlacklist = getRetryStatusBlacklist();
-
-    const response = await withRetry(async () => {
+    const response = await withProfileRetry(async () => {
         return await fetch('/api/backends/text-completions/generate', {
             headers: {
                 ...getRequestHeaders(),
@@ -1329,11 +1325,9 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
             signal: signal,
         });
     }, {
-        maxRetries,
-        retryBlacklist,
         signal,
         label: 'textgen',
-        onAttempt: (attempt) => {
+        onAttempt: (attempt, _err, _delay, maxRetries) => {
             toastr.info(
                 t`Retrying request… (${attempt}/${maxRetries})`,
                 t`Request failed`,
