@@ -17,7 +17,7 @@ import {
 import { t } from './i18n.js';
 import { autoSelectInstructPreset } from './instruct-mode.js';
 import { withRetry } from './request-retry.js';
-import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
 
 import {
     power_user,
@@ -233,6 +233,7 @@ function tryParseStreamingError(response, decoded) {
 
 export async function generateKoboldWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
     const maxRetries = getMaxRequestRetries();
+    const retryBlacklist = getRetryStatusBlacklist();
 
     const response = await withRetry(async () => {
         return await fetch('/api/backends/kobold/generate', {
@@ -243,6 +244,7 @@ export async function generateKoboldWithStreaming(generate_data, signal, { onLuk
         });
     }, {
         maxRetries,
+        retryBlacklist,
         signal,
         label: 'kobold',
         onAttempt: (attempt) => {

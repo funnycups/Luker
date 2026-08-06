@@ -25,7 +25,7 @@ import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasList
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 import { t } from './i18n.js';
 import { withRetry } from './request-retry.js';
-import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
 
 const default_preamble = '[ Style: chat, complex, sensory, visceral ]';
 const default_order = [1, 5, 0, 2, 3, 4];
@@ -752,6 +752,7 @@ export async function generateNovelWithStreaming(generate_data, signal, { onLuke
     generate_data.streaming = nai_settings.streaming_novel;
 
     const maxRetries = getMaxRequestRetries();
+    const retryBlacklist = getRetryStatusBlacklist();
 
     const response = await withRetry(async () => {
         return await fetch('/api/novelai/generate', {
@@ -762,6 +763,7 @@ export async function generateNovelWithStreaming(generate_data, signal, { onLuke
         });
     }, {
         maxRetries,
+        retryBlacklist,
         signal,
         label: 'novelai',
         onAttempt: (attempt) => {

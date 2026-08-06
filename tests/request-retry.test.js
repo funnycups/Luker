@@ -375,4 +375,106 @@ describe('withRetry', () => {
             warnSpy.mockRestore();
         }
     });
+
+    // ── Task 10: retryBlacklist option ──────────────────────────────────────
+    // The blacklist subtracts from the default retriable set (429 + 5xx).
+    // Codes on the list are treated as non-retriable — return / throw
+    // immediately on the first attempt, no matter what maxRetries says.
+
+    test('retryBlacklist skips retry on Response 429 when 429 is blacklisted', async () => {
+        const resp429 = new Response('rl', { status: 429 });
+        const fetcher = jest.fn().mockResolvedValue(resp429);
+        const onAttempt = jest.fn();
+
+        const result = await withRetry(fetcher, { maxRetries: 3, retryBlacklist: [429], onAttempt });
+
+        expect(result).toBe(resp429);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(onAttempt).not.toHaveBeenCalled();
+    });
+
+    test('retryBlacklist skips retry on Response 503 when 503 is blacklisted', async () => {
+        const resp503 = new Response('down', { status: 503 });
+        const fetcher = jest.fn().mockResolvedValue(resp503);
+
+        const result = await withRetry(fetcher, { maxRetries: 3, retryBlacklist: [503] });
+
+        expect(result).toBe(resp503);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    test('retryBlacklist skips retry on thrown error with blacklisted status', async () => {
+        const err = Object.assign(new Error('quota'), { status: 429 });
+        const fetcher = jest.fn().mockRejectedValue(err);
+
+        await expect(withRetry(fetcher, { maxRetries: 3, retryBlacklist: [429] })).rejects.toBe(err);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    test('retryBlacklist does not affect codes outside the list', async () => {
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('', { status: 500 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: [429, 503] });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('retryBlacklist still retries network errors (no status)', async () => {
+        const netErr = new TypeError('Failed to fetch');
+        const fetcher = jest.fn()
+            .mockRejectedValueOnce(netErr)
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: [429, 503] });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('empty retryBlacklist behaves as if no blacklist', async () => {
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('', { status: 429 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: [] });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('undefined retryBlacklist behaves as if no blacklist', async () => {
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('', { status: 429 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, { maxRetries: 2 });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('retryBlacklist non-array (invalid input) is ignored', async () => {
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('', { status: 429 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        // Pass a string instead of an array — should be treated as null.
+        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: /** @type {any} */ ('429') });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
 });

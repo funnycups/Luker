@@ -55,8 +55,14 @@
             <label for="connection_profile_max_request_retries" data-i18n="Max request retries (0 = disabled)">Max request retries (0 = disabled)</label>
             <input id="connection_profile_max_request_retries" class="text_pole widthUnset" type="number" min="0" max="5" step="1" value="0" />
         </div>
+        <div id="connection_profile_retry_status_blacklist_block" class="flex-container alignItemsCenter gap10 marginTop10">
+            <label for="connection_profile_retry_status_blacklist" data-i18n="Retry status blacklist">Retry status blacklist</label>
+            <input id="connection_profile_retry_status_blacklist" class="text_pole flex1" type="text" placeholder="429, 503" />
+        </div>
         <div id="connection_profile_max_request_retries_hint_block" class="marginTop5">
             <small class="opacity50p" data-i18n="Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.">Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.</small>
+            <br>
+            <small class="opacity50p" data-i18n="Blacklist accepts comma-separated HTTP status codes (100–599). Listed codes are never retried, even if they would otherwise qualify (e.g. 429 / 5xx).">Blacklist accepts comma-separated HTTP status codes (100–599). Listed codes are never retried, even if they would otherwise qualify (e.g. 429 / 5xx).</small>
         </div>
         <div id="connection_profile_auto_continue_truncated_block" class="marginTop10">
             <label class="checkbox_label" for="connection_profile_auto_continue_on_truncated">

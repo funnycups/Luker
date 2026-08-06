@@ -4,7 +4,24 @@ const MAX_BACKOFF_MS = 8_000;
 const MAX_RETRY_AFTER_MS = 60_000;
 const RETRY_SUFFIX_TEMPLATE = ' (after %d retries)';
 
-function isRetriableStatus(status) {
+/**
+ * Whether an HTTP status code is retriable at the network layer.
+ *
+ * Default retriable set: `429 ∪ [500, 600)`.
+ *
+ * `blacklist` (per-profile "never retry these" override) subtracts from the
+ * default set: any code in the blacklist is treated as non-retriable even if
+ * it would otherwise be retried. Anything outside the default retriable set
+ * is already non-retriable; blacklisting non-retriable codes is a no-op.
+ *
+ * @param {number} status
+ * @param {number[]|null|undefined} [blacklist] status codes to never retry
+ * @returns {boolean}
+ */
+function isRetriableStatus(status, blacklist) {
+    if (Array.isArray(blacklist) && blacklist.length > 0 && blacklist.includes(status)) {
+        return false;
+    }
     return status === 429 || (status >= 500 && status < 600);
 }
 
@@ -93,20 +110,23 @@ function appendRetrySuffix(err, retries) {
  *   - thrown error with err.skipRetry === true
  *   - thrown error with non-retriable status (4xx other than 429)
  *   - returned Response with non-retriable status
+ *   - status present in `retryBlacklist` (per-profile "never retry these" override)
  *   - maxRetries <= 0
  *
  * @template T
  * @param {() => Promise<T>} fetcher
  * @param {object} [options]
  * @param {number} [options.maxRetries=0] - 0 disables retry (callers clamp 0–5).
+ * @param {number[]} [options.retryBlacklist] - Status codes to never retry (subtracts from the default 429 + 5xx set).
  * @param {AbortSignal} [options.signal]
  * @param {(attempt: number, error: Error, nextDelayMs: number) => void} [options.onAttempt]
  * @param {string} [options.label]
  * @returns {Promise<T>}
  */
 export async function withRetry(fetcher, options = {}) {
-    const { maxRetries: rawMax, signal, onAttempt /* , label */ } = options;
+    const { maxRetries: rawMax, retryBlacklist, signal, onAttempt /* , label */ } = options;
     const maxRetries = (Number.isFinite(rawMax) && rawMax >= 0) ? Math.floor(rawMax) : 0;
+    const blacklist = Array.isArray(retryBlacklist) ? retryBlacklist : null;
 
     if (signal?.aborted) throw makeAbortError();
 
@@ -123,7 +143,7 @@ export async function withRetry(fetcher, options = {}) {
         }
 
         if (!thrownError) {
-            if (result instanceof Response && !result.ok && isRetriableStatus(result.status)) {
+            if (result instanceof Response && !result.ok && isRetriableStatus(result.status, blacklist)) {
                 if (signal?.aborted) throw makeAbortError();
                 if (attempt >= maxRetries) {
                     return result;
@@ -146,7 +166,7 @@ export async function withRetry(fetcher, options = {}) {
         if (thrownError?.skipRetry) throw thrownError;
 
         const status = thrownError?.status;
-        const retriable = (status === undefined) || isRetriableStatus(status);
+        const retriable = (status === undefined) || isRetriableStatus(status, blacklist);
         if (!retriable) throw thrownError;
         if (attempt >= maxRetries) {
             if (attempt > 0) appendRetrySuffix(thrownError, attempt);

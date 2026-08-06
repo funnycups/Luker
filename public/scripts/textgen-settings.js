@@ -19,7 +19,7 @@ import { deriveTemplatesFromChatTemplate } from './chat-templates.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
 import { withRetry } from './request-retry.js';
-import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
@@ -1317,6 +1317,7 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
     generate_data.stream = true;
 
     const maxRetries = getMaxRequestRetries();
+    const retryBlacklist = getRetryStatusBlacklist();
 
     const response = await withRetry(async () => {
         return await fetch('/api/backends/text-completions/generate', {
@@ -1329,6 +1330,7 @@ export async function generateTextGenWithStreaming(generate_data, signal, { onLu
         });
     }, {
         maxRetries,
+        retryBlacklist,
         signal,
         label: 'textgen',
         onAttempt: (attempt) => {

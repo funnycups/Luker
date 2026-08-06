@@ -59,7 +59,7 @@ import { ToolManager } from '../../tool-calling.js';
 import { macros, MacroCategory } from '../../macros/macro-system.js';
 import { t, translate } from '../../i18n.js';
 import { withRetry } from '../../request-retry.js';
-import { getMaxRequestRetries } from '../connection-manager/max-retries.js';
+import { getMaxRequestRetries, getRetryStatusBlacklist } from '../connection-manager/max-retries.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
 import { MacrosParser } from '/scripts/macros.js';
@@ -3426,6 +3426,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
 
     try {
         const maxRetries = getMaxRequestRetries();
+        const retryBlacklist = getRetryStatusBlacklist();
 
         result = await withRetry(async () => {
             let inner = { format: '', data: '' };
@@ -3516,6 +3517,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
             return inner;
         }, {
             maxRetries,
+            retryBlacklist,
             signal,
             label: 'image-generation',
             onAttempt: (attempt) => {

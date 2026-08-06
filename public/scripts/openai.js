@@ -48,7 +48,7 @@ import { forceCharacterEditorTokenize, getCustomStoppingStrings, persona_descrip
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 import { extension_settings } from './extensions.js';
 import { acquire as acquireRequestSlot } from './extensions/connection-manager/request-throttler.js';
-import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
 import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
 import { withRetry } from './request-retry.js';
 
@@ -4075,6 +4075,7 @@ function isChatCompletionResponseEmpty(data) {
  */
 async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false, apiPresetName = '' } = {}) {
     const maxRetries = getMaxRequestRetries(apiPresetName);
+    const retryBlacklist = getRetryStatusBlacklist(apiPresetName);
     const isStreamRequest = Boolean(requestBody?.stream);
     // Only peek body for empty-response detection when retries are enabled
     // and this is a non-stream request. Streaming responses have their own
@@ -4112,6 +4113,7 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
         return r;
     }, {
         maxRetries,
+        retryBlacklist,
         signal,
         label: 'chat-completion',
         onAttempt: (attempt) => {

@@ -16,7 +16,7 @@ import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { kai_settings } from './kai-settings.js';
 import { withRetry } from './request-retry.js';
-import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { getMaxRequestRetries, getRetryStatusBlacklist } from './extensions/connection-manager/max-retries.js';
 
 export {
     MIN_LENGTH,
@@ -221,6 +221,7 @@ export async function generateHorde(prompt, params, signal, reportProgress) {
     };
 
     const maxRetries = getMaxRequestRetries();
+    const retryBlacklist = getRetryStatusBlacklist();
 
     const response = await withRetry(async () => {
         return await fetch('/api/horde/generate-text', {
@@ -231,6 +232,7 @@ export async function generateHorde(prompt, params, signal, reportProgress) {
         });
     }, {
         maxRetries,
+        retryBlacklist,
         signal,
         label: 'horde',
         onAttempt: (attempt) => {

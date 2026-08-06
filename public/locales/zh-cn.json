@@ -5556,6 +5556,8 @@
     ,"Max request retries (0 = disabled)": "请求重试次数上限（0 表示关闭）"
     ,"Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.": "对文本生成和图像生成请求都生效。遇到网络错误、上游限流或服务器错误时会自动重试。流式响应开始后断开不会重试。"
     ,"Max request retries": "请求重试次数上限"
+    ,"Retry status blacklist": "重试状态码黑名单"
+    ,"Blacklist accepts comma-separated HTTP status codes (100–599). Listed codes are never retried, even if they would otherwise qualify (e.g. 429 / 5xx).": "黑名单接受用逗号分隔的 HTTP 状态码（100–599）。列表中的状态码永远不会重试，即使属于默认的可重试范围（如 429 或 5xx）。"
     ,"Auto-continue when the response is truncated": "回复被截断时自动继续"
     ,"Max auto-continue attempts": "最大自动继续次数"
     ,"Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.": "仅作用于主聊天。在触及输出上限或被安全策略截断时触发。若上一轮未产出任何新内容则停止。计数在用户发送新消息、切换聊天或收到正常结束的回复时重置。"

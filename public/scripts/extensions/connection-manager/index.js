@@ -21,7 +21,7 @@ import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
-import { clampMaxRetries } from './max-retries.js';
+import { clampMaxRetries, formatRetryStatusBlacklist, parseRetryStatusBlacklist } from './max-retries.js';
 import { clampAutoContinueMaxAttempts, getAutoContinueMaxAttemptsCeiling } from './auto-continue-truncated.js';
 import {
     createEmbeddingProfileStub,
@@ -168,6 +168,7 @@ const FANCY_NAMES = {
     'vertexai-express-project-id': 'Vertex AI Express Project',
     'rpm-limit': 'Requests per minute',
     'max-request-retries': 'Max request retries',
+    'retry-status-blacklist': 'Retry status blacklist',
     'auto-continue-on-truncated': 'Auto-continue on truncated',
     'auto-continue-on-truncated-max-attempts': 'Max auto-continue attempts',
 };
@@ -275,6 +276,7 @@ const profilesProvider = () => [
  * @property {string} [secret-id] Secret ID
  * @property {number} [rpm-limit] Requests-per-minute limit. 0/missing = no limit.
  * @property {number} [max-request-retries] Network-layer retry count (0-5). 0/missing = disabled.
+ * @property {string} [retry-status-blacklist] Comma-separated HTTP status codes to never retry (e.g. "429, 503"). Empty/missing = no additional exclusions.
  * @property {boolean|string} [auto-continue-on-truncated] Auto-continue main chat when finish_reason=length. Missing/false = disabled.
  * @property {number} [auto-continue-on-truncated-max-attempts] Max successive auto-continue attempts (1-10). 0/missing = disabled.
  * @property {string[]} [exclude] Commands to exclude
@@ -1203,6 +1205,7 @@ export async function init() {
     const plainTextFunctionCallingRetryAttemptsInput = document.getElementById('connection_profile_function_calling_plain_text_error_retry_max_attempts');
     const rpmLimitInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_rpm_limit'));
     const maxRequestRetriesInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_max_request_retries'));
+    const retryStatusBlacklistInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_retry_status_blacklist'));
     const autoContinueOnTruncatedToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated'));
     const autoContinueOnTruncatedMaxAttemptsInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated_max_attempts'));
     const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
@@ -1285,6 +1288,15 @@ export async function init() {
             maxRequestRetriesInput.disabled = !supportedForRetries;
             if (document.activeElement !== maxRequestRetriesInput) {
                 maxRequestRetriesInput.value = String(retriesValue);
+            }
+        }
+
+        if (retryStatusBlacklistInput) {
+            const supportedForBlacklist = !!profile && (profileMode === 'cc' || profileMode === 'tc');
+            const blacklistValue = profile ? parseRetryStatusBlacklist(profile['retry-status-blacklist']) : [];
+            retryStatusBlacklistInput.disabled = !supportedForBlacklist;
+            if (document.activeElement !== retryStatusBlacklistInput) {
+                retryStatusBlacklistInput.value = formatRetryStatusBlacklist(blacklistValue);
             }
         }
 
@@ -1540,6 +1552,36 @@ export async function init() {
                 delete profile['max-request-retries'];
             } else {
                 profile['max-request-retries'] = value;
+            }
+            saveSettingsDebounced();
+            await renderDetailsContent(detailsContent);
+            await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+            syncProfileEditorControls();
+        });
+    }
+
+    if (retryStatusBlacklistInput) {
+        retryStatusBlacklistInput.addEventListener('change', async () => {
+            const codes = parseRetryStatusBlacklist(retryStatusBlacklistInput.value);
+            const normalized = formatRetryStatusBlacklist(codes);
+            retryStatusBlacklistInput.value = normalized;
+
+            const profile = getSelectedProfile();
+            if (!profile) {
+                syncProfileEditorControls();
+                return;
+            }
+            const mode = resolveProfileMode(profile);
+            if (mode !== 'cc' && mode !== 'tc') {
+                syncProfileEditorControls();
+                return;
+            }
+
+            const oldProfile = structuredClone(profile);
+            if (!normalized) {
+                delete profile['retry-status-blacklist'];
+            } else {
+                profile['retry-status-blacklist'] = normalized;
             }
             saveSettingsDebounced();
             await renderDetailsContent(detailsContent);
