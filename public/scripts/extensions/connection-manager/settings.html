@@ -33,75 +33,83 @@
                 <i id="delete_connection_profile" class="menu_button fa-solid fa-trash-can" title="Delete a connection profile" data-i18n="[title]Delete a connection profile"></i>
             </div>
         </div>
-        <label class="checkbox_label">
-            <input id="connection_profile_function_calling_plain_text" type="checkbox" />
-            <span data-i18n="Plain-text Function Calling">Plain-text Function Calling</span>
-        </label>
-        <div id="connection_profile_function_calling_plain_text_error_retry_block" class="range-block">
-            <label for="connection_profile_function_calling_plain_text_error_retry" class="checkbox_label widthFreeExpand">
-                <input id="connection_profile_function_calling_plain_text_error_retry" type="checkbox" />
-                <span data-i18n="Retry malformed plain-text tool calls">Retry malformed plain-text tool calls</span>
-            </label>
-        </div>
-        <div id="connection_profile_function_calling_plain_text_retry_attempts_block" class="flex-container alignItemsCenter gap10 marginTop10">
-            <label for="connection_profile_function_calling_plain_text_error_retry_max_attempts" data-i18n="Plain-text retry attempts">Plain-text retry attempts</label>
-            <input id="connection_profile_function_calling_plain_text_error_retry_max_attempts" class="text_pole widthUnset" type="number" min="1" max="10" step="1" value="3" />
-        </div>
         <div id="connection_profile_rpm_limit_block" class="flex-container alignItemsCenter gap10 marginTop10">
             <label for="connection_profile_rpm_limit" data-i18n="Requests per minute (0 = unlimited)">Requests per minute (0 = unlimited)</label>
             <input id="connection_profile_rpm_limit" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
         </div>
-        <div id="connection_profile_max_request_retries_block" class="flex-container alignItemsCenter gap10 marginTop10">
-            <label for="connection_profile_max_request_retries" data-i18n="Max request retries (0 = disabled)">Max request retries (0 = disabled)</label>
-            <input id="connection_profile_max_request_retries" class="text_pole widthUnset" type="number" min="0" max="5" step="1" value="0" />
-        </div>
-        <div id="connection_profile_retry_status_blacklist_block" class="flex-container alignItemsCenter gap10 marginTop10">
-            <label for="connection_profile_retry_status_blacklist" data-i18n="Retry status blacklist">Retry status blacklist</label>
-            <input id="connection_profile_retry_status_blacklist" class="text_pole flex1" type="text" placeholder="429, 503" />
-        </div>
-        <div id="connection_profile_max_request_retries_hint_block" class="marginTop5">
-            <small class="opacity50p" data-i18n="Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.">Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.</small>
-            <br>
-            <small class="opacity50p" data-i18n="Blacklist accepts comma-separated HTTP status codes (100–599). Listed codes are never retried, even if they would otherwise qualify (e.g. 429 / 5xx).">Blacklist accepts comma-separated HTTP status codes (100–599). Listed codes are never retried, even if they would otherwise qualify (e.g. 429 / 5xx).</small>
-        </div>
-        <div id="connection_profile_auto_continue_truncated_block" class="marginTop10">
-            <label class="checkbox_label" for="connection_profile_auto_continue_on_truncated">
-                <input id="connection_profile_auto_continue_on_truncated" type="checkbox" />
-                <span data-i18n="Auto-continue when the response is truncated">Auto-continue when the response is truncated</span>
-            </label>
-            <div id="connection_profile_auto_continue_truncated_max_attempts_block" class="flex-container alignItemsCenter gap10 marginTop5">
-                <label for="connection_profile_auto_continue_on_truncated_max_attempts" data-i18n="Max auto-continue attempts">Max auto-continue attempts</label>
-                <input id="connection_profile_auto_continue_on_truncated_max_attempts" class="text_pole widthUnset" type="number" min="1" max="10" step="1" value="3" />
+        <div class="inline-drawer wide100p marginTop10">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b data-i18n="Advanced">Advanced</b>
+                <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
             </div>
-            <div class="marginTop5">
-                <small class="opacity50p" data-i18n="Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.">Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.</small>
+            <div class="inline-drawer-content">
+                <label class="checkbox_label">
+                    <input id="connection_profile_function_calling_plain_text" type="checkbox" />
+                    <span data-i18n="Plain-text Function Calling">Plain-text Function Calling</span>
+                </label>
+                <div id="connection_profile_function_calling_plain_text_error_retry_block" class="range-block">
+                    <label for="connection_profile_function_calling_plain_text_error_retry" class="checkbox_label widthFreeExpand">
+                        <input id="connection_profile_function_calling_plain_text_error_retry" type="checkbox" />
+                        <span data-i18n="Retry malformed plain-text tool calls">Retry malformed plain-text tool calls</span>
+                    </label>
+                </div>
+                <div id="connection_profile_function_calling_plain_text_retry_attempts_block" class="flex-container alignItemsCenter gap10 marginTop10">
+                    <label for="connection_profile_function_calling_plain_text_error_retry_max_attempts" data-i18n="Plain-text retry attempts">Plain-text retry attempts</label>
+                    <input id="connection_profile_function_calling_plain_text_error_retry_max_attempts" class="text_pole widthUnset" type="number" min="1" max="10" step="1" value="3" />
+                </div>
+                <div id="connection_profile_max_request_retries_block" class="flex-container alignItemsCenter gap10 marginTop10">
+                    <label for="connection_profile_max_request_retries" data-i18n="Max request retries (0 = disabled)">Max request retries (0 = disabled)</label>
+                    <input id="connection_profile_max_request_retries" class="text_pole widthUnset" type="number" min="0" max="5" step="1" value="0" />
+                </div>
+                <div id="connection_profile_retry_status_blacklist_block" class="flex-container alignItemsCenter gap10 marginTop10">
+                    <label for="connection_profile_retry_status_blacklist" data-i18n="Retry status blacklist">Retry status blacklist</label>
+                    <input id="connection_profile_retry_status_blacklist" class="text_pole flex1" type="text" placeholder="429, 503" />
+                </div>
+                <div id="connection_profile_max_request_retries_hint_block" class="marginTop5">
+                    <small class="opacity50p" data-i18n="Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.">Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.</small>
+                    <br>
+                    <small class="opacity50p" data-i18n="Blacklist accepts comma-separated HTTP status codes (100–599). Listed codes are never retried, even if they would otherwise qualify (e.g. 429 / 5xx).">Blacklist accepts comma-separated HTTP status codes (100–599). Listed codes are never retried, even if they would otherwise qualify (e.g. 429 / 5xx).</small>
+                </div>
+                <div id="connection_profile_auto_continue_truncated_block" class="marginTop10">
+                    <label class="checkbox_label" for="connection_profile_auto_continue_on_truncated">
+                        <input id="connection_profile_auto_continue_on_truncated" type="checkbox" />
+                        <span data-i18n="Auto-continue when the response is truncated">Auto-continue when the response is truncated</span>
+                    </label>
+                    <div id="connection_profile_auto_continue_truncated_max_attempts_block" class="flex-container alignItemsCenter gap10 marginTop5">
+                        <label for="connection_profile_auto_continue_on_truncated_max_attempts" data-i18n="Max auto-continue attempts">Max auto-continue attempts</label>
+                        <input id="connection_profile_auto_continue_on_truncated_max_attempts" class="text_pole widthUnset" type="number" min="1" max="10" step="1" value="3" />
+                    </div>
+                    <div class="marginTop5">
+                        <small class="opacity50p" data-i18n="Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.">Main-chat only. Fires on output cap or safety cutoff. Stops if the last round produced no new content. Counter resets on user input, chat switch, or a normal-finish reply.</small>
+                    </div>
+                </div>
+                <div id="connection_profile_claude_cache_block" class="marginTop10" data-source="claude,openrouter">
+                    <h4 class="margin0" data-i18n="Claude Prompt Caching">Claude Prompt Caching</h4>
+                    <small class="opacity50p" data-i18n="Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h)\; reads cost 0.1×.">Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.</small>
+                    <label class="checkbox_label marginTop5">
+                        <input id="connection_profile_claude_enable_system_prompt_cache" type="checkbox" />
+                        <span data-i18n="Cache system prompt">Cache system prompt</span>
+                    </label>
+                    <label class="checkbox_label">
+                        <input id="connection_profile_claude_extended_ttl" type="checkbox" />
+                        <span data-i18n="Use 1h cache TTL (instead of 5m)">Use 1h cache TTL (instead of 5m)</span>
+                    </label>
+                    <div class="flex-container alignItemsCenter gap10 marginTop5">
+                        <label for="connection_profile_claude_caching_at_depth" data-i18n="Cache message history at depth (-1 to disable)">Cache message history at depth (-1 to disable)</label>
+                        <input id="connection_profile_claude_caching_at_depth" class="text_pole widthUnset" type="number" min="-1" step="1" value="-1" />
+                    </div>
+                    <small id="connection_profile_claude_cache_warning_single" class="neutral_warning marginTop5 displayNone" data-i18n="Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.">Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.</small>
+                    <small id="connection_profile_claude_cache_warning_strict" class="neutral_warning marginTop5 displayNone" data-i18n="Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.">Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.</small>
+                </div>
+                <div id="connection_profile_gemini_cache_block" class="marginTop10" data-source="openrouter">
+                    <h4 class="margin0" data-i18n="OpenRouter Gemini Prompt Caching">OpenRouter Gemini Prompt Caching</h4>
+                    <small class="opacity50p" data-i18n="Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.">Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.</small>
+                    <label class="checkbox_label marginTop5">
+                        <input id="connection_profile_gemini_enable_system_prompt_cache" type="checkbox" />
+                        <span data-i18n="Cache system prompt">Cache system prompt</span>
+                    </label>
+                </div>
             </div>
-        </div>
-        <div id="connection_profile_claude_cache_block" class="marginTop10" data-source="claude,openrouter">
-            <h4 class="margin0" data-i18n="Claude Prompt Caching">Claude Prompt Caching</h4>
-            <small class="opacity50p" data-i18n="Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h)\; reads cost 0.1×.">Only effective when the prompt prefix is stable across requests (no in-chat lorebook injections or random macros). Cache writes cost 1.25× base (5m) or 2× base (1h); reads cost 0.1×.</small>
-            <label class="checkbox_label marginTop5">
-                <input id="connection_profile_claude_enable_system_prompt_cache" type="checkbox" />
-                <span data-i18n="Cache system prompt">Cache system prompt</span>
-            </label>
-            <label class="checkbox_label">
-                <input id="connection_profile_claude_extended_ttl" type="checkbox" />
-                <span data-i18n="Use 1h cache TTL (instead of 5m)">Use 1h cache TTL (instead of 5m)</span>
-            </label>
-            <div class="flex-container alignItemsCenter gap10 marginTop5">
-                <label for="connection_profile_claude_caching_at_depth" data-i18n="Cache message history at depth (-1 to disable)">Cache message history at depth (-1 to disable)</label>
-                <input id="connection_profile_claude_caching_at_depth" class="text_pole widthUnset" type="number" min="-1" step="1" value="-1" />
-            </div>
-            <small id="connection_profile_claude_cache_warning_single" class="neutral_warning marginTop5 displayNone" data-i18n="Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.">Prompt post-processing is set to Single user message, which collapses every turn into one message. Prompt caching cannot reuse any prefix across requests in this mode — every request is a cache write with no read. Switch to None or Merge consecutive roles for caching to take effect.</small>
-            <small id="connection_profile_claude_cache_warning_strict" class="neutral_warning marginTop5 displayNone" data-i18n="Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.">Prompt post-processing is set to Strict or Semi-strict, which folds every system message after the first into a user turn. Prompt caching still works on the first user message's tail, but the dedicated system-prompt cache breakpoint is unavailable. None or Merge consecutive roles gives the best cache coverage.</small>
-        </div>
-        <div id="connection_profile_gemini_cache_block" class="marginTop10" data-source="openrouter">
-            <h4 class="margin0" data-i18n="OpenRouter Gemini Prompt Caching">OpenRouter Gemini Prompt Caching</h4>
-            <small class="opacity50p" data-i18n="Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.">Only applied when OpenRouter routes to a Gemini model that supports caching. Same prefix-stability caveat as Claude caching.</small>
-            <label class="checkbox_label marginTop5">
-                <input id="connection_profile_gemini_enable_system_prompt_cache" type="checkbox" />
-                <span data-i18n="Cache system prompt">Cache system prompt</span>
-            </label>
         </div>
         <div id="connection_profile_details_content" class="hidden"></div>
     </div>

@@ -4461,7 +4461,7 @@
     "Aborting populateSideBar due to process id mismatch": "由于 populateSideBar ID 不匹配，中止填充侧边栏",
     "Add character names to completion objects.": "将角色名称添加到补全对象中。",
     "Adds a shadow to the character sprite.": "为角色立绘添加阴影。",
-    "Advanced": "高端",
+    "Advanced": "高级",
     "Alignment for rank nodes.": "对排名节点的对齐方式。",
     "Allocates a portion of the response length for thinking (low: 10%, medium: 25%, high: 50%). Other options are model-dependent.": "分配部分回应长度用于推理功能（低：10%、中：25%、高：50%）。其他选项依模型而异。",
     "Allow Jailbreak": "允许越狱",
