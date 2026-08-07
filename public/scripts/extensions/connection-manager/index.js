@@ -21,7 +21,7 @@ import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
-import { clampMaxRetries, formatRetryStatusBlacklist, parseRetryStatusBlacklist } from './max-retries.js';
+import { clampMaxRetries, formatRetryStatusWhitelist, parseRetryStatusWhitelist } from './max-retries.js';
 import { clampAutoContinueMaxAttempts, getAutoContinueMaxAttemptsCeiling } from './auto-continue-truncated.js';
 import {
     createEmbeddingProfileStub,
@@ -168,7 +168,7 @@ const FANCY_NAMES = {
     'vertexai-express-project-id': 'Vertex AI Express Project',
     'rpm-limit': 'Requests per minute',
     'max-request-retries': 'Max request retries',
-    'retry-status-blacklist': 'Retry status blacklist',
+    'retry-status-whitelist': 'Retry status whitelist',
     'auto-continue-on-truncated': 'Auto-continue on truncated',
     'auto-continue-on-truncated-max-attempts': 'Max auto-continue attempts',
 };
@@ -276,7 +276,7 @@ const profilesProvider = () => [
  * @property {string} [secret-id] Secret ID
  * @property {number} [rpm-limit] Requests-per-minute limit. 0/missing = no limit.
  * @property {number} [max-request-retries] Network-layer retry count (0-5). 0/missing = disabled.
- * @property {string} [retry-status-blacklist] Comma-separated HTTP status codes to never retry (e.g. "429, 503"). Empty/missing = no additional exclusions.
+ * @property {string} [retry-status-whitelist] Comma-separated HTTP status codes / ranges to retry (e.g. "429, 500-599"). Empty/missing = use built-in default set (429 + 5xx).
  * @property {boolean|string} [auto-continue-on-truncated] Auto-continue main chat when finish_reason=length. Missing/false = disabled.
  * @property {number} [auto-continue-on-truncated-max-attempts] Max successive auto-continue attempts (1-10). 0/missing = disabled.
  * @property {string[]} [exclude] Commands to exclude
@@ -1205,7 +1205,7 @@ export async function init() {
     const plainTextFunctionCallingRetryAttemptsInput = document.getElementById('connection_profile_function_calling_plain_text_error_retry_max_attempts');
     const rpmLimitInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_rpm_limit'));
     const maxRequestRetriesInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_max_request_retries'));
-    const retryStatusBlacklistInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_retry_status_blacklist'));
+    const retryStatusWhitelistInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_retry_status_whitelist'));
     const autoContinueOnTruncatedToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated'));
     const autoContinueOnTruncatedMaxAttemptsInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated_max_attempts'));
     const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
@@ -1291,12 +1291,12 @@ export async function init() {
             }
         }
 
-        if (retryStatusBlacklistInput) {
-            const supportedForBlacklist = !!profile && (profileMode === 'cc' || profileMode === 'tc');
-            const blacklistValue = profile ? parseRetryStatusBlacklist(profile['retry-status-blacklist']) : [];
-            retryStatusBlacklistInput.disabled = !supportedForBlacklist;
-            if (document.activeElement !== retryStatusBlacklistInput) {
-                retryStatusBlacklistInput.value = formatRetryStatusBlacklist(blacklistValue);
+        if (retryStatusWhitelistInput) {
+            const supportedForWhitelist = !!profile && (profileMode === 'cc' || profileMode === 'tc');
+            const whitelistValue = profile ? parseRetryStatusWhitelist(profile['retry-status-whitelist']) : [];
+            retryStatusWhitelistInput.disabled = !supportedForWhitelist;
+            if (document.activeElement !== retryStatusWhitelistInput) {
+                retryStatusWhitelistInput.value = formatRetryStatusWhitelist(whitelistValue);
             }
         }
 
@@ -1560,11 +1560,11 @@ export async function init() {
         });
     }
 
-    if (retryStatusBlacklistInput) {
-        retryStatusBlacklistInput.addEventListener('change', async () => {
-            const codes = parseRetryStatusBlacklist(retryStatusBlacklistInput.value);
-            const normalized = formatRetryStatusBlacklist(codes);
-            retryStatusBlacklistInput.value = normalized;
+    if (retryStatusWhitelistInput) {
+        retryStatusWhitelistInput.addEventListener('change', async () => {
+            const entries = parseRetryStatusWhitelist(retryStatusWhitelistInput.value);
+            const normalized = formatRetryStatusWhitelist(entries);
+            retryStatusWhitelistInput.value = normalized;
 
             const profile = getSelectedProfile();
             if (!profile) {
@@ -1579,9 +1579,15 @@ export async function init() {
 
             const oldProfile = structuredClone(profile);
             if (!normalized) {
-                delete profile['retry-status-blacklist'];
+                delete profile['retry-status-whitelist'];
             } else {
-                profile['retry-status-blacklist'] = normalized;
+                profile['retry-status-whitelist'] = normalized;
+            }
+            // Any legacy blacklist field on this profile is now dead weight —
+            // drop it so future reads don't emit the deprecation warning and
+            // the persisted profile matches the new schema.
+            if ('retry-status-blacklist' in profile) {
+                delete profile['retry-status-blacklist'];
             }
             saveSettingsDebounced();
             await renderDetailsContent(detailsContent);

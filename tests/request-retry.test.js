@@ -376,74 +376,18 @@ describe('withRetry', () => {
         }
     });
 
-    // ── Task 10: retryBlacklist option ──────────────────────────────────────
-    // The blacklist subtracts from the default retriable set (429 + 5xx).
-    // Codes on the list are treated as non-retriable — return / throw
-    // immediately on the first attempt, no matter what maxRetries says.
+    // ── Task 10: retryWhitelist option ──────────────────────────────────────
+    // When empty / missing, the built-in default set (429 + 5xx) applies.
+    // When non-empty, ONLY listed codes are retried — the default set is
+    // fully overridden. Ranges (`{start, end}`) are supported alongside
+    // plain-number entries.
 
-    test('retryBlacklist skips retry on Response 429 when 429 is blacklisted', async () => {
-        const resp429 = new Response('rl', { status: 429 });
-        const fetcher = jest.fn().mockResolvedValue(resp429);
-        const onAttempt = jest.fn();
-
-        const result = await withRetry(fetcher, { maxRetries: 3, retryBlacklist: [429], onAttempt });
-
-        expect(result).toBe(resp429);
-        expect(fetcher).toHaveBeenCalledTimes(1);
-        expect(onAttempt).not.toHaveBeenCalled();
-    });
-
-    test('retryBlacklist skips retry on Response 503 when 503 is blacklisted', async () => {
-        const resp503 = new Response('down', { status: 503 });
-        const fetcher = jest.fn().mockResolvedValue(resp503);
-
-        const result = await withRetry(fetcher, { maxRetries: 3, retryBlacklist: [503] });
-
-        expect(result).toBe(resp503);
-        expect(fetcher).toHaveBeenCalledTimes(1);
-    });
-
-    test('retryBlacklist skips retry on thrown error with blacklisted status', async () => {
-        const err = Object.assign(new Error('quota'), { status: 429 });
-        const fetcher = jest.fn().mockRejectedValue(err);
-
-        await expect(withRetry(fetcher, { maxRetries: 3, retryBlacklist: [429] })).rejects.toBe(err);
-        expect(fetcher).toHaveBeenCalledTimes(1);
-    });
-
-    test('retryBlacklist does not affect codes outside the list', async () => {
-        const fetcher = jest.fn()
-            .mockResolvedValueOnce(new Response('', { status: 500 }))
-            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
-
-        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: [429, 503] });
-        await jest.runAllTimersAsync();
-        const result = await promise;
-
-        expect(result.status).toBe(200);
-        expect(fetcher).toHaveBeenCalledTimes(2);
-    });
-
-    test('retryBlacklist still retries network errors (no status)', async () => {
-        const netErr = new TypeError('Failed to fetch');
-        const fetcher = jest.fn()
-            .mockRejectedValueOnce(netErr)
-            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
-
-        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: [429, 503] });
-        await jest.runAllTimersAsync();
-        const result = await promise;
-
-        expect(result.status).toBe(200);
-        expect(fetcher).toHaveBeenCalledTimes(2);
-    });
-
-    test('empty retryBlacklist behaves as if no blacklist', async () => {
+    test('empty retryWhitelist falls back to default set (429 retried)', async () => {
         const fetcher = jest.fn()
             .mockResolvedValueOnce(new Response('', { status: 429 }))
             .mockResolvedValueOnce(new Response('ok', { status: 200 }));
 
-        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: [] });
+        const promise = withRetry(fetcher, { maxRetries: 2, retryWhitelist: [] });
         await jest.runAllTimersAsync();
         const result = await promise;
 
@@ -451,7 +395,7 @@ describe('withRetry', () => {
         expect(fetcher).toHaveBeenCalledTimes(2);
     });
 
-    test('undefined retryBlacklist behaves as if no blacklist', async () => {
+    test('undefined retryWhitelist falls back to default set', async () => {
         const fetcher = jest.fn()
             .mockResolvedValueOnce(new Response('', { status: 429 }))
             .mockResolvedValueOnce(new Response('ok', { status: 200 }));
@@ -464,13 +408,118 @@ describe('withRetry', () => {
         expect(fetcher).toHaveBeenCalledTimes(2);
     });
 
-    test('retryBlacklist non-array (invalid input) is ignored', async () => {
+    test('retryWhitelist non-array (invalid input) falls back to default set', async () => {
         const fetcher = jest.fn()
             .mockResolvedValueOnce(new Response('', { status: 429 }))
             .mockResolvedValueOnce(new Response('ok', { status: 200 }));
 
-        // Pass a string instead of an array — should be treated as null.
-        const promise = withRetry(fetcher, { maxRetries: 2, retryBlacklist: /** @type {any} */ ('429') });
+        const promise = withRetry(fetcher, { maxRetries: 2, retryWhitelist: /** @type {any} */ ('429') });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('non-empty whitelist retries only listed Response status', async () => {
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('forbidden', { status: 403 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, { maxRetries: 2, retryWhitelist: [403] });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('non-empty whitelist skips default-set codes not in the list', async () => {
+        // 429 is in the built-in default, but the user's list is [403] only —
+        // 429 must NOT be retried.
+        const resp429 = new Response('rl', { status: 429 });
+        const fetcher = jest.fn().mockResolvedValue(resp429);
+        const onAttempt = jest.fn();
+
+        const result = await withRetry(fetcher, { maxRetries: 3, retryWhitelist: [403], onAttempt });
+
+        expect(result).toBe(resp429);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(onAttempt).not.toHaveBeenCalled();
+    });
+
+    test('non-empty whitelist skips default-set 503 when not listed', async () => {
+        const resp503 = new Response('down', { status: 503 });
+        const fetcher = jest.fn().mockResolvedValue(resp503);
+
+        const result = await withRetry(fetcher, { maxRetries: 3, retryWhitelist: [403] });
+
+        expect(result).toBe(resp503);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    test('whitelist honors range entries (inclusive endpoints)', async () => {
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('', { status: 500 }))
+            .mockResolvedValueOnce(new Response('', { status: 599 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, {
+            maxRetries: 3,
+            retryWhitelist: [{ start: 500, end: 599 }],
+        });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(3);
+    });
+
+    test('whitelist range excludes status just outside endpoints', async () => {
+        // Range 500-504 must NOT catch 505.
+        const resp505 = new Response('', { status: 505 });
+        const fetcher = jest.fn().mockResolvedValue(resp505);
+
+        const result = await withRetry(fetcher, {
+            maxRetries: 3,
+            retryWhitelist: [{ start: 500, end: 504 }],
+        });
+
+        expect(result).toBe(resp505);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    test('whitelist retries thrown error whose status is listed', async () => {
+        const err403 = Object.assign(new Error('forbidden'), { status: 403 });
+        const fetcher = jest.fn()
+            .mockRejectedValueOnce(err403)
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, { maxRetries: 2, retryWhitelist: [403] });
+        await jest.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('whitelist rejects thrown error whose status is unlisted', async () => {
+        const err429 = Object.assign(new Error('quota'), { status: 429 });
+        const fetcher = jest.fn().mockRejectedValue(err429);
+
+        await expect(withRetry(fetcher, { maxRetries: 3, retryWhitelist: [403] })).rejects.toBe(err429);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    test('whitelist still retries network errors (no status)', async () => {
+        // Errors without a `.status` are network-layer failures and always
+        // retriable regardless of the whitelist.
+        const netErr = new TypeError('Failed to fetch');
+        const fetcher = jest.fn()
+            .mockRejectedValueOnce(netErr)
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const promise = withRetry(fetcher, { maxRetries: 2, retryWhitelist: [403] });
         await jest.runAllTimersAsync();
         const result = await promise;
 

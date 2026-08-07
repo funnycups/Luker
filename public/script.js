@@ -9971,7 +9971,7 @@ export async function sendGenerationRequest(type, data, options = {}) {
     // kobold / novel). Openai / koboldhorde branch off above through their own
     // retry-wrapped transports; every other main-chat + auto-continue round
     // funnels through this fetch, so it must respect the same per-profile
-    // retry policy (max-request-retries + retry-status-blacklist) as the rest.
+    // retry policy (max-request-retries + retry-status-whitelist) as the rest.
     const response = await withProfileRetry(async () => {
         return await fetch(getGenerateUrl(main_api), {
             method: 'POST',

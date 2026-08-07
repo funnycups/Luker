@@ -12,22 +12,22 @@ const { withProfileRetry } = await import(
     '../public/scripts/extensions/connection-manager/profile-retry.js'
 );
 
-function setActiveProfile({ maxRetries = 0, blacklist = '' } = {}) {
+function setActiveProfile({ maxRetries = 0, whitelist = '' } = {}) {
     cmSettings.profiles = [{
         id: 'active',
         name: 'active-profile',
         'max-request-retries': maxRetries,
-        'retry-status-blacklist': blacklist,
+        'retry-status-whitelist': whitelist,
     }];
     cmSettings.selectedProfile = 'active';
 }
 
-function setNamedProfile(name, { maxRetries = 0, blacklist = '' } = {}) {
+function setNamedProfile(name, { maxRetries = 0, whitelist = '' } = {}) {
     cmSettings.profiles.push({
         id: `id-${name}`,
         name,
         'max-request-retries': maxRetries,
-        'retry-status-blacklist': blacklist,
+        'retry-status-whitelist': whitelist,
     });
 }
 
@@ -68,8 +68,36 @@ describe('withProfileRetry', () => {
         expect(fetcher).toHaveBeenCalledTimes(3);
     });
 
-    test('active profile blacklist skips 429 even when retries are enabled', async () => {
-        setActiveProfile({ maxRetries: 3, blacklist: '429' });
+    test('active profile with empty whitelist retries default set (429)', async () => {
+        setActiveProfile({ maxRetries: 3, whitelist: '' });
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('rl', { status: 429 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const p = withProfileRetry(fetcher, { label: 'unit' });
+        await jest.runAllTimersAsync();
+        const result = await p;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('active profile whitelist restricts retry set (403 in list → retried)', async () => {
+        setActiveProfile({ maxRetries: 3, whitelist: '403' });
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('forbidden', { status: 403 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const p = withProfileRetry(fetcher, { label: 'unit' });
+        await jest.runAllTimersAsync();
+        const result = await p;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    test('active profile whitelist excludes 429 when only 403 listed', async () => {
+        setActiveProfile({ maxRetries: 3, whitelist: '403' });
         const resp = new Response('rl', { status: 429 });
         const fetcher = jest.fn().mockResolvedValue(resp);
 
@@ -77,6 +105,20 @@ describe('withProfileRetry', () => {
 
         expect(result).toBe(resp);
         expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    test('active profile range whitelist retries codes inside range', async () => {
+        setActiveProfile({ maxRetries: 3, whitelist: '500-599' });
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('down', { status: 503 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const p = withProfileRetry(fetcher, { label: 'unit' });
+        await jest.runAllTimersAsync();
+        const result = await p;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
     });
 
     test('named profile takes precedence over active for retry count', async () => {
@@ -95,17 +137,41 @@ describe('withProfileRetry', () => {
         expect(fetcher).toHaveBeenCalledTimes(2);
     });
 
-    test('named profile blacklist applies (not active profile blacklist)', async () => {
-        setActiveProfile({ maxRetries: 3, blacklist: '' });         // active: no blacklist
-        setNamedProfile('worker', { maxRetries: 3, blacklist: '503' });
+    test('named profile whitelist applies (not active profile whitelist)', async () => {
+        setActiveProfile({ maxRetries: 3, whitelist: '' });          // active: default set
+        setNamedProfile('worker', { maxRetries: 3, whitelist: '403' });
 
-        const resp = new Response('', { status: 503 });
+        const resp = new Response('down', { status: 503 });          // 503 is in default but not in worker's list
         const fetcher = jest.fn().mockResolvedValue(resp);
 
         const result = await withProfileRetry(fetcher, { profileName: 'worker', label: 'unit' });
 
         expect(result).toBe(resp);
-        expect(fetcher).toHaveBeenCalledTimes(1);   // worker's blacklist won
+        expect(fetcher).toHaveBeenCalledTimes(1);   // worker's whitelist won: 503 excluded
+    });
+
+    test('legacy blacklist field is ignored (no silent semantic flip)', async () => {
+        // A user upgrading from the old blacklist schema should NOT have their
+        // codes silently reinterpreted as a whitelist — the old field is dead
+        // weight and the effective whitelist is empty (→ default set).
+        cmSettings.profiles = [{
+            id: 'active',
+            name: 'active-profile',
+            'max-request-retries': 3,
+            'retry-status-blacklist': '429',   // legacy field
+        }];
+        cmSettings.selectedProfile = 'active';
+
+        const fetcher = jest.fn()
+            .mockResolvedValueOnce(new Response('rl', { status: 429 }))
+            .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+        const p = withProfileRetry(fetcher, { label: 'unit' });
+        await jest.runAllTimersAsync();
+        const result = await p;
+
+        expect(result.status).toBe(200);
+        expect(fetcher).toHaveBeenCalledTimes(2);  // 429 still retried per default set
     });
 
     test('onAttempt receives maxRetries as 4th positional arg', async () => {

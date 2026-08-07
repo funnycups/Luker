@@ -7,19 +7,29 @@ const RETRY_SUFFIX_TEMPLATE = ' (after %d retries)';
 /**
  * Whether an HTTP status code is retriable at the network layer.
  *
- * Default retriable set: `429 ∪ [500, 600)`.
+ * When `whitelist` is empty / missing, falls back to the built-in default
+ * retriable set: `429 ∪ [500, 600)`.
  *
- * `blacklist` (per-profile "never retry these" override) subtracts from the
- * default set: any code in the blacklist is treated as non-retriable even if
- * it would otherwise be retried. Anything outside the default retriable set
- * is already non-retriable; blacklisting non-retriable codes is a no-op.
+ * When `whitelist` is non-empty, ONLY codes matching the whitelist are
+ * retriable. The built-in default is fully overridden — users get exactly
+ * what they configured, nothing more.
+ *
+ * Whitelist entries may be plain numbers (single status) or `{start, end}`
+ * range objects (both ends inclusive). See `max-retries.js` for the parser.
  *
  * @param {number} status
- * @param {number[]|null|undefined} [blacklist] status codes to never retry
+ * @param {Array<number | { start: number, end: number }>|null|undefined} [whitelist]
  * @returns {boolean}
  */
-function isRetriableStatus(status, blacklist) {
-    if (Array.isArray(blacklist) && blacklist.length > 0 && blacklist.includes(status)) {
+function isRetriableStatus(status, whitelist) {
+    if (Array.isArray(whitelist) && whitelist.length > 0) {
+        for (const entry of whitelist) {
+            if (typeof entry === 'number') {
+                if (entry === status) return true;
+            } else if (entry && Number.isInteger(entry.start) && Number.isInteger(entry.end)) {
+                if (status >= entry.start && status <= entry.end) return true;
+            }
+        }
         return false;
     }
     return status === 429 || (status >= 500 && status < 600);
@@ -102,31 +112,38 @@ function appendRetrySuffix(err, retries) {
  * Wrap a fetcher with HTTP-layer retry logic.
  *
  * Retries on:
- *   - thrown errors with retriable status (429, 5xx) or no status (network)
+ *   - thrown errors with retriable status or no status (network)
  *   - returned Response objects with retriable status
+ *
+ * "Retriable status" is determined by `retryWhitelist`:
+ *   - empty / missing → built-in default set (429 + 5xx)
+ *   - non-empty       → ONLY codes matching the whitelist are retried
  *
  * Short-circuits (no retry, rethrow / return as-is):
  *   - AbortError
  *   - thrown error with err.skipRetry === true
- *   - thrown error with non-retriable status (4xx other than 429)
+ *   - thrown error with non-retriable status
  *   - returned Response with non-retriable status
- *   - status present in `retryBlacklist` (per-profile "never retry these" override)
  *   - maxRetries <= 0
+ *
+ * Thrown errors without a `.status` (network drops, DNS failures, generic
+ * exceptions) are always considered retriable and cannot be excluded via
+ * the whitelist — the list only governs HTTP-level status handling.
  *
  * @template T
  * @param {() => Promise<T>} fetcher
  * @param {object} [options]
  * @param {number} [options.maxRetries=0] - 0 disables retry (callers clamp 0–5).
- * @param {number[]} [options.retryBlacklist] - Status codes to never retry (subtracts from the default 429 + 5xx set).
+ * @param {Array<number | { start: number, end: number }>} [options.retryWhitelist] - Status codes to retry (empty = built-in 429 + 5xx default).
  * @param {AbortSignal} [options.signal]
  * @param {(attempt: number, error: Error, nextDelayMs: number) => void} [options.onAttempt]
  * @param {string} [options.label]
  * @returns {Promise<T>}
  */
 export async function withRetry(fetcher, options = {}) {
-    const { maxRetries: rawMax, retryBlacklist, signal, onAttempt /* , label */ } = options;
+    const { maxRetries: rawMax, retryWhitelist, signal, onAttempt /* , label */ } = options;
     const maxRetries = (Number.isFinite(rawMax) && rawMax >= 0) ? Math.floor(rawMax) : 0;
-    const blacklist = Array.isArray(retryBlacklist) ? retryBlacklist : null;
+    const whitelist = Array.isArray(retryWhitelist) ? retryWhitelist : null;
 
     if (signal?.aborted) throw makeAbortError();
 
@@ -143,7 +160,7 @@ export async function withRetry(fetcher, options = {}) {
         }
 
         if (!thrownError) {
-            if (result instanceof Response && !result.ok && isRetriableStatus(result.status, blacklist)) {
+            if (result instanceof Response && !result.ok && isRetriableStatus(result.status, whitelist)) {
                 if (signal?.aborted) throw makeAbortError();
                 if (attempt >= maxRetries) {
                     return result;
@@ -166,7 +183,7 @@ export async function withRetry(fetcher, options = {}) {
         if (thrownError?.skipRetry) throw thrownError;
 
         const status = thrownError?.status;
-        const retriable = (status === undefined) || isRetriableStatus(status, blacklist);
+        const retriable = (status === undefined) || isRetriableStatus(status, whitelist);
         if (!retriable) throw thrownError;
         if (attempt >= maxRetries) {
             if (attempt > 0) appendRetrySuffix(thrownError, attempt);
