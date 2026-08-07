@@ -2581,31 +2581,48 @@ function removeStaleCustomModelOptions($select, keepIds) {
     });
 }
 
-function applyCustomModelsToCurrentSource({ triggerModelChange = false, includeSelected = true } = {}) {
+function applyCustomModelsToCurrentSource({ triggerModelChange = false } = {}) {
     const source = oai_settings.chat_completion_source;
     const binding = getModelBindingForSource(source);
     if (!binding) {
         return;
     }
 
+    // Only sync the user-declared "Custom Models (Current Source)" list to
+    // the picker's option set. Historically this function ALSO appended
+    // `oai_settings.<src>_model` and forced `.val()` on it, which was
+    // wrong: it fabricated evidence that a model exists in the source
+    // when it may not (typo, stale value from a different source, a name
+    // the provider dropped). That silently masked real 4xx errors and, on
+    // boot, tripped an HTML spec chain: append into a selectedIndex=-1
+    // <select> flips selectedIndex to 0, and then the delayed remove of
+    // the same option (from a subsequent call with an empty keepIds set)
+    // collapsed the picker back to options[0] — surfacing as "picker
+    // always shows the first entry after auto-connect".
+    //
+    // The picker's selection is now owned exclusively by
+    // syncSourceModelInputs (which .val(saved) only if saved is actually
+    // in the fetched/declared option list, else selectedIndex=-1). The
+    // text input remains the source of truth for the request; if the
+    // provider doesn't recognize it, that surfaces on the actual request
+    // — no UI fiction here.
     const customModels = getCustomModelsForSource(source);
-    const selectedModel = String(oai_settings[binding.settingKey] || '').trim();
-    const allModels = (includeSelected && selectedModel) ? [...customModels, selectedModel] : customModels;
-    const keepIds = new Set(allModels);
+    const keepIds = new Set(customModels);
 
     const targets = [binding.selector, ...(binding.extraSelectors || [])];
     for (const selector of targets) {
         const $select = $(selector);
         removeStaleCustomModelOptions($select, keepIds);
-        appendMissingModelOptions($select, allModels);
+        appendMissingModelOptions($select, customModels);
     }
 
-    if (includeSelected && selectedModel) {
-        const $select = $(binding.selector);
-        $select.val(selectedModel);
-        if (triggerModelChange) {
-            $select.trigger('change');
-        }
+    if (triggerModelChange) {
+        // Kept for callers that want the source-change downstream chain
+        // to fire (e.g. token counter updates that key off model picks).
+        // We DON'T inject a value — the picker's current .val() (whatever
+        // syncSourceModelInputs / user interaction last set) is what
+        // propagates.
+        $(binding.selector).trigger('change');
     }
 }
 
@@ -3203,7 +3220,7 @@ function saveModelList(data) {    model_list = mergeModelRecordsWithCustom(data,
         }
     }
 
-    applyCustomModelsToCurrentSource({ includeSelected: false });
+    applyCustomModelsToCurrentSource();
 
     // Notify listeners that the source-specific model picker has been
     // repopulated. Anything that needs an accurate options list to run
