@@ -932,10 +932,46 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
-        fun setDebugRecordingEnabled(enabled: Boolean) {
+        fun setDebugRecordingEnabled(enabled: Boolean): Boolean {
+            val wasEnabled = LukerAndroidDebugConfig.isEnabled(applicationContext)
             LukerAndroidDebugConfig.setEnabled(applicationContext, enabled)
             LukerLogcatTail.setEnabled(applicationContext, enabled)
             LukerDebugTrail.append("native", "debug-recording $enabled")
+
+            // Chromium's WebView debugging switch is process-global and
+            // unreversible — once armed we can't tear it down for this
+            // process. So we honor the user's *intent*: on enable, arm
+            // right now so the CDP collector is running for any future
+            // renderer; on disable, we can only stop the logcat tail
+            // and let the debug switch stay hot until the next cold
+            // start (LukerApplication.initDebugRecording reads the pref
+            // again then).
+            //
+            // Returns true iff the caller needs to prompt the user to
+            // restart the app for the change to fully take effect against
+            // the currently loaded WebView. That is: the enable path,
+            // because the current renderer was created before the
+            // devtools server was up and Chromium will not retrofit
+            // attach it. Toggling off never has a "restart to take
+            // effect" story that helps the user, so we return false.
+            return if (enabled && !wasEnabled) {
+                val app = application as? LukerApplication
+                app?.armWebViewCdp()
+                true
+            } else {
+                false
+            }
+        }
+
+        // Frontend reads this on load to reflect the *native-side* truth
+        // in the UI checkbox, instead of trusting whatever
+        // power_user.android_debug_recording happens to be in
+        // settings.json (which drifts out of sync whenever a renderer
+        // crashes before saveSettingsDebounced flushes — the old flow
+        // then silently disabled recording on next reload).
+        @JavascriptInterface
+        fun isDebugRecordingEnabled(): Boolean {
+            return LukerAndroidDebugConfig.isEnabled(applicationContext)
         }
 
         @JavascriptInterface

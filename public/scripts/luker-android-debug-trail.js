@@ -66,11 +66,34 @@ export function pushRenderMarker({ msgId, bytes, turn }) {
 
 export function setAndroidDebugRecordingEnabled(enabled) {
     const bridge = getBridge();
-    if (!bridge || typeof bridge.setDebugRecordingEnabled !== 'function') return;
+    if (!bridge || typeof bridge.setDebugRecordingEnabled !== 'function') return false;
     try {
-        bridge.setDebugRecordingEnabled(Boolean(enabled));
+        // Native side returns true iff the app needs to be restarted for
+        // the change to fully take effect against the currently loaded
+        // WebView (see MainActivity.setDebugRecordingEnabled). Older
+        // native builds returned void — coerce that to false.
+        return Boolean(bridge.setDebugRecordingEnabled(Boolean(enabled)));
     } catch (_) {
-        // ignore
+        return false;
+    }
+}
+
+/**
+ * Reads the native-side truth for the debug-recording preference. Prefer
+ * this over trusting settings.json when reflecting state into the UI —
+ * the JS pref and the native pref drift apart whenever the renderer
+ * crashes before saveSettingsDebounced() flushes.
+ *
+ * Returns null if the bridge is unavailable or the getter is missing
+ * (older native builds), so callers can fall back to the JS setting.
+ */
+export function getAndroidDebugRecordingActualState() {
+    const bridge = getBridge();
+    if (!bridge || typeof bridge.isDebugRecordingEnabled !== 'function') return null;
+    try {
+        return Boolean(bridge.isDebugRecordingEnabled());
+    } catch (_) {
+        return null;
     }
 }
 

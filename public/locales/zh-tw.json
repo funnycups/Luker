@@ -2799,6 +2799,8 @@
     "Keep AI requests running when the app or browser is in the background on mobile devices.": "當應用程式或瀏覽器在行動裝置後台時，保持 AI 請求繼續執行。",
     "Background keep-alive could not be primed. Try unchecking and re-checking the option.": "後台保活預熱失敗，請取消勾選後重新勾選。",
     "Background keep-alive": "後台保活",
+    "The current WebView won't be inspected until you fully restart the app. Turning it on now only covers renderers created after this point.": "目前 WebView 在你完全重啟 app 之前不會被觀察到。現在打開只對之後建立的渲染程序生效。",
+    "Debug recording enabled": "偵錯錄製已開啟",
     "Picture-in-Picture: a small floating window stays on screen. Does not interrupt music.": "子母畫面：螢幕上多一個懸浮小窗，不會打斷正在播放的音樂。",
     "Audio: automatically keeps AI requests alive only while a message is generating. A media card appears on the lock screen during that time, and other music or video apps will be paused.": "音訊：僅在訊息生成期間自動保活，期間鎖定畫面會出現一張媒體卡片，其他正在播放的音樂和影片會被暫停。",
     "Picture-in-Picture": "子母畫面",

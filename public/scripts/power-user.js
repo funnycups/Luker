@@ -78,7 +78,7 @@ import { DEFAULT_REASONING_TEMPLATE, loadReasoningTemplates } from './reasoning.
 import { bindModelTemplates } from './chat-templates.js';
 import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { setFrontendConsoleDebugLoggingEnabled } from './frontend-log-manager.js';
-import { setAndroidDebugRecordingEnabled, isAndroidDebugTrailAvailable } from './luker-android-debug-trail.js';
+import { setAndroidDebugRecordingEnabled, isAndroidDebugTrailAvailable, getAndroidDebugRecordingActualState } from './luker-android-debug-trail.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { downloadCurrentSelfProfileReport, setSelfProfilerPreference, syncSelfProfilerEnabled } from './self-profiler.js';
@@ -2054,7 +2054,21 @@ async function showDebugMenu() {
 
 export function applyPowerUserSettings() {
     setFrontendConsoleDebugLoggingEnabled(power_user.frontend_debug_logging, { announce: false });
-    setAndroidDebugRecordingEnabled(!!power_user.android_debug_recording);
+    // Do NOT push power_user.android_debug_recording down to native here.
+    // The native side owns this pref (LukerAndroidDebugConfig) and we
+    // read it back to keep the JS setting and checkbox honest — pushing
+    // would silently disable recording after a renderer crash that
+    // happens before saveSettingsDebounced() flushes the enable action
+    // to settings.json.
+    const nativeDebugPref = getAndroidDebugRecordingActualState();
+    if (nativeDebugPref !== null) {
+        power_user.android_debug_recording = nativeDebugPref;
+        // loadPowerUserSettings already reflected the stale JS value into
+        // the checkbox before us — overwrite it so the UI matches the
+        // native truth (and next saveSettingsDebounced writes the truth
+        // back to settings.json instead of resurrecting the stale value).
+        $('#android_debug_recording').prop('checked', nativeDebugPref);
+    }
     switchUiMode();
     applyFontScale('forced');
     applyThemeColor();
@@ -4253,7 +4267,14 @@ jQuery(() => {
 
     $('#android_debug_recording').on('input', function () {
         power_user.android_debug_recording = !!$(this).prop('checked');
-        setAndroidDebugRecordingEnabled(power_user.android_debug_recording);
+        const needsRestart = setAndroidDebugRecordingEnabled(power_user.android_debug_recording);
+        if (needsRestart) {
+            toastr.warning(
+                t`The current WebView won't be inspected until you fully restart the app. Turning it on now only covers renderers created after this point.`,
+                t`Debug recording enabled`,
+                { timeOut: 10000, extendedTimeOut: 5000 },
+            );
+        }
         saveSettingsDebounced();
     });
 

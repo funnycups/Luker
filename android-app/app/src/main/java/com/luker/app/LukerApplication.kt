@@ -81,7 +81,17 @@ class LukerApplication : Application() {
         }
     }
 
-    private fun armWebViewCdp() {
+    /**
+     * Idempotent. Turns on WebView remote-debugging (a process-global,
+     * unreversible Chromium switch) and starts the CDP collector. Safe to
+     * call from anywhere in the app process at any time.
+     *
+     * The caller is responsible for informing the user that this only
+     * attaches to renderers created *after* this call — for the currently
+     * loaded WebView they need to restart the app to get CDP coverage of
+     * the first page load.
+     */
+    fun armWebViewCdp() {
         val debugArmed = runCatching {
             WebView.setWebContentsDebuggingEnabled(true)
             true
