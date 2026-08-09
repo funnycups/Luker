@@ -17,7 +17,7 @@ import java.io.IOException
  * `kSocketNameFormat` / `getpid()`).
  *
  * The earlier /proc/net/unix scan-and-discover approach is unusable on
- * Android 10+: /proc/net/* is SELinux-restricted for regular apps (vivo
+ * Android 10+: procfs is SELinux-restricted for regular apps (vivo
  * Android 16 EACCES observed in the field). We do not need it — connecting
  * to your own uid's abstract socket is authorized by Chromium's
  * `CanUserConnectToDevTools` (uid == getuid()) and by the kernel (same-uid
