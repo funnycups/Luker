@@ -56,11 +56,41 @@ const observer = new MutationObserver(mutations => {
         if (mutation.type === 'attributes') {
             const target = mutation.target;
             if (mutation.attributeName === 'class' && target instanceof Element) {
-                handleNodeChange(target);
+                handleClassChange(target, mutation.oldValue || '');
             }
         }
     });
 });
+
+/**
+ * Reacts to a `class` attribute change on `target`. Only reinitializes descendants when the change
+ * toggles `disabled` or `not_focusable`, since those flags are the only ones whose value on `target`
+ * feeds into `hasDisabledOrNotFocusableAncestor` for descendants. Any other class change can only
+ * affect whether `target` itself qualifies as an interactable / scroll-reset container.
+ * @param {Element} target
+ * @param {string} oldClassValue
+ */
+function handleClassChange(target, oldClassValue) {
+    const oldTokens = oldClassValue.split(/\s+/);
+    const oldHadDisabled = oldTokens.includes(DISABLED_CONTROL_CLASS);
+    const oldHadNotFocusable = oldTokens.includes(NOT_FOCUSABLE_CONTROL_CLASS);
+    const nowHasDisabled = target.classList.contains(DISABLED_CONTROL_CLASS);
+    const nowHasNotFocusable = target.classList.contains(NOT_FOCUSABLE_CONTROL_CLASS);
+    const descendantTabindexAffected =
+        oldHadDisabled !== nowHasDisabled || oldHadNotFocusable !== nowHasNotFocusable;
+
+    if (descendantTabindexAffected) {
+        handleNodeChange(target);
+        return;
+    }
+
+    if (isKeyboardInteractable(target)) {
+        makeKeyboardInteractable(target);
+    }
+    if (target.classList.contains('scroll-reset-container')) {
+        applyScrollResetBehavior(target);
+    }
+}
 
 /**
  * Function to handle node changes (added or modified nodes)
@@ -250,6 +280,7 @@ export function initKeyboard() {
         subtree: true,
         attributes: true,
         attributeFilter: ['class'],
+        attributeOldValue: true,
     });
 
     // Initialize already existing controls
