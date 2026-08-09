@@ -54,6 +54,7 @@ import {
     getPromptNames,
     postProcessPrompt,
     PROMPT_PROCESSING_TYPE,
+    renameAssistantReasoningToReasoningContent,
 } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 
@@ -451,6 +452,10 @@ async function resolveMoonshot(ctx) {
     /** @type {any} */
     const bodyParams = {};
     if (body.reasoning_effort) bodyParams.thinking = { type: 'enabled' };
+    // Kimi K3 / K2.7-code always keep Preserved Thinking; K2.6 with thinking.keep="all" does too.
+    // In all cases, previous turns' reasoning must be echoed as `reasoning_content` (Moonshot's
+    // field name), not `reasoning` (which is what setOpenAIMessages / getChat emit). Rename in place.
+    renameAssistantReasoningToReasoningContent(body.messages);
     if (body.json_schema) {
         setJsonObjectFormat(bodyParams, body.messages, body.json_schema);
     } else {

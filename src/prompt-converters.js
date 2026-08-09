@@ -1450,6 +1450,30 @@ export function addReasoningContentToToolCalls(messages) {
 }
 
 /**
+ * Renames the assistant `reasoning` field to `reasoning_content` on every assistant message.
+ * For providers that expect Preserved Thinking to be echoed on the `reasoning_content` field
+ * (e.g. Moonshot Kimi K2.6 with thinking.keep="all", K2.7-code, K3). Kimi requires the
+ * previous turns' reasoning_content to be preserved verbatim in the `messages` array or the
+ * model loses reasoning context. Applies to ALL assistant messages regardless of tool_calls
+ * presence — plain-text assistant turns also carry reasoning that must be echoed.
+ * @param {object[]} messages Array of messages
+ * @returns {void}
+ */
+export function renameAssistantReasoningToReasoningContent(messages) {
+    if (!Array.isArray(messages)) {
+        return;
+    }
+
+    for (const message of messages) {
+        if (!message || message.role !== 'assistant') continue;
+        if ('reasoning_content' in message) continue;
+        if (typeof message.reasoning !== 'string' || message.reasoning.length === 0) continue;
+        message.reasoning_content = message.reasoning;
+        delete message.reasoning;
+    }
+}
+
+/**
  * Converts reasoning signatures to OpenRouter format.
  * @param {object[]} messages Array of messages
  * @param {string} model Model name

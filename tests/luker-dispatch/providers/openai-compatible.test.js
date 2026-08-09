@@ -329,6 +329,69 @@ describe('dispatchOpenAICompatible', () => {
             expect(init.headers['Authorization']).toBe('Bearer mk');
         });
 
+        test('MOONSHOT renames assistant `reasoning` to `reasoning_content` on wire', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                    model: 'kimi-k2.6',
+                    messages: [
+                        { role: 'user', content: 'q1' },
+                        { role: 'assistant', content: 'a1', reasoning: 'think about q1' },
+                        { role: 'user', content: 'q2' },
+                    ],
+                },
+                secretMap: { api_key_moonshot: 'mk' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            const [, init] = ctx.fetch.mock.calls[0];
+            const wireBody = JSON.parse(init.body);
+            const assistantMsg = wireBody.messages.find(m => m.role === 'assistant');
+            expect(assistantMsg.reasoning_content).toBe('think about q1');
+            expect(assistantMsg).not.toHaveProperty('reasoning');
+        });
+
+        test('MOONSHOT preserves pre-existing reasoning_content unchanged', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                    model: 'kimi-k2.6',
+                    messages: [
+                        { role: 'user', content: 'q' },
+                        { role: 'assistant', content: 'a', reasoning: 'stray', reasoning_content: 'authoritative' },
+                    ],
+                },
+                secretMap: { api_key_moonshot: 'mk' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            const [, init] = ctx.fetch.mock.calls[0];
+            const wireBody = JSON.parse(init.body);
+            const assistantMsg = wireBody.messages.find(m => m.role === 'assistant');
+            expect(assistantMsg.reasoning_content).toBe('authoritative');
+            expect(assistantMsg.reasoning).toBe('stray');
+        });
+
+        test('MOONSHOT does not add reasoning_content when reasoning is absent or empty', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                    model: 'kimi-k2.6',
+                    messages: [
+                        { role: 'user', content: 'q1' },
+                        { role: 'assistant', content: 'no thinking here' },
+                        { role: 'user', content: 'q2' },
+                        { role: 'assistant', content: 'empty string reasoning', reasoning: '' },
+                    ],
+                },
+                secretMap: { api_key_moonshot: 'mk' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            const [, init] = ctx.fetch.mock.calls[0];
+            const wireBody = JSON.parse(init.body);
+            for (const m of wireBody.messages.filter(x => x.role === 'assistant')) {
+                expect(m).not.toHaveProperty('reasoning_content');
+            }
+        });
+
         test('COMETAPI (temporarily disabled: emits error, no fetch)', async () => {
             const ctx = fakeCtx({
                 body: { chat_completion_source: CHAT_COMPLETION_SOURCES.COMETAPI },

@@ -1350,6 +1350,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             const continueMessage = messages.splice(continueMessageIndex, 1)[0];
             const prompt = new Prompt(continueMessage);
             const chatMessage = await Message.fromPromptAsync(promptManager.preparePrompt(prompt));
+            if (typeof continueMessage.reasoning === 'string' && continueMessage.reasoning.length > 0) {
+                chatMessage.reasoning = continueMessage.reasoning;
+            }
             if (Array.isArray(continueMessage.reasoning_blocks) && continueMessage.reasoning_blocks.length > 0) {
                 chatMessage.reasoning_blocks = continueMessage.reasoning_blocks;
             }
@@ -1400,6 +1403,9 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             ? chatPrompt.invocations
             : [];
         const shouldCountSignature = invocations.length > 0 && includeSignature && Boolean(chatPrompt.signature);
+        const reasoning = typeof chatPrompt.reasoning === 'string' && chatPrompt.reasoning.length > 0
+            ? chatPrompt.reasoning
+            : null;
         const reasoningBlocks = Array.isArray(chatPrompt.reasoning_blocks) && chatPrompt.reasoning_blocks.length > 0
             ? chatPrompt.reasoning_blocks
             : null;
@@ -1413,6 +1419,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             ...(messageName ? { name: messageName } : {}),
             ...(invocations.length > 0 ? { tool_calls: Message.formatToolCalls(invocations, includeSignature) } : {}),
             ...(shouldCountSignature ? { signature: chatPrompt.signature } : {}),
+            ...(reasoning ? { reasoning } : {}),
             ...(reasoningBlocks ? { reasoning_blocks: reasoningBlocks } : {}),
             ...(reasoningDetails ? { reasoning_details: reasoningDetails } : {}),
         };
@@ -5055,15 +5062,16 @@ class Message {
 
     /**
      * Create many Message instances and count them in a single batch.
-     * @param {{ role: string, content: string|any[], identifier: string, name?: string, tool_calls?: object[], signature?: string|null, reasoning_blocks?: object[]|null, reasoning_details?: object[]|null }[]} definitions
+     * @param {{ role: string, content: string|any[], identifier: string, name?: string, tool_calls?: object[], signature?: string|null, reasoning?: string|null, reasoning_blocks?: object[]|null, reasoning_details?: object[]|null }[]} definitions
      * @returns {Promise<Message[]>} Message instances
      */
     static async createManyAsync(definitions) {
-        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature, reasoning_blocks, reasoning_details }) => {
+        const messages = definitions.map(({ role, content, identifier, name, tool_calls, signature, reasoning, reasoning_blocks, reasoning_details }) => {
             const message = new Message(role, content, identifier);
             message.name = name;
             message.tool_calls = tool_calls;
             message.signature = signature ?? null;
+            message.reasoning = typeof reasoning === 'string' && reasoning.length > 0 ? reasoning : null;
             message.reasoning_blocks = Array.isArray(reasoning_blocks) && reasoning_blocks.length > 0 ? reasoning_blocks : null;
             message.reasoning_details = Array.isArray(reasoning_details) && reasoning_details.length > 0 ? reasoning_details : null;
             return message;
