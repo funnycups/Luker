@@ -243,13 +243,22 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         // constructing `new Response` so the caller sees the real upstream
         // status (401/429/500/etc), not a synthetic 200. See setupHandlers
         // for fallbacks when head never arrives.
+        // Rejected (via `rejectHead` on the entry) when unsubscribe/close
+        // fires before any head/chunk/end/error frame arrives. Without
+        // that reject, the caller's `await headPromise` hangs forever;
+        // if the caller is a fire-and-forget async chain (e.g. a jQuery
+        // `async` click handler), V8 GCs the whole continuation and any
+        // `finally` in the chain — including mutex/lock resets — never
+        // runs.
         let resolveHead;
-        const headPromise = new Promise((res) => { resolveHead = res; });
+        let rejectHead;
+        const headPromise = new Promise((res, rej) => { resolveHead = res; rejectHead = rej; });
         pending.set(requestId, {
             controller,
             lastSeq: fromSeq > 0 ? fromSeq - 1 : 0,
             initialHeaders,
             resolveHead,
+            rejectHead,
             headResolved: false,
         });
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -273,20 +282,34 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         if (ws && ws.readyState === WebSocket.OPEN) {
             try { ws.send(JSON.stringify({ type: 'unsubscribe', request_id: requestId })); } catch {}
         }
-        // Terminate the caller's ReadableStream so any pending
-        // `reader.read()` resolves. Without this, callers looping on
-        // `for await (const chunk of response.body)` hang forever after
-        // an abort. `controller.error` propagates as AbortError-shaped
-        // exception; `controller.close` is used when the caller is
-        // shutting down cleanly (no explicit reason).
-        if (entry?.controller) {
-            try {
-                if (reason instanceof Error || (reason && typeof reason.message === 'string')) {
-                    entry.controller.error(reason);
-                } else {
-                    entry.controller.close();
-                }
-            } catch { /* controller may already be closed */ }
+        if (entry) {
+            // Reject headPromise if it never resolved, so a caller doing
+            // `await headPromise` (proxiedFetch) throws instead of hanging.
+            // A hung await leaves the whole async chain orphaned; V8 then
+            // GCs the continuation and any downstream `finally` (e.g.
+            // SimpleMutex.isBusy reset) is silently skipped.
+            if (!entry.headResolved) {
+                entry.headResolved = true;
+                const err = reason instanceof Error
+                    ? reason
+                    : new Error('ws-delivery: subscription cancelled before head');
+                entry.rejectHead(err);
+            }
+            // Terminate the caller's ReadableStream so any pending
+            // `reader.read()` resolves. Without this, callers looping on
+            // `for await (const chunk of response.body)` hang forever after
+            // an abort. `controller.error` propagates as AbortError-shaped
+            // exception; `controller.close` is used when the caller is
+            // shutting down cleanly (no explicit reason).
+            if (entry.controller) {
+                try {
+                    if (reason instanceof Error || (reason && typeof reason.message === 'string')) {
+                        entry.controller.error(reason);
+                    } else {
+                        entry.controller.close();
+                    }
+                } catch { /* controller may already be closed */ }
+            }
         }
         pending.delete(requestId);
     }
@@ -317,6 +340,18 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             closed = true;
             stopStaleCheck();
             if (ws) ws.close();
+            // Settle every pending entry before clearing the map. Otherwise
+            // callers still `await`ing headPromise / reader.read() hang
+            // forever, orphaning their async chains (see unsubscribe).
+            for (const entry of pending.values()) {
+                if (!entry.headResolved) {
+                    entry.headResolved = true;
+                    entry.rejectHead(new Error('ws-delivery: closed'));
+                }
+                if (entry.controller) {
+                    try { entry.controller.error(new Error('ws-delivery: closed')); } catch {}
+                }
+            }
             pending.clear();
         },
     };

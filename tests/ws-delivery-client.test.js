@@ -117,4 +117,51 @@ describe('lukerDelivery client', () => {
         // Should have sent resume with from_seq=2
         expect(ws2.sent.some(s => s.includes('"resume"') && s.includes('"from_seq":2'))).toBe(true);
     });
+
+    test('unsubscribe with Error reason rejects headPromise if head not yet resolved', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const { headPromise, unsubscribe } = delivery.subscribe('req-abort', {});
+        // Abort before any frame arrives — this is the exact scenario that
+        // orphans headPromise in the buggy version and hangs the caller's
+        // async chain (proxiedFetch → Generate → sendTextareaMessage → mutex).
+        const abortErr = new Error('The user aborted a request.');
+        unsubscribe(abortErr);
+        await expect(headPromise).rejects.toBe(abortErr);
+    });
+
+    test('unsubscribe without reason rejects headPromise with generic error', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const { headPromise, unsubscribe } = delivery.subscribe('req-cancel', {});
+        unsubscribe();
+        await expect(headPromise).rejects.toThrow(/cancelled before head/);
+    });
+
+    test('unsubscribe after head resolved does not re-settle headPromise', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const ws = MockWebSocket.instances[0];
+        const { headPromise, unsubscribe } = delivery.subscribe('req-post-head', {});
+        ws._receive({ type: 'head', request_id: 'req-post-head', status: 200, headers: { 'x-test': '1' } });
+        const head = await headPromise;
+        expect(head.status).toBe(200);
+        // Later unsubscribe must not throw; headPromise is already resolved and
+        // must stay resolved (double-settle would violate promise semantics).
+        expect(() => unsubscribe()).not.toThrow();
+    });
+
+    test('close rejects all pending headPromises', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const s1 = delivery.subscribe('req-c1', {});
+        const s2 = delivery.subscribe('req-c2', {});
+        delivery.close();
+        await expect(s1.headPromise).rejects.toThrow(/closed/);
+        await expect(s2.headPromise).rejects.toThrow(/closed/);
+    });
 });
