@@ -33,6 +33,11 @@ if (CSS.supports('selector(:has(*))')) {
     interactableSelectors.push('#extensionsMenu div:has(.extensionsMenuExtensionButton)');
 }
 
+// Composite selector combining all entries in `interactableSelectors`, kept in sync via
+// `registerInteractableType`. Used by `getAllInteractables` so each scan runs a single
+// `querySelectorAll` instead of one call per selector.
+let compositeInteractableSelector = interactableSelectors.join(', ');
+
 export const INTERACTABLE_CONTROL_CLASS = 'interactable';
 export const CUSTOM_INTERACTABLE_CONTROL_CLASS = 'custom_interactable';
 
@@ -88,6 +93,7 @@ function handleNodeChange(node) {
  */
 export function registerInteractableType(interactableSelector, { disabledByDefault = false, notFocusableByDefault = false } = {}) {
     interactableSelectors.push(interactableSelector);
+    compositeInteractableSelector = interactableSelectors.join(', ');
 
     const interactables = document.querySelectorAll(interactableSelector);
 
@@ -175,8 +181,9 @@ function initializeInteractables(element = document) {
  * @returns {HTMLElement[]} An array containing all the interactables that match the given selectors
  */
 function getAllInteractables(element) {
-    // Query each selector individually and combine all to a big array to return
-    return [].concat(...interactableSelectors.map(selector => Array.from(element.querySelectorAll(`${selector}`))));
+    // Single composite querySelectorAll: walks the subtree once and matches all
+    // registered selectors in one pass, instead of one full walk per selector.
+    return Array.from(element.querySelectorAll(compositeInteractableSelector));
 }
 
 /**
