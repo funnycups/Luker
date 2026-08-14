@@ -6363,6 +6363,31 @@ function modelCallback(args, model) {
     model = String(model || '').trim();
 
     if (!model) {
+        // Reverse-proxy capable sources (OpenAI/Claude/Makersuite/VertexAI/
+        // Mistral/DeepSeek/XAI/Moonshot/ZAI) render the model id as a
+        // free-form text input backed by a sibling <select> picker; the
+        // input is the source of truth (see INPUT_BASED_MODEL_BINDINGS
+        // and syncSourceModelInputs in openai.js). When the input holds
+        // an id absent from the picker's option list, the input handler
+        // and syncSourceModelInputs both set selectedIndex = -1 — making
+        // <select>.value === '' — which used to drop the id from
+        // readProfileFromCommands snapshots (profile Update silently
+        // kept the old model). Fall back to the sibling text input for
+        // those sources, keyed by the naming convention
+        //   <select id="model_<src>_select">  <->  <input id="<src>_model_id">
+        // Non-input-driven sources (openrouter/cohere/perplexity/... —
+        // where the select IS the source of truth) match the regex but
+        // have no sibling input, so getElementById returns null and we
+        // fall through to the original select.value.
+        if (modelSelectControl instanceof HTMLSelectElement) {
+            const siblingInputMatch = /^model_(.+)_select$/.exec(modelSelectControl.id || '');
+            if (siblingInputMatch) {
+                const inputEl = document.getElementById(`${siblingInputMatch[1]}_model_id`);
+                if (inputEl instanceof HTMLInputElement) {
+                    return String(inputEl.value || '').trim();
+                }
+            }
+        }
         return modelSelectControl.value;
     }
 
