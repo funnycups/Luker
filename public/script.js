@@ -2170,6 +2170,7 @@ async function firstLoadInit() {
     ]);
     console.debug('[init] startup tasks batch 3 done');
     performance.mark('[init] batch3 done');
+    await eventSource.emit(event_types.APP_INITIALIZED);
     await eventSource.emit(event_types.APP_READY);
     console.debug('[init] firstLoadInit complete');
     performance.mark('[init] complete');
