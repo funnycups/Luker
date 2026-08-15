@@ -2145,6 +2145,7 @@ async function firstLoadInit() {
         () => initDataMaid(),
         () => initItemizedPrompts(),
         () => initAccessibility(),
+        () => initSwipePicker(),
         () => addDebugFunctions(),
         () => doDailyExtensionUpdatesCheck(),
         () => {
