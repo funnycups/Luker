@@ -262,7 +262,7 @@ span.select2.select2-container .select2-selection__choice__remove:hover {
             color-mix(in srgb, var(--black20a) 70%, transparent));
     box-shadow:
         inset 0 1px 0 color-mix(in srgb, var(--white30a) 48%, transparent),
-        0 8px 18px rgba(0, 0, 0, 0.12);
+        inset 0 -1px 0 color-mix(in srgb, var(--black50a) 42%, transparent);
     transition:
         border-color var(--animation-duration-1x),
         box-shadow var(--animation-duration-1x),

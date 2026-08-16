@@ -5775,10 +5775,6 @@ body:has(#character_popup.open) #top-settings-holder:has(.drawer-content.openDra
     transition: opacity var(--animation-duration-2x), transform var(--animation-duration-2x);
 }
 
-.inline-drawer-icon.up {
-    transform: rotate(180deg);
-}
-
 .inline-drawer-header:hover .inline-drawer-icon {
     opacity: 0.9;
 }

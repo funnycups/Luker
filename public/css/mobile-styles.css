@@ -738,7 +738,7 @@
 }
 
 /* World Info entry editor: compact, touch-safe layout for phones and small tablets. */
-@media screen and (max-width: 899.98px) {
+@media screen and (max-width: 1000px) {
     #WorldInfo #world_popup_entries_list > .world_entry {
         min-width: 0;
         max-width: 100%;
@@ -776,7 +776,7 @@
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:hover {
-        background: transparent;
+        background: transparent !important;
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-drag-handle {
@@ -1003,6 +1003,67 @@
         align-items: stretch;
     }
 
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-settings {
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        border-top: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-settings > .wi-entry-advanced-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 40px;
+        padding: 6px 8px;
+        cursor: pointer;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-settings > .wi-entry-advanced-toggle strong {
+        color: var(--SmartThemeBodyColor);
+        font-size: 1em;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-settings > .wi-entry-advanced-content {
+        display: none;
+        box-sizing: border-box;
+        gap: 0;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        padding-bottom: 4px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-section-title {
+        width: 100%;
+        min-width: 0;
+        margin-top: 8px;
+        padding: 4px 2px 2px;
+        color: var(--SmartThemeBodyColor);
+        font-size: 0.82em;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 35%, transparent);
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry :is(.wi-entry-basic-title, .wi-entry-strategy-title) {
+        display: none;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-content > .wi-entry-section-title:first-child {
+        margin-top: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-content > :is(.wi-entry-overrides-grid, .wi-entry-timing-grid, .wi-entry-filter-grid, .wi-entry-bottom-controls) {
+        border-top: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-content > .wi-entry-overrides-grid {
+        padding-top: 4px;
+    }
+
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid {
         display: grid;
         grid-template-columns: minmax(92px, 0.65fr) minmax(0, 1.35fr);
@@ -1149,6 +1210,10 @@
         min-width: 0;
     }
 
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:hover {
+        background: transparent;
+    }
+
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-content-title {
         min-width: 0;
     }
@@ -1234,9 +1299,11 @@
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bottom-controls {
-        display: block;
+        display: none;
         width: 100%;
         min-width: 0;
+        padding: 0;
+        border: 0;
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bottom-controls > .wi-enter-footer-text {
@@ -1255,6 +1322,12 @@
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-extra-sources {
         box-sizing: border-box;
         min-width: 0;
+        padding-top: 0;
+        border-top: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-settings + .wi-entry-extra-sources {
+        margin-top: -8px;
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-extra-sources > .inline-drawer-header {
@@ -1268,7 +1341,7 @@
     }
 }
 
-@media screen and (min-width: 400px) and (max-width: 899.98px) {
+@media screen and (min-width: 400px) and (max-width: 1000px) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -1287,7 +1360,7 @@
     }
 }
 
-@media screen and (min-width: 430px) and (max-width: 899.98px) {
+@media screen and (min-width: 430px) and (max-width: 1000px) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-injection-grid {
         grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr));
     }
@@ -1297,14 +1370,14 @@
     }
 }
 
-@media screen and (min-width: 480px) and (max-width: 899.98px) {
+@media screen and (min-width: 480px) and (max-width: 1000px) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid {
         grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.45fr) minmax(0, 1fr);
         grid-template-areas: "primary logic secondary";
     }
 }
 
-@media screen and (min-width: 600px) and (max-width: 899.98px) {
+@media screen and (min-width: 600px) and (max-width: 1000px) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-injection-grid {
         grid-template-columns: minmax(12rem, 18rem) repeat(3, minmax(5rem, 7rem));
         justify-content: start;
@@ -1323,7 +1396,7 @@
     }
 }
 
-@media screen and (min-width: 760px) and (max-width: 899.98px) {
+@media screen and (min-width: 760px) and (max-width: 1000px) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid {
         grid-template-columns: repeat(6, minmax(0, 1fr));
     }
@@ -1345,7 +1418,7 @@
     }
 }
 
-@media screen and (max-width: 899.98px) and (hover: hover) and (pointer: fine) {
+@media screen and (max-width: 1000px) and (hover: hover) and (pointer: fine) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle:hover,
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle:hover,
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:hover {
@@ -1356,5 +1429,16 @@
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:hover .wi-entry-toggle:hover {
         opacity: 1;
+    }
+}
+
+/* Touch screens have no stable hover state. Keep the controls transparent at
+   rest and let the existing :active feedback communicate a press instead. */
+@media screen and (max-width: 1000px) and (hover: none) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle:hover:not(:active),
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle:hover:not(:active),
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:hover:not(:active) {
+        background: transparent !important;
+        border-color: transparent !important;
     }
 }

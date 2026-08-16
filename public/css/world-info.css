@@ -714,6 +714,137 @@
     color: color-mix(in srgb, var(--SmartThemeBodyColor) 65%, transparent);
 }
 
+/* World Info desktop overrides. The editor structure is shared with the
+   mobile layout, but PC keeps the original flat entry flow. */
+@media screen and (min-width: 1001px) {
+    #WIEntryHeaderTitlesPC {
+        display: none;
+    }
+
+    #WorldInfo .world_entry .wi-entry-main-grid,
+    #WorldInfo .world_entry .wi-entry-advanced-settings,
+    #WorldInfo .world_entry .wi-entry-advanced-content {
+        display: contents;
+    }
+
+    #WorldInfo .world_entry :is(
+        .wi-entry-basic-title,
+        .wi-entry-strategy-title,
+        .wi-entry-matching-title,
+        .wi-entry-timing-title,
+        .wi-entry-scope-title,
+        .wi-entry-advanced-toggle
+    ) {
+        display: none;
+    }
+
+    #WorldInfo .world_entry .wi-entry-keywords-grid { order: 1; }
+    #WorldInfo .world_entry .wi-entry-overrides-grid { order: 2; }
+    #WorldInfo .world_entry .wi-entry-content-block,
+    #WorldInfo .world_entry .commentContainer { order: 3; }
+    #WorldInfo .world_entry .wi-entry-timing-grid { order: 4; }
+    #WorldInfo .world_entry .wi-entry-filter-grid { order: 5; }
+    #WorldInfo .world_entry .wi-entry-bottom-controls { order: 6; }
+    #WorldInfo .world_entry .wi-entry-extra-sources { order: 7; }
+
+    #WorldInfo .world_entry .WIEntryHeaderControls .WIEntryHeaderTitleMobile {
+        display: block;
+        min-width: 0;
+        margin: 0 0 2px;
+        color: var(--SmartThemeBodyColor);
+        font-size: 0.78em;
+        line-height: 1.2;
+        white-space: nowrap;
+    }
+
+    #WorldInfo .world_entry .WIEntryHeaderControls > .world_entry_form_control {
+        align-items: stretch;
+        min-width: 0;
+    }
+
+    #WorldInfo .world_entry .WIEntryHeaderControls {
+        column-gap: 2px;
+    }
+
+    #WorldInfo .world_entry .WIEntryHeaderControls > .world_entry_form_control:has(input[name="depth"]) {
+        margin-left: 6px;
+    }
+
+    /* PC header order: bulk selection, enabled state, then the drawer toggle. */
+    #WorldInfo .world_entry .wi-entry-header-main > .wi-entry-bulk-select { order: 1; }
+    #WorldInfo .world_entry .wi-entry-header-main > .wi-entry-enabled-toggle { order: 2; }
+    #WorldInfo .world_entry .wi-entry-header-main > .wi-entry-toggle { order: 3; }
+    #WorldInfo .world_entry .wi-entry-header-main > .wi-entry-header-fields { order: 4; }
+}
+
+/* At narrow desktop widths the four injection controls cannot fit beside the
+   action buttons: the legacy flex row would clip them, while visible overflow
+   lets them paint underneath the buttons. Give the controls the full first row
+   and keep the actions together on a second row. This is desktop-only; mobile
+   keeps its own grid header. */
+@media screen and (min-width: 1001px) and (max-width: 1170px) {
+    #WorldInfo .world_entry .wi-entry-header {
+        flex-wrap: wrap;
+        row-gap: 5px;
+    }
+
+    #WorldInfo .world_entry .wi-entry-header-main {
+        flex: 0 0 100%;
+        width: 100%;
+        overflow: visible;
+    }
+
+    #WorldInfo .world_entry .wi-entry-header > .move_entry_button {
+        margin-left: auto;
+    }
+}
+
+/* Keep hover feedback on the control under the pointer, not the whole entry
+   header which also contains the title and thin controls. */
+@media screen and (min-width: 1001px) and (hover: hover) and (pointer: fine) {
+    #WorldInfo .world_entry .wi-entry-header:hover {
+        background: transparent;
+    }
+
+    #WorldInfo .world_entry .wi-entry-header:hover .wi-entry-toggle:not(:hover) {
+        opacity: 0.6;
+    }
+
+    #WorldInfo .world_entry .wi-entry-bulk-select:hover {
+        background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+        border-color: color-mix(in srgb, var(--SmartThemeBodyColor) 28%, var(--SmartThemeBorderColor));
+    }
+
+    #WorldInfo .world_entry .wi-entry-bulk-select:hover span {
+        opacity: 0.9;
+    }
+
+    #WorldInfo .world_entry .wi-entry-bulk-select:has(input:checked):hover {
+        background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent);
+        border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 86%, var(--SmartThemeBorderColor));
+    }
+}
+
+/* At medium desktop widths, keep the inclusion group on its own row so the
+   four timing fields below do not wrap unpredictably. */
+@media screen and (min-width: 1001px) and (max-width: 1240px) {
+    #WorldInfo .world_entry .wi-entry-timing-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        align-items: end;
+    }
+
+    #WorldInfo .world_entry .wi-entry-timing-grid > :first-child {
+        grid-column: 1 / -1;
+    }
+
+    #WorldInfo .world_entry .wi-entry-timing-grid > * {
+        min-width: 0;
+        width: auto;
+    }
+}
+
 .world_popup_toolbar {
     width: 100%;
     gap: 8px;
