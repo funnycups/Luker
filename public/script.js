@@ -11409,11 +11409,18 @@ export async function renameCharacter(name = null, { silent = false, renameChats
             throw new Error('Could not rename the character');
         }
     } catch (error) {
-        // Reloading to prevent data corruption
-        if (!silent) await Popup.show.text(t`Rename Character`, t`Something went wrong. The page will be reloaded.`);
-        else toastr.error(t`Something went wrong. The page will be reloaded.`, t`Rename Character`);
-
-        console.log('Renaming character error:', error);
+        // Reloading to prevent data corruption; surface the underlying error so the user isn't blind on mobile.
+        console.error('Renaming character error:', error);
+        const detail = String(error?.message || error || '');
+        if (!silent) {
+            await Popup.show.text(
+                t`Rename Character`,
+                `<p>${t`Something went wrong. The page will be reloaded.`}</p>`
+                + (detail ? `<pre style="white-space:pre-wrap;text-align:left;font-size:0.85em;opacity:0.85;max-height:40vh;overflow:auto">${escapeHtml(detail)}</pre>` : ''),
+            );
+        } else {
+            toastr.error(detail || t`Something went wrong. The page will be reloaded.`, t`Rename Character`);
+        }
         location.reload();
         return false;
     }
