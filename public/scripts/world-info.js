@@ -10527,11 +10527,34 @@ export async function importWorldInfo(file) {
  */
 export function openWorldInfoEditor(worldName) {
     console.log(`Opening lorebook for ${worldName}`);
-    if (!$('#WorldInfo').is(':visible')) {
-        $('#WIDrawerIcon').trigger('click');
+    const worldInfo = $('#WorldInfo');
+    const selectWorld = () => {
+        const index = world_names.indexOf(worldName);
+        $('#world_editor_select').val(index).trigger('change');
+    };
+
+    if (worldInfo.is(':visible')) {
+        selectWorld();
+        return;
     }
-    const index = world_names.indexOf(worldName);
-    $('#world_editor_select').val(index).trigger('change');
+
+    $('#WIDrawerIcon').trigger('click');
+
+    // Opening the drawer and changing the selected book happen in separate
+    // event handlers. Wait for the drawer to have a real layout before
+    // rendering entries, otherwise autoSetHeight textareas measure at 0px
+    // and long entry titles keep the same height as short ones.
+    void waitUntilCondition(() => {
+        const element = worldInfo[0];
+        if (!(element instanceof HTMLElement) || !element.classList.contains('openDrawer')) {
+            return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }, 1000, 16, { rejectOnTimeout: false })
+        .then(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+        .then(selectWorld);
 }
 
 /**
