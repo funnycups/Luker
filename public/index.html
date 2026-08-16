@@ -7083,9 +7083,9 @@
             </div>
         </div>
         <div id="entry_edit_template" class="template_element">
-            <div class="world_entry_edit">
-                <div class="flex-container wide100p alignitemscenter">
-                    <div name="keywordsAndLogicBlock" class="flex-container wide100p alignitemscenter">
+            <div class="world_entry_edit wi-entry-edit">
+                <div class="flex-container wide100p alignitemscenter wi-entry-main-grid">
+                    <div name="keywordsAndLogicBlock" class="flex-container wide100p alignitemscenter wi-entry-keywords-grid">
                         <div class="world_entry_form_control keyprimary flex1">
                             <small class="displayNone">
                                 <span data-i18n="Comma separated (required)">
@@ -7099,7 +7099,7 @@
                                 ⌨️
                             </button>
                         </div>
-                        <div class="world_entry_form_control">
+                        <div class="world_entry_form_control wi-entry-logic-control">
                             <small class="textAlignCenter" data-i18n="Logic">Logic</small>
                             <select name="entryLogicType" class="text_pole widthFitContent margin0">
                                 <option value="0" data-i18n="AND ANY">AND ANY</option>
@@ -7122,7 +7122,7 @@
                             </button>
                         </div>
                     </div>
-                    <div name="perEntryOverridesBlock" class="flex-container wide100p alignitemscenter">
+                    <div name="perEntryOverridesBlock" class="flex-container wide100p alignitemscenter wi-entry-overrides-grid">
                         <div class="world_entry_form_control flex1" title="Set the outlet name for this WI entry.&#10;&#10;WI entries with position 'outlet' will not be added to the prompt automatically. Instead, they will be collected and can be used as a macro in the prompt.&#10;Add {{outlet::YourName}} to the prompt in any place you want to add all WI entries this specific outlet." data-i18n="[title]wi_outlet_name">
                             <small class="textAlignCenter">
                                 <span data-i18n="Outlet Name">Outlet Name</span>
@@ -7170,22 +7170,22 @@
                             <input class="text_pole margin0" name="delayUntilRecursionLevel" type="text" placeholder="1">
                         </div>
                     </div>
-                    <div name="contentAndCharFilterBlock" class="world_entry_thin_controls flex2">
+                    <div name="contentAndCharFilterBlock" class="world_entry_thin_controls flex2 wi-entry-content-block">
                         <div class="world_entry_form_control flex1">
                             <label for="content ">
                                 <small>
-                                    <span class="alignitemscenter flex-container flexnowrap wide100p justifySpaceBetween">
-                                        <span class="alignitemscenter flex-container">
+                                    <span class="alignitemscenter flex-container flexnowrap wide100p justifySpaceBetween wi-entry-content-heading">
+                                        <span class="alignitemscenter flex-container wi-entry-content-title">
                                             <span data-i18n="Content" class="mdhotkey_location">
                                                 Content
                                             </span>
                                             <i class="editor_maximize fa-solid fa-maximize right_menu_button" title="Expand the editor" data-i18n="[title]Expand the editor"></i>
                                         </span>
-                                        <span>
+                                        <span class="wi-entry-content-meta">
                                             (<span data-i18n="extension_token_counter">Tokens:</span>&nbsp; <span class="world_entry_form_token_counter" data-first-run="true">counting...</span>)&nbsp;
                                             <span class="world_entry_form_uid_value" data-first-run="true"></span>
                                         </span>
-                                        <div class="flex-container">
+                                        <div class="flex-container wi-entry-recursion-grid">
                                             <div class="flex-container flexFlowColumn">
                                                 <label class="checkbox flex-container alignitemscenter flexNoGap" data-i18n="[title]This entry will not be recursively activated by other entries." title="This entry will not be recursively activated by other entries.">
                                                     <input type="checkbox" name="excludeRecursion" />
@@ -7229,7 +7229,7 @@
                     <div class="world_entry_thin_controls commentContainer">
                     </div>
                 </div>
-                <div class="flex-container wide100p flexGap10">
+                <div class="flex-container wide100p flexGap10 wi-entry-timing-grid">
                     <div class="flex4 flex-container flexFlowColumn flexNoGap">
                         <div class="flex-container justifySpaceBetween">
                             <small for="group">
@@ -7302,7 +7302,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="flex-container wide100p flexGap10">
+                <div class="flex-container wide100p flexGap10 wi-entry-filter-grid">
                     <div class="flex4 flex-container flexFlowColumn flexNoGap">
                         <div class="flex-container justifySpaceBetween">
                             <small for="characterFilter" data-i18n="Filter to Characters or Tags">
@@ -7351,7 +7351,7 @@
                         </div>
                     </div>
                 </div>
-                <div name="WIEntryBottomControls" class="flex-container flex1 justifySpaceBetween world_entry_form_horizontal">
+                <div name="WIEntryBottomControls" class="flex-container flex1 justifySpaceBetween world_entry_form_horizontal wi-entry-bottom-controls">
                     <div class="flex-container flexFlowColumn flexNoGap  wi-enter-footer-text">
                         <label class="checkbox flex-container">
                             <input type="checkbox" name="selective" />
@@ -7367,7 +7367,7 @@
                         </label>
                     </div>
                 </div>
-                <div class="inline-drawer wide100p flexFlowColumn">
+                <div class="inline-drawer wide100p flexFlowColumn wi-entry-extra-sources">
                     <div class="inline-drawer-toggle inline-drawer-header inline-drawer-header-pointer userSettingsInnerExpandable">
                         <strong data-i18n="Additional Matching Sources">Additional Matching Sources</strong>
                         <div class="fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
@@ -7418,18 +7418,18 @@
             </div>
             <div class="world_entry">
                 <form class="world_entry_form  wi-card-entry">
-                    <div class="inline-drawer wide100p">
-                        <div class="inline-drawer-header gap5px padding0">
-                            <span class="drag-handle">&#9776;</span>
-                            <label class="checkbox_label world_entry_select_label" title="Select this entry for bulk actions" data-i18n="[title]Select this entry for bulk actions">
-                                <input type="checkbox" class="world_entry_select">
-                                <span class="fa-solid fa-check"></span>
-                            </label>
-                            <div class="gap5px world_entry_thin_controls wide100p alignitemscenter">
-                                <div class="inline-drawer-toggle fa-fw fa-solid fa-circle-chevron-down inline-drawer-icon down"></div>
-                                <div class="fa-solid fa-toggle-on killSwitch" name="entryKillSwitch" data-i18n="[title]Toggle entry's active state." title="Toggle entry's active state."></div>
-                                <div class="flex-container alignitemscenter wide100p">
-                                    <div class="WIEntryTitleAndStatus flex-container flex1 alignitemscenter">
+                    <div class="inline-drawer wide100p wi-entry-drawer">
+                        <div class="inline-drawer-header gap5px padding0 wi-entry-header">
+                            <span class="drag-handle wi-entry-drag-handle">&#9776;</span>
+                            <div class="gap5px world_entry_thin_controls wide100p alignitemscenter wi-entry-header-main">
+                                <div class="inline-drawer-toggle fa-fw fa-solid fa-circle-chevron-down inline-drawer-icon down wi-entry-toggle"></div>
+                                <div class="fa-solid fa-toggle-on killSwitch wi-entry-enabled-toggle" name="entryKillSwitch" data-i18n="[title]Toggle entry's active state." title="Toggle entry's active state."></div>
+                                <label class="checkbox_label world_entry_select_label wi-entry-bulk-select" title="Select this entry for bulk actions" data-i18n="[title]Select this entry for bulk actions">
+                                    <input type="checkbox" class="world_entry_select">
+                                    <span class="fa-solid fa-check"></span>
+                                </label>
+                                <div class="flex-container alignitemscenter wide100p wi-entry-header-fields">
+                                    <div class="WIEntryTitleAndStatus flex-container flex1 alignitemscenter wi-entry-title-row">
                                         <div class="flex-container flex1">
                                             <textarea class="text_pole autoSetHeight" rows="1" name="comment" data-i18n="[placeholder]Entry Title/Memo" placeholder="Entry Title/Memo"></textarea>
                                         </div>
@@ -7440,7 +7440,7 @@
                                             <option value="vectorized" title="Vectorized" data-i18n="[title]WI_Entry_Status_Vectorized">🔗</option>
                                         </select>
                                     </div>
-                                    <div class="WIEntryHeaderControls flex-container">
+                                    <div class="WIEntryHeaderControls flex-container wi-entry-injection-grid">
                                         <div name="PositionBlock" class="world_entry_form_control world_entry_form_radios wi-enter-footer-text">
                                             <label for="position" class="WIEntryHeaderTitleMobile" data-i18n="Position:">Position:</label>
                                             <select name="position" class="text_pole widthNatural margin0" data-i18n="[title]T_Position" title="↑Char: Before Character Definitions&#13;↓Char: After Character Definitions&#13;↑EM: Before Example Messages&#13;↓EM: After Example Messages&#13;↑AN: Before Author's Note&#13;↓AN: After Author's Note&#13;@D ⚙️: at Depth (System)&#13;@D 👤: at Depth (User)&#13;@D 🤖: at Depth (Assistant)">
