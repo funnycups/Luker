@@ -7773,7 +7773,11 @@ export async function getWorldEntry(name, data, entry) {
         countTokensDebounced(counter, contentInput.val());
 
         applyWorldInfoEditorDisplaySettings(editTemplate);
-        editTemplate.find('.inline-drawer-content').css('display', 'none');
+        // The advanced editor block is flattened on desktop by CSS. Do not
+        // give it an inline `display: none`, otherwise that state cannot be
+        // overridden without `!important`; the optional matching-sources
+        // drawer still starts closed as before.
+        editTemplate.find('.inline-drawer-content').not('.wi-entry-advanced-content').css('display', 'none');
         editOutlet.append(editTemplate);
     }
 
