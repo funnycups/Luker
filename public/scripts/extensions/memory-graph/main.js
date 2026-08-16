@@ -15759,6 +15759,11 @@ jQuery(() => {
     });
     if (context.eventTypes.MESSAGE_SWIPED) {
         context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, (messageId, _meta) => {
+            // chat[0] is first_mes; its swipe deck IS the character card's
+            // alternate_greetings array, so a swipe here only swaps opening
+            // greetings — not new conversation content. Mirrors the
+            // type='first_message' filter in the MESSAGE_RECEIVED branch below.
+            if (Number(messageId) === 0) return;
             const fromSeq = findAffectedAssistantSeqFromMessageIndex(getContext(), messageId);
             scheduleMutationInvalidation(fromSeq, 'refresh');
         });
