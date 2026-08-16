@@ -339,13 +339,11 @@ span.select2.select2-container .select2-selection__choice__remove:hover {
     transform: translateY(-50%) scale(1.08);
 }
 
+/* Focus/open feedback is the themed border-color change only; the extra
+   3px spread ring plus heavy drop shadow read as a redundant glow. */
 .select2-container.luker-action-select2.select2-container--focus .select2-selection--single,
 .select2-container.luker-action-select2.select2-container--open .select2-selection--single {
     border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 42%, var(--SmartThemeBorderColor));
-    box-shadow:
-        inset 0 1px 0 color-mix(in srgb, var(--white30a) 60%, transparent),
-        0 0 0 3px color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, transparent),
-        0 12px 28px rgba(0, 0, 0, 0.18);
 }
 
 .select2-container.luker-action-select2.select2-container--open .select2-selection--single .select2-selection__arrow b {

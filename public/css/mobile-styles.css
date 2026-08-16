@@ -261,122 +261,6 @@
         padding-bottom: 0;
     }
 
-    /* WI entry: fix title being squeezed on narrow screens, CSS-only, no HTML changes */
-    .world_entry .wi-card-entry {
-        position: static;
-    }
-
-    .world_entry_select_label {
-        position: static;
-        flex-shrink: 0;
-        order: 99;
-    }
-
-    /* Let WIEntryTitleAndStatus shrink properly */
-    .WIEntryTitleAndStatus {
-        min-width: 0;
-        flex: 1 1 0;
-    }
-
-    .WIEntryTitleAndStatus .flex-container.flex1 {
-        min-width: 0;
-        flex: 1 1 0;
-    }
-
-    .WIEntryTitleAndStatus .flex-container.flex1 textarea {
-        min-width: 0;
-    }
-
-    .WIEntryTitleAndStatus select[name="entryStateSelector"] {
-        flex-shrink: 0;
-    }
-
-    /* Override world-info.css flex: 1 1 18rem on the wrapper div */
-    .world_entry .inline-drawer-header > .world_entry_thin_controls > .flex-container {
-        flex: 1 1 0 !important;
-        min-width: 0;
-    }
-
-    /* Hide action buttons when collapsed; show when expanded */
-    .world_entry .move_entry_button,
-    .world_entry .duplicate_entry_button,
-    .world_entry .delete_entry_button,
-    .world_entry .trace_activation_button,
-    .world_entry .WIEntryHeaderControls,
-    .world_entry select[name="entryStateSelector"] {
-        display: none !important;
-    }
-
-    /* ── 展开状态布局 ──────────────────────────────────────────── */
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .inline-drawer-header {
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0 !important;
-        padding: 0 !important;
-    }
-
-    /* 打通 thin_controls 和中间 flex-container，让子元素参与 header 的 flex 流 */
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .world_entry_thin_controls,
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .world_entry_thin_controls > .flex-container {
-        display: contents !important;
-    }
-
-    /* 行1：▼ 👁 ✓ — 三个平分整行 */
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .drag-handle {
-        display: none !important;
-    }
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .inline-drawer-toggle {
-        order: 1; flex: 0 0 calc(100% / 3);
-        display: flex; align-items: center; justify-content: center;
-    }
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .killSwitch {
-        order: 2; flex: 0 0 calc(100% / 3);
-        display: flex; align-items: center; justify-content: center;
-    }
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .world_entry_select_label {
-        order: 3; flex: 0 0 calc(100% / 3); margin-left: 0;
-        display: flex; align-items: center; justify-content: center;
-    }
-
-    /* 行2：标题 + 🔵▼，order:10 + 100% 宽度触发换行 */
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .WIEntryTitleAndStatus {
-        order: 10;
-        flex: 1 1 100%;
-        min-width: 0;
-    }
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) select[name="entryStateSelector"] {
-        display: flex !important;
-        order: 10;
-        flex: 0 0 auto;
-    }
-
-    /* 行3：WIEntryHeaderControls 作为真实容器撑满整行，4个按钮无法挤入 */
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .WIEntryHeaderControls {
-        display: flex !important;
-        order: 20;
-        flex: 1 1 100%;
-        flex-wrap: nowrap;
-        align-items: center;
-        gap: 4px;
-    }
-
-    /* 输入框撑满可用空间 */
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .WIEntryHeaderControls input.wideMax100px {
-        max-width: unset;
-        flex: 1 1 0;
-    }
-
-    /* 行4：4个按钮，order:30 */
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .move_entry_button,
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .duplicate_entry_button,
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .delete_entry_button,
-    .world_entry .inline-drawer:has(.inline-drawer-icon.up) .trace_activation_button {
-        display: flex !important;
-        order: 30;
-        flex: 0 0 auto;
-        align-self: center;
-    }
-
     #worldInfoScanningCheckboxes {
         flex-flow: row;
         flex-wrap: wrap;
@@ -850,5 +734,627 @@
 
     #horde_model {
         height: unset;
+    }
+}
+
+/* World Info entry editor: compact, touch-safe layout for phones and small tablets. */
+@media screen and (max-width: 899.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-card-entry {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        padding: 6px;
+        position: static;
+    }
+
+    /* A card is not one large button. Keep feedback on the control being used. */
+    #WorldInfo #world_popup_entries_list > .world_entry:not(.bulk-selected) .wi-card-entry:hover {
+        border-color: var(--SmartThemeBorderColor);
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry:not(.bulk-selected) .wi-card-entry:focus-within {
+        border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 55%, var(--SmartThemeBorderColor));
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, transparent);
+    }
+
+    /* Entry header ----------------------------------------------------- */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 6px;
+        align-items: center;
+        padding: 0;
+        position: relative;
+        background: transparent;
+        cursor: default;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:hover {
+        background: transparent;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-drag-handle {
+        display: none;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header-main {
+        grid-column: 1;
+        grid-row: 1;
+        display: grid;
+        grid-template-columns: 40px 40px minmax(0, 1fr) 40px;
+        gap: 4px;
+        width: 100%;
+        min-width: 0;
+        overflow: visible;
+    }
+
+    /* This wrapper has no visual or interactive role; its children join the header grid. */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header-fields {
+        display: contents;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header > .menu_button {
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        min-width: 40px;
+        height: 40px;
+        min-height: 40px;
+        margin: 0;
+        padding: 0;
+        border-radius: 7px;
+        cursor: pointer;
+        flex: 0 0 40px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle {
+        border: 1px solid transparent;
+        background: transparent;
+        transition:
+            background-color var(--animation-duration-2x),
+            border-color var(--animation-duration-2x),
+            opacity var(--animation-duration-2x);
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle {
+        grid-column: 1;
+        grid-row: 1;
+        align-self: center;
+        padding-bottom: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle {
+        grid-column: 2;
+        grid-row: 1;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-title-row {
+        grid-column: 3;
+        grid-row: 1;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+        align-items: center;
+        min-width: 0;
+        width: 100%;
+        flex: none;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-title-row > .flex-container,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-title-row textarea[name="comment"] {
+        min-width: 0;
+        width: 100%;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-title-row select[name="entryStateSelector"] {
+        display: none !important;
+        box-sizing: border-box;
+        width: 42px !important;
+        min-width: 0 !important;
+        max-width: 42px !important;
+        height: 40px;
+        padding-inline: 5px;
+        flex: none;
+    }
+
+    /* Lives inside header-main's fourth track so it vertically centers on the
+       title row (multi-line titles included) together with the status selector. */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select {
+        grid-column: 4;
+        grid-row: 1;
+        align-self: center;
+        z-index: 1;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-injection-grid,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header > :is(.move_entry_button, .duplicate_entry_button, .delete_entry_button, .trace_activation_button) {
+        display: none;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) > .wi-entry-header-main {
+        grid-column: 1 / -1;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-title-row {
+        grid-template-columns: minmax(0, 1fr) 42px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-title-row select[name="entryStateSelector"] {
+        display: block !important;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-injection-grid {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+        align-items: stretch;
+        width: 100%;
+        min-width: 0;
+        padding-top: 6px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-injection-grid > .world_entry_form_control {
+        min-width: 0;
+        width: auto;
+        align-items: stretch;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-injection-grid .WIEntryHeaderTitleMobile {
+        display: block;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-injection-grid :is(select, input.wideMax100px) {
+        box-sizing: border-box;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        flex: none;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) > :is(.move_entry_button, .duplicate_entry_button, .delete_entry_button, .trace_activation_button) {
+        grid-row: 2;
+        display: inline-flex;
+        align-self: center;
+        justify-self: center;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) > .move_entry_button {
+        grid-column: 1;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) > .duplicate_entry_button {
+        grid-column: 2;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) > .delete_entry_button {
+        grid-column: 3;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) > .trace_activation_button {
+        grid-column: 4;
+    }
+
+    /* The generic drawer hover covers the whole header. Reset it for this non-clickable header. */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:hover .wi-entry-toggle:not(:hover) {
+        opacity: 0.6;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle:active,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle:active,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:active,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header > .menu_button:active {
+        background: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
+        border-color: color-mix(in srgb, var(--SmartThemeBodyColor) 24%, var(--SmartThemeBorderColor));
+    }
+
+    /* Entry body ------------------------------------------------------- */
+    #WorldInfo #world_popup_entries_list > .world_entry .inline-drawer-outlet {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        padding-top: 8px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-edit {
+        display: grid;
+        gap: 12px;
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-main-grid,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        margin: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-main-grid {
+        display: grid;
+        gap: 10px;
+        align-items: stretch;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid {
+        display: grid;
+        grid-template-columns: minmax(92px, 0.65fr) minmax(0, 1.35fr);
+        grid-template-areas:
+            "primary primary"
+            "logic secondary";
+        gap: 8px;
+        align-items: end;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid > .keyprimary {
+        grid-area: primary;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid > .wi-entry-logic-control {
+        grid-area: logic;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid > .keysecondary {
+        grid-area: secondary;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-flow: row dense;
+        gap: 8px;
+        align-items: end;
+        padding-top: 10px;
+        border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid > .world_entry_form_control:has(> :is(input, select)[name="outletName"]),
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid > .world_entry_form_control:has(> :is(input, select)[name="automationId"]) {
+        grid-column: 1 / -1;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-edit :is(.world_entry_form_control, .range-block-range, .select2-container) {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-edit :is(input.text_pole, textarea.text_pole, select.text_pole, select.keyselect),
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid select {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    /* Select2 keeps its inline search as an 18px textarea. Long mobile
+       placeholders then get clipped before the user can start searching. */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid .select2-selection--multiple {
+        box-sizing: border-box;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        min-height: 42px;
+        height: auto;
+        padding: 3px 4px;
+        overflow: visible;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid .select2-selection--multiple .select2-selection__rendered {
+        display: flex;
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 3px;
+        width: 100%;
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid .select2-search--inline {
+        flex: 1 1 100%;
+        min-width: 0;
+        width: 100%;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid .select2-search--inline textarea.select2-search__field {
+        box-sizing: border-box;
+        display: block;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100%;
+        min-height: 36px;
+        height: 36px;
+        margin: 0 !important;
+        padding: 6px 7px;
+        line-height: 1.25;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+        resize: none;
+    }
+
+    /* Real phones skip Select2 and expose the native multiple list. Keep it
+       scrollable without letting a dynamic character/tag list dominate the card. */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid select[multiple]:not(.select2-hidden-accessible) {
+        box-sizing: border-box;
+        height: 6.5rem;
+        min-height: 0;
+        max-height: 6.5rem;
+        overflow-y: auto;
+        padding: 2px 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid:has(select[multiple]:not(.select2-hidden-accessible)) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid select[multiple]:not(.select2-hidden-accessible) option {
+        padding: 0.3rem 0.5rem;
+        line-height: 1.3;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-edit :is(select.widthNatural, select.widthFitContent) {
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-edit .select2-container {
+        width: 100% !important;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-content-block {
+        display: block;
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        padding: 10px 0 4px 9px;
+        border-left: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 65%, var(--SmartThemeBorderColor));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-content-heading {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 6px 8px;
+        align-items: center;
+        width: 100%;
+        min-width: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-content-title {
+        min-width: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-content-meta {
+        white-space: nowrap;
+        text-align: end;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-recursion-grid {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+        gap: 6px 8px;
+        align-items: start;
+        width: 100%;
+        min-width: 0;
+        padding-top: 4px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-recursion-grid > .flex-container {
+        min-width: 0;
+        gap: 4px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-recursion-grid label.checkbox {
+        align-items: flex-start;
+        min-width: 0;
+        margin: 0;
+        line-height: 1.25;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-recursion-grid label.checkbox > input {
+        flex: 0 0 auto;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-recursion-grid label.checkbox > span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-content-block textarea[name="content"] {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .commentContainer:empty {
+        display: none;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bottom-controls,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-extra-sources {
+        padding-top: 10px;
+        border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        align-items: end;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid > :first-child {
+        grid-column: 1 / -1;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid > *,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid > * {
+        min-width: 0;
+        width: auto;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bottom-controls {
+        display: block;
+        width: 100%;
+        min-width: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bottom-controls > .wi-enter-footer-text {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+        width: 100%;
+        min-width: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bottom-controls label.checkbox {
+        min-width: 0;
+        margin: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-extra-sources {
+        box-sizing: border-box;
+        min-width: 0;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-extra-sources > .inline-drawer-header {
+        min-height: 40px;
+        padding-inline: 8px;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-extra-sources > .inline-drawer-content {
+        gap: 8px;
+        min-width: 0;
+    }
+}
+
+@media screen and (min-width: 400px) and (max-width: 899.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid > .world_entry_form_control:has(> :is(input, select)[name="outletName"]),
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid > .world_entry_form_control:has(> :is(input, select)[name="automationId"]) {
+        grid-column: span 2;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid > :first-child {
+        grid-column: span 2;
+    }
+}
+
+@media screen and (min-width: 430px) and (max-width: 899.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-injection-grid {
+        grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-filter-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media screen and (min-width: 480px) and (max-width: 899.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-keywords-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.45fr) minmax(0, 1fr);
+        grid-template-areas: "primary logic secondary";
+    }
+}
+
+@media screen and (min-width: 600px) and (max-width: 899.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-injection-grid {
+        grid-template-columns: minmax(12rem, 18rem) repeat(3, minmax(5rem, 7rem));
+        justify-content: start;
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid {
+        grid-template-columns: minmax(0, 2fr) repeat(4, minmax(0, 1fr));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-timing-grid > :first-child {
+        grid-column: auto;
+    }
+}
+
+@media screen and (min-width: 760px) and (max-width: 899.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-overrides-grid {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+}
+
+@media screen and (max-width: 429.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-injection-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-injection-grid > [name="PositionBlock"] {
+        grid-column: 1 / -1;
+    }
+}
+
+@media screen and (max-width: 359.98px) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-extra-sources > .inline-drawer-content {
+        flex-direction: column;
+    }
+}
+
+@media screen and (max-width: 899.98px) and (hover: hover) and (pointer: fine) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle:hover,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle:hover,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:hover {
+        opacity: 1;
+        background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+        border-color: color-mix(in srgb, var(--SmartThemeBodyColor) 20%, var(--SmartThemeBorderColor));
+    }
+
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:hover .wi-entry-toggle:hover {
+        opacity: 1;
     }
 }
