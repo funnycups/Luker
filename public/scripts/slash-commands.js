@@ -4007,7 +4007,7 @@ async function trimTokensCallback(arg, value) {
         return value;
     }
 
-    const { tokenizerName, tokenizerId } = getFriendlyTokenizerName(main_api);
+    const { tokenizerName, tokenizerId } = getFriendlyTokenizerName(main_api, { target: tokenizer_settings.ENCODING });
     console.debug('Requesting tokenization for /trimtokens command', tokenizerName);
 
     try {
