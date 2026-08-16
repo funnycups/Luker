@@ -80,3 +80,74 @@ describe('FsEngine chat handler — corrupt-doc tolerance', () => {
         expect(got.updatedAt).toBe(updatedAt);
     });
 });
+
+// Regression: legacy chats written before the 128-byte length limit was
+// introduced must still flow through save/get/rename/append/patch. The
+// endpoint layer enforces 128 bytes on fresh user input, but the engine
+// put path only enforces the character / suffix shape check so old data
+// remains reachable end-to-end (not just readable/deletable).
+describe('FsEngine chat handler — legacy long name (>128 bytes) round-trip', () => {
+    let tmpDir, engine;
+    const handle = 'u';
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-fs-chat-long-'));
+        const userDir = path.join(tmpDir, handle);
+        fs.mkdirSync(path.join(userDir, 'chats'), { recursive: true });
+        engine = new FsEngine({
+            directoriesByHandle: () => ({
+                root: userDir,
+                chats: path.join(userDir, 'chats'),
+                groupChats: path.join(userDir, 'group chats'),
+            }),
+        });
+    });
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    // Two long-name variants: ASCII 129 bytes and CJK 129 bytes (43 * 3). Both
+    // are just over the endpoint's 128-byte cap, which is exactly the
+    // legacy-data boundary users report ("chat.name exceeds 128 bytes" when
+    // renaming a character that owns an old chat).
+    const longAscii = 'a'.repeat(129);
+    const longCjk = '我'.repeat(43);
+
+    for (const [label, longName] of [['ASCII 129 bytes', longAscii], ['CJK 129 bytes', longCjk]]) {
+        test(`put + get round-trip for legacy chat.name (${label})`, async () => {
+            const key = { kind: 'chat', handle, charDir: 'LegacyChar', name: longName, isGroup: false };
+            await engine.withTransaction(handle, async (tx) =>
+                tx.putResource(key, {
+                    header: { chat_metadata: {} }, body: [], integrity: 'x',
+                    updatedAt: 1700000000000, createdAt: 1700000000000,
+                }));
+            const got = await engine.withTransaction(handle, async (tx) => tx.getResource(key));
+            expect(got).not.toBeNull();
+            expect(got.integrity).toBe('x');
+        });
+    }
+
+    test('put succeeds when charDir also exceeds 128 bytes', async () => {
+        // renameCharDir stays byte-for-byte on charDir; a legacy long charDir
+        // must round-trip too so the migration from oldCharDir to newCharDir
+        // doesn't stall on either half of the key.
+        const key = { kind: 'chat', handle, charDir: 'c'.repeat(150), name: 'chat1', isGroup: false };
+        await engine.withTransaction(handle, async (tx) =>
+            tx.putResource(key, {
+                header: { chat_metadata: {} }, body: [], integrity: 'x',
+                updatedAt: 1, createdAt: 1,
+            }));
+        const got = await engine.withTransaction(handle, async (tx) => tx.getResource(key));
+        expect(got).not.toBeNull();
+    });
+
+    test('still rejects sanitize-unsafe chat.name even when long', async () => {
+        // Length is not the shape check's job, but shape must still hold:
+        // a 200-char name that also contains a slash must be refused.
+        const key = { kind: 'chat', handle, charDir: 'LegacyChar', name: `${'a'.repeat(150)}/oops`, isGroup: false };
+        await expect(engine.withTransaction(handle, async (tx) =>
+            tx.putResource(key, {
+                header: { chat_metadata: {} }, body: [], integrity: 'x',
+                updatedAt: 1, createdAt: 1,
+            }))).rejects.toThrow();
+    });
+});

@@ -125,6 +125,11 @@ describe('FsEngine world handler', () => {
     // (poison = anything sanitize-filename would rewrite or that looks like a
     // filename). These should all reject — the FS engine must not silently
     // change a stored name on the way to disk.
+    //
+    // The 128-byte length cap is deliberately NOT here: that limit belongs to
+    // the endpoint layer (MySQL/Postgres VARCHAR(128) PK), and enforcing it
+    // at the engine put path would lock out pre-limit legacy data that must
+    // still flow through save/append/patch/rename on FS.
     describe('poison-name rejection at put', () => {
         const cases = [
             { label: 'path separator', name: 'foo/bar' },
@@ -134,7 +139,6 @@ describe('FsEngine world handler', () => {
             { label: 'trailing .jsonl', name: 'foo.jsonl' },
             { label: 'empty', name: '' },
             { label: 'whitespace only', name: '   ' },
-            { label: 'over 128 bytes', name: 'a'.repeat(129) },
         ];
         for (const { label, name } of cases) {
             test(`rejects "${label}"`, async () => {
@@ -155,6 +159,15 @@ describe('FsEngine world handler', () => {
             { label: 'NFC café', name: 'café' },
             { label: 'NFD café', name: 'café' },
             { label: 'exactly 128 bytes', name: 'a'.repeat(128) },
+            // Legacy pre-limit data: FS engine must accept names longer than
+            // the endpoint's 128-byte cap so old worlds still round-trip
+            // through save/rename/migration. The 128-byte gate lives at the
+            // endpoint layer, not the engine. The upper bound stays at the FS
+            // hard limit (~255 UTF-8 bytes; sanitize-filename truncates past
+            // that, and the shape check rejects the resulting mismatch), so
+            // these test bytes stay well under 255.
+            { label: 'over 128 bytes ASCII (legacy)', name: 'a'.repeat(200) },
+            { label: 'over 128 bytes CJK (legacy)', name: '我'.repeat(60) }, // 180 bytes
         ];
         for (const { label, name } of cases) {
             test(`preserves "${label}" verbatim`, async () => {

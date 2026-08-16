@@ -8,7 +8,7 @@ import { sync as writeFileAtomic } from 'write-file-atomic';
 import { SIDECAR_INFIX, buildSidecarFilename, parseSidecarFilename } from './sidecar-naming.js';
 import { PRESET_FOLDER_BY_API_ID } from '../repositories/preset-repo.js';
 import { BUCKET_TO_DIR } from '../repositories/named-doc-repo.js';
-import { assertSafeRepoName } from '../name-validation.js';
+import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
 
 export class FsTransaction {
@@ -144,10 +144,10 @@ function registerChatHandler(tx) {
         },
         put(key, record) {
             if (key.isGroup) {
-                assertSafeRepoName(key.groupId ?? key.name, { field: 'chat.groupId' });
+                assertSafeRepoNameShape(key.groupId ?? key.name, { field: 'chat.groupId' });
             } else {
-                assertSafeRepoName(key.charDir, { field: 'chat.charDir' });
-                assertSafeRepoName(key.name, { field: 'chat.name' });
+                assertSafeRepoNameShape(key.charDir, { field: 'chat.charDir' });
+                assertSafeRepoNameShape(key.name, { field: 'chat.name' });
             }
             const filePath = chatFilePath(key);
             fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -357,7 +357,7 @@ function registerPresetHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
-            assertSafeRepoName(key.name, { field: 'preset.name' });
+            assertSafeRepoNameShape(key.name, { field: 'preset.name' });
             const fp = filePath(key);
             fs.mkdirSync(path.dirname(fp), { recursive: true });
             writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
@@ -467,7 +467,7 @@ function registerWorldInfoHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
-            assertSafeRepoName(key.name, { field: 'world.name' });
+            assertSafeRepoNameShape(key.name, { field: 'world.name' });
             const existing = resolveCanonicalFilename(key);
             const fp = existing
                 ? path.join(worldsDir(key.handle), existing)
@@ -542,7 +542,7 @@ function registerNamedDocHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
-            assertSafeRepoName(key.name, { field: 'named-doc.name' });
+            assertSafeRepoNameShape(key.name, { field: 'named-doc.name' });
             const fp = filePath(key);
             fs.mkdirSync(path.dirname(fp), { recursive: true });
             writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
@@ -596,7 +596,7 @@ function registerGroupHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
-            assertSafeRepoName(key.id, { field: 'group.id' });
+            assertSafeRepoNameShape(key.id, { field: 'group.id' });
             const fp = filePath(key);
             fs.mkdirSync(path.dirname(fp), { recursive: true });
             writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
