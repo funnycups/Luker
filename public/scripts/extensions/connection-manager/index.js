@@ -54,6 +54,7 @@ const CC_COMMANDS = [
     // Keep duplicated API application for legacy command sequencing consistency.
     'api',
     'api-url',
+    'custom-models',
     'model',
     'proxy',
     'base-url',
@@ -144,6 +145,7 @@ const FANCY_NAMES = {
     'start-reply-with': 'Start Reply With',
     'reasoning-template': 'Reasoning Template',
     'prompt-post-processing': 'Prompt Post-Processing',
+    'custom-models': 'Custom Models',
     'function-calling-plain-text': 'Plain-text Function Calling',
     'function-calling-plain-text-error-retry': 'Retry malformed plain-text tool calls',
     'function-calling-plain-text-error-retry-max-attempts': 'Plain-text retry attempts',
@@ -264,6 +266,7 @@ const profilesProvider = () => [
  * @property {string} [start-reply-with] Start Reply With
  * @property {string} [reasoning-template] Reasoning Template
  * @property {string} [prompt-post-processing] Prompt Post-Processing
+ * @property {string} [custom-models] Custom model IDs list (JSON-encoded array)
  * @property {string} [function-calling-plain-text] Plain-text Function Calling
  * @property {string} [function-calling-plain-text-error-retry] Retry malformed plain-text tool calls
  * @property {string} [function-calling-plain-text-error-retry-max-attempts] Plain-text retry attempts
@@ -404,6 +407,19 @@ function normalizeConnectionProfile(profile) {
     const nextMode = resolveProfileMode(profile);
     if (profile.mode !== nextMode) {
         profile.mode = nextMode;
+        mutated = true;
+    }
+
+    // Legacy cc profiles built before the per-profile custom-models rewire
+    // have no 'custom-models' field. Without it, applyConnectionProfile's
+    // "!argument → continue" gate would skip the field entirely, leaving
+    // the buffer from a previous profile intact — which contradicts every
+    // other profile field (base-url / openrouter-providers / …) that
+    // always overrides on apply. Backfill to '[]' so legacy profiles read
+    // as "this profile declares no custom models" and clear the buffer on
+    // apply. Users rebuild inside each profile.
+    if (nextMode === 'cc' && !Object.hasOwn(profile, 'custom-models')) {
+        profile['custom-models'] = '[]';
         mutated = true;
     }
 

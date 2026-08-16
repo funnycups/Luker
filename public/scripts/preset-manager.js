@@ -1130,6 +1130,7 @@ class PresetManager {
             'server_urls',
             'type',
             'custom_model',
+            'chat_completion_custom_models',
             'bypass_status_check',
             'infermaticai_model',
             'dreamgen_model',

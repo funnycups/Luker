@@ -854,7 +854,7 @@ const default_settings = {
     chat_completion_source: chat_completion_sources.OPENAI,
     max_context_unlocked: false,
     show_external_models: false,
-    custom_models_by_source: {},
+    chat_completion_custom_models: [],
     proxy_password: '',
     assistant_prefill: '',
     assistant_impersonation: '',
@@ -2499,51 +2499,36 @@ function parseCustomModelList(text) {
     return result;
 }
 
-function normalizeCustomModelsBySource(value) {
-    const normalized = {};
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return normalized;
+function normalizeCustomModels(value) {
+    if (!Array.isArray(value)) {
+        return [];
     }
-
-    for (const [rawSource, rawModels] of Object.entries(value)) {
-        const source = String(rawSource || '').trim();
-        if (!source || !sourceModelBindings[source]) {
+    const seen = new Set();
+    const result = [];
+    for (const raw of value) {
+        const id = String(raw || '').trim();
+        if (!id || seen.has(id)) {
             continue;
         }
-
-        const models = Array.isArray(rawModels)
-            ? rawModels.map(x => String(x || '').trim()).filter(Boolean)
-            : parseCustomModelList(String(rawModels || ''));
-
-        if (!models.length) {
-            continue;
-        }
-
-        normalized[source] = [...new Set(models)];
+        seen.add(id);
+        result.push(id);
     }
+    return result;
+}
 
+function getCustomModels() {
+    const normalized = normalizeCustomModels(oai_settings.chat_completion_custom_models);
+    oai_settings.chat_completion_custom_models = normalized;
     return normalized;
 }
 
-function getCustomModelsForSource(source = oai_settings.chat_completion_source) {
-    const normalized = normalizeCustomModelsBySource(oai_settings.custom_models_by_source);
-    oai_settings.custom_models_by_source = normalized;
-    return normalized[source] ?? [];
+function setCustomModels(modelIds) {
+    oai_settings.chat_completion_custom_models = normalizeCustomModels(modelIds);
 }
 
-function setCustomModelsForSource(source, modelIds) {
-    const normalized = normalizeCustomModelsBySource(oai_settings.custom_models_by_source);
-    if (Array.isArray(modelIds) && modelIds.length > 0) {
-        normalized[source] = [...new Set(modelIds.map(id => String(id || '').trim()).filter(Boolean))];
-    } else {
-        delete normalized[source];
-    }
-    oai_settings.custom_models_by_source = normalized;
-}
-
-function mergeModelRecordsWithCustom(models, source = oai_settings.chat_completion_source) {
+function mergeModelRecordsWithCustom(models) {
     const merged = Array.isArray(models) ? models.map(model => ({ ...model })) : [];
-    const customModels = getCustomModelsForSource(source);
+    const customModels = getCustomModels();
     if (!customModels.length) {
         return merged;
     }
@@ -2588,24 +2573,30 @@ function removeStaleCustomModelOptions($select, keepIds) {
     });
 }
 
-function applyCustomModelsToCurrentSource({ triggerModelChange = false } = {}) {
+function syncCustomModelsToModelPicker({ triggerModelChange = false } = {}) {
     const source = oai_settings.chat_completion_source;
     const binding = getModelBindingForSource(source);
     if (!binding) {
         return;
     }
 
-    // Only sync the user-declared "Custom Models (Current Source)" list to
-    // the picker's option set. Historically this function ALSO appended
-    // `oai_settings.<src>_model` and forced `.val()` on it, which was
-    // wrong: it fabricated evidence that a model exists in the source
-    // when it may not (typo, stale value from a different source, a name
-    // the provider dropped). That silently masked real 4xx errors and, on
-    // boot, tripped an HTML spec chain: append into a selectedIndex=-1
-    // <select> flips selectedIndex to 0, and then the delayed remove of
-    // the same option (from a subsequent call with an empty keepIds set)
-    // collapsed the picker back to options[0] — surfacing as "picker
-    // always shows the first entry after auto-connect".
+    // Only sync the user-declared custom-models list to the picker's
+    // option set for the currently-active source. The list itself is
+    // profile-scoped (owned by the active connection profile via
+    // oai_settings.chat_completion_custom_models buffer + profile
+    // snapshot), not per-source; sources without a picker binding
+    // simply skip the sync.
+    //
+    // Historically this function ALSO appended `oai_settings.<src>_model`
+    // and forced `.val()` on it, which was wrong: it fabricated evidence
+    // that a model exists in the source when it may not (typo, stale value
+    // from a different source, a name the provider dropped). That silently
+    // masked real 4xx errors and, on boot, tripped an HTML spec chain:
+    // append into a selectedIndex=-1 <select> flips selectedIndex to 0,
+    // and then the delayed remove of the same option (from a subsequent
+    // call with an empty keepIds set) collapsed the picker back to
+    // options[0] — surfacing as "picker always shows the first entry
+    // after auto-connect".
     //
     // The picker's selection is now owned exclusively by
     // syncSourceModelInputs (which .val(saved) only if saved is actually
@@ -2613,7 +2604,7 @@ function applyCustomModelsToCurrentSource({ triggerModelChange = false } = {}) {
     // text input remains the source of truth for the request; if the
     // provider doesn't recognize it, that surfaces on the actual request
     // — no UI fiction here.
-    const customModels = getCustomModelsForSource(source);
+    const customModels = getCustomModels();
     const keepIds = new Set(customModels);
 
     const targets = [binding.selector, ...(binding.extraSelectors || [])];
@@ -2633,19 +2624,11 @@ function applyCustomModelsToCurrentSource({ triggerModelChange = false } = {}) {
     }
 }
 
-function refreshCustomModelsEditorForCurrentSource() {
-    const source = oai_settings.chat_completion_source;
-    const binding = getModelBindingForSource(source);
+function refreshCustomModelsEditor() {
     const $textarea = $('#chat_completion_custom_models_text');
     const $applyButton = $('#chat_completion_custom_models_apply');
 
-    if (!binding) {
-        $textarea.val('').prop('disabled', true);
-        $applyButton.addClass('disabled').attr('aria-disabled', 'true');
-        return;
-    }
-
-    const customModels = getCustomModelsForSource(source);
+    const customModels = getCustomModels();
     $textarea.val(customModels.join('\n')).prop('disabled', false);
     $applyButton.removeClass('disabled').removeAttr('aria-disabled');
 }
@@ -2851,7 +2834,8 @@ const INPUT_BASED_MODEL_BINDINGS = [
     { input: '#custom_model_id', select: '#model_custom_select', datalist: '#model_custom_select_fill', key: 'custom_model' },
 ];
 
-function saveModelList(data) {    model_list = mergeModelRecordsWithCustom(data, oai_settings.chat_completion_source);
+function saveModelList(data) {
+    model_list = mergeModelRecordsWithCustom(data);
     model_list.sort((a, b) => a?.id && b?.id && a.id.localeCompare(b.id));
 
     if (oai_settings.chat_completion_source == chat_completion_sources.OPENROUTER) {
@@ -3227,7 +3211,7 @@ function saveModelList(data) {    model_list = mergeModelRecordsWithCustom(data,
         }
     }
 
-    applyCustomModelsToCurrentSource();
+    syncCustomModelsToModelPicker();
 
     // Notify listeners that the source-specific model picker has been
     // repopulated. Anything that needs an accurate options list to run
@@ -6005,7 +5989,11 @@ function loadOpenAISettings(data, settings) {
             }
         }
     }
-    oai_settings.custom_models_by_source = normalizeCustomModelsBySource(oai_settings.custom_models_by_source);
+    oai_settings.chat_completion_custom_models = normalizeCustomModels(oai_settings.chat_completion_custom_models);
+    // Migration: the previous per-source `custom_models_by_source` map is
+    // gone — each connection profile now owns its own custom-models list.
+    // Old data is dropped intentionally; users rebuild inside each profile.
+    delete oai_settings.custom_models_by_source;
 
     const selectedOpenAIPresetValue = openai_setting_names[oai_settings.preset_settings_openai];
     if (selectedOpenAIPresetValue !== undefined) {
@@ -6058,6 +6046,7 @@ function loadOpenAISettings(data, settings) {
     $('#openrouter_providers_chat').trigger('change');
     $('#openrouter_quantizations_chat').trigger('change');
     $('#nanogpt_provider').trigger('change');
+    refreshCustomModelsEditor();
     $('#chat_completion_source').trigger('change');
 }
 
@@ -8668,8 +8657,7 @@ function toggleChatCompletionForms() {
         $(this).toggle(mode !== 'except' ? matchesSource : !matchesSource);
     });
 
-    applyCustomModelsToCurrentSource({ triggerModelChange: true });
-    refreshCustomModelsEditorForCurrentSource();
+    syncCustomModelsToModelPicker({ triggerModelChange: true });
     setToolReasoningControls();
 }
 
@@ -9740,6 +9728,44 @@ function registerConnectionProfileAdditionalParameterSlashCommands() {
         ],
         helpString: t`Sets the OpenRouter Middle-out transform mode. Gets current value if no argument is provided.`,
     }));
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'custom-models',
+        callback: (args, value) => {
+            const forceApply = String(args?.force || '').toLowerCase() === 'true';
+            const raw = String(value ?? '').trim();
+            if (!raw && !forceApply) {
+                return JSON.stringify(getCustomModels());
+            }
+            const parsed = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : [];
+            if (!Array.isArray(parsed)) {
+                throw new Error(t`Value must be a JSON-serialized array of strings.`);
+            }
+            setCustomModels(parsed);
+            refreshCustomModelsEditor();
+            syncCustomModelsToModelPicker({ triggerModelChange: true });
+            saveSettingsDebounced();
+            return JSON.stringify(getCustomModels());
+        },
+        returns: t`custom models list`,
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'force',
+                description: t`force set an empty value`,
+                typeList: [ARGUMENT_TYPE.BOOLEAN],
+                defaultValue: 'false',
+                enumList: commonEnumProviders.boolean('trueFalse')(),
+            }),
+        ],
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: t`JSON-encoded list of model IDs`,
+                typeList: [ARGUMENT_TYPE.LIST, ARGUMENT_TYPE.STRING],
+                isRequired: false,
+            }),
+        ],
+        helpString: t`Sets the custom model IDs list (JSON-encoded array). Saved with the current connection profile. Gets current list if no argument is provided.`,
+    }));
 }
 
 export function initOpenAI() {
@@ -9978,16 +10004,10 @@ export function initOpenAI() {
     });
 
     $('#chat_completion_custom_models_apply').on('click', async function () {
-        const source = oai_settings.chat_completion_source;
-        const binding = getModelBindingForSource(source);
-        if (!binding) {
-            return;
-        }
-
         const modelIds = parseCustomModelList(String($('#chat_completion_custom_models_text').val() || ''));
-        setCustomModelsForSource(source, modelIds);
-        applyCustomModelsToCurrentSource({ triggerModelChange: true });
-        refreshCustomModelsEditorForCurrentSource();
+        setCustomModels(modelIds);
+        syncCustomModelsToModelPicker({ triggerModelChange: true });
+        refreshCustomModelsEditor();
         saveSettingsDebounced();
         startStatusLoading();
         try {
