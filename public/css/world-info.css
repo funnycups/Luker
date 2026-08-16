@@ -769,9 +769,14 @@
     }
 
     #WorldInfo .world_entry .wi-entry-main-grid,
-    #WorldInfo .world_entry .wi-entry-advanced-settings,
-    #WorldInfo .world_entry .wi-entry-advanced-content {
+    #WorldInfo .world_entry .wi-entry-advanced-settings {
         display: contents;
+    }
+
+    /* Desktop keeps advanced settings flat even if mobile left an inline
+       display:none on the nested drawer while switching viewport sizes. */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-advanced-content {
+        display: contents !important;
     }
 
     #WorldInfo .world_entry :is(
