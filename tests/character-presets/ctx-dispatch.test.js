@@ -324,7 +324,7 @@ jest.unstable_mockModule('../../public/scripts/textgen-settings.js', () => ({
     getTextGenServer: () => '', getTextGenGenerationData: () => ({}), textgenerationwebui_settings: {}, textgen_types: {},
 }));
 jest.unstable_mockModule('../../public/scripts/tokenizers.js', () => ({
-    tokenizers: {}, getTextTokens: () => [], getTokenCount: () => 0, getTokenCountAsync: async () => 0, getTokenizerModel: () => '',
+    tokenizers: {}, tokenizer_settings: {}, getTextTokens: () => [], getTokenCount: () => 0, getTokenCountAsync: async () => 0, getTokenizerModel: () => '',
 }));
 jest.unstable_mockModule('../../public/scripts/tool-calling.js', () => ({
     ToolManager: {

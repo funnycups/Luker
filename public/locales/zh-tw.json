@@ -476,6 +476,12 @@
     "Collapse Consecutive Newlines": "折疊連續的換行符號",
     "Trim spaces": "修剪空格",
     "Tokenizer": "分詞器 Tokenizer",
+    "Counting Tokenizer": "計數分詞器",
+    "Encoding Tokenizer": "編碼分詞器",
+    "tokenizer setting to update": "要更新的分詞器設定",
+    "Selects the counting and/or encoding tokenizer by name. Gets the current counting tokenizer if no name is provided.": "依名稱選擇計數和／或編碼分詞器。若未提供名稱，則傳回目前的計數分詞器。",
+    "Use <code>target=counting</code>, <code>target=encoding</code>, or <code>target=both</code> to choose which setting to update.": "使用 <code>target=counting</code>、<code>target=encoding</code> 或 <code>target=both</code> 選擇要更新的設定。",
+    "When setting <code>target=both</code>, provide one tokenizer name to apply to both settings.": "設定 <code>target=both</code> 時，請提供一個分詞器名稱以同時套用到兩項設定。",
     "Token Padding": "符元填充",
     "Start Reply With": "開始回覆",
     "AI reply prefix": "AI 回覆前綴",
@@ -5053,7 +5059,7 @@
     ,"var_ops_panel.placeholder.path": "路徑（可選，如 alice.hp）"
     ,"var_ops_panel.placeholder.value": "值"
     ,"Fast token preview": "快速 token 預覽"
-    ,"fast_token_preview_tooltip": "用前端位元組估算替代分詞器介面呼叫。更快但精度降低。logprobs 和 /tokens 斜槓命令的精度會下降。"
+    ,"fast_token_preview_tooltip": "使用快速的位元組估算取代計數分詞器。速度更快但精確度較低，不影響編碼分詞器。"
     ,"Embedding": "嵌入"
     ,"Rerank": "重排序"
     ,"Embedding Profile": "嵌入設定檔"

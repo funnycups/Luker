@@ -77,7 +77,7 @@ import {
     textValueMatcher,
     uuidv4,
 } from './utils.js';
-import { countTokensOpenAIAsync, countTokensOpenAIItemsAsync, getTokenizerModel } from './tokenizers.js';
+import { countTokensOpenAIAsync, countTokensOpenAIItemsAsync, getEncodingTokenizerType, getTokenizerModel, tokenizers } from './tokenizers.js';
 import { extractStreamingUsage, mergeStreamingUsage } from './openai-streaming-usage.js';
 import { setLastUsage } from './last-usage.js';
 import { isMobile } from './RossAscends-mods.js';
@@ -4854,22 +4854,40 @@ function parseOpenAITextLogprobs(logprobs) {
 }
 
 async function calculateLogitBias() {
-    const body = JSON.stringify(oai_settings.bias_presets[oai_settings.bias_preset_selected]);
-    let result = {};
-
     try {
-        const reply = await fetch(`/api/backends/chat-completions/bias?model=${getTokenizerModel()}`, {
+        const tokenizerModel = getLogitBiasTokenizerModel();
+        if (!tokenizerModel) {
+            return {};
+        }
+
+        const reply = await fetch(`/api/backends/chat-completions/bias?model=${encodeURIComponent(tokenizerModel)}`, {
             method: 'POST',
             headers: getRequestHeaders(),
-            body,
+            body: JSON.stringify(oai_settings.bias_presets[oai_settings.bias_preset_selected]),
         });
-
-        result = await reply.json();
+        if (!reply.ok) {
+            console.warn('Failed to calculate logit bias:', reply.status, reply.statusText);
+            return {};
+        }
+        return await reply.json();
     } catch (err) {
-        result = {};
         console.error(err);
+        return {};
     }
-    return result;
+}
+
+/**
+ * Gets the tokenizer model used to encode Chat Completion logit bias entries.
+ * @returns {string|null} Tokenizer model, or null when encoding is unavailable.
+ */
+function getLogitBiasTokenizerModel() {
+    const tokenizerType = getEncodingTokenizerType();
+    if ([tokenizers.NONE, tokenizers.API_CURRENT].includes(tokenizerType)) {
+        return null;
+    }
+
+    const tokenizerModel = getTokenizerModel({ tokenizerType });
+    return tokenizerModel === 'claude' ? null : tokenizerModel;
 }
 
 class TokenHandler {
@@ -9788,6 +9806,7 @@ export function initOpenAI() {
     }));
 
     $('#test_api_button').on('click', testApiConnection);
+    $('#encoding_tokenizer').on('change', () => biasCache = undefined);
 
     $('#temp_openai').on('input', function () {
         oai_settings.temp_openai = Number($(this).val());

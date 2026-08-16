@@ -11,15 +11,20 @@ import SVGInject from '@iconfu/svg-inject';
 import showdown from 'showdown';
 import moment from 'moment';
 import seedrandom from 'seedrandom';
-import * as Popper from '@popperjs/core';
+import * as PopperCore from '@popperjs/core';
 import droll from 'droll';
 import morphdom from 'morphdom';
 import { toggle as slideToggle } from 'slidetoggle';
 import chalk from 'chalk';
 import yaml from 'yaml';
-import * as chevrotain from 'chevrotain';
+import * as ChevrotainCore from 'chevrotain';
 import { gzipSync, gzip } from 'fflate';
 import { sha256 } from 'js-sha256';
+
+// Materialize namespace imports so Webpack treats them as local values instead
+// of namespace re-exports. The plain objects also match the legacy globals.
+const Popper = { ...PopperCore };
+const chevrotain = { ...ChevrotainCore };
 
 const libBundle = {
     lodash,

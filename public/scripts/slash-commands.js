@@ -75,7 +75,7 @@ import { chat_completion_sources, MINIMAX_ENDPOINT, oai_settings, promptManager,
 import { user_avatar } from './personas.js';
 import { addEphemeralStoppingString, chat_styles, context_presets, flushEphemeralStoppingStrings, playMessageSound, power_user } from './power-user.js';
 import { SERVER_INPUTS, textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
-import { decodeTextTokens, getAvailableTokenizers, getFriendlyTokenizerName, getTextTokens, getTokenCountAsync, selectTokenizer } from './tokenizers.js';
+import { decodeTextTokens, getAvailableTokenizers, getFriendlyTokenizerName, getTextTokens, getTokenCountAsync, selectTokenizer, tokenizer_settings } from './tokenizers.js';
 import { debounce, delay, equalsIgnoreCaseAndAccents, findChar, getCharIndex, isFalseBoolean, isTrueBoolean, onlyUnique, regexFromString, showFontAwesomePicker, stringToRange, trimToEndSentence, trimToStartSentence, waitUntilCondition } from './utils.js';
 import { registerVariableCommands, resolveVariable } from './variables.js';
 import { registerActionLoaderSlashCommands } from './action-loader-slashcommands.js';
@@ -3181,6 +3181,16 @@ export function initDefaultSlashCommands() {
         name: 'tokenizer',
         callback: selectTokenizerCallback,
         returns: t`current tokenizer`,
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'target',
+                description: t`tokenizer setting to update`,
+                typeList: [ARGUMENT_TYPE.STRING],
+                defaultValue: tokenizer_settings.BOTH,
+                enumList: [tokenizer_settings.COUNTING, tokenizer_settings.ENCODING, tokenizer_settings.BOTH],
+                forceEnum: true,
+            }),
+        ],
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
                 description: t`tokenizer name`,
@@ -3191,7 +3201,13 @@ export function initDefaultSlashCommands() {
         ],
         helpString: `
             <div>
-                ${t`Selects tokenizer by name. Gets the current tokenizer if no name is provided.`}
+                ${t`Selects the counting and/or encoding tokenizer by name. Gets the current counting tokenizer if no name is provided.`}
+            </div>
+            <div>
+                ${t`Use <code>target=counting</code>, <code>target=encoding</code>, or <code>target=both</code> to choose which setting to update.`}
+            </div>
+            <div>
+                ${t`When setting <code>target=both</code>, provide one tokenizer name to apply to both settings.`}
             </div>
             <div>
                 <strong>${t`Available tokenizers:`}</strong>
@@ -3994,7 +4010,7 @@ async function trimTokensCallback(arg, value) {
         return value;
     }
 
-    const { tokenizerName, tokenizerId } = getFriendlyTokenizerName(main_api);
+    const { tokenizerName, tokenizerId } = getFriendlyTokenizerName(main_api, { target: tokenizer_settings.ENCODING });
     console.debug('Requesting tokenization for /trimtokens command', tokenizerName);
 
     try {
@@ -6822,9 +6838,9 @@ async function setApiUrlCallback({ api = null, connect = 'true', quiet = 'false'
     return textgenerationwebui_settings.server_urls[type] ?? '';
 }
 
-async function selectTokenizerCallback(_, name) {
+async function selectTokenizerCallback({ target = tokenizer_settings.BOTH }, name) {
     if (!name) {
-        return getAvailableTokenizers().find(tokenizer => tokenizer.tokenizerId === power_user.tokenizer)?.tokenizerKey ?? '';
+        return getAvailableTokenizers().find(tokenizer => tokenizer.tokenizerId === power_user.counting_tokenizer)?.tokenizerKey ?? '';
     }
 
     const tokenizers = getAvailableTokenizers();
@@ -6838,7 +6854,7 @@ async function selectTokenizerCallback(_, name) {
 
     /** @type {import('./tokenizers.js').Tokenizer} */
     const foundTokenizer = result[0].item;
-    selectTokenizer(foundTokenizer.tokenizerId);
+    selectTokenizer(foundTokenizer.tokenizerId, { target });
 
     return foundTokenizer.tokenizerKey;
 }
