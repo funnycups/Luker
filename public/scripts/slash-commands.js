@@ -3207,6 +3207,9 @@ export function initDefaultSlashCommands() {
                 ${t`Use <code>target=counting</code>, <code>target=encoding</code>, or <code>target=both</code> to choose which setting to update.`}
             </div>
             <div>
+                ${t`When setting <code>target=both</code>, provide one tokenizer name to apply to both settings.`}
+            </div>
+            <div>
                 <strong>${t`Available tokenizers:`}</strong>
                 <pre><code>${getAvailableTokenizers().map(t => t.tokenizerKey).join(', ')}</code></pre>
             </div>
