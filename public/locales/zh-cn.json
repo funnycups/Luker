@@ -311,7 +311,7 @@
     "Counting Tokenizer": "计数分词器",
     "Encoding Tokenizer": "编码分词器",
     "tokenizer setting to update": "要更新的分词器设置",
-    "Selects the counting and/or encoding tokenizer by name. Gets the current counting tokenizer if no name is provided.": "按名称选择计数和/或编码分词器。如未提供名称，则返回当前计数分词器。",
+    "Selects the counting and/or encoding tokenizer by name. Gets the current counting tokenizer if no name is provided.": "按名称选择计数和／或编码分词器。如未提供名称，则返回当前计数分词器。",
     "Use <code>target=counting</code>, <code>target=encoding</code>, or <code>target=both</code> to choose which setting to update.": "使用 <code>target=counting</code>、<code>target=encoding</code> 或 <code>target=both</code> 选择要更新的设置。",
     "When setting <code>target=both</code>, provide one tokenizer name to apply to both settings.": "设置 <code>target=both</code> 时，请提供一个分词器名称以同时应用到两项设置。",
     "New preset": "新预设",
