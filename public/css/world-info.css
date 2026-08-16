@@ -678,6 +678,53 @@
     max-width: 3.5em;
 }
 
+@media screen and (min-width: 1001px) {
+    /* Keep native number spinners from consuming the narrow idle text area.
+       Restore them while the field is being interacted with. */
+    .WIEntryHeaderControls input[type="number"]:is(
+        [name="depth"],
+        [name="order"],
+        [name="probability"]
+    ) {
+        appearance: textfield;
+    }
+
+    .WIEntryHeaderControls input[type="number"]:is(
+        [name="depth"],
+        [name="order"],
+        [name="probability"]
+    ):is(:hover, :focus) {
+        appearance: auto;
+    }
+
+    .WIEntryHeaderControls input[type="number"]:is(
+        [name="depth"],
+        [name="order"],
+        [name="probability"]
+    )::-webkit-inner-spin-button,
+    .WIEntryHeaderControls input[type="number"]:is(
+        [name="depth"],
+        [name="order"],
+        [name="probability"]
+    )::-webkit-outer-spin-button {
+        display: none;
+        margin: 0;
+    }
+
+    .WIEntryHeaderControls input[type="number"]:is(
+        [name="depth"],
+        [name="order"],
+        [name="probability"]
+    ):is(:hover, :focus)::-webkit-inner-spin-button,
+    .WIEntryHeaderControls input[type="number"]:is(
+        [name="depth"],
+        [name="order"],
+        [name="probability"]
+    ):is(:hover, :focus)::-webkit-outer-spin-button {
+        display: block;
+    }
+}
+
 .world_entry .killSwitch {
     cursor: pointer;
 }
