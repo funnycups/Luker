@@ -749,7 +749,7 @@
         width: 100%;
         min-width: 0;
         max-width: 100%;
-        padding: 6px;
+        padding: 2px 8px;
         position: static;
     }
 
@@ -787,7 +787,7 @@
         grid-column: 1;
         grid-row: 1;
         display: grid;
-        grid-template-columns: 40px 40px minmax(0, 1fr) 40px;
+        grid-template-columns: 24px 24px minmax(0, 1fr) 24px;
         gap: 4px;
         width: 100%;
         min-width: 0;
@@ -816,6 +816,19 @@
         border-radius: 7px;
         cursor: pointer;
         flex: 0 0 40px;
+    }
+
+    /* Keep the header controls compact like the original 24px controls. */
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle,
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select {
+        width: 24px;
+        min-width: 24px;
+        height: 24px;
+        min-height: 24px;
+        flex-basis: 24px;
+        justify-self: center;
+        border-radius: 6px;
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle,
@@ -861,11 +874,13 @@
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-title-row select[name="entryStateSelector"] {
         display: none !important;
         box-sizing: border-box;
-        width: 42px !important;
+        width: 36px !important;
         min-width: 0 !important;
-        max-width: 42px !important;
-        height: 40px;
-        padding-inline: 5px;
+        max-width: 36px !important;
+        height: max(1.5em, calc(var(--mainFontSize) + 12px));
+        padding: 1px 12px 1px 3px;
+        background-position: right 4px center;
+        background-size: 7px 5px;
         flex: none;
     }
 
@@ -892,7 +907,7 @@
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-title-row {
-        grid-template-columns: minmax(0, 1fr) 42px;
+        grid-template-columns: minmax(0, 1fr) 36px;
     }
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header:has(> .wi-entry-header-main > .wi-entry-toggle.up) .wi-entry-title-row select[name="entryStateSelector"] {
@@ -961,7 +976,6 @@
 
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle:active,
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle:active,
-    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:active,
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-header > .menu_button:active {
         background: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
         border-color: color-mix(in srgb, var(--SmartThemeBodyColor) 24%, var(--SmartThemeBorderColor));
@@ -1421,7 +1435,7 @@
 @media screen and (max-width: 1000px) and (hover: hover) and (pointer: fine) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle:hover,
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle:hover,
-    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:hover {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:not(:has(input:checked)):hover {
         opacity: 1;
         background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
         border-color: color-mix(in srgb, var(--SmartThemeBodyColor) 20%, var(--SmartThemeBorderColor));
@@ -1437,7 +1451,7 @@
 @media screen and (max-width: 1000px) and (hover: none) {
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-toggle:hover:not(:active),
     #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-enabled-toggle:hover:not(:active),
-    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:hover:not(:active) {
+    #WorldInfo #world_popup_entries_list > .world_entry .wi-entry-bulk-select:not(:has(input:checked)):hover:not(:active) {
         background: transparent !important;
         border-color: transparent !important;
     }
