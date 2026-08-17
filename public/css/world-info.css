@@ -977,6 +977,16 @@
     min-width: 0;
 }
 
+/* The native search clear control still reserves space while hidden. Reclaim
+ * that space until the field is focused with an actual query. */
+#WorldInfo #world_info_search::-webkit-search-cancel-button {
+    width: 0;
+}
+
+#WorldInfo #world_info_search:focus:not(:placeholder-shown)::-webkit-search-cancel-button {
+    width: 1em;
+}
+
 /* possible place for WI Entry header styling */
 /* .world_entry_form .inline-drawer-header {
     background-color: var(--SmartThemeShadowColor);
