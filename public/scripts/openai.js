@@ -43,6 +43,11 @@ import {
     PromptManager,
     promptManagerDefaultPromptOrders,
 } from './PromptManager.js';
+import {
+    applyAttachedPromptsToMessages,
+    getPromptInjectionGroups,
+    isPromptInjectionPosition,
+} from './prompt-injections.js';
 
 import { forceCharacterEditorTokenize, getCustomStoppingStrings, persona_description_positions, power_user } from './power-user.js';
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
@@ -1681,8 +1686,8 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
 
         const prompt = prompts.get(source);
 
-        if (prompt.injection_position === INJECTION_POSITION.ABSOLUTE) {
-            promptManager.log(`Skipping prompt ${source} because it is an absolute prompt`);
+        if (!isPromptInjectionPosition(prompt, INJECTION_POSITION.RELATIVE)) {
+            promptManager.log(`Skipping prompt ${source} because it is not a relative prompt`);
             return;
         }
 
@@ -1746,18 +1751,7 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
 
     // Add ordered system and user prompts
     const systemPrompts = ['nsfw', 'jailbreak'];
-    const userRelativePrompts = prompts.collection
-        .filter((prompt) => false === prompt.system_prompt && prompt.injection_position !== INJECTION_POSITION.ABSOLUTE)
-        .reduce((acc, prompt) => {
-            acc.push(prompt.identifier);
-            return acc;
-        }, []);
-    const absolutePrompts = prompts.collection
-        .filter((prompt) => prompt.injection_position === INJECTION_POSITION.ABSOLUTE)
-        .reduce((acc, prompt) => {
-            acc.push(prompt);
-            return acc;
-        }, []);
+    const { userRelativePromptIds: userRelativePrompts, absolutePrompts, attachedPrompts } = getPromptInjectionGroups(prompts);
 
     for (const identifier of [...systemPrompts, ...userRelativePrompts]) {
         await addToChatCompletion(identifier);
@@ -1770,6 +1764,9 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
     if (bias && bias.trim().length) await addToChatCompletion('bias');
 
     const injectToMain = async (/** @type {Prompt} */ prompt, /** @type {string|number} */ position) => {
+        if (!isPromptInjectionPosition(prompt, INJECTION_POSITION.RELATIVE)) {
+            return;
+        }
         if (chatCompletion.has('main')) {
             const message = await Message.fromPromptAsync(prompt);
             chatCompletion.insert(message, 'main', position);
@@ -1819,6 +1816,17 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
         const toolMessage = [{ role: 'user', content: JSON.stringify(toolData) }];
         const toolTokens = await tokenHandler.countAsync(toolMessage);
         chatCompletion.reserveBudget(toolTokens);
+    }
+
+    // Apply attach-existing prompts before later prompt assembly mutates the history.
+    // This keeps indexing anchored to real chat turns instead of synthetic completion rows.
+    if (attachedPrompts.length > 0) {
+        applyAttachedPromptsToMessages(attachedPrompts, messages, {
+            warn: (msg) => {
+                console.warn(msg);
+                toastr.warning(msg);
+            },
+        });
     }
 
     // Displace the message to be continued from its original position before performing in-chat injections

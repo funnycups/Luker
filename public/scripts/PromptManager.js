@@ -13,6 +13,7 @@ import { Popup } from './popup.js';
 import { t } from './i18n.js';
 import { showUndoToast } from './undo-toast.js';
 import { estimateTotalTokensFromCache } from './util/prompt-token-estimate.js';
+import { INJECTION_POSITION, getPromptInjectionPosition } from './prompt-injections.js';
 
 function debouncePromise(func, delay) {
     let timeoutId;
@@ -97,13 +98,7 @@ const PROMPT_SEARCH_SCOPE_ALIASES = Object.freeze({
     source: PROMPT_SEARCH_SCOPES.SOURCE,
 });
 
-/**
- * @enum {number}
- */
-export const INJECTION_POSITION = {
-    RELATIVE: 0,
-    ABSOLUTE: 1,
-};
+export { INJECTION_POSITION };
 
 /**
  * Register migrations for the prompt manager when settings are loaded or an Open AI preset is loaded.
@@ -252,7 +247,7 @@ class Prompt {
      * @param {boolean} [param0.extension] - Prompt is added by an extension.
      * @param {boolean} [param0.plugin_extra] - Exclude this prompt from plugin preset assembly.
      */
-    constructor({ identifier, role, content, name, system_prompt, position, injection_depth, injection_position, forbid_overrides, extension, injection_order, injection_trigger, plugin_extra } = {}) {
+    constructor({ identifier, role, content, name, system_prompt, position, injection_depth, injection_position, forbid_overrides, extension, injection_order, injection_trigger, plugin_extra, attach_role, attach_index, attach_side } = {}) {
         this.identifier = identifier;
         this.role = role;
         this.content = content;
@@ -266,6 +261,9 @@ class Prompt {
         this.injection_order = injection_order ?? DEFAULT_ORDER;
         this.injection_trigger = injection_trigger ?? [];
         this.plugin_extra = Boolean(plugin_extra);
+        this.attach_role = attach_role;
+        this.attach_index = attach_index;
+        this.attach_side = attach_side;
     }
 }
 
@@ -748,11 +746,17 @@ class PromptManager {
             const injectionTriggerField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_injection_trigger'));
             const depthBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_depth_block'));
             const orderBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_order_block'));
+            const attachBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_attach_block'));
+            const attachRoleField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_role'));
+            const attachIndexField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_index'));
+            const attachSideField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_side'));
             const forbidOverridesField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_forbid_overrides'));
             const forbidOverridesBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_forbid_overrides_block'));
             const pluginExtraField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_plugin_extra'));
             const entrySourceBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source_block'));
             const entrySource = /** @type {HTMLSpanElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source'));
+
+            const injectionPosition = getPromptInjectionPosition(prompt);
 
             nameField.value = prompt.name;
             if (!CSS.supports('field-sizing', 'content')) {
@@ -760,14 +764,18 @@ class PromptManager {
             }
             roleField.value = 'system';
             promptField.value = prompt.content ?? '';
-            injectionPositionField.value = (prompt.injection_position ?? 0).toString();
+            injectionPositionField.value = injectionPosition.toString();
             injectionDepthField.value = (prompt.injection_depth ?? DEFAULT_DEPTH).toString();
             injectionOrderField.value = (prompt.injection_order ?? DEFAULT_ORDER).toString();
             Array.from(injectionTriggerField.options).forEach(option => {
                 option.selected = false;
             });
             injectionTriggerField.dispatchEvent(new Event('change', { bubbles: true }));
-            setInjectionDepthOrderDisplay(depthBlock, orderBlock, prompt.injection_position === INJECTION_POSITION.ABSOLUTE);
+            setInjectionDepthOrderDisplay(depthBlock, orderBlock, injectionPosition === INJECTION_POSITION.ABSOLUTE);
+            attachBlock.style.display = injectionPosition === INJECTION_POSITION.ATTACH_EXISTING ? 'flex' : 'none';
+            attachRoleField.value = prompt.attach_role ?? 'user';
+            attachIndexField.value = (prompt.attach_index ?? 1).toString();
+            attachSideField.value = prompt.attach_side ?? 'end';
             forbidOverridesField.checked = prompt.forbid_overrides ?? false;
             forbidOverridesBlock.style.visibility = this.overridablePrompts.includes(prompt.identifier) ? 'visible' : 'hidden';
             pluginExtraField.checked = Boolean(prompt.plugin_extra);
@@ -1696,11 +1704,13 @@ class PromptManager {
             : '';
 
         const encodedName = escapeHtml(prompt.name);
-        const isMarkerPrompt = prompt.marker && prompt.injection_position !== INJECTION_POSITION.ABSOLUTE;
-        const isSystemPrompt = !prompt.marker && prompt.system_prompt && prompt.injection_position !== INJECTION_POSITION.ABSOLUTE && !prompt.forbid_overrides;
-        const isImportantPrompt = !prompt.marker && prompt.system_prompt && prompt.injection_position !== INJECTION_POSITION.ABSOLUTE && prompt.forbid_overrides;
-        const isUserPrompt = !prompt.marker && !prompt.system_prompt && prompt.injection_position !== INJECTION_POSITION.ABSOLUTE;
-        const isInjectionPrompt = prompt.injection_position === INJECTION_POSITION.ABSOLUTE;
+        const injectionPosition = getPromptInjectionPosition(prompt);
+        const isMarkerPrompt = prompt.marker && injectionPosition === INJECTION_POSITION.RELATIVE;
+        const isSystemPrompt = !prompt.marker && prompt.system_prompt && injectionPosition === INJECTION_POSITION.RELATIVE && !prompt.forbid_overrides;
+        const isImportantPrompt = !prompt.marker && prompt.system_prompt && injectionPosition === INJECTION_POSITION.RELATIVE && prompt.forbid_overrides;
+        const isUserPrompt = !prompt.marker && !prompt.system_prompt && injectionPosition === INJECTION_POSITION.RELATIVE;
+        const isInjectionPrompt = injectionPosition === INJECTION_POSITION.ABSOLUTE;
+        const isAttachedPrompt = injectionPosition === INJECTION_POSITION.ATTACH_EXISTING;
         const isOverriddenPrompt = Array.isArray(this.overriddenPrompts) && this.overriddenPrompts.includes(prompt.identifier);
         const importantClass = isImportantPrompt ? `${prefix}prompt_manager_important` : '';
         const iconLookup = prompt.role === 'system' && (prompt.marker || prompt.system_prompt) ? '' : prompt.role;
@@ -1722,14 +1732,18 @@ class PromptManager {
                         ? `<span class="fa-fw fa-solid fa-asterisk ${markerHandleClass}" title="Preset Prompt"></span>`
                         : isInjectionPrompt
                             ? `<span class="fa-fw fa-solid fa-syringe ${markerHandleClass}" title="In-Chat Injection"></span>`
-                            : '<span class="fa-fw fa-solid prompt-manager-name-leading-placeholder" aria-hidden="true"></span>';
+                            : isAttachedPrompt
+                                ? `<span class="fa-fw fa-solid fa-paperclip ${markerHandleClass}" title="Attached to Existing Message"></span>`
+                                : '<span class="fa-fw fa-solid prompt-manager-name-leading-placeholder" aria-hidden="true"></span>';
         const nameTextHtml = this.isPromptInspectionAllowed(prompt)
             ? `<a title="${encodedName}" class="prompt-manager-inspect-action prompt-manager-name-text">${encodedName}</a>`
             : `<span title="${encodedName}" class="prompt-manager-name-text">${encodedName}</span>`;
+        const attachSideText = prompt.attach_side === 'start' ? t`Prepend` : t`Append`;
         const nameMetaHtml = [
             pluginExtraBadgeHtml,
             roleIcon ? `<span data-role="${escapeHtml(prompt.role)}" class="fa-xs fa-solid ${roleIcon}" title="${roleTitle}"></span>` : '',
             isInjectionPrompt ? `<small class="prompt-manager-injection-depth">@ ${escapeHtml(prompt.injection_depth.toString())}</small>` : '',
+            isAttachedPrompt ? `<small class="prompt-manager-injection-depth">${escapeHtml(attachSideText)} → ${escapeHtml(String(prompt.attach_role ?? 'user'))} #${escapeHtml(String(prompt.attach_index ?? 1))}</small>` : '',
             isOverriddenPrompt ? '<small class="fa-solid fa-address-card prompt-manager-overridden" title="Pulled from a character card"></small>' : '',
         ].filter(Boolean).join('');
 
@@ -1917,6 +1931,9 @@ class PromptManager {
         const injectionTriggerField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_injection_trigger'));
         const forbidOverridesField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_forbid_overrides'));
         const pluginExtraField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_plugin_extra'));
+        const attachRoleField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_role'));
+        const attachIndexField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_index'));
+        const attachSideField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_side'));
 
         prompt.name = nameField.value.replace(/\s*\r?\n+\s*/g, ' ').trim();
         prompt.role = roleField.value;
@@ -1927,6 +1944,9 @@ class PromptManager {
         prompt.injection_trigger = Array.from(injectionTriggerField.selectedOptions).map(option => option.value);
         prompt.forbid_overrides = forbidOverridesField.checked;
         prompt.plugin_extra = pluginExtraField.checked;
+        prompt.attach_role = attachRoleField.value;
+        prompt.attach_index = Number(attachIndexField.value) || 1;
+        prompt.attach_side = attachSideField.value;
     }
 
     /**
@@ -3254,12 +3274,18 @@ class PromptManager {
         const injectionTriggerField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_injection_trigger'));
         const injectionDepthBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_depth_block'));
         const injectionOrderBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_order_block'));
+        const attachBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_attach_block'));
+        const attachRoleField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_role'));
+        const attachIndexField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_index'));
+        const attachSideField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_side'));
         const forbidOverridesField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_forbid_overrides'));
         const forbidOverridesBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_forbid_overrides_block'));
         const pluginExtraField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_plugin_extra'));
         const entrySourceBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source_block'));
         const entrySource = /** @type {HTMLSpanElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source'));
         const isPulledPrompt = Object.keys(this.promptSources).includes(prompt.identifier);
+
+        const injectionPosition = getPromptInjectionPosition(prompt);
 
         nameField.value = prompt.name ?? '';
         if (!CSS.supports('field-sizing', 'content')) {
@@ -3268,14 +3294,18 @@ class PromptManager {
         roleField.value = prompt.role || 'system';
         promptField.value = prompt.content ?? '';
         promptField.disabled = prompt.marker ?? false;
-        injectionPositionField.value = (prompt.injection_position ?? INJECTION_POSITION.RELATIVE).toString();
+        injectionPositionField.value = injectionPosition.toString();
         injectionDepthField.value = (prompt.injection_depth ?? DEFAULT_DEPTH).toString();
         injectionOrderField.value = (prompt.injection_order ?? DEFAULT_ORDER).toString();
         Array.from(injectionTriggerField.options).forEach(option => {
             option.selected = Array.isArray(prompt.injection_trigger) && prompt.injection_trigger.includes(option.value);
         });
         injectionTriggerField.dispatchEvent(new Event('change', { bubbles: true }));
-        setInjectionDepthOrderDisplay(injectionDepthBlock, injectionOrderBlock, prompt.injection_position === INJECTION_POSITION.ABSOLUTE);
+        setInjectionDepthOrderDisplay(injectionDepthBlock, injectionOrderBlock, injectionPosition === INJECTION_POSITION.ABSOLUTE);
+        attachBlock.style.display = injectionPosition === INJECTION_POSITION.ATTACH_EXISTING ? 'flex' : 'none';
+        attachRoleField.value = prompt.attach_role ?? 'user';
+        attachIndexField.value = (prompt.attach_index ?? 1).toString();
+        attachSideField.value = prompt.attach_side ?? 'end';
         injectionPositionField.removeAttribute('disabled');
         forbidOverridesField.checked = prompt.forbid_overrides ?? false;
         forbidOverridesBlock.style.visibility = this.overridablePrompts.includes(prompt.identifier) ? 'visible' : 'hidden';
@@ -3305,11 +3335,17 @@ class PromptManager {
     handleInjectionPositionChange(event) {
         const injectionDepthBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_depth_block');
         const injectionOrderBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_order_block');
+        const attachBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_attach_block');
         const injectionPosition = Number(event.target.value);
         if (injectionPosition === INJECTION_POSITION.ABSOLUTE) {
             setInjectionDepthOrderDisplay(injectionDepthBlock, injectionOrderBlock, true);
+            attachBlock.style.display = 'none';
+        } else if (injectionPosition === INJECTION_POSITION.ATTACH_EXISTING) {
+            setInjectionDepthOrderDisplay(injectionDepthBlock, injectionOrderBlock, false);
+            attachBlock.style.display = 'flex';
         } else {
             setInjectionDepthOrderDisplay(injectionDepthBlock, injectionOrderBlock, false);
+            attachBlock.style.display = 'none';
         }
     }
 
@@ -3383,6 +3419,10 @@ class PromptManager {
         const injectionOrderBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_order_block'));
         const injectionOrderField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_injection_order'));
         const injectionTriggerField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_injection_trigger'));
+        const attachBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_attach_block'));
+        const attachRoleField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_role'));
+        const attachIndexField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_index'));
+        const attachSideField = /** @type {HTMLSelectElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_attach_side'));
         const forbidOverridesField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_forbid_overrides'));
         const forbidOverridesBlock = /** @type {HTMLDivElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_forbid_overrides_block'));
         const pluginExtraField = /** @type {HTMLInputElement} */(document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_plugin_extra'));
@@ -3402,6 +3442,10 @@ class PromptManager {
         injectionOrderField.value = DEFAULT_ORDER.toString();
         injectionTriggerField.value = '';
         setInjectionDepthOrderDisplay(injectionDepthBlock, injectionOrderBlock, true);
+        attachBlock.style.display = 'none';
+        attachRoleField.value = 'user';
+        attachIndexField.value = '1';
+        attachSideField.value = 'end';
         forbidOverridesBlock.style.visibility = 'unset';
         forbidOverridesField.checked = false;
         pluginExtraField.checked = false;
