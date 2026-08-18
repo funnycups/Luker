@@ -261,9 +261,9 @@ class Prompt {
         this.injection_order = injection_order ?? DEFAULT_ORDER;
         this.injection_trigger = injection_trigger ?? [];
         this.plugin_extra = Boolean(plugin_extra);
-        this.attach_role = attach_role;
-        this.attach_index = attach_index;
-        this.attach_side = attach_side;
+        this.attach_role = attach_role ?? 'user';
+        this.attach_index = attach_index ?? 1;
+        this.attach_side = attach_side ?? 'end';
     }
 }
 

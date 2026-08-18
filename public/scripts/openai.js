@@ -45,7 +45,9 @@ import {
 } from './PromptManager.js';
 import {
     applyAttachedPromptsToMessages,
+    applyPromptManagerOverrides,
     getPromptInjectionGroups,
+    getRelativePromptById,
     isPromptInjectionPosition,
 } from './prompt-injections.js';
 
@@ -1733,12 +1735,14 @@ async function populateChatCompletion(prompts, chatCompletion, { bias, quietProm
     chatCompletion.setOverriddenPrompts(prompts.overriddenPrompts);
     const controlPrompts = new MessageCollection('controlPrompts');
 
-    const impersonateMessage = await Message.fromPromptAsync(prompts.get('impersonate')) ?? null;
-    if (type === 'impersonate') controlPrompts.add(impersonateMessage);
+    const impersonatePrompt = getRelativePromptById(prompts, 'impersonate');
+    const impersonateMessage = impersonatePrompt ? await Message.fromPromptAsync(impersonatePrompt) : null;
+    if (type === 'impersonate' && impersonateMessage) controlPrompts.add(impersonateMessage);
 
     // Add quiet prompt to control prompts
     // This should always be last, even in control prompts. Add all further control prompts BEFORE this prompt
-    const quietPromptMessage = await Message.fromPromptAsync(prompts.get('quietPrompt')) ?? null;
+    const quietPromptEntry = getRelativePromptById(prompts, 'quietPrompt');
+    const quietPromptMessage = quietPromptEntry ? await Message.fromPromptAsync(quietPromptEntry) : null;
     if (quietPromptMessage && quietPromptMessage.content) {
         if (isImageInliningSupported() && quietImage) {
             await quietPromptMessage.addImage(quietImage);
@@ -1975,17 +1979,8 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
     systemPrompts.forEach(prompt => {
         const collectionPrompt = prompts.get(prompt.identifier);
 
-        // Apply system prompt role/depth overrides if they set in the prompt manager
-        if (collectionPrompt) {
-            // In-Chat / Relative
-            prompt.injection_position = collectionPrompt.injection_position ?? prompt.injection_position;
-            // Depth for In-Chat
-            prompt.injection_depth = collectionPrompt.injection_depth ?? prompt.injection_depth;
-            // Priority for In-Chat
-            prompt.injection_order = collectionPrompt.injection_order ?? prompt.injection_order;
-            // Role (system, user, assistant)
-            prompt.role = collectionPrompt.role ?? prompt.role;
-        }
+        // Apply system prompt overrides (position/depth/order/role/attach_*) from the prompt manager
+        applyPromptManagerOverrides(prompt, collectionPrompt);
 
         const newPrompt = promptManager.preparePrompt(prompt);
         const markerIndex = prompts.index(prompt.identifier);
@@ -7332,6 +7327,9 @@ function normalizePromptEntryForUnsavedCheck(prompt, index) {
         injection_depth: normalizeNumber(source.injection_depth, 4),
         injection_order: normalizeNumber(source.injection_order, 100),
         injection_trigger: normalizedTriggers,
+        attach_role: String(source.attach_role ?? 'user'),
+        attach_index: normalizeNumber(source.attach_index, 1),
+        attach_side: String(source.attach_side ?? 'end'),
         forbid_overrides: Boolean(source.forbid_overrides),
         plugin_extra: Boolean(source.plugin_extra),
         extension: Boolean(source.extension),
