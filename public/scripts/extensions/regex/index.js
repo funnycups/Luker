@@ -2607,12 +2607,27 @@ async function checkPresetEmbeddedRegexScripts(event = {}) {
                     return;
                 }
 
-                const sourceScripts = await getPresetEmbeddedRegexSourceScripts(presetManager, name, scripts);
+                // Use the in-memory scripts directly for the popup to avoid blocking on a
+                // preset+settings roundtrip before showing the UI. The persistent source
+                // snapshot (used by the "reimport" button) is written after the popup closes.
+                const sourceScripts = clonePresetEmbeddedRegexScripts(scripts);
                 const selectedScripts = await showPresetEmbeddedRegexImportPopup(sourceScripts, name, {
                     defaultSelected: true,
                     okButton: t`Import Selected`,
                     cancelButton: t`Cancel`,
                 });
+
+                // Persist the immutable source snapshot regardless of the popup outcome
+                // (including cancel) so the reimport button can offer the original bundle
+                // later. Skip the write if a snapshot is already stored to avoid churn.
+                const storedSource = presetManager.readPresetExtensionField({ name, path: PRESET_EMBEDDED_REGEX_SOURCE_PATH });
+                if ((!Array.isArray(storedSource) || storedSource.length === 0) && sourceScripts.length > 0) {
+                    await presetManager.writePresetExtensionField({
+                        name,
+                        path: PRESET_EMBEDDED_REGEX_SOURCE_PATH,
+                        value: sourceScripts,
+                    });
+                }
 
                 if (selectedScripts) {
                     await presetManager.writePresetExtensionField({ name, path: 'regex_scripts', value: selectedScripts });
