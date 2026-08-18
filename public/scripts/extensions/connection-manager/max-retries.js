@@ -9,15 +9,19 @@
 import { extension_settings } from '../../extensions.js';
 
 /**
- * Clamp arbitrary input into the supported retry range [0, 5].
- * Non-numeric / NaN / negative -> 0 (disabled).
+ * Coerce arbitrary input into a non-negative integer retry count.
+ * Non-numeric / NaN / negative -> 0 (disabled). No upper bound: the retry
+ * budget is a user-facing UX knob with no downstream constraint (the
+ * transport in `request-retry.js` loops `attempt <= maxRetries` and each
+ * attempt gates on retriable status + Retry-After); users retrying their
+ * own account against their own provider don't need us capping them.
  * @param {unknown} value
  * @returns {number}
  */
 export function clampMaxRetries(value) {
     const n = Number(value);
     if (!Number.isFinite(n) || n <= 0) return 0;
-    return Math.max(0, Math.min(5, Math.floor(n)));
+    return Math.floor(n);
 }
 
 /**

@@ -154,7 +154,7 @@ function parseProfileInteger(value) {
         return null;
     }
 
-    return Math.min(Math.max(Math.round(numeric), 1), 10);
+    return Math.max(1, Math.round(numeric));
 }
 
 function parseProfileStringList(value) {

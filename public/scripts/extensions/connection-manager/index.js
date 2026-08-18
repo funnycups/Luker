@@ -22,7 +22,7 @@ import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
 import { clampMaxRetries, formatRetryStatusWhitelist, parseRetryStatusWhitelist } from './max-retries.js';
-import { clampAutoContinueMaxAttempts, getAutoContinueMaxAttemptsCeiling } from './auto-continue-truncated.js';
+import { clampAutoContinueMaxAttempts } from './auto-continue-truncated.js';
 import {
     createEmbeddingProfileStub,
     deleteEmbeddingProfile,
@@ -340,7 +340,10 @@ function parseProfileBoolean(value) {
 }
 
 /**
- * Parses a profile integer value.
+ * Parses a profile integer value used for retry-attempts style knobs.
+ * Returns null when input is non-numeric so callers can fall back to a
+ * default. Floors to >=1 (0 disables the feature via a separate flag);
+ * no upper bound (see `clampMaxRetries` for rationale).
  * @param {unknown} value
  * @returns {number|null}
  */
@@ -349,7 +352,7 @@ function parseProfileInteger(value) {
     if (!Number.isFinite(numeric)) {
         return null;
     }
-    return Math.min(Math.max(Math.round(numeric), 1), 10);
+    return Math.max(1, Math.round(numeric));
 }
 
 /**
@@ -1325,7 +1328,7 @@ export async function init() {
             if (autoContinueOnTruncatedMaxAttemptsInput) {
                 const rawAttempts = profile ? profile['auto-continue-on-truncated-max-attempts'] : null;
                 const attempts = clampAutoContinueMaxAttempts(rawAttempts) || 3;
-                autoContinueOnTruncatedMaxAttemptsInput.max = String(getAutoContinueMaxAttemptsCeiling());
+                autoContinueOnTruncatedMaxAttemptsInput.removeAttribute('max');
                 autoContinueOnTruncatedMaxAttemptsInput.disabled = !supportedForAC || !enabled;
                 if (document.activeElement !== autoContinueOnTruncatedMaxAttemptsInput) {
                     autoContinueOnTruncatedMaxAttemptsInput.value = String(attempts);

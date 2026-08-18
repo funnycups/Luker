@@ -10,26 +10,20 @@
 
 import { extension_settings } from '../../extensions.js';
 
-// Cap the auto-retry attempts per user request. Above this we start hammering
-// the provider without user consent. 10 is enough headroom for a long reply
-// composed across several 4k / 8k output-token windows without turning into
-// an accidental infinite loop.
-const MAX_ALLOWED_ATTEMPTS = 10;
-
 /**
- * Clamp arbitrary input to [0, MAX_ALLOWED_ATTEMPTS].
- * Non-numeric / NaN / negative -> 0 (disabled).
+ * Coerce arbitrary input into a non-negative integer attempts count.
+ * Non-numeric / NaN / negative -> 0 (disabled). No upper bound: this is a
+ * user-facing UX knob, not a downstream constraint. The continue loop
+ * short-circuits as soon as the model finishes non-truncated, so a high
+ * ceiling only matters for pathological repeat-truncation cases the user
+ * has opted into.
  * @param {unknown} value
  * @returns {number}
  */
 export function clampAutoContinueMaxAttempts(value) {
     const n = Number(value);
     if (!Number.isFinite(n) || n <= 0) return 0;
-    return Math.max(0, Math.min(MAX_ALLOWED_ATTEMPTS, Math.floor(n)));
-}
-
-export function getAutoContinueMaxAttemptsCeiling() {
-    return MAX_ALLOWED_ATTEMPTS;
+    return Math.floor(n);
 }
 
 /**

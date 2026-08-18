@@ -133,7 +133,7 @@ function appendRetrySuffix(err, retries) {
  * @template T
  * @param {() => Promise<T>} fetcher
  * @param {object} [options]
- * @param {number} [options.maxRetries=0] - 0 disables retry (callers clamp 0–5).
+ * @param {number} [options.maxRetries=0] - 0 disables retry. No upper bound; callers pass through whatever the user configured.
  * @param {Array<number | { start: number, end: number }>} [options.retryWhitelist] - Status codes to retry (empty = built-in 429 + 5xx default).
  * @param {AbortSignal} [options.signal]
  * @param {(attempt: number, error: Error, nextDelayMs: number) => void} [options.onAttempt]
