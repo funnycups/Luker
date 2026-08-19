@@ -2600,8 +2600,11 @@ class PromptManager {
 
     /**
      * Validate and repair group data after prompt order changes.
-     * Removes identifiers that no longer exist in prompt_order,
-     * and splits groups whose members are no longer contiguous.
+     * Removes identifiers that no longer exist in prompt_order and
+     * clears parentId references pointing at deleted groups. Group
+     * membership itself (identifiers per group, contiguity) is rebuilt
+     * by the drag-and-drop update handler from the visual DOM order,
+     * so no re-derivation is done here.
      */
     validateGroups() {
         const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
@@ -3786,7 +3789,6 @@ class PromptManager {
              listItemHtml += groupHiddenClass
                  ? groupHtml.replace('prompt-manager-group ', `prompt-manager-group${groupHiddenClass} `)
                  : groupHtml;
-
              // Collect all descendant identifiers (including from child groups)
              const descendantIds = new Set();
              const collectDescendants = (g) => {
@@ -3844,7 +3846,20 @@ class PromptManager {
                      renderPromptItem(prompt);
                  }
              }
-        };
+
+             // Emit a group-end sentinel <li>. This makes group span
+             // walking deterministic during drag-and-drop: the update
+             // handler walks the DOM and treats this marker as
+             // "current group closes here", so a prompt dropped between
+             // the group header and this marker becomes a member and a
+             // prompt dropped after it does not. Without a sentinel,
+             // the walker would either have to guess (class-based)
+             // — which breaks for newly-dropped items — or absorb every
+             // sibling until the next group header (which is wrong for
+             // the ungrouped tail).
+             const endHiddenClass = (!isSearching && this._isGroupOrAncestorCollapsed(groupId)) ? ' prompt-manager-group-end-hidden' : '';
+             listItemHtml += `<li class="prompt-manager-group-end${endHiddenClass}" data-pm-group-end="${escapeHtml(groupId)}" aria-hidden="true"></li>`;
+         };
 
         if (!isSearching) {
             // Render all top-level groups and their descendants
@@ -4669,6 +4684,113 @@ class PromptManager {
     }
 
     /**
+     * Walk the prompt list DOM in visual order and derive both the flat
+     * prompt-identifier order and each group's membership. Group headers
+     * open a segment; group-end sentinel <li>s (data-pm-group-end="<id>")
+     * close it. Prompts get assigned to the innermost currently-open
+     * group.
+     *
+     * The renderer emits an end sentinel for every group, so the span
+     * is deterministic even when a prompt is dropped mid-group and thus
+     * lacks the group-child CSS class the renderer would otherwise add.
+     *
+     * @param {HTMLElement|null} listNode - The `<ul>` containing prompt + group `<li>`s.
+     * @returns {{
+     *   promptIdentifiersInOrder: string[],
+     *   groupMembership: Map<string, string[]>,
+     * }}
+     */
+    _walkListForOrderAndGroups(listNode) {
+        const promptIdentifiersInOrder = [];
+        const groupMembership = new Map();
+        if (!listNode) return { promptIdentifiersInOrder, groupMembership };
+
+        // Stack of currently-open group ids (innermost last).
+        const openGroups = [];
+
+        for (const child of Array.from(listNode.children)) {
+            if (!(child instanceof HTMLElement)) continue;
+
+            // Group open sentinel: header <li>.
+            if (child.classList.contains('prompt-manager-group')) {
+                const groupId = child.getAttribute('data-pm-group-id');
+                if (!groupId) continue;
+                openGroups.push(groupId);
+                if (!groupMembership.has(groupId)) groupMembership.set(groupId, []);
+                continue;
+            }
+
+            // Group close sentinel: end <li>.
+            const endGroupId = child.getAttribute('data-pm-group-end');
+            if (endGroupId) {
+                // Pop groups until we've closed the named one (defensive
+                // against a malformed DOM where an inner group has no end
+                // marker before its parent's).
+                while (openGroups.length > 0 && openGroups[openGroups.length - 1] !== endGroupId) {
+                    openGroups.pop();
+                }
+                openGroups.pop(); // remove the named group itself
+                continue;
+            }
+
+            const identifier = child.getAttribute('data-pm-identifier');
+            if (!identifier) continue;
+            promptIdentifiersInOrder.push(identifier);
+
+            // Assign this prompt to the innermost currently-open group (if any).
+            if (openGroups.length > 0) {
+                const owner = openGroups[openGroups.length - 1];
+                if (!groupMembership.has(owner)) groupMembership.set(owner, []);
+                groupMembership.get(owner).push(identifier);
+            }
+        }
+
+        return { promptIdentifiersInOrder, groupMembership };
+    }
+
+    /**
+     * Given the current sortable placeholder, walk backward through its
+     * previous siblings to find the innermost group whose segment
+     * currently contains it. Returns null if the placeholder sits
+     * outside every group segment.
+     *
+     * @param {JQuery<HTMLElement>|HTMLElement} placeholder
+     * @returns {string|null}
+     */
+    _resolvePlaceholderGroupId(placeholder) {
+        const el = placeholder instanceof HTMLElement
+            ? placeholder
+            : (placeholder && typeof placeholder.get === 'function' ? placeholder.get(0) : null);
+        if (!el) return null;
+
+        // Walk from list start up to (but not including) the placeholder,
+        // maintaining the same open-groups stack as the full walker. The
+        // top of the stack when we arrive at the placeholder is the
+        // group the drop would land inside.
+        const parent = el.parentNode;
+        if (!parent) return null;
+
+        const openGroups = [];
+        for (const node of Array.from(parent.children)) {
+            if (node === el) break;
+            if (!(node instanceof HTMLElement)) continue;
+            if (node.classList.contains('prompt-manager-group')) {
+                const gid = node.getAttribute('data-pm-group-id');
+                if (gid) openGroups.push(gid);
+                continue;
+            }
+            const endId = node.getAttribute('data-pm-group-end');
+            if (endId) {
+                while (openGroups.length > 0 && openGroups[openGroups.length - 1] !== endId) {
+                    openGroups.pop();
+                }
+                openGroups.pop();
+            }
+        }
+        return openGroups.length > 0 ? openGroups[openGroups.length - 1] : null;
+    }
+
+    /**
      * Makes the prompt list draggable and handles swapping of two entries in the list.
      * @typedef {Object} Entry
      * @property {string} identifier
@@ -4690,6 +4812,11 @@ class PromptManager {
             $(listSelector).sortable('destroy');
         }
 
+        // Track which groups we auto-expanded during a drag so the drag can
+        // hit-test into their (previously display:none) children. Restored
+        // on stop unless the user actually dropped into that group.
+        let dragAutoExpandedGroupIds = null;
+
         $(listSelector).sortable({
             delay: this.configuration.sortableDelay,
             handle: '.prompt-manager-marker-handle',
@@ -4705,23 +4832,134 @@ class PromptManager {
             scrollSpeed: 18,
             start: (_event, ui) => {
                 stylePromptManagerDragPlaceholder(ui);
+
+                // Auto-expand every collapsed group so the sortable can
+                // hit-test drops into their bodies. Without this, dropping
+                // onto a collapsed group is impossible (children are
+                // display:none → the placeholder has no landable slots
+                // inside the group and lands as a sibling instead). We
+                // remember which groups we opened so `stop` can restore
+                // any that were not actually used as the drop target.
+                dragAutoExpandedGroupIds = new Set();
+                for (const group of this.getPromptGroups()) {
+                    if (group.collapsed) {
+                        group.collapsed = false;
+                        dragAutoExpandedGroupIds.add(group.id);
+                    }
+                }
+                if (dragAutoExpandedGroupIds.size > 0) {
+                    // Expand visually without triggering a full re-render
+                    // (which would destroy the in-flight Sortable state).
+                    const $list = $(listSelector);
+                    for (const gid of dragAutoExpandedGroupIds) {
+                        const safeId = String(gid).replace(/"/g, '\\"');
+                        $list.find(`li.prompt-manager-group[data-pm-group-id="${safeId}"]`).addClass('expanded');
+                        $list.find(`li[data-pm-group-id="${safeId}"]`).removeClass('prompt-manager-group-child-hidden prompt-manager-group-hidden');
+                    }
+                }
+            },
+            over: (_event, ui) => {
+                // Highlight the group whose body currently contains the
+                // placeholder so the user has a clear "you are dropping
+                // into this group" affordance.
+                const groupId = this._resolvePlaceholderGroupId(ui.placeholder);
+                const $list = $(listSelector);
+                $list.find('li.prompt-manager-group.is-drop-target').removeClass('is-drop-target');
+                if (groupId) {
+                    const safeId = String(groupId).replace(/"/g, '\\"');
+                    $list.find(`li.prompt-manager-group[data-pm-group-id="${safeId}"]`).addClass('is-drop-target');
+                }
+            },
+            change: (_event, ui) => {
+                // Same as `over` but fires whenever the placeholder moves
+                // (including within the same connected list), which is
+                // what actually happens in a single flat sortable.
+                const groupId = this._resolvePlaceholderGroupId(ui.placeholder);
+                const $list = $(listSelector);
+                $list.find('li.prompt-manager-group.is-drop-target').removeClass('is-drop-target');
+                if (groupId) {
+                    const safeId = String(groupId).replace(/"/g, '\\"');
+                    $list.find(`li.prompt-manager-group[data-pm-group-id="${safeId}"]`).addClass('is-drop-target');
+                }
+            },
+            beforeStop: (_event, ui) => {
+                // Snapshot which group the drop landed in *before* the
+                // helper is destroyed — used to decide which auto-opened
+                // groups to re-collapse in `stop`.
+                this._lastDragDropGroupId = this._resolvePlaceholderGroupId(ui.placeholder);
+            },
+            stop: () => {
+                const $list = $(listSelector);
+                $list.find('li.prompt-manager-group.is-drop-target').removeClass('is-drop-target');
+
+                const shouldRerender = Boolean(this._dragDidMutate);
+
+                // Re-collapse any groups we auto-expanded that were not
+                // the actual drop target. The drop-target group stays
+                // open so the user can see where their item landed.
+                if (dragAutoExpandedGroupIds && dragAutoExpandedGroupIds.size > 0) {
+                    const droppedInto = this._lastDragDropGroupId;
+                    for (const group of this.getPromptGroups()) {
+                        if (!dragAutoExpandedGroupIds.has(group.id)) continue;
+                        if (group.id === droppedInto) continue;
+                        group.collapsed = true;
+                    }
+                    this.saveServiceSettings();
+                }
+
+                // Re-render so DOM attributes (data-pm-group-id, the
+                // prompt-manager-group-child class + indent) and any
+                // collapse-state changes reflect the new membership.
+                if (shouldRerender || (dragAutoExpandedGroupIds && dragAutoExpandedGroupIds.size > 0)) {
+                    this.renderPromptManagerListItems();
+                }
+
+                dragAutoExpandedGroupIds = null;
+                this._lastDragDropGroupId = null;
+                this._dragDidMutate = false;
             },
             update: (event, ui) => {
-                const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
-                const promptListElement = $(`#${this.configuration.prefix}prompt_manager_list`).sortable('toArray', { attribute: 'data-pm-identifier' })
-                    .filter(id => id); // Filter out group header rows (no data-pm-identifier)
-                const idToObjectMap = new Map(promptOrder.map(prompt => [prompt.identifier, prompt]));
-                const updatedPromptOrder = promptListElement.map(identifier => idToObjectMap.get(identifier)).filter(Boolean);
+                // Walk the DOM in visual order to rebuild both the flat
+                // prompt_order AND each group's identifiers list. This is
+                // what makes "drag into a group" actually stick — dropping
+                // a prompt inside a group's visual span reassigns its
+                // membership to that group (and correspondingly removes
+                // it from any previous group).
+                const listNode = document.getElementById(`${this.configuration.prefix}prompt_manager_list`);
+                const walk = this._walkListForOrderAndGroups(listNode);
 
+                // 1. Rebuild flat prompt_order.
+                const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
+                const idToObjectMap = new Map(promptOrder.map(prompt => [prompt.identifier, prompt]));
+                const updatedPromptOrder = walk.promptIdentifiersInOrder
+                    .map(identifier => idToObjectMap.get(identifier))
+                    .filter(Boolean);
                 this.removePromptOrderForCharacter(this.activeCharacter);
                 this.addPromptOrderForCharacter(this.activeCharacter, updatedPromptOrder);
 
-                // Validate groups after reorder — remove prompts that are no longer contiguous
+                // 2. Rebuild each existing group's identifiers from the
+                //    visual walk. Groups with no walked members become
+                //    empty and will be pruned by cleanupEmptyGroups()
+                //    below (matching current behavior).
+                for (const group of this.getPromptGroups()) {
+                    const walked = walk.groupMembership.get(group.id);
+                    group.identifiers = walked ? [...walked] : [];
+                }
+
+                // 3. Prune stale identifiers / dangling parentIds / empty
+                //    leaf groups. Contiguity is now self-healing (walked
+                //    membership follows visual order), so we no longer
+                //    need to guard it here.
                 this.validateGroups();
 
                 this.log(`Prompt order updated for ${this.activeCharacter.name}.`);
 
                 this.saveServiceSettings();
+
+                // Signal to `stop` that state changed → it should re-render
+                // so DOM attributes (data-pm-group-id, prompt-manager-
+                // group-child class + indent) reflect the new membership.
+                this._dragDidMutate = true;
             },
         });
 

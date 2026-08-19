@@ -730,6 +730,35 @@
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, var(--SmartThemeBlurTintColor));
 }
 
+/* Active drop target during a drag-into-group gesture: highlight the
+   group header whose body currently contains the placeholder so the
+   user has a clear "you are dropping into this group" affordance. */
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group.is-drop-target {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, var(--SmartThemeBlurTintColor));
+    border-left-color: var(--SmartThemeQuoteColor);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, transparent);
+}
+
+/* Group-end sentinel <li>: near-invisible marker that delimits the end
+   of a group's member span. Used by the drag-and-drop DOM walker to
+   determine which group a dropped prompt lands inside — see
+   PromptManager._walkListForOrderAndGroups. 1px tall so jQuery UI
+   sortable still hit-tests it (the placeholder must be able to slot
+   before/after it) but it does not consume perceptible visual space. */
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-end {
+    height: 1px;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    list-style: none;
+    opacity: 0;
+}
+#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-end-hidden {
+    display: none;
+}
+
 /* Chevron rotation */
 .prompt-manager-group-toggle {
     font-size: 0.7em;
