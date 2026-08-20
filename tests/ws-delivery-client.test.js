@@ -164,4 +164,99 @@ describe('lukerDelivery client', () => {
         await expect(s1.headPromise).rejects.toThrow(/closed/);
         await expect(s2.headPromise).rejects.toThrow(/closed/);
     });
+
+    // Reproduces the "你你你好好好" text-triplication bug: multiple reconnect
+    // triggers (onclose + online + visibilitychange + stale-check) can each
+    // independently call scheduleReconnect, resulting in N concurrent WebSocket
+    // instances all subscribed to the same request. Every future server chunk
+    // then arrives on every socket, and the SSE consumer's `text += replyDelta`
+    // accumulates each chunk N times. Fix must ensure at most ONE reconnect
+    // attempt in flight at any time — regardless of how many sources fire.
+    test('concurrent reconnect triggers do not open multiple sockets', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });
+        await delivery.connect(async () => 'tik');
+        const ws1 = MockWebSocket.instances[0];
+        delivery.subscribe('req-race', {});
+        // Simulate all four reconnect sources firing while ws1 is dead:
+        // 1. Underlying close (network flap) → scheduleReconnect
+        // 2. `online` event → forceReconnect → scheduleReconnect
+        // 3. `visibilitychange:visible` → forceReconnect → scheduleReconnect
+        // 4. A prior stale-check that already close()d ws → scheduleReconnect
+        ws1.close();
+        delivery.forceReconnect('online');
+        delivery.forceReconnect('visibilitychange:visible');
+        delivery.forceReconnect('stale-check');
+        // Wait past the reconnect backoff so all pending timers fire.
+        await new Promise(r => setTimeout(r, 40));
+        // Exactly ONE new WS should exist (total 2: original + one reconnect),
+        // not one per trigger source.
+        expect(MockWebSocket.instances).toHaveLength(2);
+    });
+
+    test('reconnect sends resume for each pending request exactly once', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });
+        await delivery.connect(async () => 'tik');
+        const ws1 = MockWebSocket.instances[0];
+        delivery.subscribe('req-multi-1', {});
+        delivery.subscribe('req-multi-2', {});
+        // Bump lastSeq for one so we can verify the resume from_seq math too.
+        ws1._receive({ type: 'chunk', request_id: 'req-multi-1', seq: 5, data: 'QQ==' });
+        ws1.close();
+        delivery.forceReconnect('online');
+        delivery.forceReconnect('visibilitychange:visible');
+        await new Promise(r => setTimeout(r, 40));
+        // Total sockets: at most 2 (original + one reconnect).
+        expect(MockWebSocket.instances.length).toBeLessThanOrEqual(2);
+        const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+        const resumes1 = ws2.sent.filter(s => s.includes('"resume"') && s.includes('"req-multi-1"'));
+        const resumes2 = ws2.sent.filter(s => s.includes('"resume"') && s.includes('"req-multi-2"'));
+        expect(resumes1).toHaveLength(1);
+        expect(resumes2).toHaveLength(1);
+        // from_seq must be lastSeq + 1 for req-multi-1 (which received seq=5).
+        expect(resumes1[0]).toContain('"from_seq":6');
+        // from_seq must be 1 for req-multi-2 (never received a chunk).
+        expect(resumes2[0]).toContain('"from_seq":1');
+    });
+
+    // Chunk delivery under a reconnect race: even if the client bug ever
+    // recurred and multiple sockets subscribed, the downstream stream must
+    // only see each chunk once. This asserts the observable end-to-end
+    // property (single copy of each chunk in the ReadableStream) that the
+    // "你你你好好好" bug violates.
+    test('chunks after reconnect are enqueued exactly once', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });
+        await delivery.connect(async () => 'tik');
+        const ws1 = MockWebSocket.instances[0];
+        const { stream } = delivery.subscribe('req-once', {});
+        // Fire multiple reconnect triggers to simulate the racy production
+        // path (mobile tab-return + online event + stale-check all racing).
+        ws1.close();
+        delivery.forceReconnect('online');
+        delivery.forceReconnect('visibilitychange:visible');
+        await new Promise(r => setTimeout(r, 40));
+        // Whatever set of live sockets ends up existing, deliver the same
+        // chunk on ALL of them (simulates the server fanning out to N
+        // subscribers because the client opened N sockets that each did
+        // resume). The client-side must dedupe so the stream sees one copy.
+        for (const ws of MockWebSocket.instances) {
+            if (ws.readyState === 1) {
+                ws._receive({ type: 'chunk', request_id: 'req-once', seq: 1, data: 'aGVsbG8=' });  // 'hello'
+            }
+        }
+        // End it on the primary live socket.
+        const liveWs = MockWebSocket.instances.find(w => w.readyState === 1);
+        liveWs._receive({ type: 'end', request_id: 'req-once', seq: 2 });
+        const reader = stream.getReader();
+        let combined = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            combined += new TextDecoder().decode(value);
+        }
+        // The bug produces 'hellohellohello' (or worse). Correct output is 'hello'.
+        expect(combined).toBe('hello');
+    });
 });

@@ -181,7 +181,60 @@ describe('ws-delivery server', () => {
         } finally { await server.close(); }
     });
 
-    // Mobile browser reload class: a malformed WebSocket frame after upgrade
+    // Zombie-subscription dedup: after a network flap the client opens a
+    // fresh WS (ws2) and re-subscribes to an in-flight job. Server hasn't
+    // detected ws1's death yet (pong timeout is 70s). Without cross-socket
+    // dedup, ws1 and ws2 both hold live subscribers for the same job, and
+    // every future event is delivered on both — cheap when ws1's TCP is
+    // truly dead, but a duplication vector when ws1 is only degraded /
+    // partially reachable. Fix: when a same-user subscribe/resume arrives
+    // for a request_id that already has a subscriber from an OLDER socket,
+    // the older socket's subscription is torn down first.
+    test('re-subscribe from same user retires the older socket subscription', async () => {
+        const server = await startTestServer({
+            verifyTicket: () => ({ user_handle: 'alice' }),
+        });
+        try {
+            const request = { user: { profile: { handle: 'alice' }, directories: {} }, body: {} };
+            const job = createGenerationJob(request, { job_id: 'dedup-1', persist_target: null });
+
+            const ws1 = connectWs(server.port, 'good');
+            await waitOpen(ws1);
+            const nextMsg1 = makeMsgQueue(ws1);
+            ws1.send(JSON.stringify({ type: 'subscribe', request_id: 'dedup-1' }));
+            await new Promise(r => setTimeout(r, 20));
+
+            // Second connection from same user, subscribes to same job (the
+            // client thinks ws1 is dead and is reconnecting).
+            const ws2 = connectWs(server.port, 'good');
+            await waitOpen(ws2);
+            const nextMsg2 = makeMsgQueue(ws2);
+            ws2.send(JSON.stringify({ type: 'resume', request_id: 'dedup-1', from_seq: 1 }));
+            await new Promise(r => setTimeout(r, 20));
+
+            // A fresh event now: only ws2 should receive it. ws1's zombie
+            // subscription must have been retired by the server when ws2
+            // subscribed.
+            appendGenerationEvent(job, { kind: 'chunk', data: Buffer.from([88]).toString('base64') });
+
+            const msg2 = await nextMsg2();
+            expect(msg2.type).toBe('chunk');
+            expect(msg2.data).toBe(Buffer.from([88]).toString('base64'));
+
+            // ws1 should NOT receive it. Race a short window against the
+            // possibility of an unwanted duplicate delivery.
+            const raced = await Promise.race([
+                nextMsg1().then(m => ({ got: m })),
+                new Promise(r => setTimeout(() => r({ got: null }), 100)),
+            ]);
+            expect(raced.got).toBeNull();
+
+            ws1.close();
+            ws2.close();
+        } finally { await server.close(); }
+    });
+
+    // Malformed ws frame from client does not surface as uncaughtException
     // (or a raw socket error mid-handshake) causes the ws Receiver on the
     // server-side WebSocket instance to emit 'error'. Prior to the fix in
     // ws-delivery.js, neither the wss connection ws nor the pre-upgrade raw

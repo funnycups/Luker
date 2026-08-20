@@ -39,6 +39,19 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
     // ws.readyState === OPEN in the browser but no bytes actually flow.
     let lastServerFrameAt = 0;
     let staleCheckTimer = null;
+    // Concurrency guards for scheduleReconnect. Historically the reconnect
+    // path could fire from FOUR independent sources (socket.onclose from a
+    // network flap, `online` browser event, `visibilitychange:visible`, and
+    // the stale-check timer's forced close cascading into onclose). Each
+    // unguarded call would set its own setTimeout → its own `new WebSocket`
+    // → its own resume for every pending request. The server then attached
+    // N subscriber callbacks per (jobId), and each future chunk fanned out
+    // to all N sockets. Downstream (`text += replyDelta` in openai.js) that
+    // produces `"你你你好好好"`-style character multiplication of streaming
+    // replies. Enforce at most one scheduled + one in-flight reconnect at
+    // any moment; extra calls collapse to no-ops.
+    let reconnectTimer = null;
+    let connectInFlight = null;
 
     function noteServerFrame() {
         lastServerFrameAt = Date.now();
@@ -76,41 +89,52 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
     }
 
     async function connectOnce() {
-        const ticket = await ticketProvider();
-        return new Promise((resolve, reject) => {
-            const proto = `${TICKET_PROTOCOL_PREFIX}${ticket}`;
-            const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const socket = new WebSocket(`${wsProto}//${location.host}/api/ws-delivery`, [proto]);
-            let settled = false;
-            socket.onopen = () => {
-                settled = true;
-                ws = socket;
-                noteServerFrame();
-                setupHandlers(socket);
-                startStaleCheck();
-                console.info('[ws-delivery] connected');
-                resolve();
-            };
-            socket.onerror = (evt) => {
-                // Both used during initial connect (below) AND kept as the
-                // long-lived error listener after onopen — setupHandlers no
-                // longer clobbers this so mid-life protocol errors are logged
-                // instead of silently vanishing.
-                if (!settled) {
+        // Coalesce concurrent connect attempts (initial connect + reconnect
+        // + forceReconnect can all race). Without this the socket slot `ws`
+        // gets overwritten by whichever onopen wins the race, but every
+        // socket's onmessage handler stays wired up and delivers frames
+        // into the same `pending` Map → chunk duplication.
+        if (connectInFlight) return connectInFlight;
+        connectInFlight = (async () => {
+            const ticket = await ticketProvider();
+            return new Promise((resolve, reject) => {
+                const proto = `${TICKET_PROTOCOL_PREFIX}${ticket}`;
+                const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const socket = new WebSocket(`${wsProto}//${location.host}/api/ws-delivery`, [proto]);
+                let settled = false;
+                socket.onopen = () => {
                     settled = true;
-                    console.warn('[ws-delivery] connect failed');
-                    reject(new Error('ws connection failed'));
-                } else {
-                    console.warn('[ws-delivery] socket error', evt?.message || '');
-                }
-            };
-            socket.onclose = (evt) => {
-                if (ws === socket) ws = null;
-                stopStaleCheck();
-                console.warn(`[ws-delivery] closed code=${evt?.code} reason="${evt?.reason || ''}" wasClean=${evt?.wasClean}`);
-                if (!closed) scheduleReconnect();
-            };
+                    ws = socket;
+                    noteServerFrame();
+                    setupHandlers(socket);
+                    startStaleCheck();
+                    console.info('[ws-delivery] connected');
+                    resolve();
+                };
+                socket.onerror = (evt) => {
+                    // Both used during initial connect (below) AND kept as the
+                    // long-lived error listener after onopen — setupHandlers no
+                    // longer clobbers this so mid-life protocol errors are logged
+                    // instead of silently vanishing.
+                    if (!settled) {
+                        settled = true;
+                        console.warn('[ws-delivery] connect failed');
+                        reject(new Error('ws connection failed'));
+                    } else {
+                        console.warn('[ws-delivery] socket error', evt?.message || '');
+                    }
+                };
+                socket.onclose = (evt) => {
+                    if (ws === socket) ws = null;
+                    stopStaleCheck();
+                    console.warn(`[ws-delivery] closed code=${evt?.code} reason="${evt?.reason || ''}" wasClean=${evt?.wasClean}`);
+                    if (!closed) scheduleReconnect();
+                };
+            });
+        })().finally(() => {
+            connectInFlight = null;
         });
+        return connectInFlight;
     }
 
     function setupHandlers(socket) {
@@ -193,7 +217,18 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
     }
 
     function scheduleReconnect() {
-        setTimeout(async () => {
+        // Idempotent: any reconnect trigger source (socket.onclose /
+        // forceReconnect from `online` / `visibilitychange:visible` /
+        // stale-check → close → onclose cascade) can call this. Skip if a
+        // timer is already scheduled or a connect is in flight — otherwise
+        // we open one WebSocket per trigger, each sends resume for every
+        // pending request, server registers N callbacks per job, and every
+        // chunk fans out N times → `text += replyDelta` triplicates
+        // streaming text (`"你你你好好好"` bug).
+        if (closed) return;
+        if (reconnectTimer || connectInFlight) return;
+        reconnectTimer = setTimeout(async () => {
+            reconnectTimer = null;
             if (closed) return;
             try {
                 await connectOnce();
@@ -213,6 +248,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 scheduleReconnect();
             }
         }, reconnectBackoffMs);
+        if (typeof reconnectTimer?.unref === 'function') reconnectTimer.unref();
     }
 
     // Force a reconnect from outside the socket lifecycle (visibilitychange /
@@ -339,6 +375,10 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         close() {
             closed = true;
             stopStaleCheck();
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
             if (ws) ws.close();
             // Settle every pending entry before clearing the map. Otherwise
             // callers still `await`ing headPromise / reader.read() hang

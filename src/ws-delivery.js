@@ -74,6 +74,22 @@ function eventToFrame(requestId, entry) {
 export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws-delivery' }) {
     const wss = new WebSocketServer({ noServer: true });
 
+    // Per-(user_handle, request_id) → { ws, unsub }. Enforces at most one
+    // live server-side subscription per (user, job) tuple across ALL of that
+    // user's open sockets. Rationale: a network flap gives the client a
+    // fresh WS while the server hasn't yet reaped the old one (pong-timeout
+    // is 70s). Without cross-socket dedup, both sockets hold live callbacks
+    // in jobSubscribers, and every new chunk fans out to both — a source of
+    // the "你你你好好好" text-triplication class of bug. Client-side has
+    // its own concurrent-reconnect guard; this is defense in depth for the
+    // window where the server has zombie subscribers the client couldn't
+    // help cleaning up.
+    const activeSubscriptions = new Map();
+
+    function activeSubsKey(userHandle, requestId) {
+        return `${userHandle}\u0000${requestId}`;
+    }
+
     function onUpgrade(req, socket, head) {
         if (req.url !== path && !req.url.startsWith(path + '?')) return;
         // Pre-upgrade net.Socket has no default 'error' listener; a client RST
@@ -148,6 +164,18 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
                     return;
                 }
                 if (ws.subscriptions.has(requestId)) return;  // already subscribed
+                // Cross-socket dedup: if another socket owned by the SAME
+                // user already holds a live subscription for this request,
+                // retire it before registering ours. See activeSubscriptions
+                // comment above for the class of bug this prevents.
+                const key = activeSubsKey(ws.userHandle, requestId);
+                const prior = activeSubscriptions.get(key);
+                if (prior && prior.ws !== ws) {
+                    console.info(`[ws-delivery] evicting older subscription user=${ws.userHandle} request_id=${requestId}`);
+                    try { prior.unsub(); } catch { /* subscriber already gone */ }
+                    prior.ws.subscriptions.delete(requestId);
+                    activeSubscriptions.delete(key);
+                }
                 const fromSeq = msg.type === 'resume' ? Number(msg.from_seq || 0) : 0;
                 console.info(`[ws-delivery] ${msg.type} user=${ws.userHandle} request_id=${requestId} from_seq=${fromSeq}`);
                 const unsub = subscribeToJob(requestId, (payload) => {
@@ -156,17 +184,31 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
                     if (frame) sendJson(ws, frame);
                 }, { fromSeq });
                 ws.subscriptions.set(requestId, unsub);
+                activeSubscriptions.set(key, { ws, unsub });
             } else if (msg.type === 'unsubscribe') {
                 const requestId = String(msg.request_id || '');
                 const unsub = ws.subscriptions.get(requestId);
-                if (unsub) { unsub(); ws.subscriptions.delete(requestId); }
+                if (unsub) {
+                    unsub();
+                    ws.subscriptions.delete(requestId);
+                    // Only clear activeSubscriptions if we're the current
+                    // owner — a newer socket may have already replaced us.
+                    const key = activeSubsKey(ws.userHandle, requestId);
+                    const current = activeSubscriptions.get(key);
+                    if (current && current.ws === ws) activeSubscriptions.delete(key);
+                }
             }
         });
 
         ws.on('close', (code, reason) => {
             console.info(`[ws-delivery] closed user=${ws.userHandle} code=${code} reason="${String(reason || '')}" subs=${ws.subscriptions.size}`);
-            for (const unsub of ws.subscriptions.values()) {
+            for (const [requestId, unsub] of ws.subscriptions.entries()) {
                 try { unsub(); } catch {}
+                // Only release the active-subscriptions slot if we still own
+                // it — a newer socket may have already evicted us above.
+                const key = activeSubsKey(ws.userHandle, requestId);
+                const current = activeSubscriptions.get(key);
+                if (current && current.ws === ws) activeSubscriptions.delete(key);
             }
             ws.subscriptions.clear();
         });
