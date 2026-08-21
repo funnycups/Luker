@@ -1450,6 +1450,50 @@ export function addReasoningContentToToolCalls(messages) {
 }
 
 /**
+ * Ensures the last assistant message carries `reasoning_content` when it is a
+ * DeepSeek Chat Prefix Completion prefix (last message, role=assistant,
+ * `prefix: true`). DeepSeek's beta prefix endpoint rejects a prefix that
+ * looks like a CoT continuation (e.g. content starts with `<think>` or the
+ * model is in thinking mode) unless the assistant message also provides
+ * `reasoning_content`. Missing the field surfaces as "思考内容没回传" /
+ * "reasoning content required" errors.
+ *
+ * Rule (deliberately narrow):
+ *   - Only touch the last message, and only if `role === 'assistant'` and
+ *     `prefix === true` (i.e. addAssistantPrefix decided it is a prefix).
+ *   - Never overwrite an existing `reasoning_content`.
+ *   - If a Luker/ST `reasoning` field is present (orchestrator agents, real
+ *     chat replays, etc.), promote it to `reasoning_content` verbatim.
+ *   - Otherwise seed with a single space — the minimum non-empty payload
+ *     that satisfies DeepSeek's schema without adding meaningful tokens.
+ *
+ * @param {object[]} messages Array of messages
+ * @returns {void}
+ */
+export function ensureDeepSeekPrefixReasoningContent(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return;
+    }
+
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant' || last.prefix !== true) {
+        return;
+    }
+
+    if (typeof last.reasoning_content === 'string' && last.reasoning_content.length > 0) {
+        return;
+    }
+
+    if (typeof last.reasoning === 'string' && last.reasoning.length > 0) {
+        last.reasoning_content = last.reasoning;
+        delete last.reasoning;
+        return;
+    }
+
+    last.reasoning_content = ' ';
+}
+
+/**
  * Renames the assistant `reasoning` field to `reasoning_content` on every assistant message.
  * For providers that expect Preserved Thinking to be echoed on the `reasoning_content` field
  * (e.g. Moonshot Kimi K2.6 with thinking.keep="all", K2.7-code, K3). Kimi requires the

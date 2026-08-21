@@ -107,9 +107,13 @@ describe('calculateClaudeBudgetTokens', () => {
         });
 
         test('min returns "low"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'min', true, true)).toBe('low'));
+
         test('low returns "low"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'low', true, true)).toBe('low'));
+
         test('medium returns "medium"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'medium', true, true)).toBe('medium'));
+
         test('high returns "high"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'high', true, true)).toBe('high'));
+
         test('max returns "max"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'max', true, true)).toBe('max'));
     });
 
@@ -159,19 +163,29 @@ describe('calculateGoogleBudgetTokens', () => {
 
     describe('gemini-3 flash', () => {
         test('auto returns null', () => expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-3.5-flash')).toBeNull());
+
         test('min returns minimal', () => expect(mod.calculateGoogleBudgetTokens(8192, 'min', 'gemini-3.5-flash')).toBe('minimal'));
+
         test('low returns low', () => expect(mod.calculateGoogleBudgetTokens(8192, 'low', 'gemini-3.5-flash')).toBe('low'));
+
         test('medium returns medium', () => expect(mod.calculateGoogleBudgetTokens(8192, 'medium', 'gemini-3.5-flash')).toBe('medium'));
+
         test('high returns high', () => expect(mod.calculateGoogleBudgetTokens(8192, 'high', 'gemini-3.5-flash')).toBe('high'));
+
         test('max returns high', () => expect(mod.calculateGoogleBudgetTokens(8192, 'max', 'gemini-3.5-flash')).toBe('high'));
     });
 
     describe('gemini-3 pro', () => {
         test('auto returns null', () => expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-3.0-pro')).toBeNull());
+
         test('min returns low', () => expect(mod.calculateGoogleBudgetTokens(8192, 'min', 'gemini-3.0-pro')).toBe('low'));
+
         test('low returns low', () => expect(mod.calculateGoogleBudgetTokens(8192, 'low', 'gemini-3.0-pro')).toBe('low'));
+
         test('medium returns low', () => expect(mod.calculateGoogleBudgetTokens(8192, 'medium', 'gemini-3.0-pro')).toBe('low'));
+
         test('high returns high', () => expect(mod.calculateGoogleBudgetTokens(8192, 'high', 'gemini-3.0-pro')).toBe('high'));
+
         test('max returns high', () => expect(mod.calculateGoogleBudgetTokens(8192, 'max', 'gemini-3.0-pro')).toBe('high'));
     });
 
@@ -251,6 +265,62 @@ describe('addReasoningContentToToolCalls', () => {
     test('handles non-array input gracefully', () => {
         expect(() => mod.addReasoningContentToToolCalls(null)).not.toThrow();
         expect(() => mod.addReasoningContentToToolCalls('string')).not.toThrow();
+    });
+});
+
+
+describe('ensureDeepSeekPrefixReasoningContent', () => {
+    test('seeds a single space on assistant prefix without reasoning', () => {
+        const messages = [
+            { role: 'user', content: 'hi' },
+            { role: 'assistant', content: '<think>\nfoo', prefix: true },
+        ];
+        mod.ensureDeepSeekPrefixReasoningContent(messages);
+        expect(messages[1].reasoning_content).toBe(' ');
+    });
+
+    test('promotes existing `reasoning` field to reasoning_content verbatim', () => {
+        const messages = [
+            { role: 'assistant', content: 'x', prefix: true, reasoning: 'prior CoT' },
+        ];
+        mod.ensureDeepSeekPrefixReasoningContent(messages);
+        expect(messages[0].reasoning_content).toBe('prior CoT');
+        expect(messages[0].reasoning).toBeUndefined();
+    });
+
+    test('does not overwrite existing non-empty reasoning_content', () => {
+        const messages = [
+            { role: 'assistant', content: 'x', prefix: true, reasoning_content: 'kept' },
+        ];
+        mod.ensureDeepSeekPrefixReasoningContent(messages);
+        expect(messages[0].reasoning_content).toBe('kept');
+    });
+
+    test('does nothing when last message is not an assistant prefix', () => {
+        const noPrefix = [{ role: 'assistant', content: 'x' }];
+        mod.ensureDeepSeekPrefixReasoningContent(noPrefix);
+        expect(noPrefix[0].reasoning_content).toBeUndefined();
+
+        const notAssistant = [{ role: 'user', content: 'x', prefix: true }];
+        mod.ensureDeepSeekPrefixReasoningContent(notAssistant);
+        expect(notAssistant[0].reasoning_content).toBeUndefined();
+    });
+
+    test('does not touch earlier assistant messages, only the tail prefix', () => {
+        const messages = [
+            { role: 'assistant', content: 'earlier' },
+            { role: 'user', content: 'hi' },
+            { role: 'assistant', content: '<think>', prefix: true },
+        ];
+        mod.ensureDeepSeekPrefixReasoningContent(messages);
+        expect(messages[0].reasoning_content).toBeUndefined();
+        expect(messages[2].reasoning_content).toBe(' ');
+    });
+
+    test('handles empty and non-array input gracefully', () => {
+        expect(() => mod.ensureDeepSeekPrefixReasoningContent([])).not.toThrow();
+        expect(() => mod.ensureDeepSeekPrefixReasoningContent(null)).not.toThrow();
+        expect(() => mod.ensureDeepSeekPrefixReasoningContent('nope')).not.toThrow();
     });
 });
 

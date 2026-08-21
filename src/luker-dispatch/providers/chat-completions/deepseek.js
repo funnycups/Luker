@@ -15,6 +15,7 @@ import {
     PROMPT_PROCESSING_TYPE,
     addAssistantPrefix,
     addReasoningContentToToolCalls,
+    ensureDeepSeekPrefixReasoningContent,
     getPromptNames,
 } from '../../../prompt-converters.js';
 import { excludeKeysByYaml, mergeObjectWithYaml } from '../../../util.js';
@@ -99,6 +100,7 @@ export async function dispatchDeepSeek(ctx) {
             'prefix',
         );
         addReasoningContentToToolCalls(processedMessages);
+        ensureDeepSeekPrefixReasoningContent(processedMessages);
 
         if (body.reasoning_effort) {
             bodyParams['reasoning_effort'] = body.reasoning_effort;
