@@ -9,7 +9,15 @@ import * as webTokenizer from './web-tokenizer-adapter.js';
 import * as sentencepiece from './sentencepiece-adapter.js';
 import { normalizeTokenizerModel } from './normalize-model.js';
 
-const ADAPTERS = [tiktoken, webTokenizer, sentencepiece];
+// Order matters: specialized adapters first (web tokenizers for
+// claude/llama3/qwen2/…, sentencepiece for llama/mistral/yi/gemma/…), then
+// tiktoken as a catch-all so unknown model names (kimi, moonshot/*, custom
+// OpenAI-compat providers) still tokenize locally with cl100k_base — the same
+// encoding src/endpoints/tokenizers.js defaults to. This preserves the
+// invariant that /api/tokenizers/openai/count-batch is only reached after a
+// real client-side attempt failed, not because a model name was missing from
+// normalize-model.js's keyword table.
+const ADAPTERS = [webTokenizer, sentencepiece, tiktoken];
 
 function pick(model) {
     const normalized = normalizeTokenizerModel(model);

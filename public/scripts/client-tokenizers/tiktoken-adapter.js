@@ -65,9 +65,18 @@ export async function decode(model, ids) {
     return enc.decode(ids);
 }
 
+// Catch-all. tiktoken cl100k_base is what src/endpoints/tokenizers.js falls
+// back to when its own getTokenizerModel() keyword table misses (see the
+// generic branch at src/endpoints/tokenizers.js:997-1023 — same 3/1/3 padding,
+// same encoding via getTiktokenTokenizer('gpt-3.5-turbo')). Handling the
+// unknown case here keeps count-batch strictly a "client tokenizer threw"
+// fallback instead of a "model name not in our keyword list" fallback, so
+// ordinary sync counting for OpenAI-compatible providers (CUSTOM with kimi,
+// moonshot, self-hosted qwen, …) stays local.
+//
+// Order matters in index.js's ADAPTERS: webTokenizer and sentencepiece must
+// come first so canonical keys ('qwen2', 'claude', 'llama3', …) hit their
+// accurate adapter; tiktoken is last so it only takes what nobody else claimed.
 export function supports(model) {
-    return typeof model === 'string' && (
-        model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3') ||
-        model.startsWith('o4')   || model.startsWith('text-davinci') || model.startsWith('code-')
-    );
+    return typeof model === 'string' && model.length > 0;
 }
