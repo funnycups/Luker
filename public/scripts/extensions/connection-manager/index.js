@@ -1834,16 +1834,25 @@ export async function init() {
         }).get();
 
         const oldProfile = structuredClone(profile);
-        if (newExcludeList.length !== profile.exclude.length || !newExcludeList.every(e => profile.exclude.includes(e))) {
+        const excludeListChanged = newExcludeList.length !== profile.exclude.length || !newExcludeList.every(e => profile.exclude.includes(e));
+        if (excludeListChanged) {
             profile.exclude = newExcludeList;
             for (const command of newExcludeList) {
                 delete profile[command];
             }
-            if (saveChanges) {
-                await updateConnectionProfile(profile);
-            } else {
+            if (!saveChanges) {
                 toastr.info('Press "Update" to record them into the profile.', 'Included settings list updated');
             }
+        }
+        // "Save and Update" must always re-snapshot from live oai_settings,
+        // even when the exclude list is unchanged. Otherwise fields that
+        // are only mutable through side dialogs (Additional Parameters,
+        // proxy, etc.) get silently dropped: the user edits them, hits
+        // "Save and Update" expecting a snapshot, but nothing is written
+        // to the profile — and the next profile switch clobbers the live
+        // value from oai_settings.
+        if (saveChanges) {
+            await updateConnectionProfile(profile);
         }
 
         if (profile.name !== newName) {
