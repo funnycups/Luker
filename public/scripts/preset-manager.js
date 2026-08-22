@@ -26,7 +26,7 @@ import { t } from './i18n.js';
 import { instruct_presets } from './instruct-mode.js';
 import { kai_settings } from './kai-settings.js';
 import { convertNovelPreset } from './nai-settings.js';
-import { getChatCompletionPreset, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings } from './openai.js';
+import { getActiveCardBoundGhostSnapshot, getChatCompletionPreset, maybeApplyCharacterBoundPreset, oai_settings, openai_setting_names, openai_settings } from './openai.js';
 import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
 import { renameCharacterBoundPreset } from './character/presets.js';
 import { getContext } from './st-context.js';
@@ -760,10 +760,29 @@ class PresetManager {
 
     /**
      * Gets the selected preset value.
+     *
+     * For card-bound ghost `<option>`s the raw `.val()` is an opaque
+     * encoded sentinel (`__luker_card__::<enc(avatar)>::<enc(name)>`)
+     * that upstream third-party consumers cannot dereference —
+     * `presets[Number(sentinel)]` is `presets[NaN]`. To preserve the
+     * upstream contract ("selected value is an index into
+     * `getPresetList().presets`"), we look up the synthesized index
+     * that `getPresetList()` injects for the active ghost body and
+     * return it as a numeric-string. Non-ghost selections are unchanged.
      * @returns {any} Selected preset value
      */
     getSelectedPreset() {
-        return $(this.select).find('option:selected').val();
+        const $sel = $(this.select);
+        const selectedOpt = $sel.find('option:selected');
+        if (this.apiId === 'openai' && selectedOpt.attr?.('data-luker-char-bound') === '1') {
+            const ghost = getActiveCardBoundGhostSnapshot();
+            if (ghost) {
+                const { preset_names } = this.getPresetList();
+                const idx = preset_names?.[ghost.name];
+                if (Number.isInteger(idx)) return String(idx);
+            }
+        }
+        return selectedOpt.val();
     }
 
     /**
@@ -923,19 +942,23 @@ class PresetManager {
     }
 
     /**
-     * Gets a list of presets for the API.
-     * @param {string} [api] API ID. If not specified, uses the current API ID.
+     * Gets the raw underlying preset list references (no ghost-row
+     * synthesis). Internal writers and internal reads that must go
+     * against the module-level arrays use this — `getPresetList()`
+     * synthesizes a card-bound row into fresh shallow copies, so
+     * writing through those copies would silently drop mutations.
+     *
+     * Public consumers (third-party extensions, `getContext()` clients)
+     * should keep using `getPresetList()` to get the synth.
+     * @param {string} [api]
      * @returns {{presets: any[], preset_names: object, settings: object}}
      */
-    getPresetList(api) {
+    getPresetListRaw(api) {
         let presets = [];
         let preset_names = {};
         let settings = {};
 
-        // If no API specified, use the current API
-        if (api === undefined) {
-            api = this.apiId;
-        }
+        if (api === undefined) api = this.apiId;
 
         switch (api) {
             case 'koboldhorde':
@@ -987,6 +1010,59 @@ class PresetManager {
     }
 
     /**
+     * Gets a list of presets for the API.
+     *
+     * For `openai` with an active card-bound ghost `<option>`, a
+     * synthesized read-only row is appended so upstream third-party
+     * consumers that read `presets[preset_names[name]]` or
+     * `presets[Number(getSelectedPreset())]` (JS-Slash-Runner /
+     * TavernHelper `usePresetSettingsStore`, `usePresetScriptsStore`,
+     * per-preset variable schemas, etc.) resolve to the active card
+     * body instead of `undefined`. Without this row those consumers
+     * silently drop their per-preset state whenever a card-bound
+     * preset is active.
+     *
+     * Semantics:
+     *   - Only applies to `openai` — no other API has ghost options.
+     *   - Same-name collision (a global preset already carries this
+     *     name) yields to the global entry so writes going through
+     *     the global `updateList` / `savePreset` path still target
+     *     the same array slot. Card-bound writes have their own
+     *     path (`writePresetExtensionField` → card sync at
+     *     `syncCharacterBoundOpenAIPresetExtensionField`) so this
+     *     bias is safe. Third-party consumers that read the
+     *     collided global body will see the source they bound
+     *     from — acceptable because card-body edits stay in sync
+     *     with the global via existing iter-studio propagation.
+     *   - Returned `presets` array and `preset_names` object are
+     *     fresh shallow copies (only when synthesis occurs) so the
+     *     upstream `openai_settings` / `openai_setting_names`
+     *     module state is never mutated by this read path. Internal
+     *     writers must use `getPresetListRaw()` instead — mutating
+     *     the synth copies would silently drop the writes.
+     * @param {string} [api] API ID. If not specified, uses the current API ID.
+     * @returns {{presets: any[], preset_names: object, settings: object}}
+     */
+    getPresetList(api) {
+        const raw = this.getPresetListRaw(api);
+        const resolvedApi = api === undefined ? this.apiId : api;
+
+        if (resolvedApi === 'openai') {
+            const ghost = getActiveCardBoundGhostSnapshot();
+            if (ghost?.name && ghost?.body && raw.preset_names && !(ghost.name in raw.preset_names)) {
+                const synthIndex = raw.presets.length;
+                return {
+                    presets: [...raw.presets, ghost.body],
+                    preset_names: { ...raw.preset_names, [ghost.name]: synthIndex },
+                    settings: raw.settings,
+                };
+            }
+        }
+
+        return raw;
+    }
+
+    /**
      * Returns true if the API is keyed, meaning it uses a name to identify presets.
      */
     isKeyedApi() {
@@ -1006,7 +1082,12 @@ class PresetManager {
      * @param {object} preset Preset object
      */
     updateList(name, preset, { select = true } = {}) {
-        const { presets, preset_names } = this.getPresetList();
+        // MUST go against the raw arrays — `getPresetList()` returns
+        // fresh shallow copies when a card-bound ghost is active, so
+        // mutating those copies would silently drop the write and leave
+        // the underlying `openai_settings` / `openai_setting_names`
+        // out of date. See `getPresetList()` JSDoc.
+        const { presets, preset_names } = this.getPresetListRaw();
         const presetExists = this.isKeyedApi() ? preset_names.includes(name) : Object.keys(preset_names).includes(name);
 
         // Detach the cached preset body from the caller's reference. Some callers
@@ -1226,7 +1307,9 @@ class PresetManager {
      * @param {string} [name] Name of the preset to delete.
      */
     async deletePreset(name) {
-        const { preset_names, presets } = this.getPresetList();
+        // Raw underlying arrays — see `updateList` for why writers
+        // cannot go through the synth-augmented `getPresetList()`.
+        const { preset_names, presets } = this.getPresetListRaw();
         const resolvedName = name ? this.resolvePresetName(name) : this.getSelectedPresetName();
         const value = name ? (this.isKeyedApi() ? this.findPreset(resolvedName) : resolvedName) : this.getSelectedPreset();
         const nameToDelete = resolvedName || this.getSelectedPresetName();

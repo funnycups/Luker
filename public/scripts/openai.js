@@ -342,6 +342,47 @@ if (typeof window !== 'undefined') {
         configurable: true,
     });
 }
+
+/**
+ * Read-only accessor for the currently-active card-bound ghost option's
+ * body cache. Returns `null` when no ghost option is selected on
+ * `#settings_preset_openai`.
+ *
+ * Exposed so `preset-manager.getPresetList()` can synthesize a read-only
+ * view row for the ghost preset — upstream SillyTavern's implicit
+ * contract is that `getPresetList().presets[preset_names[name]]` (and
+ * the numeric-index sibling `presets[Number(getSelectedPreset())]`)
+ * always resolve to the currently-active preset body. Luker's ghost
+ * `<option>` breaks that contract for card-bound bindings because its
+ * `value` is an opaque encoded string (`__luker_card__::…`) rather than
+ * a numeric index into the global `openai_settings` array. Every
+ * third-party extension that follows the upstream idiom (JS-Slash-Runner
+ * / TavernHelper, etc.) then reads `undefined` and silently drops its
+ * per-preset state.
+ *
+ * Encapsulation: we return a shallow structuredClone of the cached body
+ * so callers cannot mutate the live cache; the two identifier fields
+ * (`name`, `ghostValue`) are strings and safe to hand out.
+ *
+ * @returns {{ name: string, ghostValue: string, body: object } | null}
+ */
+export function getActiveCardBoundGhostSnapshot() {
+    if (typeof document === 'undefined') return null;
+    const selectedOption = document.querySelector('#settings_preset_openai option:checked');
+    if (!selectedOption || selectedOption.getAttribute('data-luker-char-bound') !== '1') {
+        return null;
+    }
+    const ghostValue = String(selectedOption.value ?? '');
+    const cached = characterBoundPresetState?.runtimeOptions?.get?.(ghostValue);
+    if (!cached || !cached.body || typeof cached.body !== 'object') {
+        return null;
+    }
+    return {
+        name: String(cached.name ?? selectedOption.textContent ?? '').trim(),
+        ghostValue,
+        body: structuredClone(cached.body),
+    };
+}
 let lastOpenAIPresetSelectValue = '';
 
 function scheduleOpenAIPresetChangeNotifications(presetName) {
