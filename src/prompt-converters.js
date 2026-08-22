@@ -1429,68 +1429,49 @@ export function embedOpenRouterMedia(messages, { audio = true, video = true } = 
 }
 
 /**
- * Adds reasoning_content field to messages with tool calls for DeepSeek models that require it.
- * DeepSeek reasoner (v1/v3) and V4 series (pro/flash) both require reasoning_content
- * to be passed back in multi-turn tool call sequences.
- * @param {object[]} messages Array of messages
- * @returns {void}
- */
-export function addReasoningContentToToolCalls(messages) {
-    if (!Array.isArray(messages)) {
-        return;
-    }
-
-    for (const message of messages) {
-        if (!Array.isArray(message.tool_calls) || 'reasoning_content' in message) {
-            continue;
-        }
-
-        message.reasoning_content = message.reasoning || '';
-    }
-}
-
-/**
- * Ensures the last assistant message carries `reasoning_content` when it is a
- * DeepSeek Chat Prefix Completion prefix (last message, role=assistant,
- * `prefix: true`). DeepSeek's beta prefix endpoint rejects a prefix that
- * looks like a CoT continuation (e.g. content starts with `<think>` or the
- * model is in thinking mode) unless the assistant message also provides
- * `reasoning_content`. Missing the field surfaces as "思考内容没回传" /
- * "reasoning content required" errors.
+ * Ensures every assistant message in an outbound DeepSeek payload carries a
+ * `reasoning_content` field. DeepSeek's `/beta` chat endpoint rejects any
+ * assistant message missing this field with "思考内容没回传" / "reasoning
+ * content required" errors — this covers the Chat Prefix Completion prefix
+ * message, prior assistant turns in a tool call transcript, and any earlier
+ * plain-content assistant turn while thinking mode is on. Widening the
+ * seed to every assistant message avoids narrow gating that has historically
+ * missed one of these branches.
  *
- * Rule (deliberately narrow):
- *   - Only touch the last message, and only if `role === 'assistant'` and
- *     `prefix === true` (i.e. addAssistantPrefix decided it is a prefix).
- *   - Never overwrite an existing `reasoning_content`.
- *   - If a Luker/ST `reasoning` field is present (orchestrator agents, real
- *     chat replays, etc.), promote it to `reasoning_content` verbatim.
+ * Rule:
+ *   - Only touch `role === 'assistant'` messages.
+ *   - Never overwrite an existing string `reasoning_content` (empty or not).
+ *   - If an ST/Luker-internal `reasoning` field is present (orchestrator
+ *     agents, real chat replays, etc.), promote it to `reasoning_content`
+ *     verbatim and delete `reasoning` (not part of the DeepSeek schema).
  *   - Otherwise seed with a single space — the minimum non-empty payload
  *     that satisfies DeepSeek's schema without adding meaningful tokens.
  *
  * @param {object[]} messages Array of messages
  * @returns {void}
  */
-export function ensureDeepSeekPrefixReasoningContent(messages) {
-    if (!Array.isArray(messages) || messages.length === 0) {
+export function ensureDeepSeekReasoningContent(messages) {
+    if (!Array.isArray(messages)) {
         return;
     }
 
-    const last = messages[messages.length - 1];
-    if (!last || last.role !== 'assistant' || last.prefix !== true) {
-        return;
-    }
+    for (const message of messages) {
+        if (!message || message.role !== 'assistant') {
+            continue;
+        }
 
-    if (typeof last.reasoning_content === 'string' && last.reasoning_content.length > 0) {
-        return;
-    }
+        if (typeof message.reasoning_content === 'string') {
+            continue;
+        }
 
-    if (typeof last.reasoning === 'string' && last.reasoning.length > 0) {
-        last.reasoning_content = last.reasoning;
-        delete last.reasoning;
-        return;
-    }
+        if (typeof message.reasoning === 'string' && message.reasoning.length > 0) {
+            message.reasoning_content = message.reasoning;
+            delete message.reasoning;
+            continue;
+        }
 
-    last.reasoning_content = ' ';
+        message.reasoning_content = ' ';
+    }
 }
 
 /**

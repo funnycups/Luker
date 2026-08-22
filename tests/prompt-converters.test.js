@@ -239,88 +239,67 @@ describe('calculateGoogleBudgetTokens', () => {
 });
 
 
-describe('addReasoningContentToToolCalls', () => {
-    test('adds reasoning_content to messages with tool_calls', () => {
+describe('ensureDeepSeekReasoningContent', () => {
+    test('seeds a single space on every assistant message without reasoning', () => {
         const messages = [
-            { role: 'assistant', tool_calls: [{ id: '1', function: { name: 'f' } }] },
-        ];
-        mod.addReasoningContentToToolCalls(messages);
-        expect(messages[0].reasoning_content).toBe('');
-    });
-
-    test('does not overwrite existing reasoning_content', () => {
-        const messages = [
-            { role: 'assistant', tool_calls: [{ id: '1' }], reasoning_content: 'existing' },
-        ];
-        mod.addReasoningContentToToolCalls(messages);
-        expect(messages[0].reasoning_content).toBe('existing');
-    });
-
-    test('skips messages without tool_calls', () => {
-        const messages = [{ role: 'user', content: 'hi' }];
-        mod.addReasoningContentToToolCalls(messages);
-        expect(messages[0].reasoning_content).toBeUndefined();
-    });
-
-    test('handles non-array input gracefully', () => {
-        expect(() => mod.addReasoningContentToToolCalls(null)).not.toThrow();
-        expect(() => mod.addReasoningContentToToolCalls('string')).not.toThrow();
-    });
-});
-
-
-describe('ensureDeepSeekPrefixReasoningContent', () => {
-    test('seeds a single space on assistant prefix without reasoning', () => {
-        const messages = [
-            { role: 'user', content: 'hi' },
-            { role: 'assistant', content: '<think>\nfoo', prefix: true },
-        ];
-        mod.ensureDeepSeekPrefixReasoningContent(messages);
-        expect(messages[1].reasoning_content).toBe(' ');
-    });
-
-    test('promotes existing `reasoning` field to reasoning_content verbatim', () => {
-        const messages = [
-            { role: 'assistant', content: 'x', prefix: true, reasoning: 'prior CoT' },
-        ];
-        mod.ensureDeepSeekPrefixReasoningContent(messages);
-        expect(messages[0].reasoning_content).toBe('prior CoT');
-        expect(messages[0].reasoning).toBeUndefined();
-    });
-
-    test('does not overwrite existing non-empty reasoning_content', () => {
-        const messages = [
-            { role: 'assistant', content: 'x', prefix: true, reasoning_content: 'kept' },
-        ];
-        mod.ensureDeepSeekPrefixReasoningContent(messages);
-        expect(messages[0].reasoning_content).toBe('kept');
-    });
-
-    test('does nothing when last message is not an assistant prefix', () => {
-        const noPrefix = [{ role: 'assistant', content: 'x' }];
-        mod.ensureDeepSeekPrefixReasoningContent(noPrefix);
-        expect(noPrefix[0].reasoning_content).toBeUndefined();
-
-        const notAssistant = [{ role: 'user', content: 'x', prefix: true }];
-        mod.ensureDeepSeekPrefixReasoningContent(notAssistant);
-        expect(notAssistant[0].reasoning_content).toBeUndefined();
-    });
-
-    test('does not touch earlier assistant messages, only the tail prefix', () => {
-        const messages = [
-            { role: 'assistant', content: 'earlier' },
-            { role: 'user', content: 'hi' },
+            { role: 'user', content: 'weather?' },
+            { role: 'assistant', content: 'Let me check.' },
+            { role: 'user', content: 'ok' },
+            {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{ id: '1', function: { name: 'weather', arguments: '{}' } }],
+            },
+            { role: 'tool', tool_call_id: '1', content: 'cloudy' },
             { role: 'assistant', content: '<think>', prefix: true },
         ];
-        mod.ensureDeepSeekPrefixReasoningContent(messages);
+        mod.ensureDeepSeekReasoningContent(messages);
+        expect(messages[0].reasoning_content).toBeUndefined(); // user untouched
+        expect(messages[1].reasoning_content).toBe(' ');       // plain assistant
+        expect(messages[2].reasoning_content).toBeUndefined(); // user untouched
+        expect(messages[3].reasoning_content).toBe(' ');       // tool_calls assistant
+        expect(messages[4].reasoning_content).toBeUndefined(); // tool role untouched
+        expect(messages[5].reasoning_content).toBe(' ');       // prefix assistant
+    });
+
+    test('promotes existing `reasoning` field to reasoning_content verbatim and deletes reasoning', () => {
+        const messages = [
+            { role: 'assistant', content: 'x', reasoning: 'prior CoT' },
+            { role: 'assistant', content: 'y', tool_calls: [{ id: '1' }], reasoning: 'tool CoT' },
+        ];
+        mod.ensureDeepSeekReasoningContent(messages);
+        expect(messages[0].reasoning_content).toBe('prior CoT');
+        expect(messages[0].reasoning).toBeUndefined();
+        expect(messages[1].reasoning_content).toBe('tool CoT');
+        expect(messages[1].reasoning).toBeUndefined();
+    });
+
+    test('does not overwrite existing string reasoning_content (including empty string)', () => {
+        const messages = [
+            { role: 'assistant', content: 'x', reasoning_content: 'kept' },
+            { role: 'assistant', content: 'y', reasoning_content: '' },
+        ];
+        mod.ensureDeepSeekReasoningContent(messages);
+        expect(messages[0].reasoning_content).toBe('kept');
+        expect(messages[1].reasoning_content).toBe('');
+    });
+
+    test('does not touch non-assistant roles', () => {
+        const messages = [
+            { role: 'user', content: 'hi' },
+            { role: 'tool', tool_call_id: '1', content: 'result' },
+            { role: 'system', content: 'sys' },
+        ];
+        mod.ensureDeepSeekReasoningContent(messages);
         expect(messages[0].reasoning_content).toBeUndefined();
-        expect(messages[2].reasoning_content).toBe(' ');
+        expect(messages[1].reasoning_content).toBeUndefined();
+        expect(messages[2].reasoning_content).toBeUndefined();
     });
 
     test('handles empty and non-array input gracefully', () => {
-        expect(() => mod.ensureDeepSeekPrefixReasoningContent([])).not.toThrow();
-        expect(() => mod.ensureDeepSeekPrefixReasoningContent(null)).not.toThrow();
-        expect(() => mod.ensureDeepSeekPrefixReasoningContent('nope')).not.toThrow();
+        expect(() => mod.ensureDeepSeekReasoningContent([])).not.toThrow();
+        expect(() => mod.ensureDeepSeekReasoningContent(null)).not.toThrow();
+        expect(() => mod.ensureDeepSeekReasoningContent('nope')).not.toThrow();
     });
 });
 

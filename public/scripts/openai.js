@@ -5423,7 +5423,7 @@ class MessageCollection {
         // Claude converter reconstructs from `reasoning_blocks` alone. So for CLAUDE
         // we emit `reasoning_blocks` only and drop the OAI/OpenRouter/Gemini-shaped
         // sidecars. All other providers still consume them: DeepSeek/Doubao read
-        // root `reasoning` (prompt-converters.js addReasoningContentToToolCalls),
+        // root `reasoning` (prompt-converters.js ensureDeepSeekReasoningContent),
         // Gemini 2.5/3 read root `signature` (convertGooglePrompt), OpenRouter reads
         // `reasoning_details` (prompt-converters.js addOpenRouterSignatures).
         const isClaude = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE;
