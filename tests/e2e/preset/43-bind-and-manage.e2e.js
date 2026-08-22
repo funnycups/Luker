@@ -455,33 +455,39 @@ test.describe('#43 — Bind (add + set-default) and Manage Bound Presets dialog'
         await closeCurrentPopup(page);
     });
 
-    test('Clear Bound Chat Completion Preset wipes the whole set', async ({ page }) => {
-        // Fresh state: seed a couple of slots so we can prove the wipe.
+    test('Clear Bound Chat Completion Preset (legacy bare-string binding): simple confirm wipes the field', async ({ page }) => {
+        // Seed a LEGACY bare-string binding — the state has a
+        // defaultPresetName but no `presets[]` snapshots, so there is
+        // nothing to salvage. The salvage dialog short-circuits and the
+        // menu action falls through to the plain confirm popup. The
+        // multi-slot salvage flow (Save/Discard per slot, collision
+        // handling, promote-to-global) has its own coverage in
+        // 43b-clear-with-salvage.e2e.js.
+        //
+        // Layer 1's `scheduleMigrationFlush` migrates the bare-string
+        // shape to `{presets:[], defaultPresetName:'<name>'}` on first
+        // read. We check the post-migration shape (defaultPresetName
+        // populated, presets[] empty) rather than the raw bare string.
         await seedCharacterCardBindingsOnDisk({
             dataRoot: server.dataRoot,
             avatarFile: CHAR_AVATAR,
-            state: {
-                presets: [
-                    { name: SLOT_A, preset: { temperature: SLOT_A_TEMP, chat_completion_source: 'openai' } },
-                    { name: SLOT_B, preset: { temperature: SLOT_B_TEMP, chat_completion_source: 'openai' } },
-                ],
-                defaultPresetName: SLOT_B,
-            },
+            state: SLOT_A, // bare-string on disk.
         });
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, CHAR_NAME);
 
-        // Preconditions: at least one slot present.
-        await expect
-            .poll(async () => (await readCardState(page)).presets?.length ?? -1, { timeout: 10_000 })
-            .toBeGreaterThanOrEqual(1);
+        // Preconditions: defaultPresetName is populated, presets[] is empty
+        // (the bare-string → multi-slot migration path).
+        await expect.poll(async () => {
+            const s = await readCardState(page);
+            return { presetsLen: s.presets?.length ?? -1, defaultName: s.defaultPresetName ?? null, isNull: s.isNull ?? null };
+        }, { timeout: 10_000 }).toEqual({ presetsLen: 0, defaultName: SLOT_A, isNull: false });
 
         await fireDropdownAction(page, 'clear_character_chat_completion_preset');
         await acceptPopup(page);
 
         await expect.poll(async () => {
             const state = await readCardState(page);
-            // After a full clear, the field is null → readCardState returns {isNull:true}.
             return state.isNull === true;
         }, { timeout: 10_000 }).toBe(true);
     });

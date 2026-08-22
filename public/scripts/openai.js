@@ -6612,12 +6612,25 @@ async function clearCharacterBoundChatCompletionPreset(characterId = this_chid) 
         toastr.info(t`This character has no bound chat completion preset.`);
         return;
     }
-    // "Clear" wipes the ENTIRE `chat_completion_preset` field (all slots
-    // + defaultPresetName). Per-slot lifecycle belongs to the Manage
-    // dialog. Layer 1's clearAllCharacterBoundPresets routes through
-    // persistCharacterBoundState so sibling luker.* keys survive the
-    // field-null write.
 
+    // Prefer the salvage dialog when the card has real per-slot snapshots
+    // to protect. This lets the user promote each snapshot to a reusable
+    // global preset before the card field is wiped — the previous
+    // behavior silently threw away every Prompt-Manager edit made while
+    // a preset was card-bound, since those edits only lived in the card
+    // snapshot and never on the global (see #43b tests). Dynamic import
+    // breaks the openai.js ↔ manage-bound-presets-dialog.js cycle that a
+    // top-of-file import would introduce.
+    if (state.presets.length > 0) {
+        const { openClearWithSalvageDialog } = await import('./character/manage-bound-presets-dialog.js');
+        await openClearWithSalvageDialog(character);
+        return;
+    }
+
+    // Legacy fallback: bare-string binding (defaultPresetName only, no
+    // presets[]). There is nothing to salvage in that case — the binding
+    // is a plain name reference to a global preset the user retains
+    // control of. Just confirm and wipe.
     const confirmation = await Popup.show.confirm(
         t`Clear Character Preset`,
         t`Clear ALL bound chat completion presets from '${character.name}'?`,

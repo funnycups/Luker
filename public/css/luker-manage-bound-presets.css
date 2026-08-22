@@ -124,3 +124,127 @@
         width: 100%;
     }
 }
+
+/*
+ * Luker — Clear Bound Presets salvage dialog
+ *
+ * Sibling of the manage dialog above: one row per card-bound slot with a
+ * Save-to-global / Discard radio pair and an inline global-preset name
+ * input. See `openClearWithSalvageDialog` in
+ * public/scripts/character/manage-bound-presets-dialog.js.
+ */
+
+#luker_clear_bound_presets_dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75em;
+    width: min(48em, 100%);
+    max-width: 100%;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-heading {
+    margin: 0 0 0.25em 0;
+    font-size: 1.1em;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-intro {
+    margin: 0;
+    color: color-mix(in oklab, var(--SmartThemeBodyColor) 75%, transparent);
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-bulk {
+    display: flex;
+    gap: 0.5em;
+    flex-wrap: wrap;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75em;
+    padding: 0.5em 0.75em;
+    border: 1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 15%, transparent);
+    border-radius: 6px;
+    background: color-mix(in oklab, var(--SmartThemeBodyColor) 3%, transparent);
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-slot {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    min-width: 8em;
+    max-width: 14em;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-slot-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-default-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15em 0.5em;
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--SmartThemeQuoteColor, gold) 25%, transparent);
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.8em;
+    font-weight: 600;
+    flex: 0 0 auto;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-choice {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-choice-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3em;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-global-name {
+    flex: 1 1 10em;
+    min-width: 6em;
+}
+
+#luker_clear_bound_presets_dialog .luker-cbp-global-name[disabled] {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+@media (max-width: 720px) {
+    #luker_clear_bound_presets_dialog .luker-cbp-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    #luker_clear_bound_presets_dialog .luker-cbp-slot {
+        max-width: none;
+    }
+    #luker_clear_bound_presets_dialog .luker-cbp-choice {
+        justify-content: flex-start;
+    }
+    #luker_clear_bound_presets_dialog .luker-cbp-global-name {
+        flex: 0 0 auto;
+        width: 100%;
+    }
+}

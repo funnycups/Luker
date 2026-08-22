@@ -39,11 +39,13 @@ import {
     setCharacterBoundDefault,
     renameCharacterBoundPreset,
     getCharacterBoundPreset,
+    clearAllCharacterBoundPresets,
 } from './presets.js';
 import { getCurrentPresetBodyForBinding, maybeApplyCharacterBoundPreset } from '/scripts/openai.js';
 import { decodeCardBoundOptionValue } from './preset-ref-codec.js';
 
 const DIALOG_ID = 'luker_manage_bound_presets_dialog';
+const CLEAR_DIALOG_ID = 'luker_clear_bound_presets_dialog';
 
 /**
  * Get all local (global) openai preset names. `getAllPresets()` reads
@@ -207,6 +209,281 @@ async function promoteCardSnapshotToGlobal(slotName, presetBody) {
     }
     toastr.warning(t`Save to global preset cancelled.`);
     return null;
+}
+
+/**
+ * Save a preset body to the global preset library under a specific name,
+ * with a boolean allow-overwrite gate. Thin wrapper over
+ * `PresetManager.savePreset` — used by the batch salvage flow where name
+ * choice + collision resolution have already happened in the outer
+ * dialog, so we don't want the per-name input popup that
+ * `promoteCardSnapshotToGlobal` runs.
+ *
+ * @param {string} name  target global preset name (already trimmed)
+ * @param {object} body  preset body (already stripped of connection fields by Layer 1 read)
+ * @param {{allowOverwrite: boolean}} options
+ * @throws when `allowOverwrite=false` and the name already collides with
+ *   an existing global preset (caller must have collision-scanned first),
+ *   or when the underlying `savePreset` throws.
+ * @returns {Promise<void>}
+ */
+async function saveBodyAsGlobalPreset(name, body, { allowOverwrite }) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) throw new Error('saveBodyAsGlobalPreset: name required');
+    const mgr = getContext().getPresetManager?.('openai');
+    if (!mgr) throw new Error('saveBodyAsGlobalPreset: preset manager unavailable');
+    if (!allowOverwrite && getLocalPresetNames().includes(trimmed)) {
+        throw new Error(`saveBodyAsGlobalPreset: refusing to overwrite existing global preset without allowOverwrite: ${trimmed}`);
+    }
+    await mgr.savePreset(trimmed, body);
+}
+
+/**
+ * Open the "Clear + Salvage" dialog: lists every card-bound slot with a
+ * per-row choice (Save to global preset / Discard) and an inline global
+ * preset name input. OK resolves to a batch operation that:
+ *
+ *   1. Scans the collected Save rows against the global preset library
+ *      for name collisions.
+ *   2. If any collide → single confirm popup listing all colliders with
+ *      Overwrite all / Back / Cancel. Back re-opens THIS dialog with the
+ *      user's current picks preserved so they can rename any colliding
+ *      target inline.
+ *   3. Sequentially promotes each Save row to a global preset (fail-fast:
+ *      the first savePreset throw aborts the batch WITHOUT calling
+ *      clearAllCharacterBoundPresets — the card snapshots stay intact so
+ *      the user can retry).
+ *   4. After all promotes succeed, clears the entire
+ *      chat_completion_preset field.
+ *
+ * Legacy / empty-snapshot state (bare-string binding with no
+ * embedded body) is caller's responsibility to short-circuit before
+ * entering this dialog — there is nothing to salvage in that case.
+ *
+ * @param {object} character
+ * @returns {Promise<boolean>} true when the batch clear went through
+ *   (all promotes + clear succeeded), false on cancel/back-that-ended-in-cancel
+ *   or on the fail-fast abort path.
+ */
+export async function openClearWithSalvageDialog(character) {
+    if (!character) return false;
+    const slots = listCharacterBoundPresets(character);
+    if (slots.length === 0) return false;
+
+    // Per-row user picks — persisted across Back → re-open cycles.
+    /** @type {Map<string, {action:'save'|'discard', globalName:string}>} */
+    const picks = new Map();
+    for (const s of slots) {
+        picks.set(s.name, { action: 'save', globalName: s.name });
+    }
+
+    while (true) {
+        const outcome = await runSalvageDialogOnce(character, slots, picks);
+        if (outcome.kind === 'cancel') return false;
+        // outcome.kind === 'ok' — outcome.picks reflects the user's final
+        // per-row picks; picks has already been mutated in place inside the
+        // dialog, so re-reading `picks` here would be equivalent.
+
+        // Collision scan.
+        const localNames = new Set(getLocalPresetNames());
+        const collisions = [];
+        const saveRows = [];
+        for (const slot of slots) {
+            const pick = picks.get(slot.name);
+            if (pick.action !== 'save') continue;
+            const target = String(pick.globalName || '').trim();
+            if (!target) {
+                toastr.error(t`Empty global preset name for slot '${slot.name}'.`);
+                continue;
+            }
+            saveRows.push({ slotName: slot.name, targetName: target });
+            if (localNames.has(target)) {
+                collisions.push({ slotName: slot.name, targetName: target });
+            }
+        }
+
+        if (collisions.length > 0) {
+            const collisionList = collisions.map(c => `• ${c.targetName}`).join('\n');
+            const action = await Popup.show.confirm(
+                t`Overwrite existing global presets?`,
+                t`The following global presets already exist and will be overwritten if you continue.\n\n${collisionList}`,
+                {
+                    okButton: t`Overwrite all`,
+                    cancelButton: t`Cancel`,
+                    customButtons: [{
+                        text: t`Back`,
+                        result: POPUP_RESULT.CUSTOM1,
+                    }],
+                    defaultResult: POPUP_RESULT.CUSTOM1,
+                },
+            );
+            if (action === POPUP_RESULT.CUSTOM1) {
+                // Back → re-open the salvage dialog with picks intact so
+                // the user can rename any colliding target inline.
+                continue;
+            }
+            if (action !== POPUP_RESULT.AFFIRMATIVE) {
+                // Cancel / dismiss → abort the whole clear.
+                return false;
+            }
+        }
+
+        // Promote then clear. Fail-fast: any thrown savePreset aborts
+        // the batch WITHOUT calling clearAllCharacterBoundPresets, so the
+        // user can retry without losing snapshots. Already-written globals
+        // are NOT rolled back (they were the user's declared intent).
+        for (const row of saveRows) {
+            const snapshot = getCharacterBoundPreset(character, row.slotName);
+            if (!snapshot?.preset || typeof snapshot.preset !== 'object') {
+                toastr.error(t`Cannot read snapshot for slot '${row.slotName}'.`);
+                return false;
+            }
+            try {
+                await saveBodyAsGlobalPreset(row.targetName, snapshot.preset, { allowOverwrite: true });
+            } catch (err) {
+                console.error('openClearWithSalvageDialog: promote failed', err);
+                toastr.error(t`Failed to save slot '${row.slotName}' to global preset '${row.targetName}': ${String(err?.message || err)}`);
+                return false;
+            }
+        }
+
+        try {
+            await clearAllCharacterBoundPresets(character);
+            await maybeApplyCharacterBoundPreset();
+        } catch (err) {
+            console.error('openClearWithSalvageDialog: final clear failed', err);
+            toastr.error(t`Failed to clear card-bound presets: ${String(err?.message || err)}`);
+            return false;
+        }
+
+        const savedCount = saveRows.length;
+        if (savedCount > 0) {
+            toastr.success(t`Cleared ${slots.length} card-bound preset(s) from '${character.name}'. ${savedCount} saved to global preset library.`);
+        } else {
+            toastr.success(t`Cleared ${slots.length} card-bound preset(s) from '${character.name}'.`);
+        }
+        return true;
+    }
+}
+
+/**
+ * Render + drive one iteration of the salvage dialog. Mutates `picks` in
+ * place as the user changes radios / edits names, so the surrounding loop
+ * can re-open with the same picks after a Back from the collision confirm.
+ *
+ * Returns {kind:'ok'} when the user presses OK, {kind:'cancel'} otherwise.
+ */
+async function runSalvageDialogOnce(character, slots, picks) {
+    const html = renderSalvageDialogHtml(character, slots, picks);
+    const popup = new Popup(html, POPUP_TYPE.CONFIRM, '', {
+        wide: true,
+        allowVerticalScrolling: true,
+        okButton: t`Clear`,
+        cancelButton: t`Cancel`,
+    });
+
+    const $dlg = window.jQuery(popup.dlg);
+
+    // Radio change → sync into picks + enable/disable the inline name input.
+    $dlg.on('change', `#${CLEAR_DIALOG_ID} .luker-cbp-action`, (ev) => {
+        const row = ev.currentTarget.closest('.luker-cbp-row');
+        const slotName = row?.dataset?.slotName;
+        if (!slotName) return;
+        const action = ev.currentTarget.value === 'save' ? 'save' : 'discard';
+        const current = picks.get(slotName) || { action: 'save', globalName: slotName };
+        current.action = action;
+        picks.set(slotName, current);
+        const input = row.querySelector('.luker-cbp-global-name');
+        if (input) {
+            input.disabled = action !== 'save';
+        }
+    });
+
+    // Inline name input → sync into picks on every keystroke so a Back
+    // → re-open cycle preserves the edits.
+    $dlg.on('input', `#${CLEAR_DIALOG_ID} .luker-cbp-global-name`, (ev) => {
+        const row = ev.currentTarget.closest('.luker-cbp-row');
+        const slotName = row?.dataset?.slotName;
+        if (!slotName) return;
+        const current = picks.get(slotName) || { action: 'save', globalName: slotName };
+        current.globalName = String(ev.currentTarget.value ?? '');
+        picks.set(slotName, current);
+    });
+
+    // Bulk buttons: set all rows to save/discard in one click.
+    $dlg.on('click', `#${CLEAR_DIALOG_ID} .luker-cbp-bulk-save`, () => {
+        for (const slot of slots) {
+            const current = picks.get(slot.name) || { action: 'save', globalName: slot.name };
+            current.action = 'save';
+            picks.set(slot.name, current);
+        }
+        rerenderSalvageDialog(popup, character, slots, picks);
+    });
+    $dlg.on('click', `#${CLEAR_DIALOG_ID} .luker-cbp-bulk-discard`, () => {
+        for (const slot of slots) {
+            const current = picks.get(slot.name) || { action: 'save', globalName: slot.name };
+            current.action = 'discard';
+            picks.set(slot.name, current);
+        }
+        rerenderSalvageDialog(popup, character, slots, picks);
+    });
+
+    const result = await popup.show();
+    return result === POPUP_RESULT.AFFIRMATIVE ? { kind: 'ok' } : { kind: 'cancel' };
+}
+
+function rerenderSalvageDialog(popup, character, slots, picks) {
+    const outer = popup.dlg.querySelector('#' + CLEAR_DIALOG_ID);
+    if (!outer) return;
+    outer.outerHTML = renderSalvageDialogHtml(character, slots, picks);
+}
+
+function renderSalvageDialogHtml(character, slots, picks) {
+    const rows = slots.map((slot, idx) => {
+        const pick = picks.get(slot.name) || { action: 'save', globalName: slot.name };
+        const escName = escapeHtml(slot.name);
+        const escGlobal = escapeHtml(pick.globalName ?? slot.name);
+        const isSave = pick.action === 'save';
+        const disabledAttr = isSave ? '' : 'disabled';
+        const saveChecked = isSave ? 'checked' : '';
+        const discardChecked = isSave ? '' : 'checked';
+        const defaultBadge = slot.isDefault
+            ? `<span class="luker-cbp-default-badge" title="${escapeHtml(t`This slot is the auto-apply default on character load.`)}">${escapeHtml(t`Default`)}</span>`
+            : '';
+        // Radio group name uses row index rather than slot name so exotic
+        // characters in the slot name (e.g. brackets, quotes) can't break
+        // the HTML attribute grouping. Row-DOM has data-slot-name for
+        // event handlers to look up the slot instead.
+        const radioName = `luker-cbp-action-row-${idx}`;
+        return `
+<div class="luker-cbp-row" data-slot-name="${escName}">
+    <div class="luker-cbp-slot">
+        <span class="luker-cbp-slot-name" title="${escName}">${escName}</span>
+        ${defaultBadge}
+    </div>
+    <div class="luker-cbp-choice">
+        <label class="luker-cbp-choice-label">
+            <input type="radio" class="luker-cbp-action" name="${radioName}" value="save" ${saveChecked}>
+            ${escapeHtml(t`Save to global preset`)}
+        </label>
+        <input type="text" class="luker-cbp-global-name text_pole" value="${escGlobal}" ${disabledAttr} placeholder="${escapeHtml(t`Global preset name`)}">
+        <label class="luker-cbp-choice-label">
+            <input type="radio" class="luker-cbp-action" name="${radioName}" value="discard" ${discardChecked}>
+            ${escapeHtml(t`Discard`)}
+        </label>
+    </div>
+</div>`;
+    }).join('');
+    return `
+<div id="${CLEAR_DIALOG_ID}">
+    <h3 class="luker-cbp-heading">${escapeHtml(t`Clear card-bound presets for '${character?.name ?? ''}'`)}</h3>
+    <p class="luker-cbp-intro">${escapeHtml(t`Choose what to do with each slot. Saved slots become global presets you can reuse on any character. Discarded slots are permanently deleted.`)}</p>
+    <div class="luker-cbp-bulk">
+        <button type="button" class="menu_button luker-cbp-bulk-save">${escapeHtml(t`Save all to global`)}</button>
+        <button type="button" class="menu_button luker-cbp-bulk-discard">${escapeHtml(t`Discard all`)}</button>
+    </div>
+    <div class="luker-cbp-rows">${rows}</div>
+</div>`;
 }
 
 /**
