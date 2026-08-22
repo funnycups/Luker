@@ -19531,7 +19531,7 @@ jQuery(async function () {
         e.stopPropagation();
         const format = $(this).data('format') || 'txt';
         await saveChatConditional();
-        const filename = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text();
+        const filename = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text().replace(/\.jsonl$/i, '');
         console.log(`exporting ${filename} in ${format} format`);
 
         const body = {
