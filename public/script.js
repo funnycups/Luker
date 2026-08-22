@@ -3194,7 +3194,15 @@ export async function replaceCurrentChat() {
     }
 }
 
+/**
+ * When true, per-message DOM truncation in addOneMessage is suppressed because the user
+ * manually loaded older messages via "Show more messages". Reset by printMessages(),
+ * which runs on every chat reload/switch/reset path.
+ */
+let manualTruncationOverride = false;
+
 export async function showMoreMessages(messagesToLoad = null) {
+    manualTruncationOverride = true;
     const showMoreButton = $('#show_more_messages');
     const firstDisplayedMesId = chatElement.children('.mes').first().attr('mesid');
     let messageId = Number(firstDisplayedMesId);
@@ -3313,6 +3321,7 @@ export async function showMoreMessages(messagesToLoad = null) {
 }
 
 export async function printMessages() {
+    manualTruncationOverride = false;
     let startIndex = 0;
     let count = power_user.chat_truncation || Number.MAX_SAFE_INTEGER;
 
@@ -5122,6 +5131,30 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
     //last_mes should always be updated.
     chatElement.find('.mes').removeClass('last_mes');
     chatElement.find('.mes').last().addClass('last_mes');
+
+    // Apply chat_truncation cap when a new message was appended. Skipped on swipes
+    // (in-place update, no new DOM node), mid-chat inserts (not a new message arrival),
+    // during message editing (removing a .mes would destroy its unsaved <textarea>),
+    // and after the user manually loaded older messages via "Show more" (until chat
+    // reload/switch/reset resets the override via printMessages).
+    if (
+        type !== 'swipe'
+        && typeof insertAfter !== 'number'
+        && typeof insertBefore !== 'number'
+        && !manualTruncationOverride
+        && !(this_edit_mes_id >= 0)
+    ) {
+        const cap = Number(power_user.chat_truncation);
+        if (cap > 0) {
+            const excess = chatElement.children('.mes').length - cap;
+            if (excess > 0) {
+                chatElement.children('.mes').slice(0, excess).remove();
+                if (!$('#show_more_messages').length) {
+                    chatElement.prepend('<div id="show_more_messages">Show more messages</div>');
+                }
+            }
+        }
+    }
 
     if (showSwipes) refreshSwipeButtons();
     // Don't scroll if not inserting last
