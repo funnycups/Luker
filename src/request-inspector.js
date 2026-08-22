@@ -222,6 +222,77 @@ function normalizeEvent(e) {
  return '';
 }
 
+// ---- Provider-error detection ----
+//
+// Some upstream providers return HTTP 200 with a body that carries an `error`
+// field instead of the usual choices/candidates payload — OpenAI-compatible
+// APIs sometimes surface rate-limit or context-length failures this way, and
+// SSE streams can inject `data: {"error":{...}}` frames mid-stream. Luker's
+// makersuite dispatch also constructs `{error:{message}}` payloads on its own
+// for Gemini's blocked-prompt / blocked-output branches so the client's
+// `data.error` handler fires with a descriptive message.
+//
+// These paths hit `completeInspection*` (dispatch signals "the fetch itself
+// succeeded, hand the payload to the inspector"), so without an `error`
+// field check they'd be marked status='success' with an empty response body
+// — a silent classification bug. The three helpers below are pure structural
+// checks: `error != null` and nothing else, no heuristics.
+
+/**
+ * True when a non-streaming payload carries a top-level `error` field. Handles
+ * both `error: 'string'` and `error: { message | code | type | ... }` shapes.
+ * @param {*} payload
+ * @returns {boolean}
+ */
+function hasProviderError(payload) {
+ return payload != null
+ && typeof payload === 'object'
+ && payload.error != null;
+}
+
+/**
+ * Scan SSE events (tail-first, since the terminal frame is where providers
+ * inject an `error` payload) and return the first frame's parsed `error`
+ * value if any. Returns `null` when no error frame is present.
+ * @param {Array<string|{data:string}>} events
+ * @returns {*|null}
+ */
+function findErrorFrameInStreamEvents(events) {
+ if (!Array.isArray(events) || events.length === 0) return null;
+ for (let i = events.length - 1; i >= 0; i--) {
+ const raw = normalizeEvent(events[i]);
+ if (!raw || raw === '[DONE]') continue;
+ let parsed;
+ try { parsed = JSON.parse(raw); } catch { continue; }
+ if (parsed?.luker) continue;
+ if (parsed?.error != null) return parsed.error;
+ }
+ return null;
+}
+
+/**
+ * Coerce a provider-error value into a display string. Prefers `.message`,
+ * falls back to `.code` / `.type`, then to `String(...)` for plain strings,
+ * finally `JSON.stringify(...)` for opaque objects. Never returns empty
+ * (falls back to `'error'` when the input is `{}`).
+ * @param {*} err
+ * @returns {string}
+ */
+function extractProviderErrorMessage(err) {
+ if (err == null) return 'error';
+ if (typeof err === 'string') return err;
+ if (typeof err !== 'object') return String(err);
+ if (typeof err.message === 'string' && err.message) return err.message;
+ if (typeof err.code === 'string' && err.code) return err.code;
+ if (typeof err.type === 'string' && err.type) return err.type;
+ try {
+ const s = JSON.stringify(err);
+ return s && s !== '{}' ? s : 'error';
+ } catch {
+ return 'error';
+ }
+}
+
 function extractUsageFromOAI(payload) {
  const usage = payload?.usage;
  if (!usage || typeof usage !== 'object') return {};
@@ -881,6 +952,15 @@ export function completeInspection(request, payload, rawApiResponse) {
  const fr = extractFinishReasonFromPayload(payload, rawApiResponse, source);
  entry.finishReason = fr.finishReason;
  entry.nativeFinishReason = fr.nativeFinishReason;
+
+ // HTTP 200 but body carries `{ error: {...} }` — provider signalled failure
+ // through the payload instead of a non-2xx status. Reclassify from success
+ // to error and surface the message; `httpStatus` stays 200 (truthful) so
+ // the UI shows the "HTTP OK, body was an error" case explicitly.
+ if (hasProviderError(payload)) {
+ entry.status = 'error';
+ entry.error = extractProviderErrorMessage(payload.error);
+ }
 }
 
 /**
@@ -914,6 +994,17 @@ export function completeInspectionFromStream(request, events, accumulatedText) {
  const fr = extractFinishReasonFromStreamEvents(events, entry.source);
  entry.finishReason = fr.finishReason;
  entry.nativeFinishReason = fr.nativeFinishReason;
+
+ // SSE stream carried a `data: {"error":{...}}` frame — provider aborted
+ // mid-stream (rate limit, context length, policy trigger, upstream cut).
+ // Reclassify from success to error and surface the message; already
+ // accumulated deltas stay in responseText / responseParts so the user can
+ // see how far the model got before the stream broke.
+ const providerError = findErrorFrameInStreamEvents(events);
+ if (providerError != null) {
+ entry.status = 'error';
+ entry.error = extractProviderErrorMessage(providerError);
+ }
 }
 
 /**

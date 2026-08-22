@@ -249,9 +249,13 @@ describe('dispatchMakerSuite', () => {
         const ends = ctx._emitted.filter(e => e.kind === 'end');
         expect(ends).toHaveLength(1);
 
-        // Soft error still routes to inspection.complete so the run shows up
-        // as a completed request (with the error payload) rather than an
-        // aborted/failed one.
+        // Blocked payload routes through inspection.complete (not .fail):
+        // dispatch signals "the fetch itself succeeded, hand the payload to
+        // the inspector for classification". The inspector's provider-error
+        // detection (see request-inspector.js hasProviderError) then reads
+        // `payload.error` and marks the entry status='error' with the block
+        // message, so the UI shows a failed request that carries the
+        // descriptive reason instead of a silent green tick.
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
         const [payloadArg, rawArg] = ctx.inspection.complete.mock.calls[0];
         expect(payloadArg.error.message).toContain('no candidate');
