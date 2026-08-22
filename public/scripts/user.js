@@ -10,6 +10,7 @@ import { POPUP_RESULT, POPUP_TYPE, callGenericPopup } from './popup.js';
 import { canViewSecrets } from './secrets.js';
 import { renderTemplateAsync } from './templates.js';
 import { copyText, debounce, ensureImageFormatSupported, getBase64Async, humanFileSize } from './utils.js';
+import { downloadFromServer } from './luker-download.js';
 import { formatAnnouncementBody } from './announcements.js';
 import { buildStorageBackendCreds } from './admin-storage-backend.js';
 import { openLanSyncPanel } from './lan-sync.js';
@@ -671,57 +672,25 @@ async function backupUserData(handle, callback, selection = BACKUP_DEFAULT_SELEC
             { timeOut: 0, extendedTimeOut: 0, closeButton: false, tapToDismiss: false },
         );
 
-        const androidBridge = globalThis?.LukerAndroid;
-        if (androidBridge && typeof androidBridge.saveFileFromUrl === 'function') {
-            const includesSecrets = await canViewSecrets();
-            if (includesSecrets === false) {
-                toastr.warning('The backup will not include secrets due to a server configuration.', 'Secrets Not Included');
-            }
-            const fileName = `${handle}-${clientBackupTimestamp()}.zip`;
-            clearProgressToast();
-            androidBridge.saveFileFromUrl(JSON.stringify({
-                url: '/api/users/backup',
-                fileName,
-                mimeType: 'application/zip',
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ handle, selection }),
-            }));
-            callback?.();
-            return;
-        }
-
-        const response = await fetch('/api/users/backup', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ handle, selection }),
-        });
-
-        if (!response.ok) {
-            const data = await response.json().catch(() => ({}));
-            toastr.error(data.error || t`Unknown error`, t`Failed to backup user data`);
-            throw new Error('Failed to backup user data');
-        }
-
         const includesSecrets = await canViewSecrets();
         if (includesSecrets === false) {
             toastr.warning('The backup will not include secrets due to a server configuration.', 'Secrets Not Included');
         }
 
-        const blob = await response.blob();
-        const header = response.headers.get('Content-Disposition') || '';
-        const fileNameMatch = /filename="?([^"]+)"?/i.exec(header);
-        const filename = fileNameMatch?.[1] || `${handle}-backup.zip`;
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        clearProgressToast();
-        a.click();
-        URL.revokeObjectURL(url);
+        const fileName = `${handle}-${clientBackupTimestamp()}.zip`;
+        await downloadFromServer({
+            url: '/api/users/backup',
+            fileName,
+            mimeType: 'application/zip',
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ handle, selection }),
+        });
         callback?.();
     } catch (error) {
         console.error('Error backing up user data:', error);
+        const message = error?.serverMessage || (error instanceof Error ? error.message : '') || t`Unknown error`;
+        toastr.error(message, t`Failed to backup user data`);
     } finally {
         clearProgressToast();
     }
