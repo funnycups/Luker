@@ -19695,21 +19695,23 @@ jQuery(async function () {
             }
         };
 
-        for (const message of currentChatToolsMatches) {
+        for (const messageId of currentChatToolsMatches) {
+            const message = chatElement.find(`.mes[mesid="${messageId}"]`).first();
+            if (!message.length) continue;
             message.find('.mes_text, .mes_reasoning').each((_, element) => highlightElement(element));
         }
     }
 
     function applyCurrentChatToolsMatchHighlights() {
         chatElement.children('.mes.chat_tools_match_found').removeClass('chat_tools_match_found');
-        for (const message of currentChatToolsMatches) {
-            message.addClass('chat_tools_match_found');
+        for (const messageId of currentChatToolsMatches) {
+            chatElement.find(`.mes[mesid="${messageId}"]`).addClass('chat_tools_match_found');
         }
     }
 
-    function scrollCurrentChatToolsMessageIntoView(messageElement) {
+    function scrollCurrentChatToolsMessageIntoView(messageId) {
         const container = chatElement?.[0];
-        const target = messageElement?.[0];
+        const target = chatElement.find(`.mes[mesid="${messageId}"]`).first()[0];
         if (!container || !target) {
             return;
         }
@@ -19729,14 +19731,12 @@ jQuery(async function () {
         if (currentChatToolsMatchIndex < 0 || currentChatToolsMatchIndex >= currentChatToolsMatches.length) {
             return null;
         }
-        const messageId = Number(currentChatToolsMatches[currentChatToolsMatchIndex].attr('mesid'));
+        const messageId = currentChatToolsMatches[currentChatToolsMatchIndex];
         return Number.isInteger(messageId) ? messageId : null;
     }
 
     function getCurrentChatToolsVisibleMessageIds() {
-        return currentChatToolsMatches
-            .map(message => Number(message.attr('mesid')))
-            .filter(messageId => Number.isInteger(messageId));
+        return currentChatToolsMatches.filter(messageId => Number.isInteger(messageId));
     }
 
     function sanitizeCurrentChatToolsSelections() {
@@ -19901,28 +19901,39 @@ jQuery(async function () {
         toggleCurrentChatToolsButton(currentChatToolsInsertAfter, !canMutate || !canInsert);
     }
 
+    function getCurrentChatToolsSearchableText(message) {
+        // Approximate the DOM-based extraction that used to inspect
+        // .name_text / .mes_text / .mes_reasoning: parse each field as HTML
+        // and take textContent so tags/attributes don't leak into matches.
+        const parts = [
+            String(message?.name ?? ''),
+            String(message?.extra?.display_text ?? message?.mes ?? ''),
+            String(message?.extra?.reasoning ?? ''),
+        ].filter(Boolean);
+        if (!parts.length) return '';
+        const container = document.createElement('div');
+        container.innerHTML = parts.join('\n');
+        return (container.textContent || '').toLocaleLowerCase();
+    }
+
     function collectCurrentChatMatches(query) {
         const normalizedQuery = String(query ?? '').trim().toLocaleLowerCase();
-        /** @type {JQuery<HTMLElement>[]} */
+        /** @type {number[]} */
         const found = [];
 
-        chatElement.children('.mes').each((_, messageElement) => {
-            const message = $(messageElement);
+        for (let messageId = 0; messageId < chat.length; messageId++) {
+            const message = chat[messageId];
+            if (!message) continue;
+
             if (!normalizedQuery) {
-                found.push(message);
-                return;
+                found.push(messageId);
+                continue;
             }
 
-            const searchableText = [
-                String(message.find('.name_text').first().text() || ''),
-                String(message.find('.mes_text').text() || ''),
-                String(message.find('.mes_reasoning').text() || ''),
-            ].join('\n').toLocaleLowerCase();
-
-            if (searchableText.includes(normalizedQuery)) {
-                found.push(message);
+            if (getCurrentChatToolsSearchableText(message).includes(normalizedQuery)) {
+                found.push(messageId);
             }
-        });
+        }
 
         return found;
     }
@@ -19936,8 +19947,7 @@ jQuery(async function () {
 
         const activeMessageId = getCurrentChatToolsMessageId();
         const currentQuery = String(currentChatToolsQuery.val() ?? '').trim();
-        for (const messageElement of currentChatToolsMatches) {
-            const messageId = Number(messageElement.attr('mesid'));
+        for (const messageId of currentChatToolsMatches) {
             if (!Number.isInteger(messageId)) {
                 continue;
             }
@@ -19983,7 +19993,7 @@ jQuery(async function () {
         }
     }
 
-    function setCurrentChatToolsActiveMatch(index, { scroll = true, flash = false } = {}) {
+    async function setCurrentChatToolsActiveMatch(index, { scroll = true, flash = false } = {}) {
         if (!currentChatToolsMatches.length) {
             currentChatToolsMatchIndex = -1;
             clearCurrentChatToolsHighlight();
@@ -19994,8 +20004,15 @@ jQuery(async function () {
         }
 
         currentChatToolsMatchIndex = ((index % currentChatToolsMatches.length) + currentChatToolsMatches.length) % currentChatToolsMatches.length;
-        const currentMatch = currentChatToolsMatches[currentChatToolsMatchIndex];
         const activeMessageId = getCurrentChatToolsMessageId();
+
+        // Lazy load: if the match lies outside the currently rendered DOM window
+        // (chat_truncation cap), expand via showMoreMessages() so we have a
+        // DOM node to scroll/highlight. This also sets manualTruncationOverride,
+        // which is intentional — searching signals the user wants to see history.
+        if (activeMessageId !== null && chatElement.find(`.mes[mesid="${activeMessageId}"]`).length === 0) {
+            await showMoreMessages(Number.MAX_SAFE_INTEGER);
+        }
 
         clearCurrentChatToolsHighlight();
         applyCurrentChatToolsMatchHighlights();
@@ -20008,8 +20025,8 @@ jQuery(async function () {
             }
         }
 
-        if (scroll) {
-            scrollCurrentChatToolsMessageIntoView(currentMatch);
+        if (scroll && activeMessageId !== null) {
+            scrollCurrentChatToolsMessageIntoView(activeMessageId);
         }
 
         renderCurrentChatToolsList();
@@ -20017,7 +20034,7 @@ jQuery(async function () {
         updateCurrentChatToolsButtons();
     }
 
-    function refreshCurrentChatMatches({ recollect = false, scroll = false, flash = false } = {}) {
+    async function refreshCurrentChatMatches({ recollect = false, scroll = false, flash = false } = {}) {
         const query = String(currentChatToolsQuery.val() ?? '').trim();
         const previousActiveId = getCurrentChatToolsMessageId();
 
@@ -20026,7 +20043,7 @@ jQuery(async function () {
             currentChatToolsLastQuery = query;
 
             if (previousActiveId !== null) {
-                const index = currentChatToolsMatches.findIndex(message => Number(message.attr('mesid')) === previousActiveId);
+                const index = currentChatToolsMatches.findIndex(id => id === previousActiveId);
                 currentChatToolsMatchIndex = index >= 0 ? index : 0;
             }
         }
@@ -20045,13 +20062,13 @@ jQuery(async function () {
             currentChatToolsMatchIndex = 0;
         }
 
-        setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex, { scroll, flash });
+        await setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex, { scroll, flash });
     }
 
-    function openCurrentChatToolsPanel() {
+    async function openCurrentChatToolsPanel() {
         currentChatToolsPanel.removeClass('displayNone');
         currentChatToolsQuery.trigger('focus');
-        refreshCurrentChatMatches({ recollect: true, scroll: false });
+        await refreshCurrentChatMatches({ recollect: true, scroll: false });
     }
 
     function closeCurrentChatToolsPanel() {
@@ -20060,12 +20077,12 @@ jQuery(async function () {
         clearCurrentChatToolsInlineHighlights();
     }
 
-    function toggleCurrentChatToolsPanel() {
+    async function toggleCurrentChatToolsPanel() {
         if (isCurrentChatToolsOpen()) {
             closeCurrentChatToolsPanel();
             return;
         }
-        openCurrentChatToolsPanel();
+        await openCurrentChatToolsPanel();
     }
 
     function toMessageRanges(messageIds) {
@@ -20124,7 +20141,7 @@ jQuery(async function () {
 
         currentChatToolsSelectedIds.clear();
         currentChatToolsLastQuery = '';
-        refreshCurrentChatMatches({ recollect: true, scroll: false });
+        await refreshCurrentChatMatches({ recollect: true, scroll: false });
     }
 
     function createCurrentChatToolsInsertedMessage(role, text) {
@@ -20225,24 +20242,24 @@ jQuery(async function () {
         currentChatToolsSelectedIds.add(insertAt);
         currentChatToolsLastQuery = '';
         currentChatToolsInsertText.val('');
-        refreshCurrentChatMatches({ recollect: true, scroll: true, flash: true });
+        await refreshCurrentChatMatches({ recollect: true, scroll: true, flash: true });
     }
 
-    currentChatToolsQuery.on('input', () => {
+    currentChatToolsQuery.on('input', async () => {
         currentChatToolsLastQuery = '';
-        refreshCurrentChatMatches({ recollect: true, scroll: false });
+        await refreshCurrentChatMatches({ recollect: true, scroll: false });
     });
 
-    currentChatToolsQuery.on('keydown', (event) => {
+    currentChatToolsQuery.on('keydown', async (event) => {
         if (event.key !== 'Enter') {
             return;
         }
         event.preventDefault();
         if (currentChatToolsMatches.length === 0) {
-            refreshCurrentChatMatches({ recollect: true, scroll: true });
+            await refreshCurrentChatMatches({ recollect: true, scroll: true });
             return;
         }
-        setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex + 1, { scroll: true, flash: true });
+        await setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex + 1, { scroll: true, flash: true });
     });
 
     currentChatToolsInsertText.on('input', () => {
@@ -20253,20 +20270,20 @@ jQuery(async function () {
         updateCurrentChatToolsButtons();
     });
 
-    currentChatToolsPrev.on('click', (event) => {
+    currentChatToolsPrev.on('click', async (event) => {
         event.preventDefault();
         if (currentChatToolsPrev.hasClass('disabled')) {
             return;
         }
-        setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex - 1, { scroll: true, flash: true });
+        await setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex - 1, { scroll: true, flash: true });
     });
 
-    currentChatToolsNext.on('click', (event) => {
+    currentChatToolsNext.on('click', async (event) => {
         event.preventDefault();
         if (currentChatToolsNext.hasClass('disabled')) {
             return;
         }
-        setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex + 1, { scroll: true, flash: true });
+        await setCurrentChatToolsActiveMatch(currentChatToolsMatchIndex + 1, { scroll: true, flash: true });
     });
 
     currentChatToolsClose.on('click', (event) => {
@@ -20360,17 +20377,17 @@ jQuery(async function () {
         await insertCurrentChatMessage('after');
     });
 
-    currentChatToolsList.on('click', '.current_chat_tools_list_item', (event) => {
+    currentChatToolsList.on('click', '.current_chat_tools_list_item', async (event) => {
         const row = $(event.currentTarget);
         const messageId = Number(row.attr('data-mesid'));
         if (!Number.isInteger(messageId)) {
             return;
         }
 
-        const index = currentChatToolsMatches.findIndex(message => Number(message.attr('mesid')) === messageId);
+        const index = currentChatToolsMatches.findIndex(id => id === messageId);
         if (index >= 0) {
             currentChatToolsInsertAt.val(String(messageId));
-            setCurrentChatToolsActiveMatch(index, { scroll: true, flash: true });
+            await setCurrentChatToolsActiveMatch(index, { scroll: true, flash: true });
         }
     });
 
@@ -20398,12 +20415,12 @@ jQuery(async function () {
         updateCurrentChatToolsButtons();
     });
 
-    const refreshCurrentChatToolsOnUpdate = () => {
+    const refreshCurrentChatToolsOnUpdate = async () => {
         if (!isCurrentChatToolsOpen()) {
             return;
         }
         currentChatToolsLastQuery = '';
-        refreshCurrentChatMatches({ recollect: true, scroll: false });
+        await refreshCurrentChatMatches({ recollect: true, scroll: false });
     };
 
     eventSource.on(event_types.MESSAGE_SENT, refreshCurrentChatToolsOnUpdate);
@@ -20554,7 +20571,7 @@ jQuery(async function () {
         } else if (id == 'option_delete_mes') {
             setTimeout(() => openMessageDelete(fromSlashCommand), animation_duration);
         } else if (id == 'option_search_chat') {
-            toggleCurrentChatToolsPanel();
+            await toggleCurrentChatToolsPanel();
         } else if (id == 'option_close_chat') {
             await closeCurrentChat();
         } else if (id === 'option_settings') {
