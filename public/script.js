@@ -170,7 +170,6 @@ import {
     isOdd,
     sortMoments,
     timestampToMoment,
-    download,
     isDataURL,
     getCharaFilename,
     PAGINATION_TEMPLATE,
@@ -205,6 +204,7 @@ import {
     createTimeout,
 } from './scripts/utils.js';
 import { debounce_timeout, GENERATION_TYPE_TRIGGERS, IGNORE_SYMBOL, inject_ids, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, OVERSWIPE_BEHAVIOR, SCROLL_BEHAVIOR, SWIPE_DIRECTION, SWIPE_SOURCE, SWIPE_STATE } from './scripts/constants.js';
+import { downloadFromServer } from './scripts/luker-download.js';
 
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, loadExtensionSettings, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/state-errors.js';
@@ -19534,40 +19534,27 @@ jQuery(async function () {
         const filename = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text().replace(/\.jsonl$/i, '');
         console.log(`exporting ${filename} in ${format} format`);
 
+        const exportfilename = `${filename}.${format}`;
         const body = {
             is_group: !!selected_group,
             avatar_url: characters[this_chid]?.avatar,
             file: `${filename}.jsonl`,
-            exportfilename: `${filename}.${format}`,
-            format: format,
+            exportfilename,
+            format,
         };
-        console.log(body);
         try {
-            const response = await fetch('/api/chats/export', {
+            await downloadFromServer({
+                url: '/api/chats/export',
+                fileName: exportfilename,
+                mimeType: format === 'txt' ? 'text/plain' : 'application/x-ndjson',
                 method: 'POST',
-                body: JSON.stringify(body),
                 headers: getRequestHeaders(),
+                body: JSON.stringify(body),
             });
-            const data = await response.json();
-            if (!response.ok) {
-                // display error message
-                console.log(data.message);
-                await delay(250);
-                toastr.error(`Error: ${data.message}`);
-                return;
-            } else {
-                const mimeType = format == 'txt' ? 'text/plain' : 'application/octet-stream';
-                // success, handle response data
-                console.log(data);
-                await delay(250);
-                toastr.success(data.message);
-                download(data.result, body.exportfilename, mimeType);
-            }
         } catch (error) {
-            // display error message
-            console.log(`An error has occurred: ${error.message}`);
+            console.error(`Chat export failed: ${error?.message}`);
             await delay(250);
-            toastr.error(`Error: ${error.message}`);
+            toastr.error(`Error: ${error?.serverMessage || error?.message || 'Unknown error'}`);
         }
     });
 

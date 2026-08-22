@@ -3125,11 +3125,9 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
             ? await repo.get(request.user.profile.handle, '', name, { isGroup: true, groupId: name })
             : await repo.get(request.user.profile.handle, dirName, name);
         if (chat == null) {
-            const errorMessage = {
-                message: `Could not find chat to export. Source chat: ${dirName || 'group'}/${name}.`,
-            };
-            console.error(errorMessage.message);
-            return response.status(404).json(errorMessage);
+            const errorMessage = `Could not find chat to export. Source chat: ${dirName || 'group'}/${name}.`;
+            console.error(errorMessage);
+            return response.status(404).json({ error: errorMessage });
         }
 
         if (request.body.format === 'jsonl') {
@@ -3144,12 +3142,10 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
             const lines = [JSON.stringify(headerWithIntegrity)];
             for (const msg of (chat.body ?? [])) lines.push(JSON.stringify(msg));
             const rawFile = lines.join('\n') + '\n';
-            const successMessage = {
-                message: `Chat saved to ${exportfilename}`,
-                result: rawFile,
-            };
             console.info(`Chat exported as ${exportfilename}`);
-            return response.status(200).json(successMessage);
+            response.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+            response.setHeader('Content-Disposition', `attachment; filename="${encodeURI(path.basename(exportfilename))}"`);
+            return response.status(200).send(rawFile);
         }
 
         // Plain-text format: name/message per body row, hidden/system skipped.
@@ -3160,12 +3156,10 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
             const message = String(data?.extra?.display_text || data?.mes || '').replace(/\r?\n/g, '\n');
             buffer += `${data.name}: ${message}\n\n`;
         }
-        const successMessage = {
-            message: `Chat saved to ${exportfilename}`,
-            result: buffer,
-        };
         console.info(`Chat exported as ${exportfilename}`);
-        return response.status(200).json(successMessage);
+        response.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        response.setHeader('Content-Disposition', `attachment; filename="${encodeURI(path.basename(exportfilename))}"`);
+        return response.status(200).send(buffer);
     } catch (err) {
         console.error('chat export failed.', err);
         return response.sendStatus(400);
