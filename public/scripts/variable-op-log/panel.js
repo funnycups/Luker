@@ -217,6 +217,9 @@ export function initVarOpsPanelHandler() {
     eventSource.on(event_types.MESSAGE_DELETED, refreshAllButtons);
     eventSource.on(event_types.MESSAGE_SWIPE_DELETED, refreshAllButtons);
     eventSource.on(event_types.CHAT_CHANGED, refreshAllButtons);
+    // Show more messages re-inserts old .mes DOM nodes; their .mes_var_ops button
+    // ships with style="display:none" and only refreshButtonVisibility() flips it.
+    eventSource.on(event_types.MORE_MESSAGES_LOADED, refreshAllButtons);
 }
 
 function refreshButtonVisibility(messageId) {
