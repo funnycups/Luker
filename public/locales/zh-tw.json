@@ -6104,4 +6104,6 @@
     ,"stores": "儲存"
     ,"records": "條"
     ,"requests": "請求"
+    ,"Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.": "拒絕儲存：聊天尚未完全載入。請重新載入頁面以防止資料遺失。"
+    ,"Chat save aborted": "聊天儲存已中止"
 }

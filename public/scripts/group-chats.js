@@ -665,6 +665,22 @@ function resetSelectedGroup() {
  * @returns {Promise<void>} A promise that resolves when the group chat has been saved.
  */
 async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, retryAttempt = 0, context = null) {
+    // Data-loss guard: refuse to save when chat is not fully loaded.
+    // chat_metadata.integrity is filled in getGroupChat's success path; if
+    // the fetch failed (5xx / network abort / OOM), chat_metadata stays
+    // empty. Writing now ships an empty body to /api/chats/group/save whose
+    // null-integrity path skips the integrity check and overwrites server
+    // data. See saveChatInternal (script.js) for the full rationale.
+    if (!chat_metadata?.integrity) {
+        console.error('[ChatWrite] Group save refused: chat not fully loaded (integrity missing).');
+        toastr.error(
+            t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
+            t`Chat save aborted`,
+            { timeOut: 15000, preventDuplicates: true },
+        );
+        return;
+    }
+
     const saveContext = context && typeof context === 'object' ? context : null;
     const resolvedGroupId = String(saveContext?.groupId || groupId || '').trim();
     const group = groups.find(x => String(x?.id || '') === resolvedGroupId);

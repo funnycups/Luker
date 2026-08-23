@@ -6265,4 +6265,6 @@
     ,"stores": "存储"
     ,"records": "条"
     ,"requests": "请求"
+    ,"Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.": "拒绝保存：聊天尚未完全加载。请重新加载页面以防止数据丢失。"
+    ,"Chat save aborted": "聊天保存已中止"
 }

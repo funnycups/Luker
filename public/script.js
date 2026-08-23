@@ -13608,6 +13608,20 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         return true;
     }
 
+    // Data-loss guard: refuse to append when chat is not fully loaded (see
+    // saveChatInternal for full rationale). appendChatMessagesInternal returns
+    // boolean; return false so the caller's saveChatConditional fallback also
+    // trips the guard in saveChatInternal instead of full-saving an empty body.
+    if (!chat_metadata?.integrity) {
+        console.error('[ChatWrite] Append refused: chat not fully loaded (integrity missing).');
+        toastr.error(
+            t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
+            t`Chat save aborted`,
+            { timeOut: 15000, preventDuplicates: true },
+        );
+        return false;
+    }
+
     /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
     let target = null;
     try {
@@ -13776,6 +13790,19 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
 
     if (normalizedOperations.length === 0) {
         return true;
+    }
+
+    // Data-loss guard: refuse to patch when chat is not fully loaded (see
+    // saveChatInternal for full rationale). Same false-return semantics as
+    // appendChatMessagesInternal.
+    if (!chat_metadata?.integrity) {
+        console.error('[ChatWrite] Patch refused: chat not fully loaded (integrity missing).');
+        toastr.error(
+            t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
+            t`Chat save aborted`,
+            { timeOut: 15000, preventDuplicates: true },
+        );
+        return false;
     }
 
     /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
@@ -14007,6 +14034,18 @@ export async function waitForChatSwitchAvailability({ requireCompletedSave = fal
  * @returns {Promise<boolean>} True on successful metadata save.
  */
 async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0, context = null) {
+    // Data-loss guard: refuse to save when chat is not fully loaded (see
+    // saveChatInternal for full rationale).
+    if (!chat_metadata?.integrity) {
+        console.error('[ChatWrite] Metadata save refused: chat not fully loaded (integrity missing).');
+        toastr.error(
+            t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
+            t`Chat save aborted`,
+            { timeOut: 15000, preventDuplicates: true },
+        );
+        return false;
+    }
+
     try {
         const saveContext = context ?? buildActiveChatSaveContext({ withMetadata });
         if (!saveContext?.target) {
@@ -14127,6 +14166,22 @@ export async function saveChatMetadata(withMetadata = undefined, retryCount = 0)
  * @returns {Promise<void>}
  */
 async function saveChatInternal({ chatName, withMetadata, mesId, force = false, _retryAttempt = 0 } = {}) {
+    // Data-loss guard: refuse to save when chat is not fully loaded.
+    // chat_metadata.integrity is filled in getChat's success path; if the
+    // fetch failed (5xx / network abort / OOM), the catch only toasts and
+    // leaves chat_metadata as {}. Writing now ships an empty body to
+    // /api/chats/save, whose null-integrity path (chats.js:2166) skips the
+    // integrity check and overwrites server data.
+    if (!chat_metadata?.integrity) {
+        console.error('[ChatWrite] Save refused: chat not fully loaded (integrity missing).');
+        toastr.error(
+            t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
+            t`Chat save aborted`,
+            { timeOut: 15000, preventDuplicates: true },
+        );
+        return;
+    }
+
     const saveContext = arguments?.[0]?._context ?? buildActiveChatSaveContext({ withMetadata, chatName, mesId });
     const target = saveContext?.target ?? resolveChatStateTarget();
 
