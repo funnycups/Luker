@@ -1681,6 +1681,24 @@ class MainActivity : AppCompatActivity() {
             if (req.headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
                 runCatching { connection.setRequestProperty("User-Agent", cachedUserAgent) }
             }
+            // Basic Auth fallback: web-side getRequestHeaders() has no access
+            // to the credentials the user typed into the native WebView auth
+            // dialog, so /api/... requests routed through this stream path
+            // would 401 whenever basicAuthMode is enabled. Reuse the same
+            // credentials the WebView already persisted for this host.
+            if (req.headers.keys.none { it.equals("Authorization", ignoreCase = true) }) {
+                val authHost = runCatching { URL(resolvedUrl).host }.getOrNull()
+                if (!authHost.isNullOrBlank()) {
+                    val creds = LukerHttpAuthStore.loadAnyForHost(applicationContext, authHost)
+                    if (creds != null) {
+                        val basicHeader = "Basic " + Base64.encodeToString(
+                            "${creds.username}:${creds.password}".toByteArray(Charsets.UTF_8),
+                            Base64.NO_WRAP,
+                        )
+                        connection.setRequestProperty("Authorization", basicHeader)
+                    }
+                }
+            }
 
             if (req.method == "POST" && req.body != null) {
                 connection.doOutput = true
