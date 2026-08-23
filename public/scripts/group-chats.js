@@ -88,6 +88,7 @@ import {
     buildChatMetadataPatchOperationsAsync,
     buildChatMessagePatchOperations,
     applyIntegrityFromWritePayloadToTarget,
+    consumePendingForceOverwrite,
     refreshChatWriteSnapshotsFromServer,
     refreshSnapshotIntegrityFromActiveLive,
     resolveChatWriteConflictForTarget,
@@ -715,12 +716,20 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
         character_name: 'unused',
     };
     const target = saveContext?.target || { is_group: true, id: chatId };
+    // Consume the force-overwrite marker set by a prior 409 recovery so this
+    // save carries force:true — the server skips its integrity check and
+    // accepts the overwrite. See saveChatInternal (script.js) for full
+    // rationale. Consumed once per save; the recursive retry below re-runs
+    // saveGroupChatInternal which consumes its own marker if a fresh 409
+    // sets one.
+    const forceRecovery = consumePendingForceOverwrite(target);
+    const effectiveForce = force || Boolean(forceRecovery);
     const previousMessages = getChatMessageSnapshot(target);
     let response = null;
     /** @type {{endpoint: string, opSummary: string|null} | null} */
     let requestSummary = null;
 
-    if (!force && Array.isArray(previousMessages)) {
+    if (!effectiveForce && Array.isArray(previousMessages)) {
         const operations = await buildChatMessagePatchOperations(previousMessages, messagesSnapshot);
         if (operations.length > 0) {
             // Pull live integrity in case a concurrent save advanced it after our
@@ -741,7 +750,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
                     operations,
                     chat_metadata: { ...metadataSnapshot },
                     integrity: metadataSnapshot?.integrity,
-                    force: force,
+                    force: effectiveForce,
                     luker_generation_id: getLastLukerGenerationIdForApi(),
                 }),
             });
@@ -762,7 +771,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
                         id: chatId,
                         operations: metadataOperations,
                         integrity: metadataSnapshot?.integrity,
-                        force: force,
+                        force: effectiveForce,
                     }),
                 });
             }
@@ -784,7 +793,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
         response = await fetch('/api/chats/group/save', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ id: chatId, chat: [chatHeader, ...messagesSnapshot], force: force }),
+            body: JSON.stringify({ id: chatId, chat: [chatHeader, ...messagesSnapshot], force: effectiveForce }),
         });
     }
 
@@ -796,7 +805,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     }
 
     if (!response.ok) {
-        const conflictResolution = !force
+        const conflictResolution = !effectiveForce
             ? await resolveChatWriteConflictForTarget(response, target, metadataSnapshot, retryAttempt, {
                 endpoint: requestSummary?.endpoint ?? 'group save',
                 opSummary: requestSummary?.opSummary ?? null,

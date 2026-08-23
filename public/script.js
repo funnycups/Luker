@@ -12199,6 +12199,40 @@ export function getChatMessageSnapshot(target = null) {
 let chatWriteQueue = Promise.resolve();
 let activeChatSaveContext = null;
 
+/**
+ * Targets whose next save should carry `force:true` to bypass server-side
+ * integrity check. Set by conflict-recovery paths in
+ * resolveChatWriteConflictForTarget as an explicit FE-wins signal, consumed by
+ * saveChatInternal / saveChatMetadataInternal / saveGroupChatInternal at fetch
+ * time. Replaces the older "delete chat_metadata.integrity" signal which
+ * (a) left chat_metadata.integrity falsy for arbitrarily long stretches until
+ * the next successful write refilled it, tripping the empty-integrity data-loss
+ * guard on every intervening save, and (b) collided semantically with the
+ * half-open state (getChat failed → chat_metadata is empty and integrity is
+ * absent because it was never populated). With the marker, the two states are
+ * distinguishable: recovery is an explicit per-target Map entry, half-open is
+ * "no marker and no integrity".
+ * @type {Map<string, string>}
+ */
+const pendingForceOverwriteTargets = new Map();
+
+export function markTargetForForceOverwriteOnNextSave(target, reason) {
+    const key = getChatStateTargetKey(target);
+    if (!key) return;
+    pendingForceOverwriteTargets.set(key, String(reason || 'unknown'));
+}
+
+export function consumePendingForceOverwrite(target) {
+    const key = getChatStateTargetKey(target);
+    if (!key) return null;
+    const reason = pendingForceOverwriteTargets.get(key);
+    if (reason !== undefined) {
+        pendingForceOverwriteTargets.delete(key);
+        return reason;
+    }
+    return null;
+}
+
 export function runSerializedChatWrite(task) {
     if (typeof task !== 'function') {
         return Promise.resolve(undefined);
@@ -13544,15 +13578,22 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     }
 
     if (errorType === 'integrity') {
-        if (metadata && typeof metadata === 'object') {
-            if (currentIntegrity) {
+        if (currentIntegrity) {
+            if (metadata && typeof metadata === 'object') {
                 metadata.integrity = currentIntegrity;
-            } else {
-                delete metadata.integrity;
             }
-        }
-        if (isActiveChatStateTarget(target)) {
-            syncCurrentChatIntegrityFromMetadata(metadata);
+            if (isActiveChatStateTarget(target)) {
+                syncCurrentChatIntegrityFromMetadata({ integrity: currentIntegrity });
+            }
+        } else {
+            // Server has no current integrity to sync against. Do NOT delete
+            // chat_metadata.integrity here — the empty-integrity data-loss
+            // guard on saveChatInternal would then refuse every subsequent
+            // write until the chat is reloaded. Instead, mark the target so
+            // the recovery save (queued next) carries force:true; the server
+            // skips its integrity check and accepts the overwrite, and its
+            // 200 response's integrity refills client state.
+            markTargetForForceOverwriteOnNextSave(target, 'integrity-409-empty-current');
         }
         // Invalidate the message snapshot too so the caller's saveChatConditional
         // fallback skips the diff-patch path and writes a full /api/chats/save,
@@ -13577,9 +13618,18 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     // overwrite current local mutations (e.g. regenerate/edit-in-progress) and
     // make behavior look like random refresh or duplicate replies.
     invalidateChatWriteSnapshot(target);
-    if (isActiveChatStateTarget(target) && chat_metadata && typeof chat_metadata === 'object') {
-        delete chat_metadata.integrity;
-    }
+    // FE-wins recovery signal for the next save on this target. Formerly this
+    // path did `delete chat_metadata.integrity`, which relied on server
+    // treating a missing slug as "no check needed" so the follow-up
+    // saveChatConditional would silently overwrite. That collision with the
+    // half-open state (also produces missing integrity) meant the empty-
+    // integrity data-loss guard couldn't tell the two apart and had to either
+    // let both through (unsafe half-open write) or block both (breaks recovery
+    // on every 409, which is what the append/patch optimistic-snapshot vs
+    // BE-normalization drift makes routinely common). The marker keeps
+    // chat_metadata.integrity intact so the guard still blocks half-open
+    // writes, and signals the intended overwrite explicitly.
+    markTargetForForceOverwriteOnNextSave(target, 'snapshot-409-recovery');
     notifyChatWriteConflict({
         kind: 'snapshot',
         errorType,
@@ -14055,6 +14105,11 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
             ? saveContext.metadataSnapshot
             : {};
         const target = saveContext.target;
+        // Consume the force-overwrite marker set by a prior 409 recovery so
+        // this metadata save carries force:true. See saveChatInternal for
+        // full rationale.
+        const forceRecovery = consumePendingForceOverwrite(target);
+        const effectiveForce = Boolean(forceRecovery);
 
         const snapshotKey = getChatMetadataSnapshotKey(target);
         const previousMetadata = snapshotKey ? chatMetadataSnapshotCache.get(snapshotKey) : null;
@@ -14078,6 +14133,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                     id: target.id,
                     operations,
                     integrity: metadata?.integrity,
+                    force: effectiveForce,
                 }),
             });
 
@@ -14117,6 +14173,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                     avatar_url: target.avatar_url,
                     operations,
                     integrity: metadata?.integrity,
+                    force: effectiveForce,
                 }),
             });
 
@@ -14251,9 +14308,17 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         writeTarget = target?.is_group
             ? target
             : { is_group: false, avatar_url: avatar, file_name: fileName, char_name: charName };
+        // Consume the force-overwrite marker set by a prior 409 recovery so
+        // this save carries force:true — the server skips its integrity check
+        // and accepts the overwrite. Consumed once per save; the recursive
+        // retry below (line 14348) re-runs saveChatInternal which will consume
+        // its own marker if a fresh 409 sets one, or fall through to raw
+        // force (typically false) if not.
+        const forceRecovery = consumePendingForceOverwrite(writeTarget);
+        const effectiveForce = force || Boolean(forceRecovery);
         const previousMessages = chatMessageSnapshotCache.get(getChatMessageSnapshotKey(writeTarget));
 
-        if (!force && Array.isArray(previousMessages)) {
+        if (!effectiveForce && Array.isArray(previousMessages)) {
             const operations = await buildChatMessagePatchOperations(previousMessages, trimmedChat);
 
             if (operations.length > 0) {
@@ -14273,7 +14338,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                         avatar_url: avatar,
                         chat_metadata: metadata,
                         integrity: metadata?.integrity,
-                        force: force,
+                        force: effectiveForce,
                         luker_generation_id: getLastLukerGenerationIdForApi(),
                     }),
                 });
@@ -14285,7 +14350,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                     return;
                 }
 
-                if (!force) {
+                if (!effectiveForce) {
                     const conflictResolution = await resolveChatWriteConflictForTarget(patchResult, writeTarget, metadata, _retryAttempt, {
                         endpoint: 'chats/patch (save-internal)',
                         opSummary: summarizeJsonPatchOperations(operations),
@@ -14321,7 +14386,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                 file_name: fileName,
                 chat: [chatHeader, ...trimmedChat],
                 avatar_url: avatar,
-                force: force,
+                force: effectiveForce,
             }),
         });
 
@@ -14332,7 +14397,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
             return;
         }
 
-        if (!force) {
+        if (!effectiveForce) {
             const conflictResolution = await resolveChatWriteConflictForTarget(result, writeTarget, metadata, _retryAttempt, {
                 endpoint: 'chats/save (full)',
                 opSummary: `full ${Array.isArray(trimmedChat) ? trimmedChat.length : 0} msgs`,
