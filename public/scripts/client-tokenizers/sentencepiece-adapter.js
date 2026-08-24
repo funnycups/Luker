@@ -34,7 +34,6 @@ let workerInstance = null;
 let workerDisabled = false;
 let workerSequence = 0;
 const workerPending = new Map();
-const WORKER_REQUEST_TIMEOUT_MS = 30000;
 
 function ensureWorker() {
     if (workerDisabled || typeof Worker === 'undefined') return null;
@@ -57,7 +56,6 @@ function ensureWorker() {
         if (!Number.isInteger(id)) return;
         const pending = workerPending.get(id);
         if (!pending) return;
-        clearTimeout(pending.timeoutId);
         workerPending.delete(id);
         if (event.data?.ok) {
             pending.resolve(event.data.result);
@@ -70,7 +68,6 @@ function ensureWorker() {
         console.error('[sentencepiece-adapter] Worker crashed; sentencepiece counts will route through the server', event?.error || event);
         const crashErr = event?.error || new Error('sentencepiece worker crashed');
         for (const [, pending] of workerPending) {
-            clearTimeout(pending.timeoutId);
             pending.reject(crashErr);
         }
         workerPending.clear();
@@ -88,15 +85,10 @@ function callWorker(op, payload) {
 
     return new Promise((resolve, reject) => {
         const id = ++workerSequence;
-        const timeoutId = setTimeout(() => {
-            workerPending.delete(id);
-            reject(new Error(`sentencepiece worker ${op} timed out`));
-        }, WORKER_REQUEST_TIMEOUT_MS);
-        workerPending.set(id, { resolve, reject, timeoutId });
+        workerPending.set(id, { resolve, reject });
         try {
             worker.postMessage({ id, op, ...payload });
         } catch (error) {
-            clearTimeout(timeoutId);
             workerPending.delete(id);
             reject(error);
         }
