@@ -7,6 +7,7 @@ import {
     completeGenerationJobFromText,
     failGenerationJob,
     attachJobToRequest,
+    notifyJobTextProgress,
 } from '../endpoints/backends/luker-generation.js';
 import {
     completeInspection,
@@ -213,6 +214,10 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                     //     completeInspectionFromStream at dispatch tail.
                     const bytes = event.data;
                     accumulateChunkTextIntoJob(job, bytes);
+                    // Throttled status push so a reconnecting client's
+                    // recovery preview streams live instead of freezing at
+                    // its subscribe-time snapshot until awaiting_ack.
+                    notifyJobTextProgress(job);
                     let text = '';
                     if (bytes && typeof bytes === 'string') {
                         text = bytes;

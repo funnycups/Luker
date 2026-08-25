@@ -50,6 +50,9 @@ jest.unstable_mockModule('../../src/endpoints/backends/luker-generation.js', () 
     // This mock is a no-op because the persisted-trailer test only cares
     // about `job.persisted` and `job.status` values on the trailer frame.
     accumulateChunkTextIntoJob: () => {},
+    // Throttled live-text status push (no-op here; this file only asserts
+    // the trailer frame's persisted/status values).
+    notifyJobTextProgress: () => {},
     failGenerationJob: (job, err) => { if (job) { job.status = 'failed'; job.error = String(err || ''); } },
     // The whole point of this test file: force-complete synchronously
     // with persisted=true so the trailer envelope carries a real value.

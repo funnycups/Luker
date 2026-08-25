@@ -336,12 +336,76 @@ function pruneGenerationJobs() {
 }
 
 function clearGenerationJobPersistenceTimer(job) {
+    // Also owns the text-progress notify timer: every caller of this helper
+    // is a state transition (complete / fail / cancel / persist), where a
+    // pending progress frame would be stale noise.
+    if (job?._textNotifyTimer) {
+        clearTimeout(job._textNotifyTimer);
+        job._textNotifyTimer = null;
+    }
     if (!job?.persistenceTimer) {
         return;
     }
 
     clearTimeout(job.persistenceTimer);
     job.persistenceTimer = null;
+}
+
+// Live-text progress feed for recovery subscribers (/jobs/events-stream).
+// Every status frame carries the FULL accumulated job.text, so notifying on
+// each chunk would scale wire bytes quadratically with reply length (a
+// 100KB reply arriving in 1KB chunks ≈ 5MB of redundant JSON per client).
+// The interval bounds that to one frame per tick while the trailing timer
+// guarantees the final partial segment is never stranded until completion.
+const LUKER_GENERATION_TEXT_PROGRESS_NOTIFY_MS = 300;
+
+/**
+ * Throttled status notification during a running stream so recovery clients
+ * see the preview text grow live instead of jumping at completion. Leading +
+ * trailing edge: fires immediately when the interval has elapsed since the
+ * last send, otherwise schedules one trailing send so text accumulated in
+ * between is still delivered.
+ *
+ * No-op once the job leaves 'running' (terminal transitions notify their own
+ * status frames), when text length is unchanged, or for jobs without text.
+ * @param {object} job
+ */
+export function notifyJobTextProgress(job) {
+    if (!job || String(job.status || '') !== 'running') {
+        return;
+    }
+    const textLen = String(job.text || '').length;
+    if (!textLen || textLen === Number(job._lastNotifiedTextLen || 0)) {
+        return;
+    }
+    const now = Date.now();
+    const elapsed = now - Number(job._lastTextNotifyAt || 0);
+    if (elapsed >= LUKER_GENERATION_TEXT_PROGRESS_NOTIFY_MS) {
+        if (job._textNotifyTimer) {
+            clearTimeout(job._textNotifyTimer);
+            job._textNotifyTimer = null;
+        }
+        job._lastTextNotifyAt = now;
+        job._lastNotifiedTextLen = textLen;
+        notifyJobStatus(job);
+        return;
+    }
+    if (job._textNotifyTimer) {
+        return;
+    }
+    job._textNotifyTimer = setTimeout(() => {
+        job._textNotifyTimer = null;
+        if (String(job.status || '') !== 'running') {
+            return;
+        }
+        const lenNow = String(job.text || '').length;
+        if (!lenNow || lenNow === Number(job._lastNotifiedTextLen || 0)) {
+            return;
+        }
+        job._lastTextNotifyAt = Date.now();
+        job._lastNotifiedTextLen = lenNow;
+        notifyJobStatus(job);
+    }, LUKER_GENERATION_TEXT_PROGRESS_NOTIFY_MS - elapsed);
 }
 
 function buildGenerationJobRequestMeta(request, persistTarget) {

@@ -19,6 +19,7 @@ import {
     subscribeToJob,
     getPersistChatKey,
     failGenerationJob,
+    notifyJobTextProgress,
 } from '../src/endpoints/backends/luker-generation.js';
 
 let idCounter = 0;
@@ -545,5 +546,94 @@ describe('failGenerationJob', () => {
         job.abortController = { abort: () => {}, signal: { aborted: false } };
         failGenerationJob(job, 'nope');
         expect(job.abortController).toBeNull();
+    });
+});
+
+describe('notifyJobTextProgress', () => {
+    test('sends a status frame carrying the accumulated text while running', async () => {
+        const jobId = uniqueJobId('progress-notify');
+        const job = createGenerationJob(baseRequest(), { job_id: jobId });
+        const received = [];
+        subscribeToJob(jobId, payload => received.push(payload));
+
+        job.text = 'partial stream text';
+        notifyJobTextProgress(job);
+
+        const statusFrames = received.filter(p => p.type === 'status');
+        expect(statusFrames).toHaveLength(1);
+        expect(statusFrames[0].status).toBe('running');
+        expect(statusFrames[0].text).toBe('partial stream text');
+    });
+
+    test('is a no-op when text length is unchanged', () => {
+        const jobId = uniqueJobId('progress-dedupe');
+        const job = createGenerationJob(baseRequest(), { job_id: jobId });
+        const received = [];
+        subscribeToJob(jobId, payload => received.push(payload));
+
+        job.text = 'same';
+        notifyJobTextProgress(job);
+        job.text = 'same';
+        notifyJobTextProgress(job);
+
+        expect(received.filter(p => p.type === 'status')).toHaveLength(1);
+    });
+
+    test('does nothing for jobs that are not running', () => {
+        const jobId = uniqueJobId('progress-terminal');
+        const job = createGenerationJob(baseRequest(), { job_id: jobId });
+        const received = [];
+        subscribeToJob(jobId, payload => received.push(payload));
+
+        job.status = 'awaiting_ack';
+        job.text = 'text';
+        notifyJobTextProgress(job);
+
+        expect(received.filter(p => p.type === 'status')).toHaveLength(0);
+    });
+
+    test('throttles bursts to one frame per interval with a trailing send', async () => {
+        const jobId = uniqueJobId('progress-throttle');
+        const job = createGenerationJob(baseRequest(), { job_id: jobId });
+        const received = [];
+        subscribeToJob(jobId, payload => received.push(payload));
+
+        // First call fires immediately (leading edge).
+        job.text = 'a';
+        notifyJobTextProgress(job);
+        // Rapid follow-ups inside the 300ms window must not each send.
+        job.text = 'ab';
+        notifyJobTextProgress(job);
+        await new Promise(r => setTimeout(r, 50));
+        job.text = 'abc';
+        notifyJobTextProgress(job);
+        expect(received.filter(p => p.type === 'status')).toHaveLength(1);
+
+        // Trailing timer delivers the stranded segment once the window ends.
+        await new Promise(r => setTimeout(r, 400));
+        const statusFrames = received.filter(p => p.type === 'status');
+        expect(statusFrames.length).toBe(2);
+        expect(statusFrames[1].text).toBe('abc');
+    });
+
+    test('pending trailing timer does not fire after the job leaves running', async () => {
+        const jobId = uniqueJobId('progress-cancel');
+        const job = createGenerationJob(baseRequest(), { job_id: jobId });
+        const received = [];
+        subscribeToJob(jobId, payload => received.push(payload));
+
+        job.text = 'first';
+        notifyJobTextProgress(job);
+        job.text = 'second';
+        notifyJobTextProgress(job);   // schedules trailing timer
+        failGenerationJob(job, 'upstream gone');   // transition clears it
+
+        await new Promise(r => setTimeout(r, 400));
+        const statusFrames = received.filter(p => p.type === 'status');
+        // Leading frame + failed frame; the stranded trailing frame must NOT fire.
+        expect(statusFrames).toHaveLength(2);
+        expect(statusFrames[0].status).toBe('running');
+        expect(statusFrames[0].text).toBe('first');
+        expect(statusFrames[1].status).toBe('failed');
     });
 });
