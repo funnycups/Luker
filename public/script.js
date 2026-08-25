@@ -19265,7 +19265,16 @@ jQuery(async function () {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         void startLukerGenerationRecovery();
     });
-    eventSource.on(event_types.GENERATION_STARTED, () => {
+    eventSource.on(event_types.GENERATION_STARTED, (type, _params, isDryRun) => {
+        // PromptManager's token-count dry run (openai.js tryGenerate →
+        // Generate('normal', {}, true)) emits this event on every chat open,
+        // right after the recovery session below has attached. Treating a
+        // dry run as a real generation tore down the freshly-started
+        // recovery SSE, freezing the preview and hiding the server-persisted
+        // reply until a manual refresh.
+        if (isDryRun) {
+            return;
+        }
         stopLukerGenerationRecovery();
     });
 
