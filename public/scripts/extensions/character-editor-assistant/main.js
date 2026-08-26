@@ -30,6 +30,7 @@ import {
     isCharacterPresetReadTool,
     runCharacterPresetReadTool,
 } from '../../iteration-library/tools/character-presets-reads.js';
+import { floorRecordToTaskMessage, readPluginFloors } from '../../lib/plugin-floors.js';
 
 const __ctx = Luker.getContext();
 const generateQuietPrompt = __ctx.generateQuietPrompt;
@@ -2672,7 +2673,7 @@ function createCharacterEditorLorebookWriteToolApi(context, { avatar = '' } = {}
     };
 }
 
-function buildCharacterEditorSimulationSourceMessages(context, {
+export function buildCharacterEditorSimulationSourceMessages(context, {
     text = '',
     messages = null,
 } = {}) {
@@ -2693,7 +2694,8 @@ function buildCharacterEditorSimulationSourceMessages(context, {
         };
     }
 
-    const currentChatMessages = normalizeWorldInfoResolverMessages(Array.isArray(context?.chat) ? context.chat : [])
+    const currentChatMessages = readPluginFloors(context, { roles: ['user', 'assistant'] })
+        .map(floorRecordToTaskMessage)
         .filter(message => message && typeof message === 'object' && String(message.content ?? '').trim());
     return {
         mode: 'text',

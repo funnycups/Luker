@@ -35,6 +35,7 @@ import {
     runSkillIterStudioTool,
     commitApprovedSkillProposal,
 } from '../../../iteration-library/tools/skill-iter-studio.js';
+import { floorRecordToTaskMessage, readPluginFloors } from '../../../lib/plugin-floors.js';
 
 // Re-export so studio.js commits approved skill proposals at Apply time
 // through CPA's own surface rather than reaching into iteration-library
@@ -1237,18 +1238,13 @@ function buildPromptLayoutOutline(body) {
     }));
 }
 
-function buildSimulateSourceMessages(context, { text, messages }) {
+export function buildSimulateSourceMessages(context, { text, messages }) {
     if (messages && messages.length > 0) {
         return { mode: 'messages', messages };
     }
     if (text) {
-        const existingChat = Array.isArray(context?.chat) ? context.chat : [];
-        const carry = existingChat
-            .filter((m) => m && typeof m === 'object')
-            .map((m) => ({
-                role: m.is_user ? 'user' : (m.is_system ? 'system' : 'assistant'),
-                content: String(m.mes || ''),
-            }));
+        const carry = readPluginFloors(context, { roles: ['user', 'assistant', 'system'] })
+            .map(floorRecordToTaskMessage);
         return {
             mode: 'text',
             messages: [...carry, { role: 'user', content: text }],

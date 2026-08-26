@@ -45,7 +45,7 @@ const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
-import { computeDepthsFromEnd, regexChatMessageForAgent } from '../../lib/chat-regex.js';
+import { readPluginFloors } from '../../lib/plugin-floors.js';
 import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import {
     AGENDA_PLANNER_TOOL,
@@ -339,7 +339,12 @@ export function createAgendaTodo({ id = '', goal = '', status = 'todo' } = {}) {
 
 export function buildAgendaRecentChatText(messages, settings = extension_settings[MODULE_NAME]) {
     const source = Array.isArray(messages) ? messages : [];
-    const depths = computeDepthsFromEnd(source);
+    // All three roles: getRecentMessages slices keep interleaved system
+    // floors, and their text used to surface in recent_chat verbatim.
+    const cookedByIndex = new Map(
+        readPluginFloors({ chat: source }, { roles: ['user', 'assistant', 'system'] })
+            .map(record => [record.sourceIndex, record.mesCooked]),
+    );
     const indexOf = new Map();
     for (let i = 0; i < source.length; i += 1) {
         indexOf.set(source[i], i);
@@ -347,8 +352,9 @@ export function buildAgendaRecentChatText(messages, settings = extension_setting
     return getRecentMessages(source, settings?.maxRecentMessages)
         .map(message => {
             const idx = indexOf.get(message);
-            const depth = typeof idx === 'number' ? depths[idx] : undefined;
-            const rewrittenMes = regexChatMessageForAgent(message, depth);
+            const rewrittenMes = (typeof idx === 'number' && cookedByIndex.has(idx))
+                ? cookedByIndex.get(idx)
+                : String(message?.mes ?? '');
             const speaker = message?.is_user ? 'User' : (message?.name || 'Assistant');
             return `${speaker}: ${rewrittenMes}`;
         })
@@ -359,8 +365,9 @@ export function buildAgendaLastUserText(messages) {
     const source = Array.isArray(messages) ? messages : [];
     const { index, message } = extractLastUserMessage(source);
     if (index < 0 || !message) return '';
-    const depths = computeDepthsFromEnd(source);
-    return regexChatMessageForAgent(message, depths[index]);
+    const record = readPluginFloors({ chat: source }, { roles: ['user', 'assistant', 'system'] })
+        .find(item => item.sourceIndex === index);
+    return record?.mesCooked ?? String(message?.mes ?? '');
 }
 
 export function selectAgendaRuns(runs = [], selectedRunIds = null) {

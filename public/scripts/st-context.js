@@ -169,6 +169,8 @@ import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
 import { getNovelGenerationData, nai_settings, novelai_settings, novelai_setting_names } from './nai-settings.js';
 import * as EDITS_API from './lib/edits/index.js';
+import { applyPluginLaneRegex } from './lib/plugin-prompt-regex.js';
+import { readPluginFloors, floorRecordToTaskMessage } from './lib/plugin-floors.js';
 import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
 import * as LUKER_TABS_API from './extensions/luker-tabs.js';
 import * as FIELD_HELP_API from './extensions/field-help.js';
@@ -1527,53 +1529,28 @@ function normalizePromptMessages(messages) {
             normalized.reasoning_details = structuredClone(message.reasoning_details);
         }
 
+        // Internal-only floor provenance (see lib/plugin-prompt-regex.js):
+        // messages converted from chat floors by floorRecordToTaskMessage
+        // carry it so applyPluginLaneRegex skips their already-done regex
+        // pass. Stripped again before any network payload leaves.
+        if (typeof message.sourceFloorIndex === 'number' && Number.isFinite(message.sourceFloorIndex)) {
+            normalized.sourceFloorIndex = message.sourceFloorIndex;
+        }
+
         result.push(normalized);
     }
     return result;
 }
 
-function getPluginRegexPlacementForPromptMessage(message) {
-    const role = normalizePromptMessageRole(message?.role);
-    if (role === 'user') {
-        return regex_placement.USER_INPUT;
-    }
-    if (role === 'assistant') {
-        return regex_placement.AI_OUTPUT;
-    }
-    return null;
-}
-
-function applyPluginRegexToPromptMessages(messages) {
-    if (!Array.isArray(messages) || messages.length === 0) {
-        return [];
-    }
-
-    const eligibleIndexes = [];
-    for (let index = 0; index < messages.length; index++) {
-        if (getPluginRegexPlacementForPromptMessage(messages[index]) !== null) {
-            eligibleIndexes.push(index);
-        }
-    }
-
-    const depthByIndex = new Map(
-        eligibleIndexes.map((index, orderIndex) => [index, eligibleIndexes.length - orderIndex - 1]),
-    );
-
-    return messages.map((message, index) => {
-        const placement = getPluginRegexPlacementForPromptMessage(message);
-        if (placement === null || typeof message?.content !== 'string') {
-            return message;
-        }
-
-        return {
-            ...message,
-            content: getRegexedString(message.content, placement, {
-                isPluginPrompt: true,
-                depth: depthByIndex.get(index),
-            }),
-        };
-    });
-}
+// Plugin-lane regex cooking for prompt-message arrays lives in
+// lib/plugin-prompt-regex.js (applyPluginLaneRegex). The previous local
+// implementation derived depth from the array position of plugin
+// messages — not real chat depth — and had no way to skip messages whose
+// text was already regexed upstream (chat-floor conversions). The
+// dispatcher fixes both: unmarked user/assistant messages are cooked
+// once with { isPluginPrompt: true } and no depth, marked messages pass
+// through untouched, and the internal sourceFloorIndex marker is
+// stripped from every returned message.
 
 function applyPluginRegexToRuntimeWorldInfo(runtimeWorldInfo = null) {
     if (!runtimeWorldInfo || typeof runtimeWorldInfo !== 'object') {
@@ -2379,7 +2356,7 @@ function buildPresetAwarePromptMessages({
         }
     }
 
-    const pluginRegexMessages = applyPluginRegexToPromptMessages(normalizedMessages);
+    const pluginRegexMessages = applyPluginLaneRegex(normalizedMessages, { applyRegex: getRegexedString });
 
     const orderedMessages = buildPluginMessagesFromPromptOrder(
         resolvedEnvelope?.promptCore?.completion,
@@ -2471,10 +2448,24 @@ export function getContext() {
         //   isMarkdown, isPrompt, isPluginPrompt, isEdit, depth }).
         // - `placement` — the `regex_placement` enum (USER_INPUT / AI_OUTPUT
         //   / SLASH_COMMAND / WORLD_INFO / REASONING).
+        //
+        // For READING chat floors as cooked prompt-ready records, prefer
+        // `readPluginFloors` below over hand-rolling a chat walk — it
+        // already routes every floor through this lane with real depths.
         regex: {
             applyRegex: getRegexedString,
             placement: regex_placement,
         },
+        // Chat floor accessor for plugin LLM requests (lib/plugin-floors.js):
+        // walks the current chat once, cooks each floor through the plugin
+        // regex lane above with real depth-from-end, and returns records
+        // with 1-based `seq` / `sourceIndex` / `depth`. Options:
+        // { fromSeq, toSeq, fromDepth, toDepth, roles } (default roles
+        // ['user','assistant'] also excludes is_system floors).
+        // `floorRecordToTaskMessage` converts a record into a task message
+        // stamped so the dispatch layer skips its own regex pass.
+        readPluginFloors: (options = {}) => readPluginFloors(getContext(), options),
+        floorRecordToTaskMessage,
         iterationLibrary: ITERATION_LIBRARY_API,
         edits: EDITS_API,
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,

@@ -1,31 +1,29 @@
 /**
- * chat-regex.js — apply user-authored regex scripts to chat text that will
- * be fed to plugin-driven LLM requests.
+ * chat-regex.js — depth computation and the response-side regex
+ * primitive for plugin-driven LLM traffic.
  *
- * Rationale: the main generation pipeline runs every chat message through
- * `getRegexedString(..., USER_INPUT|AI_OUTPUT, { isPrompt: true, depth })`
- * before shipping it to the model (see `public/script.js` in the
- * `coreChat.map` block). Plugins that surface chat text to their own LLM
- * requests (orchestrator agents, memory-graph extraction/recall, etc.)
- * used to skip this step — they pulled `message.mes` raw, so user regex
- * scripts scoped to "prompt" placements silently didn't apply to what
- * the plugin saw.
- *
- * This module centralizes the transformation so every plugin entry point
- * that surfaces chat text to an LLM behaves the same way as the main
- * pipeline. Current consumers:
- *   - orchestrator/spec-runtime.js: `{{recent_chat}}` / `{{last_user}}` vars
- *   - orchestrator/agenda-runtime.js: same, for agenda mode
- *   - orchestrator/loop-tools/chat.js: `chat_read_range` / `chat_search` tools
- *   - orchestrator/director-tools.js: agent output re-entering context via
- *     tool-result envelopes (uses `regexAgentPluginOutput` only)
- *   - memory-graph/main.js: extraction / recall route / recall finalize /
- *     rewrite recall query (all four chat consumption points)
+ * This module no longer hosts a request-side per-text entry point: the
+ * single place plugins cook chat text for their own LLM requests is
+ * `lib/plugin-floors.js` (`readPluginFloors` / `cookPluginFloorText`).
+ * What remains here:
+ *   - `computeDepthsFromEnd` — shared depth-from-end computation, used
+ *     by plugin-floors so plugins see the same depth numbering the main
+ *     generation pipeline feeds to `applyRegex`.
+ *   - `regexAgentPluginOutput` — response-side primitive: applies
+ *     AI_OUTPUT-scoped, plugin-message regex scripts to agent-produced
+ *     text re-entering an LLM context through a non-`role:'assistant'`
+ *     channel (e.g. a sub-agent's output in a tool-result envelope).
+ *   - `__resetRegexApiCacheForTests` — test seam.
  *
  * Depth semantics match the main pipeline: `depth` is 0-based, counting
  * from the *end* of the "usable" chat (system messages skipped). The
  * last non-system message is depth 0. This lets a script authored with
- * `maxDepth: 4` do the same thing here that it does in Generate().
+ * `maxDepth: 4` do the same thing on the plugin lane that it does in
+ * Generate().
+ *
+ * Plugin-channel semantics:
+ *   The plugin channel applies pluginOnly rules plus the message's real
+ *   chat depth; main-pipeline-only rules (promptOnly) never enter it.
  *
  * Regex engine access:
  *   We consume the regex primitives through `Luker.getContext().regex`
@@ -40,20 +38,6 @@
  *   finishes wiring `globalThis.Luker`, and in the browser it would
  *   fire before `st-context.js` finishes exposing the `regex` field.
  *   Lazy avoids both hazards.
- *
- * Double-apply note (rules with both scopes ticked):
- *   A script with BOTH `promptOnly` AND `pluginOnly` ticked will be
- *   applied TWICE when a plugin consumes chat this way:
- *     - once here (via `regexChatMessageForAgent` with `isPrompt:true`),
- *       matching the `promptOnly && isPrompt` branch in `getRegexedString`
- *     - once downstream in `buildPresetAwarePromptMessages` →
- *       `applyPluginRegexToPromptMessages` (with `isPluginPrompt:true`),
- *       matching the `pluginOnly && isPluginPrompt` branch
- *   The main generation pipeline only applies the promptOnly branch (it
- *   doesn't route through `buildPresetAwarePromptMessages`), so for
- *   dual-scope rules plugin requests will apply one extra pass compared
- *   to the main pipeline. Accepted as a rare-edge behavior: users who
- *   author dual-scope rules opt into "apply everywhere possible".
  */
 
 let __regexApiCache = undefined;
@@ -113,37 +97,17 @@ export function computeDepthsFromEnd(messages) {
 }
 
 /**
- * Apply prompt-scoped regex scripts to a single chat message's text.
- * Returns raw `mes` when the regex API isn't reachable (e.g. bare unit
- * tests without a Luker stub) so callers degrade gracefully rather
- * than crashing.
- *
- * @param {object} message — chat message object (needs `mes` + `is_user`)
- * @param {number|undefined} depth — 0-based depth from chat tail; pass
- *     `undefined` to disable depth-based script filtering
- * @returns {string} the text ready to feed to an LLM
- */
-export function regexChatMessageForAgent(message, depth) {
-    const raw = String(message?.mes ?? '');
-    if (!raw) return '';
-    const api = getRegexApi();
-    if (!api) return raw;
-    const placement = message?.is_user ? api.placement.USER_INPUT : api.placement.AI_OUTPUT;
-    return api.applyRegex(raw, placement, { isPrompt: true, depth });
-}
-
-/**
  * Apply AI_OUTPUT-scoped, plugin-message regex scripts to a piece of
  * agent-produced text before it re-enters an LLM's context via a
  * non-`role:'assistant'` channel (e.g. a sub-agent's `outputText`
  * bubbling back through a `tool_result` envelope to the main agent).
  *
- * Why a separate helper from `regexChatMessageForAgent`:
+ * Distinct from the request-side lane (`lib/plugin-floors.js`):
  *   - Placement is fixed to AI_OUTPUT (this text is by definition an
  *     agent's own output; there is no user-input case).
  *   - Flag is `isPluginPrompt:true`, matching what
- *     `applyPluginRegexToPromptMessages` already sets on assistant
- *     messages built by `buildPresetAwarePromptMessages`. This means a
+ *     `applyPluginLaneRegex` already sets when cooking assistant
+ *     messages in plugin-built prompt arrays. This means a
  *     single user-authored rule scoped to AI_OUTPUT with the
  *     "plugin messages only" flag ticked will cover BOTH (a) an
  *     agent's own next-round view of its previous-round assistant turn
@@ -156,7 +120,7 @@ export function regexChatMessageForAgent(message, depth) {
  *     stable chat-depth, and depth-based filtering (`minDepth` /
  *     `maxDepth`) is almost never authored on pluginOnly rules.
  *     Passing `undefined` disables the depth filter, matching how
- *     `applyPluginRegexToPromptMessages` treats an undepthed message.
+ *     `applyPluginLaneRegex` treats an undepthed message.
  *
  * Returns raw text when the regex API isn't reachable (bare unit tests
  * without a Luker stub) so callers degrade gracefully.

@@ -1075,7 +1075,7 @@ export function createSubagentDispatcher({
                         // `await_subagents` tool_result envelope.
                         // Without this pass the same rule that already
                         // scrubs an agent's own next-round view (via
-                        // `applyPluginRegexToPromptMessages` on the
+                        // `applyPluginLaneRegex` on the
                         // `role:'assistant'` history) would silently
                         // miss the sub-agent → parent hand-off, because
                         // that hand-off travels as a JSON-serialized

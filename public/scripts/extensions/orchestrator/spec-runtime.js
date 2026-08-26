@@ -43,7 +43,7 @@ const extension_settings = Luker.getContext().extensionSettings;
 import { isAbortSignalLike, throwIfAborted } from './abort-utils.js';
 import { canonicalStringifyArgs } from './canonical-stringify.js';
 import { extractLastUserMessage, getRecentMessages } from './anchors.js';
-import { computeDepthsFromEnd, regexChatMessageForAgent } from '../../lib/chat-regex.js';
+import { readPluginFloors } from '../../lib/plugin-floors.js';
 import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import {
     AUTO_INJECTED_PLACEHOLDER_RUNTIME_NOTE,
@@ -602,9 +602,9 @@ export function extractReviewDecision(toolCalls = [], nodeId = '') {
 
 /**
  * Build the `{{recent_chat}}` / `{{last_user}}` template values for a
- * node run. Both go through prompt-scoped regex scripts so orchestrator
+ * node run. Both go through the plugin regex lane so orchestrator
  * agents see the same rewritten text the main model would (see
- * `chat-regex.js` for rationale). `depth` is computed against the full
+ * `plugin-floors.js` for rationale). Depth is computed against the full
  * `messages` array so `minDepth` / `maxDepth` filters behave the same
  * way they do in Generate().
  *
@@ -614,24 +614,28 @@ export function extractReviewDecision(toolCalls = [], nodeId = '') {
  */
 function buildRecentChatAndLastUser(messages, maxRecent) {
     const source = Array.isArray(messages) ? messages : [];
-    const depths = computeDepthsFromEnd(source);
+    // All three roles: getRecentMessages slices keep interleaved system
+    // floors, and their text used to surface in recent_chat verbatim.
+    const cookedByIndex = new Map(
+        readPluginFloors({ chat: source }, { roles: ['user', 'assistant', 'system'] })
+            .map(record => [record.sourceIndex, record.mesCooked]),
+    );
     const indexOf = new Map();
     for (let i = 0; i < source.length; i += 1) {
         indexOf.set(source[i], i);
     }
+    const cookedAt = (idx, message) => (typeof idx === 'number' && cookedByIndex.has(idx))
+        ? cookedByIndex.get(idx)
+        : String(message?.mes ?? '');
     const recentChatText = getRecentMessages(source, maxRecent)
         .map(message => {
-            const idx = indexOf.get(message);
-            const depth = typeof idx === 'number' ? depths[idx] : undefined;
-            const rewrittenMes = regexChatMessageForAgent(message, depth);
+            const rewrittenMes = cookedAt(indexOf.get(message), message);
             const speaker = message?.is_user ? 'User' : (message?.name || 'Assistant');
             return `${speaker}: ${rewrittenMes}`;
         })
         .join('\n');
     const { index: lastUserIndex, message: lastUser } = extractLastUserMessage(source);
-    const lastUserText = lastUserIndex >= 0
-        ? regexChatMessageForAgent(lastUser, depths[lastUserIndex])
-        : '';
+    const lastUserText = lastUserIndex >= 0 ? cookedAt(lastUserIndex, lastUser) : '';
     return { recentChatText, lastUserText };
 }
 

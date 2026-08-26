@@ -375,7 +375,8 @@ jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
     getCharacterEmbeddedWorld: () => null,
     newWorldInfoEntryTemplate: () => ({}), createWorldInfoEntry: () => Promise.resolve(),
     setWorldInfoButtonClass: () => {}, setGlobalWorldInfoSelection: () => {},
-    deleteWorldInfoEntry: () => Promise.resolve(), selected_world_info: [],
+    deleteWorldInfoEntry: () => Promise.resolve(), deleteWorldInfo: () => Promise.resolve(),
+    selected_world_info: [],
     getChatWorldInfoNames: () => [], setChatWorldInfoSelection: () => {},
     getSortedEntries: () => Promise.resolve([]),
 }));

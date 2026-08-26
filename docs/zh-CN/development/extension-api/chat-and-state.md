@@ -18,6 +18,92 @@
 | `context.chat_metadata` | `object` | 当前聊天的元数据 |
 | `context.online_status` | `string` | API 连接状态 |
 
+## 在插件请求中读取聊天楼层
+
+自己驱动 LLM 请求的插件（多智能体编排、记忆图整理、迭代重建等）需要把聊天历史变成 prompt 消息。不要自己遍历 `context.chat`：
+
+- **深度很容易算错。** 带 `minDepth` / `maxDepth` 的正则脚本期望的深度是从可用聊天的末尾起算（跳过系统楼层）。手写遍历通常用数组位置当深度——那是另一个数字。
+- **裸 `.mes` 会漏涂正则。** 主生成管线在文本进入模型前会把每个楼层都过一遍用户的正则脚本。手写遍历喂给 agent 的是原始文本，而主聊天里看到的是改写后的文本。
+
+### readPluginFloors
+
+```ts
+context.readPluginFloors(options?: {
+  fromSeq?: number,     // 聊天位置下界（1-based，含）
+  toSeq?: number,       // 聊天位置上界（1-based，含）
+  fromDepth?: number,   // 计算深度的下界（含）
+  toDepth?: number,     // 计算深度的上界（含）
+  roles?: string[],     // 默认 ['user', 'assistant']
+}): FloorRecord[]
+```
+
+把当前聊天读成可直接进 prompt 的楼层记录。只遍历 `context.chat` 一次，每个楼层都带着真实的「距末尾深度」走一遍插件正则通道——脚本上的 `maxDepth` 在这里和在主管线里含义一致。
+
+过滤器决定返回哪些记录；返回的每条记录始终带有下面表格里的全部字段。默认角色白名单会排除系统楼层，与主管线对它们的处理一致。传 `roles: ['user', 'assistant', 'system']` 可以把它们加回来——这类记录的 `depth` 为 `undefined`，因为系统楼层不在深度编号之内。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `seq` | `number` | 聊天中的位置（1-based） |
+| `sourceIndex` | `number` | `chat` 中的索引（0-based） |
+| `depth` | `number \| undefined` | 从聊天末尾起算的深度（0-based），系统楼层被跳过；系统楼层的值为 `undefined` |
+| `is_user` | `boolean` | 是否由用户写入 |
+| `is_system` | `boolean` | 是否为系统消息 |
+| `mesRaw` | `string` | 原始 `.mes` 文本，未做任何处理 |
+| `mesCooked` | `string` | 经过插件正则通道后的文本 |
+
+绝大多数场景应该用 `mesCooked`：注入定位跟随作者身份（`is_user` → 用户输入规则，否则 AI 输出规则），插件作用域的正则脚本会在读取时按该楼层的真实聊天深度套用。
+
+### floorRecordToTaskMessage
+
+```ts
+context.floorRecordToTaskMessage(record: FloorRecord): {
+  role: string,
+  content: string,
+  sourceFloorIndex: number,
+}
+```
+
+把记录转换成可传入 [`generateTask`](/zh-CN/development/extension-api/generation) 的 task message。role 由作者标记推导（先看 `is_user` → `'user'`，再看 `is_system` → `'system'`，否则 `'assistant'`），content 取 `mesCooked`。
+
+```js
+const ctx = Luker.getContext();
+
+const taskMessages = [
+    { role: 'system', content: 'Summarize the conversation so far.' },
+    ...ctx.readPluginFloors({ roles: ['user', 'assistant', 'system'] })
+        .map(ctx.floorRecordToTaskMessage),
+];
+
+const result = await ctx.generateTask({ taskMessages });
+```
+
+### 楼层来源标记
+
+转换后消息上的 `sourceFloorIndex` 是一个来源标记：它告诉派发层这段文本已经由 `readPluginFloors` 涂过正则，自己的正则 pass 会跳过这条消息，避免脚本被套用第二次。
+
+这份契约分三部分：
+
+- 读 API 给它产出的每条消息都盖戳——你永远不需要自己计算或维护这个字段
+- 派发层识别标记，原样放行带戳消息，并在任何内容发往网络之前剥掉标记
+- 插件只负责搬运带戳的消息（重排、过滤、嵌进更大的 payload）；标记在常规的对象操作中自然保留
+
+因此无论数组被派发多少次，每个楼层只会被涂一次正则。
+
+### tool 载荷豁免
+
+派发层的正则 pass 只处理 `role: 'user'` 或 `'assistant'` 且 content 为字符串的消息。工具流量（`tool_result` 等）一律不动。所以嵌进 tool JSON 里的楼层文本保持 `readPluginFloors` 读取时涂好的样子——不会被二次套用，历史经工具重放时也不会有重复涂抹的风险。
+
+响应方向同样无需做任何事：子代理输出经工具信封重新进入 LLM 上下文（例如父 agent 消费子代理的报告）时，核心会在送达前自动完成涂抹。插件侧代码永远不需要自己套正则。
+
+### 哪些正则规则在哪条通道生效
+
+规则的生效范围在两条通道之间划分得很干净：
+
+- `promptOnly` 规则绝不会出现在插件请求中——它们只在主生成管线内生效
+- `pluginOnly` 规则**只**出现在插件请求中——主管线看不到它们
+
+两个标记都没勾的规则对哪条通道都不生效——它改写的是存储的聊天历史本身，在消息编辑或保存时套用。
+
 ## 消息 API
 
 Luker 提供了统一的高层消息操作 API。每个操作都是完整的一条龙流程：内存更新 + DOM 渲染 + 事件触发 + 持久化。

@@ -25,7 +25,7 @@
 
 import { ToolError } from '../loop-runtime.js';
 import { gatherGrepMatches } from '../grep-tool.js';
-import { computeDepthsFromEnd, regexChatMessageForAgent } from '../../../lib/chat-regex.js';
+import { readPluginFloors } from '../../../lib/plugin-floors.js';
 
 const MAX_RANGE = 50;
 
@@ -48,6 +48,22 @@ function roleFromMessage(message) {
     if (message?.is_user) return 'user';
     if (message?.is_system) return 'system';
     return 'assistant';
+}
+
+// All three roles: both tools surface system floors verbatim (grep
+// corpus / read slices), so they must come back from the floor walk.
+const FLOOR_ROLES = ['user', 'assistant', 'system'];
+
+/**
+ * Cooked text by chat index. Falls back to raw `mes` for entries
+ * readPluginFloors skips (non-object slots) so output shape stays
+ * identical to the pre-API walk.
+ */
+function cookedTextByIndex(context) {
+    return new Map(
+        readPluginFloors(context, { roles: FLOOR_ROLES })
+            .map(record => [record.sourceIndex, record.mesCooked]),
+    );
 }
 
 /**
@@ -113,14 +129,14 @@ export async function execChatReadRange(args, context) {
     start = alignedStart;
     end = alignedEnd;
 
-    const depths = computeDepthsFromEnd(chat);
+    const cookedByIndex = cookedTextByIndex(context);
     const out = [];
     for (let i = start; i <= end; i += 1) {
         const message = chat[i];
         out.push({
             floor: i,
             role: roleFromMessage(message),
-            content: regexChatMessageForAgent(message, depths[i]),
+            content: cookedByIndex.has(i) ? cookedByIndex.get(i) : String(message?.mes ?? ''),
         });
     }
     return out;
@@ -145,14 +161,14 @@ export async function execChatSearch(args, context) {
     }
     const flags = typeof args?.flags === 'string' && args.flags.length > 0 ? args.flags : 'gm';
     const chat = Array.isArray(context?.chat) ? context.chat : [];
-    const depths = computeDepthsFromEnd(chat);
+    const cookedByIndex = cookedTextByIndex(context);
 
     function* corpus() {
         for (let i = 0; i < chat.length; i++) {
             const msg = chat[i];
             yield {
                 prefix: `floor_${i} [${roleFromMessage(msg)}]`,
-                content: regexChatMessageForAgent(msg, depths[i]),
+                content: cookedByIndex.has(i) ? cookedByIndex.get(i) : String(msg?.mes ?? ''),
             };
         }
     }

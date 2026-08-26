@@ -18,6 +18,92 @@ The following properties provide read-only access to the current chat:
 | `context.chat_metadata` | `object` | Metadata of the current chat |
 | `context.online_status` | `string` | API connection status |
 
+## Reading Chat Floors in Plugin Requests
+
+Plugins that drive their own LLM requests (orchestrator agents, memory-graph curation, iteration rebuilds, ...) need the chat history as prompt messages. Do not walk `context.chat` yourself:
+
+- **Depth is easy to get wrong.** Regex scripts authored with `minDepth` / `maxDepth` expect depth counted from the end of the usable chat (system floors skipped). Hand-rolled walks usually derive depth from array position — a different number.
+- **Raw `.mes` skips regex.** The main generation pipeline cooks every floor through the user's regex scripts before the text reaches the model. A hand-rolled walk feeds your agents raw text while the main chat shows rewritten text.
+
+### readPluginFloors
+
+```ts
+context.readPluginFloors(options?: {
+  fromSeq?: number,     // inclusive 1-based lower chat-position bound
+  toSeq?: number,       // inclusive 1-based upper chat-position bound
+  fromDepth?: number,   // inclusive lower bound on computed depth
+  toDepth?: number,     // inclusive upper bound on computed depth
+  roles?: string[],     // default ['user', 'assistant']
+}): FloorRecord[]
+```
+
+Reads the current chat as prompt-ready floor records. Walks `context.chat` exactly once and routes every floor through the plugin regex lane with real depth-from-end, so a script's `maxDepth` means the same thing here as it does in the main pipeline.
+
+Filters narrow which records come back; every returned record always carries all fields below. The default role whitelist excludes system floors, matching how the main pipeline treats them. Pass `roles: ['user', 'assistant', 'system']` to re-include them — such records have `depth: undefined` because system floors sit outside the depth numbering.
+
+| Field | Type | Description |
+|------|------|------|
+| `seq` | `number` | 1-based position in the chat |
+| `sourceIndex` | `number` | 0-based index into `chat` |
+| `depth` | `number \| undefined` | 0-based depth from the chat tail, system floors skipped; `undefined` for system floors |
+| `is_user` | `boolean` | Whether the floor was written by the user |
+| `is_system` | `boolean` | Whether the floor is a system message |
+| `mesRaw` | `string` | Raw `.mes` text, untouched |
+| `mesCooked` | `string` | Text after the plugin regex lane |
+
+`mesCooked` is what you almost always want: placement follows authorship (`is_user` → user input rules, otherwise AI output rules) and plugin-scoped regex scripts apply at read time with the floor's real chat depth.
+
+### floorRecordToTaskMessage
+
+```ts
+context.floorRecordToTaskMessage(record: FloorRecord): {
+  role: string,
+  content: string,
+  sourceFloorIndex: number,
+}
+```
+
+Converts a record into a task message for arrays passed to [`generateTask`](/development/extension-api/generation). The role is derived from authorship flags (`is_user` → `'user'`, then `is_system` → `'system'`, otherwise `'assistant'`) and the content is `mesCooked`.
+
+```js
+const ctx = Luker.getContext();
+
+const taskMessages = [
+    { role: 'system', content: 'Summarize the conversation so far.' },
+    ...ctx.readPluginFloors({ roles: ['user', 'assistant', 'system'] })
+        .map(ctx.floorRecordToTaskMessage),
+];
+
+const result = await ctx.generateTask({ taskMessages });
+```
+
+### Floor provenance
+
+The `sourceFloorIndex` field on converted messages is a provenance stamp: it tells the dispatch layer that this text was already cooked by `readPluginFloors`, so its own regex pass skips the message instead of applying scripts a second time.
+
+The contract has three parts:
+
+- The read API stamps every message it produces — you never compute or maintain the field yourself
+- The dispatcher recognizes the stamp, passes those messages through uncooked, and strips the marker before anything leaves for the network
+- Your plugin only carries stamped messages around (reordering, filtering, embedding in larger payloads); the stamp survives normal object handling
+
+This means cooking happens exactly once per floor no matter how many times the array is dispatched.
+
+### Tool payloads are exempt
+
+The dispatch-layer regex pass only touches messages with `role: 'user'` or `'assistant'` and string content. Tool traffic (`tool_result` and friends) is never modified. Floor text embedded inside tool JSON therefore stays exactly as `readPluginFloors` cooked it at read time — no second application, and no risk of double-cooking when history is replayed through tools.
+
+On the response direction there is also nothing to do: sub-agent output that re-enters an LLM context through a tool envelope (e.g. a sub-agent's report consumed by the parent agent) is cooked automatically by core before delivery. Plugin-side code never needs to apply regex itself.
+
+### Which regex rules apply where
+
+Rule scope is split cleanly between the two lanes:
+
+- `promptOnly` rules never appear in plugin requests — they stay scoped to the main generation pipeline
+- `pluginOnly` rules appear *only* in plugin requests — they are invisible to the main pipeline
+
+A rule with neither flag touches neither lane — it rewrites the stored chat history itself, and is applied when messages are edited or saved.
+
 ## Messages API
 
 Luker provides a unified high-level message API. Every operation is a full pipeline: memory update + DOM rendering + event emission + persistence.

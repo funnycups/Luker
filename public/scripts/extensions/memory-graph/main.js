@@ -66,7 +66,9 @@ import {
     DEFAULT_EVENT_COMPRESS_INSTRUCTION,
 } from './default-prompts.js';
 import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
-import { computeDepthsFromEnd, regexChatMessageForAgent } from '../../lib/chat-regex.js';
+import { computeDepthsFromEnd } from '../../lib/chat-regex.js';
+import { cookPluginFloorText } from '../../lib/plugin-floors.js';
+import { markPluginFloorMessage } from '../../lib/plugin-prompt-regex.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import {
     TOOL_PROTOCOL_STYLE,
@@ -3477,8 +3479,9 @@ async function runFunctionCallTask(context, settings, {
     // requestSingleFunctionCallWithRetry verbatim. Callers that need
     // role-alternating chat between the system prefix and the tail user
     // task (extraction / recall route / recall finalize) construct this
-    // themselves so per-turn user regex applies at real chat depth via
-    // buildPresetAwarePromptMessages → applyPluginRegexToPromptMessages.
+    // themselves so per-turn plugin-lane regex applies at real chat depth
+    // via cookPluginFloorText, and the dispatch layer skips re-cooking
+    // these texts through its floor provenance marker.
     taskMessages: taskMessagesOverride = null,
     promptPresetName = '',
     apiPresetName = '',
@@ -4299,8 +4302,8 @@ function buildExtractInputTail(requiredTypes, graphData) {
 
 /**
  * Wrap a chat message's cooked text with the seq metadata prefix used by
- * extraction / recall LLM inputs. The wrapper prefix is added AFTER
- * prompt-scoped regex has already been applied, so user regex rules
+ * extraction / recall LLM inputs. The wrapper prefix is added AFTER the
+ * plugin-lane cooking pass has already been applied, so user regex rules
  * only see raw chat text — the wrapper doesn't pollute pattern inputs.
  */
 function wrapChatMessageContentWithSeq(seq, cookedText) {
@@ -4311,7 +4314,7 @@ function wrapChatMessageContentWithSeq(seq, cookedText) {
 /**
  * Convert a memory-graph batch item (from buildExtractBatchFromFrames or
  * queryBundle.recent_messages equivalent) into a role-alternating chat
- * completion message, with prompt-scoped user regex scripts applied at
+ * completion message, with pluginOnly user regex scripts applied at
  * the real chat[] depth for parity with the main pipeline.
  *
  * @param {{seq?: number, is_user?: boolean, name?: string, mes?: string, source_index?: number}} item
@@ -4320,19 +4323,25 @@ function wrapChatMessageContentWithSeq(seq, cookedText) {
  *     cooked text is prefixed with `<seq>{n}</seq>\n` so extraction prompts
  *     can identify per-turn seq boundaries. Default false for recall /
  *     rewrite scenarios where seq per turn is not consumed.
- * @returns {{role: string, content: string}}
+ * @returns {{role: string, content: string, sourceFloorIndex: number}}
  */
 function buildRoleSplitChatMessage(item, depth, { wrapWithSeq = false } = {}) {
     const isUser = Boolean(item?.is_user);
     const rawText = String(item?.mes || '');
-    const cooked = regexChatMessageForAgent({ mes: rawText, is_user: isUser }, depth);
+    const cooked = cookPluginFloorText({ mes: rawText, is_user: isUser }, depth);
     const content = wrapWithSeq
         ? wrapChatMessageContentWithSeq(Number(item?.seq || 0), cooked)
         : cooked;
-    return {
-        role: isUser ? 'user' : 'assistant',
-        content,
-    };
+    // Stamp the floor-provenance marker so the dispatch layer
+    // (applyPluginLaneRegex) skips re-cooking these already-cooked texts.
+    // The marker is stripped before any network payload leaves.
+    return markPluginFloorMessage(
+        {
+            role: isUser ? 'user' : 'assistant',
+            content,
+        },
+        item?.source_index,
+    );
 }
 
 /**
@@ -4343,7 +4352,7 @@ function buildRoleSplitChatMessage(item, depth, { wrapWithSeq = false } = {}) {
  *
  * Items with missing / invalid source_index fall back to `undefined`
  * depth (disabling depth-based script filtering), matching the graceful
- * degradation policy in `regexChatMessageForAgent`.
+ * degradation policy in `cookPluginFloorText`.
  *
  * @param {Array<object>} batchItems
  * @param {object} context
@@ -15619,6 +15628,7 @@ export function _setSafeInjectMemoryPromptsHookForTest(hook) {
 export function _setPersistentDrainHookForTest(hook) {
     __testPersistentDrainHook = (typeof hook === 'function') ? hook : null;
 }
+export { buildRoleSplitChatMessages as _buildRoleSplitChatMessagesForTest };
 
 jQuery(() => {
     const context = getContext();

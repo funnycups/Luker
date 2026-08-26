@@ -18,6 +18,92 @@
 | `context.chat_metadata` | `object` | 當前聊天的中繼資料 |
 | `context.online_status` | `string` | API 連線狀態 |
 
+## 在外掛請求中讀取聊天樓層
+
+自己驅動 LLM 請求的外掛（多智能體編排、記憶圖整理、迭代重建等）需要把聊天歷史變成 prompt 訊息。不要自己遍歷 `context.chat`：
+
+- **深度很容易算錯。** 帶 `minDepth` / `maxDepth` 的正則腳本期望的深度是從可用聊天的末尾起算（跳過系統樓層）。手寫遍歷通常用陣列位置當深度——那是另一個數字。
+- **裸 `.mes` 會漏塗正則。** 主生成管線在文字進入模型前會把每個樓層都過一遍使用者的正則腳本。手寫遍歷餵給 agent 的是原始文字，而主聊天裡看到的是改寫後的文字。
+
+### readPluginFloors
+
+```ts
+context.readPluginFloors(options?: {
+  fromSeq?: number,     // 聊天位置下界（1-based，含）
+  toSeq?: number,       // 聊天位置上界（1-based，含）
+  fromDepth?: number,   // 計算深度的下界（含）
+  toDepth?: number,     // 計算深度的上界（含）
+  roles?: string[],     // 預設 ['user', 'assistant']
+}): FloorRecord[]
+```
+
+把當前聊天讀成可直接進 prompt 的樓層記錄。只遍歷 `context.chat` 一次，每個樓層都帶著真實的「距末尾深度」走一遍外掛正則通道——腳本上的 `maxDepth` 在這裡和主管線裡含義一致。
+
+過濾器決定回傳哪些記錄；回傳的每條記錄始終帶有下面表格裡的全部欄位。預設角色白名單會排除系統樓層，與主管線對它們的處理一致。傳 `roles: ['user', 'assistant', 'system']` 可以把它們加回來——這類記錄的 `depth` 為 `undefined`，因為系統樓層不在深度編號之內。
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `seq` | `number` | 聊天中的位置（1-based） |
+| `sourceIndex` | `number` | `chat` 中的索引（0-based） |
+| `depth` | `number \| undefined` | 從聊天末尾起算的深度（0-based），系統樓層被跳過；系統樓層的值為 `undefined` |
+| `is_user` | `boolean` | 是否由使用者寫入 |
+| `is_system` | `boolean` | 是否為系統訊息 |
+| `mesRaw` | `string` | 原始 `.mes` 文字，未做任何處理 |
+| `mesCooked` | `string` | 經過外掛正則通道後的文字 |
+
+絕大多數場景應該用 `mesCooked`：注入定位跟隨作者身份（`is_user` → 使用者輸入規則，否則 AI 輸出規則），外掛作用域的正則腳本會在讀取時按該樓層的真實聊天深度套用。
+
+### floorRecordToTaskMessage
+
+```ts
+context.floorRecordToTaskMessage(record: FloorRecord): {
+  role: string,
+  content: string,
+  sourceFloorIndex: number,
+}
+```
+
+把記錄轉換成可傳入 [`generateTask`](/zh-TW/development/extension-api/generation) 的 task message。role 由作者標記推導（先看 `is_user` → `'user'`，再看 `is_system` → `'system'`，否則 `'assistant'`），content 取 `mesCooked`。
+
+```js
+const ctx = Luker.getContext();
+
+const taskMessages = [
+    { role: 'system', content: 'Summarize the conversation so far.' },
+    ...ctx.readPluginFloors({ roles: ['user', 'assistant', 'system'] })
+        .map(ctx.floorRecordToTaskMessage),
+];
+
+const result = await ctx.generateTask({ taskMessages });
+```
+
+### 樓層來源標記
+
+轉換後訊息上的 `sourceFloorIndex` 是一個來源標記：它告訴派發層這段文字已經由 `readPluginFloors` 塗過正則，自己的正則 pass 會跳過這條訊息，避免腳本被套用第二次。
+
+這份契約分三部分：
+
+- 讀 API 給它產出的每條訊息都蓋戳——你永遠不需要自己計算或維護這個欄位
+- 派發層識別標記，原樣放行帶戳訊息，並在任何內容發往網路之前剝掉標記
+- 外掛只負責搬運帶戳的訊息（重排、過濾、嵌進更大的 payload）；標記在常規的物件操作中自然保留
+
+因此無論陣列被派發多少次，每個樓層只會被塗一次正則。
+
+### tool 載荷豁免
+
+派發層的正則 pass 只處理 `role: 'user'` 或 `'assistant'` 且 content 為字串的訊息。工具流量（`tool_result` 等）一律不動。所以嵌進 tool JSON 裡的樓層文字保持 `readPluginFloors` 讀取時塗好的樣子——不會被二次套用，歷史經工具重放時也不會有重複塗抹的風險。
+
+回應方向同樣無需做任何事：子代理輸出經工具信封重新進入 LLM 上下文（例如父 agent 消費子代理的報告）時，核心會在送達前自動完成塗抹。外掛側程式碼永遠不需要自己套正則。
+
+### 哪些正則規則在哪條通道生效
+
+規則的生效範圍在兩條通道之間劃分得很乾淨：
+
+- `promptOnly` 規則絕不會出現在外掛請求中——它們只在主生成管線內生效
+- `pluginOnly` 規則**只**出現在外掛請求中——主管線看不到它們
+
+兩個標記都沒勾的規則對哪條通道都不生效——它改寫的是儲存的聊天歷史本身，在訊息編輯或儲存時套用。
+
 ## 訊息 API
 
 Luker 提供了統一的高層訊息操作 API。每個操作都是完整的一條龍流程：記憶體更新 + DOM 渲染 + 事件觸發 + 持久化。
