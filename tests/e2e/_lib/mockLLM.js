@@ -270,11 +270,19 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         };
     }
 
+    // One-shot failure injection for the /responses endpoint. The next
+    // /responses request is answered with the given status + raw body and
+    // consumes no scripted queue entries; the flag then clears itself.
+    let failNext = null;
+    function failNextResponses({ status = 500, body = 'upstream error' } = {}) {
+        failNext = { status, body };
+    }
+
     const server = http.createServer(async (req, res) => {
         let body = '';
         for await (const chunk of req) body += chunk;
         let parsed = {};
-        try { parsed = JSON.parse(body || '{}'); } catch {}
+        try { parsed = JSON.parse(body || '{}'); } catch { /* non-JSON body — treat as empty */ }
         // Track when the mock received this request and when it emitted
         // the first response byte. Barrier / cache-warmup tests use
         // these to assert follower-request timing relative to lead
@@ -472,6 +480,89 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
             return;
         }
 
+        // OpenAI Responses API. Reuses the same scripted queues (replies/tools)
+        // and router/generic routes as chat completions, but emits semantic
+        // Responses events instead of chat chunks. The request body carries an
+        // input[] array instead of messages[], so synthesize a messages view
+        // before director/generic classification (which fingerprints on the
+        // messages array shape).
+        if (req.url.endsWith('/responses')) {
+            if (failNext) {
+                const { status, body } = failNext;
+                failNext = null;
+                res.writeHead(status, { 'content-type': 'text/plain' });
+                res.end(String(body));
+                return;
+            }
+            const isStreamFlagged = parsed.stream === true;
+            const classifyView = { ...parsed, messages: responsesInputToMessages(parsed.input) };
+
+            let routerResponse = null;
+            if (directorRoute) {
+                const classification = classifyRequest(classifyView);
+                if (classification.role !== 'unknown') {
+                    const reqDescriptor = {
+                        ...classification,
+                        turn: turnCounters[classification.role],
+                    };
+                    try {
+                        routerResponse = directorRoute(reqDescriptor);
+                    } catch (err) {
+                        res.writeHead(500, { 'content-type': 'application/json' });
+                        res.end(JSON.stringify({ error: { message: `mock director route threw: ${err?.message || err}` } }));
+                        return;
+                    }
+                    if (routerResponse !== null && routerResponse !== undefined) {
+                        turnCounters[classification.role] += 1;
+                    }
+                }
+            }
+
+            if (routerResponse !== null && routerResponse !== undefined) {
+                await respondFromResponsesRoute(res, parsed, isStreamFlagged, { response: routerResponse }, chunkDelayMsGlobal);
+                return;
+            }
+
+            if (genericRoute) {
+                let generic = null;
+                try {
+                    generic = genericRoute({
+                        turn: genericTurn,
+                        body: classifyView,
+                        stream: isStreamFlagged,
+                        systemPrompts: (classifyView.messages || [])
+                            .filter((m) => m && m.role === 'system')
+                            .map((m) => stringifyMessageContent(m.content)),
+                        userMessages: (classifyView.messages || [])
+                            .filter((m) => m && m.role === 'user')
+                            .map((m) => stringifyMessageContent(m.content)),
+                        toolNames: (Array.isArray(parsed?.tools) ? parsed.tools : [])
+                            .map((t) => String(t?.function?.name || t?.name || ''))
+                            .filter(Boolean),
+                    });
+                } catch (err) {
+                    res.writeHead(500, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ error: { message: `mock generic route threw: ${err?.message || err}` } }));
+                    return;
+                }
+                if (generic !== null && generic !== undefined) {
+                    genericTurn += 1;
+                    await respondFromResponsesRoute(res, parsed, isStreamFlagged, { response: generic }, chunkDelayMsGlobal);
+                    return;
+                }
+            }
+
+            // Queue fallback — same precedence as chat completions: tools
+            // before replies.
+            const toolCall = tools.length ? tools.shift() : null;
+            const reply = toolCall ? null : (replies.length ? replies.shift() : deriveEcho(classifyView));
+            const scripted = toolCall
+                ? { response: { tool: toolCall.name, arguments: toolCall.arguments } }
+                : { response: { text: reply } };
+            await respondFromResponsesRoute(res, parsed, isStreamFlagged, scripted, chunkDelayMsGlobal);
+            return;
+        }
+
         // Status / generic 200 for unknown probes.
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end('{}');
@@ -489,6 +580,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         clearDirectorRun() { setDirectorRoute(null); },
         scriptCompletion(route) { setGenericRoute(route); },
         clearScriptedCompletion() { setGenericRoute(null); },
+        failNextResponses,
         requests,
         stop: () => new Promise((resolve) => server.close(() => resolve())),
     };
@@ -599,6 +691,114 @@ function respondFromRouter(res, parsed, response, isStream) {
         choices: [choice],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     }));
+}
+
+/**
+ * Emit a Responses-API reply derived from the same scripted shapes as
+ * respondFromRouter ({ text } / { tool, arguments } / { toolCalls } /
+ * optional { reasoning }). Streaming emits semantic Responses events;
+ * non-streaming returns the full response object.
+ */
+async function respondFromResponsesRoute(res, parsed, isStream, scripted, chunkDelayMs = 0) {
+    const toolCalls = normalizeToolCalls(scripted.response);
+    const text = String(scripted.response.text ?? '');
+    const reasoning = scripted.response.reasoning != null ? String(scripted.response.reasoning) : '';
+
+    if (!isStream) {
+        const output = [];
+        if (reasoning.length > 0) {
+            output.push({ type: 'reasoning', summary: [{ type: 'summary_text', text: reasoning }] });
+        }
+        if (text.length > 0) {
+            output.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+        }
+        toolCalls.forEach((tc, i) => {
+            output.push({ type: 'function_call', id: `fc_${i + 1}`, call_id: `mock-call-${i + 1}`, name: tc.name, arguments: tc.arguments });
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+            id: 'resp_mock_1',
+            object: 'response',
+            status: 'completed',
+            model: parsed.model || 'mock-gpt-4o',
+            output,
+            usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+        }));
+        return;
+    }
+
+    res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'connection': 'keep-alive',
+    });
+    const send = (obj) => res.write(`event: ${obj.type}\ndata: ${JSON.stringify(obj)}\n\n`);
+    send({ type: 'response.created', response: { id: 'resp_mock_1' } });
+    send({ type: 'response.in_progress', response: { id: 'resp_mock_1' } });
+
+    let outputIndex = 0;
+    if (reasoning.length > 0) {
+        send({ type: 'response.output_item.added', output_index: outputIndex, item: { type: 'reasoning' } });
+        send({ type: 'response.reasoning_summary_part.added', item_id: 'rs_1', output_index: outputIndex, summary_index: 0 });
+        const rpieces = splitPieces(reasoning);
+        for (let i = 0; i < rpieces.length; i++) {
+            send({ type: 'response.reasoning_summary_text.delta', item_id: 'rs_1', output_index: outputIndex, delta: rpieces[i] });
+            if (chunkDelayMs > 0 && i < rpieces.length - 1) {
+                await new Promise(r => setTimeout(r, chunkDelayMs));
+            }
+        }
+        send({ type: 'response.reasoning_summary_text.done', item_id: 'rs_1', output_index: outputIndex });
+        send({ type: 'response.output_item.done', output_index: outputIndex, item: { type: 'reasoning' } });
+        outputIndex += 1;
+    }
+    if (text.length > 0) {
+        send({ type: 'response.output_item.added', output_index: outputIndex, item: { type: 'message', role: 'assistant' } });
+        send({ type: 'response.content_part.added', item_id: 'msg_1', output_index: outputIndex, content_index: 0, part: { type: 'output_text', text: '' } });
+        const tpieces = splitPieces(text);
+        for (let i = 0; i < tpieces.length; i++) {
+            send({ type: 'response.output_text.delta', item_id: 'msg_1', output_index: outputIndex, delta: tpieces[i] });
+            if (chunkDelayMs > 0 && i < tpieces.length - 1) {
+                await new Promise(r => setTimeout(r, chunkDelayMs));
+            }
+        }
+        send({ type: 'response.output_text.done', item_id: 'msg_1', output_index: outputIndex });
+        send({ type: 'response.output_item.done', output_index: outputIndex, item: { type: 'message', role: 'assistant' } });
+        outputIndex += 1;
+    }
+    for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i];
+        send({ type: 'response.output_item.added', output_index: outputIndex, item: { type: 'function_call', id: `fc_${i + 1}`, call_id: `mock-call-${i + 1}`, name: tc.name, arguments: '' } });
+        send({ type: 'response.function_call_arguments.delta', item_id: `fc_${i + 1}`, output_index: outputIndex, delta: tc.arguments });
+        send({ type: 'response.function_call_arguments.done', item_id: `fc_${i + 1}`, output_index: outputIndex, arguments: tc.arguments });
+        send({ type: 'response.output_item.done', output_index: outputIndex, item: { type: 'function_call', id: `fc_${i + 1}`, call_id: `mock-call-${i + 1}`, name: tc.name, arguments: tc.arguments } });
+        outputIndex += 1;
+    }
+    send({
+        type: 'response.completed',
+        response: { id: 'resp_mock_1', status: 'completed', usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } },
+    });
+    res.end();
+}
+
+function splitPieces(s) {
+    // Word-by-word with leading spaces preserved so consumers see
+    // incremental updates identical to the chat-completions path.
+    return s.split(/\s+/).map((w, i) => (i === 0 ? '' : ' ') + w).filter(Boolean);
+}
+
+/**
+ * Convert a Responses-API input[] back into a chat-completions-style
+ * messages array so director/generic classification (which fingerprints on
+ * messages) can run unchanged. function_call / function_call_output items
+ * are dropped — classification never needs them. A bare string input is
+ * treated as a single user turn.
+ */
+function responsesInputToMessages(input) {
+    if (typeof input === 'string') return [{ role: 'user', content: input }];
+    if (!Array.isArray(input)) return [];
+    return input
+        .filter((item) => item && typeof item === 'object' && typeof item.role === 'string')
+        .map((item) => ({ role: item.role, content: stringifyMessageContent(item.content) }));
 }
 
 /**

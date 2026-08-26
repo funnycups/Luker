@@ -6,7 +6,7 @@
 // placeholder messages and no doc-example strings.
 
 import { mkdirSync, writeFileSync, copyFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve } from 'node:path';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 
@@ -147,7 +147,7 @@ export const BRYN_ENTRIES = [
  * Write a connection-manager profile pointing at the in-process mock LLM.
  * Stored under settings.json -> extensionSettings.connectionManager.profiles.
  */
-export function appendConnectionProfile({ dataRoot, handle = 'default-user', name = 'e2e-mock', baseURL, model = 'mock-gpt-4o' }) {
+export function appendConnectionProfile({ dataRoot, handle = 'default-user', name = 'e2e-mock', baseURL, model = 'mock-gpt-4o', source = 'custom' }) {
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     if (!existsSync(settingsPath)) {
         throw new Error(`settings.json not found at ${settingsPath} — start the server once before adding profiles`);
@@ -168,13 +168,15 @@ export function appendConnectionProfile({ dataRoot, handle = 'default-user', nam
         context: '',
         sysprompt: '',
         'sysprompt-state': false,
-        instruct: '',
         'instruct-state': false,
         'tokenizer': '',
         'stop-strings': '',
-        // CUSTOM source with explicit URL — no real key needed.
-        'chat-completion-source': 'custom',
-        'custom-url': baseURL,
+        // CUSTOM source with explicit URL — no real key needed. For the
+        // openai_responses source the profile-resolver reads overrides from
+        // 'api-url' into responses_url (profile-resolver.js), so write that
+        // key instead of 'custom-url'.
+        'chat-completion-source': source,
+        ...(source === 'openai_responses' ? { 'api-url': baseURL } : { 'custom-url': baseURL }),
     };
     s.extensionSettings.connectionManager.profiles.push(profile);
     s.extensionSettings.connectionManager.selectedProfile = profileId;
@@ -229,6 +231,72 @@ export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', base
     ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };
     ext.connectionManager.selectedProfile = null;
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
+}
+
+/**
+ * Patch settings.json with the openai sub-tree config for the OpenAI
+ * Responses chat-completion source so the very first turn already routes
+ * to the mock. Structural clone of bootstrapCustomBackend (same
+ * neutralize / clear-profile logic) with source-specific keys:
+ *   - chat_completion_source = 'openai_responses'
+ *   - responses_url instead of custom_url
+ *   - openai_responses_model alongside the legacy openai_model slot
+ *
+ * Also seeds the `api_key_openai_responses` secret in the user's
+ * secrets.json: the Responses dispatcher refuses to fire without a key
+ * (unlike CUSTOM, which is keyless), and writing it here mirrors how a
+ * real user completes the connection form before their first turn.
+ */
+export function bootstrapResponsesBackend({ dataRoot, handle = 'default-user', baseURL, model = 'mock-gpt-4o', stream = true }) {
+    const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
+    const s = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
+    s.main_api = 'openai';
+    s.firstRun = false;
+    s.oai_settings = s.oai_settings || {};
+    s.oai_settings.chat_completion_source = 'openai_responses';
+    s.oai_settings.responses_url = baseURL;
+    s.oai_settings.openai_responses_model = model;
+    s.oai_settings.openai_model = model;
+    s.oai_settings.stream_openai = stream;
+    // Wipe legacy fields the dev's settings.json may have left behind that
+    // would otherwise reroute orchestrator/CPA/MG/CEA LLM calls via a real
+    // provider URL. The mirrored values live under extension_settings
+    // (snake_case) — the SPA reads from there at load.
+    const ext = (s.extension_settings = s.extension_settings || {});
+    for (const slot of ['orchestrator', 'completion_preset_assistant', 'memory_graph', 'character_editor_assistant']) {
+        const m = (ext[slot] = ext[slot] || {});
+        for (const key of [
+            'llmNodeApiPresetName', 'llmNodePresetName',
+            'requestApiPresetName', 'requestLlmPresetName',
+            'schemaIterationApiPresetName', 'schemaIterationLlmPresetName',
+            'iterationApiPresetName', 'iterationLlmPresetName',
+            'recallApiPresetName', 'recallLlmPresetName',
+            'extractApiPresetName', 'extractLlmPresetName',
+        ]) {
+            m[key] = '';
+        }
+    }
+    // Clear the active connection profile so resolveProfile doesn't
+    // override chat_completion_source/responses_url with a dev's "Claude"
+    // / "Gemini" profile blob.
+    ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };
+    ext.connectionManager.selectedProfile = null;
+    writeFileSync(settingsPath, JSON.stringify(s, null, 4));
+
+    // Seed the provider secret on disk in Luker's multi-secret array shape
+    // ({id,value,label,active}) — the SecretManager only reports a key as
+    // "saved" when it finds a non-empty array, which the client's Connect
+    // handler gates on before probing /status.
+    const secretsPath = resolve(userRoot(dataRoot, handle), 'secrets.json');
+    let secrets = {};
+    try { secrets = JSON.parse(readFileSync(secretsPath, 'utf8')); } catch { /* first seed */ }
+    secrets['api_key_openai_responses'] = [{
+        id: 'e2e-openai-responses-key',
+        value: 'mock-responses-key',
+        label: 'e2e-mock',
+        active: true,
+    }];
+    writeFileSync(secretsPath, JSON.stringify(secrets, null, 4));
 }
 
 /**

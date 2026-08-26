@@ -30,6 +30,7 @@ export const SECRET_KEYS = {
     TOGETHERAI: 'api_key_togetherai',
     MISTRALAI: 'api_key_mistralai',
     CUSTOM: 'api_key_custom',
+    OPENAI_RESPONSES: 'api_key_openai_responses',
     OOBA: 'api_key_ooba',
     INFERMATICAI: 'api_key_infermaticai',
     DREAMGEN: 'api_key_dreamgen',

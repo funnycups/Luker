@@ -6284,6 +6284,7 @@ function getModelOptions(quiet) {
         { id: 'llamacpp_model', api: 'textgenerationwebui', type: textgen_types.LLAMACPP },
         { id: 'featherless_model', api: 'textgenerationwebui', type: textgen_types.FEATHERLESS },
         { id: 'model_openai_select', api: 'openai', type: chat_completion_sources.OPENAI },
+        { id: 'model_responses_select', api: 'openai', type: chat_completion_sources.OPENAI_RESPONSES },
         { id: 'model_claude_select', api: 'openai', type: chat_completion_sources.CLAUDE },
         { id: 'model_openrouter_select', api: 'openai', type: chat_completion_sources.OPENROUTER },
         { id: 'model_ai21_select', api: 'openai', type: chat_completion_sources.AI21 },
@@ -6655,6 +6656,26 @@ async function setApiUrlCallback({ api = null, connect = 'true', quiet = 'false'
         }
 
         $('#custom_api_url_text').val(url).trigger('input');
+
+        if (autoConnect) {
+            $('#api_button_openai').trigger('click');
+        }
+
+        return url;
+    }
+
+    const isCurrentlyResponsesOpenai = main_api === 'openai' && oai_settings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES;
+    if (api === chat_completion_sources.OPENAI_RESPONSES || (!api && isCurrentlyResponsesOpenai)) {
+        if (!url) {
+            return oai_settings.responses_url ?? '';
+        }
+
+        if (!isCurrentlyResponsesOpenai && autoConnect) {
+            toastr.warning(t`OpenAI Responses API is not the currently selected API, so we cannot do an auto-connect. Consider switching to it via /api beforehand.`);
+            return '';
+        }
+
+        $('#responses_url_text').val(url).trigger('input');
 
         if (autoConnect) {
             $('#api_button_openai').trigger('click');

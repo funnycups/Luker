@@ -30,6 +30,7 @@ function getChatModelSettingBySource() {
             [chat_completion_sources.AZURE_OPENAI]: 'azure_openai_model',
             [chat_completion_sources.ZAI]: 'zai_model',
             [chat_completion_sources.SILICONFLOW]: 'siliconflow_model',
+            [chat_completion_sources.OPENAI_RESPONSES]: 'openai_responses_model',
         };
     }
     return _chatModelSettingBySource;
@@ -63,6 +64,7 @@ function getApiAliasToChatSource() {
             azure_openai: chat_completion_sources.AZURE_OPENAI,
             zai: chat_completion_sources.ZAI,
             siliconflow: chat_completion_sources.SILICONFLOW,
+            openai_responses: chat_completion_sources.OPENAI_RESPONSES,
         };
     }
     return _apiAliasToChatSource;
@@ -199,6 +201,8 @@ function buildApiSettingsOverrideFromProfile(profile, fallbackSource = '') {
             overrides.vertexai_region = apiUrlValue;
         } else if (resolvedSource === chat_completion_sources.ZAI) {
             overrides.zai_endpoint = apiUrlValue;
+        } else if (resolvedSource === chat_completion_sources.OPENAI_RESPONSES) {
+            overrides.responses_url = apiUrlValue;
         }
     }
 

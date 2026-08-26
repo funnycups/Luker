@@ -54,6 +54,7 @@ import { dispatchMinimax } from '../../luker-dispatch/providers/chat-completions
 import { dispatchElectronHub } from '../../luker-dispatch/providers/chat-completions/electronhub.js';
 import { dispatchAzureOpenAI } from '../../luker-dispatch/providers/chat-completions/azure-openai.js';
 import { dispatchOpenAICompatible } from '../../luker-dispatch/providers/chat-completions/openai-compatible.js';
+import { dispatchOpenAIResponses } from '../../luker-dispatch/providers/chat-completions/openai-responses.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -567,6 +568,11 @@ router.post('/status', async function (request, statusResponse) {
             apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_MISTRAL).toString();
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MISTRALAI) || '';
             headers = {};
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES) {
+            apiUrl = normalizeOpenAIBaseUrl(request.body.responses_url || 'https://api.openai.com/v1');
+            apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.OPENAI_RESPONSES) || '';
+            headers = {};
+            mergeObjectWithYaml(headers, request.body.custom_include_headers);
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             apiUrl = normalizeOpenAIBaseUrl(request.body.custom_url);
             apiKey = readProviderSecret(request, SECRET_KEYS.CUSTOM);
@@ -1127,6 +1133,7 @@ const CHAT_COMPLETION_DISPATCH_TABLE = {
     [CHAT_COMPLETION_SOURCES.OPENAI]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.OPENROUTER]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.CUSTOM]: dispatchOpenAICompatible,
+    [CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES]: dispatchOpenAIResponses,
     [CHAT_COMPLETION_SOURCES.PERPLEXITY]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.GROQ]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.FIREWORKS]: dispatchOpenAICompatible,

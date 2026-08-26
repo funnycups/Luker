@@ -15,6 +15,7 @@ import { dispatchChutes } from '../../src/luker-dispatch/providers/chat-completi
 import { dispatchMinimax } from '../../src/luker-dispatch/providers/chat-completions/minimax.js';
 import { dispatchElectronHub } from '../../src/luker-dispatch/providers/chat-completions/electronhub.js';
 import { dispatchAzureOpenAI } from '../../src/luker-dispatch/providers/chat-completions/azure-openai.js';
+import { dispatchOpenAIResponses } from '../../src/luker-dispatch/providers/chat-completions/openai-responses.js';
 
 function fakeRequest({ requestId = null, body = {}, handle = 'alice' } = {}) {
     return {
@@ -79,6 +80,10 @@ describe('selectChatCompletionDispatch', () => {
         for (const source of shared) {
             expect(selectChatCompletionDispatch({ chat_completion_source: source })).toBe(dispatchOpenAICompatible);
         }
+    });
+
+    test('OPENAI_RESPONSES routes to dispatchOpenAIResponses', () => {
+        expect(selectChatCompletionDispatch({ chat_completion_source: 'openai_responses' })).toBe(dispatchOpenAIResponses);
     });
 
     test('unknown source throws with descriptive message', () => {
