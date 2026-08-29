@@ -717,12 +717,10 @@
     align-items: center;
     column-gap: 0.5em;
     padding: 0.45em 0.65em;
-    padding-left: calc(var(--group-indent, 0px) + 0.65em);
     cursor: pointer;
     user-select: none;
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 80%, transparent);
     border-left: 3px solid var(--SmartThemeQuoteColor);
-    margin-left: var(--group-indent, 0px);
     transition: background-color var(--animation-duration-2x);
 }
 
@@ -849,7 +847,7 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
 
 /* --- Group child indentation --- */
 #completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-child {
-    margin-left: calc(var(--group-indent, 0px) + 12px);
+    /* margin-left set inline by JS */
     border-left-width: 2px;
 }
 
@@ -1069,17 +1067,8 @@ li.prompt-manager-group.expanded .prompt-manager-group-toggle {
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, var(--SmartThemeBlurTintColor));
 }
 
-/* ===== Nested Group Indentation ===== */
-#completion_prompt_manager #completion_prompt_manager_list li.prompt-manager-group-child {
-    padding-left: var(--group-indent);
-}
-.prompt-manager-group,
-.prompt-manager-group-child,
-.prompt-manager-group-edit-label,
-li.prompt-manager-group-editing {
-    --group-indent: 0px;
-    padding-left: var(--group-indent);
-}
+/* Nested group indentation: padding-left / margin-left set inline by JS per element.
+   No CSS variable inheritance — each <li> gets its own computed value. */
 
 /* ===== Group Edit Mode Collapse ===== */
 .prompt-manager-group-edit-toggle {

@@ -2592,9 +2592,13 @@ class PromptManager {
     cleanupEmptyGroups() {
         const groups = this.getPromptGroups();
         for (let i = groups.length - 1; i >= 0; i--) {
+            const group = groups[i];
             // Don't remove groups that have child groups
-            const hasChildren = groups.some(g => (g.parentId ?? null) === groups[i].id);
-            if (!groups[i].identifiers.length && !hasChildren) groups.splice(i, 1);
+            const hasChildren = groups.some(g => (g.parentId ?? null) === group.id);
+            if (group.identifiers.length || hasChildren) continue;
+            // Preserve sub-groups (containers created to hold prompts via drag-and-drop)
+            if (group.parentId) continue;
+            groups.splice(i, 1);
         }
     }
 
@@ -3678,7 +3682,7 @@ class PromptManager {
             const parentIdAttr = group.parentId ? ` data-pm-parent-id="${escapeHtml(group.parentId)}"` : '';
 
             return `
-            <li class="prompt-manager-group ${expandedClass}" data-pm-group-id="${escapeHtml(group.id)}"${parentIdAttr} data-depth="${depth}" style="--group-indent:${indentPx}px">
+            <li class="prompt-manager-group ${expandedClass}" data-pm-group-id="${escapeHtml(group.id)}"${parentIdAttr} data-depth="${depth}" style="margin-left:${indentPx}px">
         <span class="prompt-manager-group-toggle fa-solid fa-chevron-right"></span>
         <span class="prompt-manager-group-info">
             <span class="prompt-manager-group-icon fa-solid fa-folder"></span>
@@ -3771,7 +3775,6 @@ class PromptManager {
             });
 
         const groups = this.getPromptGroups();
-        const sortedGroups = this.getPromptGroupsSorted();
         const renderedGroupIds = new Set();
         const isSearching = Boolean(searchQuery);
 
@@ -3817,7 +3820,7 @@ class PromptManager {
                  const hiddenClass = isHidden ? 'prompt-manager-group-child-hidden' : '';
                  const groupIdAttr = `data-pm-group-id="${escapeHtml(groupId)}"`;
                  const depthAttr = `data-depth="${depth}"`;
-                 const indentStyle = `style="--group-indent:${depth * 24}px"`;
+                  const indentStyle = `style="margin-left:${depth * 24 + 12}px"`;
 
                  const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
                  const html = this.buildPromptItemHtml(prompt, listEntry);
@@ -3861,36 +3864,47 @@ class PromptManager {
              listItemHtml += `<li class="prompt-manager-group-end${endHiddenClass}" data-pm-group-end="${escapeHtml(groupId)}" aria-hidden="true"></li>`;
          };
 
-        if (!isSearching) {
-            // Render all top-level groups and their descendants
-            const topLevelGroups = sortedGroups.filter(g => !g.parentId);
-            for (const g of topLevelGroups) {
-                renderGroupAndChildren(g.id);
+        if (isSearching) {
+            // In search mode, render all prompts flat (no group headers)
+            visiblePrompts.forEach(prompt => {
+                if (!prompt) return;
+                listItemHtml += this.buildPromptItemHtml(prompt, this.getPromptOrderEntry(this.activeCharacter, prompt.identifier));
+            });
+        } else {
+            // Interleaved rendering: groups appear at the position of their first
+            // member in the original prompt order, preserving the user's ordering.
+            // Previously groups were rendered first (pinned to top), pushing
+            // ungrouped prompts down and breaking the intended sequence.
+            const renderedGroupAncestors = (groupId) => {
+                const chain = [];
+                let cur = groups.find(g => g.id === groupId);
+                while (cur && cur.parentId) {
+                    const parent = groups.find(g => g.id === cur.parentId);
+                    if (parent && !renderedGroupIds.has(parent.id)) {
+                        chain.unshift(parent.id);
+                    }
+                    cur = parent;
+                }
+                for (const id of chain) {
+                    renderGroupAndChildren(id);
+                }
+            };
+
+            for (const prompt of visiblePrompts) {
+                if (!prompt) continue;
+                const group = this.getGroupForPrompt(prompt.identifier);
+
+                if (group && !renderedGroupIds.has(group.id)) {
+                    renderedGroupAncestors(group.id);
+                    renderGroupAndChildren(group.id);
+                } else if (!group) {
+                    const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
+                    listItemHtml += this.buildPromptItemHtml(prompt, listEntry);
+                }
+                // Prompts inside an already-rendered group are skipped —
+                // renderGroupAndChildren already emitted them in order.
             }
         }
-
-        // Render ungrouped prompts (and also in search mode, render everything)
-        visiblePrompts.forEach(prompt => {
-            if (!prompt) return;
-            const group = this.getGroupForPrompt(prompt.identifier);
-
-            if (isSearching) {
-                // In search mode, don't show group headers, just render all prompts
-                listItemHtml += this.buildPromptItemHtml(prompt, this.getPromptOrderEntry(this.activeCharacter, prompt.identifier));
-                return;
-            }
-
-            // Skip prompts that have already been rendered inside groups
-            if (group && renderedGroupIds.has(group.id)) {
-                // Already rendered above
-                return;
-            }
-            // Ungrouped prompts
-            if (!group) {
-                const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
-                listItemHtml += this.buildPromptItemHtml(prompt, listEntry);
-            }
-        });
 
         if (searchQuery && visiblePrompts.length === 0) {
             listItemHtml += `
@@ -3917,7 +3931,6 @@ class PromptManager {
     renderGroupEditModeList(searchQuery, searchClauses) {
             const { prefix } = this.configuration;
             const groups = this.getPromptGroups();
-            const sortedGroups = this.getPromptGroupsSorted();
             const groupColorMap = new Map();
             groups.forEach((g, i) => groupColorMap.set(g.id, i % 8));
 
@@ -3934,14 +3947,6 @@ class PromptManager {
             let currentGroupId = null;
             const renderedGroupLabels = new Set();
 
-            // First render groups that have prompts in the visible list, in sorted order
-            const visibleGroupIds = new Set();
-            for (const prompt of visiblePrompts) {
-                const group = this.getGroupForPrompt(prompt.identifier);
-                if (group) visibleGroupIds.add(group.id);
-            }
-
-            // Also render empty groups that have children
             const renderGroupLabel = (groupId) => {
                 if (renderedGroupLabels.has(groupId)) return;
                 renderedGroupLabels.add(groupId);
@@ -3951,7 +3956,7 @@ class PromptManager {
                 const depth = this.getGroupDepth(groupId);
                 const indentPx = depth * 24;
                 html += `
-                <li class="prompt-manager-group-edit-label" data-pm-group-id="${escapeHtml(groupId)}" data-depth="${depth}" style="--group-indent:${indentPx}px">
+                <li class="prompt-manager-group-edit-label" data-pm-group-id="${escapeHtml(groupId)}" data-depth="${depth}" style="margin-left:${indentPx}px">
                     <span class="prompt-manager-group-edit-toggle fa-solid fa-chevron-right"></span>
                     <span class="prompt-manager-group-indicator" data-group-color="${colorIdx}"></span>
         <span class="prompt-manager-group-edit-label-name">
@@ -3966,19 +3971,34 @@ class PromptManager {
     `;
             };
 
-            // Render group labels in hierarchical order
-            for (const g of sortedGroups) {
-                if (visibleGroupIds.has(g.id) || this.getGroupChildren(g.id).length > 0) {
-                    renderGroupLabel(g.id);
+            // Interleaved rendering: group labels appear at the position of their
+            // first member in the original prompt order, preserving the user's ordering.
+            const renderedGroupAncestors = (groupId) => {
+                const chain = [];
+                let cur = groups.find(g => g.id === groupId);
+                while (cur && cur.parentId) {
+                    const parent = groups.find(g => g.id === cur.parentId);
+                    if (parent && !renderedGroupLabels.has(parent.id)) {
+                        chain.unshift(parent.id);
+                    }
+                    cur = parent;
                 }
-            }
+                for (const id of chain) {
+                    renderGroupLabel(id);
+                }
+            };
 
-            // Render prompts with group indicators
             for (const prompt of visiblePrompts) {
                 if (!prompt) continue;
 
                 const group = this.getGroupForPrompt(prompt.identifier);
                 const groupId = group?.id ?? null;
+
+                // Render group label at the position of its first member
+                if (group && !renderedGroupLabels.has(group.id)) {
+                    renderedGroupAncestors(group.id);
+                    renderGroupLabel(group.id);
+                }
 
                 const isSelected = this._groupEditSelection?.has(prompt.identifier) ?? false;
                 const selectedClass = isSelected ? 'selected' : '';
@@ -3994,7 +4014,7 @@ class PromptManager {
                 const encodedName = escapeHtml(prompt.name);
 
                 html += `
-                <li class="${prefix}prompt_manager_prompt prompt-manager-group-editing ${enabledClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}" data-pm-group-id="${escapeHtml(groupId ?? '')}" data-depth="${depth}" style="--group-indent:${indentPx}px">
+                <li class="${prefix}prompt_manager_prompt prompt-manager-group-editing ${enabledClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}" data-pm-group-id="${escapeHtml(groupId ?? '')}" data-depth="${depth}" style="margin-left:${indentPx}px">
                     ${indicatorHtml}
         <span class="prompt-manager-group-select fa-solid ${isSelected ? 'fa-square-check' : 'fa-square'} ${selectedClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}"></span>
         <span class="${prefix}prompt_manager_prompt_name" data-pm-name="${encodedName}">
