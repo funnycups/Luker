@@ -352,6 +352,26 @@ export async function createNewBookmark(mesId, { forceName = null } = {}) {
         await saveChat({ chatName: name, withMetadata: newMetadata, mesId });
     }
 
+    // A checkpoint chat is the same structural transition as a branch: a new
+    // chat file truncated at mesId, copied from the current chat. Chat-state
+    // sidecars do NOT follow the chat file automatically, so replay the
+    // branch settle/emit pair — without it, plugins with chat-bound state
+    // (memory graph) find an empty sidecar on the checkpoint and restart
+    // extraction from zero.
+    const { sourceTarget, targetTarget } = buildBranchChatStateTarget(name);
+    const assistantMessageCount = countAssistantMessagesThroughIndex(mesId);
+    if (sourceTarget && targetTarget) {
+        const checkpointPayload = {
+            mesId,
+            branchName: name,
+            assistantMessageCount,
+            sourceTarget,
+            targetTarget,
+        };
+        await settleBranchCreated(checkpointPayload);
+        await eventSource.emit(event_types.CHAT_BRANCH_CREATED, checkpointPayload);
+    }
+
     lastMes.extra.bookmark_link = name;
 
     const mes = $(`.mes[mesid="${mesId}"]`);

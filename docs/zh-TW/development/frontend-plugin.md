@@ -190,7 +190,7 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
 | `CHAT_CHANGED` | 聊天切換完成 | `(chatId)` |
 | `CHAT_CREATED` | 新聊天建立 | `(chatId)` |
 | `GROUP_CHAT_CREATED` | 群組聊天建立 | `(chatId)` |
-| `CHAT_BRANCH_CREATED` | 聊天分支建立 | `(payload)` — 見下文 |
+| `CHAT_BRANCH_CREATED` | 聊天分支或檢查點建立 | `(payload)` — 見下文 |
 
 ### 訊息事件
 
@@ -260,8 +260,8 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
 
 ```ts
 {
-  mesId: number,                  // 分支點訊息索引
-  branchName: string,             // 新分支聊天 ID / 檔名
+  mesId: number,                  // 分支/檢查點訊息索引
+  branchName: string,             // 新分支或檢查點聊天 ID / 檔名
   assistantMessageCount: number,  // 分支中包含的助手訊息數
   sourceTarget: {
     is_group: boolean,
@@ -278,7 +278,7 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
 }
 ```
 
-`CHAT_BRANCH_CREATED` 在新分支聊天檔案儲存後、UI 切換到新分支之前觸發。如果你的外掛儲存了聊天綁定的狀態資料，應在此事件中將狀態複製或截斷到新分支。
+`CHAT_BRANCH_CREATED` 在新分支或檢查點聊天檔案儲存後、UI 切換到新聊天之前觸發。如果你的外掛儲存了聊天綁定的狀態資料，應在此事件中將狀態複製或截斷到新的分支或檢查點。
 
 ### 生成鉤子事件
 

@@ -190,7 +190,7 @@ Luker's event listeners execute **serially** in the following priority order (ea
 | `CHAT_CHANGED` | Chat switch completed | `(chatId)` |
 | `CHAT_CREATED` | New chat created | `(chatId)` |
 | `GROUP_CHAT_CREATED` | Group chat created | `(chatId)` |
-| `CHAT_BRANCH_CREATED` | Chat branch created | `(payload)` — see below |
+| `CHAT_BRANCH_CREATED` | Chat branch or checkpoint created | `(payload)` — see below |
 
 ### Message Events
 
@@ -260,8 +260,8 @@ The second argument `type` of `MESSAGE_RECEIVED` indicates the source of the mes
 
 ```ts
 {
-  mesId: number,                  // Message index at the branch point
-  branchName: string,             // New branch chat ID / filename
+  mesId: number,                  // Message index at the branch/checkpoint point
+  branchName: string,             // New branch or checkpoint chat ID / filename
   assistantMessageCount: number,  // Number of assistant messages in the branch
   sourceTarget: {
     is_group: boolean,
@@ -278,7 +278,7 @@ The second argument `type` of `MESSAGE_RECEIVED` indicates the source of the mes
 }
 ```
 
-`CHAT_BRANCH_CREATED` fires after the new branch chat file is saved but before the UI switches to the new branch. If your plugin stores state data bound to a chat, you should copy or truncate that state to the new branch in this event handler.
+`CHAT_BRANCH_CREATED` fires after a new branch or checkpoint chat file is saved, before the UI switches to the new chat. If your plugin stores state data bound to a chat, you should copy or truncate that state to the new branch or checkpoint in this event handler.
 
 ### Generation Hook Events
 
