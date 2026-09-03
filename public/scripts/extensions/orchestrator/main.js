@@ -8006,7 +8006,7 @@ function bindUi() {
             const agendaScope = getAgendaScopeFromElement(this, context, settings);
             const agendaEditor = getAgendaEditorByScope(agendaScope);
             ensureAgendaEditorIntegrity(agendaEditor);
-            const input = jQuery(this).closest('.luker_orch_preset_add_row').find('[data-luker-agenda-new-agent]');
+            const input = jQuery(this).closest('[data-luker-scope-root]').find(`[data-luker-agenda-new-agent="${agendaScope}"]`);
             const candidate = sanitizeIdentifierToken(input.val(), '');
             if (!candidate) {
                 notifyError(i18n('Preset ID cannot be empty.'));
