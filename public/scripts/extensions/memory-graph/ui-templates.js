@@ -263,22 +263,22 @@ function buildAdvancedTabHtml(deps) {
             <label>${escapeHtml(i18n('Extract batch assistant turns'))}
                 <input id="luker_rpg_memory_advanced_extract_batch_turns" class="text_pole" type="number" min="1" step="1" />
             </label>
-            <label>${escapeHtml(i18n('Extraction graph mode'))}
+            <label>${escapeHtml(i18n('Extraction graph mode'))}${fh('About Extraction graph mode', 'Extraction graph mode help body')}
                 <select id="luker_rpg_memory_advanced_extract_mode" class="text_pole">
-                    <option value="oneshot">One-shot</option>
-                    <option value="crawl">Crawl graph</option>
+                    <option value="oneshot">${escapeHtml(i18n('One-shot (full graph input)'))}</option>
+                    <option value="crawl">${escapeHtml(i18n('Crawl (LLM-explored local slice)'))}</option>
                 </select>
             </label>
-            <label>${escapeHtml(i18n('Crawl max rounds'))}
+            <label>${escapeHtml(i18n('Crawl max rounds'))}${fh('About Crawl max rounds', 'Crawl max rounds help body')}
                 <input id="luker_rpg_memory_advanced_extract_crawl_rounds" class="text_pole" type="number" min="1" max="5" step="1" />
             </label>
-            <label>${escapeHtml(i18n('Crawl candidate limit'))}
+            <label>${escapeHtml(i18n('Crawl candidate limit'))}${fh('About Crawl candidate limit', 'Crawl candidate limit help body')}
                 <input id="luker_rpg_memory_advanced_extract_crawl_candidates" class="text_pole" type="number" min="10" max="100" step="1" />
             </label>
-            <label>${escapeHtml(i18n('Crawl read budget'))}
+            <label>${escapeHtml(i18n('Crawl read budget'))}${fh('About Crawl read budget', 'Crawl read budget help body')}
                 <input id="luker_rpg_memory_advanced_extract_crawl_reads" class="text_pole" type="number" min="1" max="30" step="1" />
             </label>
-            <small style="display:block; opacity:0.8">Crawl mode shows a compact graph index and reads relevant nodes on demand before extraction.</small>
+            <small style="display:block; opacity:0.8">${escapeHtml(i18n('Crawl mode shows a compact graph index and reads relevant nodes on demand before extraction.'))}</small>
             <label>${escapeHtml(i18n('Extract Table Fill Prompt'))}${fh('About Extract Table Fill Prompt', 'Extract Table Fill Prompt help body')}
                 <textarea id="luker_rpg_memory_advanced_extract_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
             </label>
