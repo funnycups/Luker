@@ -2235,24 +2235,29 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="range-block wide100p" data-source="moonshot">
+                                <div class="range-block" data-source="moonshot">
                                     <label class="checkbox_label flexWrap" for="kimi_partial_mode">
                                         <input id="kimi_partial_mode" type="checkbox" />
                                         <span class="horizontalCheck" data-i18n="Kimi Partial Mode">Kimi Partial Mode</span>
                                     </label>
-                                    <div id="kimi_partial_config">
+                                    <div id="kimi_partial_config" class="wide100p">
                                         <div class="flex-container alignItemsCenter">
-                                            <span data-i18n="Kimi Partial Content">Kimi Partial Content</span>
+                                            <span id="kimi_partial_content_text" data-i18n="Kimi Partial Content">Kimi Partial Content</span>
                                             <i class="editor_maximize fa-solid fa-maximize right_menu_button" data-for="kimi_partial_content" title="Expand the editor" data-i18n="[title]Expand the editor"></i>
                                         </div>
                                         <textarea id="kimi_partial_content" class="text_pole textarea_compact autoSetHeight" name="kimi_partial_content" rows="2" data-i18n="[placeholder]Start Kimi's answer with..." placeholder="Start Kimi's answer with..."></textarea>
+                                        <div class="range-block-title" data-i18n="Kimi Partial Name Source">Kimi Partial Name Source</div>
                                         <select id="kimi_partial_name_source" class="text_pole">
+                                            <option value="" data-i18n="Do Not Set a Name">Do Not Set a Name</option>
                                             <option value="character" data-i18n="Name from Character Card">Name from Character Card</option>
                                             <option value="manual" data-i18n="Manually Enter Name">Manually Enter Name</option>
                                         </select>
                                         <div id="kimi_partial_name_block" class="displayNone">
-                                            <div class="range-block-title" data-i18n="Kimi Partial Name">Kimi Partial Name</div>
-                                            <input id="kimi_partial_name" type="text" class="text_pole wide100p" data-i18n="[title]Leave empty to omit the prefill name" title="Leave empty to omit the prefill name">
+                                            <div class="flex-container alignItemsCenter">
+                                                <span id="kimi_partial_name_text" data-i18n="Kimi Partial Name">Kimi Partial Name</span>
+                                                <i class="editor_maximize fa-solid fa-maximize right_menu_button" data-for="kimi_partial_name" title="Expand the editor" data-i18n="[title]Expand the editor"></i>
+                                            </div>
+                                            <input id="kimi_partial_name" type="text" class="text_pole wide100p" data-i18n="[placeholder]Prefill name that anchors the reply voice" placeholder="Prefill name that anchors the reply voice">
                                         </div>
                                         <div id="kimi_partial_warning">
                                             <i class="fa-solid fa-circle-info"></i>

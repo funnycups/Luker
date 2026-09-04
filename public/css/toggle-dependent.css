@@ -514,6 +514,7 @@ label[for="trim_spaces"]:not(:has(input:checked)) small {
 
 #openai_settings:has(#kimi_partial_mode:checked) #kimi_partial_config {
     display: block;
+    flex-basis: 100%;
 }
 
 #kimi_partial_warning {

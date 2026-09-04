@@ -98,10 +98,14 @@ test.describe.serial('Kimi partial prefill', () => {
         await expect(page.locator('#kimi_partial_mode')).toBeChecked();
         await page.locator('#kimi_partial_config').waitFor({ state: 'visible', timeout: 5000 });
 
-        // Name visibility: manual reveals the name input; character hides it.
+        // Name visibility: manual reveals the name input; the other two
+        // sources (none / character card) hide it. End on character so the
+        // send below exercises the character-sourced name path.
         const nameSource = page.locator('#kimi_partial_name_source');
         await nameSource.selectOption('manual');
         await page.locator('#kimi_partial_name_block').waitFor({ state: 'visible', timeout: 5000 });
+        await nameSource.selectOption('');
+        await expect(page.locator('#kimi_partial_name_block')).toBeHidden();
         await nameSource.selectOption('character');
         await expect(page.locator('#kimi_partial_name_block')).toBeHidden();
 
@@ -197,7 +201,7 @@ test.describe.serial('Kimi partial prefill', () => {
         await selectPresetByName(page, 'kimi-e2e-clean');
         await expect(page.locator('#kimi_partial_mode')).not.toBeChecked();
         await expect(page.locator('#kimi_partial_content')).toHaveValue('');
-        await expect(page.locator('#kimi_partial_name_source')).toHaveValue('character');
+        await expect(page.locator('#kimi_partial_name_source')).toHaveValue('');
         // name_block visibility is driven by the select's change handler;
         // after a preset switch the block can lag one event behind the
         // already-updated select value, so only the value is asserted here.

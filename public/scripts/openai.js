@@ -918,7 +918,7 @@ const default_settings = {
     assistant_impersonation: '',
     kimi_partial_mode: false,
     kimi_partial_content: '',
-    kimi_partial_name_source: 'character',
+    kimi_partial_name_source: '',
     kimi_partial_name: '',
     use_sysprompt: false,
     vertexai_auth_mode: 'express',
@@ -3967,7 +3967,7 @@ export async function createGenerationParameters(settings, model, type, messages
             generate_data.kimi_partial_content = String(substituteParams(settings.kimi_partial_content ?? '') ?? '');
             const kimiPartialName = settings.kimi_partial_name_source === 'manual'
                 ? String(substituteParams(settings.kimi_partial_name ?? '') ?? '')
-                : String(name2 ?? '');
+                : settings.kimi_partial_name_source === 'character' ? String(name2 ?? '') : '';
             if (kimiPartialName) {
                 generate_data.kimi_partial_name = kimiPartialName;
             }
