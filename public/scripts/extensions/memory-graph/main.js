@@ -14980,6 +14980,7 @@ function bindUi() {
         '#luker_rpg_memory_advanced_extract_crawl_candidates',
         '#luker_rpg_memory_advanced_extract_crawl_reads',
         '#luker_rpg_memory_advanced_extract_system_prompt',
+        '#luker_rpg_memory_advanced_extract_crawl_system_prompt',
         '#luker_rpg_memory_advanced_recall_route_prompt',
         '#luker_rpg_memory_advanced_recall_finalize_prompt',
         '#luker_rpg_memory_advanced_rag_rewrite_prompt',
