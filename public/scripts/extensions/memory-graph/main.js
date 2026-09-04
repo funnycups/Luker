@@ -5714,7 +5714,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
     const messageText = (Array.isArray(messageBatch) ? messageBatch : [])
         .map(item => `${item?.is_user ? 'user' : 'assistant'}: ${String(item?.mes || '')}`)
         .filter(item => item.trim().length > 8)
-        .join('\\n');
+        .join('\n');
     const visibleCandidates = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0 }) || [])
         .slice(0, limit);
     const candidates = visibleCandidates
@@ -5738,7 +5738,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
         'If a relevant entity is not in the candidate index, search for it before creating a duplicate.',
         'Do not write memory. Finish with luker_rpg_extract_crawl_done when enough context is collected.',
         'Keep exploration selective: create a new event directly when no historical detail is required.',
-    ].join('\\n');
+    ].join('\n');
     let round = 0;
     while (round < maxRounds) {
         round += 1;
@@ -5746,12 +5746,12 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
             throw new DOMException('Memory extraction aborted.', 'AbortError');
         }
         const prompt = [
-            `<dialogue_batch>\\n${messageText}\\n</dialogue_batch>`,
+            `<dialogue_batch>\n${messageText}\n</dialogue_batch>`,
             buildJsonXmlSection('candidate_nodes', candidates),
             observations.length > 0 ? buildJsonXmlSection('crawl_observations', observations) : '',
             `Exploration round ${round}/${maxRounds}. Reads used: ${readKeys.size}/${maxReads}.`,
             'Call one or more read tools, or call luker_rpg_extract_crawl_done.',
-        ].filter(Boolean).join('\\n\\n');
+        ].filter(Boolean).join('\n\n');
         const calls = await requestToolCallsWithRetry(context, settings, {
             taskMessages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
             apiPresetName: settings.extractApiPresetName || '',
