@@ -5740,13 +5740,16 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
     };
     const messageText = (Array.isArray(messageBatch) ? messageBatch : [])
         .map(item => `${item?.is_user ? 'user' : 'assistant'}: ${String(item?.mes || '')}`)
+        // Skip empty/placeholder turns ("user: hi" etc) that carry no extractable
+        // scene content; the round-trip cost of a turn must buy at least a
+        // short clause of content to be worth prompt tokens.
         .filter(item => item.trim().length > 8)
         .join('\n');
     const visibleCandidates = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0, seqWindow: maxSeq === null ? undefined : { to: maxSeq } }) || [])
         .filter(isAsOfNode)
         .slice(0, limit);
     const candidates = visibleCandidates
-        .map(node => buildCrawlBriefRow(node) || extractCrawlBrief({ id: node?.id }, readApi, undefined))
+        .map(node => extractCrawlBrief({ id: node?.id }, readApi, undefined) || buildCrawlBriefRow(node))
         .filter(node => node && node.id);
     const selected = new Map();
     const readKeys = new Set();
@@ -5780,7 +5783,11 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
             llmPresetName: settings.extractPresetName || '',
             tools,
             allowedNames: CRAWL_READ_TOOL_NAMES,
-            retriesOverride: 0,
+            // Crawl is a read-only warm-up; unlike the extract pass there is no
+            // semantic-retry loop around this call, so transient tool-parse
+            // failures fall back to the user's toolCallRetryMax instead of
+            // hard-failing the whole extraction.
+            retriesOverride: Math.max(0, Math.floor(Number(settings?.toolCallRetryMax) || 0)),
             abortSignal: options?.abortSignal || null,
         });
         let done = false;
