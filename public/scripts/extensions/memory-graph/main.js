@@ -5774,42 +5774,75 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                 done = true;
                 continue;
             }
+            // Tool failures push a structured error observation so the LLM sees
+            // why a call produced nothing; silent no-ops historically caused
+            // model loops (see iter-studio noop/error contract).
             let result = null;
+            let error = null;
             if (name === 'luker_rpg_extract_crawl_inspect') {
                 const id = String(args.node_id || '').trim();
-                if (id && !readKeys.has(`inspect:${id}`)) {
+                if (!id) {
+                    error = 'invalid_args: node_id is required.';
+                } else if (readKeys.has(`inspect:${id}`)) {
+                    error = 'already_read: node was inspected earlier; refer to crawl_observations instead of re-reading.';
+                } else {
                     const node = readApi.getNode(id);
-                    const brief = readApi.getNodeBrief(id, { visibleNodeIds: undefined, edgeSummaryLimit: 8 });
-                    result = node ? {
-                        id: node.id,
-                        type: node.type,
-                        title: node.title,
-                        fields: node.fields,
-                        seqTo: node.seqTo,
-                        semanticDepth: node.semanticDepth,
-                        parentId: node.parentId,
-                        childrenIds: node.childrenIds,
-                    } : null;
-                    if (brief) selected.set(`node:${id}`, brief);
-                    readKeys.add(`inspect:${id}`);
+                    if (!node) {
+                        error = `not_found: node_id "${id}" does not exist. Use search to locate the correct id.`;
+                    } else {
+                        result = {
+                            id: node.id,
+                            type: node.type,
+                            title: node.title,
+                            fields: node.fields,
+                            seqTo: node.seqTo,
+                            semanticDepth: node.semanticDepth,
+                            parentId: node.parentId,
+                            childrenIds: node.childrenIds,
+                        };
+                        const brief = readApi.getNodeBrief(id, { visibleNodeIds: undefined, edgeSummaryLimit: 8 });
+                        if (brief) selected.set(`node:${id}`, brief);
+                        readKeys.add(`inspect:${id}`);
+                    }
                 }
             } else if (name === 'luker_rpg_extract_crawl_neighbors') {
                 const id = String(args.node_id || '').trim();
-                if (id && !readKeys.has(`neighbors:${id}`)) {
+                if (!id) {
+                    error = 'invalid_args: node_id is required.';
+                } else if (readKeys.has(`neighbors:${id}`)) {
+                    error = 'already_read: neighbors of this node were fetched earlier; refer to crawl_observations.';
+                } else {
                     result = readApi.getNeighbors(id, { edgeTypes: args.edge_types, projectTo: 'raw' });
-                    result = Array.from(result || []).slice(0, Math.max(1, Math.min(20, Number(args.limit) || 10))).map(item => ({
-                        id: item?.node?.id, type: item?.node?.type, title: item?.node?.title,
-                        edge_type: item?.edgeType, direction: item?.direction,
-                    }));
-                    readKeys.add(`neighbors:${id}`);
+                    if (!result || result.size === 0) {
+                        error = `not_found: node_id "${id}" has no matching neighbors.`;
+                    } else {
+                        result = Array.from(result || []).slice(0, Math.max(1, Math.min(20, Number(args.limit) || 10))).map(item => ({ // cap-ok: neighbor briefs feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
+                            id: item?.node?.id, type: item?.node?.type, title: item?.node?.title,
+                            edge_type: item?.edgeType, direction: item?.direction,
+                        }));
+                        readKeys.add(`neighbors:${id}`);
+                    }
                 }
             } else if (name === 'luker_rpg_extract_crawl_search') {
                 const query = String(args.query || '').trim();
-                if (query && !readKeys.has(`search:${query.toLowerCase()}`)) {
-                    result = readApi.keywordSearch({ query, types: args.types, k: Math.max(1, Math.min(20, Number(args.limit) || 10)) });
-                    result = Array.from(result || []).map(node => ({ id: node.id, type: node.type, title: node.title, seqTo: node.seqTo }));
-                    readKeys.add(`search:${query.toLowerCase()}`);
+                if (!query) {
+                    error = 'invalid_args: query is required.';
+                } else if (readKeys.has(`search:${query.toLowerCase()}`)) {
+                    error = 'already_read: this exact query was searched earlier; refer to crawl_observations.';
+                } else {
+                    result = readApi.keywordSearch({ query, types: args.types, k: Math.max(1, Math.min(20, Number(args.limit) || 10)) }); // cap-ok: search hits feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
+                    if (Array.from(result || []).length === 0) {
+                        error = 'not_found: no nodes match this query. Try different keywords or proceed without it.';
+                        result = null;
+                    } else {
+                        result = Array.from(result || []).map(node => ({ id: node.id, type: node.type, title: node.title, seqTo: node.seqTo }));
+                        readKeys.add(`search:${query.toLowerCase()}`);
+                    }
                 }
+            }
+            if (error) {
+                observations.push({ tool: name, args, result: null, error });
+                continue;
             }
             if (result) {
                 observations.push({ tool: name, args, result });
