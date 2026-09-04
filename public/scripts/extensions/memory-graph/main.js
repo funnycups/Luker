@@ -5705,27 +5705,49 @@ function extractCrawlBrief(node, readApi, visibleIds) {
     });
 }
 
+// Fallback row builder when getNodeBrief can't serve a node (missing spec,
+// diagnostic nodes, etc). Kept to the same 5-field compact shape so crawl
+// graph_data rows stay uniform even on the degraded path.
+function buildCrawlBriefRow(node) {
+    if (!node?.id) return null;
+    return {
+        id: String(node.id || ''),
+        type: String(node.type || ''),
+        title: String(node.title || ''),
+        seqTo: Number(node.seqTo || 0),
+        semanticDepth: Number(node.semanticDepth || 0),
+    };
+}
+
 async function buildExtractionCrawlGraph(context, store, settings, schema, messageBatch, options = {}) {
     const { getMemoryGraphReadApi } = await import('./read-api.js');
     const readApi = getMemoryGraphReadApi(store, context);
     const limit = Math.max(10, Math.min(100, Math.floor(Number(settings?.extractCrawlCandidateLimit) || 40)));
     const maxReads = Math.max(1, Math.min(30, Math.floor(Number(settings?.extractCrawlMaxReads) || 12)));
     const maxRounds = Math.max(1, Math.min(5, Math.floor(Number(settings?.extractCrawlMaxRounds) || 3)));
+    // as-of cutoff: the rebuild-from-seq replay path calls this against a live
+    // store that already contains nodes from AFTER the batch being extracted.
+    // Every store read below must honor maxSeq or future graph state leaks
+    // into a historical batch (see buildGraphNodeHints maxSeq handling).
+    const maxSeq = Number.isFinite(Number(options?.maxSeq))
+        ? Math.max(0, Math.floor(Number(options.maxSeq)))
+        : null;
+    const isAsOfNode = (node) => {
+        if (!node || node.archived || isRecallDiagnosticNode(node)) return false;
+        if (maxSeq === null) return true;
+        const seq = Number(node?.seqTo ?? NaN);
+        return !Number.isFinite(seq) || seq <= maxSeq;
+    };
     const messageText = (Array.isArray(messageBatch) ? messageBatch : [])
         .map(item => `${item?.is_user ? 'user' : 'assistant'}: ${String(item?.mes || '')}`)
         .filter(item => item.trim().length > 8)
         .join('\n');
-    const visibleCandidates = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0 }) || [])
+    const visibleCandidates = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0, seqWindow: maxSeq === null ? undefined : { to: maxSeq } }) || [])
+        .filter(isAsOfNode)
         .slice(0, limit);
     const candidates = visibleCandidates
-        .map(node => ({
-            id: String(node?.id || ''),
-            type: String(node?.type || ''),
-            title: String(node?.title || ''),
-            seqTo: Number(node?.seqTo || 0),
-            semanticDepth: Number(node?.semanticDepth || 0),
-        }))
-        .filter(node => node.id);
+        .map(node => buildCrawlBriefRow(node) || extractCrawlBrief({ id: node?.id }, readApi, undefined))
+        .filter(node => node && node.id);
     const selected = new Map();
     const readKeys = new Set();
     const observations = [];
@@ -5789,6 +5811,8 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                     const node = readApi.getNode(id);
                     if (!node) {
                         error = `not_found: node_id "${id}" does not exist. Use search to locate the correct id.`;
+                    } else if (!isAsOfNode(node)) {
+                        error = `not_found: node_id "${id}" exists outside the extraction seq window (seqTo > ${maxSeq}). Do not reference it.`;
                     } else {
                         result = {
                             id: node.id,
@@ -5812,11 +5836,12 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                 } else if (readKeys.has(`neighbors:${id}`)) {
                     error = 'already_read: neighbors of this node were fetched earlier; refer to crawl_observations.';
                 } else {
-                    result = readApi.getNeighbors(id, { edgeTypes: args.edge_types, projectTo: 'raw' });
-                    if (!result || result.size === 0) {
+                    const neighbors = readApi.getNeighbors(id, { edgeTypes: args.edge_types, projectTo: 'raw' });
+                    const asOfNeighbors = Array.from(neighbors || []).filter(item => isAsOfNode(item?.node));
+                    if (asOfNeighbors.length === 0) {
                         error = `not_found: node_id "${id}" has no matching neighbors.`;
                     } else {
-                        result = Array.from(result || []).slice(0, Math.max(1, Math.min(20, Number(args.limit) || 10))).map(item => ({ // cap-ok: neighbor briefs feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
+                        result = asOfNeighbors.slice(0, Math.max(1, Math.min(20, Number(args.limit) || 10))).map(item => ({ // cap-ok: neighbor briefs feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
                             id: item?.node?.id, type: item?.node?.type, title: item?.node?.title,
                             edge_type: item?.edgeType, direction: item?.direction,
                         }));
@@ -5830,12 +5855,13 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                 } else if (readKeys.has(`search:${query.toLowerCase()}`)) {
                     error = 'already_read: this exact query was searched earlier; refer to crawl_observations.';
                 } else {
-                    result = readApi.keywordSearch({ query, types: args.types, k: Math.max(1, Math.min(20, Number(args.limit) || 10)) }); // cap-ok: search hits feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
-                    if (Array.from(result || []).length === 0) {
+                    const hits = readApi.keywordSearch({ query, types: args.types, k: Math.max(1, Math.min(20, Number(args.limit) || 10)) }); // cap-ok: search hits feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
+                    const asOfHits = Array.from(hits || []).filter(isAsOfNode);
+                    if (asOfHits.length === 0) {
                         error = 'not_found: no nodes match this query. Try different keywords or proceed without it.';
                         result = null;
                     } else {
-                        result = Array.from(result || []).map(node => ({ id: node.id, type: node.type, title: node.title, seqTo: node.seqTo }));
+                        result = asOfHits.map(node => ({ id: node.id, type: node.type, title: node.title, seqTo: node.seqTo }));
                         readKeys.add(`search:${query.toLowerCase()}`);
                     }
                 }
@@ -5850,14 +5876,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                 for (const row of rows) {
                     const id = String(row?.id || '').trim();
                     if (id && !selected.has(`node:${id}`)) {
-                        const node = store?.nodes?.[id];
-                        const brief = node ? {
-                            id: String(node.id || ''),
-                            type: String(node.type || ''),
-                            title: String(node.title || ''),
-                            seqTo: Number(node.seqTo || 0),
-                            semanticDepth: Number(node.semanticDepth || 0),
-                        } : null;
+                        const brief = extractCrawlBrief({ id }, readApi, undefined) || buildCrawlBriefRow(store?.nodes?.[id]);
                         if (brief) selected.set(`node:${id}`, brief);
                     }
                 }
@@ -5873,12 +5892,24 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
     const nodes = Array.from(nodeMap.values()).slice(0, limit + maxReads * 2);
     const ids = new Set(nodes.map(node => String(node.id || '')).filter(Boolean));
     const edges = readApi.projectEdges({ visibleNodeIds: ids, excludeInternal: false });
+    // True as-of graph total, not the crawl slice size. The extraction prompt
+    // tells the LLM "omitted nodes may exist"; that guardrail only works if
+    // this number reflects how much of the graph was actually withheld.
+    const semanticNodeTotal = listNodesByLevel(store, LEVEL.SEMANTIC)
+        .filter(node => !node?.archived)
+        .filter(node => !isRecallDiagnosticNode(node))
+        .filter((node) => {
+            if (maxSeq === null) return true;
+            const seq = Number(node?.seqTo ?? NaN);
+            return !Number.isFinite(seq) || seq <= maxSeq;
+        })
+        .length;
     return {
         initialized: nodes.length > 0,
         editable_type_ids: schema.filter(item => item?.editable).map(item => String(item.id || '').toLowerCase()).filter(Boolean),
         projection_policy: { hierarchical_types: 'top_level_rollups_only', non_hierarchical_types: 'crawled_local_slice' },
         graph_scope: 'crawled_local_slice',
-        semantic_node_total: nodes.length,
+        semantic_node_total: semanticNodeTotal,
         visible_node_count: nodes.length,
         nodes,
         edges: Array.from(edges || []).map(edge => ({ from: edge.from, to: edge.to, type: edge.type, weight: Math.max(1, Number(edge.weight || 1)) })),
