@@ -508,6 +508,27 @@ label[for="trim_spaces"]:not(:has(input:checked)) small {
     margin: 10px 0;
 }
 
+#kimi_partial_config {
+    display: none;
+}
+
+#openai_settings:has(#kimi_partial_mode:checked) #kimi_partial_config {
+    display: block;
+}
+
+#kimi_partial_warning {
+    display: none;
+    color: red;
+    font-weight: bold;
+}
+
+#openai_settings:has(#kimi_partial_mode:checked):has(#openai_function_calling:checked) #kimi_partial_warning {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 10px 0;
+}
+
 #connection_profile_function_calling_plain_text_error_retry_block,
 #connection_profile_function_calling_plain_text_retry_attempts_block {
     display: none;

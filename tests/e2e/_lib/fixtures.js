@@ -300,6 +300,59 @@ export function bootstrapResponsesBackend({ dataRoot, handle = 'default-user', b
 }
 
 /**
+ * Seed the server-side settings.json with a Moonshot (Kimi) API connection
+ * pointing at the local mock server. Structural clone of
+ * bootstrapResponsesBackend with source-specific keys: the Moonshot source
+ * reads oai_settings.moonshot_model (not the shared openai_model) and the
+ * shared base_url override, and the key lives under SECRET_KEYS.MOONSHOT
+ * ('api_key_moonshot'), unlike the OpenAI defaults.
+ */
+export function bootstrapMoonshotBackend({ dataRoot, handle = 'default-user', baseURL, model = 'kimi-e2e' }) {
+    const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
+    const s = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
+    s.main_api = 'openai';
+    s.firstRun = false;
+    s.oai_settings = s.oai_settings || {};
+    s.oai_settings.chat_completion_source = 'moonshot';
+    s.oai_settings.moonshot_model = model;
+    s.oai_settings.openai_model = model;
+    s.oai_settings.stream_openai = true;
+    s.oai_settings.base_url = baseURL;
+    s.oai_settings.openai_max_context = 200000;
+    // Same neutralize / clear-profile logic as the other bootstraps.
+    const ext = (s.extension_settings = s.extension_settings || {});
+    for (const slot of ['orchestrator', 'completion_preset_assistant', 'memory_graph', 'character_editor_assistant']) {
+        const m = (ext[slot] = ext[slot] || {});
+        for (const key of [
+            'llmNodeApiPresetName', 'llmNodePresetName',
+            'requestApiPresetName', 'requestLlmPresetName',
+            'schemaIterationApiPresetName', 'schemaIterationLlmPresetName',
+            'iterationApiPresetName', 'iterationLlmPresetName',
+            'recallApiPresetName', 'recallLlmPresetName',
+            'extractApiPresetName', 'extractLlmPresetName',
+        ]) {
+            m[key] = '';
+        }
+    }
+    ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };
+    ext.connectionManager.selectedProfile = null;
+    writeFileSync(settingsPath, JSON.stringify(s, null, 4));
+
+    const secretsPath = resolve(userRoot(dataRoot, handle), 'secrets.json');
+    let secrets = {};
+    try { secrets = JSON.parse(readFileSync(secretsPath, 'utf8')); } catch { /* first seed */ }
+    secrets['api_key_moonshot'] = [{
+        id: 'e2e-kimi-key',
+        value: 'test-moonshot-key',
+        label: 'e2e-mock',
+        active: true,
+    }];
+    writeFileSync(secretsPath, JSON.stringify(secrets, null, 4));
+}
+
+
+
+/**
  * Mark the user as having completed onboarding so the welcome popup
  * does not block first paint. Idempotent.
  */

@@ -241,6 +241,10 @@
     "continue_prefill": false,
     "function_calling": false,
     "continue_postfix": " ",
+    "kimi_partial_mode": false,
+    "kimi_partial_content": "",
+    "kimi_partial_name_source": "character",
+    "kimi_partial_name": "",
     "seed": -1,
     "n": 1
 }

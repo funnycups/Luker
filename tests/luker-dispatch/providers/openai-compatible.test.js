@@ -392,6 +392,230 @@ describe('dispatchOpenAICompatible', () => {
             }
         });
 
+        describe('moonshot partial prefill', () => {
+            test('appends assistant partial message with name when last message is not assistant', async () => {
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: [
+                            { role: 'system', content: 's' },
+                            { role: 'user', content: 'u' },
+                        ],
+                        kimi_partial: true,
+                        kimi_partial_content: 'Her reply begins thus:',
+                        kimi_partial_name: 'Seraphina',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                const [, init] = ctx.fetch.mock.calls[0];
+                const wireBody = JSON.parse(init.body);
+                expect(wireBody.messages).toHaveLength(3);
+                expect(wireBody.messages[1].role).toBe('user');
+                expect(wireBody.messages[2]).toEqual({
+                    role: 'assistant',
+                    content: 'Her reply begins thus:',
+                    partial: true,
+                    name: 'Seraphina',
+                });
+            });
+
+            test('appends assistant partial with empty content and no name when name omitted', async () => {
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: [
+                            { role: 'system', content: 's' },
+                            { role: 'user', content: 'u' },
+                        ],
+                        kimi_partial: true,
+                        kimi_partial_content: '',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                const [, init] = ctx.fetch.mock.calls[0];
+                const wireBody = JSON.parse(init.body);
+                const last = wireBody.messages[wireBody.messages.length - 1];
+                expect(last.content).toBe('');
+                expect(last.partial).toBe(true);
+                expect(last).not.toHaveProperty('name');
+            });
+
+            test('merges prefix into trailing assistant and drops name', async () => {
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: [
+                            { role: 'system', content: 's' },
+                            { role: 'user', content: 'u' },
+                            { role: 'assistant', content: 'Once upon' },
+                        ],
+                        kimi_partial: true,
+                        kimi_partial_content: ' a time',
+                        kimi_partial_name: 'ignored',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                const [, init] = ctx.fetch.mock.calls[0];
+                const wireBody = JSON.parse(init.body);
+                expect(wireBody.messages).toHaveLength(3);
+                const last = wireBody.messages[wireBody.messages.length - 1];
+                expect(last.content).toBe('Once upon a time');
+                expect(last.partial).toBe(true);
+                expect(last).not.toHaveProperty('name');
+            });
+
+            test('merges prefix into trailing assistant with null content', async () => {
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: [
+                            { role: 'user', content: 'u' },
+                            { role: 'assistant', content: null },
+                        ],
+                        kimi_partial: true,
+                        kimi_partial_content: 'goes on',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                const [, init] = ctx.fetch.mock.calls[0];
+                const wireBody = JSON.parse(init.body);
+                const last = wireBody.messages[wireBody.messages.length - 1];
+                expect(last.content).toBe('goes on');
+                expect(last.partial).toBe(true);
+            });
+
+            test('leaves messages untouched when tools are involved', async () => {
+                const toolCallsMessages = [
+                    { role: 'user', content: 'u' },
+                    {
+                        role: 'assistant',
+                        content: '',
+                        tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }],
+                    },
+                ];
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: toolCallsMessages,
+                        kimi_partial: true,
+                        kimi_partial_content: 'Her reply begins thus:',
+                        kimi_partial_name: 'Seraphina',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                const [, init] = ctx.fetch.mock.calls[0];
+                const wireBody = JSON.parse(init.body);
+                expect(wireBody.messages).toEqual([
+                    { role: 'user', content: 'u' },
+                    {
+                        role: 'assistant',
+                        content: '',
+                        tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }],
+                    },
+                ]);
+
+                const toolRoleMessages = [
+                    { role: 'user', content: 'u' },
+                    { role: 'assistant', content: 'a', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }] },
+                    { role: 'tool', tool_call_id: 'c1', content: 'r' },
+                ];
+                const ctx2 = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: toolRoleMessages,
+                        kimi_partial: true,
+                        kimi_partial_content: 'Her reply begins thus:',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx2);
+                const [, init2] = ctx2.fetch.mock.calls[0];
+                const wireBody2 = JSON.parse(init2.body);
+                expect(wireBody2.messages).toHaveLength(3);
+                expect(wireBody2.messages.some(m => 'partial' in m)).toBe(false);
+            });
+
+            test('json_schema takes priority over kimi_partial', async () => {
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: [
+                            { role: 'system', content: 's' },
+                            { role: 'user', content: 'u' },
+                        ],
+                        json_schema: {
+                            value: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+                            name: 'answer',
+                            strict: true,
+                        },
+                        kimi_partial: true,
+                        kimi_partial_content: 'Her reply begins thus:',
+                        kimi_partial_name: 'Seraphina',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                const [, init] = ctx.fetch.mock.calls[0];
+                const wireBody = JSON.parse(init.body);
+                expect(wireBody.response_format).toEqual({ type: 'json_object' });
+                expect(wireBody.messages).toHaveLength(3);
+                const last = wireBody.messages[wireBody.messages.length - 1];
+                expect(last.role).toBe('user');
+                expect(last.content).toContain('JSON schema for the response:');
+                expect(wireBody.messages.some(m => 'partial' in m)).toBe(false);
+            });
+
+            test('falls back to legacy addAssistantPrefix when kimi_partial is absent or false', async () => {
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: [
+                            { role: 'user', content: 'u' },
+                            { role: 'assistant', content: 'a' },
+                        ],
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                const [, init] = ctx.fetch.mock.calls[0];
+                const wireBody = JSON.parse(init.body);
+                expect(wireBody.messages).toHaveLength(2);
+                expect(wireBody.messages[1].partial).toBe(true);
+
+                const ctx2 = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        model: 'kimi-k2.6',
+                        messages: [
+                            { role: 'system', content: 's' },
+                            { role: 'user', content: 'u' },
+                        ],
+                        kimi_partial: false,
+                        kimi_partial_content: 'Her reply begins thus:',
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+                await dispatchOpenAICompatible(ctx2);
+                const [, init2] = ctx2.fetch.mock.calls[0];
+                const wireBody2 = JSON.parse(init2.body);
+                expect(wireBody2.messages).toHaveLength(2);
+                expect(wireBody2.messages.some(m => m.role === 'assistant')).toBe(false);
+            });
+        });
+
         test('COMETAPI (temporarily disabled: emits error, no fetch)', async () => {
             const ctx = fakeCtx({
                 body: { chat_completion_source: CHAT_COMPLETION_SOURCES.COMETAPI },

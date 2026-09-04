@@ -666,6 +666,10 @@ export const settingsToUpdate = {
     inline_image_quality: ['#openai_inline_image_quality', 'inline_image_quality', false, false],
     continue_prefill: ['#continue_prefill', 'continue_prefill', true, false],
     continue_postfix: ['#continue_postfix', 'continue_postfix', false, false],
+    kimi_partial_mode: ['#kimi_partial_mode', 'kimi_partial_mode', true, false],
+    kimi_partial_content: ['#kimi_partial_content', 'kimi_partial_content', false, false],
+    kimi_partial_name_source: ['#kimi_partial_name_source', 'kimi_partial_name_source', false, false],
+    kimi_partial_name: ['#kimi_partial_name', 'kimi_partial_name', false, false],
     function_calling: ['#openai_function_calling', 'function_calling', true, false],
     function_calling_plain_text: ['#connection_profile_function_calling_plain_text', 'function_calling_plain_text', true, true],
     function_calling_plain_text_error_retry: ['#connection_profile_function_calling_plain_text_error_retry', 'function_calling_plain_text_error_retry', true, true],
@@ -912,6 +916,10 @@ const default_settings = {
     proxy_password: '',
     assistant_prefill: '',
     assistant_impersonation: '',
+    kimi_partial_mode: false,
+    kimi_partial_content: '',
+    kimi_partial_name_source: 'character',
+    kimi_partial_name: '',
     use_sysprompt: false,
     vertexai_auth_mode: 'express',
     vertexai_region: 'us-central1',
@@ -3953,6 +3961,19 @@ export async function createGenerationParameters(settings, model, type, messages
         }
     }
 
+    if (settings.chat_completion_source === chat_completion_sources.MOONSHOT) {
+        generate_data.kimi_partial = settings.kimi_partial_mode === true;
+        if (settings.kimi_partial_mode === true) {
+            generate_data.kimi_partial_content = String(substituteParams(settings.kimi_partial_content ?? '') ?? '');
+            const kimiPartialName = settings.kimi_partial_name_source === 'manual'
+                ? String(substituteParams(settings.kimi_partial_name ?? '') ?? '')
+                : String(name2 ?? '');
+            if (kimiPartialName) {
+                generate_data.kimi_partial_name = kimiPartialName;
+            }
+        }
+    }
+
     if (seedSupportedSources.includes(settings.chat_completion_source) && settings.seed >= 0) {
         generate_data.seed = settings.seed;
     }
@@ -6229,6 +6250,7 @@ async function syncOpenAIPresetUiAfterApply() {
             '#group_nudge_prompt_textarea',
             '#claude_assistant_prefill',
             '#claude_assistant_impersonation',
+            '#kimi_partial_content',
             '#continue_postifx',
         ];
 
@@ -8731,6 +8753,10 @@ async function onConnectButtonClick(e) {
     await getStatusOpen();
 }
 
+function updateKimiPartialNameVisibility() {
+    $('#kimi_partial_name_block').toggleClass('displayNone', oai_settings.kimi_partial_name_source !== 'manual');
+}
+
 function toggleChatCompletionForms() {
     if (oai_settings.chat_completion_source == chat_completion_sources.CLAUDE) {
         // Claude model id is a free-form text input, no select to re-trigger.
@@ -8798,6 +8824,7 @@ function toggleChatCompletionForms() {
 
     syncCustomModelsToModelPicker({ triggerModelChange: true });
     setToolReasoningControls();
+    updateKimiPartialNameVisibility();
 }
 
 async function testApiConnection() {
@@ -10192,6 +10219,27 @@ export function initOpenAI() {
 
     $('#claude_assistant_impersonation').on('input', function () {
         oai_settings.assistant_impersonation = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#kimi_partial_mode').on('input', function () {
+        oai_settings.kimi_partial_mode = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#kimi_partial_content').on('input', function () {
+        oai_settings.kimi_partial_content = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    $('#kimi_partial_name_source').on('change', function () {
+        oai_settings.kimi_partial_name_source = String($(this).val());
+        saveSettingsDebounced();
+        updateKimiPartialNameVisibility();
+    });
+
+    $('#kimi_partial_name').on('input', function () {
+        oai_settings.kimi_partial_name = String($(this).val());
         saveSettingsDebounced();
     });
 

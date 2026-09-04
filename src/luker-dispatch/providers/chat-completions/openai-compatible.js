@@ -443,6 +443,29 @@ async function resolvePollinations(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
+function applyKimiPartial(messages, content, name) {
+    if (!Array.isArray(messages) || !messages.length) {
+        return;
+    }
+    const toolInvolved = messages.some((message) =>
+        (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) || message?.role === 'tool');
+    if (toolInvolved) {
+        return;
+    }
+    const prefix = typeof content === 'string' ? content : '';
+    const last = messages[messages.length - 1];
+    if (last?.role === 'assistant' && (typeof last.content === 'string' || last.content == null)) {
+        last.content = `${last.content ?? ''}${prefix}`;
+        last.partial = true;
+        return;
+    }
+    const injected = { role: 'assistant', content: prefix, partial: true };
+    if (name) {
+        injected.name = String(name);
+    }
+    messages.push(injected);
+}
+
 /** MOONSHOT — chat-completions.js:3185-3195 */
 async function resolveMoonshot(ctx) {
     const body = ctx.body;
@@ -458,6 +481,8 @@ async function resolveMoonshot(ctx) {
     renameAssistantReasoningToReasoningContent(body.messages);
     if (body.json_schema) {
         setJsonObjectFormat(bodyParams, body.messages, body.json_schema);
+    } else if (body.kimi_partial === true) {
+        applyKimiPartial(body.messages, body.kimi_partial_content, body.kimi_partial_name);
     } else {
         addAssistantPrefix(body.messages, [], 'partial');
     }
