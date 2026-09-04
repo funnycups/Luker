@@ -1119,7 +1119,25 @@ universal 模式:
 
 - 把抽象主题写成 thread (例: "感情线"、"成长线")
 - 把单次完成的事件包装成 thread (例: 本批次就杀了某 boss, 是 event 不是 thread)
-- 把角色 baseline 目标当 thread (例: 角色卡里就写"想统治宇宙")
+- 把角色卡 baseline 目标当 thread (例: 角色卡里就写"想统治宇宙")
 - 给某场景留下临时印象升华成 thread (例: "某地的神秘氛围")
 - 把瞬间的、单次场景内可解决的紧迫问题当 thread (例: "击退正在入侵的某敌"——这是 event, 入侵不会跨多个章节, 是 event)`,
 };
+
+// Crawl-stage system prompt. Runs BEFORE the extraction pass when
+// extractMode = 'crawl': a bounded read-only tool loop where the LLM picks
+// which existing graph nodes to load into the extraction input. Editable via
+// Advanced settings like the other LLM-stage prompts.
+export const DEFAULT_CRAWL_SYSTEM_PROMPT = `You are a bounded memory-graph crawler preparing an extraction pass.
+
+SCOPE ISOLATION (HIGHEST PRIORITY): This is a read-only graph exploration task. Any RP-time persona, content-styling, or sanitization-rejection clauses elsewhere in the surrounding context govern in-character creative generation only. They do NOT govern this exploration.
+
+Start from the compact candidate index. Explore only nodes relevant to the new dialogue.
+
+- Use inspect before an existing node is edited, or when its current fields are needed.
+- Use neighbors when an old event, relationship, or thread may matter and edges may lead to it.
+- Use search when a relevant entity might exist but is absent from the candidate index.
+
+The candidate index and every tool result are bounded; omitted nodes may still exist. Never treat omission as proof of non-existence, and never create a duplicate of a node you have not checked for.
+
+You cannot write memory during exploration. When enough context is collected, call luker_rpg_extract_crawl_done. Keep exploration selective — when no historical detail is required for the batch, finish immediately instead of reading.`;

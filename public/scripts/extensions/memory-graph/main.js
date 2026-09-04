@@ -64,6 +64,7 @@ import {
     EVENT_SUMMARY_RULES_BODY,
     DEFAULT_EXTRACT_SYSTEM_PROMPT,
     DEFAULT_EVENT_COMPRESS_INSTRUCTION,
+    DEFAULT_CRAWL_SYSTEM_PROMPT,
 } from './default-prompts.js';
 import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
 import { computeDepthsFromEnd } from '../../lib/chat-regex.js';
@@ -468,6 +469,7 @@ const defaultSettings = {
     requestApiPresetName: '',
     requestLlmPresetName: '',
     extractSystemPrompt: DEFAULT_EXTRACT_SYSTEM_PROMPT,
+    extractCrawlSystemPrompt: DEFAULT_CRAWL_SYSTEM_PROMPT,
     schemaIterSystemPrompt: DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
     extractBatchTurns: 1,
     extractContextTurns: 2,
@@ -903,6 +905,7 @@ function ensureSettings() {
     extension_settings[MODULE_NAME].extractCrawlCandidateLimit = Math.max(10, Math.min(100, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlCandidateLimit) || defaultSettings.extractCrawlCandidateLimit)));
     extension_settings[MODULE_NAME].extractCrawlMaxReads = Math.max(1, Math.min(30, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlMaxReads) || defaultSettings.extractCrawlMaxReads)));
     extension_settings[MODULE_NAME].extractSystemPrompt = String(extension_settings[MODULE_NAME].extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
+    extension_settings[MODULE_NAME].extractCrawlSystemPrompt = String(extension_settings[MODULE_NAME].extractCrawlSystemPrompt || '').trim() || DEFAULT_CRAWL_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].schemaIterSystemPrompt = String(extension_settings[MODULE_NAME].schemaIterSystemPrompt || '').trim() || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].recallRouteSystemPrompt = String(extension_settings[MODULE_NAME].recallRouteSystemPrompt || '').trim() || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].recallFinalizeSystemPrompt = String(extension_settings[MODULE_NAME].recallFinalizeSystemPrompt || '').trim() || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT;
@@ -1023,6 +1026,7 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
         extractCrawlCandidateLimit: Math.max(10, Math.min(100, Math.floor(Number.isFinite(extractCrawlCandidateLimitRaw) ? extractCrawlCandidateLimitRaw : Number(base.extractCrawlCandidateLimit ?? defaultSettings.extractCrawlCandidateLimit)))),
         extractCrawlMaxReads: Math.max(1, Math.min(30, Math.floor(Number.isFinite(extractCrawlMaxReadsRaw) ? extractCrawlMaxReadsRaw : Number(base.extractCrawlMaxReads ?? defaultSettings.extractCrawlMaxReads)))),
         extractSystemPrompt: String(input.extractSystemPrompt || '').trim() || String(base.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT),
+        extractCrawlSystemPrompt: String(input.extractCrawlSystemPrompt || '').trim() || String(base.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT),
         schemaIterSystemPrompt: String(input.schemaIterSystemPrompt || '').trim() || String(base.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT),
         recallRouteSystemPrompt: String(input.recallRouteSystemPrompt || '').trim() || String(base.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
         recallFinalizeSystemPrompt: String(input.recallFinalizeSystemPrompt || '').trim() || String(base.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
@@ -1055,6 +1059,7 @@ function applyAdvancedSettings(target, values) {
     target.extractCrawlCandidateLimit = normalized.extractCrawlCandidateLimit;
     target.extractCrawlMaxReads = normalized.extractCrawlMaxReads;
     target.extractSystemPrompt = normalized.extractSystemPrompt;
+    target.extractCrawlSystemPrompt = normalized.extractCrawlSystemPrompt;
     target.schemaIterSystemPrompt = normalized.schemaIterSystemPrompt;
     target.recallRouteSystemPrompt = normalized.recallRouteSystemPrompt;
     target.recallFinalizeSystemPrompt = normalized.recallFinalizeSystemPrompt;
@@ -5755,15 +5760,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
     const readKeys = new Set();
     const observations = [];
     const tools = buildExtractionCrawlTools();
-    const systemPrompt = [
-        'You are a bounded memory-graph crawler preparing an extraction pass.',
-        'Start with the compact candidate index. Explore only nodes relevant to the new dialogue.',
-        'Use inspect before editing an existing node. Use neighbors or search when an old event, relationship, or thread may matter.',
-        'The candidate index and every tool result are bounded. Never assume omitted nodes do not exist.',
-        'If a relevant entity is not in the candidate index, search for it before creating a duplicate.',
-        'Do not write memory. Finish with luker_rpg_extract_crawl_done when enough context is collected.',
-        'Keep exploration selective: create a new event directly when no historical detail is required.',
-    ].join('\n');
+    const systemPrompt = String(settings?.extractCrawlSystemPrompt || '').trim() || DEFAULT_CRAWL_SYSTEM_PROMPT;
     let round = 0;
     while (round < maxRounds) {
         round += 1;
@@ -14343,6 +14340,7 @@ function hydrateAdvancedTabFields(root, source) {
     root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val(String(Math.max(10, Math.min(100, Number(source.extractCrawlCandidateLimit ?? defaultSettings.extractCrawlCandidateLimit)))));
     root.find('#luker_rpg_memory_advanced_extract_crawl_reads').val(String(Math.max(1, Math.min(30, Number(source.extractCrawlMaxReads ?? defaultSettings.extractCrawlMaxReads)))));
     root.find('#luker_rpg_memory_advanced_extract_system_prompt').val(String(source.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_extract_crawl_system_prompt').val(String(source.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_recall_route_prompt').val(String(source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val(String(source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val(String(source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT));
@@ -14370,6 +14368,7 @@ function readAdvancedTabFields(root) {
         extractCrawlCandidateLimit: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val()),
         extractCrawlMaxReads: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_reads').val()),
         extractSystemPrompt: String(root.find('#luker_rpg_memory_advanced_extract_system_prompt').val() || '').trim(),
+        extractCrawlSystemPrompt: String(root.find('#luker_rpg_memory_advanced_extract_crawl_system_prompt').val() || '').trim(),
         recallRouteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_route_prompt').val() || '').trim(),
         recallFinalizeSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val() || '').trim(),
         ragRewriteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val() || '').trim(),

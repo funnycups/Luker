@@ -279,6 +279,9 @@ function buildAdvancedTabHtml(deps) {
                 <input id="luker_rpg_memory_advanced_extract_crawl_reads" class="text_pole" type="number" min="1" max="30" step="1" />
             </label>
             <small style="display:block; opacity:0.8">${escapeHtml(i18n('Crawl mode shows a compact graph index and reads relevant nodes on demand before extraction.'))}</small>
+            <label>${escapeHtml(i18n('Extraction Crawl Prompt'))}${fh('About Extraction Crawl Prompt', 'Extraction Crawl Prompt help body')}
+                <textarea id="luker_rpg_memory_advanced_extract_crawl_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
+            </label>
             <label>${escapeHtml(i18n('Extract Table Fill Prompt'))}${fh('About Extract Table Fill Prompt', 'Extract Table Fill Prompt help body')}
                 <textarea id="luker_rpg_memory_advanced_extract_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
             </label>
