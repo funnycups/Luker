@@ -109,10 +109,11 @@ export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
  * @property {string} handle - The user's short handle. Used for directories and other references
  * @property {string} name - The user's name. Displayed in the UI
  * @property {string} avatar - The user's avatar image
- * @property {boolean} [admin] - Whether the user is an admin (can manage other users)
+ * @property {boolean} [admin] - Whether the user is an admin
  * @property {boolean} password - Whether the user is password protected
  * @property {boolean} [enabled] - Whether the user is enabled
- * @property {number} [created] - The timestamp when the user was created
+ * @property {number} [created] - When the user was created
+ * @property {string[]} [oauthProviders] - OAuth providers bound to this account (login page uses this to route OAuth-only accounts to the provider flow instead of the password form)
  */
 
 /**

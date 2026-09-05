@@ -557,6 +557,7 @@ router.post('/list', async (_request, response) => {
                         created: user.created,
                         avatar: avatar,
                         password: !!user.password,
+                        oauthProviders: Object.keys(user.oauth || {}),
                     }),
                 );
             }));
@@ -591,6 +592,18 @@ router.post('/login', async (request, response) => {
         if (!user.enabled) {
             console.warn('Login failed: User', user.handle, 'is disabled');
             return response.status(403).json({ error: 'User is disabled' });
+        }
+
+        // OAuth-bound accounts are created without a password. An empty
+        // password field must NOT satisfy them — that would make every
+        // OAuth account trivially impersonable via the password path
+        // (handle-guessing + any password). Only a locally-set password
+        // may pass the password check; OAuth login goes through
+        // /oauth/start instead. Same generic error as an unknown user
+        // so the response leaks nothing about how the account authenticates.
+        if (user.oauth && !user.password) {
+            console.warn('Login failed: Password login rejected for OAuth-bound user', user.handle);
+            return response.status(403).json({ error: 'Incorrect credentials' });
         }
 
         if (user.password && user.password !== getPasswordHash(request.body.password, user.salt)) {

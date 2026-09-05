@@ -94,6 +94,8 @@ Luker 支援透過 GitHub 帳號登入。使用者點擊登入後會被重新導
 
 你需要先在 GitHub 上建立一個 OAuth App，將回呼地址設定為 `https://your-domain/api/users/oauth/callback/github`。
 
+透過 OAuth 建立的帳號沒有本機密碼，密碼登入通道對這類帳號是關閉的——它們始終透過提供方登入。如果使用者（或管理員透過修改密碼流程）之後設定了本機密碼，兩種憑據均可使用：密碼登入會被接受，OAuth 登入也繼續有效。
+
 ## Discord OAuth 登入
 
 Luker 同樣支援 Discord OAuth 登入，並提供更細緻的存取控制——可以校驗使用者是否為指定 Discord 伺服器的成員，以及是否擁有特定身分組（Role）。

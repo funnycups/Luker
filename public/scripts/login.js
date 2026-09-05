@@ -220,6 +220,20 @@ async function performLogin(handle, password) {
  * @returns {Promise<void>}
  */
 async function onUserSelected(user) {
+    // OAuth-only account (created by the GitHub/Discord flow, no local
+    // password): the password path is closed for it server-side, so send
+    // the user straight to the provider. Prefer the bound provider's
+    // start URL; fall back to the login page (which shows the provider
+    // buttons) if the account is bound to a provider that is no longer
+    // enabled.
+    if (!user.password && Array.isArray(user.oauthProviders) && user.oauthProviders.length > 0) {
+        const provider = user.oauthProviders.find(p => p === 'github' || p === 'discord');
+        if (provider && $(`#oauth${provider.charAt(0).toUpperCase() + provider.slice(1)}Button`).attr('href')) {
+            return window.location.assign(`/api/users/oauth/start/${provider}`);
+        }
+        return displayError('This account signs in with GitHub or Discord. Use the buttons below.');
+    }
+
     if (!user.password) {
         return performLogin(user.handle, '');
     }
