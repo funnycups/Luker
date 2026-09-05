@@ -2627,7 +2627,7 @@ export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
     return entities;
 }
 
-export async function getOneCharacter(avatarUrl) {
+export async function getOneCharacter(avatarUrl, { preserveChat = false } = {}) {
     const response = await fetch('/api/characters/get', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -2654,6 +2654,9 @@ export async function getOneCharacter(avatarUrl) {
             // load) or that an active session already wrote.
             const existingChat = characters[indexOf]?.chat;
             if (!getData.chat && existingChat) {
+                getData.chat = existingChat;
+            }
+            if (preserveChat && existingChat) {
                 getData.chat = existingChat;
             }
             characters[indexOf] = getData;
@@ -14594,7 +14597,7 @@ export async function unshallowCharacter(characterId) {
         return;
     }
 
-    await getOneCharacter(avatar);
+    await getOneCharacter(avatar, { preserveChat: true });
 }
 
 export async function getChat() {
