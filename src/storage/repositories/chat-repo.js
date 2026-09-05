@@ -5,7 +5,8 @@ import { assertWritable } from '../read-only-mode.js';
 import { applyJsonPatch } from './json-patch.js';
 
 export class ChatRepo {
-    constructor({ engine, now = () => Math.floor(Date.now() / 1000) }) {
+    // Milliseconds, matching FsEngine's stat.mtimeMs reads and the SQL engines' Date.now() writes.
+    constructor({ engine, now = () => Date.now() }) {
         this._engine = engine;
         this._now = now;
     }
