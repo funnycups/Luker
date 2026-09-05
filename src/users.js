@@ -69,7 +69,7 @@ const TRUSTED_PROXIES = filterValidIpPatterns(getConfigValue('sso.trustedProxies
  * @type {Map<string, UserDirectoryList>}
  */
 const DIRECTORIES_CACHE = new Map();
-const PUBLIC_USER_AVATAR = '/img/default-user.png';
+const PUBLIC_USER_AVATAR = '/img/user-default.png';
 const COOKIE_SECRET_PATH = 'cookie-secret.txt';
 
 const STORAGE_KEYS = {
