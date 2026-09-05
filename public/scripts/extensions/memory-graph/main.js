@@ -64,6 +64,7 @@ import {
     EVENT_SUMMARY_RULES_BODY,
     DEFAULT_EXTRACT_SYSTEM_PROMPT,
     DEFAULT_EVENT_COMPRESS_INSTRUCTION,
+    DEFAULT_CRAWL_SYSTEM_PROMPT,
 } from './default-prompts.js';
 import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
 import { computeDepthsFromEnd } from '../../lib/chat-regex.js';
@@ -445,6 +446,10 @@ const defaultSettings = {
     enabled: false,
     autoExtractionEnabled: true,
     autoCompressionEnabled: true,
+    extractMode: 'oneshot',
+    extractCrawlMaxRounds: 3,
+    extractCrawlCandidateLimit: 40,
+    extractCrawlMaxReads: 12,
     updateEvery: 1,
     maxTurns: 900,
     recallEnabled: true,
@@ -464,6 +469,7 @@ const defaultSettings = {
     requestApiPresetName: '',
     requestLlmPresetName: '',
     extractSystemPrompt: DEFAULT_EXTRACT_SYSTEM_PROMPT,
+    extractCrawlSystemPrompt: DEFAULT_CRAWL_SYSTEM_PROMPT,
     schemaIterSystemPrompt: DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT,
     extractBatchTurns: 1,
     extractContextTurns: 2,
@@ -892,7 +898,14 @@ function ensureSettings() {
         Math.min(50, Math.floor(Number.isFinite(ragDefaultPerTypeKRaw) ? ragDefaultPerTypeKRaw : defaultSettings.ragDefaultPerTypeK)),
     );
     extension_settings[MODULE_NAME].includeWorldInfoWithPreset = extension_settings[MODULE_NAME].includeWorldInfoWithPreset !== false;
+    extension_settings[MODULE_NAME].extractMode = ['oneshot', 'crawl'].includes(String(extension_settings[MODULE_NAME].extractMode || '').trim().toLowerCase())
+        ? String(extension_settings[MODULE_NAME].extractMode).trim().toLowerCase()
+        : defaultSettings.extractMode;
+    extension_settings[MODULE_NAME].extractCrawlMaxRounds = Math.max(1, Math.min(5, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlMaxRounds) || defaultSettings.extractCrawlMaxRounds)));
+    extension_settings[MODULE_NAME].extractCrawlCandidateLimit = Math.max(10, Math.min(100, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlCandidateLimit) || defaultSettings.extractCrawlCandidateLimit)));
+    extension_settings[MODULE_NAME].extractCrawlMaxReads = Math.max(1, Math.min(30, Math.floor(Number(extension_settings[MODULE_NAME].extractCrawlMaxReads) || defaultSettings.extractCrawlMaxReads)));
     extension_settings[MODULE_NAME].extractSystemPrompt = String(extension_settings[MODULE_NAME].extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
+    extension_settings[MODULE_NAME].extractCrawlSystemPrompt = String(extension_settings[MODULE_NAME].extractCrawlSystemPrompt || '').trim() || DEFAULT_CRAWL_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].schemaIterSystemPrompt = String(extension_settings[MODULE_NAME].schemaIterSystemPrompt || '').trim() || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].recallRouteSystemPrompt = String(extension_settings[MODULE_NAME].recallRouteSystemPrompt || '').trim() || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT;
     extension_settings[MODULE_NAME].recallFinalizeSystemPrompt = String(extension_settings[MODULE_NAME].recallFinalizeSystemPrompt || '').trim() || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT;
@@ -951,6 +964,12 @@ export function getSettings() {
 function normalizeAdvancedSettings(source = null, fallbackSource = null) {
     const base = fallbackSource && typeof fallbackSource === 'object' ? fallbackSource : defaultSettings;
     const input = source && typeof source === 'object' ? source : {};
+    const extractMode = ['oneshot', 'crawl'].includes(String(input.extractMode || '').trim().toLowerCase())
+        ? String(input.extractMode).trim().toLowerCase()
+        : String(base.extractMode || defaultSettings.extractMode);
+    const extractCrawlMaxRoundsRaw = Number(input.extractCrawlMaxRounds);
+    const extractCrawlCandidateLimitRaw = Number(input.extractCrawlCandidateLimit);
+    const extractCrawlMaxReadsRaw = Number(input.extractCrawlMaxReads);
     const extractBatchTurnsRaw = Number(input.extractBatchTurns);
     const extractContextTurnsRaw = Number(input.extractContextTurns);
     const extractExcludeRecentTurnsRaw = Number(input.extractExcludeRecentTurns);
@@ -1002,7 +1021,12 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
             0,
             Math.floor(Number.isFinite(rpmLimitRaw) ? rpmLimitRaw : Number(base.rpmLimit ?? defaultSettings.rpmLimit)),
         ),
+        extractMode,
+        extractCrawlMaxRounds: Math.max(1, Math.min(5, Math.floor(Number.isFinite(extractCrawlMaxRoundsRaw) ? extractCrawlMaxRoundsRaw : Number(base.extractCrawlMaxRounds ?? defaultSettings.extractCrawlMaxRounds)))),
+        extractCrawlCandidateLimit: Math.max(10, Math.min(100, Math.floor(Number.isFinite(extractCrawlCandidateLimitRaw) ? extractCrawlCandidateLimitRaw : Number(base.extractCrawlCandidateLimit ?? defaultSettings.extractCrawlCandidateLimit)))),
+        extractCrawlMaxReads: Math.max(1, Math.min(30, Math.floor(Number.isFinite(extractCrawlMaxReadsRaw) ? extractCrawlMaxReadsRaw : Number(base.extractCrawlMaxReads ?? defaultSettings.extractCrawlMaxReads)))),
         extractSystemPrompt: String(input.extractSystemPrompt || '').trim() || String(base.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT),
+        extractCrawlSystemPrompt: String(input.extractCrawlSystemPrompt || '').trim() || String(base.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT),
         schemaIterSystemPrompt: String(input.schemaIterSystemPrompt || '').trim() || String(base.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT),
         recallRouteSystemPrompt: String(input.recallRouteSystemPrompt || '').trim() || String(base.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
         recallFinalizeSystemPrompt: String(input.recallFinalizeSystemPrompt || '').trim() || String(base.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
@@ -1030,7 +1054,12 @@ function applyAdvancedSettings(target, values) {
     target.extractContextTurns = normalized.extractContextTurns;
     target.recallQueryMessages = normalized.recallQueryMessages;
     target.extractBatchTurns = normalized.extractBatchTurns;
+    target.extractMode = normalized.extractMode;
+    target.extractCrawlMaxRounds = normalized.extractCrawlMaxRounds;
+    target.extractCrawlCandidateLimit = normalized.extractCrawlCandidateLimit;
+    target.extractCrawlMaxReads = normalized.extractCrawlMaxReads;
     target.extractSystemPrompt = normalized.extractSystemPrompt;
+    target.extractCrawlSystemPrompt = normalized.extractCrawlSystemPrompt;
     target.schemaIterSystemPrompt = normalized.schemaIterSystemPrompt;
     target.recallRouteSystemPrompt = normalized.recallRouteSystemPrompt;
     target.recallFinalizeSystemPrompt = normalized.recallFinalizeSystemPrompt;
@@ -4291,9 +4320,11 @@ function buildExtractInputTail(requiredTypes, graphData) {
         requiredTypeXml,
         '  </required_types>',
         '  <input_guide>graph_data is the current semantic memory graph state for extraction.</input_guide>',
-        '  <input_guide>graph_data is a full schema-aware projection of the current semantic graph for extraction.</input_guide>',
-        '  <input_guide>Each graph_data.nodes row contains key_values (identity keys) and row_values (schema columns).</input_guide>',
-        '  <input_guide>graph_data.edges contains the currently projected semantic relations between nodes.</input_guide>',
+        safeGraphData.graph_scope === 'crawled_local_slice'
+            ? '  <input_guide>graph_data is a bounded local slice obtained by crawling from relevant candidate nodes. Nodes omitted from this slice may still exist; do not treat omission as proof of non-existence.</input_guide>'
+            : '  <input_guide>graph_data is a full schema-aware projection of the current semantic graph for extraction.</input_guide>',
+        '  <input_guide>Each graph_data.nodes row contains key_values (identity keys) and row_values (schema columns) when available.</input_guide>',
+        '  <input_guide>graph_data.edges contains the currently projected semantic relations between nodes in this graph view.</input_guide>',
         '  <input_guide>If graph_data.initialized=false, treat graph as uninitialized and prefer create operations over edit/delete.</input_guide>',
         buildJsonXmlSection('graph_data', safeGraphData),
         '</extract_input>',
@@ -4464,18 +4495,25 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         ? Math.max(0, Math.floor(Number(options.maxSeq)))
         : null;
     const rebuildCreateOnly = Boolean(options?.rebuildCreateOnly);
-    const graphNodes = buildGraphNodeHints(store, schema, 0, { maxSeq: extractionMaxSeq, scope: 'visible' });
+    const crawlGraph = options?.crawlGraph && typeof options.crawlGraph === 'object' ? options.crawlGraph : null;
+    const graphNodes = crawlGraph
+        ? (Array.isArray(crawlGraph.nodes) ? crawlGraph.nodes : [])
+        : buildGraphNodeHints(store, schema, 0, { maxSeq: extractionMaxSeq, scope: 'visible' });
     const graphNodeIds = new Set(graphNodes.map(node => String(node?.id || '')).filter(Boolean));
-    const graphEdges = buildProjectedEdges(store, {
-        visibleNodeIds: graphNodeIds,
-        excludeInternal: false,
-    }).map(edge => ({
+    const graphEdges = crawlGraph && Array.isArray(crawlGraph.edges)
+        ? crawlGraph.edges
+        : buildProjectedEdges(store, {
+            visibleNodeIds: graphNodeIds,
+            excludeInternal: false,
+        }).map(edge => ({
         from: String(edge?.from || ''),
         to: String(edge?.to || ''),
         type: normalizeText(edge?.type || 'related') || 'related',
-        weight: Math.max(1, Number(edge?.weight || 1)),
-    }));
-    const semanticNodeTotal = listNodesByLevel(store, LEVEL.SEMANTIC)
+            weight: Math.max(1, Number(edge?.weight || 1)),
+        }));
+    const semanticNodeTotal = crawlGraph
+        ? Number(crawlGraph.semantic_node_total || graphNodes.length)
+        : listNodesByLevel(store, LEVEL.SEMANTIC)
         .filter(node => !node?.archived)
         .filter(node => !isRecallDiagnosticNode(node))
         .filter((node) => {
@@ -4489,11 +4527,11 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
     const graphDataPayload = {
             initialized: graphNodes.length > 0,
             editable_type_ids: Array.from(editableTypeSet.values()),
-            projection_policy: {
+            projection_policy: crawlGraph?.projection_policy || {
                 hierarchical_types: 'top_level_rollups_only',
                 non_hierarchical_types: 'full',
             },
-            graph_scope: 'visible',
+            graph_scope: crawlGraph?.graph_scope || 'visible',
             semantic_node_total: semanticNodeTotal,
             visible_node_count: graphNodes.length,
             nodes: graphNodes,
@@ -5602,6 +5640,286 @@ function buildExtractBatchFromFrames(frames, batchStartIndex, batchEndIndex, con
     return batch;
 }
 
+const CRAWL_READ_TOOL_NAMES = new Set([
+    'luker_rpg_extract_crawl_inspect',
+    'luker_rpg_extract_crawl_neighbors',
+    'luker_rpg_extract_crawl_search',
+    'luker_rpg_extract_crawl_done',
+]);
+
+function buildExtractionCrawlTools() {
+    return [
+        {
+            type: 'function',
+            function: {
+                name: 'luker_rpg_extract_crawl_inspect',
+                description: 'Inspect one existing memory node in full. Use before editing or when its current fields are needed.',
+                parameters: { type: 'object', properties: { node_id: { type: 'string' } }, required: ['node_id'], additionalProperties: false },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_rpg_extract_crawl_neighbors',
+                description: 'Crawl from a known node through semantic graph edges. Returns bounded neighbor briefs; use for historical continuity or related events.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        node_id: { type: 'string' },
+                        edge_types: { type: 'array', items: { type: 'string' } },
+                        limit: { type: 'integer', minimum: 1, maximum: 20 },
+                    },
+                    required: ['node_id'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_rpg_extract_crawl_search',
+                description: 'Search the complete graph for a named entity or topic, useful when a relevant old node is not in the initial candidate list.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        query: { type: 'string' },
+                        types: { type: 'array', items: { type: 'string' } },
+                        limit: { type: 'integer', minimum: 1, maximum: 20 },
+                    },
+                    required: ['query'],
+                    additionalProperties: false,
+                },
+            },
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'luker_rpg_extract_crawl_done',
+                description: 'Finish graph exploration. Call this when the local graph slice is sufficient for extraction.',
+                parameters: { type: 'object', properties: { reason: { type: 'string' } }, additionalProperties: false },
+            },
+        },
+    ];
+}
+
+function extractCrawlBrief(node, readApi, visibleIds) {
+    if (!node?.id) return null;
+    return readApi.getNodeBrief(String(node.id), {
+        visibleNodeIds: visibleIds,
+        edgeSummaryLimit: 6,
+    });
+}
+
+// Fallback row builder when getNodeBrief can't serve a node (missing spec,
+// diagnostic nodes, etc). Kept to the same 5-field compact shape so crawl
+// graph_data rows stay uniform even on the degraded path.
+function buildCrawlBriefRow(node) {
+    if (!node?.id) return null;
+    return {
+        id: String(node.id || ''),
+        type: String(node.type || ''),
+        title: String(node.title || ''),
+        seqTo: Number(node.seqTo || 0),
+        semanticDepth: Number(node.semanticDepth || 0),
+    };
+}
+
+async function buildExtractionCrawlGraph(context, store, settings, schema, messageBatch, options = {}) {
+    const { getMemoryGraphReadApi } = await import('./read-api.js');
+    const readApi = getMemoryGraphReadApi(store, context);
+    const limit = Math.max(10, Math.min(100, Math.floor(Number(settings?.extractCrawlCandidateLimit) || 40)));
+    const maxReads = Math.max(1, Math.min(30, Math.floor(Number(settings?.extractCrawlMaxReads) || 12)));
+    const maxRounds = Math.max(1, Math.min(5, Math.floor(Number(settings?.extractCrawlMaxRounds) || 3)));
+    // as-of cutoff: the rebuild-from-seq replay path calls this against a live
+    // store that already contains nodes from AFTER the batch being extracted.
+    // Every store read below must honor maxSeq or future graph state leaks
+    // into a historical batch (see buildGraphNodeHints maxSeq handling).
+    const maxSeq = Number.isFinite(Number(options?.maxSeq))
+        ? Math.max(0, Math.floor(Number(options.maxSeq)))
+        : null;
+    const isAsOfNode = (node) => {
+        if (!node || node.archived || isRecallDiagnosticNode(node)) return false;
+        if (maxSeq === null) return true;
+        const seq = Number(node?.seqTo ?? NaN);
+        return !Number.isFinite(seq) || seq <= maxSeq;
+    };
+    const messageText = (Array.isArray(messageBatch) ? messageBatch : [])
+        .map(item => `${item?.is_user ? 'user' : 'assistant'}: ${String(item?.mes || '')}`)
+        // Skip empty/placeholder turns ("user: hi" etc) that carry no extractable
+        // scene content; the round-trip cost of a turn must buy at least a
+        // short clause of content to be worth prompt tokens.
+        .filter(item => item.trim().length > 8)
+        .join('\n');
+    const visibleCandidates = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0, seqWindow: maxSeq === null ? undefined : { to: maxSeq } }) || [])
+        .filter(isAsOfNode)
+        .slice(0, limit);
+    const candidates = visibleCandidates
+        .map(node => extractCrawlBrief({ id: node?.id }, readApi, undefined) || buildCrawlBriefRow(node))
+        .filter(node => node && node.id);
+    const selected = new Map();
+    const readKeys = new Set();
+    const observations = [];
+    const tools = buildExtractionCrawlTools();
+    const systemPrompt = String(settings?.extractCrawlSystemPrompt || '').trim() || DEFAULT_CRAWL_SYSTEM_PROMPT;
+    let round = 0;
+    while (round < maxRounds) {
+        round += 1;
+        if (isAbortSignalLike(options?.abortSignal) && options.abortSignal.aborted) {
+            throw new DOMException('Memory extraction aborted.', 'AbortError');
+        }
+        const prompt = [
+            `<dialogue_batch>\n${messageText}\n</dialogue_batch>`,
+            buildJsonXmlSection('candidate_nodes', candidates),
+            observations.length > 0 ? buildJsonXmlSection('crawl_observations', observations) : '',
+            `Exploration round ${round}/${maxRounds}. Reads used: ${readKeys.size}/${maxReads}.`,
+            'Call one or more read tools, or call luker_rpg_extract_crawl_done.',
+        ].filter(Boolean).join('\n\n');
+        const calls = await requestToolCallsWithRetry(context, settings, {
+            taskMessages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }],
+            apiPresetName: settings.extractApiPresetName || '',
+            llmPresetName: settings.extractPresetName || '',
+            tools,
+            allowedNames: CRAWL_READ_TOOL_NAMES,
+            // Crawl is a read-only warm-up; unlike the extract pass there is no
+            // semantic-retry loop around this call, so transient tool-parse
+            // failures fall back to the user's toolCallRetryMax instead of
+            // hard-failing the whole extraction.
+            retriesOverride: Math.max(0, Math.floor(Number(settings?.toolCallRetryMax) || 0)),
+            abortSignal: options?.abortSignal || null,
+        });
+        let done = false;
+        for (const call of calls) {
+            const name = String(call?.name || '');
+            const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            if (name === 'luker_rpg_extract_crawl_done') {
+                done = true;
+                continue;
+            }
+            if (readKeys.size >= maxReads) {
+                observations.push({ tool: 'budget', result: 'Read budget exhausted; finalize exploration.' });
+                done = true;
+                continue;
+            }
+            // Tool failures push a structured error observation so the LLM sees
+            // why a call produced nothing; silent no-ops historically caused
+            // model loops (see iter-studio noop/error contract).
+            let result = null;
+            let error = null;
+            if (name === 'luker_rpg_extract_crawl_inspect') {
+                const id = String(args.node_id || '').trim();
+                if (!id) {
+                    error = 'invalid_args: node_id is required.';
+                } else if (readKeys.has(`inspect:${id}`)) {
+                    error = 'already_read: node was inspected earlier; refer to crawl_observations instead of re-reading.';
+                } else {
+                    const node = readApi.getNode(id);
+                    if (!node) {
+                        error = `not_found: node_id "${id}" does not exist. Use search to locate the correct id.`;
+                    } else if (!isAsOfNode(node)) {
+                        error = `not_found: node_id "${id}" exists outside the extraction seq window (seqTo > ${maxSeq}). Do not reference it.`;
+                    } else {
+                        result = {
+                            id: node.id,
+                            type: node.type,
+                            title: node.title,
+                            fields: node.fields,
+                            seqTo: node.seqTo,
+                            semanticDepth: node.semanticDepth,
+                            parentId: node.parentId,
+                            childrenIds: node.childrenIds,
+                        };
+                        const brief = readApi.getNodeBrief(id, { visibleNodeIds: undefined, edgeSummaryLimit: 8 });
+                        if (brief) selected.set(`node:${id}`, brief);
+                        readKeys.add(`inspect:${id}`);
+                    }
+                }
+            } else if (name === 'luker_rpg_extract_crawl_neighbors') {
+                const id = String(args.node_id || '').trim();
+                if (!id) {
+                    error = 'invalid_args: node_id is required.';
+                } else if (readKeys.has(`neighbors:${id}`)) {
+                    error = 'already_read: neighbors of this node were fetched earlier; refer to crawl_observations.';
+                } else {
+                    const neighbors = readApi.getNeighbors(id, { edgeTypes: args.edge_types, projectTo: 'raw' });
+                    const asOfNeighbors = Array.from(neighbors || []).filter(item => isAsOfNode(item?.node));
+                    if (asOfNeighbors.length === 0) {
+                        error = `not_found: node_id "${id}" has no matching neighbors.`;
+                    } else {
+                        result = asOfNeighbors.slice(0, Math.max(1, Math.min(20, Number(args.limit) || 10))).map(item => ({ // cap-ok: neighbor briefs feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
+                            id: item?.node?.id, type: item?.node?.type, title: item?.node?.title,
+                            edge_type: item?.edgeType, direction: item?.direction,
+                        }));
+                        readKeys.add(`neighbors:${id}`);
+                    }
+                }
+            } else if (name === 'luker_rpg_extract_crawl_search') {
+                const query = String(args.query || '').trim();
+                if (!query) {
+                    error = 'invalid_args: query is required.';
+                } else if (readKeys.has(`search:${query.toLowerCase()}`)) {
+                    error = 'already_read: this exact query was searched earlier; refer to crawl_observations.';
+                } else {
+                    const hits = readApi.keywordSearch({ query, types: args.types, k: Math.max(1, Math.min(20, Number(args.limit) || 10)) }); // cap-ok: search hits feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
+                    const asOfHits = Array.from(hits || []).filter(isAsOfNode);
+                    if (asOfHits.length === 0) {
+                        error = 'not_found: no nodes match this query. Try different keywords or proceed without it.';
+                        result = null;
+                    } else {
+                        result = asOfHits.map(node => ({ id: node.id, type: node.type, title: node.title, seqTo: node.seqTo }));
+                        readKeys.add(`search:${query.toLowerCase()}`);
+                    }
+                }
+            }
+            if (error) {
+                observations.push({ tool: name, args, result: null, error });
+                continue;
+            }
+            if (result) {
+                observations.push({ tool: name, args, result });
+                const rows = Array.isArray(result) ? result : [result];
+                for (const row of rows) {
+                    const id = String(row?.id || '').trim();
+                    if (id && !selected.has(`node:${id}`)) {
+                        const brief = extractCrawlBrief({ id }, readApi, undefined) || buildCrawlBriefRow(store?.nodes?.[id]);
+                        if (brief) selected.set(`node:${id}`, brief);
+                    }
+                }
+            }
+        }
+        if (done || calls.length === 0) break;
+    }
+    const nodeMap = new Map();
+    for (const item of candidates) nodeMap.set(String(item.id), item);
+    for (const value of selected.values()) {
+        if (value && value.id) nodeMap.set(String(value.id), value);
+    }
+    const nodes = Array.from(nodeMap.values()).slice(0, limit + maxReads * 2);
+    const ids = new Set(nodes.map(node => String(node.id || '')).filter(Boolean));
+    const edges = readApi.projectEdges({ visibleNodeIds: ids, excludeInternal: false });
+    // True as-of graph total, not the crawl slice size. The extraction prompt
+    // tells the LLM "omitted nodes may exist"; that guardrail only works if
+    // this number reflects how much of the graph was actually withheld.
+    const semanticNodeTotal = listNodesByLevel(store, LEVEL.SEMANTIC)
+        .filter(node => !node?.archived)
+        .filter(node => !isRecallDiagnosticNode(node))
+        .filter((node) => {
+            if (maxSeq === null) return true;
+            const seq = Number(node?.seqTo ?? NaN);
+            return !Number.isFinite(seq) || seq <= maxSeq;
+        })
+        .length;
+    return {
+        initialized: nodes.length > 0,
+        editable_type_ids: schema.filter(item => item?.editable).map(item => String(item.id || '').toLowerCase()).filter(Boolean),
+        projection_policy: { hierarchical_types: 'top_level_rollups_only', non_hierarchical_types: 'crawled_local_slice' },
+        graph_scope: 'crawled_local_slice',
+        semantic_node_total: semanticNodeTotal,
+        visible_node_count: nodes.length,
+        nodes,
+        edges: Array.from(edges || []).map(edge => ({ from: edge.from, to: edge.to, type: edge.type, weight: Math.max(1, Number(edge.weight || 1)) })),
+    };
+}
+
 async function processPendingMessageBatchWithLLM(context, store, settings, schema, frames, batchStartIndex, batchEndIndex, options = {}) {
     const source = Array.isArray(frames) ? frames : [];
     const safeStart = Math.max(0, Math.min(source.length - 1, Math.floor(Number(batchStartIndex) || 0)));
@@ -5622,6 +5940,9 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
         maxSeq: extractionMaxSeq,
         abortSignal: options?.abortSignal || null,
         rebuildCreateOnly: Boolean(options?.rebuildCreateOnly),
+        crawlGraph: String(settings?.extractMode || '').toLowerCase() === 'crawl'
+            ? await buildExtractionCrawlGraph(context, store, settings, schema, extractBatch, { maxSeq: extractionMaxSeq, abortSignal: options?.abortSignal || null })
+            : null,
     });
     if (operations.length === 0) {
         return { processed: true, changed: false };
@@ -14014,7 +14335,12 @@ function hydrateAdvancedTabFields(root, source) {
     root.find('#luker_rpg_memory_advanced_recall_query_messages').val(String(sanitizeRecallQueryMessages(source.recallQueryMessages)));
     root.find('#luker_rpg_memory_advanced_llm_visible_recent_messages').val(String(Math.max(0, Math.min(200, Number(source.llmVisibleRecentMessages ?? defaultSettings.llmVisibleRecentMessages)))));
     root.find('#luker_rpg_memory_advanced_extract_batch_turns').val(String(Math.max(1, Number(source.extractBatchTurns ?? defaultSettings.extractBatchTurns))));
+    root.find('#luker_rpg_memory_advanced_extract_mode').val(String(source.extractMode || defaultSettings.extractMode));
+    root.find('#luker_rpg_memory_advanced_extract_crawl_rounds').val(String(Math.max(1, Math.min(5, Number(source.extractCrawlMaxRounds ?? defaultSettings.extractCrawlMaxRounds)))));
+    root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val(String(Math.max(10, Math.min(100, Number(source.extractCrawlCandidateLimit ?? defaultSettings.extractCrawlCandidateLimit)))));
+    root.find('#luker_rpg_memory_advanced_extract_crawl_reads').val(String(Math.max(1, Math.min(30, Number(source.extractCrawlMaxReads ?? defaultSettings.extractCrawlMaxReads)))));
     root.find('#luker_rpg_memory_advanced_extract_system_prompt').val(String(source.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_extract_crawl_system_prompt').val(String(source.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_recall_route_prompt').val(String(source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val(String(source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val(String(source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT));
@@ -14037,7 +14363,12 @@ function readAdvancedTabFields(root) {
         recallQueryMessages: Number(root.find('#luker_rpg_memory_advanced_recall_query_messages').val()),
         llmVisibleRecentMessages: Number(root.find('#luker_rpg_memory_advanced_llm_visible_recent_messages').val()),
         extractBatchTurns: Number(root.find('#luker_rpg_memory_advanced_extract_batch_turns').val()),
+        extractMode: String(root.find('#luker_rpg_memory_advanced_extract_mode').val() || defaultSettings.extractMode),
+        extractCrawlMaxRounds: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_rounds').val()),
+        extractCrawlCandidateLimit: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val()),
+        extractCrawlMaxReads: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_reads').val()),
         extractSystemPrompt: String(root.find('#luker_rpg_memory_advanced_extract_system_prompt').val() || '').trim(),
+        extractCrawlSystemPrompt: String(root.find('#luker_rpg_memory_advanced_extract_crawl_system_prompt').val() || '').trim(),
         recallRouteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_route_prompt').val() || '').trim(),
         recallFinalizeSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val() || '').trim(),
         ragRewriteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val() || '').trim(),
@@ -14644,7 +14975,12 @@ function bindUi() {
         '#luker_rpg_memory_advanced_recall_query_messages',
         '#luker_rpg_memory_advanced_llm_visible_recent_messages',
         '#luker_rpg_memory_advanced_extract_batch_turns',
+        '#luker_rpg_memory_advanced_extract_mode',
+        '#luker_rpg_memory_advanced_extract_crawl_rounds',
+        '#luker_rpg_memory_advanced_extract_crawl_candidates',
+        '#luker_rpg_memory_advanced_extract_crawl_reads',
         '#luker_rpg_memory_advanced_extract_system_prompt',
+        '#luker_rpg_memory_advanced_extract_crawl_system_prompt',
         '#luker_rpg_memory_advanced_recall_route_prompt',
         '#luker_rpg_memory_advanced_recall_finalize_prompt',
         '#luker_rpg_memory_advanced_rag_rewrite_prompt',
