@@ -7,7 +7,7 @@ import { getIpAddress, retryAfter } from '../express-common.js';
 import { color, Cache, getConfigValue } from '../util.js';
 import { getAdminSettings } from '../admin-settings.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
-import { KEY_PREFIX, getUserAvatar, toKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive } from '../users.js';
+import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive } from '../users.js';
 import { consumeLanMigrationOffer } from '../lan-migration.js';
 
 const DISCREET_LOGIN = getConfigValue('enableDiscreetLogin', false, 'boolean');
@@ -79,6 +79,57 @@ async function findUserByOAuth(provider, externalId) {
     return users.find(user => String(user?.oauth?.[provider]?.id || '') === String(externalId)) || null;
 }
 
+/**
+ * Resolves the OAuth provider profile to an avatar image URL.
+ * @param {string} provider OAuth provider name
+ * @param {object} profile Provider profile response
+ * @returns {string} Avatar image URL, empty string if the profile has none
+ */
+function getOAuthProfileAvatarUrl(provider, profile) {
+    if (provider === 'github') {
+        return String(profile?.avatar_url || '');
+    }
+
+    if (provider === 'discord') {
+        // https://discord.com/developers/docs/reference#image-formatting
+        const avatarHash = String(profile?.avatar || '');
+        if (!avatarHash) {
+            return '';
+        }
+        const id = String(profile?.id || '');
+        const extension = avatarHash.startsWith('a_') ? 'gif' : 'png';
+        return `https://cdn.discordapp.com/avatars/${id}/${avatarHash}.${extension}`;
+    }
+
+    return '';
+}
+
+/**
+ * Downloads an image and returns it as a data URL (the storage format
+ * change-avatar uses). Returns an empty string on any failure — the
+ * caller falls back to the default avatar in that case.
+ * @param {string} url Absolute image URL
+ * @returns {Promise<string>} Data URL or empty string
+ */
+async function fetchAvatarAsDataUrl(url) {
+    try {
+        const response = await fetch(url, {
+            headers: { 'User-Agent': 'Luker OAuth' },
+        });
+        if (!response.ok) {
+            return '';
+        }
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.startsWith('image/')) {
+            return '';
+        }
+        const buffer = Buffer.from(await response.arrayBuffer());
+        return `data:${contentType};base64,${buffer.toString('base64')}`;
+    } catch {
+        return '';
+    }
+}
+
 async function createUserFromOAuth(provider, profile, adminSettings) {
     const handles = await getAllUserHandles();
     const seed = provider === 'github'
@@ -125,6 +176,17 @@ async function createUserFromOAuth(provider, profile, adminSettings) {
     await ensurePublicDirectoriesExist();
     const directories = getUserDirectories(handle);
     await checkForNewContent([directories], [CONTENT_TYPES.SETTINGS]);
+
+    // Seed the account with the provider profile picture so OAuth users
+    // don't render as a broken default on the login page. Best-effort:
+    // any failure leaves the default avatar in place.
+    const avatarUrl = getOAuthProfileAvatarUrl(provider, profile);
+    if (avatarUrl) {
+        const avatarDataUrl = await fetchAvatarAsDataUrl(avatarUrl);
+        if (avatarDataUrl) {
+            await storage.setItem(toAvatarKey(handle), avatarDataUrl);
+        }
+    }
 
     return newUser;
 }
