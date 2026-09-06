@@ -8271,7 +8271,10 @@ async function updateWorldInfoLinks(oldName, newName) {
                 }
 
                 // used to update the data in the browser's memory
-                await getOneCharacter(character.avatar);
+                // (lorebook-link update only — keep the live chat pointer:
+                // the merge never touches chat, so restoring the card's
+                // persisted value could clobber an unpersisted one).
+                await getOneCharacter(character.avatar, { preserveChat: true });
 
                 // Flag if the currently open character was affected
                 if (String(chid) === String(this_chid)) {

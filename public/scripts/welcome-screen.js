@@ -591,6 +591,13 @@ async function openRecentCharacterChat(avatarId, fileName) {
         const currentChatId = getCurrentChatId();
         if (currentChatId === fileName) {
             console.debug(`Chat ${fileName} is already open.`);
+            // The selection loaded fileName via the pin above, but that pin
+            // lives only in memory. Persist it into the character card — the
+            // same write openCharacterChat would do — so the next reload
+            // (auto-load chat, /go, a full getCharacters refresh) resumes on
+            // the chat the user actually opened, not the last one the card
+            // happened to record.
+            await updateRemoteChatName(characterId, fileName);
             return;
         }
         await openCharacterChat(fileName);
@@ -652,7 +659,15 @@ async function renameRecentCharacterChat(avatarId, fileName) {
             newFileName: newName,
             loader: false,
         });
-        await updateRemoteChatName(characterId, newName);
+        // Follow the rename with a pointer update only when the renamed
+        // file WAS the character's active chat. Unconditionally writing the
+        // pointer here hijacks the card onto whatever chat the user chose
+        // to rename, even if it is an old one — the next reload would open
+        // the renamed chat instead of the last-active one. Mirrors the
+        // guard inside renameGroupOrCharacterChat (script.js).
+        if (characters[characterId]?.chat === fileName) {
+            await updateRemoteChatName(characterId, newName);
+        }
         await refreshWelcomeScreen();
         toastr.success(t`Chat renamed.`);
     } catch (error) {

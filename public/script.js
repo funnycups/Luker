@@ -2741,6 +2741,18 @@ export async function getCharacters() {
 
     if (Array.isArray(getData)) {
         const previousAvatar = this_chid !== undefined ? characters[this_chid]?.avatar : null;
+        // Snapshot every live chat pointer before the array is replaced.
+        // The rebuild below restores each character's `.chat` from the
+        // PNG-persisted value, but a pointer the client set moments ago
+        // (e.g. a chat opened from the welcome screen) may not be persisted
+        // yet — reverting it would silently retarget getCurrentChatId() and
+        // the next save away from the chat the user is looking at.
+        const liveChats = new Map();
+        for (const character of characters) {
+            if (character?.avatar && character.chat) {
+                liveChats.set(character.avatar, character.chat);
+            }
+        }
         characters.splice(0, characters.length);
         for (let i = 0; i < getData.length; i++) {
             characters[i] = getData[i];
@@ -2749,6 +2761,13 @@ export async function getCharacters() {
             // For dropped-in cards
             if (!characters[i].chat) {
                 characters[i].chat = `${characters[i].name} - ${humanizedDateTime()}`;
+            }
+
+            // Carry the pre-rebuild pointer across when the client was
+            // actively holding one for this avatar.
+            const liveChat = liveChats.get(characters[i].avatar);
+            if (liveChat) {
+                characters[i].chat = liveChat;
             }
 
             characters[i].chat = String(characters[i].chat);
@@ -17838,7 +17857,11 @@ export async function createOrEditCharacter(e) {
                 throw new Error(detail ? `${fetchResult.status} ${detail}` : `${fetchResult.status}`);
             }
 
-            await getOneCharacter(formData.get('avatar_url'));
+            // Keep the live chat pointer across the refresh: the edit form
+            // already persists the chat it intends, so restoring the card's
+            // persisted value here only matters when a concurrent chat
+            // switch changed it mid-save — in that race the live value wins.
+            await getOneCharacter(formData.get('avatar_url'), { preserveChat: true });
             favsToHotswap(); // Update fav state
 
             $('#add_avatar_button').replaceWith(

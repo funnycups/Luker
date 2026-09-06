@@ -5464,8 +5464,10 @@ async function updateCharacterCallback(args) {
             }
         }
 
-        // Refresh the character data
-        await getOneCharacter(character.avatar);
+        // Refresh the character data (data-field update only — keep the
+        // live chat pointer: the merge never touches chat, so restoring
+        // the card's persisted value could clobber an unpersisted one).
+        await getOneCharacter(character.avatar, { preserveChat: true });
 
         await eventSource.emit(event_types.CHARACTER_EDITED, { detail: { id: characterIndex, character: characters[characterIndex] } });
 
