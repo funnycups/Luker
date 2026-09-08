@@ -26,7 +26,7 @@ import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '
 import { debounce_timeout } from '../../constants.js';
 import { SlashCommandEnumValue, enumTypes } from '../../slash-commands/SlashCommandEnumValue.js';
 import { enumIcons } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
-import { POPUP_TYPE, callGenericPopup } from '../../popup.js';
+import { POPUP_TYPE, Popup, callGenericPopup } from '../../popup.js';
 import { GoogleTranslateTtsProvider } from './google-translate.js';
 import { GoogleNativeTtsProvider } from './google-native.js';
 import { ChatterboxTtsProvider } from './chatterbox.js';
@@ -37,7 +37,9 @@ import { MiniMaxTtsProvider } from './minimax.js';
 import { ElectronHubTtsProvider } from './electronhub.js';
 import { ChutesTtsProvider } from './chutes.js';
 import { VolcengineTtsProvider } from './volcengine.js';
-import { applyLocale, t } from '/scripts/i18n.js';
+import { applyLocale, t, translate } from '/scripts/i18n.js';
+import { renderTtsAttributionSelectors, loadAttributionMap, readAttributionFor, parseAndCacheAttribution, decorateMessageWithPlayButtons, ensureNpcVoiceMapEntries } from './npc-attribution.js';
+import { extractQuoteSegments, attachQuoteIndices } from './quote-segments.js';
 
 const UPDATE_INTERVAL = 1000;
 const wrapper = new ModuleWorkerWrapper(moduleWorker);
@@ -171,10 +173,20 @@ async function onNarrateOneMessage() {
     resetTtsPlayback();
     processAndQueueTtsMessage(message, Number(id), { manual: true });
     moduleWorker();
+    if (extension_settings.tts.npcAttributionEnabled && extension_settings.tts.enabled) {
+        parseAndCacheAttribution(context, Number(id)).catch((error) => {
+            console.warn(`[tts] NPC attribution lazy parse failed for message ${id}`, error);
+        });
+    }
 }
 
 async function onNarrateText(args, text) {
     if (!text) {
+        return '';
+    }
+
+    if (!extension_settings.tts.enabled) {
+        toastr.warning(translate('TTS is disabled. Please enable it in the extension settings.'));
         return '';
     }
 
@@ -273,6 +285,7 @@ function processAndQueueTtsMessage(message, messageId = null, { manual = false }
     const clone = structuredClone(message);
     clone.id = messageId ?? null;
     clone.manual = manual ?? false;
+    clone.originalMes = clone.mes;
 
     if (!extension_settings.tts.narrate_by_paragraphs) {
         ttsJobQueue.push(clone);
@@ -371,8 +384,7 @@ globalThis.tts_preview = function (id) {
 
     if (audio instanceof HTMLAudioElement && !$(audio).data('disabled')) {
         audio.play();
-    }
-    else {
+    } else {
         void ttsProvider.previewTtsVoice(id).catch(error => {
             toastr.error(error.toString(), 'TTS Preview Failed');
             console.error(error);
@@ -623,49 +635,62 @@ async function processTtsQueue() {
 
         try {
             let voiceMapKey = char;
+            let speakerName = null;
 
-            // If multi-voice is enabled, modify the voice map key based on segment type
-            if (extension_settings.tts.multi_voice_enabled && char !== DEFAULT_VOICE_MARKER) {
-                switch (segmentType) {
-                    case 'dialogue':
-                        voiceMapKey = `${char} ("Quotes")`;
-                        break;
-                    case 'action':
-                        voiceMapKey = `${char} (*Text inside asterisks*)`;
-                        break;
-                    case 'other':
-                    default:
-                        voiceMapKey = `${char} (Other text)`;
-                        break;
+            // NPC attribution: consult the per-chat cache for this dialogue segment
+            if (extension_settings.tts.npcAttributionEnabled
+                && segmentType === 'dialogue'
+                && Number.isInteger(currentTtsJob.qIndex)
+                && Number.isInteger(currentTtsJob.id)) {
+                const attributionMap = await loadAttributionMap(getContext());
+                const entry = readAttributionFor(getContext(), attributionMap, currentTtsJob.id);
+                const speaker = entry?.segments?.find(s => s.qIndex === currentTtsJob.qIndex)?.speaker;
+                if (typeof speaker === 'string' && speaker.length > 0) {
+                    speakerName = speaker;
                 }
             }
 
-            const voiceMapEntry = voiceMap[voiceMapKey] === DEFAULT_VOICE_MARKER ? voiceMap[DEFAULT_VOICE_MARKER] : voiceMap[voiceMapKey];
+            const voiceChar = speakerName ?? char;
 
+            // If multi-voice is enabled, modify the voice map key based on segment type
+            if (extension_settings.tts.multi_voice_enabled && voiceChar !== DEFAULT_VOICE_MARKER) {
+                switch (segmentType) {
+                    case 'dialogue':
+                        voiceMapKey = `${voiceChar} ("Quotes")`;
+                        break;
+                    case 'action':
+                        voiceMapKey = `${voiceChar} (*Text inside asterisks*)`;
+                        break;
+                    case 'other':
+                    default:
+                        voiceMapKey = `${voiceChar} (Other text)`;
+                        break;
+                }
+            } else {
+                voiceMapKey = voiceChar;
+            }
+
+            const voiceMapEntry = voiceMap[voiceMapKey] === DEFAULT_VOICE_MARKER ? voiceMap[DEFAULT_VOICE_MARKER] : voiceMap[voiceMapKey];
             if (voiceMapEntry === DISABLED_VOICE_MARKER) {
-                const storageKey = `tts_disabled_warned_${char}`;
+                const storageKey = `tts_disabled_warned_${voiceChar}`;
                 if (!accountStorage.getItem(storageKey) || currentTtsJob.manual) {
                     accountStorage.setItem(storageKey, 'true');
-                    toastr.info(`TTS voice for ${char} is disabled.`);
+                    toastr.info(`TTS voice for ${voiceChar} is disabled.`);
                 }
                 currentTtsJob = null;
                 setTimeout(() => wrapper.update(), 0);
                 return;
             }
-
             if (!voiceMapEntry) {
-                throw `${char} not in voicemap. Configure character in extension settings voice map`;
+                throw `${voiceChar} not in voicemap. Configure character in extension settings voice map`;
             }
-
             const voice = await ttsProvider.getVoice(voiceMapEntry);
             const voiceId = voice.voice_id;
             if (voiceId == null) {
-                toastr.error(`Specified voice for ${char} was not found. Check the TTS extension settings.`);
-                throw `Unable to attain voiceId for ${char}`;
+                toastr.error(`Specified voice for ${voiceChar} was not found. Check the TTS extension settings.`);
+                throw `Unable to attain voiceId for ${voiceChar}`;
             }
-
-            // Pass the full voiceMapKey (e.g., "User ("Quotes")") as well with character name
-            await tts(segmentText, voiceId, char, voiceMapKey);
+            await tts(segmentText, voiceId, voiceChar, voiceMapKey);
         } catch (error) {
             toastr.error(error.toString());
             console.error(error);
@@ -739,6 +764,12 @@ async function processTtsQueue() {
         // Parse message into segments if multi-voice is enabled
         const segments = parseMessageSegments(text);
 
+        // Attach whole-message quote indices so the queue path can consult
+        // the attribution cache; the quote window is computed from the
+        // pre-filter message text (filters must not shift quote order).
+        const attributionWindow = extractQuoteSegments(currentTtsJob.originalMes ?? currentTtsJob.mes);
+        attachQuoteIndices(segments, attributionWindow);
+
         if (segments.length === 0) {
             console.warn('No valid segments found in text.');
             completeTtsJob();
@@ -751,8 +782,10 @@ async function processTtsQueue() {
                 name: char,
                 segmentType: segments[i].type,
                 segmentText: segments[i].text,
+                qIndex: segments[i].qIndex,
                 is_user: currentTtsJob.is_user,
                 mes: currentTtsJob.mes,
+                originalMes: currentTtsJob.originalMes,
                 extra: currentTtsJob.extra,
                 id: currentTtsJob.id,
                 manual: currentTtsJob.manual,
@@ -849,7 +882,7 @@ async function playFullConversation() {
     resetTtsPlayback();
 
     if (!extension_settings.tts.enabled) {
-        return toastr.warning('TTS is disabled. Please enable it in the extension settings.');
+        return toastr.warning(translate('TTS is disabled. Please enable it in the extension settings.'));
     }
 
     const context = getContext();
@@ -907,6 +940,10 @@ function loadSettings() {
     $('#playback_rate_counter').val(Number(extension_settings.tts.playback_rate).toFixed(2));
     $('#playback_rate_block').toggle(extension_settings.tts.currentProvider !== 'System');
 
+    $('#tts_npc_attribution_enabled').prop('checked', extension_settings.tts.npcAttributionEnabled);
+    $('#tts_npc_attribution_retry_max').val(extension_settings.tts.npcAttributionRetryMax);
+    renderTtsAttributionSelectors(getContext());
+
     $('body').toggleClass('tts', extension_settings.tts.enabled);
 }
 
@@ -920,6 +957,10 @@ const defaultSettings = {
     multi_voice_enabled: false,
     apply_regex: false,
     regex_pattern: '',
+    npcAttributionEnabled: false,
+    npcAttributionApiPresetName: '',
+    npcAttributionPresetName: '',
+    npcAttributionRetryMax: 2,
 };
 
 function setTtsStatus(status, success) {
@@ -1033,6 +1074,195 @@ function onRegexPatternChange() {
     updateRegexPatternWarning();
 }
 
+function onNpcAttributionEnabledClick() {
+    extension_settings.tts.npcAttributionEnabled = !!$('#tts_npc_attribution_enabled').prop('checked');
+    saveSettingsDebounced();
+}
+
+function onNpcAttributionApiPresetChange() {
+    extension_settings.tts.npcAttributionApiPresetName = String($('#tts_npc_attribution_api_preset').val() || '').trim();
+    saveSettingsDebounced();
+}
+
+function onNpcAttributionPresetChange() {
+    extension_settings.tts.npcAttributionPresetName = String($('#tts_npc_attribution_preset').val() || '').trim();
+    saveSettingsDebounced();
+}
+
+function onNpcAttributionRetryMaxChange() {
+    const clamped = Math.max(0, Math.floor(Number($('#tts_npc_attribution_retry_max').val()) || 0));
+    extension_settings.tts.npcAttributionRetryMax = clamped;
+    $('#tts_npc_attribution_retry_max').val(clamped);
+    saveSettingsDebounced();
+}
+
+/**
+ * Build the voice-map management popup content: one select row per
+ * mapped/participant name, an inline add entry, and a per-row remove
+ * button for voice-map-owned names (not chat participants).
+ * @param {VoiceMapEntry[]} entries current voiceMapEntries
+ * @returns {JQuery<HTMLElement>} detached popup content
+ */
+function buildVoiceMapPopupContent(entries, voiceIds) {
+    const content = $('<div id="tts_voicemap_popup">');
+    const addRow = $('<div class="tts_voicemap_add">');
+    const nameInput = $('<input id="tts_voicemap_add_name" class="text_pole" type="text">')
+        .attr('placeholder', translate('Add a speaker name…'));
+    const addButton = $('<input id="tts_voicemap_add" class="menu_button" type="button">')
+        .attr('value', translate('Add'));
+    addRow.append(nameInput, addButton);
+    content.append(addRow);
+
+    const rows = $('<div id="tts_voicemap_block">');
+    for (const entry of entries) {
+        const row = entry.renderRow(voiceIds);
+        if (isNpcVoiceMapKey(entry.name)) {
+            const removeButton = $('<i class="tts_voicemap_remove fa-solid fa-xmark" role="button"></i>')
+                .attr('title', translate('Remove from voice map'));
+            row.append(removeButton);
+        }
+        rows.append(row);
+    }
+    content.append(rows);
+    return content;
+}
+
+/**
+ * Wire add + change + remove behaviour for the voice-map popup. Changes
+ * apply to the live entries; persistence happens through syncVoiceMapFromEntries
+ * on close, removal rewrites the provider voiceMap directly.
+ */
+function wireVoiceMapPopup(content) {
+    content.find('.tts_voicemap_block_char select').on('change', () => syncVoiceMapFromEntries());
+
+    // Add/remove rebuild the popup with fresh rows: close the current
+    // voice-map popup instance (its complete() runs the close animation
+    // and resolves the awaiting openVoiceMapPopup), then reopen.
+    const reopenPopup = async () => {
+        const current = Popup.util.popups.find(p => p.content?.querySelector?.('#tts_voicemap_popup'));
+        if (current) {
+            await current.completeCancelled();
+        }
+        await openVoiceMapPopup(true);
+    };
+
+    const onAdd = async () => {
+        const name = String(content.find('#tts_voicemap_add_name').val() || '').trim();
+        if (!name) {
+            toastr.info(translate('Enter a name to add to the voice map.'));
+            return;
+        }
+        const providerName = extension_settings.tts.currentProvider;
+        const providerSettings = extension_settings.tts[providerName];
+        if (!providerSettings) {
+            return;
+        }
+        const added = await ensureNpcVoiceMapEntries(providerName, [name]);
+        if (added.length === 0) {
+            toastr.info(translate('That name is already in the voice map.'));
+            return;
+        }
+        content.find('#tts_voicemap_add_name').val('');
+        await reopenPopup();
+    };
+    content.find('#tts_voicemap_add').on('click', onAdd);
+    content.find('#tts_voicemap_add_name').on('keydown', async (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            await onAdd();
+        }
+    });
+
+    content.find('.tts_voicemap_remove').on('click', async function () {
+        const rowLabel = $(this).siblings('span').first().text();
+        // Multi-voice rows are labelled with the segment suffix
+        // ("Quotes" / asterisks / "Other text") while the map keys are
+        // matched on the bare name; strip before comparing.
+        const nameSpan = rowLabel.includes(' (') ? rowLabel.slice(0, rowLabel.lastIndexOf(' (')) : rowLabel;
+        const providerName = extension_settings.tts.currentProvider;
+        const providerSettings = extension_settings.tts[providerName];
+        if (!providerSettings || !providerSettings.voiceMap || typeof providerSettings.voiceMap !== 'object') {
+            return;
+        }
+        for (const key of Object.keys(providerSettings.voiceMap)) {
+            const bareName = key.includes(' (') ? key.slice(0, key.lastIndexOf(' (')) : key;
+            if (bareName === nameSpan) {
+                delete providerSettings.voiceMap[key];
+            }
+        }
+        // Entries are the popup's source of truth: dropping the key only
+        // from provider settings would be undone at close, when
+        // syncVoiceMapFromEntries writes every live entry back. Match on
+        // the bare name so multi-voice segment rows go too — same
+        // stripping the delete loop above uses.
+        voiceMapEntries = voiceMapEntries.filter(entry => {
+            const bareName = entry.name.includes(' (') ? entry.name.slice(0, entry.name.lastIndexOf(' (')) : entry.name;
+            return bareName !== nameSpan;
+        });
+        saveSettingsDebounced();
+        await reopenPopup();
+    });
+}
+
+/**
+ * Sync the module-level voiceMap + persisted provider voiceMap from the
+ * popup's live entries (select changes during the popup session).
+ */
+function syncVoiceMapFromEntries() {
+    const tempVoiceMap = {};
+    for (const voice of voiceMapEntries) {
+        if (voice.voiceId === null || voice.voiceId === undefined) {
+            continue;
+        }
+        tempVoiceMap[voice.name] = voice.voiceId;
+    }
+    voiceMap = tempVoiceMap;
+    if (!extension_settings.tts[ttsProviderName].voiceMap || typeof extension_settings.tts[ttsProviderName].voiceMap !== 'object') {
+        extension_settings.tts[ttsProviderName].voiceMap = {};
+    }
+    // The popup lists exactly what the runtime map uses, so assign wholesale.
+    Object.assign(extension_settings.tts[ttsProviderName].voiceMap, voiceMap);
+    saveSettingsDebounced();
+}
+
+/**
+ * Open the voice-map management popup. All rows (participants +
+ * voiceMap-configured names) render here instead of inline in the
+ * settings panel, keeping the panel light no matter how many names
+ * accumulate.
+ * @param {boolean} reopen skip initVoiceMap (already fresh in this session)
+ */
+async function openVoiceMapPopup(reopen = false) {
+    if (!reopen) {
+        await initVoiceMap();
+    }
+    const provider = ttsProvider;
+    let voiceIds = [];
+    try {
+        voiceIds = await provider.fetchTtsVoiceObjects();
+    } catch {
+        toastr.error('TTS Provider failed to return voice ids.');
+    }
+    const content = buildVoiceMapPopupContent(voiceMapEntries, voiceIds);
+    wireVoiceMapPopup(content);
+    await callGenericPopup(content, POPUP_TYPE.TEXT, '', {
+        okButton: translate('Done'),
+        allowVerticalScrolling: true,
+        wide: true,
+        animation: 'none',
+        onClosing: () => {
+            syncVoiceMapFromEntries();
+            return true;
+        },
+    });
+    // Drop stale select references after the popup DOM is gone.
+    voiceMapEntries.forEach(entry => { entry.selectElement = null; });
+}
+
+async function onVoicemapManageClick() {
+    await openVoiceMapPopup();
+}
+
 function updateRegexPatternWarning() {
     const warning = $('#tts_regex_warning');
     if (!extension_settings.tts.apply_regex) {
@@ -1106,6 +1336,11 @@ async function onChatChanged() {
     const voiceMapInit = initVoiceMap();
     await Promise.race([voiceMapInit, delay(debounce_timeout.relaxed)]);
     lastMessage = null;
+    if (extension_settings.tts.npcAttributionEnabled) {
+        for (let i = 0; i < getContext().chat.length; i++) {
+            decorateMessageWithPlayButtons(i);
+        }
+    }
 }
 
 async function onMessageEvent(messageId, lastCharIndex) {
@@ -1332,6 +1567,21 @@ export function getCharacters(unrestricted) {
     }
     characters = characters.filter(onlyUnique);
 
+    // Merge NPC names discovered by attribution (they live in the
+    // provider voiceMap but are not chat participants) so the settings
+    // panel renders a select row for each; the multi-voice expansion
+    // below then generates their segment keys naturally.
+    const providerVoiceMap = extension_settings.tts[ttsProviderName]?.voiceMap;
+    if (providerVoiceMap && typeof providerVoiceMap === 'object' && !Array.isArray(providerVoiceMap)) {
+        for (const key of Object.keys(providerVoiceMap)) {
+            const bareName = key.includes(' (') ? key.slice(0, key.lastIndexOf(' (')) : key;
+            if (bareName && bareName !== DEFAULT_VOICE_MARKER && !characters.includes(bareName)) {
+                characters.push(bareName);
+            }
+        }
+        characters = characters.filter(onlyUnique);
+    }
+
     // If multi-voice is enabled, expand characters to include segment types
     if (extension_settings.tts.multi_voice_enabled) {
         const expandedCharacters = [];
@@ -1348,6 +1598,39 @@ export function getCharacters(unrestricted) {
     }
 
     return characters;
+}
+
+/**
+ * Whether a voice-map key names a speaker that is not a chat participant
+ * (i.e. an NPC added manually or discovered by the attribution pass).
+ * Multi-voice segment suffixes ("Quotes" / asterisks / "Other text") are
+ * stripped before matching.
+ * @param {string} key voiceMap key, possibly with a multi-voice suffix
+ * @returns {boolean}
+ */
+export function isNpcVoiceMapKey(key) {
+    if (typeof key !== 'string' || key.length === 0 || key === DEFAULT_VOICE_MARKER) {
+        return false;
+    }
+    const bareName = key.includes(' (') ? key.slice(0, key.lastIndexOf(' (')) : key;
+    if (bareName === DEFAULT_VOICE_MARKER || isSystemVoiceAlias(bareName)) {
+        return false;
+    }
+    const context = getContext();
+    const participants = [];
+    participants.push(context.name1);
+    if (context.groupId === null) {
+        participants.push(context.name2);
+    } else {
+        const group = context.groups?.find(group => context.groupId == group.id);
+        for (const member of group?.members ?? []) {
+            const character = (context.characters ?? []).find(char => char.avatar == member);
+            if (character) {
+                participants.push(character.name);
+            }
+        }
+    }
+    return !participants.includes(bareName);
 }
 
 export function sanitizeId(input) {
@@ -1376,7 +1659,8 @@ function parseVoiceMap(voiceMapString) {
 
 
 /**
- * Apply voiceMap based on current voiceMapEntries
+ * Rebuild the runtime voiceMap from current voiceMapEntries and persist
+ * it into the provider settings.
  */
 function updateVoiceMap() {
     const tempVoiceMap = {};
@@ -1407,37 +1691,41 @@ class VoiceMapEntry {
         this.selectElement = null;
     }
 
-    addUI(voiceIds) {
-        let sanitizedName = sanitizeId(this.name);
+    renderRow(voiceIds) {
+        const sanitizedName = sanitizeId(this.name);
         let defaultOption = this.name === DEFAULT_VOICE_MARKER ?
             `<option>${DISABLED_VOICE_MARKER}</option>` :
             `<option>${DEFAULT_VOICE_MARKER}</option><option>${DISABLED_VOICE_MARKER}</option>`;
-        let template = `
-            <div class='tts_voicemap_block_char flex-container flexGap5'>
-                <span id='tts_voicemap_char_${sanitizedName}'>${this.name}</span>
+        const npcTag = isNpcVoiceMapKey(this.name)
+            ? `<span class='tts_voicemap_npc_tag' title="${translate('NPC voice')}">${translate('NPC')}</span>`
+            : '';
+        const template = `
+            <div class='tts_voicemap_block_char'>
+                <span class='tts_voicemap_char_name' id='tts_voicemap_char_${sanitizedName}'>${this.name}</span>
+                ${npcTag}
                 <select id='tts_voicemap_char_${sanitizedName}_voice'>
                     ${defaultOption}
                 </select>
             </div>
         `;
-        $('#tts_voicemap_block').append(template);
+        const row = $(template);
 
         // Populate voice ID select list
         for (const voiceId of voiceIds) {
             const option = document.createElement('option');
             option.innerText = voiceId.name;
             option.value = voiceId.name;
-            $(`#tts_voicemap_char_${sanitizedName}_voice`).append(option);
+            row.find('select').append(option);
         }
 
-        this.selectElement = $(`#tts_voicemap_char_${sanitizedName}_voice`);
-        this.selectElement.on('change', args => this.onSelectChange(args));
+        this.selectElement = row.find('select');
+        this.selectElement.on('change', () => this.onSelectChange());
         this.selectElement.val(this.voiceId);
+        return row;
     }
 
-    onSelectChange(args) {
+    onSelectChange() {
         this.voiceId = this.selectElement.find(':selected').val();
-        updateVoiceMap();
     }
 }
 
@@ -1476,25 +1764,25 @@ export async function initVoiceMap(unrestricted = false) {
  * @param {boolean} unrestricted - If true, will include all characters in voiceMapEntries, even if they are not in the current chat.
  */
 async function initVoiceMapInternal(unrestricted) {
-    // Gate initialization if not enabled or TTS Provider not ready. Prevents error popups.
+    // Voice-map entries are user configuration, not playback state: the
+    // Manage voices popup renders them on demand, so they must be built
+    // even while TTS is off or the provider is unreachable. Readiness
+    // only drives the status indicator; it used to gate this build when
+    // the panel rendered voice selects inline, but those now live in the
+    // popup (see openVoiceMapPopup).
     const enabled = $('#tts_enabled').is(':checked');
-    if (!enabled) {
-        return;
+    if (enabled) {
+        // Keep errors inside extension UI rather than toastr. Toastr errors for TTS are annoying.
+        try {
+            await ttsProvider.checkReady();
+            setTtsStatus('TTS Provider Loaded', true);
+        } catch (error) {
+            const message = `TTS Provider not ready. ${error}`;
+            setTtsStatus(message, false);
+        }
     }
-
-    // Keep errors inside extension UI rather than toastr. Toastr errors for TTS are annoying.
-    try {
-        await ttsProvider.checkReady();
-    } catch (error) {
-        const message = `TTS Provider not ready. ${error}`;
-        setTtsStatus(message, false);
-        return;
-    }
-
-    setTtsStatus('TTS Provider Loaded', true);
 
     // Clear existing voiceMap state
-    $('#tts_voicemap_block').empty();
     voiceMapEntries = [];
 
     // Get characters in current chat
@@ -1512,15 +1800,9 @@ async function initVoiceMapInternal(unrestricted) {
         }
     }
 
-    // Get voiceIds from provider
-    let voiceIdsFromProvider;
-    try {
-        voiceIdsFromProvider = await ttsProvider.fetchTtsVoiceObjects();
-    } catch {
-        toastr.error('TTS Provider failed to return voice ids.');
-    }
-
-    // Build UI using VoiceMapEntry objects
+    // Build entries from chat participants + voiceMap keys. Rows are not
+    // rendered inline — the Manage voices popup renders them on demand,
+    // so the settings panel stays light no matter how many names exist.
     for (const character of characters) {
         if (isSystemVoiceAlias(character)) {
             continue;
@@ -1535,10 +1817,28 @@ async function initVoiceMapInternal(unrestricted) {
             voiceId = DEFAULT_VOICE_MARKER;
         }
         const voiceMapEntry = new VoiceMapEntry(character, voiceId);
-        voiceMapEntry.addUI(voiceIdsFromProvider);
         voiceMapEntries.push(voiceMapEntry);
     }
     updateVoiceMap();
+}
+
+export function getRuntimeVoiceMap() {
+    return voiceMap;
+}
+
+export function enqueueSegmentPlayback(name, segmentText, message, messageId) {
+    resetTtsPlayback();
+    ttsJobQueue.push({
+        name,
+        segmentType: 'dialogue',
+        segmentText,
+        is_user: message.is_user,
+        mes: message.mes,
+        extra: message.extra,
+        id: messageId,
+        manual: true,
+    });
+    wrapper.update();
 }
 
 export async function init() {
@@ -1560,6 +1860,11 @@ export async function init() {
         $('#tts_multi_voice_enabled').on('click', onMultiVoiceClick);
         $('#tts_apply_regex').on('change', onApplyRegexChange);
         $('#tts_regex_pattern').on('input', onRegexPatternChange);
+        $('#tts_npc_attribution_enabled').on('click', onNpcAttributionEnabledClick);
+        $('#tts_npc_attribution_api_preset').on('change', onNpcAttributionApiPresetChange);
+        $('#tts_npc_attribution_preset').on('change', onNpcAttributionPresetChange);
+        $('#tts_npc_attribution_retry_max').on('input', onNpcAttributionRetryMaxChange);
+        $('#tts_voicemap_manage').on('click', onVoicemapManageClick);
 
         $('#playback_rate').on('input', function () {
             const value = $(this).val();
@@ -1589,6 +1894,20 @@ export async function init() {
     eventSource.on(event_types.GENERATION_ENDED, onGenerationEnded);
     eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => onMessageEvent(messageId));
     eventSource.makeLast(event_types.USER_MESSAGE_RENDERED, (messageId) => onMessageEvent(messageId));
+    // NPC attribution: parse after the existing narration handler (makeLast
+    // chain appends after the one registered above for onMessageEvent).
+    eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
+        if (!extension_settings.tts.npcAttributionEnabled || !extension_settings.tts.enabled) return;
+        parseAndCacheAttribution(getContext(), messageId).catch((error) => {
+            console.warn(`[tts] NPC attribution parse failed for message ${messageId}`, error);
+        });
+    });
+    // NPC attribution: decorate rendered character messages with per-quote
+    // play buttons (after the parse-triggering makeLast handler above).
+    eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
+        if (!extension_settings.tts.npcAttributionEnabled) return;
+        decorateMessageWithPlayButtons(messageId);
+    });
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'speak',
         callback: async (args, value) => {

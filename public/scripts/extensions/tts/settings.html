@@ -78,6 +78,27 @@
                     <input type="text" id="tts_regex_pattern" class="text_pole width100p" placeholder="Example: /[^a-zA-Z0-9\s.,!?;:'&quot;()]+/g" />
                     <small id="tts_regex_warning" class="warning" data-i18n="Invalid regex pattern.">Invalid regex pattern.</small>
                 </div>
+                <hr>
+                <div id="tts_npc_attribution_block">
+                    <label class="checkbox_label" for="tts_npc_attribution_enabled"
+                        data-i18n="[title]Attribute quoted dialogue to specific speakers with an AI pass, so each line plays with its own voice"
+                        title="Attribute quoted dialogue to specific speakers with an AI pass, so each line plays with its own voice">
+                        <input type="checkbox" id="tts_npc_attribution_enabled">
+                        <small data-i18n="NPC dialogue attribution">NPC dialogue attribution</small>
+                    </label>
+                    <div class="tts_custom_voices">
+                        <span data-i18n="Attribution API connection">Attribution API connection</span>
+                        <select id="tts_npc_attribution_api_preset" class="text_pole flex1"></select>
+                    </div>
+                    <div class="tts_custom_voices">
+                        <span data-i18n="Attribution completion preset">Attribution completion preset</span>
+                        <select id="tts_npc_attribution_preset" class="text_pole flex1"></select>
+                    </div>
+                    <div class="tts_custom_voices">
+                        <span data-i18n="Attribution retry count">Attribution retry count</span>
+                        <input type="number" id="tts_npc_attribution_retry_max" class="text_pole" min="0" step="1">
+                    </div>
+                </div>
             </div>
             <div id="playback_rate_block" class="range-block">
                 <hr>
@@ -93,7 +114,17 @@
                     </div>
                 </div>
             </div>
-            <div id="tts_voicemap_block">
+            <div class="range-block">
+                <hr>
+                <div class="range-block-title justifyLeft">
+                    <small data-i18n="Voice map">Voice map</small>
+                </div>
+                <div class="tts_voicemap_hint">
+                    <small data-i18n="Assign a voice to each name. Names the AI discovers while attributing quoted dialogue are added here automatically.">Assign a voice to each name. Names the AI discovers while attributing quoted dialogue are added here automatically.</small>
+                </div>
+                <div class="tts_voicemap_manage">
+                    <input id="tts_voicemap_manage" class="menu_button" data-i18n="[value]Manage voices" type="submit" value="Manage voices" />
+                </div>
             </div>
             <hr>
             <form id="tts_provider_settings">
