@@ -6285,4 +6285,8 @@
     ,"Keep recent turns uncached": "不缓存最近几轮"
     ,"The current input is also kept uncached. Reuses a fixed history prefix for up to five minutes, then advances it. Changed history or summaries rebuild the prefix. Cache hits and savings depend on the provider.": "当前输入也不缓存。固定复用一段历史前缀，最多五分钟后向后推进；历史或总结变化时重建前缀。实际命中与节省取决于提供商。"
     ,"Uncached turns must be a positive integer.": "不缓存的轮数必须为正整数。"
+    ,"OpenRouter Gemini history cache toggle state": "OpenRouter Gemini 历史缓存开关状态"
+    ,"Sets OpenRouter Gemini stable history caching on/off. Gets current value if no argument is provided.": "设置 OpenRouter Gemini 稳定历史缓存的开启/关闭。如未提供参数，则获取当前值。"
+    ,"Number of recent turns excluded from Gemini history caching": "Gemini 历史缓存不覆盖的最近回合数"
+    ,"Keeps this many completed turns plus the current input outside the cache. Default: 2.": "将最近这么多完整回合连同当前输入留在缓存之外。默认：2。"
 }

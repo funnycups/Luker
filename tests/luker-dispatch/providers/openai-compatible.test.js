@@ -59,9 +59,13 @@ describe('OpenRouter Gemini history cache wire requests', () => {
         const messages = [{ role: 'system', content: 'Rules' }, { role: 'assistant', content: '<summary>Old history</summary>' }];
         for (let i = 0; i < 5; i++) messages.push({ role: 'user', content: `User ${i}` }, { role: 'assistant', content: `Assistant ${i}` });
         messages.push({ role: 'user', content: 'Latest' });
-        const onFetch = jest.fn(async url => new Response(JSON.stringify(String(url).endsWith('/models')
-            ? { data: [{ id: 'google/gemini-cache-test', pricing: { input_cache_write: '0' } }] }
-            : { choices: [{ message: { role: 'assistant', content: 'Reply' } }] }), { status: 200 }));
+        const onFetch = jest.fn(async url => {
+            if (String(url).endsWith('/models')) {
+                if (overrides.__modelsFail) return new Response('upstream unavailable', { status: 503 });
+                return new Response(JSON.stringify({ data: [{ id: 'google/gemini-cache-test', pricing: { input_cache_write: '0' } }] }), { status: 200 });
+            }
+            return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'Reply' } }] }), { status: 200 });
+        });
         return fakeCtx({
             secretMap: { api_key_openrouter: 'or-test-key' }, onFetch,
             body: {
@@ -106,13 +110,25 @@ describe('OpenRouter Gemini history cache wire requests', () => {
         expect(wire(ctx).messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
     });
 
-    test('invalid policy and unverified model support fail before sending a generation', async () => {
+    test('invalid policy and models known to lack cache support fail before sending a generation', async () => {
         for (const overrides of [{ gemini_cache_keep_recent_turns: 0 }, { model: 'google/gemini-unsupported' }]) {
             const ctx = geminiCtx(overrides);
             await dispatchOpenAICompatible(ctx);
             expect(wire(ctx)).toBeNull();
             expect(ctx._emitted.some(event => event.kind === 'error')).toBe(true);
         }
+    });
+
+    test('unreachable models API degrades to an unmarked request instead of failing the generation', async () => {
+        const ctx = geminiCtx({
+            model: 'google/gemini-unreachable-check',
+            __modelsFail: true,
+        });
+        await dispatchOpenAICompatible(ctx);
+        const request = wire(ctx);
+        expect(request).not.toBeNull();
+        expect(JSON.stringify(request)).not.toContain('cache_control');
+        expect(ctx._emitted.filter(event => event.kind === 'error')).toHaveLength(0);
     });
 
     test('other OpenRouter models ignore Gemini history settings', async () => {

@@ -159,7 +159,9 @@ function getOpenRouterPlugins(body) {
  * Uses ctx.fetch so tests can stub.
  * @param {object} ctx DispatchContext
  * @param {string} modelId
- * @returns {Promise<boolean>}
+ * @returns {Promise<boolean|null>} true/false when verified from the models
+ *   API, null when verification could not be performed (network failure,
+ *   non-ok response, unexpected payload).
  */
 async function isOpenRouterModelCacheable(ctx, modelId) {
     if (openRouterCacheableModels.includes(modelId)) return true;
@@ -171,21 +173,22 @@ async function isOpenRouterModelCacheable(ctx, modelId) {
         });
         if (!response.ok) {
             console.warn(`OpenRouter models API returned ${response.status}: ${response.statusText}`);
-            return false;
+            return null;
         }
         /** @type {any} */
         const data = await response.json();
         if (!Array.isArray(data?.data)) {
             console.warn('OpenRouter API response format unexpected');
-            return false;
+            return null;
         }
         const model = data.data.find(m => m.id === modelId);
+        if (!model) return false;
         const supportsCache = model?.pricing?.input_cache_write != null;
         if (supportsCache) openRouterCacheableModels.push(modelId);
         return supportsCache;
     } catch (error) {
         console.warn(`Failed to check OpenRouter cache support for ${modelId}:`, error.message);
-        return false;
+        return null;
     }
 }
 
@@ -277,14 +280,21 @@ async function resolveOpenRouter(ctx) {
     }
     const isClaude = /^anthropic\/claude/.test(body.model);
     const isGemini = /google\/gemini/.test(body.model);
-    const isCacheableGemini = isGemini && await isOpenRouterModelCacheable(ctx, body.model);
+    const modelCacheSupport = isGemini ? await isOpenRouterModelCacheable(ctx, body.model) : false;
     const enableGeminiSystemPromptCache = resolveGeminiSystemPromptCache(body);
     const enableGeminiHistoryCache = typeof body.gemini_enable_history_cache === 'boolean'
         ? body.gemini_enable_history_cache
         : getConfigValue('gemini.enableHistoryCache', false, 'boolean');
-    if (isGemini && enableGeminiHistoryCache && !isCacheableGemini) {
-        throw new Error('OpenRouter Gemini history cache: could not verify explicit cache support for this model.');
+    // The models API is only advisory for cache eligibility. When it cannot be
+    // reached, fall back to sending the request without markers instead of
+    // failing the whole generation; the provider ignores stray cache markers.
+    if (isGemini && enableGeminiHistoryCache && modelCacheSupport === false) {
+        throw new Error('OpenRouter Gemini history cache: this model does not support explicit caching.');
     }
+    if (isGemini && enableGeminiHistoryCache && modelCacheSupport === null) {
+        console.warn('OpenRouter Gemini history cache: model cache support could not be verified, skipping markers for this request.');
+    }
+    const isCacheableGemini = modelCacheSupport === true;
     if (Array.isArray(body.messages)) {
         embedOpenRouterMedia(body.messages, { audio: true, video: true });
         addOpenRouterSignatures(body.messages, body.model);
