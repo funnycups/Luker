@@ -69,6 +69,8 @@ const CC_COMMANDS = [
     'claude-extended-ttl',
     'claude-caching-at-depth',
     'gemini-enable-system-prompt-cache',
+    'gemini-enable-history-cache',
+    'gemini-cache-keep-recent-turns',
     'openrouter-providers',
     'openrouter-quantizations',
     'openrouter-allow-fallbacks',
@@ -128,6 +130,8 @@ const RERANK_COMMANDS = [
 ];
 
 const FANCY_NAMES = {
+    'gemini-enable-history-cache': 'Cache stable Gemini history',
+    'gemini-cache-keep-recent-turns': 'Uncached recent Gemini turns',
     'api': 'API',
     'api-url': 'Server URL',
     'preset': 'Settings Preset',
@@ -1233,6 +1237,8 @@ export async function init() {
     const claudeCacheWarningSingle = document.getElementById('connection_profile_claude_cache_warning_single');
     const claudeCacheWarningStrict = document.getElementById('connection_profile_claude_cache_warning_strict');
     const geminiEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_enable_system_prompt_cache'));
+    const geminiEnableHistoryCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_enable_history_cache'));
+    const geminiCacheKeepRecentTurnsInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_gemini_cache_keep_recent_turns'));
     renderConnectionProfiles(profiles);
     initActionableSingleSelect(profiles, {
         searchInputPlaceholder: t`Search...`,
@@ -1368,6 +1374,18 @@ export async function init() {
             geminiEnableSystemPromptCacheToggle.disabled = !ccGate;
             geminiEnableSystemPromptCacheToggle.checked = fromProfile ?? Boolean(oai_settings.gemini_enable_system_prompt_cache);
         }
+        if (geminiEnableHistoryCacheToggle && geminiCacheKeepRecentTurnsInput) {
+            const fromProfile = profile && profileMode === 'cc'
+                ? parseProfileBoolean(profile['gemini-enable-history-cache']) : null;
+            const enabled = fromProfile ?? Boolean(oai_settings.gemini_enable_history_cache);
+            geminiEnableHistoryCacheToggle.disabled = !ccGate;
+            geminiEnableHistoryCacheToggle.checked = enabled;
+            geminiCacheKeepRecentTurnsInput.disabled = !ccGate || !enabled;
+            if (document.activeElement !== geminiCacheKeepRecentTurnsInput) {
+                geminiCacheKeepRecentTurnsInput.value = String(profile?.['gemini-cache-keep-recent-turns']
+                    ?? oai_settings.gemini_cache_keep_recent_turns ?? 2);
+            }
+        }
         if (claudeCacheWarningSingle && claudeCacheWarningStrict) {
             const isClaudeSource = oai_settings.chat_completion_source === chat_completion_sources.CLAUDE;
             const depthValue = parseCachingAtDepth(oai_settings.claude_caching_at_depth) ?? -1;
@@ -1497,6 +1515,23 @@ export async function init() {
     wireProfileBoundCheckbox(claudeEnableSystemPromptCacheToggle, 'claude_enable_system_prompt_cache', 'claude-enable-system-prompt-cache');
     wireProfileBoundCheckbox(claudeExtendedTtlToggle, 'claude_extended_ttl', 'claude-extended-ttl');
     wireProfileBoundCheckbox(geminiEnableSystemPromptCacheToggle, 'gemini_enable_system_prompt_cache', 'gemini-enable-system-prompt-cache');
+    wireProfileBoundCheckbox(geminiEnableHistoryCacheToggle, 'gemini_enable_history_cache', 'gemini-enable-history-cache');
+
+    geminiCacheKeepRecentTurnsInput?.addEventListener('change', async () => {
+        if (!geminiCacheKeepRecentTurnsInput.reportValidity()) return;
+        const turns = geminiCacheKeepRecentTurnsInput.valueAsNumber;
+        if (!Number.isInteger(turns) || turns < 1) return;
+        const profile = getSelectedProfile();
+        if (!profile) {
+            oai_settings.gemini_cache_keep_recent_turns = turns;
+            saveSettingsDebounced();
+            syncProfileEditorControls();
+        } else if (resolveProfileMode(profile) === 'cc') {
+            await applySelectedProfileMutation(selectedProfile => {
+                setProfileCommandValue(selectedProfile, 'gemini-cache-keep-recent-turns', String(turns));
+            });
+        }
+    });
 
     if (claudeCachingAtDepthInput) {
         claudeCachingAtDepthInput.addEventListener('change', async () => {

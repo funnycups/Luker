@@ -421,6 +421,12 @@ gemini:
   apiVersion: 'v1beta'
   # Adds thought signatures to requests (if available). Only for Gemini 3 and above.
   thoughtSignatures: true
+  # OpenRouter only: reuse a fixed explicit history breakpoint for up to 5 minutes.
+  # UI/profile values take precedence. Inspect actual cache reads/writes and costs.
+  enableHistoryCache: false
+  # Positive number of completed turns to exclude, in addition to the current input.
+  # Raise this when depth-based regexes or extensions rewrite older messages.
+  cacheKeepRecentTurns: 2
   # Enables caching of the system prompt (if supported). Only for OpenRouter.
   # -- IMPORTANT! --
   # Use only when the prompt before the chat history is static and doesn't change between requests

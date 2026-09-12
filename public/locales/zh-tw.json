@@ -6120,4 +6120,8 @@
     ,"requests": "請求"
     ,"Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.": "拒絕儲存：聊天尚未完全載入。請重新載入頁面以防止資料遺失。"
     ,"Chat save aborted": "聊天儲存已中止"
+    ,"Cache stable chat history": "快取穩定的聊天歷史"
+    ,"Keep recent turns uncached": "不快取最近幾輪"
+    ,"The current input is also kept uncached. Reuses a fixed history prefix for up to five minutes, then advances it. Changed history or summaries rebuild the prefix. Cache hits and savings depend on the provider.": "目前輸入也不快取。固定重用一段歷史前綴，最多五分鐘後向後推進；歷史或摘要變更時重建前綴。實際命中與節省取決於提供商。"
+    ,"Uncached turns must be a positive integer.": "不快取的輪數必須為正整數。"
 }

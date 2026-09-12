@@ -80,6 +80,24 @@ After configuring an API connection, you need to select the specific model to us
 
 For APIs like Claude and Gemini, Luker supports **dynamic model lists** — automatically fetching the latest available models from the API without manual updates. You can also customize the model list for each API source. See [Other Improvements](/improvements/other) for details.
 
+## Gemini History Caching on OpenRouter
+
+Under **OpenRouter Gemini Prompt Caching**, enable **Cache stable chat history** to explicitly cache a prefix containing the system prompt, summaries, and older conversation messages. This is opt-in and applies only to OpenRouter Gemini models that advertise explicit cache support. Direct Google AI Studio/Vertex connections and other models keep their existing behavior.
+
+**Keep recent turns uncached** defaults to **2** completed turns; the current user input is also always excluded. Raise it if your regexes or extensions rewrite older messages as their depth changes. The boundary is selected from the final outbound messages, so consecutive user messages count as one turn and tool results do not count as new user turns. Message text, roles, summary placement, tool calls and media are preserved.
+
+Gemini uses only the last explicit breakpoint for normal message content. Luker therefore holds one breakpoint at the same history position across requests instead of advancing it on every turn. It checks the prefix before each reuse. After five minutes, or when an edit, swipe, summary replacement, context trimming, system instruction or tool definition changes that prefix, it selects a new boundary. New messages remain outside the fixed prefix until the next refresh. A larger uncached-tail setting also takes effect on the next request.
+
+The existing **Cache system prompt** toggle remains useful for short requests without enough history. With history caching active, Luker places one history marker instead of adding a competing system marker. Explicit markers supplied by another extension are preserved and take precedence.
+
+These settings are saved with connection profiles and can also be read or changed using `/gemini-enable-history-cache` and `/gemini-cache-keep-recent-turns`. Backend callers that omit UI settings can use `gemini.enableHistoryCache` and `gemini.cacheKeepRecentTurns` in `config.yaml`.
+
+### Checking the result
+
+In Request Inspector, inspect the final outbound request: the selected history message's last text block should contain `cache_control: { "type": "ephemeral" }`. The server log also reports `created`, `reused`, `refreshed`, `no-history`, or `external-breakpoint` for the local boundary plan. **A reused boundary is not proof of a provider cache hit.** Check OpenRouter's `usage.prompt_tokens_details.cached_tokens`, cache writes and total cost across several turns.
+
+OpenRouter documents a five-minute Gemini explicit-cache lifetime and cache creation/storage charges. A larger cached prefix can cost more when rebuilt frequently or used only once. Long pauses, upstream routing, minimum cache sizes and server restarts can reduce reuse. Luker stores only bounded, user/credential/conversation-scoped hashes and positions in memory, not provider cache objects; it cannot guarantee hits or control the upstream cache lifetime. See [OpenRouter's Gemini caching documentation](https://openrouter.ai/docs/guides/best-practices/prompt-caching#google-gemini).
+
 ## Proxy Settings
 
 If you need to access APIs through a reverse proxy, you can configure it in the connection profile:

@@ -678,6 +678,8 @@ export const settingsToUpdate = {
     claude_caching_at_depth: ['#connection_profile_claude_caching_at_depth', 'claude_caching_at_depth', false, true],
     claude_extended_ttl: ['#connection_profile_claude_extended_ttl', 'claude_extended_ttl', true, true],
     gemini_enable_system_prompt_cache: ['#connection_profile_gemini_enable_system_prompt_cache', 'gemini_enable_system_prompt_cache', true, true],
+    gemini_enable_history_cache: ['#connection_profile_gemini_enable_history_cache', 'gemini_enable_history_cache', true, true],
+    gemini_cache_keep_recent_turns: ['#connection_profile_gemini_cache_keep_recent_turns', 'gemini_cache_keep_recent_turns', false, true],
     tool_call_recurse_limit: ['#tool_call_recurse_limit', 'tool_call_recurse_limit', false, false],
     show_thoughts: ['#openai_show_thoughts', 'show_thoughts', true, false],
     reasoning_effort: ['#openai_reasoning_effort', 'reasoning_effort', false, false],
@@ -937,6 +939,8 @@ const default_settings = {
     claude_caching_at_depth: -1,
     claude_extended_ttl: false,
     gemini_enable_system_prompt_cache: false,
+    gemini_enable_history_cache: false,
+    gemini_cache_keep_recent_turns: 2,
     tool_call_recurse_limit: 5,
     names_behavior: character_names_behavior.DEFAULT,
     continue_postfix: continue_postfix_types.SPACE,
@@ -3779,6 +3783,15 @@ export async function createGenerationParameters(settings, model, type, messages
             ? Number(settings.claude_caching_at_depth)
             : -1;
         generate_data.gemini_enable_system_prompt_cache = Boolean(settings.gemini_enable_system_prompt_cache);
+        generate_data.gemini_enable_history_cache = Boolean(settings.gemini_enable_history_cache);
+        generate_data.gemini_cache_keep_recent_turns = Number(settings.gemini_cache_keep_recent_turns ?? 2);
+        if (generate_data.gemini_enable_history_cache) {
+            const target = buildLukerPersistTarget();
+            if (target) {
+                // Server-local identity only; never send chat names to OpenRouter.
+                generate_data.gemini_cache_session = JSON.stringify([target.kind, target.id, target.avatar_url, target.file_name]);
+            }
+        }
     }
 
     if (settings.chat_completion_source === chat_completion_sources.NANOGPT) {
@@ -9760,6 +9773,33 @@ function registerConnectionProfileAdditionalParameterSlashCommands() {
         t`OpenRouter Gemini system prompt cache toggle state`,
         t`Sets OpenRouter Gemini system prompt caching on/off. Gets current value if no argument is provided.`,
     );
+    registerCacheBooleanCommand(
+        'gemini-enable-history-cache',
+        'gemini_enable_history_cache',
+        t`OpenRouter Gemini history cache toggle state`,
+        t`Sets OpenRouter Gemini stable history caching on/off. Gets current value if no argument is provided.`,
+    );
+
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'gemini-cache-keep-recent-turns',
+        callback: (args, value) => {
+            if (!String(value ?? '').trim() && String(args?.force || '').toLowerCase() !== 'true') {
+                return String(oai_settings.gemini_cache_keep_recent_turns ?? 2);
+            }
+            const turns = Number(value);
+            if (!Number.isInteger(turns) || turns < 1) {
+                throw new Error(t`Uncached turns must be a positive integer.`);
+            }
+            oai_settings.gemini_cache_keep_recent_turns = turns;
+            saveSettingsDebounced();
+            return String(turns);
+        },
+        returns: t`Number of recent turns excluded from Gemini history caching`,
+        unnamedArgumentList: [SlashCommandArgument.fromProps({
+            description: t`value`, typeList: [ARGUMENT_TYPE.NUMBER], isRequired: false,
+        })],
+        helpString: t`Keeps this many completed turns plus the current input outside the cache. Default: 2.`,
+    }));
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'claude-caching-at-depth',

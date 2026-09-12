@@ -108,6 +108,15 @@
                         <input id="connection_profile_gemini_enable_system_prompt_cache" type="checkbox" />
                         <span data-i18n="Cache system prompt">Cache system prompt</span>
                     </label>
+                    <label class="checkbox_label marginTop5">
+                        <input id="connection_profile_gemini_enable_history_cache" type="checkbox" />
+                        <span data-i18n="Cache stable chat history">Cache stable chat history</span>
+                    </label>
+                    <div class="flex-container alignItemsCenter marginTop5">
+                        <label for="connection_profile_gemini_cache_keep_recent_turns" data-i18n="Keep recent turns uncached">Keep recent turns uncached</label>
+                        <input id="connection_profile_gemini_cache_keep_recent_turns" class="text_pole widthUnset" type="number" min="1" step="1" value="2" required />
+                    </div>
+                    <small class="opacity50p" data-i18n="The current input is also kept uncached. Reuses a fixed history prefix for up to five minutes, then advances it. Changed history or summaries rebuild the prefix. Cache hits and savings depend on the provider.">The current input is also kept uncached. Reuses a fixed history prefix for up to five minutes, then advances it. Changed history or summaries rebuild the prefix. Cache hits and savings depend on the provider.</small>
                 </div>
             </div>
         </div>

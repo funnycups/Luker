@@ -268,6 +268,18 @@ function buildApiSettingsOverrideFromProfile(profile, fallbackSource = '') {
         }
     }
 
+    if (Object.hasOwn(profile, 'gemini-enable-history-cache')) {
+        const value = parseProfileBoolean(profile['gemini-enable-history-cache']);
+        if (value !== null) overrides.gemini_enable_history_cache = value;
+    }
+    if (Object.hasOwn(profile, 'gemini-cache-keep-recent-turns')) {
+        const turns = Number(profile['gemini-cache-keep-recent-turns']);
+        if (!Number.isInteger(turns) || turns < 1) {
+            throw new Error('Gemini history cache: uncached turns must be a positive integer.');
+        }
+        overrides.gemini_cache_keep_recent_turns = turns;
+    }
+
     if (Object.hasOwn(profile, 'openrouter-providers')) {
         const parsed = parseProfileStringList(profile['openrouter-providers']);
         if (parsed !== null) {

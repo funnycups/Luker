@@ -6281,4 +6281,8 @@
     ,"requests": "请求"
     ,"Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.": "拒绝保存：聊天尚未完全加载。请重新加载页面以防止数据丢失。"
     ,"Chat save aborted": "聊天保存已中止"
+    ,"Cache stable chat history": "缓存稳定的聊天历史"
+    ,"Keep recent turns uncached": "不缓存最近几轮"
+    ,"The current input is also kept uncached. Reuses a fixed history prefix for up to five minutes, then advances it. Changed history or summaries rebuild the prefix. Cache hits and savings depend on the provider.": "当前输入也不缓存。固定复用一段历史前缀，最多五分钟后向后推进；历史或总结变化时重建前缀。实际命中与节省取决于提供商。"
+    ,"Uncached turns must be a positive integer.": "不缓存的轮数必须为正整数。"
 }

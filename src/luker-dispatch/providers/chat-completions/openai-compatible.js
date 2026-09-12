@@ -57,6 +57,9 @@ import {
     renameAssistantReasoningToReasoningContent,
 } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { GeminiHistoryCache } from '../../gemini-history-cache.js';
+
+const geminiHistoryCache = new GeminiHistoryCache();
 
 // Provider base URLs (mirror the constants defined at the top of
 // src/endpoints/backends/chat-completions.js:95-122).
@@ -276,6 +279,12 @@ async function resolveOpenRouter(ctx) {
     const isGemini = /google\/gemini/.test(body.model);
     const isCacheableGemini = isGemini && await isOpenRouterModelCacheable(ctx, body.model);
     const enableGeminiSystemPromptCache = resolveGeminiSystemPromptCache(body);
+    const enableGeminiHistoryCache = typeof body.gemini_enable_history_cache === 'boolean'
+        ? body.gemini_enable_history_cache
+        : getConfigValue('gemini.enableHistoryCache', false, 'boolean');
+    if (isGemini && enableGeminiHistoryCache && !isCacheableGemini) {
+        throw new Error('OpenRouter Gemini history cache: could not verify explicit cache support for this model.');
+    }
     if (Array.isArray(body.messages)) {
         embedOpenRouterMedia(body.messages, { audio: true, video: true });
         addOpenRouterSignatures(body.messages, body.model);
@@ -287,12 +296,18 @@ async function resolveOpenRouter(ctx) {
                 cachingAtDepthForOpenRouterClaude(body.messages, cachingAtDepth, cacheTTL);
             }
         }
-        if (isCacheableGemini && enableGeminiSystemPromptCache) {
+        if (isCacheableGemini && enableGeminiSystemPromptCache && !enableGeminiHistoryCache) {
             cachingSystemPromptForOpenRouter(body.messages);
         }
     }
     if (isGemini) bodyParams['safety_settings'] = GEMINI_SAFETY;
-    return { apiUrl, apiKey, headers, bodyParams };
+    const geminiCacheOptions = isCacheableGemini && enableGeminiHistoryCache ? {
+        scope: JSON.stringify([ctx.user?.handle, apiKey]),
+        session: body.gemini_cache_session,
+        keepRecentTurns: body.gemini_cache_keep_recent_turns
+            ?? getConfigValue('gemini.cacheKeepRecentTurns', 2, 'number'),
+    } : null;
+    return { apiUrl, apiKey, headers, bodyParams, geminiCacheOptions };
 }
 
 /** CUSTOM — chat-completions.js:3056-3083 */
@@ -607,7 +622,7 @@ export async function dispatchOpenAICompatible(ctx) {
 
     try {
         const isTextCompletion = detectTextCompletion(body);
-        const { apiUrl, apiKey, headers, bodyParams } = await resolver(ctx);
+        const { apiUrl, apiKey, headers, bodyParams, geminiCacheOptions } = await resolver(ctx);
 
         // Reasoning effort — OPENAI/CUSTOM only, gated by model list.
         if (body.reasoning_effort && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(source)) {
@@ -689,6 +704,14 @@ export async function dispatchOpenAICompatible(ctx) {
 
         if (source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             excludeKeysByYaml(requestBody, body.custom_exclude_body);
+        }
+
+        if (geminiCacheOptions) {
+            const plan = geminiHistoryCache.apply(requestBody, geminiCacheOptions);
+            if (plan.reason === 'no-history' && resolveGeminiSystemPromptCache(body)) {
+                cachingSystemPromptForOpenRouter(requestBody.messages);
+            }
+            console.debug('OpenRouter Gemini history cache:', plan);
         }
 
         ctx.inspection.attach(endpointUrl, apiKey, requestBody);
