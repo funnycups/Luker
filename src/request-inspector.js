@@ -5,6 +5,28 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 
 const RING_BUFFER_SIZE = 200;
+const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const MIN_CLEANUP_INTERVAL_MS = 10 * 1000;
+const MIN_TTL_MS = 10 * 1000;
+const ACTIVE_ENTRY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+function readPositiveIntegerEnv(name, fallback, minimum) {
+ const value = Number(process.env[name]);
+ if (!Number.isFinite(value) || value < minimum) return fallback;
+ return Math.floor(value);
+}
+
+const REQUEST_INSPECTOR_TTL_MS = readPositiveIntegerEnv(
+ 'LUKER_REQUEST_INSPECTOR_TTL_MS',
+ DEFAULT_TTL_MS,
+ MIN_TTL_MS,
+);
+const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readPositiveIntegerEnv(
+ 'LUKER_REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS',
+ DEFAULT_CLEANUP_INTERVAL_MS,
+ MIN_CLEANUP_INTERVAL_MS,
+);
 
 /** @type {Map<string, InspectorEntry[]>} handle -> entries */
 const buffers = new Map();
@@ -39,6 +61,44 @@ function pushEntry(handle, entry) {
  buf.shift();
  }
 }
+
+function removeEntry(handle, entry) {
+ const buffer = buffers.get(handle);
+ if (!buffer) return false;
+
+ const index = buffer.indexOf(entry);
+ if (index === -1) return false;
+
+ buffer.splice(index, 1);
+ if (buffer.length === 0) buffers.delete(handle);
+ return true;
+}
+
+/**
+ * 清理已过期的请求记录。正在运行的请求保留更长时间，避免响应完成前被移除。
+ * @param {number} [now]
+ * @returns {number} 本次清理的记录数量
+ */
+export function cleanupExpiredEntries(now = Date.now()) {
+ let removed = 0;
+
+ for (const [handle, buffer] of buffers) {
+ for (const entry of [...buffer]) {
+ const age = now - Number(entry.timestamp);
+ const isRunning = entry.status === 'running';
+ const isExpired = isRunning
+ ? age >= Math.max(REQUEST_INSPECTOR_TTL_MS, ACTIVE_ENTRY_MAX_AGE_MS)
+ : age >= REQUEST_INSPECTOR_TTL_MS;
+
+ if (isExpired && removeEntry(handle, entry)) removed++;
+ }
+ }
+
+ return removed;
+}
+
+const cleanupTimer = setInterval(cleanupExpiredEntries, REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS);
+cleanupTimer.unref?.();
 
 /**
  * Produce a redacted fingerprint of an API key suitable for the Inspector UI.
@@ -201,7 +261,8 @@ export function findEntry(request) {
  const handle = String(request?.user?.profile?.handle || '');
  const id = request?.__inspectorId;
  if (!handle || !id) return null;
- const buf = getBuffer(handle);
+ const buf = buffers.get(handle);
+ if (!buf) return null;
  for (let i = buf.length - 1; i >= 0; i--) {
  if (buf[i].id === id) return buf[i];
  }

@@ -3,6 +3,7 @@ import {
     startInspection,
     completeInspection,
     completeInspectionFromStream,
+    cleanupExpiredEntries,
     getBufferForHandle,
 } from '../src/request-inspector.js';
 
@@ -201,5 +202,42 @@ describe('request-inspector: 200-but-error detection', () => {
             expect(e.status).toBe('success');
             expect(e.error).toBe('');
         });
+    });
+});
+
+describe('request-inspector: TTL cleanup', () => {
+    test('保留有效记录，超过 TTL 后删除完整记录', () => {
+        const req = newRequest();
+        startInspection(req);
+        completeInspection(req, {
+            choices: [{ message: { content: 'full response' }, finish_reason: 'stop' }],
+        });
+
+        const entry = getEntry(req);
+        const fullMessages = [{ role: 'user', content: 'complete request body' }];
+        entry.fullMessages = fullMessages;
+        entry.wireRequest = { messages: fullMessages };
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) + 1000;
+
+        expect(cleanupExpiredEntries(Date.now())).toBe(0);
+        expect(getEntry(req)).toBe(entry);
+
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
+    });
+
+    test('运行中的请求在扩展保留期内不会被删除', () => {
+        const req = newRequest();
+        startInspection(req);
+        const entry = getEntry(req);
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+
+        expect(cleanupExpiredEntries(Date.now())).toBe(0);
+        expect(getEntry(req)).toBe(entry);
+
+        entry.timestamp = Date.now() - (6 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getEntry(req)).toBeNull();
     });
 });
