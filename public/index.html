@@ -8712,9 +8712,14 @@
     <script type="module" src="init.js"></script>
     <script>
         (() => {
+            // Keep iOS's native keyboard panning on its original dvh layout.
+            // Using the keyboard-reduced innerHeight here also shrinks #chat,
+            // so WebKit pans the composer upward a second time. Android still
+            // needs the measured height for its WebView dvh reflow workaround.
+            const useNativeViewportHeight = CSS.supports('-webkit-touch-callout', 'none');
             const documentHeight = () => {
                 const doc = document.documentElement;
-                doc.style.setProperty('--doc-height', `${window.innerHeight}px`);
+                doc.style.setProperty('--doc-height', useNativeViewportHeight ? '100dvh' : `${window.innerHeight}px`);
             };
             window.addEventListener('resize', documentHeight);
             if (window.visualViewport) {
