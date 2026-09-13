@@ -12,30 +12,30 @@ const MIN_TTL_MS = 10 * 1000;
 const ACTIVE_ENTRY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 function readPositiveIntegerEnv(name, fallback, minimum) {
- const value = Number(process.env[name]);
- if (!Number.isFinite(value) || value < minimum) return fallback;
- return Math.floor(value);
+    const value = Number(process.env[name]);
+    if (!Number.isFinite(value) || value < minimum) return fallback;
+    return Math.floor(value);
 }
 
 const REQUEST_INSPECTOR_TTL_MS = readPositiveIntegerEnv(
- 'LUKER_REQUEST_INSPECTOR_TTL_MS',
- DEFAULT_TTL_MS,
- MIN_TTL_MS,
+    'LUKER_REQUEST_INSPECTOR_TTL_MS',
+    DEFAULT_TTL_MS,
+    MIN_TTL_MS,
 );
 const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readPositiveIntegerEnv(
- 'LUKER_REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS',
- DEFAULT_CLEANUP_INTERVAL_MS,
- MIN_CLEANUP_INTERVAL_MS,
+    'LUKER_REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS',
+    DEFAULT_CLEANUP_INTERVAL_MS,
+    MIN_CLEANUP_INTERVAL_MS,
 );
 
 /** @type {Map<string, InspectorEntry[]>} handle -> entries */
 const buffers = new Map();
 
 function getBuffer(handle) {
- if (!buffers.has(handle)) {
- buffers.set(handle, []);
- }
- return buffers.get(handle);
+    if (!buffers.has(handle)) {
+        buffers.set(handle, []);
+    }
+    return buffers.get(handle);
 }
 
 /**
@@ -49,29 +49,29 @@ function getBuffer(handle) {
  * @returns {object[]}
  */
 export function getBufferForHandle(handle) {
- const h = String(handle || '');
- if (!h || !buffers.has(h)) return [];
- return buffers.get(h).slice();
+    const h = String(handle || '');
+    if (!h || !buffers.has(h)) return [];
+    return buffers.get(h).slice();
 }
 
 function pushEntry(handle, entry) {
- const buf = getBuffer(handle);
- buf.push(entry);
- if (buf.length > RING_BUFFER_SIZE) {
- buf.shift();
- }
+    const buf = getBuffer(handle);
+    buf.push(entry);
+    if (buf.length > RING_BUFFER_SIZE) {
+        buf.shift();
+    }
 }
 
 function removeEntry(handle, entry) {
- const buffer = buffers.get(handle);
- if (!buffer) return false;
+    const buffer = buffers.get(handle);
+    if (!buffer) return false;
 
- const index = buffer.indexOf(entry);
- if (index === -1) return false;
+    const index = buffer.indexOf(entry);
+    if (index === -1) return false;
 
- buffer.splice(index, 1);
- if (buffer.length === 0) buffers.delete(handle);
- return true;
+    buffer.splice(index, 1);
+    if (buffer.length === 0) buffers.delete(handle);
+    return true;
 }
 
 /**
@@ -80,21 +80,21 @@ function removeEntry(handle, entry) {
  * @returns {number} 本次清理的记录数量
  */
 export function cleanupExpiredEntries(now = Date.now()) {
- let removed = 0;
+    let removed = 0;
 
- for (const [handle, buffer] of buffers) {
- for (const entry of [...buffer]) {
- const age = now - Number(entry.timestamp);
- const isRunning = entry.status === 'running';
- const isExpired = isRunning
- ? age >= Math.max(REQUEST_INSPECTOR_TTL_MS, ACTIVE_ENTRY_MAX_AGE_MS)
- : age >= REQUEST_INSPECTOR_TTL_MS;
+    for (const [handle, buffer] of buffers) {
+        for (const entry of [...buffer]) {
+            const age = now - Number(entry.timestamp);
+            const isRunning = entry.status === 'running';
+            const isExpired = isRunning
+                ? age >= Math.max(REQUEST_INSPECTOR_TTL_MS, ACTIVE_ENTRY_MAX_AGE_MS)
+                : age >= REQUEST_INSPECTOR_TTL_MS;
 
- if (isExpired && removeEntry(handle, entry)) removed++;
- }
- }
+            if (isExpired && removeEntry(handle, entry)) removed++;
+        }
+    }
 
- return removed;
+    return removed;
 }
 
 const cleanupTimer = setInterval(cleanupExpiredEntries, REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS);
@@ -110,29 +110,29 @@ cleanupTimer.unref?.();
  * @returns {string}
  */
 export function fingerprintApiKey(apiKey) {
- const key = String(apiKey ?? '');
- if (!key) return '';
- const len = key.length;
- if (len <= 8) return `${'*'.repeat(len)} (${len} chars)`;
- return `${key.slice(0, 4)}...${key.slice(-4)} (${len} chars)`;
+    const key = String(apiKey ?? '');
+    if (!key) return '';
+    const len = key.length;
+    if (len <= 8) return `${'*'.repeat(len)} (${len} chars)`;
+    return `${key.slice(0, 4)}...${key.slice(-4)} (${len} chars)`;
 }
 
 const REDACT_QUERY_KEYS = new Set(['key', 'api_key', 'apikey', 'access_token', 'token']);
 
 function sanitizeEndpointUrl(endpoint) {
- const raw = String(endpoint || '');
- if (!raw) return '';
- try {
- const url = new URL(raw);
- for (const name of [...url.searchParams.keys()]) {
- if (REDACT_QUERY_KEYS.has(name.toLowerCase())) {
- url.searchParams.set(name, '***');
- }
- }
- return url.toString();
- } catch {
- return raw;
- }
+    const raw = String(endpoint || '');
+    if (!raw) return '';
+    try {
+        const url = new URL(raw);
+        for (const name of [...url.searchParams.keys()]) {
+            if (REDACT_QUERY_KEYS.has(name.toLowerCase())) {
+                url.searchParams.set(name, '***');
+            }
+        }
+        return url.toString();
+    } catch {
+        return raw;
+    }
 }
 
 /**
@@ -153,19 +153,19 @@ function sanitizeEndpointUrl(endpoint) {
  * @param {object} [wirePayload] Optional outbound request body to snapshot.
  */
 export function attachInspectionEndpoint(request, endpoint, apiKey, wirePayload) {
- const entry = findEntry(request);
- if (!entry) return;
- entry.endpoint = sanitizeEndpointUrl(endpoint);
- entry.apiKeyFingerprint = fingerprintApiKey(apiKey);
- if (wirePayload && typeof wirePayload === 'object') {
- try {
- entry.wireRequest = typeof structuredClone === 'function'
- ? structuredClone(wirePayload)
- : JSON.parse(JSON.stringify(wirePayload));
- } catch {
- try { entry.wireRequest = JSON.parse(JSON.stringify(wirePayload)); } catch { /* skip */ }
- }
- }
+    const entry = findEntry(request);
+    if (!entry) return;
+    entry.endpoint = sanitizeEndpointUrl(endpoint);
+    entry.apiKeyFingerprint = fingerprintApiKey(apiKey);
+    if (wirePayload && typeof wirePayload === 'object') {
+        try {
+            entry.wireRequest = typeof structuredClone === 'function'
+                ? structuredClone(wirePayload)
+                : JSON.parse(JSON.stringify(wirePayload));
+        } catch {
+            try { entry.wireRequest = JSON.parse(JSON.stringify(wirePayload)); } catch { /* skip */ }
+        }
+    }
 }
 
 /**
@@ -174,82 +174,82 @@ export function attachInspectionEndpoint(request, endpoint, apiKey, wirePayload)
  * @param {import('express').Request} request
  */
 export function startInspection(request) {
- const handle = String(request?.user?.profile?.handle || '');
- if (!handle) return;
+    const handle = String(request?.user?.profile?.handle || '');
+    if (!handle) return;
 
- const body = request.body || {};
- const messages = Array.isArray(body.messages) ? body.messages : [];
+    const body = request.body || {};
+    const messages = Array.isArray(body.messages) ? body.messages : [];
 
- const entry = {
- id: randomUUID(),
- type: 'chat',
- handle,
- timestamp: Date.now(),
- source: String(body.chat_completion_source || body.api_type || 'unknown'),
- model: String(body.model || ''),
- stream: Boolean(body.stream),
- endpoint: '',
- apiKeyFingerprint: '',
- messageCount: messages.length,
- messageRoles: messages.map(m => String(m?.role || '?')),
- promptCharLength: messages.reduce((sum, m) => {
- const content = m?.content;
- if (typeof content === 'string') return sum + content.length;
- if (Array.isArray(content)) {
- return sum + content.reduce((s, part) => {
- if (typeof part === 'string') return s + part.length;
- if (part?.text) return s + String(part.text).length;
- if (part?.type === 'image_url' || part?.type === 'image') return s + 100;
- return s;
- }, 0);
- }
- return sum;
- }, 0),
- maxTokens: body.max_tokens ?? body.max_completion_tokens ?? null,
- // Deep-clone snapshot of the messages array as the client posted it.
- // Downstream send paths mutate request.body.messages in place to fit
- // the upstream provider's schema, so a live reference would expose
- // post-mutation intermediate state at export time.
- fullMessages: (() => {
- try {
- return typeof structuredClone === 'function'
- ? structuredClone(messages)
- : JSON.parse(JSON.stringify(messages));
- } catch {
- return JSON.parse(JSON.stringify(messages));
- }
- })(),
- responseText: '',
- responseParts: [],
- usage: {
- prompt_tokens: null,
- completion_tokens: null,
- total_tokens: null,
- cache_read: null,
- cache_write: null,
- },
- durationMs: null,
- status: 'running',
- httpStatus: null,
- error: '',
- // Normalized OpenAI-shape stop reason (stop/length/tool_calls/content_filter/…).
- // For native providers we translate their vocabulary into OAI's on capture so
- // list-scan filters and cross-provider stats stay comparable. `null` = never
- // received (still running / failed before response / provider silent).
- finishReason: null,
- // Provider-original stop-reason string, verbatim, before any normalization.
- // Claude=`stop_reason` (end_turn/max_tokens/tool_use/…), Gemini=`finishReason`
- // (STOP/MAX_TOKENS/SAFETY/…), OpenRouter=`native_finish_reason` (upstream
- // provider's string when OR proxies e.g. Groq/Together). Kept separate from
- // `finishReason` because the raw value carries diagnostic info the OAI
- // vocabulary erases (e.g. Gemini SAFETY → OAI `content_filter` loses which
- // safety category tripped; Claude `pause_turn` has no OAI equivalent).
- nativeFinishReason: null,
- };
+    const entry = {
+        id: randomUUID(),
+        type: 'chat',
+        handle,
+        timestamp: Date.now(),
+        source: String(body.chat_completion_source || body.api_type || 'unknown'),
+        model: String(body.model || ''),
+        stream: Boolean(body.stream),
+        endpoint: '',
+        apiKeyFingerprint: '',
+        messageCount: messages.length,
+        messageRoles: messages.map(m => String(m?.role || '?')),
+        promptCharLength: messages.reduce((sum, m) => {
+            const content = m?.content;
+            if (typeof content === 'string') return sum + content.length;
+            if (Array.isArray(content)) {
+                return sum + content.reduce((s, part) => {
+                    if (typeof part === 'string') return s + part.length;
+                    if (part?.text) return s + String(part.text).length;
+                    if (part?.type === 'image_url' || part?.type === 'image') return s + 100;
+                    return s;
+                }, 0);
+            }
+            return sum;
+        }, 0),
+        maxTokens: body.max_tokens ?? body.max_completion_tokens ?? null,
+        // Deep-clone snapshot of the messages array as the client posted it.
+        // Downstream send paths mutate request.body.messages in place to fit
+        // the upstream provider's schema, so a live reference would expose
+        // post-mutation intermediate state at export time.
+        fullMessages: (() => {
+            try {
+                return typeof structuredClone === 'function'
+                    ? structuredClone(messages)
+                    : JSON.parse(JSON.stringify(messages));
+            } catch {
+                return JSON.parse(JSON.stringify(messages));
+            }
+        })(),
+        responseText: '',
+        responseParts: [],
+        usage: {
+            prompt_tokens: null,
+            completion_tokens: null,
+            total_tokens: null,
+            cache_read: null,
+            cache_write: null,
+        },
+        durationMs: null,
+        status: 'running',
+        httpStatus: null,
+        error: '',
+        // Normalized OpenAI-shape stop reason (stop/length/tool_calls/content_filter/…).
+        // For native providers we translate their vocabulary into OAI's on capture so
+        // list-scan filters and cross-provider stats stay comparable. `null` = never
+        // received (still running / failed before response / provider silent).
+        finishReason: null,
+        // Provider-original stop-reason string, verbatim, before any normalization.
+        // Claude=`stop_reason` (end_turn/max_tokens/tool_use/…), Gemini=`finishReason`
+        // (STOP/MAX_TOKENS/SAFETY/…), OpenRouter=`native_finish_reason` (upstream
+        // provider's string when OR proxies e.g. Groq/Together). Kept separate from
+        // `finishReason` because the raw value carries diagnostic info the OAI
+        // vocabulary erases (e.g. Gemini SAFETY → OAI `content_filter` loses which
+        // safety category tripped; Claude `pause_turn` has no OAI equivalent).
+        nativeFinishReason: null,
+    };
 
- pushEntry(handle, entry);
- request.__inspectorId = entry.id;
- request.__inspectorTimestamp = entry.timestamp;
+    pushEntry(handle, entry);
+    request.__inspectorId = entry.id;
+    request.__inspectorTimestamp = entry.timestamp;
 }
 
 /**
@@ -258,15 +258,15 @@ export function startInspection(request) {
  * @returns {object|null}
  */
 export function findEntry(request) {
- const handle = String(request?.user?.profile?.handle || '');
- const id = request?.__inspectorId;
- if (!handle || !id) return null;
- const buf = buffers.get(handle);
- if (!buf) return null;
- for (let i = buf.length - 1; i >= 0; i--) {
- if (buf[i].id === id) return buf[i];
- }
- return null;
+    const handle = String(request?.user?.profile?.handle || '');
+    const id = request?.__inspectorId;
+    if (!handle || !id) return null;
+    const buf = buffers.get(handle);
+    if (!buf) return null;
+    for (let i = buf.length - 1; i >= 0; i--) {
+        if (buf[i].id === id) return buf[i];
+    }
+    return null;
 }
 
 // ---- Usage extraction helpers ----
@@ -278,9 +278,9 @@ export function findEntry(request) {
  * Normalize to the string data line.
  */
 function normalizeEvent(e) {
- if (typeof e === 'string') return e;
- if (e && typeof e.data === 'string') return e.data;
- return '';
+    if (typeof e === 'string') return e;
+    if (e && typeof e.data === 'string') return e.data;
+    return '';
 }
 
 // ---- Provider-error detection ----
@@ -306,7 +306,7 @@ function normalizeEvent(e) {
  * @returns {boolean}
  */
 function hasProviderError(payload) {
- return payload != null
+    return payload != null
  && typeof payload === 'object'
  && payload.error != null;
 }
@@ -319,16 +319,16 @@ function hasProviderError(payload) {
  * @returns {*|null}
  */
 function findErrorFrameInStreamEvents(events) {
- if (!Array.isArray(events) || events.length === 0) return null;
- for (let i = events.length - 1; i >= 0; i--) {
- const raw = normalizeEvent(events[i]);
- if (!raw || raw === '[DONE]') continue;
- let parsed;
- try { parsed = JSON.parse(raw); } catch { continue; }
- if (parsed?.luker) continue;
- if (parsed?.error != null) return parsed.error;
- }
- return null;
+    if (!Array.isArray(events) || events.length === 0) return null;
+    for (let i = events.length - 1; i >= 0; i--) {
+        const raw = normalizeEvent(events[i]);
+        if (!raw || raw === '[DONE]') continue;
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { continue; }
+        if (parsed?.luker) continue;
+        if (parsed?.error != null) return parsed.error;
+    }
+    return null;
 }
 
 /**
@@ -340,59 +340,59 @@ function findErrorFrameInStreamEvents(events) {
  * @returns {string}
  */
 function extractProviderErrorMessage(err) {
- if (err == null) return 'error';
- if (typeof err === 'string') return err;
- if (typeof err !== 'object') return String(err);
- if (typeof err.message === 'string' && err.message) return err.message;
- if (typeof err.code === 'string' && err.code) return err.code;
- if (typeof err.type === 'string' && err.type) return err.type;
- try {
- const s = JSON.stringify(err);
- return s && s !== '{}' ? s : 'error';
- } catch {
- return 'error';
- }
+    if (err == null) return 'error';
+    if (typeof err === 'string') return err;
+    if (typeof err !== 'object') return String(err);
+    if (typeof err.message === 'string' && err.message) return err.message;
+    if (typeof err.code === 'string' && err.code) return err.code;
+    if (typeof err.type === 'string' && err.type) return err.type;
+    try {
+        const s = JSON.stringify(err);
+        return s && s !== '{}' ? s : 'error';
+    } catch {
+        return 'error';
+    }
 }
 
 function extractUsageFromOAI(payload) {
- const usage = payload?.usage;
- if (!usage || typeof usage !== 'object') return {};
- return {
- prompt_tokens: usage.prompt_tokens ?? null,
- completion_tokens: usage.completion_tokens ?? null,
- total_tokens: usage.total_tokens ?? null,
- cache_read: usage.prompt_tokens_details?.cached_tokens
+    const usage = payload?.usage;
+    if (!usage || typeof usage !== 'object') return {};
+    return {
+        prompt_tokens: usage.prompt_tokens ?? null,
+        completion_tokens: usage.completion_tokens ?? null,
+        total_tokens: usage.total_tokens ?? null,
+        cache_read: usage.prompt_tokens_details?.cached_tokens
  ?? usage.cache_read_input_tokens
  ?? usage.prompt_cache_hit_tokens
  ?? null,
- cache_write: usage.cache_creation_input_tokens
+        cache_write: usage.cache_creation_input_tokens
  ?? usage.prompt_cache_miss_tokens
  ?? null,
- };
+    };
 }
 
 function extractUsageFromClaude(payload) {
- const usage = payload?.usage;
- if (!usage || typeof usage !== 'object') return {};
- return {
- prompt_tokens: usage.input_tokens ?? null,
- completion_tokens: usage.output_tokens ?? null,
- total_tokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) || null,
- cache_read: usage.cache_read_input_tokens ?? null,
- cache_write: usage.cache_creation_input_tokens ?? null,
- };
+    const usage = payload?.usage;
+    if (!usage || typeof usage !== 'object') return {};
+    return {
+        prompt_tokens: usage.input_tokens ?? null,
+        completion_tokens: usage.output_tokens ?? null,
+        total_tokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) || null,
+        cache_read: usage.cache_read_input_tokens ?? null,
+        cache_write: usage.cache_creation_input_tokens ?? null,
+    };
 }
 
 function extractUsageFromGemini(payload) {
- const meta = payload?.usageMetadata;
- if (!meta || typeof meta !== 'object') return {};
- return {
- prompt_tokens: meta.promptTokenCount ?? null,
- completion_tokens: meta.candidatesTokenCount ?? null,
- total_tokens: meta.totalTokenCount ?? null,
- cache_read: meta.cachedContentTokenCount ?? null,
- cache_write: null,
- };
+    const meta = payload?.usageMetadata;
+    if (!meta || typeof meta !== 'object') return {};
+    return {
+        prompt_tokens: meta.promptTokenCount ?? null,
+        completion_tokens: meta.candidatesTokenCount ?? null,
+        total_tokens: meta.totalTokenCount ?? null,
+        cache_read: meta.cachedContentTokenCount ?? null,
+        cache_write: null,
+    };
 }
 
 // ---- Finish-reason extraction helpers ----
@@ -404,10 +404,10 @@ function extractUsageFromGemini(payload) {
 // no OAI vocabulary equivalent; leave them null on the normalized field and
 // rely on `nativeFinishReason` to carry the truth.
 const CLAUDE_STOP_TO_OAI = {
- end_turn: 'stop',
- stop_sequence: 'stop',
- max_tokens: 'length',
- tool_use: 'tool_calls',
+    end_turn: 'stop',
+    stop_sequence: 'stop',
+    max_tokens: 'length',
+    tool_use: 'tool_calls',
 };
 
 // Gemini candidates[0].finishReason → OAI. Mirrors
@@ -415,23 +415,23 @@ const CLAUDE_STOP_TO_OAI = {
 // `MALFORMED_FUNCTION_CALL`, and `IMAGE_*` variants deliberately fall
 // through to null so the raw value is the sole source of truth for those.
 const GEMINI_FINISH_TO_OAI = {
- STOP: 'stop',
- MAX_TOKENS: 'length',
- SAFETY: 'content_filter',
- RECITATION: 'content_filter',
- BLOCKLIST: 'content_filter',
- PROHIBITED_CONTENT: 'content_filter',
- SPII: 'content_filter',
- LANGUAGE: 'content_filter',
+    STOP: 'stop',
+    MAX_TOKENS: 'length',
+    SAFETY: 'content_filter',
+    RECITATION: 'content_filter',
+    BLOCKLIST: 'content_filter',
+    PROHIBITED_CONTENT: 'content_filter',
+    SPII: 'content_filter',
+    LANGUAGE: 'content_filter',
 };
 
 // Cohere finish_reason → OAI. Mirrors COHERE_FINISH_REASON_TO_OAI.
 const COHERE_FINISH_TO_OAI = {
- COMPLETE: 'stop',
- STOP_SEQUENCE: 'stop',
- MAX_TOKENS: 'length',
- TOOL_CALL: 'tool_calls',
- ERROR: null,
+    COMPLETE: 'stop',
+    STOP_SEQUENCE: 'stop',
+    MAX_TOKENS: 'length',
+    TOOL_CALL: 'tool_calls',
+    ERROR: null,
 };
 
 /**
@@ -447,46 +447,46 @@ const COHERE_FINISH_TO_OAI = {
  * @returns {{finishReason: string|null, nativeFinishReason: string|null}}
  */
 function extractFinishReasonFromPayload(payload, rawApiResponse, source) {
- let nativeFinishReason = null;
- let finishReason = null;
+    let nativeFinishReason = null;
+    let finishReason = null;
 
- if (source === 'claude' && rawApiResponse?.stop_reason) {
- nativeFinishReason = String(rawApiResponse.stop_reason);
- finishReason = CLAUDE_STOP_TO_OAI[nativeFinishReason] ?? null;
- } else if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse?.candidates)) {
- const raw = rawApiResponse.candidates[0]?.finishReason;
- if (raw) {
- nativeFinishReason = String(raw);
- finishReason = GEMINI_FINISH_TO_OAI[nativeFinishReason] ?? null;
- }
- } else if (source === 'cohere' && rawApiResponse?.finish_reason) {
- nativeFinishReason = String(rawApiResponse.finish_reason);
- finishReason = COHERE_FINISH_TO_OAI[nativeFinishReason] ?? null;
- }
+    if (source === 'claude' && rawApiResponse?.stop_reason) {
+        nativeFinishReason = String(rawApiResponse.stop_reason);
+        finishReason = CLAUDE_STOP_TO_OAI[nativeFinishReason] ?? null;
+    } else if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse?.candidates)) {
+        const raw = rawApiResponse.candidates[0]?.finishReason;
+        if (raw) {
+            nativeFinishReason = String(raw);
+            finishReason = GEMINI_FINISH_TO_OAI[nativeFinishReason] ?? null;
+        }
+    } else if (source === 'cohere' && rawApiResponse?.finish_reason) {
+        nativeFinishReason = String(rawApiResponse.finish_reason);
+        finishReason = COHERE_FINISH_TO_OAI[nativeFinishReason] ?? null;
+    }
 
- // Fall back / augment from the OAI-shaped choices array. This is the
- // primary path for OpenAI, DeepSeek, Mistral, xAI, AIMLAPI, OpenRouter,
- // Azure, MiniMax, Chutes, ElectronHub, AI21, and any other OAI-compatible
- // upstream that goes through the runner catch-all. OpenRouter also
- // surfaces `native_finish_reason` on the choice — that's the upstream
- // provider's original string (e.g. Groq's `length`, Together's `eos`),
- // which is exactly what "native" means here even though the runner didn't
- // see a separate raw body.
- const choice = payload?.choices?.[0];
- if (choice) {
- if (!finishReason && choice.finish_reason) {
- finishReason = String(choice.finish_reason);
- }
- if (!nativeFinishReason && choice.native_finish_reason) {
- nativeFinishReason = String(choice.native_finish_reason);
- } else if (!nativeFinishReason && choice.finish_reason) {
- // For plain-OAI providers, native == normalized. Copy so the UI
- // always has something to show when a reason exists at all.
- nativeFinishReason = String(choice.finish_reason);
- }
- }
+    // Fall back / augment from the OAI-shaped choices array. This is the
+    // primary path for OpenAI, DeepSeek, Mistral, xAI, AIMLAPI, OpenRouter,
+    // Azure, MiniMax, Chutes, ElectronHub, AI21, and any other OAI-compatible
+    // upstream that goes through the runner catch-all. OpenRouter also
+    // surfaces `native_finish_reason` on the choice — that's the upstream
+    // provider's original string (e.g. Groq's `length`, Together's `eos`),
+    // which is exactly what "native" means here even though the runner didn't
+    // see a separate raw body.
+    const choice = payload?.choices?.[0];
+    if (choice) {
+        if (!finishReason && choice.finish_reason) {
+            finishReason = String(choice.finish_reason);
+        }
+        if (!nativeFinishReason && choice.native_finish_reason) {
+            nativeFinishReason = String(choice.native_finish_reason);
+        } else if (!nativeFinishReason && choice.finish_reason) {
+            // For plain-OAI providers, native == normalized. Copy so the UI
+            // always has something to show when a reason exists at all.
+            nativeFinishReason = String(choice.finish_reason);
+        }
+    }
 
- return { finishReason, nativeFinishReason };
+    return { finishReason, nativeFinishReason };
 }
 
 /**
@@ -499,54 +499,54 @@ function extractFinishReasonFromPayload(payload, rawApiResponse, source) {
  * @returns {{finishReason: string|null, nativeFinishReason: string|null}}
  */
 export function extractFinishReasonFromStreamEvents(events, source) {
- if (!Array.isArray(events) || events.length === 0) {
- return { finishReason: null, nativeFinishReason: null };
- }
+    if (!Array.isArray(events) || events.length === 0) {
+        return { finishReason: null, nativeFinishReason: null };
+    }
 
- for (let i = events.length - 1; i >= 0; i--) {
- const raw = normalizeEvent(events[i]);
- if (!raw || raw === '[DONE]') continue;
+    for (let i = events.length - 1; i >= 0; i--) {
+        const raw = normalizeEvent(events[i]);
+        if (!raw || raw === '[DONE]') continue;
 
- let parsed;
- try { parsed = JSON.parse(raw); } catch { continue; }
- if (parsed?.luker) continue;
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { continue; }
+        if (parsed?.luker) continue;
 
- if (source === 'claude') {
- // Anthropic streaming emits message_delta with the terminal
- // stop_reason once the model releases the turn. Nothing else on
- // the stream carries it.
- if (parsed?.type === 'message_delta' && parsed?.delta?.stop_reason) {
- const native = String(parsed.delta.stop_reason);
- return { finishReason: CLAUDE_STOP_TO_OAI[native] ?? null, nativeFinishReason: native };
- }
- continue;
- }
+        if (source === 'claude') {
+            // Anthropic streaming emits message_delta with the terminal
+            // stop_reason once the model releases the turn. Nothing else on
+            // the stream carries it.
+            if (parsed?.type === 'message_delta' && parsed?.delta?.stop_reason) {
+                const native = String(parsed.delta.stop_reason);
+                return { finishReason: CLAUDE_STOP_TO_OAI[native] ?? null, nativeFinishReason: native };
+            }
+            continue;
+        }
 
- if (source === 'makersuite' || source === 'vertexai') {
- const raw2 = parsed?.candidates?.[0]?.finishReason;
- if (raw2) {
- const native = String(raw2);
- return { finishReason: GEMINI_FINISH_TO_OAI[native] ?? null, nativeFinishReason: native };
- }
- continue;
- }
+        if (source === 'makersuite' || source === 'vertexai') {
+            const raw2 = parsed?.candidates?.[0]?.finishReason;
+            if (raw2) {
+                const native = String(raw2);
+                return { finishReason: GEMINI_FINISH_TO_OAI[native] ?? null, nativeFinishReason: native };
+            }
+            continue;
+        }
 
- // OpenAI / OpenAI-compatible. finish_reason on the choice (either
- // in delta or on the choice itself for providers that fold it in).
- // Also pick up OpenRouter's `native_finish_reason` when present.
- const choice = parsed?.choices?.[0];
- if (!choice) continue;
- const norm = choice.finish_reason ?? choice.delta?.finish_reason;
- const nat = choice.native_finish_reason ?? choice.delta?.native_finish_reason;
- if (norm || nat) {
- return {
- finishReason: norm ? String(norm) : null,
- nativeFinishReason: nat ? String(nat) : (norm ? String(norm) : null),
- };
- }
- }
+        // OpenAI / OpenAI-compatible. finish_reason on the choice (either
+        // in delta or on the choice itself for providers that fold it in).
+        // Also pick up OpenRouter's `native_finish_reason` when present.
+        const choice = parsed?.choices?.[0];
+        if (!choice) continue;
+        const norm = choice.finish_reason ?? choice.delta?.finish_reason;
+        const nat = choice.native_finish_reason ?? choice.delta?.native_finish_reason;
+        if (norm || nat) {
+            return {
+                finishReason: norm ? String(norm) : null,
+                nativeFinishReason: nat ? String(nat) : (norm ? String(norm) : null),
+            };
+        }
+    }
 
- return { finishReason: null, nativeFinishReason: null };
+    return { finishReason: null, nativeFinishReason: null };
 }
 
 /**
@@ -556,42 +556,42 @@ export function extractFinishReasonFromStreamEvents(events, source) {
  * @returns {object}
  */
 export function extractUsageFromStreamEvents(events, source) {
- if (!Array.isArray(events) || events.length === 0) return {};
+    if (!Array.isArray(events) || events.length === 0) return {};
 
- for (let i = events.length - 1; i >= 0; i--) {
- const raw = normalizeEvent(events[i]);
- if (!raw || raw === '[DONE]') continue;
+    for (let i = events.length - 1; i >= 0; i--) {
+        const raw = normalizeEvent(events[i]);
+        if (!raw || raw === '[DONE]') continue;
 
- let parsed;
- try {
- parsed = JSON.parse(raw);
- } catch {
- continue;
- }
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            continue;
+        }
 
- if (parsed?.luker) continue;
+        if (parsed?.luker) continue;
 
- if (source === 'claude') {
- if (parsed?.type === 'message_delta' && parsed?.usage) {
- return extractUsageFromClaude({ usage: parsed.usage });
- }
- if (parsed?.type === 'message_start' && parsed?.message?.usage) {
- return extractUsageFromClaude({ usage: parsed.message.usage });
- }
- }
+        if (source === 'claude') {
+            if (parsed?.type === 'message_delta' && parsed?.usage) {
+                return extractUsageFromClaude({ usage: parsed.usage });
+            }
+            if (parsed?.type === 'message_start' && parsed?.message?.usage) {
+                return extractUsageFromClaude({ usage: parsed.message.usage });
+            }
+        }
 
- if (source === 'makersuite' || source === 'vertexai') {
- if (parsed?.usageMetadata) {
- return extractUsageFromGemini(parsed);
- }
- }
+        if (source === 'makersuite' || source === 'vertexai') {
+            if (parsed?.usageMetadata) {
+                return extractUsageFromGemini(parsed);
+            }
+        }
 
- if (parsed?.usage) {
- return extractUsageFromOAI(parsed);
- }
- }
+        if (parsed?.usage) {
+            return extractUsageFromOAI(parsed);
+        }
+    }
 
- return {};
+    return {};
 }
 
 /**
@@ -602,38 +602,38 @@ export function extractUsageFromStreamEvents(events, source) {
  * @returns {string}
  */
 function extractTextFromStreamEvents(events, source) {
- if (!Array.isArray(events) || events.length === 0) return '';
- const out = [];
- for (const ev of events) {
- const raw = normalizeEvent(ev);
- if (!raw || raw === '[DONE]') continue;
- let parsed;
- try { parsed = JSON.parse(raw); } catch { continue; }
- if (parsed?.luker) continue;
+    if (!Array.isArray(events) || events.length === 0) return '';
+    const out = [];
+    for (const ev of events) {
+        const raw = normalizeEvent(ev);
+        if (!raw || raw === '[DONE]') continue;
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { continue; }
+        if (parsed?.luker) continue;
 
- if (source === 'claude') {
- if (parsed?.type === 'content_block_delta' && parsed?.delta?.type === 'text_delta') {
- out.push(parsed.delta.text || '');
- }
- continue;
- }
- if (source === 'makersuite' || source === 'vertexai') {
- const parts = parsed?.candidates?.[0]?.content?.parts;
- if (Array.isArray(parts)) {
- for (const p of parts) if (typeof p?.text === 'string') out.push(p.text);
- }
- continue;
- }
- // OpenAI / generic
- const delta = parsed?.choices?.[0]?.delta?.content
+        if (source === 'claude') {
+            if (parsed?.type === 'content_block_delta' && parsed?.delta?.type === 'text_delta') {
+                out.push(parsed.delta.text || '');
+            }
+            continue;
+        }
+        if (source === 'makersuite' || source === 'vertexai') {
+            const parts = parsed?.candidates?.[0]?.content?.parts;
+            if (Array.isArray(parts)) {
+                for (const p of parts) if (typeof p?.text === 'string') out.push(p.text);
+            }
+            continue;
+        }
+        // OpenAI / generic
+        const delta = parsed?.choices?.[0]?.delta?.content
  ?? parsed?.choices?.[0]?.text
  ?? parsed?.choices?.[0]?.message?.content;
- if (typeof delta === 'string') out.push(delta);
- else if (Array.isArray(delta)) {
- for (const p of delta) if (p?.type === 'text' && typeof p.text === 'string') out.push(p.text);
- }
- }
- return out.join('');
+        if (typeof delta === 'string') out.push(delta);
+        else if (Array.isArray(delta)) {
+            for (const p of delta) if (p?.type === 'text' && typeof p.text === 'string') out.push(p.text);
+        }
+    }
+    return out.join('');
 }
 
 /**
@@ -650,177 +650,177 @@ function extractTextFromStreamEvents(events, source) {
  *     a JSON string
  */
 function extractPartsFromStreamEvents(events, source) {
- if (!Array.isArray(events) || events.length === 0) return [];
+    if (!Array.isArray(events) || events.length === 0) return [];
 
- if (source === 'claude') {
- /** @type {Map<number, {type:string,text:string,name:string,id:string,inputJson:string,thinking:string,signature:string,data:string}>} */
- const blocks = new Map();
- const order = [];
- const ensureBlock = (idx) => {
- let b = blocks.get(idx);
- if (!b) {
- b = { type: 'text', text: '', name: '', id: '', inputJson: '', thinking: '', signature: '', data: '' };
- blocks.set(idx, b);
- order.push(idx);
- }
- return b;
- };
- for (const ev of events) {
- const raw = normalizeEvent(ev);
- if (!raw || raw === '[DONE]') continue;
- let parsed;
- try { parsed = JSON.parse(raw); } catch { continue; }
- if (parsed?.luker) continue;
+    if (source === 'claude') {
+        /** @type {Map<number, {type:string,text:string,name:string,id:string,inputJson:string,thinking:string,signature:string,data:string}>} */
+        const blocks = new Map();
+        const order = [];
+        const ensureBlock = (idx) => {
+            let b = blocks.get(idx);
+            if (!b) {
+                b = { type: 'text', text: '', name: '', id: '', inputJson: '', thinking: '', signature: '', data: '' };
+                blocks.set(idx, b);
+                order.push(idx);
+            }
+            return b;
+        };
+        for (const ev of events) {
+            const raw = normalizeEvent(ev);
+            if (!raw || raw === '[DONE]') continue;
+            let parsed;
+            try { parsed = JSON.parse(raw); } catch { continue; }
+            if (parsed?.luker) continue;
 
- if (parsed?.type === 'content_block_start') {
- const idx = parsed.index ?? 0;
- const cb = parsed.content_block || {};
- const b = ensureBlock(idx);
- b.type = cb.type || 'text';
- if (cb.type === 'text' && typeof cb.text === 'string') b.text = cb.text;
- if (cb.type === 'thinking' && typeof cb.thinking === 'string') b.thinking = cb.thinking;
- if (cb.type === 'thinking' && typeof cb.signature === 'string') b.signature = cb.signature;
- if (cb.type === 'redacted_thinking' && typeof cb.data === 'string') b.data = cb.data;
- if (cb.name) b.name = cb.name;
- if (cb.id) b.id = cb.id;
- } else if (parsed?.type === 'content_block_delta') {
- const idx = parsed.index ?? 0;
- const b = ensureBlock(idx);
- const d = parsed.delta;
- if (d?.type === 'text_delta' && typeof d.text === 'string') b.text += d.text;
- else if (d?.type === 'input_json_delta' && typeof d.partial_json === 'string') b.inputJson += d.partial_json;
- else if (d?.type === 'thinking_delta' && typeof d.thinking === 'string') b.thinking += d.thinking;
- else if (d?.type === 'signature_delta' && typeof d.signature === 'string') b.signature += d.signature;
- }
- }
+            if (parsed?.type === 'content_block_start') {
+                const idx = parsed.index ?? 0;
+                const cb = parsed.content_block || {};
+                const b = ensureBlock(idx);
+                b.type = cb.type || 'text';
+                if (cb.type === 'text' && typeof cb.text === 'string') b.text = cb.text;
+                if (cb.type === 'thinking' && typeof cb.thinking === 'string') b.thinking = cb.thinking;
+                if (cb.type === 'thinking' && typeof cb.signature === 'string') b.signature = cb.signature;
+                if (cb.type === 'redacted_thinking' && typeof cb.data === 'string') b.data = cb.data;
+                if (cb.name) b.name = cb.name;
+                if (cb.id) b.id = cb.id;
+            } else if (parsed?.type === 'content_block_delta') {
+                const idx = parsed.index ?? 0;
+                const b = ensureBlock(idx);
+                const d = parsed.delta;
+                if (d?.type === 'text_delta' && typeof d.text === 'string') b.text += d.text;
+                else if (d?.type === 'input_json_delta' && typeof d.partial_json === 'string') b.inputJson += d.partial_json;
+                else if (d?.type === 'thinking_delta' && typeof d.thinking === 'string') b.thinking += d.thinking;
+                else if (d?.type === 'signature_delta' && typeof d.signature === 'string') b.signature += d.signature;
+            }
+        }
 
- const parts = [];
- for (const idx of order) {
- const b = blocks.get(idx);
- if (!b) continue;
- if (b.type === 'text') {
- if (b.text) parts.push({ type: 'text', text: b.text });
- } else if (b.type === 'tool_use') {
- parts.push({ type: 'tool_call', id: b.id, name: b.name, args: coerceToolArgs(b.inputJson) });
- } else if (b.type === 'thinking') {
- parts.push({ type: 'reasoning', kind: 'thinking', text: b.thinking, signature: b.signature });
- } else if (b.type === 'redacted_thinking') {
- parts.push({ type: 'reasoning', kind: 'redacted_thinking', data: b.data });
- }
- }
- return parts;
- }
+        const parts = [];
+        for (const idx of order) {
+            const b = blocks.get(idx);
+            if (!b) continue;
+            if (b.type === 'text') {
+                if (b.text) parts.push({ type: 'text', text: b.text });
+            } else if (b.type === 'tool_use') {
+                parts.push({ type: 'tool_call', id: b.id, name: b.name, args: coerceToolArgs(b.inputJson) });
+            } else if (b.type === 'thinking') {
+                parts.push({ type: 'reasoning', kind: 'thinking', text: b.thinking, signature: b.signature });
+            } else if (b.type === 'redacted_thinking') {
+                parts.push({ type: 'reasoning', kind: 'redacted_thinking', data: b.data });
+            }
+        }
+        return parts;
+    }
 
- if (source === 'makersuite' || source === 'vertexai') {
- const parts = [];
- let textAccum = '';
- const flushText = () => {
- if (textAccum) { parts.push({ type: 'text', text: textAccum }); textAccum = ''; }
- };
- for (const ev of events) {
- const raw = normalizeEvent(ev);
- if (!raw || raw === '[DONE]') continue;
- let parsed;
- try { parsed = JSON.parse(raw); } catch { continue; }
- if (parsed?.luker) continue;
- const geminiParts = parsed?.candidates?.[0]?.content?.parts;
- if (!Array.isArray(geminiParts)) continue;
- for (const p of geminiParts) {
- if (typeof p?.text === 'string') {
- textAccum += p.text;
- } else if (p?.functionCall) {
- flushText();
- parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
- }
- }
- }
- flushText();
- return parts;
- }
+    if (source === 'makersuite' || source === 'vertexai') {
+        const parts = [];
+        let textAccum = '';
+        const flushText = () => {
+            if (textAccum) { parts.push({ type: 'text', text: textAccum }); textAccum = ''; }
+        };
+        for (const ev of events) {
+            const raw = normalizeEvent(ev);
+            if (!raw || raw === '[DONE]') continue;
+            let parsed;
+            try { parsed = JSON.parse(raw); } catch { continue; }
+            if (parsed?.luker) continue;
+            const geminiParts = parsed?.candidates?.[0]?.content?.parts;
+            if (!Array.isArray(geminiParts)) continue;
+            for (const p of geminiParts) {
+                if (typeof p?.text === 'string') {
+                    textAccum += p.text;
+                } else if (p?.functionCall) {
+                    flushText();
+                    parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
+                }
+            }
+        }
+        flushText();
+        return parts;
+    }
 
- // OpenAI / OpenAI-compatible
- let textAccum = '';
- let reasoningTextAccum = '';
- /** @type {Map<string, object>} keyed by detail.id (fallback ordinal); preserves reasoning_details entries */
- const reasoningDetails = new Map();
- const reasoningDetailsOrder = [];
- /** @type {Map<number, {id:string,name:string,argsStr:string}>} */
- const toolCalls = new Map();
- const toolOrder = [];
- const ensureToolCall = (idx) => {
- let t = toolCalls.get(idx);
- if (!t) {
- t = { id: '', name: '', argsStr: '' };
- toolCalls.set(idx, t);
- toolOrder.push(idx);
- }
- return t;
- };
- const ingestReasoningDetails = (arr) => {
- if (!Array.isArray(arr)) return;
- for (const detail of arr) {
- if (!detail || typeof detail !== 'object') continue;
- const key = detail.id != null ? String(detail.id) : `__ordinal_${reasoningDetailsOrder.length}`;
- if (!reasoningDetails.has(key)) {
- reasoningDetails.set(key, { ...detail });
- reasoningDetailsOrder.push(key);
- } else {
- // Streamed data payloads arrive fragmented across multiple deltas;
- // append instead of overwrite. Metadata fields (type/id/format/index)
- // are same-value across increments — last-write-wins is safe.
- const existing = reasoningDetails.get(key);
- for (const [k, v] of Object.entries(detail)) {
- if (k === 'data' && typeof v === 'string' && typeof existing.data === 'string') {
- existing.data = existing.data + v;
- } else {
- existing[k] = v;
- }
- }
- }
- }
- };
- for (const ev of events) {
- const raw = normalizeEvent(ev);
- if (!raw || raw === '[DONE]') continue;
- let parsed;
- try { parsed = JSON.parse(raw); } catch { continue; }
- if (parsed?.luker) continue;
- const delta = parsed?.choices?.[0]?.delta;
- if (!delta) continue;
- const content = delta.content;
- if (typeof content === 'string') textAccum += content;
- else if (Array.isArray(content)) {
- for (const p of content) if (p?.type === 'text' && typeof p.text === 'string') textAccum += p.text;
- }
- if (typeof delta.reasoning_content === 'string') reasoningTextAccum += delta.reasoning_content;
- if (typeof delta.reasoning === 'string') reasoningTextAccum += delta.reasoning;
- if (Array.isArray(delta.reasoning_details)) ingestReasoningDetails(delta.reasoning_details);
- if (Array.isArray(delta.tool_calls)) {
- for (const tc of delta.tool_calls) {
- const idx = tc?.index ?? 0;
- const t = ensureToolCall(idx);
- if (tc?.id) t.id = tc.id;
- if (tc?.function?.name) t.name = tc.function.name;
- if (typeof tc?.function?.arguments === 'string') t.argsStr += tc.function.arguments;
- }
- }
- }
+    // OpenAI / OpenAI-compatible
+    let textAccum = '';
+    let reasoningTextAccum = '';
+    /** @type {Map<string, object>} keyed by detail.id (fallback ordinal); preserves reasoning_details entries */
+    const reasoningDetails = new Map();
+    const reasoningDetailsOrder = [];
+    /** @type {Map<number, {id:string,name:string,argsStr:string}>} */
+    const toolCalls = new Map();
+    const toolOrder = [];
+    const ensureToolCall = (idx) => {
+        let t = toolCalls.get(idx);
+        if (!t) {
+            t = { id: '', name: '', argsStr: '' };
+            toolCalls.set(idx, t);
+            toolOrder.push(idx);
+        }
+        return t;
+    };
+    const ingestReasoningDetails = (arr) => {
+        if (!Array.isArray(arr)) return;
+        for (const detail of arr) {
+            if (!detail || typeof detail !== 'object') continue;
+            const key = detail.id != null ? String(detail.id) : `__ordinal_${reasoningDetailsOrder.length}`;
+            if (!reasoningDetails.has(key)) {
+                reasoningDetails.set(key, { ...detail });
+                reasoningDetailsOrder.push(key);
+            } else {
+                // Streamed data payloads arrive fragmented across multiple deltas;
+                // append instead of overwrite. Metadata fields (type/id/format/index)
+                // are same-value across increments — last-write-wins is safe.
+                const existing = reasoningDetails.get(key);
+                for (const [k, v] of Object.entries(detail)) {
+                    if (k === 'data' && typeof v === 'string' && typeof existing.data === 'string') {
+                        existing.data = existing.data + v;
+                    } else {
+                        existing[k] = v;
+                    }
+                }
+            }
+        }
+    };
+    for (const ev of events) {
+        const raw = normalizeEvent(ev);
+        if (!raw || raw === '[DONE]') continue;
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { continue; }
+        if (parsed?.luker) continue;
+        const delta = parsed?.choices?.[0]?.delta;
+        if (!delta) continue;
+        const content = delta.content;
+        if (typeof content === 'string') textAccum += content;
+        else if (Array.isArray(content)) {
+            for (const p of content) if (p?.type === 'text' && typeof p.text === 'string') textAccum += p.text;
+        }
+        if (typeof delta.reasoning_content === 'string') reasoningTextAccum += delta.reasoning_content;
+        if (typeof delta.reasoning === 'string') reasoningTextAccum += delta.reasoning;
+        if (Array.isArray(delta.reasoning_details)) ingestReasoningDetails(delta.reasoning_details);
+        if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+                const idx = tc?.index ?? 0;
+                const t = ensureToolCall(idx);
+                if (tc?.id) t.id = tc.id;
+                if (tc?.function?.name) t.name = tc.function.name;
+                if (typeof tc?.function?.arguments === 'string') t.argsStr += tc.function.arguments;
+            }
+        }
+    }
 
- const parts = [];
- if (reasoningTextAccum) parts.push({ type: 'reasoning', kind: 'text', text: reasoningTextAccum });
- if (reasoningDetailsOrder.length) {
- parts.push({
- type: 'reasoning',
- kind: 'details',
- details: reasoningDetailsOrder.map(k => reasoningDetails.get(k)),
- });
- }
- if (textAccum) parts.push({ type: 'text', text: textAccum });
- for (const idx of toolOrder) {
- const t = toolCalls.get(idx);
- parts.push({ type: 'tool_call', id: t.id, name: t.name, args: coerceToolArgs(t.argsStr) });
- }
- return parts;
+    const parts = [];
+    if (reasoningTextAccum) parts.push({ type: 'reasoning', kind: 'text', text: reasoningTextAccum });
+    if (reasoningDetailsOrder.length) {
+        parts.push({
+            type: 'reasoning',
+            kind: 'details',
+            details: reasoningDetailsOrder.map(k => reasoningDetails.get(k)),
+        });
+    }
+    if (textAccum) parts.push({ type: 'text', text: textAccum });
+    for (const idx of toolOrder) {
+        const t = toolCalls.get(idx);
+        parts.push({ type: 'tool_call', id: t.id, name: t.name, args: coerceToolArgs(t.argsStr) });
+    }
+    return parts;
 }
 
 /**
@@ -831,30 +831,30 @@ function extractPartsFromStreamEvents(events, source) {
  * @returns {string}
  */
 function extractTextFromPayload(payload, source, rawApiResponse) {
- if (rawApiResponse) {
- if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
- return rawApiResponse.content
- .filter(p => p?.type === 'text' && typeof p.text === 'string')
- .map(p => p.text)
- .join('');
- }
- if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
- const parts = rawApiResponse.candidates[0]?.content?.parts;
- if (Array.isArray(parts)) {
- return parts.filter(p => typeof p?.text === 'string').map(p => p.text).join('');
- }
- }
- }
- const choice = payload?.choices?.[0];
- const msgContent = choice?.message?.content ?? choice?.text;
- if (typeof msgContent === 'string') return msgContent;
- if (Array.isArray(msgContent)) {
- return msgContent
- .filter(p => p?.type === 'text' && typeof p.text === 'string')
- .map(p => p.text)
- .join('');
- }
- return '';
+    if (rawApiResponse) {
+        if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
+            return rawApiResponse.content
+                .filter(p => p?.type === 'text' && typeof p.text === 'string')
+                .map(p => p.text)
+                .join('');
+        }
+        if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
+            const parts = rawApiResponse.candidates[0]?.content?.parts;
+            if (Array.isArray(parts)) {
+                return parts.filter(p => typeof p?.text === 'string').map(p => p.text).join('');
+            }
+        }
+    }
+    const choice = payload?.choices?.[0];
+    const msgContent = choice?.message?.content ?? choice?.text;
+    if (typeof msgContent === 'string') return msgContent;
+    if (Array.isArray(msgContent)) {
+        return msgContent
+            .filter(p => p?.type === 'text' && typeof p.text === 'string')
+            .map(p => p.text)
+            .join('');
+    }
+    return '';
 }
 
 /**
@@ -862,11 +862,11 @@ function extractTextFromPayload(payload, source, rawApiResponse) {
  * Falls back to the original value if parsing fails.
  */
 function coerceToolArgs(raw) {
- if (raw == null) return {};
- if (typeof raw === 'string') {
- try { return JSON.parse(raw); } catch { return raw; }
- }
- return raw;
+    if (raw == null) return {};
+    if (typeof raw === 'string') {
+        try { return JSON.parse(raw); } catch { return raw; }
+    }
+    return raw;
 }
 
 /**
@@ -875,103 +875,103 @@ function coerceToolArgs(raw) {
  * {type:'tool_call', id, name, args}.
  */
 function extractPartsFromPayload(payload, source, rawApiResponse) {
- const parts = [];
+    const parts = [];
 
- if (rawApiResponse) {
- if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
- for (const p of rawApiResponse.content) {
- if (p?.type === 'text' && typeof p.text === 'string') {
- if (p.text) parts.push({ type: 'text', text: p.text });
- } else if (p?.type === 'tool_use') {
- parts.push({ type: 'tool_call', id: p.id || '', name: p.name || '', args: p.input ?? {} });
- } else if (p?.type === 'thinking') {
- parts.push({
- type: 'reasoning',
- kind: 'thinking',
- text: typeof p.thinking === 'string' ? p.thinking : '',
- signature: typeof p.signature === 'string' ? p.signature : '',
- });
- } else if (p?.type === 'redacted_thinking') {
- parts.push({
- type: 'reasoning',
- kind: 'redacted_thinking',
- data: typeof p.data === 'string' ? p.data : '',
- });
- }
- }
- return parts;
- }
- if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
- const geminiParts = rawApiResponse.candidates[0]?.content?.parts;
- if (Array.isArray(geminiParts)) {
- for (const p of geminiParts) {
- if (typeof p?.text === 'string') {
- if (p.text) parts.push({ type: 'text', text: p.text });
- } else if (p?.functionCall) {
- parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
- }
- }
- return parts;
- }
- }
- }
+    if (rawApiResponse) {
+        if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
+            for (const p of rawApiResponse.content) {
+                if (p?.type === 'text' && typeof p.text === 'string') {
+                    if (p.text) parts.push({ type: 'text', text: p.text });
+                } else if (p?.type === 'tool_use') {
+                    parts.push({ type: 'tool_call', id: p.id || '', name: p.name || '', args: p.input ?? {} });
+                } else if (p?.type === 'thinking') {
+                    parts.push({
+                        type: 'reasoning',
+                        kind: 'thinking',
+                        text: typeof p.thinking === 'string' ? p.thinking : '',
+                        signature: typeof p.signature === 'string' ? p.signature : '',
+                    });
+                } else if (p?.type === 'redacted_thinking') {
+                    parts.push({
+                        type: 'reasoning',
+                        kind: 'redacted_thinking',
+                        data: typeof p.data === 'string' ? p.data : '',
+                    });
+                }
+            }
+            return parts;
+        }
+        if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
+            const geminiParts = rawApiResponse.candidates[0]?.content?.parts;
+            if (Array.isArray(geminiParts)) {
+                for (const p of geminiParts) {
+                    if (typeof p?.text === 'string') {
+                        if (p.text) parts.push({ type: 'text', text: p.text });
+                    } else if (p?.functionCall) {
+                        parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
+                    }
+                }
+                return parts;
+            }
+        }
+    }
 
- const choice = payload?.choices?.[0];
- if (choice) {
- const msg = choice?.message || {};
- if (typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
- parts.push({ type: 'reasoning', kind: 'text', text: msg.reasoning_content });
- } else if (typeof msg.reasoning === 'string' && msg.reasoning) {
- parts.push({ type: 'reasoning', kind: 'text', text: msg.reasoning });
- }
- if (Array.isArray(msg.reasoning_details) && msg.reasoning_details.length) {
- parts.push({ type: 'reasoning', kind: 'details', details: msg.reasoning_details });
- }
- if (Array.isArray(msg.reasoning_blocks) && msg.reasoning_blocks.length) {
- for (const b of msg.reasoning_blocks) {
- if (b?.type === 'thinking') {
- parts.push({
- type: 'reasoning',
- kind: 'thinking',
- text: typeof b.thinking === 'string' ? b.thinking : '',
- signature: typeof b.signature === 'string' ? b.signature : '',
- });
- } else if (b?.type === 'redacted_thinking') {
- parts.push({
- type: 'reasoning',
- kind: 'redacted_thinking',
- data: typeof b.data === 'string' ? b.data : '',
- });
- }
- }
- }
- const msgContent = msg.content ?? choice?.text;
- if (typeof msgContent === 'string' && msgContent) {
- parts.push({ type: 'text', text: msgContent });
- } else if (Array.isArray(msgContent)) {
- for (const p of msgContent) {
- if (p?.type === 'text' && typeof p.text === 'string' && p.text) {
- parts.push({ type: 'text', text: p.text });
- }
- }
- }
- const tcs = msg.tool_calls;
- if (Array.isArray(tcs)) {
- for (const tc of tcs) {
- parts.push({
- type: 'tool_call',
- id: tc?.id || '',
- name: tc?.function?.name || tc?.name || '',
- args: coerceToolArgs(tc?.function?.arguments ?? tc?.arguments),
- });
- }
- }
- const fc = msg.function_call;
- if (fc) {
- parts.push({ type: 'tool_call', id: '', name: fc.name || '', args: coerceToolArgs(fc.arguments) });
- }
- }
- return parts;
+    const choice = payload?.choices?.[0];
+    if (choice) {
+        const msg = choice?.message || {};
+        if (typeof msg.reasoning_content === 'string' && msg.reasoning_content) {
+            parts.push({ type: 'reasoning', kind: 'text', text: msg.reasoning_content });
+        } else if (typeof msg.reasoning === 'string' && msg.reasoning) {
+            parts.push({ type: 'reasoning', kind: 'text', text: msg.reasoning });
+        }
+        if (Array.isArray(msg.reasoning_details) && msg.reasoning_details.length) {
+            parts.push({ type: 'reasoning', kind: 'details', details: msg.reasoning_details });
+        }
+        if (Array.isArray(msg.reasoning_blocks) && msg.reasoning_blocks.length) {
+            for (const b of msg.reasoning_blocks) {
+                if (b?.type === 'thinking') {
+                    parts.push({
+                        type: 'reasoning',
+                        kind: 'thinking',
+                        text: typeof b.thinking === 'string' ? b.thinking : '',
+                        signature: typeof b.signature === 'string' ? b.signature : '',
+                    });
+                } else if (b?.type === 'redacted_thinking') {
+                    parts.push({
+                        type: 'reasoning',
+                        kind: 'redacted_thinking',
+                        data: typeof b.data === 'string' ? b.data : '',
+                    });
+                }
+            }
+        }
+        const msgContent = msg.content ?? choice?.text;
+        if (typeof msgContent === 'string' && msgContent) {
+            parts.push({ type: 'text', text: msgContent });
+        } else if (Array.isArray(msgContent)) {
+            for (const p of msgContent) {
+                if (p?.type === 'text' && typeof p.text === 'string' && p.text) {
+                    parts.push({ type: 'text', text: p.text });
+                }
+            }
+        }
+        const tcs = msg.tool_calls;
+        if (Array.isArray(tcs)) {
+            for (const tc of tcs) {
+                parts.push({
+                    type: 'tool_call',
+                    id: tc?.id || '',
+                    name: tc?.function?.name || tc?.name || '',
+                    args: coerceToolArgs(tc?.function?.arguments ?? tc?.arguments),
+                });
+            }
+        }
+        const fc = msg.function_call;
+        if (fc) {
+            parts.push({ type: 'tool_call', id: '', name: fc.name || '', args: coerceToolArgs(fc.arguments) });
+        }
+    }
+    return parts;
 }
 
 /**
@@ -981,47 +981,47 @@ function extractPartsFromPayload(payload, source, rawApiResponse) {
  * @param {object} [rawApiResponse]
  */
 export function completeInspection(request, payload, rawApiResponse) {
- const entry = findEntry(request);
- if (!entry) return;
+    const entry = findEntry(request);
+    if (!entry) return;
 
- entry.status = 'success';
- entry.durationMs = Date.now() - entry.timestamp;
- entry.httpStatus = 200;
+    entry.status = 'success';
+    entry.durationMs = Date.now() - entry.timestamp;
+    entry.httpStatus = 200;
 
- const source = entry.source;
- let usage = {};
+    const source = entry.source;
+    let usage = {};
 
- if (rawApiResponse) {
- if (source === 'claude') {
- usage = extractUsageFromClaude(rawApiResponse);
- } else if (source === 'makersuite' || source === 'vertexai') {
- usage = extractUsageFromGemini(rawApiResponse);
- }
- }
+    if (rawApiResponse) {
+        if (source === 'claude') {
+            usage = extractUsageFromClaude(rawApiResponse);
+        } else if (source === 'makersuite' || source === 'vertexai') {
+            usage = extractUsageFromGemini(rawApiResponse);
+        }
+    }
 
- if (!usage.prompt_tokens) {
- const oaiUsage = extractUsageFromOAI(payload);
- if (oaiUsage.prompt_tokens) {
- usage = oaiUsage;
- }
- }
+    if (!usage.prompt_tokens) {
+        const oaiUsage = extractUsageFromOAI(payload);
+        if (oaiUsage.prompt_tokens) {
+            usage = oaiUsage;
+        }
+    }
 
- Object.assign(entry.usage, usage);
- entry.responseText = extractTextFromPayload(payload, source, rawApiResponse);
- entry.responseParts = extractPartsFromPayload(payload, source, rawApiResponse);
+    Object.assign(entry.usage, usage);
+    entry.responseText = extractTextFromPayload(payload, source, rawApiResponse);
+    entry.responseParts = extractPartsFromPayload(payload, source, rawApiResponse);
 
- const fr = extractFinishReasonFromPayload(payload, rawApiResponse, source);
- entry.finishReason = fr.finishReason;
- entry.nativeFinishReason = fr.nativeFinishReason;
+    const fr = extractFinishReasonFromPayload(payload, rawApiResponse, source);
+    entry.finishReason = fr.finishReason;
+    entry.nativeFinishReason = fr.nativeFinishReason;
 
- // HTTP 200 but body carries `{ error: {...} }` — provider signalled failure
- // through the payload instead of a non-2xx status. Reclassify from success
- // to error and surface the message; `httpStatus` stays 200 (truthful) so
- // the UI shows the "HTTP OK, body was an error" case explicitly.
- if (hasProviderError(payload)) {
- entry.status = 'error';
- entry.error = extractProviderErrorMessage(payload.error);
- }
+    // HTTP 200 but body carries `{ error: {...} }` — provider signalled failure
+    // through the payload instead of a non-2xx status. Reclassify from success
+    // to error and surface the message; `httpStatus` stays 200 (truthful) so
+    // the UI shows the "HTTP OK, body was an error" case explicitly.
+    if (hasProviderError(payload)) {
+        entry.status = 'error';
+        entry.error = extractProviderErrorMessage(payload.error);
+    }
 }
 
 /**
@@ -1031,41 +1031,41 @@ export function completeInspection(request, payload, rawApiResponse) {
  * @param {string} [accumulatedText] caller-side accumulated text (preferred over re-parsing events)
  */
 export function completeInspectionFromStream(request, events, accumulatedText) {
- const entry = findEntry(request);
- if (!entry) return;
+    const entry = findEntry(request);
+    if (!entry) return;
 
- entry.status = 'success';
- entry.durationMs = Date.now() - entry.timestamp;
- entry.httpStatus = 200;
+    entry.status = 'success';
+    entry.durationMs = Date.now() - entry.timestamp;
+    entry.httpStatus = 200;
 
- const usage = extractUsageFromStreamEvents(events, entry.source);
- Object.assign(entry.usage, usage);
+    const usage = extractUsageFromStreamEvents(events, entry.source);
+    Object.assign(entry.usage, usage);
 
- entry.responseParts = extractPartsFromStreamEvents(events, entry.source);
+    entry.responseParts = extractPartsFromStreamEvents(events, entry.source);
 
- if (typeof accumulatedText === 'string' && accumulatedText.length) {
- entry.responseText = accumulatedText;
- } else {
- entry.responseText = entry.responseParts
- .filter(p => p.type === 'text')
- .map(p => p.text)
- .join('') || extractTextFromStreamEvents(events, entry.source);
- }
+    if (typeof accumulatedText === 'string' && accumulatedText.length) {
+        entry.responseText = accumulatedText;
+    } else {
+        entry.responseText = entry.responseParts
+            .filter(p => p.type === 'text')
+            .map(p => p.text)
+            .join('') || extractTextFromStreamEvents(events, entry.source);
+    }
 
- const fr = extractFinishReasonFromStreamEvents(events, entry.source);
- entry.finishReason = fr.finishReason;
- entry.nativeFinishReason = fr.nativeFinishReason;
+    const fr = extractFinishReasonFromStreamEvents(events, entry.source);
+    entry.finishReason = fr.finishReason;
+    entry.nativeFinishReason = fr.nativeFinishReason;
 
- // SSE stream carried a `data: {"error":{...}}` frame — provider aborted
- // mid-stream (rate limit, context length, policy trigger, upstream cut).
- // Reclassify from success to error and surface the message; already
- // accumulated deltas stay in responseText / responseParts so the user can
- // see how far the model got before the stream broke.
- const providerError = findErrorFrameInStreamEvents(events);
- if (providerError != null) {
- entry.status = 'error';
- entry.error = extractProviderErrorMessage(providerError);
- }
+    // SSE stream carried a `data: {"error":{...}}` frame — provider aborted
+    // mid-stream (rate limit, context length, policy trigger, upstream cut).
+    // Reclassify from success to error and surface the message; already
+    // accumulated deltas stay in responseText / responseParts so the user can
+    // see how far the model got before the stream broke.
+    const providerError = findErrorFrameInStreamEvents(events);
+    if (providerError != null) {
+        entry.status = 'error';
+        entry.error = extractProviderErrorMessage(providerError);
+    }
 }
 
 /**
@@ -1075,13 +1075,13 @@ export function completeInspectionFromStream(request, events, accumulatedText) {
  * @param {number} [httpStatus]
  */
 export function failInspection(request, errorMessage, httpStatus) {
- const entry = findEntry(request);
- if (!entry) return;
+    const entry = findEntry(request);
+    if (!entry) return;
 
- entry.status = 'error';
- entry.durationMs = Date.now() - entry.timestamp;
- entry.httpStatus = httpStatus ?? null;
- entry.error = String(errorMessage || 'Unknown error');
+    entry.status = 'error';
+    entry.durationMs = Date.now() - entry.timestamp;
+    entry.httpStatus = httpStatus ?? null;
+    entry.error = String(errorMessage || 'Unknown error');
 }
 
 /**
@@ -1089,12 +1089,12 @@ export function failInspection(request, errorMessage, httpStatus) {
  * @param {import('express').Request} request
  */
 export function abortInspection(request) {
- const entry = findEntry(request);
- if (!entry) return;
- if (entry.status !== 'running') return;
+    const entry = findEntry(request);
+    if (!entry) return;
+    if (entry.status !== 'running') return;
 
- entry.status = 'aborted';
- entry.durationMs = Date.now() - entry.timestamp;
+    entry.status = 'aborted';
+    entry.durationMs = Date.now() - entry.timestamp;
 }
 
 // ---- ComfyUI Workflow Parsing ----
@@ -1548,145 +1548,145 @@ export function failEmbeddingInspection(request, errorMessage, httpStatus) {
 export const router = express.Router();
 
 function buildSearchSnippet(entry) {
- if (entry.type === 'image') {
- return [entry.source, entry.model, entry.prompt, entry.negativePrompt, entry.error].filter(Boolean).join(' ');
- }
- if (entry.type === 'embedding') {
- const inputText = Array.isArray(entry.inputTexts)
- ? entry.inputTexts.map(s => s?.text || '').join(' ')
- : '';
- const hitsText = Array.isArray(entry.hits)
- ? entry.hits.map(h => String(h?.text ?? '')).join(' ')
- : '';
- const combined = [
- entry.source,
- entry.model,
- entry.operation,
- entry.collectionId,
- Array.isArray(entry.collectionIds) ? entry.collectionIds.join(' ') : '',
- entry.query,
- inputText,
- hitsText,
- entry.error,
- ].filter(Boolean).join(' ');
- return combined.length > 8192 ? combined.slice(0, 8192) : combined;
- }
- const messageText = Array.isArray(entry.fullMessages)
- ? entry.fullMessages.map(m => {
- const c = m?.content;
- if (typeof c === 'string') return c;
- if (Array.isArray(c)) return c.map(p => (typeof p === 'string' ? p : (p?.text || ''))).join(' ');
- return '';
- }).join(' ')
- : '';
- const combined = [entry.source, entry.model, entry.error, messageText, entry.responseText || ''].filter(Boolean).join(' ');
- return combined.length > 8192 ? combined.slice(0, 8192) : combined;
+    if (entry.type === 'image') {
+        return [entry.source, entry.model, entry.prompt, entry.negativePrompt, entry.error].filter(Boolean).join(' ');
+    }
+    if (entry.type === 'embedding') {
+        const inputText = Array.isArray(entry.inputTexts)
+            ? entry.inputTexts.map(s => s?.text || '').join(' ')
+            : '';
+        const hitsText = Array.isArray(entry.hits)
+            ? entry.hits.map(h => String(h?.text ?? '')).join(' ')
+            : '';
+        const combined = [
+            entry.source,
+            entry.model,
+            entry.operation,
+            entry.collectionId,
+            Array.isArray(entry.collectionIds) ? entry.collectionIds.join(' ') : '',
+            entry.query,
+            inputText,
+            hitsText,
+            entry.error,
+        ].filter(Boolean).join(' ');
+        return combined.length > 8192 ? combined.slice(0, 8192) : combined;
+    }
+    const messageText = Array.isArray(entry.fullMessages)
+        ? entry.fullMessages.map(m => {
+            const c = m?.content;
+            if (typeof c === 'string') return c;
+            if (Array.isArray(c)) return c.map(p => (typeof p === 'string' ? p : (p?.text || ''))).join(' ');
+            return '';
+        }).join(' ')
+        : '';
+    const combined = [entry.source, entry.model, entry.error, messageText, entry.responseText || ''].filter(Boolean).join(' ');
+    return combined.length > 8192 ? combined.slice(0, 8192) : combined;
 }
 
 router.get('/list', (req, res) => {
- const handle = String(req?.user?.profile?.handle || '');
- if (!handle) return res.status(401).send({ error: 'Unauthorized' });
+    const handle = String(req?.user?.profile?.handle || '');
+    if (!handle) return res.status(401).send({ error: 'Unauthorized' });
 
- const buf = getBuffer(handle);
- const summaries = buf.map(e => {
- const base = {
- id: e.id,
- type: e.type || 'chat',
- timestamp: e.timestamp,
- source: e.source,
- model: e.model,
- durationMs: e.durationMs,
- status: e.status,
- httpStatus: e.httpStatus,
- error: e.error,
- searchText: buildSearchSnippet(e),
- };
- if (e.type === 'image') {
- base.prompt = (e.prompt || '').slice(0, 80);
- base.width = e.width;
- base.height = e.height;
- base.outputFormat = e.outputFormat;
- base.outputSizeBytes = e.outputSizeBytes;
- } else if (e.type === 'embedding') {
- base.operation = e.operation;
- base.routeKind = e.routeKind;
- base.collectionId = e.collectionId;
- base.inputCount = e.inputCount;
- base.inputCharTotal = e.inputCharTotal;
- base.query = (e.query || '').slice(0, 80);
- base.topK = e.topK;
- base.resultCount = e.resultCount;
- base.vectorDim = e.vectorDim;
- } else {
- base.stream = e.stream;
- base.messageCount = e.messageCount;
- base.promptCharLength = e.promptCharLength;
- base.maxTokens = e.maxTokens;
- base.usage = e.usage;
- base.responseChars = (e.responseText || '').length;
- }
- return base;
- });
+    const buf = getBuffer(handle);
+    const summaries = buf.map(e => {
+        const base = {
+            id: e.id,
+            type: e.type || 'chat',
+            timestamp: e.timestamp,
+            source: e.source,
+            model: e.model,
+            durationMs: e.durationMs,
+            status: e.status,
+            httpStatus: e.httpStatus,
+            error: e.error,
+            searchText: buildSearchSnippet(e),
+        };
+        if (e.type === 'image') {
+            base.prompt = (e.prompt || '').slice(0, 80);
+            base.width = e.width;
+            base.height = e.height;
+            base.outputFormat = e.outputFormat;
+            base.outputSizeBytes = e.outputSizeBytes;
+        } else if (e.type === 'embedding') {
+            base.operation = e.operation;
+            base.routeKind = e.routeKind;
+            base.collectionId = e.collectionId;
+            base.inputCount = e.inputCount;
+            base.inputCharTotal = e.inputCharTotal;
+            base.query = (e.query || '').slice(0, 80);
+            base.topK = e.topK;
+            base.resultCount = e.resultCount;
+            base.vectorDim = e.vectorDim;
+        } else {
+            base.stream = e.stream;
+            base.messageCount = e.messageCount;
+            base.promptCharLength = e.promptCharLength;
+            base.maxTokens = e.maxTokens;
+            base.usage = e.usage;
+            base.responseChars = (e.responseText || '').length;
+        }
+        return base;
+    });
 
- summaries.reverse();
- return res.json(summaries);
+    summaries.reverse();
+    return res.json(summaries);
 });
 
 router.get('/:id', (req, res) => {
- const handle = String(req?.user?.profile?.handle || '');
- if (!handle) return res.status(401).send({ error: 'Unauthorized' });
+    const handle = String(req?.user?.profile?.handle || '');
+    if (!handle) return res.status(401).send({ error: 'Unauthorized' });
 
- const buf = getBuffer(handle);
- const entry = buf.find(e => e.id === req.params.id);
- if (!entry) return res.status(404).send({ error: 'Not found' });
+    const buf = getBuffer(handle);
+    const entry = buf.find(e => e.id === req.params.id);
+    if (!entry) return res.status(404).send({ error: 'Not found' });
 
- return res.json(entry);
+    return res.json(entry);
 });
 
 router.get('/:id/export', (req, res) => {
- const handle = String(req?.user?.profile?.handle || '');
- if (!handle) return res.status(401).send({ error: 'Unauthorized' });
+    const handle = String(req?.user?.profile?.handle || '');
+    if (!handle) return res.status(401).send({ error: 'Unauthorized' });
 
- const buf = getBuffer(handle);
- const entry = buf.find(e => e.id === req.params.id);
- if (!entry) return res.status(404).send({ error: 'Not found' });
+    const buf = getBuffer(handle);
+    const entry = buf.find(e => e.id === req.params.id);
+    if (!entry) return res.status(404).send({ error: 'Not found' });
 
- // Re-compute schema snapshot at export time so caller can compare with
- // `messageSchemaAtCapture`. If the two disagree, something downstream
- // mutated `body.messages` in place after `startInspection`.
- const exportMessages = Array.isArray(entry.fullMessages) ? entry.fullMessages : [];
- const messageSchemaAtExport = exportMessages.map(m => {
- const content = m?.content;
- const ctype = typeof content === 'string'
- ? 'string'
- : (Array.isArray(content) ? 'array' : (content === null ? 'null' : typeof content));
- let clen = 0;
- let chead = '';
- if (typeof content === 'string') {
- clen = content.length;
- chead = content.slice(0, 60);
- } else if (Array.isArray(content)) {
- clen = content.reduce((s, p) => {
- if (typeof p === 'string') return s + p.length;
- if (p && typeof p.text === 'string') return s + p.text.length;
- return s;
- }, 0);
- chead = content.map(p => (typeof p === 'string' ? p : (p?.text || `<${p?.type || '?'}>`))).join('|').slice(0, 60);
- } else if (content !== null && content !== undefined) {
- try { chead = JSON.stringify(content).slice(0, 60); clen = chead.length; } catch { /* ignore */ }
- }
- return {
- role: String(m?.role || ''),
- contentType: ctype,
- contentLen: clen,
- contentHead: chead,
- hasToolCalls: Array.isArray(m?.tool_calls) && m.tool_calls.length > 0,
- toolCallId: m?.tool_call_id ? String(m.tool_call_id).slice(0, 24) : '',
- };
- });
+    // Re-compute schema snapshot at export time so caller can compare with
+    // `messageSchemaAtCapture`. If the two disagree, something downstream
+    // mutated `body.messages` in place after `startInspection`.
+    const exportMessages = Array.isArray(entry.fullMessages) ? entry.fullMessages : [];
+    const messageSchemaAtExport = exportMessages.map(m => {
+        const content = m?.content;
+        const ctype = typeof content === 'string'
+            ? 'string'
+            : (Array.isArray(content) ? 'array' : (content === null ? 'null' : typeof content));
+        let clen = 0;
+        let chead = '';
+        if (typeof content === 'string') {
+            clen = content.length;
+            chead = content.slice(0, 60);
+        } else if (Array.isArray(content)) {
+            clen = content.reduce((s, p) => {
+                if (typeof p === 'string') return s + p.length;
+                if (p && typeof p.text === 'string') return s + p.text.length;
+                return s;
+            }, 0);
+            chead = content.map(p => (typeof p === 'string' ? p : (p?.text || `<${p?.type || '?'}>`))).join('|').slice(0, 60);
+        } else if (content !== null && content !== undefined) {
+            try { chead = JSON.stringify(content).slice(0, 60); clen = chead.length; } catch { /* ignore */ }
+        }
+        return {
+            role: String(m?.role || ''),
+            contentType: ctype,
+            contentLen: clen,
+            contentHead: chead,
+            hasToolCalls: Array.isArray(m?.tool_calls) && m.tool_calls.length > 0,
+            toolCallId: m?.tool_call_id ? String(m.tool_call_id).slice(0, 24) : '',
+        };
+    });
 
- const filename = `request-${entry.id.slice(0, 8)}-${entry.timestamp}.json`;
- res.setHeader('Content-Type', 'application/json');
- res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
- return res.send(JSON.stringify({ ...entry, messageSchemaAtExport }, null, 2));
+    const filename = `request-${entry.id.slice(0, 8)}-${entry.timestamp}.json`;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(JSON.stringify({ ...entry, messageSchemaAtExport }, null, 2));
 });
