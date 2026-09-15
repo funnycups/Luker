@@ -262,23 +262,24 @@ async function statFileSize(absPath) {
 }
 
 /**
- * 极简 glob 展开 — 只支持结尾 `*` (前缀匹配)。
- * taxonomy 里只用 `settings.json.backup-*` / `luker-storage.sqlite*` /
- * `chat_*.jsonl` 这类形态,不引入 minimatch。
- * 非结尾 `*` 的模式抛 E_INVALID_PATH。
+ * 极简 glob 展开 — 只支持文件名中恰好一个 `*`。
+ * taxonomy 只需要 `prefix*` / `prefix*suffix` / `*` 这三类形态，
+ * 不引入 minimatch 或其它 glob 语法。
  */
 async function walkGlob(parentAbs, pattern) {
-    if (!pattern.endsWith('*')) {
+    const starIndex = pattern.indexOf('*');
+    if (starIndex < 0 || starIndex !== pattern.lastIndexOf('*') || pattern.includes('/') || pattern.includes('\\')) {
         throw new StorageInspectorError('E_INVALID_PATH', `unsupported glob: ${pattern}`);
     }
-    const prefix = pattern.slice(0, -1);
+    const prefix = pattern.slice(0, starIndex);
+    const suffix = pattern.slice(starIndex + 1);
     let entries = [];
     try {
         entries = await fsPromises.readdir(parentAbs, { withFileTypes: true });
     } catch {
         return { sizeBytes: 0, matched: [] };
     }
-    const matched = entries.filter(e => e.name.startsWith(prefix));
+    const matched = entries.filter(e => e.name.startsWith(prefix) && e.name.endsWith(suffix));
     let sizeBytes = 0;
     const files = [];
     for (const e of matched) {

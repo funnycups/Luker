@@ -96,6 +96,7 @@ class StorageInspector {
         this.mutator = mutator;
         this.container = container;
         this.pathStack = [];
+        this.failedPath = null;
         this.cache = new Map();  // key = _cacheKey(path) → InspectorResponse
     }
 
@@ -111,7 +112,7 @@ class StorageInspector {
         this.container.querySelector('.storageInspectorRefreshButton')
             .addEventListener('click', () => this.refresh());
         this.container.querySelector('.storageInspectorRetryButton')
-            .addEventListener('click', () => this.navigateTo(this.pathStack));
+            .addEventListener('click', () => this.navigateTo(this.failedPath ?? this.pathStack));
     }
 
     _cacheKey(pathArr) {
@@ -123,7 +124,6 @@ class StorageInspector {
     }
 
     async navigateTo(pathArr) {
-        this.pathStack = pathArr;
         const key = this._cacheKey(pathArr);
         this._showLoading();
         try {
@@ -135,12 +135,14 @@ class StorageInspector {
             // aggregate depth-3 redirect(仅 V1 REST provider 会产生;V2 provider 不发 redirect,undefined 时自然 skip)
             if (resp.redirect) {
                 this.provider.dataSource = { kind: 'any', target: resp.redirect.target };
-                this.pathStack = resp.redirect.path;
                 this.cache.clear();  // 换 target,cache 失效
-                return this.navigateTo(this.pathStack);
+                return this.navigateTo(resp.redirect.path);
             }
+            this.pathStack = pathArr;
+            this.failedPath = null;
             this._renderResponse(resp);
         } catch (err) {
+            this.failedPath = pathArr;
             this._showError(err);
         }
     }

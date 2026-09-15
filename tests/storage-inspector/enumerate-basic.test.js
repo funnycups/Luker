@@ -181,6 +181,22 @@ describe('enumerateCategory — grouped (images / attachments / presets / backup
             await cleanup();
         }
     });
+
+    test('backups → suffix globs group and list chat/settings backups', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ backups: true });
+        try {
+            const res = await enumerateCategory(userRoot, 'backups');
+            expect(res.entries.map(e => e.key).sort()).toEqual(['chat-backups', 'settings-backups']);
+            expect(res.entries.every(e => e.childCount === 1 && e.canDrill)).toBe(true);
+
+            const chats = await enumerateSubDir(userRoot, 'backups', 'chat-backups');
+            const settings = await enumerateSubDir(userRoot, 'backups', 'settings-backups');
+            expect(chats.entries.map(e => e.label)).toEqual(['chat_Seraphina_20260101.jsonl']);
+            expect(settings.entries.map(e => e.label)).toEqual(['settings_20260101.json']);
+        } finally {
+            await cleanup();
+        }
+    });
 });
 
 describe('enumerateSubDir — grouped category L3 leaves', () => {
