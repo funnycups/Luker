@@ -700,6 +700,86 @@ describe('dispatchOpenAICompatible', () => {
             });
         });
 
+        describe('moonshot reasoning params by model', () => {
+            function moonshotCtx(overrides = {}) {
+                return fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.MOONSHOT,
+                        messages: [
+                            { role: 'system', content: 's' },
+                            { role: 'user', content: 'u' },
+                        ],
+                        ...overrides,
+                    },
+                    secretMap: { api_key_moonshot: 'mk' },
+                });
+            }
+            function wireBody(ctx) {
+                const [url, init] = ctx.fetch.mock.calls[0];
+                expect(String(url)).toContain('api.moonshot.ai');
+                return JSON.parse(init.body);
+            }
+
+            test('kimi-k3 forwards reasoning_effort as top-level field, no thinking object', async () => {
+                const ctx = moonshotCtx({ model: 'kimi-k3', reasoning_effort: 'low' });
+                await dispatchOpenAICompatible(ctx);
+                const body = wireBody(ctx);
+                expect(body.reasoning_effort).toBe('low');
+                expect(body.thinking).toBeUndefined();
+            });
+
+            test('kimi-k3 maps ST efforts: min/low→low, medium/high→high, max→max, auto omitted', async () => {
+                for (const [effort, expected] of [
+                    ['min', 'low'], ['low', 'low'],
+                    ['medium', 'high'], ['high', 'high'],
+                    ['max', 'max'],
+                ]) {
+                    const ctx = moonshotCtx({ model: 'kimi-k3', reasoning_effort: effort });
+                    await dispatchOpenAICompatible(ctx);
+                    expect(wireBody(ctx).reasoning_effort).toBe(expected);
+                }
+                const autoCtx = moonshotCtx({ model: 'kimi-k3', reasoning_effort: 'auto' });
+                await dispatchOpenAICompatible(autoCtx);
+                expect(wireBody(autoCtx).reasoning_effort).toBeUndefined();
+            });
+
+            test('kimi-k2.6 maps min→disabled, other efforts→enabled, absent/auto→server default', async () => {
+                const disabledCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: 'min' });
+                await dispatchOpenAICompatible(disabledCtx);
+                expect(wireBody(disabledCtx).thinking).toEqual({ type: 'disabled', keep: 'all' });
+
+                const enabledCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: 'high' });
+                await dispatchOpenAICompatible(enabledCtx);
+                expect(wireBody(enabledCtx).thinking).toEqual({ type: 'enabled', keep: 'all' });
+
+                const autoCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: 'auto' });
+                await dispatchOpenAICompatible(autoCtx);
+                expect(wireBody(autoCtx).thinking).toEqual({ type: 'enabled', keep: 'all' });
+
+                const absentCtx = moonshotCtx({ model: 'kimi-k2.6' });
+                await dispatchOpenAICompatible(absentCtx);
+                expect(wireBody(absentCtx).thinking).toEqual({ type: 'enabled', keep: 'all' });
+            });
+
+            test('kimi-k2.7-code always sends thinking enabled regardless of effort', async () => {
+                const withEffort = moonshotCtx({ model: 'kimi-k2.7-code', reasoning_effort: 'auto' });
+                await dispatchOpenAICompatible(withEffort);
+                expect(wireBody(withEffort).thinking).toEqual({ type: 'enabled' });
+
+                const withoutEffort = moonshotCtx({ model: 'kimi-k2.7-code' });
+                await dispatchOpenAICompatible(withoutEffort);
+                expect(wireBody(withoutEffort).thinking).toEqual({ type: 'enabled' });
+            });
+
+            test('unknown/non-kimi-thinking model gets no reasoning params', async () => {
+                const ctx = moonshotCtx({ model: 'kimi-latest', reasoning_effort: 'high' });
+                await dispatchOpenAICompatible(ctx);
+                const body = wireBody(ctx);
+                expect(body.reasoning_effort).toBeUndefined();
+                expect(body.thinking).toBeUndefined();
+            });
+        });
+
         test('COMETAPI (temporarily disabled: emits error, no fetch)', async () => {
             const ctx = fakeCtx({
                 body: { chat_completion_source: CHAT_COMPLETION_SOURCES.COMETAPI },

@@ -491,6 +491,41 @@ function applyKimiPartial(messages, content, name) {
     messages.push(injected);
 }
 
+/**
+ * Kimi reasoning params differ per model family (platform.moonshot.ai docs):
+ *   kimi-k3        — top-level `reasoning_effort` (low/high/max), thinking always on
+ *   kimi-k2.6      — `thinking.type` enabled/disabled
+ *   kimi-k2.7-code — thinking always on, only `enabled` accepted
+ * Other models accept neither field.
+ */
+function applyMoonshotReasoningParams(bodyParams, model, effort) {
+    const hasEffort = typeof effort === 'string' && effort.length > 0;
+    if (/^kimi-k3/.test(model)) {
+        if (!hasEffort || effort === 'auto') {
+            return;
+        }
+        // K3 accepts low/high/max only; ST's six buckets collapse onto them.
+        const K3_EFFORT_MAP = { min: 'low', low: 'low', medium: 'high', high: 'high', max: 'max' };
+        bodyParams.reasoning_effort = K3_EFFORT_MAP[effort];
+        return;
+    }
+    if (/^kimi-k2\.7-code/.test(model)) {
+        bodyParams.thinking = { type: 'enabled' };
+        return;
+    }
+    if (/^kimi-k2\.6/.test(model)) {
+        // keep:'all' = Preserved Thinking. K2.6's server default is keep:null,
+        // which silently drops echoed historical reasoning_content — without
+        // this, the reasoning we replay from chat history is ignored upstream.
+        if (!hasEffort || effort === 'auto') {
+            bodyParams.thinking = { type: 'enabled', keep: 'all' };
+            return;
+        }
+        // min is the only ST bucket that maps to thinking off; the rest enable it.
+        bodyParams.thinking = { type: effort === 'min' ? 'disabled' : 'enabled', keep: 'all' };
+    }
+}
+
 /** MOONSHOT — chat-completions.js:3185-3195 */
 async function resolveMoonshot(ctx) {
     const body = ctx.body;
@@ -499,7 +534,7 @@ async function resolveMoonshot(ctx) {
     const headers = {};
     /** @type {any} */
     const bodyParams = {};
-    if (body.reasoning_effort) bodyParams.thinking = { type: 'enabled' };
+    applyMoonshotReasoningParams(bodyParams, body.model, body.reasoning_effort);
     // Kimi K3 / K2.7-code always keep Preserved Thinking; K2.6 with thinking.keep="all" does too.
     // In all cases, previous turns' reasoning must be echoed as `reasoning_content` (Moonshot's
     // field name), not `reasoning` (which is what setOpenAIMessages / getChat emit). Rename in place.
