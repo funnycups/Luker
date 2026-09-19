@@ -3,27 +3,46 @@
 
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { getConfigValue } from './util.js';
 
 const RING_BUFFER_SIZE = 200;
+// Completed records are diagnostic snapshots, not durable data — 2h covers
+// "look back at what happened this session" without holding full message
+// bodies (which can be megabytes) in the heap all day.
 const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
+// Sweep cadence. Coarser than the TTL on purpose: expiry is lazy, so a
+// stale record survives at most TTL + interval past its deadline.
 const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_CLEANUP_INTERVAL_MS = 10 * 1000;
 const MIN_TTL_MS = 10 * 1000;
+// Running requests can legitimately span hours (long generations, stalled
+// streams waiting on the client). Expire them on a separate, much longer
+// clock so an in-flight record is never swept before its completion
+// callback runs.
 const ACTIVE_ENTRY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-function readPositiveIntegerEnv(name, fallback, minimum) {
-    const value = Number(process.env[name]);
+/**
+ * Read a numeric tuning value from config.yaml (or its env override via
+ * getConfigValue). Values below `minimum` fall back to the default so a
+ * mistyped `0` / negative can't turn the sweeper into a hot loop.
+ * @param {string} key config.yaml key
+ * @param {number} fallback default when unset or invalid
+ * @param {number} minimum smallest accepted value
+ * @returns {number}
+ */
+function readTuningNumber(key, fallback, minimum) {
+    const value = Number(getConfigValue(key, fallback, 'number'));
     if (!Number.isFinite(value) || value < minimum) return fallback;
     return Math.floor(value);
 }
 
-const REQUEST_INSPECTOR_TTL_MS = readPositiveIntegerEnv(
-    'LUKER_REQUEST_INSPECTOR_TTL_MS',
+const REQUEST_INSPECTOR_TTL_MS = readTuningNumber(
+    'requestInspector.ttlMs',
     DEFAULT_TTL_MS,
     MIN_TTL_MS,
 );
-const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readPositiveIntegerEnv(
-    'LUKER_REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS',
+const REQUEST_INSPECTOR_CLEANUP_INTERVAL_MS = readTuningNumber(
+    'requestInspector.cleanupIntervalMs',
     DEFAULT_CLEANUP_INTERVAL_MS,
     MIN_CLEANUP_INTERVAL_MS,
 );
@@ -91,6 +110,12 @@ export function cleanupExpiredEntries(now = Date.now()) {
                 : age >= REQUEST_INSPECTOR_TTL_MS;
 
             if (isExpired && removeEntry(handle, entry)) removed++;
+        }
+        // Empty buffers (e.g. every record expired, or the /list route
+        // re-created one for a user with no live records) hold no data —
+        // drop the Map key so idle users don't leave entries behind.
+        if (buffer.length === 0) {
+            buffers.delete(handle);
         }
     }
 
