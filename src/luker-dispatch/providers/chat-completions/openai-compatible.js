@@ -497,10 +497,28 @@ function applyKimiPartial(messages, content, name) {
  *   kimi-k2.6      — `thinking.type` enabled/disabled
  *   kimi-k2.7-code — thinking always on, only `enabled` accepted
  * Other models accept neither field.
+ *
+ * Family detection matches on the LAST path segment so vendor-prefixed ids
+ * (moonshotai/kimi-k3, moonshot/kimi-k2.6, ...) resolve to the same family.
  */
+function getKimiModelFamily(model) {
+    const tail = String(model || '').split('/').pop() ?? '';
+    if (/^kimi-k3/.test(tail)) {
+        return 'k3';
+    }
+    if (/^kimi-k2\.7-code/.test(tail)) {
+        return 'k2.7-code';
+    }
+    if (/^kimi-k2\.6/.test(tail)) {
+        return 'k2.6';
+    }
+    return null;
+}
+
 function applyMoonshotReasoningParams(bodyParams, model, effort) {
     const hasEffort = typeof effort === 'string' && effort.length > 0;
-    if (/^kimi-k3/.test(model)) {
+    const family = getKimiModelFamily(model);
+    if (family === 'k3') {
         if (!hasEffort || effort === 'auto') {
             return;
         }
@@ -509,11 +527,11 @@ function applyMoonshotReasoningParams(bodyParams, model, effort) {
         bodyParams.reasoning_effort = K3_EFFORT_MAP[effort];
         return;
     }
-    if (/^kimi-k2\.7-code/.test(model)) {
+    if (family === 'k2.7-code') {
         bodyParams.thinking = { type: 'enabled' };
         return;
     }
-    if (/^kimi-k2\.6/.test(model)) {
+    if (family === 'k2.6') {
         // keep:'all' = Preserved Thinking. K2.6's server default is keep:null,
         // which silently drops echoed historical reasoning_content — without
         // this, the reasoning we replay from chat history is ignored upstream.

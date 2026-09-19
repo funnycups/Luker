@@ -728,6 +728,24 @@ describe('dispatchOpenAICompatible', () => {
                 expect(body.thinking).toBeUndefined();
             });
 
+            test('vendor-prefixed model ids resolve to the same Kimi family', async () => {
+                for (const model of ['moonshotai/kimi-k3', 'moonshot/kimi-k3']) {
+                    const ctx = moonshotCtx({ model, reasoning_effort: 'low' });
+                    await dispatchOpenAICompatible(ctx);
+                    const body = wireBody(ctx);
+                    expect(body.reasoning_effort).toBe('low');
+                    expect(body.thinking).toBeUndefined();
+                }
+
+                const k26Ctx = moonshotCtx({ model: 'moonshotai/kimi-k2.6', reasoning_effort: 'high' });
+                await dispatchOpenAICompatible(k26Ctx);
+                expect(wireBody(k26Ctx).thinking).toEqual({ type: 'enabled', keep: 'all' });
+
+                const k27Ctx = moonshotCtx({ model: 'moonshot/kimi-k2.7-code-highspeed' });
+                await dispatchOpenAICompatible(k27Ctx);
+                expect(wireBody(k27Ctx).thinking).toEqual({ type: 'enabled' });
+            });
+
             test('kimi-k3 maps ST efforts: min/low→low, medium/high→high, max→max, auto omitted', async () => {
                 for (const [effort, expected] of [
                     ['min', 'low'], ['low', 'low'],
