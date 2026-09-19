@@ -150,24 +150,17 @@ import {
 import {
     applyCharacterExecutionModeForAvatar,
     clearCharacterExtensionForMode,
-    getCharacterAgendaOverrideByAvatar,
-    getCharacterDirectorOverrideByAvatar,
+    getCharacterActivePresetId,
     getCharacterDisplayNameByAvatar,
     getCharacterExtensionDataByAvatar,
     getCharacterIndexByAvatar,
-    getCharacterLoopOverrideByAvatar,
-    getCharacterOverrideByAvatar,
     getCharacterPresetLibrary,
     getExecutionMode,
-    hasCharacterAgendaOverride,
+    getRuntimePresetScope,
     hasCharacterAgendaPresetLibrary,
-    hasCharacterDirectorOverride,
     hasCharacterDirectorPresetLibrary,
-    hasCharacterLoopOverride,
     hasCharacterLoopPresetLibrary,
-    hasCharacterSpecOverride,
     hasCharacterSpecPresetLibrary,
-    isCharacterPresetActiveOverrideEnabled,
     normalizeExecutionMode,
 } from './character-overrides.js';
 import {
@@ -318,10 +311,6 @@ import {
     persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
     persistRuntimeLimitsPatch,
-    setCharacterAgendaOverrideEnabled,
-    setCharacterDirectorOverrideEnabled,
-    setCharacterLoopOverrideEnabled,
-    setCharacterSpecOverrideEnabled,
 } from './editor-persist.js';
 import { collectResolvedSkillsForOrchPreset } from './collect-active-skills.js';
 import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
@@ -354,11 +343,13 @@ registerExtensionApi(MODULE_NAME, {
     bridgeSillyTavernTool,
     unbridgeSillyTavernTool,
     listAvailableSillyTavernTools,
-    // Per-character override accessors (character-overrides.js). Plugins
-    // that want to read or pin a character's orchestration override go
-    // through this surface — direct ES-module import from a sibling
-    // plugin is forbidden by the plugin↔plugin boundary rule.
-    getCharacterOverrideByAvatar,
+    // Per-character preset accessors (character-overrides.js). Plugins
+    // that want to read a character's orchestration preset state or pin
+    // its saved execution mode go through this surface — direct
+    // ES-module import from a sibling plugin is forbidden by the
+    // plugin↔plugin boundary rule.
+    getRuntimePresetScope,
+    getCharacterActivePresetId,
     getCharacterIndexByAvatar,
     getCharacterExtensionDataByAvatar,
     applyCharacterExecutionModeForAvatar,
@@ -805,8 +796,9 @@ export function getEffectiveProfile(context) {
         };
     }
 
-    const useCard = Boolean(avatar)
-        && isCharacterPresetActiveOverrideEnabled(context, avatar, executionMode);
+    // Single-scope model: the card's active slot decides. Non-empty slot
+    // → run the card library; empty → run the global active preset.
+    const useCard = getRuntimePresetScope(context, avatar, executionMode) === 'character';
     const scope = useCard ? 'character' : 'global';
     // `getActivePreset` returns `{ok:true, state}` envelope after Task 4.1;
     // `state` is null when no preset is configured (legitimate success).
@@ -1705,11 +1697,8 @@ function getOrchestratorUiTemplateDeps() {
         escapeHtml,
         extension_prompt_roles,
         getAgendaEditorByScope,
-        getCharacterAgendaOverrideByAvatar,
-        getCharacterDirectorOverrideByAvatar,
+        getCharacterActivePresetId,
         getCharacterDisplayNameByAvatar,
-        getCharacterLoopOverrideByAvatar,
-        getCharacterOverrideByAvatar,
         getContext,
         getCurrentAvatar,
         getDirectorEditorByScope,
@@ -1721,13 +1710,10 @@ function getOrchestratorUiTemplateDeps() {
         getLoopEditorByScope,
         getPopupEditingLabel,
         getProfileTitleForScope,
-        hasCharacterAgendaOverride,
+        getRuntimePresetScope,
         hasCharacterAgendaPresetLibrary,
-        hasCharacterDirectorOverride,
         hasCharacterDirectorPresetLibrary,
-        hasCharacterLoopOverride,
         hasCharacterLoopPresetLibrary,
-        hasCharacterSpecOverride,
         hasCharacterSpecPresetLibrary,
         i18n,
         initializeUiState,
@@ -1834,24 +1820,27 @@ function hydrateGeneralTabFields(mount, context, settings, prefix = '') {
         $('luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
     }
     // Character-scope action buttons. Template emits them always with
-    // `display:none`; toggle here per live character presence and scope
-    // (same pattern as `hydratePerModeChips` — always emit + hydrate on
-    // state change). Without this, buttons stay stuck at the render-
-    // time value from initial drawer mount, when no character is loaded.
+    // `display:none`; toggle here per live character presence and
+    // per-mode runtime scope (same pattern as `hydratePerModeChips` —
+    // always emit + hydrate on state change). Without this, buttons
+    // stay stuck at the render-time value from initial drawer mount,
+    // when no character is loaded. `clear-character` only matters when
+    // at least one mode actually runs the card's library.
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     const hasActiveCharacter = Boolean(activeAvatar);
-    const isCharacterScope = getDisplayedScope(context, settings) === 'character';
+    const anyModeRunsCard = hasActiveCharacter && ['spec', 'agenda', 'loop', 'director'].some(
+        mode => getRuntimePresetScope(context, activeAvatar, mode) === 'character',
+    );
     mount.find('[data-luker-action="save-character"]').toggle(hasActiveCharacter);
-    mount.find('[data-luker-action="clear-character"]').toggle(hasActiveCharacter && isCharacterScope);
+    mount.find('[data-luker-action="clear-character"]').toggle(anyModeRunsCard);
 }
 
 /**
  * Hydrate the 4 per-mode profile-chip blocks (spec / agenda / loop /
  * director) shared by drawer and popup. Reads the active-avatar's
- * character-override state and the per-mode displayed scope, then sets
- * chip label text, override-toggle visibility, and override-enabled
- * checkbox state. Extracted from `renderDynamicPanels` so the popup
- * can share the same source of truth without re-running the whole
+ * preset-library state and the per-mode displayed scope, then sets chip
+ * label text. Extracted from `renderDynamicPanels` so the popup can
+ * share the same source of truth without re-running the whole
  * drawer-only render (which also touches action-button state and mode
  * visibility).
  */
@@ -1863,64 +1852,31 @@ function hydratePerModeChips(mount, context, settings, prefix = '') {
         ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
         : i18n('(No character card)');
 
-    // Spec mode uses legacy `luker_orch_profile_*` (no `spec_` prefix) for
-    // target + mode labels, but `luker_orch_spec_override_*` for the toggle.
+    // Spec mode uses legacy `luker_orch_profile_*` (no `spec_` prefix).
     //
-    // Toggle-visibility runs on library-presence alone (not on the
-    // `isCharacterScope` runtime predicate) — otherwise flipping the
-    // toggle off would immediately hide the toggle itself, stranding
-    // the user with no way to re-enable. `getDisplayedScopeLabel`
-    // reads `isEnabled` separately to pick the "(enabled)" vs
-    // "(configured, currently disabled)" wording, and it prefers the
-    // "configured, currently disabled" branch whenever the library is
-    // present regardless of the current runtime scope, so the label
-    // stays honest about the persisted override even after the toggle
-    // has flipped displayed scope back to global.
+    // The label prefers the character branch whenever the card has a
+    // library: the card carries a saved preset the user can switch back
+    // to, so "Global profile" would hide that state from the user's
+    // mental model.
     {
-        const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
         const hasLibrary = hasCharacterSpecPresetLibrary(context, activeAvatar);
-        const isEnabled = Boolean(override?.enabled);
-        // When the library is present, force the label to the character
-        // branch so "configured, currently disabled" always fires (the
-        // runtime scope has already fallen back to global, so
-        // getDisplayedScopeLabel(false, …) would otherwise render
-        // "Global profile" and hide the persisted override from the
-        // user's mental model).
-        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_profile_target').text(targetLabel);
-        $('luker_orch_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
-        $('luker_orch_spec_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
-        $('luker_orch_spec_override_enabled').prop('checked', isEnabled);
+        $('luker_orch_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
     }
     {
-        const override = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
         const hasLibrary = hasCharacterAgendaPresetLibrary(context, activeAvatar);
-        const isEnabled = Boolean(override?.enabled);
-        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_agenda_profile_target').text(targetLabel);
-        $('luker_orch_agenda_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
-        $('luker_orch_agenda_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
-        $('luker_orch_agenda_override_enabled').prop('checked', isEnabled);
+        $('luker_orch_agenda_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
     }
     {
-        const override = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
         const hasLibrary = hasCharacterLoopPresetLibrary(context, activeAvatar);
-        const isEnabled = Boolean(override?.enabled);
-        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_loop_profile_target').text(targetLabel);
-        $('luker_orch_loop_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
-        $('luker_orch_loop_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
-        $('luker_orch_loop_override_enabled').prop('checked', isEnabled);
+        $('luker_orch_loop_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
     }
     {
-        const override = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
         const hasLibrary = hasCharacterDirectorPresetLibrary(context, activeAvatar);
-        const isEnabled = Boolean(override?.enabled);
-        const isCharacterScopeForLabel = hasLibrary;
         $('luker_orch_director_profile_target').text(targetLabel);
-        $('luker_orch_director_profile_mode').text(getDisplayedScopeLabel(isCharacterScopeForLabel, hasLibrary, isEnabled));
-        $('luker_orch_director_override_toggle').toggle(Boolean(activeAvatar) && hasLibrary);
-        $('luker_orch_director_override_enabled').prop('checked', isEnabled);
+        $('luker_orch_director_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
     }
 }
 
@@ -1964,7 +1920,7 @@ function renderDynamicPanels(root, context) {
     // drawer mount time (via `buildOrchestratorSettingsHtml`) and stale
     // `<option>` lists linger — see the "click a deleted preset shows
     // another preset's content" regression this fix addresses.
-    refreshPresetSelectorBars(root, getOrchestratorUiTemplateDeps(), context, settings);
+    refreshPresetSelectorBars(root, getOrchestratorUiTemplateDeps(), context);
     refreshOrchestrationEditorPopup(context, settings);
 }
 
@@ -2462,7 +2418,6 @@ async function persistCopiedProfileTarget(context, settings, mode, scope) {
             }
             const ok = await persistCharacterAgendaEditor(context, settings, avatar, {
                 editor: uiState.characterAgendaEditor,
-                forceEnabled: true,
             });
             if (!ok) {
                 notifyError(i18n('Failed to persist character override.'));
@@ -2489,7 +2444,6 @@ async function persistCopiedProfileTarget(context, settings, mode, scope) {
         }
         const ok = await persistCharacterEditor(context, settings, avatar, {
             editor: uiState.characterEditor,
-            forceEnabled: true,
         });
         if (!ok) {
             notifyError(i18n('Failed to persist character override.'));
@@ -2673,17 +2627,15 @@ function isDirectorIterationSession(session) {
 }
 
 /**
- * Dispatch helper for "does this character have an override for the mode
- * the iteration popup is currently editing?". Used by the iter popup to
- * decide whether to inject the "scope hint" system-prompt addendum that
- * tells the AI it's starting from a seeded global copy rather than an
- * existing override.
- */
+  * Dispatch helper for "does this card run its own preset for the mode
+  * the iteration popup is currently editing?" (single-scope model: the
+  * card's active slot is non-empty). Used by the iter popup to decide
+  * whether to inject the "scope hint" system-prompt addendum that tells
+  * the AI it's starting from a seeded global copy rather than an
+  * existing card preset.
+  */
 function hasCharacterOverrideForCurrentMode(context, avatar, mode) {
-    if (mode === ORCH_EXECUTION_MODE_DIRECTOR) return hasCharacterDirectorOverride(context, avatar);
-    if (mode === ORCH_EXECUTION_MODE_LOOP) return hasCharacterLoopOverride(context, avatar);
-    if (mode === ORCH_EXECUTION_MODE_AGENDA) return hasCharacterAgendaOverride(context, avatar);
-    return hasCharacterSpecOverride(context, avatar);
+    return getRuntimePresetScope(context, avatar, mode) === 'character';
 }
 
 // Director profile is stored at settings.presetLibraries.director (global)
@@ -6421,7 +6373,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         const importedEditor = {
             ...profile,
             avatar,
-            enabled: true,
         };
         const activeCharacter = context.characters?.find(c => c?.avatar === avatar) || null;
         const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
@@ -6439,7 +6390,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         }
         const ok = await persistCharacterLoopEditor(context, settings, avatar, {
             editor: importedEditor,
-            forceEnabled: true,
         });
         if (!ok) {
             notifyError(i18n('Failed to persist character override.'));
@@ -6466,7 +6416,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         const agendaProfile = cloneAgendaWorkingProfileFromEditor(session?.workingProfile || {});
         const importedEditor = {
             ...agendaProfile,
-            enabled: true,
         };
         const activeCharacter = context.characters?.find(c => c?.avatar === avatar) || null;
         const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
@@ -6484,7 +6433,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         }
         const ok = await persistCharacterAgendaEditor(context, settings, avatar, {
             editor: importedEditor,
-            forceEnabled: true,
         });
         if (!ok) {
             notifyError(i18n('Failed to persist character override.'));
@@ -6511,7 +6459,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         const importedEditor = {
             ...sanitizedProfile,
             avatar,
-            enabled: true,
         };
         const activeCharacter = context.characters?.find(c => c?.avatar === avatar) || null;
         const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
@@ -6529,7 +6476,6 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         }
         const ok = await persistCharacterDirectorEditor(context, settings, avatar, {
             editor: importedEditor,
-            forceEnabled: true,
         });
         if (!ok) {
             notifyError(i18n('Failed to persist character override.'));
@@ -6576,9 +6522,7 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
     const ok = await persistCharacterEditor(context, settings, avatar, {
         editor: {
             ...importedEditor,
-            enabled: true,
         },
-        forceEnabled: true,
     });
     if (!ok) {
         notifyError(i18n('Failed to persist character override.'));
@@ -6718,27 +6662,6 @@ function bindUi() {
         saveSettingsDebounced();
     });
 
-    // Per-character override toggles. Live next to the "Editing: ..." label
-    // for each mode. Each handler flips only the `enabled` field on the
-    // current card's override; runtime falls back to the global profile
-    // automatically (see getEffectiveProfile). Re-render after the write
-    // so the status label and checkbox stay in lockstep — even if the
-    // persist call returned false the panel snaps back to truth.
-    const wireOverrideToggle = (selector, setEnabled) => {
-        root.on('change.lukerOrch', selector, async function () {
-            const nextEnabled = Boolean(jQuery(this).prop('checked'));
-            const avatar = String(getCurrentAvatar(context) || '').trim();
-            if (avatar) {
-                await setEnabled(context, avatar, nextEnabled);
-            }
-            renderDynamicPanels(root, context);
-        });
-    };
-    wireOverrideToggle('#luker_orch_spec_override_enabled', setCharacterSpecOverrideEnabled);
-    wireOverrideToggle('#luker_orch_agenda_override_enabled', setCharacterAgendaOverrideEnabled);
-    wireOverrideToggle('#luker_orch_loop_override_enabled', setCharacterLoopOverrideEnabled);
-    wireOverrideToggle('#luker_orch_director_override_enabled', setCharacterDirectorOverrideEnabled);
-
     // ─── Preset selector bar handlers ─────────────────────────────────
     // The selector bar (rendered by `renderPresetSelectorBar` in
     // ui-templates.js) appears at the top of every mode's workspace board
@@ -6747,19 +6670,34 @@ function bindUi() {
     // with the .lukerOrchEditor namespace — same pattern the per-mode
     // form handlers below already use.
     //
-    // After any preset mutation we go through `reloadOrchestratorEditor`
-    // (defined alongside `renderDynamicPanels`) which re-runs
-    // `initializeUiState` to refresh the (mode, scope) editor draft AND
-    // the cached active-preset-id maps, then re-renders the panel. Without
-    // that reload the dropdown would still show the old `activeId` and
-    // the workspace would keep editing the old preset's draft.
+    // Single-scope model: the dropdown IS the runtime switch. Each
+    // <option> carries `data-preset-scope` ('character' | 'global');
+    // picking a Character option writes the card's active slot, picking
+    // a Global option clears the card's slot (when it holds one) and
+    // makes that preset the global active. After any selection we go
+    // through `reloadOrchestratorEditor` (defined alongside
+    // `renderDynamicPanels`) which re-runs `initializeUiState` to refresh
+    // the (mode, scope) editor draft AND the cached active-preset-id
+    // maps, then re-renders the panel. Without that reload the dropdown
+    // would still show the old highlight and the workspace would keep
+    // editing the old preset's draft.
     jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-preset-select], .luker_orch_editor_popup [data-luker-preset-select]`, async function () {
         const mode = String(jQuery(this).attr('data-mode') || '');
-        const scope = String(jQuery(this).attr('data-scope') || '');
+        const scope = String(jQuery(this).find('option:selected').attr('data-preset-scope') || '');
         const presetId = String(jQuery(this).val() || '');
         if (!mode || !scope || !presetId) return;
         const ctx = getContext();
         const avatar = String(getCurrentAvatar(ctx) || '').trim();
+        const settings = extension_settings[MODULE_NAME];
+        // Picking a Global option means "this card runs the global active
+        // preset" — clear the card's own active slot, but only when it
+        // actually holds an id. Probing first avoids the
+        // getScopeContainer touch side-effect (creating empty containers)
+        // on cards that never had a slot.
+        const hadCardSlot = Boolean(avatar) && Boolean(getCharacterActivePresetId(ctx, avatar, mode));
+        if (scope === 'global' && hadCardSlot) {
+            setActivePresetId(settings, mode, 'character', '', { context: ctx, avatar });
+        }
         // `setActivePresetId` silently returns false when the requested
         // preset id doesn't exist in the scope's library (typical cause:
         // a stale dropdown option still visible after a delete, before
@@ -6767,14 +6705,14 @@ function bindUi() {
         // toast + drawer re-render so the user gets a clear signal and
         // the stale <option> is replaced instead of quietly writing a
         // stale activeIds map back to disk.
-        const applied = setActivePresetId(extension_settings[MODULE_NAME], mode, scope, presetId,
+        const applied = setActivePresetId(settings, mode, scope, presetId,
             { context: ctx, avatar });
         if (!applied) {
             notifyError(i18n('Preset no longer exists — refreshing the list.'));
             reloadOrchestratorEditor(root, context);
             return;
         }
-        if (scope === 'character') {
+        if (hadCardSlot || (scope === 'character' && avatar)) {
             const idx = getCharacterIndexByAvatar(ctx, avatar);
             if (idx >= 0) {
                 // setActivePresetId already mutated the character's
@@ -6788,7 +6726,8 @@ function bindUi() {
                     await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
                 }
             }
-        } else {
+        }
+        if (scope === 'global') {
             await saveSettings();
         }
         reloadOrchestratorEditor(root, context);
@@ -8364,22 +8303,18 @@ function bindUi() {
             if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
                 ok = await persistCharacterLoopEditor(context, settings, activeAvatar, {
                     editor: getLoopEditorByScope(sourceScope),
-                    forceEnabled: sourceScope === 'character' ? null : true,
                 });
             } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
                 ok = await persistCharacterAgendaEditor(context, settings, activeAvatar, {
                     editor: getAgendaEditorByScope(sourceScope),
-                    forceEnabled: sourceScope === 'character' ? null : true,
                 });
             } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
                 ok = await persistCharacterDirectorEditor(context, settings, activeAvatar, {
                     editor: getDirectorEditorByScope(sourceScope),
-                    forceEnabled: sourceScope === 'character' ? null : true,
                 });
             } else {
                 ok = await persistCharacterEditor(context, settings, activeAvatar, {
                     editor: getEditorByScope(sourceScope),
-                    forceEnabled: sourceScope === 'character' ? null : true,
                 });
             }
             if (!ok) {

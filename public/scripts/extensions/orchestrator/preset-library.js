@@ -174,6 +174,13 @@ export function getActivePresetId(settings, mode, { scope = 'global', context, a
 export function setActivePresetId(settings, mode, scope, presetId, { context, avatar } = {}) {
     const c = getScopeContainer(settings, scope, { context, avatar });
     if (!c) return false;
+    if (scope === 'character' && presetId === '') {
+        // Single-scope model: an empty card slot means "run the global
+        // active preset". The library itself is preserved so the user can
+        // switch back without rebuilding it.
+        c.activeIds[mode] = '';
+        return true;
+    }
     if (!presetId || !c.libraries[mode]?.[presetId]) return false;
     c.activeIds[mode] = String(presetId);
     return true;
@@ -243,7 +250,15 @@ export function migrateLegacyCardOverrideForMode(context, avatar, mode) {
             ext.overrideEnabled = {};
         }
         if (typeof ext.overrideEnabled[mode] !== 'boolean') {
-            ext.overrideEnabled[mode] = legacyEnabled;
+            // Only seed the flag when the slot says the override was
+            // actually live. A legacy payload with enabled=true can sit
+            // on a card whose active slot was explicitly cleared (the
+            // single-scope "run global" choice) — re-seeding the flag
+            // here would resurrect that cleared slot on the next flag
+            // migration.
+            if (ext.activePresetIds[mode]) {
+                ext.overrideEnabled[mode] = legacyEnabled;
+            }
         }
     }
     // Strip the legacy fields we just consumed so the next render does
@@ -297,10 +312,10 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
     if (Object.keys(c.libraries[mode]).length === 0) {
         // Character scope: do NOT seed a factory default. Seeding here
         // would (a) create a phantom override for cards that have never
-        // been customized — `hasCharacter*Override` reads
+        // been customized — `hasCharacter*PresetLibrary` reads
         // `presetLibraries.<mode>` non-empty and would flip to true after
-        // the first popup render — and (b) make "Clear Character
-        // Override" a no-op since the next `loadCharacterEditorState →
+        // the first popup render — and (b) make "Clear presets from this
+        // card" a no-op since the next `loadCharacterEditorState →
         // getActivePreset` would immediately re-seed the just-cleared
         // library. Return null so callers fall back to the global
         // active preset.
@@ -309,7 +324,17 @@ function ensureDefaultSeeded(settings, mode, scope, { context, avatar } = {}) {
         }
         seedFactoryEntries(c, mode);
     }
-    if (!c.activeIds[mode] || !c.libraries[mode][c.activeIds[mode]]) {
+    // Single-scope model: an empty active slot is the explicit "run the
+    // global active preset" choice — never auto-heal it to the first
+    // library key, or the user's selection would silently revert on the
+    // next read.
+    if (!c.activeIds[mode]) {
+        if (scope === 'character') {
+            return c;
+        }
+        c.activeIds[mode] = Object.keys(c.libraries[mode])[0] || '';
+    }
+    if (!c.libraries[mode][c.activeIds[mode]]) {
         c.activeIds[mode] = Object.keys(c.libraries[mode])[0] || '';
     }
     return c;

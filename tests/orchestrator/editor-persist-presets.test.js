@@ -111,8 +111,8 @@ describe('editor-persist — global writes land in active preset', () => {
     });
 });
 
-describe('editor-persist — character writes record overrideEnabled + pin saved mode', () => {
-    test('persistCharacterLoopEditor seeds presetLibraries.loop and sets overrideEnabled.loop', async () => {
+describe('editor-persist — character writes land in the card active slot', () => {
+    test('persistCharacterLoopEditor seeds presetLibraries.loop and pins saved mode', async () => {
         const character = {
             avatar: 'alice.png',
             name: 'Alice',
@@ -126,7 +126,7 @@ describe('editor-persist — character writes record overrideEnabled + pin saved
             writeExtensionField: async (id, key, value) => { writes.push({ id, key, value }); },
         };
         await persist.persistCharacterLoopEditor(ctx, extensionSettings.orchestrator, 'alice.png', {
-            editor: { mode: 'loop', system_prompt: 'NEW-CARD-LOOP', tools: {}, max_rounds: 8, wall_clock_budget_ms: 60000, enabled: true },
+            editor: { mode: 'loop', system_prompt: 'NEW-CARD-LOOP', tools: {}, max_rounds: 8, wall_clock_budget_ms: 60000 },
         });
         expect(writes.length).toBe(1);
         const payload = writes[0].value;
@@ -134,11 +134,14 @@ describe('editor-persist — character writes record overrideEnabled + pin saved
         const ids = Object.keys(payload.presetLibraries.loop);
         expect(ids.length).toBe(1);
         expect(payload.presetLibraries.loop[ids[0]].system_prompt).toBe('NEW-CARD-LOOP');
-        expect(payload.overrideEnabled.loop).toBe(true);
+        // Single-scope model: persisting an editor draft activates the
+        // card's slot; no overrideEnabled flag is written.
+        expect(payload.activePresetIds.loop).toBe(ids[0]);
+        expect(payload.overrideEnabled).toBeUndefined();
         expect(payload.override.mode).toBe('loop');
     });
 
-    test('persistCharacterLoopEditor honors forceEnabled=false even when editor says enabled', async () => {
+    test('persistCharacterLoopEditor ignores a stale forceEnabled option', async () => {
         const character = {
             avatar: 'bob.png',
             name: 'Bob',
@@ -152,6 +155,8 @@ describe('editor-persist — character writes record overrideEnabled + pin saved
             editor: { mode: 'loop', system_prompt: 'X', tools: {}, max_rounds: 8, wall_clock_budget_ms: 60000, enabled: true },
             forceEnabled: false,
         });
-        expect(writes[0].value.overrideEnabled.loop).toBe(false);
+        // The enabled flag no longer exists — the payload must not carry it.
+        expect(writes[0].value.overrideEnabled).toBeUndefined();
+        expect(writes[0].value.activePresetIds.loop).toBeTruthy();
     });
 });

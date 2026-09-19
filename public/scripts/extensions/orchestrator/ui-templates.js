@@ -41,76 +41,89 @@ function getSettings() {
  * `scope` propagate as data-attributes so main.js can route events to
  * the right (mode, scope) target.
  */
-function renderPresetSelectorBar(deps, { mode, scope, presets, activeId, disabledReason }) {
+/**
+ * Render one preset bar. The select is the single runtime control under
+ * the single-scope model: it lists the card's presets (Character
+ * optgroup) and the global library (Global optgroup). Selecting an
+ * option switches that chat's runtime preset immediately — the option's
+ * `data-preset-scope` tells main.js which active slot to write.
+ *
+ * Highlight follows the runtime scope: the group matching
+ * `runtimeScope` shows its `activeId` as selected; the other group's
+ * options are unselected. `mode` propagates as a data-attribute so
+ * main.js routes events to the right mode target.
+ */
+function renderPresetSelectorBar(deps, { mode, characterPresets, globalPresets, runtimeScope, characterActiveId, globalActiveId, disabledReason }) {
     const { escapeHtml, i18n } = deps;
     const safeMode = escapeHtml(String(mode));
-    const safeScope = escapeHtml(String(scope));
     if (disabledReason) {
         return `<div class="luker_orch_preset_bar luker_orch_preset_bar--disabled"
-                     data-mode="${safeMode}" data-scope="${safeScope}">
+                     data-mode="${safeMode}" data-scope="global">
             <span class="luker_orch_preset_bar_hint">${escapeHtml(i18n(disabledReason))}</span>
         </div>`;
     }
-    const options = (Array.isArray(presets) ? presets : []).map(p => `
-        <option value="${escapeHtml(p.id)}" ${p.id === activeId ? 'selected' : ''}>${escapeHtml(p.name)}</option>
+    const optionHtml = (scope, presets, activeId) => (Array.isArray(presets) ? presets : []).map(p => `
+        <option value="${escapeHtml(p.id)}" data-preset-scope="${scope}" ${scope === runtimeScope && p.id === activeId ? 'selected' : ''}>${escapeHtml(p.name)}</option>
     `).join('');
-    return `<div class="luker_orch_preset_bar" data-mode="${safeMode}" data-scope="${safeScope}">
+    const characterGroup = `<optgroup label="${escapeHtml(i18n('Character'))}">${
+        optionHtml('character', characterPresets, characterActiveId)
+        || `<option value="" disabled>${escapeHtml(i18n('No character presets yet'))}</option>`
+    }</optgroup>`;
+    const globalGroup = `<optgroup label="${escapeHtml(i18n('Global'))}">${
+        optionHtml('global', globalPresets, globalActiveId)
+        || `<option value="" disabled>${escapeHtml(i18n('No global presets yet'))}</option>`
+    }</optgroup>`;
+    return `<div class="luker_orch_preset_bar" data-mode="${safeMode}">
         <label class="luker_orch_preset_bar_label">${escapeHtml(i18n('Preset'))}</label>
         <select class="text_pole luker_orch_preset_select"
-                data-luker-preset-select data-mode="${safeMode}" data-scope="${safeScope}">
-            ${options}
+                data-luker-preset-select data-mode="${safeMode}">
+            ${characterGroup}${globalGroup}
         </select>
         <button class="menu_button" data-luker-preset-action="new"
-                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('New preset'))}</button>
+                data-mode="${safeMode}" data-scope="${escapeHtml(runtimeScope)}">${escapeHtml(i18n('New preset'))}</button>
         <button class="menu_button" data-luker-preset-action="duplicate"
-                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Duplicate preset'))}</button>
+                data-mode="${safeMode}" data-scope="${escapeHtml(runtimeScope)}">${escapeHtml(i18n('Duplicate preset'))}</button>
         <button class="menu_button" data-luker-preset-action="rename"
-                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Rename preset'))}</button>
+                data-mode="${safeMode}" data-scope="${escapeHtml(runtimeScope)}">${escapeHtml(i18n('Rename preset'))}</button>
         <button class="menu_button" data-luker-preset-action="export"
-                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Export preset'))}</button>
+                data-mode="${safeMode}" data-scope="${escapeHtml(runtimeScope)}">${escapeHtml(i18n('Export preset'))}</button>
         <button class="menu_button" data-luker-preset-action="import"
-                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Import preset'))}</button>
+                data-mode="${safeMode}" data-scope="${escapeHtml(runtimeScope)}">${escapeHtml(i18n('Import preset'))}</button>
         <button class="menu_button luker_orch_btn_danger" data-luker-preset-action="delete"
-                data-mode="${safeMode}" data-scope="${safeScope}">${escapeHtml(i18n('Delete preset'))}</button>
+                data-mode="${safeMode}" data-scope="${escapeHtml(runtimeScope)}">${escapeHtml(i18n('Delete preset'))}</button>
     </div>`;
 }
 
 /**
  * Build the props bundle the four workspace renderers feed into
- * `renderPresetSelectorBar`. Owns the (mode, scope) → activeId lookup
- * and the per-scope listPresets call so each workspace renderer stays
- * a one-line `${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'spec', safeScope))}`.
+ * `renderPresetSelectorBar`. Owns the per-scope `listPresets` calls and
+ * the (scope → activeId) lookups so each workspace renderer stays a
+ * one-line `${renderPresetSelectorBar(deps, presetBarPropsFor(deps, 'spec'))}`.
  *
- * `safeScope` is the already-validated scope ('global' | 'character').
- * Returns `{ mode, scope, presets, activeId, disabledReason }` ready
- * to splat into the bar renderer.
+ * The runtime scope decides which group's active id is highlighted —
+ * the dropdown selection and the running preset are the same thing.
+ * Returns the mixed-model props ready to splat into the bar renderer.
  */
-function presetBarPropsFor(deps, mode, safeScope) {
+function presetBarPropsFor(deps, mode) {
     const ctx = deps.getContext();
     const activeAvatar = String(deps.getCurrentAvatar(ctx) || '').trim();
-    if (safeScope === 'character' && !activeAvatar) {
-        return {
-            mode,
-            scope: safeScope,
-            presets: [],
-            activeId: '',
-            disabledReason: 'Select a character first',
-        };
-    }
     const settings = getSettings();
-    const presets = listPresets(settings, mode, {
-        scope: safeScope,
-        context: ctx,
-        avatar: activeAvatar,
-    });
-    const activeId = safeScope === 'character'
+    const runtimeScope = String(deps.getRuntimePresetScope(ctx, activeAvatar, mode) || 'global');
+    const characterPresets = activeAvatar
+        ? listPresets(settings, mode, { scope: 'character', context: ctx, avatar: activeAvatar })
+        : [];
+    const globalPresets = listPresets(settings, mode, { scope: 'global' });
+    const characterActiveId = activeAvatar
         ? String(uiState.characterActivePresetIds?.[mode] || '')
-        : String(uiState.globalActivePresetIds?.[mode] || '');
+        : '';
+    const globalActiveId = String(uiState.globalActivePresetIds?.[mode] || '');
     return {
         mode,
-        scope: safeScope,
-        presets,
-        activeId,
+        characterPresets,
+        globalPresets,
+        runtimeScope,
+        characterActiveId,
+        globalActiveId,
         disabledReason: '',
     };
 }
@@ -1057,11 +1070,7 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         ORCH_EXECUTION_MODE_SINGLE,
         ORCH_EXECUTION_MODE_SPEC,
         escapeHtml,
-        getCharacterAgendaOverrideByAvatar,
-        getCharacterDirectorOverrideByAvatar,
         getCharacterDisplayNameByAvatar,
-        getCharacterLoopOverrideByAvatar,
-        getCharacterOverrideByAvatar,
         getCurrentAvatar,
         getDisplayedScope,
         getExecutionMode,
@@ -1088,40 +1097,31 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
     const isCharacterScope = scope === 'character';
     const currentMode = settings && getExecutionMode ? getExecutionMode(settings) : '';
 
-    // Editing-label uses library-presence to force the character
-    // branch when the library is present regardless of `isCharacterScope`.
-    // The runtime scope (`getDisplayedScope`) already fell back to
-    // global when the toggle was flipped off, so passing
-    // `isCharacterScope` here would land on
-    // "Global profile" and hide the fact that the card still carries
-    // a persisted override. Passing `hasLibrary` as the character-scope
-    // arg keeps `getPopupEditingLabel` in the "Character override
-    // (configured, currently disabled)" branch until the library
-    // itself is cleared.
+    // Editing label: two states under the single-scope model. The card
+    // runs its own library (slot non-empty) or the global active preset.
+    // Library-presence keeps the "Character override" label when the
+    // user is editing the card's workspace even if the runtime currently
+    // runs global.
     let editingLabel;
     let modeChipLabel;
     if (currentMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-        const directorOverride = activeAvatar ? getCharacterDirectorOverrideByAvatar(context, activeAvatar) : null;
         const hasDirectorLibrary = hasCharacterDirectorPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(hasDirectorLibrary || isCharacterScope, hasDirectorLibrary, Boolean(directorOverride?.enabled));
+        editingLabel = getPopupEditingLabel(hasDirectorLibrary || isCharacterScope, hasDirectorLibrary);
         modeChipLabel = i18n('Director');
     } else if (currentMode === ORCH_EXECUTION_MODE_LOOP) {
-        const loopOverride = activeAvatar ? getCharacterLoopOverrideByAvatar(context, activeAvatar) : null;
         const hasLoopLibrary = hasCharacterLoopPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(hasLoopLibrary || isCharacterScope, hasLoopLibrary, Boolean(loopOverride?.enabled));
+        editingLabel = getPopupEditingLabel(hasLoopLibrary || isCharacterScope, hasLoopLibrary);
         modeChipLabel = i18n('Loop');
     } else if (currentMode === ORCH_EXECUTION_MODE_AGENDA) {
-        const agendaOverride = activeAvatar ? getCharacterAgendaOverrideByAvatar(context, activeAvatar) : null;
         const hasAgendaLibrary = hasCharacterAgendaPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(hasAgendaLibrary || isCharacterScope, hasAgendaLibrary, Boolean(agendaOverride?.enabled));
+        editingLabel = getPopupEditingLabel(hasAgendaLibrary || isCharacterScope, hasAgendaLibrary);
         modeChipLabel = i18n('Agenda planner');
     } else if (currentMode === ORCH_EXECUTION_MODE_SINGLE) {
-        editingLabel = getPopupEditingLabel(isCharacterScope, false, false);
+        editingLabel = getPopupEditingLabel(isCharacterScope, false);
         modeChipLabel = i18n('Single agent');
     } else {
-        const override = activeAvatar ? getCharacterOverrideByAvatar(context, activeAvatar) : null;
         const hasSpecLibrary = hasCharacterSpecPresetLibrary(context, activeAvatar);
-        editingLabel = getPopupEditingLabel(hasSpecLibrary || isCharacterScope, hasSpecLibrary, Boolean(override?.enabled));
+        editingLabel = getPopupEditingLabel(hasSpecLibrary || isCharacterScope, hasSpecLibrary);
         modeChipLabel = i18n('Spec workflow');
     }
 
@@ -1295,10 +1295,8 @@ export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, 
  * @param {object} context - SillyTavern context
  * @param {object} settings - extensionSettings.orchestrator
  */
-export function refreshPresetSelectorBars(root, deps, context, settings) {
+export function refreshPresetSelectorBars(root, deps, context) {
     if (!root || typeof root.find !== 'function') return;
-    const getDisplayedScope = deps?.getDisplayedScopeForMode;
-    if (typeof getDisplayedScope !== 'function') return;
     // Force a fresh `uiState.{global,character}ActivePresetIds` sync
     // before rebuilding the bars — `presetBarPropsFor` reads those
     // caches to pick the `selected` <option>, and mutations that
@@ -1307,10 +1305,9 @@ export function refreshPresetSelectorBars(root, deps, context, settings) {
     const initFn = deps?.initializeUiState;
     if (typeof initFn === 'function') initFn(context);
     for (const mode of ['spec', 'agenda', 'loop', 'director']) {
-        const scope = String(getDisplayedScope(context, settings, mode) || 'global');
         const host = root.find(`[data-luker-preset-bar-host="${mode}"]`);
         if (!host.length) continue;
-        host.html(renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, scope)));
+        host.html(renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode)));
     }
 }
 
@@ -1428,7 +1425,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         i18n,
         world_info_position,
         getExecutionMode,
-        getDisplayedScope,
         getContext,
     } = deps;
     const s = baseId => scopeId(baseId, idPrefix);
@@ -1437,32 +1433,20 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
     // title/body are English source keys, i18n resolves per active locale.
     const fh = (titleKey, bodyKey) => renderFieldHelpButton({ title: i18n(titleKey), bodyHtml: escapeHtml(i18n(bodyKey)) });
 
-    // Resolve mode-scoped state for preset bars. Character-scope action
-    // buttons (save-character / clear-character) are emitted here with
-    // `display:none` and later toggled by `hydrateGeneralTabFields`, so
-    // no character-presence check is needed at render time. Popup and
-    // drawer callers both hit this path, so self-source from context if
-    // the caller did not thread state in.
-    const context = getContext ? getContext() : {};
+    // Popup and drawer callers both hit this path. Preset bars
+    // self-source scope via `presetBarPropsFor` (runtime scope).
     const settings = getSettings();
     const currentMode = getExecutionMode ? getExecutionMode(settings) : '';
-    const safeScope = getDisplayedScope ? getDisplayedScope(context, settings) : 'global';
 
-    // Per-mode "current profile" row builders — chip + override + buttons
-    // laid out flat with no wrapper card. Chips reuse
-    // .luker-studio-editor-chip pill styling. `data-orch-mode` is the
-    // sole visibility hook.
+    // Per-mode "current profile" row builders — chip + buttons laid out
+    // flat with no wrapper card. Chips reuse .luker-studio-editor-chip
+    // pill styling. `data-orch-mode` is the sole visibility hook.
     const cardChip = (idKey, textKey) => `<span class="luker-studio-editor-chip">${escapeHtml(i18n(textKey))} <b id="${s(idKey)}">${escapeHtml(i18n('(No character card)'))}</b></span>`;
     const editingChip = (idKey) => `<span class="luker-studio-editor-chip">${escapeHtml(i18n('Editing:'))} <b id="${s(idKey)}">${escapeHtml(i18n('Global profile'))}</b></span>`;
-    const overrideToggle = (toggleIdKey, checkboxIdKey) => `<label id="${s(toggleIdKey)}" class="checkbox_label luker_orch_override_toggle" style="display:none" title="${escapeHtml(i18n('Off uses the global profile and keeps the override stored on the card.'))}">
-                <input type="checkbox" id="${s(checkboxIdKey)}" />
-                <span>${escapeHtml(i18n('Use this card\'s override'))}</span>
-            </label>`;
-    const modeRow = ({ mode, targetIdKey, modeIdKey, toggleIdKey, checkboxIdKey, includeViewLastRun, includeCopyRows, hintKey }) => `
+    const modeRow = ({ mode, targetIdKey, modeIdKey, includeViewLastRun, includeCopyRows, hintKey }) => `
         <div data-orch-mode="${mode}" class="luker_orch_mode_row" style="display:none">
             ${cardChip(targetIdKey, 'Current card:')}
             ${editingChip(modeIdKey)}
-            ${overrideToggle(toggleIdKey, checkboxIdKey)}
             ${commonActions(deps, idPrefix, { includeViewLastRun, includeCopyRows })}
             ${hintKey ? `<small class="luker_orch_mode_hint">${escapeHtml(i18n(hintKey))}</small>` : ''}
         </div>`;
@@ -1470,8 +1454,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         mode: 'spec',
         targetIdKey: 'luker_orch_profile_target',
         modeIdKey: 'luker_orch_profile_mode',
-        toggleIdKey: 'luker_orch_spec_override_toggle',
-        checkboxIdKey: 'luker_orch_spec_override_enabled',
         includeViewLastRun: true,
         includeCopyRows: true,
     });
@@ -1479,8 +1461,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         mode: 'agenda',
         targetIdKey: 'luker_orch_agenda_profile_target',
         modeIdKey: 'luker_orch_agenda_profile_mode',
-        toggleIdKey: 'luker_orch_agenda_override_toggle',
-        checkboxIdKey: 'luker_orch_agenda_override_enabled',
         includeViewLastRun: true,
         includeCopyRows: true,
     });
@@ -1488,8 +1468,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         mode: 'loop',
         targetIdKey: 'luker_orch_loop_profile_target',
         modeIdKey: 'luker_orch_loop_profile_mode',
-        toggleIdKey: 'luker_orch_loop_override_toggle',
-        checkboxIdKey: 'luker_orch_loop_override_enabled',
         includeViewLastRun: true,
         includeCopyRows: false,
         hintKey: 'Loop mode runs a single agent that calls tools in a loop and finalizes when ready.',
@@ -1498,8 +1476,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         mode: 'director',
         targetIdKey: 'luker_orch_director_profile_target',
         modeIdKey: 'luker_orch_director_profile_mode',
-        toggleIdKey: 'luker_orch_director_override_toggle',
-        checkboxIdKey: 'luker_orch_director_override_enabled',
         includeViewLastRun: false,
         includeCopyRows: false,
         hintKey: 'Director mode produces the assistant message directly via a main agent that may dispatch sub-agents.',
@@ -1522,7 +1498,7 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
     const presetBarModes = ['spec', 'agenda', 'loop', 'director'];
     const presetBars = presetBarModes.map(mode => {
         const modeVisible = currentMode === mode ? '' : ' style="display:none"';
-        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}><div data-luker-preset-bar-host="${escapeHtml(mode)}">${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode, safeScope))}</div></div>`;
+        return `<div data-orch-mode="${escapeHtml(mode)}"${modeVisible}><div data-luker-preset-bar-host="${escapeHtml(mode)}">${renderPresetSelectorBar(deps, presetBarPropsFor(deps, mode))}</div></div>`;
     }).join('');
 
     // Actions bar — profile-management actions. Single mode has no

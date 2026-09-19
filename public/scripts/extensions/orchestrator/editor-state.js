@@ -35,11 +35,7 @@ import {
 import {
     applyCharacterExecutionModeForAvatar,
     getCharacterActivePresetId,
-    hasCharacterAgendaOverride,
-    hasCharacterDirectorOverride,
-    hasCharacterLoopOverride,
-    hasCharacterSpecOverride,
-    isCharacterPresetActiveOverrideEnabled,
+    getRuntimePresetScope,
     normalizeExecutionMode,
 } from './character-overrides.js';
 import {
@@ -179,7 +175,7 @@ export function loadCharacterEditorState(context, avatar) {
     const spec = toEditableSpec(specSource, presets);
     return {
         avatar: safeAvatar,
-        enabled: isCharacterPresetActiveOverrideEnabled(context, safeAvatar, ORCH_EXECUTION_MODE_SPEC),
+        enabled: Boolean(getCharacterActivePresetId(context, safeAvatar, ORCH_EXECUTION_MODE_SPEC)),
         spec,
         presets,
     };
@@ -211,7 +207,7 @@ export function loadCharacterAgendaEditorState(context, avatar) {
         : globalBase;
     return {
         avatar: safeAvatar,
-        enabled: isCharacterPresetActiveOverrideEnabled(context, safeAvatar, ORCH_EXECUTION_MODE_AGENDA),
+        enabled: Boolean(getCharacterActivePresetId(context, safeAvatar, ORCH_EXECUTION_MODE_AGENDA)),
         planner: profile.planner,
         agents: profile.agents,
         finalAgentId: profile.finalAgentId,
@@ -278,7 +274,7 @@ export function loadCharacterLoopEditorState(context, avatar) {
     return {
         ...baseProfile,
         avatar: safeAvatar,
-        enabled: isCharacterPresetActiveOverrideEnabled(context, safeAvatar, ORCH_EXECUTION_MODE_LOOP),
+        enabled: Boolean(getCharacterActivePresetId(context, safeAvatar, ORCH_EXECUTION_MODE_LOOP)),
     };
 }
 
@@ -346,9 +342,11 @@ export function loadCharacterDirectorEditorState(context, avatar) {
     const charActiveResult = getActivePreset(settings, ORCH_EXECUTION_MODE_DIRECTOR,
         { scope: 'character', context, avatar: safeAvatar });
     const charActive = (charActiveResult.ok && charActiveResult.state) ? charActiveResult.state : null;
-    const overrideEnabled = isCharacterPresetActiveOverrideEnabled(
+    // Single-scope model: "enabled" means the card's active slot holds a
+    // real preset id — the card library runs for this mode.
+    const overrideEnabled = Boolean(getCharacterActivePresetId(
         context, safeAvatar, ORCH_EXECUTION_MODE_DIRECTOR,
-    );
+    ));
     if (!charActive) {
         return {
             ...globalBase,
@@ -458,18 +456,11 @@ export function getScopePreferenceStateKey(mode = ORCH_EXECUTION_MODE_SPEC) {
 }
 
 export function getStoredDisplayedScopeForMode(context, settings, mode = ORCH_EXECUTION_MODE_SPEC) {
+    // Single-scope model: the card's active slot decides which library
+    // the editor displays — same derivation as the runtime.
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     const normalized = normalizeExecutionMode(mode);
-    if (normalized === ORCH_EXECUTION_MODE_AGENDA) {
-        return hasCharacterAgendaOverride(context, activeAvatar) ? 'character' : 'global';
-    }
-    if (normalized === ORCH_EXECUTION_MODE_LOOP) {
-        return hasCharacterLoopOverride(context, activeAvatar) ? 'character' : 'global';
-    }
-    if (normalized === ORCH_EXECUTION_MODE_DIRECTOR) {
-        return hasCharacterDirectorOverride(context, activeAvatar) ? 'character' : 'global';
-    }
-    return hasCharacterSpecOverride(context, activeAvatar) ? 'character' : 'global';
+    return getRuntimePresetScope(context, activeAvatar, normalized) === 'character' ? 'character' : 'global';
 }
 
 export function setDisplayedScopeForMode(context, settings, mode = ORCH_EXECUTION_MODE_SPEC, scope = '') {

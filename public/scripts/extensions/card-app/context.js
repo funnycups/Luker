@@ -1108,13 +1108,15 @@ export function buildContext(container, charId, config) {
             await saveScriptsByType(next, scriptType);
         },
 
-        // ==================== Orchestrator (per-character override) ====================
+        // ==================== Orchestrator (per-character preset) ====================
 
         /**
-         * Get the orchestrator override summary for the active character.
+         * Get the orchestrator preset state for the active character.
          * Returns a `{ mode, enabled }` view per active mode (or `null`
-         * when no per-character preset library exists for that mode).
-         * Always character-scoped — never reads the global
+         * when no per-character preset library exists for that mode);
+         * `enabled` reports whether the card's active slot is non-empty
+         * (single-scope model — a non-empty slot means the card's preset
+         * runs). Always character-scoped — never reads the global
          * `extension_settings.orchestrator`. The full per-mode preset
          * payload is read separately through the preset-library
          * accessors.
@@ -1127,25 +1129,33 @@ export function buildContext(container, charId, config) {
             const avatar = String(charData?.avatar || '').trim();
             if (!avatar) return null;
             const orch = requireExtensionApi('orchestrator');
-            return orch.getCharacterOverrideByAvatar(lukerCtx, avatar);
+            const savedMode = orch.getCharacterSavedExecutionModeByAvatar
+                ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
+                : '';
+            if (!savedMode) return null;
+            return {
+                mode: savedMode,
+                enabled: orch.getRuntimePresetScope(lukerCtx, avatar, savedMode) === 'character',
+            };
         },
 
         /**
-         * Toggle the per-character orchestrator override enabled flag for
-         * the saved execution mode (`overrideEnabled[mode]`). The card's
-         * preset library is preserved either way; only the flag flips.
-         * Always character-scoped.
+         * Switch which preset runs for the saved execution mode.
+         * Single-scope model: pass the card preset id to activate, or
+         * `''` to fall back to the global active preset (the card's
+         * preset library is preserved either way). Always
+         * character-scoped.
          *
-         * The override mode must already have a preset library on the
-         * card (otherwise there is nothing to enable / disable). Use the
+         * The mode must already have a preset library on the card
+         * (otherwise there is nothing to switch between). Use the
          * orchestrator editor to populate it first.
          *
-         * @param {{enabled:boolean}} options
+         * @param {{presetId:string}} options card preset id, or '' for global
          * @returns {Promise<boolean>} true on success
          */
         async setOrchestratorOverride(options) {
-            if (!options || typeof options !== 'object' || typeof options.enabled !== 'boolean') {
-                throw new Error('[CardApp] setOrchestratorOverride requires { enabled: boolean }');
+            if (!options || typeof options !== 'object' || typeof options.presetId !== 'string') {
+                throw new Error('[CardApp] setOrchestratorOverride requires { presetId: string }');
             }
             const lukerCtx = getContext();
             const charData = characters[__ctx.characterId];
@@ -1158,16 +1168,17 @@ export function buildContext(container, charId, config) {
                 ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
                 : '';
             if (!savedMode) return false;
-            const setter = ({
-                spec: orch.setCharacterSpecOverrideEnabled,
-                agenda: orch.setCharacterAgendaOverrideEnabled,
-                loop: orch.setCharacterLoopOverrideEnabled,
-                director: orch.setCharacterDirectorOverrideEnabled,
-            })[savedMode];
-            if (typeof setter !== 'function') return false;
-            const ok = await setter(lukerCtx, avatar, options.enabled);
+            if (options.presetId !== '') {
+                const library = orch.getCharacterPresetLibrary(lukerCtx, avatar, savedMode);
+                if (!library[options.presetId]) return false;
+            }
+            const orchSettings = extension_settings?.orchestrator;
+            const ok = orch.setActivePresetId(orchSettings, savedMode, 'character', options.presetId, {
+                context: lukerCtx,
+                avatar,
+            });
             if (ok) {
-                orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+                orch.applyCharacterExecutionModeForAvatar(lukerCtx, orchSettings, avatar);
             }
             return ok;
         },

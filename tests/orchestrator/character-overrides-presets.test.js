@@ -73,13 +73,90 @@ jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
 }));
 
 let overrides;
+let presetLibrary;
 beforeAll(async () => {
     overrides = await import('../../public/scripts/extensions/orchestrator/character-overrides.js');
+    presetLibrary = await import('../../public/scripts/extensions/orchestrator/preset-library.js');
 });
 
 function makeCtx(avatar, ext) {
     return { characters: [{ avatar, data: { extensions: { orchestrator: ext || {} } } }] };
 }
+
+describe('character-overrides — single-scope runtime derivation', () => {
+    test('card with populated active slot reads as character runtime scope', () => {
+        const ctx = makeCtx('alice.png', {
+            presetLibraries: { loop: { id1: { name: 'A' } } },
+            activePresetIds: { loop: 'id1' },
+        });
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('character');
+        expect(overrides.getCharacterActivePresetId(ctx, 'alice.png', 'loop')).toBe('id1');
+    });
+
+    test('card with empty active slot reads as global even when library is populated', () => {
+        // Single-scope model: the user picked a global preset for this
+        // card. The library stays on the card, but the empty slot means
+        // the global active preset runs.
+        const ctx = makeCtx('alice.png', {
+            presetLibraries: { loop: { id1: { name: 'A' } } },
+            activePresetIds: { loop: '' },
+        });
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('global');
+        expect(overrides.getCharacterActivePresetId(ctx, 'alice.png', 'loop')).toBe('');
+    });
+
+    test('missing activePresetIds container reads as global', () => {
+        const ctx = makeCtx('alice.png', {
+            presetLibraries: { loop: { id1: { name: 'A' } } },
+        });
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('global');
+    });
+
+    test('no avatar always reads as global', () => {
+        const ctx = makeCtx('alice.png', {
+            presetLibraries: { loop: { id1: { name: 'A' } } },
+            activePresetIds: { loop: 'id1' },
+        });
+        expect(overrides.getRuntimePresetScope(ctx, '', 'loop')).toBe('global');
+    });
+});
+
+describe('character-overrides — overrideEnabled flag migration', () => {
+    test('enabled true keeps/fills card active id, false clears, flag removed', () => {
+        const ctx = makeCtx('alice.png', {
+            presetLibraries: {
+                spec: { p1: { name: 'P1', spec: { stages: [] } } },
+                loop: { l1: { name: 'L1' } },
+            },
+            activePresetIds: { spec: 'p1', loop: '' },
+            overrideEnabled: { spec: true, loop: false },
+        });
+        expect(overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png')).toBe(true);
+        const ext = ctx.characters[0].data.extensions.orchestrator;
+        expect(ext.activePresetIds.spec).toBe('p1');
+        expect(ext.activePresetIds.loop).toBe('');
+        expect(ext.overrideEnabled).toBeUndefined();
+    });
+
+    test('enabled true with empty slot fills the first library key', () => {
+        const ctx = makeCtx('alice.png', {
+            presetLibraries: { agenda: { a1: { name: 'A1' } } },
+            activePresetIds: { agenda: '' },
+            overrideEnabled: { agenda: true },
+        });
+        overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png');
+        expect(ctx.characters[0].data.extensions.orchestrator.activePresetIds.agenda).toBe('a1');
+    });
+
+    test('no-op when no flag field present', () => {
+        const ctx = makeCtx('alice.png', {
+            presetLibraries: { spec: { p1: { name: 'P1', spec: { stages: [] } } } },
+            activePresetIds: { spec: 'p1' },
+        });
+        expect(overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png')).toBe(false);
+        expect(ctx.characters[0].data.extensions.orchestrator.activePresetIds.spec).toBe('p1');
+    });
+});
 
 describe('character-overrides — preset library reads', () => {
     test('presetLibraries.loop is exposed as-is', () => {
@@ -98,22 +175,27 @@ describe('character-overrides — preset library reads', () => {
         expect(overrides.getCharacterActivePresetId(ctx, 'alice.png', 'loop')).toBe('');
     });
 
-    test('isCharacterPresetActiveOverrideEnabled requires both library entry and overrideEnabled flag', () => {
+    test('overrideEnabled.loop=true migrates to a filled slot (card runs)', () => {
+        // Superseded by the single-scope model: the runtime decision is
+        // now `getRuntimePresetScope` (active slot non-empty). The legacy
+        // flag is consumed once by `migrateCardOverrideEnabledFlags`.
         const ctx = makeCtx('alice.png', {
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
             overrideEnabled: { loop: true },
         });
-        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(true);
+        overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png');
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('character');
     });
 
-    test('overrideEnabled.loop=false disables override even when library is populated', () => {
+    test('overrideEnabled.loop=false migrates to an empty slot (global runs)', () => {
         const ctx = makeCtx('alice.png', {
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
             overrideEnabled: { loop: false },
         });
-        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
+        overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png');
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('global');
     });
 
     test('missing overrideEnabled container reads as disabled', () => {
@@ -121,30 +203,30 @@ describe('character-overrides — preset library reads', () => {
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
         });
-        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('character');
     });
 
-    test('freshly imported legacy card with only override.<mode>.enabled is recognized as enabled', () => {
+    test('freshly imported legacy card with only override.<mode>.enabled migrates to a filled slot', () => {
         // Regression: imports through /api/characters/import write the
         // card's `data.extensions.orchestrator` blob verbatim, no
         // migration. A legacy card whose loop override was authored under
         // the pre-preset-library shape has the on/off flag at
-        // `override.loop.enabled`, not the new `overrideEnabled.loop`
-        // container. Without this probe falling back, the runtime path
-        // (main.js:getEffectiveProfile) silently discards the override
-        // and runs the global profile.
+        // `override.loop.enabled`. The legacy payload migration seeds the
+        // library + active id; after the flag migration the slot is
+        // filled, so the runtime scope is character.
         const ctx = makeCtx('alice.png', {
             override: { mode: 'loop', loop: { enabled: true, system_prompt: 'LEGACY' } },
         });
-        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(true);
+        // Legacy payload migration (existing) seeds library + active id.
+        presetLibrary.migrateAndPersistLegacyCardOverrideForMode(ctx, 'alice.png', 'loop');
+        // Flag migration consumes overrideEnabled (seeded by the legacy
+        // migration) and settles the slot.
+        overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png');
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('character');
+        expect(overrides.getCharacterActivePresetId(ctx, 'alice.png', 'loop')).not.toBe('');
     });
 
-    test('legacy spec card uses top-level override.enabled as the fallback flag', () => {
-        // Spec mode never had a per-mode sub-payload in the legacy shape
-        // — its enable flag lived at `override.enabled` (alongside
-        // `override.spec`, `override.presets`). Same regression as the
-        // loop case above: import drops the user's "spec override is on"
-        // intent unless the probe reads the legacy flag.
+    test('legacy spec card with top-level override.enabled=true migrates to a filled slot', () => {
         const ctx = makeCtx('alice.png', {
             override: {
                 mode: 'spec',
@@ -153,20 +235,23 @@ describe('character-overrides — preset library reads', () => {
                 presets: { p1: { systemPrompt: 'KEEP' } },
             },
         });
-        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'spec')).toBe(true);
+        presetLibrary.migrateAndPersistLegacyCardOverrideForMode(ctx, 'alice.png', 'spec');
+        overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png');
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'spec')).toBe('character');
     });
 
-    test('legacy override.<mode>.enabled=false on import stays disabled', () => {
-        // The fallback must read the legacy flag literally — a card whose
-        // creator turned the override off must NOT flip on just because
-        // the payload exists.
+    test('legacy override.<mode>.enabled=false on import migrates to an empty slot', () => {
+        // The legacy flag must be read literally — a card whose creator
+        // turned the override off must NOT flip on after migration.
         const ctx = makeCtx('alice.png', {
             override: { mode: 'loop', loop: { enabled: false, system_prompt: 'LEGACY' } },
         });
-        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
+        presetLibrary.migrateAndPersistLegacyCardOverrideForMode(ctx, 'alice.png', 'loop');
+        overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png');
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('global');
     });
 
-    test('new-shape overrideEnabled.<mode> takes precedence over the legacy flag', () => {
+    test('new-shape overrideEnabled.<mode> wins over the legacy flag during migration', () => {
         // If both the new flag and a stale legacy flag are present
         // (mid-migration card), the explicit new value wins. Otherwise
         // the user's flick-the-toggle-off action from after the migration
@@ -177,6 +262,7 @@ describe('character-overrides — preset library reads', () => {
             presetLibraries: { loop: { id1: { name: 'A' } } },
             activePresetIds: { loop: 'id1' },
         });
-        expect(overrides.isCharacterPresetActiveOverrideEnabled(ctx, 'alice.png', 'loop')).toBe(false);
+        overrides.migrateCardOverrideEnabledFlags(ctx, 'alice.png');
+        expect(overrides.getRuntimePresetScope(ctx, 'alice.png', 'loop')).toBe('global');
     });
 });

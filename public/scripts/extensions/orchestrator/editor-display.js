@@ -38,11 +38,11 @@ import {
 export function getDisplayedScopeForMode(context, settings, mode = ORCH_EXECUTION_MODE_SPEC) {
     const key = getScopePreferenceStateKey(mode);
     const preferredScope = String(uiState[key] || '');
+    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     const storedScope = getStoredDisplayedScopeForMode(context, settings, mode);
     if (storedScope === 'character') {
         return 'character';
     }
-    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
     if (preferredScope === 'character' && activeAvatar) {
         return 'character';
     }
@@ -108,28 +108,24 @@ export function getCopyScopeFromElement(element, context) {
     return String(getCurrentAvatar(context) || '').trim() ? 'character' : 'global';
 }
 
-export function getDisplayedScopeLabel(isCharacterScope, hasPersistedOverride, isEnabled) {
+export function getDisplayedScopeLabel(isCharacterScope, hasPersistedOverride) {
     if (!isCharacterScope) {
         return i18n('Global profile (no character override for current card)');
     }
     if (!hasPersistedOverride) {
         return i18n('Character draft (not saved yet)');
     }
-    return isEnabled
-        ? i18n('Character override (enabled)')
-        : i18n('Character override (configured, currently disabled)');
+    return i18n('Character override (enabled)');
 }
 
-export function getPopupEditingLabel(isCharacterScope, hasPersistedOverride, isEnabled) {
+export function getPopupEditingLabel(isCharacterScope, hasPersistedOverride) {
     if (!isCharacterScope) {
         return i18n('Global profile');
     }
     if (!hasPersistedOverride) {
         return i18n('Character draft (not saved yet)');
     }
-    return isEnabled
-        ? i18n('Current character override')
-        : i18n('Character override (configured, currently disabled)');
+    return i18n('Current character override');
 }
 
 export function getProfileTitleForScope(context, activeAvatar, isCharacterScope, hasPersistedOverride) {

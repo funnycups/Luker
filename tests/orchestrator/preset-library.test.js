@@ -455,3 +455,32 @@ describe('preset-library — migration persistence hook', () => {
         expect(calls).toEqual([]);
     });
 });
+
+describe('preset-library — single-scope model (slot empty = global)', () => {
+    function makeCardContext(avatar, extPayload) {
+        return {
+            characters: [{
+                avatar,
+                data: { extensions: { orchestrator: extPayload || {} } },
+            }],
+        };
+    }
+
+    test('setActivePresetId character empty string clears the slot and keeps the library', () => {
+        const settings = freshSettings();
+        const ctx = makeCardContext('alice.png', {
+            presetLibraries: { spec: {}, agenda: {}, loop: {}, director: {} },
+            activePresetIds: { spec: '', agenda: '', loop: '', director: '' },
+        });
+        const id = lib.createPreset(settings, 'spec', 'character',
+            { name: 'CardPreset' }, { context: ctx, avatar: 'alice.png' });
+        lib.setActivePresetId(settings, 'spec', 'character', id, { context: ctx, avatar: 'alice.png' });
+        expect(lib.setActivePresetId(settings, 'spec', 'character', '', { context: ctx, avatar: 'alice.png' })).toBe(true);
+        const ext = ctx.characters[0].data.extensions.orchestrator;
+        expect(ext.activePresetIds.spec).toBe('');
+        // Library preserved so the user can switch back without rebuilding.
+        expect(Object.keys(ext.presetLibraries.spec)).toContain(id);
+        // Global scope empty-string is still rejected (never a valid write).
+        expect(lib.setActivePresetId(settings, 'spec', 'global', '')).toBe(false);
+    });
+});

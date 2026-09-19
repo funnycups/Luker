@@ -30,16 +30,16 @@ Edits made in the panel write back to the **active** preset. There is no implici
 
 ## Global vs character-card scope
 
-The scope selector toggles which library the bar is showing.
+With no character loaded, the preset bar shows the global library for the current mode. Edits here affect every chat that doesn't run its own card preset.
 
-When **Scope = Global** is selected, the preset bar shows the global library for the current mode. Edits here affect every chat that doesn't have its own card override.
+When a character is loaded, the dropdown splits into two groups — **Character** and **Global** — and one of them is selected. That selection is the whole decision:
 
-When **Scope = Character** is selected (a character must be loaded), the bar switches to the card's own library. The `Use character override` toggle decides whether the card's active preset overrides the global active at runtime:
+- **Character preset selected** — the card's preset takes effect for this character; the global active is ignored for this chat.
+- **Global preset selected** — the global active preset runs for this chat. The card's own library stays on the card untouched, so you can switch back to any of its presets from the same dropdown at any time.
 
-- **Override off** — the card's library still exists and is editable, but the global active preset wins. Useful for drafting a card-specific preset without committing to it yet.
-- **Override on** — the card's active preset takes effect for this character; the global active is ignored for this chat.
+Switching groups writes the card's active slot immediately and persists with the card, so the choice travels with the card on export/import.
 
-If the card has no preset library of its own yet, the bar shows a single `Default` entry seeded from the global active. Editing it creates the card library transparently — no separate "initialize card library" step.
+If the card has no preset library of its own yet, the Character group is empty. Saving an edit while a card preset is selected creates the card library transparently — no separate "initialize card library" step.
 
 ::: info Cards ship their library on export
 Exporting a character card includes the card's preset library, so importing the card on another machine brings its presets with it. Other people who load the card pick up a complete, runnable orchestration setup without any extra files to import.
@@ -98,7 +98,7 @@ A few common workflows the preset bar enables:
 - **Two presets for one card** — a fast-and-cheap preset for casual scenes and a slower, denser preset for set-piece moments. Save both under the card scope, flip between them from the dropdown.
 - **Promote a card preset to global** — export the card's active preset, switch the bar to global scope, import the JSON. The global library now has the same preset available to every chat.
 - **Try a preset without committing** — duplicate the active preset, edit the duplicate, and roll back by selecting the original from the dropdown if the experiment doesn't pan out.
-- **Hand off a tuned orchestration with the card** — finish iterating on the card scope, leave `Use character override` on, and export the card. The recipient gets the orchestration shape you tuned without any side configuration.
+- **Hand off a tuned orchestration with the card** — finish iterating on the card scope, make sure the card's preset is the selected one in the dropdown, and export the card. The recipient gets the orchestration shape you tuned without any side configuration.
 
 ## Related
 

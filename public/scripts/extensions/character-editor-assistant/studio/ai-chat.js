@@ -449,7 +449,7 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.ORCHESTRATOR_GET_OVERRIDE,
- description: 'Read the orchestrator override summary for the active character card. Always character-scoped — never reads global orchestrator settings. Returns `{ mode, enabled }` for the saved execution mode (or null when no per-character preset library exists for that mode). The full per-mode preset payload (spec / agenda / loop / director) is stored in `presetLibraries.<mode>` on the card and is managed through the orchestrator iteration studio rather than this tool.',
+ description: 'Read the orchestrator preset state for the active character card. Always character-scoped — never reads global orchestrator settings. Returns `{ mode, enabled, activePresetId }` for the saved execution mode (or null when the card has no per-character preset library for that mode). `enabled` is true when the card\'s active slot points at a real preset (the card library runs); false means the global active preset runs. The full per-mode preset payload is stored in `presetLibraries.<mode>` on the card and is managed through the orchestrator iteration studio rather than this tool.',
  parameters: { type: 'object', properties: {}, additionalProperties: false },
  },
  },
@@ -457,13 +457,13 @@ function buildTools() {
  type: 'function',
  function: {
  name: TOOL_NAMES.ORCHESTRATOR_SET_OVERRIDE,
- description: 'Toggle the per-character orchestrator override enabled flag for the saved execution mode (overrideEnabled[mode]). The card\'s preset library is preserved either way; only the flag flips. Always character-scoped — global orchestrator settings are never touched. The card must already have a preset library for the saved mode (otherwise there is nothing to enable / disable); populate it through the orchestrator iteration studio first.',
+ description: 'Switch which preset the active character card runs for its saved execution mode. Always character-scoped — global orchestrator settings are never touched. The card must already have a preset library for the saved mode (otherwise there is nothing to switch); populate it through the orchestrator iteration studio first.',
  parameters: {
  type: 'object',
  properties: {
- enabled: { type: 'boolean', description: 'true → apply the card\'s preset library; false → fall back to the global profile while preserving the library for re-enabling later.' },
+ presetId: { type: 'string', description: 'The card preset id to activate, or an empty string to fall back to the global active preset (the card library is preserved either way).' },
  },
- required: ['enabled'],
+ required: ['presetId'],
  additionalProperties: false,
  },
  },
@@ -1251,7 +1251,7 @@ async function executeTool(charId, toolName, args, options = {}) {
  await saveScriptsByType(next, scriptType);
  return { ok: true, message: `Regex script "${idStr}" deleted from ${scope} scope.` };
  }
- // ==================== Orchestrator (per-character override) ====================
+ // ==================== Orchestrator (per-character preset) ====================
  case TOOL_NAMES.ORCHESTRATOR_GET_OVERRIDE: {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
@@ -1262,15 +1262,25 @@ async function executeTool(charId, toolName, args, options = {}) {
  const charData = characters[__ctx.characterId];
  const avatar = String(charData?.avatar || '').trim();
  if (!avatar) return { ok: false, error: 'Character has no avatar' };
- const override = orch.getCharacterOverrideByAvatar(lukerCtx, avatar);
- return { ok: true, override: override || null };
+ const savedMode = orch.getCharacterSavedExecutionModeByAvatar
+ ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
+ : '';
+ if (!savedMode) return { ok: true, override: null };
+ return {
+ ok: true,
+ override: {
+ mode: savedMode,
+ enabled: orch.getRuntimePresetScope(lukerCtx, avatar, savedMode) === 'character',
+ activePresetId: orch.getCharacterActivePresetId(lukerCtx, avatar, savedMode),
+ },
+ };
  }
  case TOOL_NAMES.ORCHESTRATOR_SET_OVERRIDE: {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
  return { ok: false, error: 'No active character' };
  }
- if (typeof args?.enabled !== 'boolean') {
- return { ok: false, error: 'enabled must be a boolean' };
+ if (typeof args?.presetId !== 'string') {
+ return { ok: false, error: 'presetId must be a string — the card preset id to activate, or an empty string to fall back to the global active preset' };
  }
  const orch = __ctx.getExtensionApi('orchestrator');
  if (!orch) return { ok: false, error: 'orchestrator extension is not loaded' };
@@ -1282,24 +1292,27 @@ async function executeTool(charId, toolName, args, options = {}) {
  ? orch.getCharacterSavedExecutionModeByAvatar(lukerCtx, avatar)
  : '';
  if (!savedMode) {
- return { ok: false, error: 'Character has no orchestrator preset library to enable. Populate one through the orchestrator iteration studio first.' };
+ return { ok: false, error: 'Character has no orchestrator preset library to switch. Populate one through the orchestrator iteration studio first.' };
  }
- const setter = ({
- spec: orch.setCharacterSpecOverrideEnabled,
- agenda: orch.setCharacterAgendaOverrideEnabled,
- loop: orch.setCharacterLoopOverrideEnabled,
- director: orch.setCharacterDirectorOverrideEnabled,
- })[savedMode];
- if (typeof setter !== 'function') {
- return { ok: false, error: `No enable-toggle setter for mode "${savedMode}"` };
+ if (args.presetId !== '') {
+ const library = orch.getCharacterPresetLibrary(lukerCtx, avatar, savedMode);
+ if (!library[args.presetId]) {
+ return { ok: false, error: `Preset id "${args.presetId}" not found in the card's ${savedMode} library` };
  }
- const ok = await setter(lukerCtx, avatar, args.enabled);
+ }
+ const orchSettings = extension_settings?.orchestrator;
+ const ok = orch.setActivePresetId(orchSettings, savedMode, 'character', args.presetId, {
+ context: lukerCtx,
+ avatar,
+ });
  if (ok) {
- orch.applyCharacterExecutionModeForAvatar(lukerCtx, extension_settings?.orchestrator, avatar);
+ orch.applyCharacterExecutionModeForAvatar(lukerCtx, orchSettings, avatar);
  }
  return ok
- ? { ok: true, message: `Orchestrator override ${args.enabled ? 'enabled' : 'disabled'} for mode "${savedMode}".`, mode: savedMode, enabled: args.enabled }
- : { ok: false, error: 'Failed to toggle orchestrator override flag' };
+ ? { ok: true, message: args.presetId === ''
+ ? `Card now runs the global active preset for mode "${savedMode}".`
+ : `Card preset "${args.presetId}" activated for mode "${savedMode}".`, mode: savedMode, presetId: args.presetId }
+ : { ok: false, error: 'Failed to switch the card active preset' };
  }
  case TOOL_NAMES.ORCHESTRATOR_CLEAR_OVERRIDE: {
  if (__ctx.characterId === undefined || __ctx.characterId === null) {
@@ -1631,7 +1644,7 @@ These are the same edits the Studio \`worldinfo_*\` tools perform, exposed on ct
 ### Authoring surfaces (rarely needed at runtime)
 Same operations as the Studio tools (\`regex_*\`, \`character_*_orchestrator\`, \`character_*_memory_graph\`); use these only if the CardApp itself needs to flip authoring state at runtime.
 - ctx.getRegexScripts(scope?) / createRegexScript(fields) async / updateRegexScript(id, patch) async / deleteRegexScript(id) async
-- ctx.getOrchestratorOverride() / setOrchestratorOverride(override) async / clearOrchestratorOverride() async
+- ctx.getOrchestratorOverride() / setOrchestratorOverride({ presetId }) async / clearOrchestratorOverride() async
 - ctx.getMemoryGraphSchema() / setMemoryGraphSchema(schema) async / setMemoryGraphAdvanced(advanced) async
 
 ### Utilities
@@ -1744,7 +1757,9 @@ exact slash command name, argument shape, or lukerContext property:
 - **character_update_fields({fields: { world: "..." }})** — Bind / change the
   character's primary world book. Pass \`""\` to unbind.
 - **character_get_orchestrator / character_update_orchestrator / character_clear_orchestrator**
-  — Read, replace, or remove the per-character orchestrator override.
+  — Read the card's orchestrator preset state, switch which card preset
+  runs (or fall back to the global active preset), or remove the card's
+  preset libraries entirely.
   Always character-scoped — never touches global orchestrator settings.
 - **character_get_memory_graph / character_update_memory_graph_schema / character_update_memory_graph_advanced**
   — Read the effective memory-graph config, replace the node-type schema
@@ -2158,9 +2173,9 @@ Op-log handles flat scalars. For deeply nested state (quest journal with sub-obj
 
 Two more layers can be tailored *per character card* — both are **always character-scoped writes** through the dedicated tools below; they never touch the user's global orchestrator/memory-graph settings.
 
-### Orchestrator override
+### Orchestrator presets
 
-**What the orchestrator actually does — read this before designing an override.** The orchestrator does **not** replace the main reply generation. Before each user turn, it runs a separate planning pipeline whose only output is a single block of text called the **capsule** (剧情指引 — orchestration guidance). The capsule is then injected as a system-role message into the main reply LLM's prompt at a configured position (\`atDepth\`, \`before\`, \`after\`); the main LLM still does straight-line generation and writes everything the user reads. Stage agents / planner agents / sub-agents inside the orchestrator do **not** write dialogue, do **not** speak in character, and do **not** produce the user-facing reply — their job is to assemble the guidance text. Only the **last stage's** output forms the capsule body; intermediate stage outputs flow as inputs to downstream stages but never reach the prompt directly.
+**What the orchestrator actually does — read this before designing a preset.** The orchestrator does **not** replace the main reply generation. Before each user turn, it runs a separate planning pipeline whose only output is a single block of text called the **capsule** (剧情指引 — orchestration guidance). The capsule is then injected as a system-role message into the main reply LLM's prompt at a configured position (\`atDepth\`, \`before\`, \`after\`); the main LLM still does straight-line generation and writes everything the user reads. Stage agents / planner agents / sub-agents inside the orchestrator do **not** write dialogue, do **not** speak in character, and do **not** produce the user-facing reply — their job is to assemble the guidance text. Only the **last stage's** output forms the capsule body; intermediate stage outputs flow as inputs to downstream stages but never reach the prompt directly.
 
 So when a user says "I want a separate writer agent" or "I want this agent to actually write the reply", that's not what the orchestrator gives them — they're describing a different system. With the orchestrator, every "writer/critic/planner" name is a guidance-author, not a reply-author.
 
@@ -2172,38 +2187,11 @@ Mode picker:
 
 Storage and tools (all character-scoped, never global):
 
-- \`character_get_orchestrator\` → reads \`character.data.extensions.orchestrator.override\` for the active card. Returns \`null\` if no override is set (card runs whatever global orchestrator config the user has).
-- \`character_update_orchestrator({override})\` → replaces the override. The override object must include a \`mode\` ('spec' | 'agenda' | 'loop') and the corresponding sub-payload (\`spec\`, \`agenda\`, or \`loop\`). Mode is auto-pinned by content if you leave it implicit. Sanitizers fill in missing fields with defaults — pass a minimal skeleton and let the runtime normalize the rest.
-- \`character_clear_orchestrator\` → removes the override; the card falls back to the user's global orchestrator config.
+- \`character_get_orchestrator\` → reads the card's orchestrator preset state (\`character.data.extensions.orchestrator\`). Returns \`{ mode, enabled, activePresetId }\` for the card's saved mode — \`enabled\` is true when the card's active slot is non-empty (the card's preset runs; a slot emptied by the user means the card runs the global active preset). Returns \`null\` when the card has no preset library.
+- \`character_update_orchestrator({presetId})\` → switches which preset runs for the card's saved mode. Pass the card preset id to activate, or \`''\` (empty string) to fall back to the global active preset — the card's preset library is preserved either way. Mode follows the card's saved mode pin; you cannot switch modes here.
+- \`character_clear_orchestrator\` → removes the card's preset libraries entirely; the card falls back to the user's global orchestrator config.
 
-Minimal skeletons (fields not listed are filled by the sanitizer with sensible defaults; check current shape with \`character_get_orchestrator\` before overwriting):
-
-\`\`\`js
-// loop — the simplest override
-{ mode: 'loop', loop: { system_prompt: '<your "剧情指引员" instructions>' } }
-
-// agenda — planner + agents (default agent set kept; just override what you need)
-{ mode: 'agenda', agenda: {
-    planner: { systemPrompt: '...', userPromptTemplate: '...' },
-    // agents: { distiller: {...}, planner: {...}, finalizer: {...}, ... }   // optional overrides
-    finalAgentId: 'finalizer',  // which agent's output becomes the capsule body
-} }
-
-// spec — DAG of stages
-{ mode: 'spec', spec: { stages: [
-    { id: 'distill',  mode: 'serial',   nodes: ['distiller'] },
-    { id: 'reason',   mode: 'parallel', nodes: ['planner', 'lorebook_reader'] },
-    { id: 'finalize', mode: 'serial',   nodes: ['synthesizer'] },  // last stage → capsule
-] } }
-\`\`\`
-
-Capsule injection knobs (optional, common to all modes; loop mode reads them from \`loop.capsule_inject\`, the global orchestrator settings hold the spec/agenda equivalents):
-
-- \`position\` — \`'atDepth'\` (default), \`'before'\` (before all chat), \`'after'\` (after chat / before reply). Same semantics as world-info \`position\`.
-- \`depth\` — when \`position: 'atDepth'\`, how many messages back from the tail. Default \`0\` (right before the latest message).
-- \`role\` — \`'system'\` (default), \`'user'\`, or \`'assistant'\`. The role label the capsule arrives under.
-
-Before writing a non-trivial override, fetch the existing one (it might already be set), and consult orchestrator docs via \`list_luker_docs({filter: "orchestrator"})\` and \`read_luker_doc(...)\` to confirm the schema for the mode you're targeting. Don't invent fields — the orchestrator validates on load.
+Before switching presets, fetch the current state with \`character_get_orchestrator\` (it reports the saved mode and active preset id), and consult orchestrator docs via \`list_luker_docs({filter: "orchestrator"})\` and \`read_luker_doc(...)\` to understand the preset model. Don't invent preset ids — list the card's library through the orchestrator editor surface first.
 
 ### Memory-graph schema
 

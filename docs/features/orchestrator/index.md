@@ -23,7 +23,7 @@ You don't pick a mode first. You don't write a workflow first. The default Spec 
 
 Open the Extensions drawer (top bar) and find the **Multi-Agent Orchestration** section. Toggle **Enable** on.
 
-![Orchestrator toggle and presets](/images/orchestrator/orch-toggle.png)
+![Orchestrator enable toggle](/images/orchestrator/orch-toggle.png)
 
 ### Step 2 — Pick a model for the agents {#step-2}
 
@@ -119,11 +119,11 @@ Orchestration configurations can be bound to a character card. When bound:
 - Card creators can ship a workflow that's tuned for their character.
 - Switching to the card auto-applies its workflow.
 - The card can specify its own execution mode (all four modes are supported).
-- Card override can be enabled/disabled independently of the global config.
-- "Clear character override" reverts to the global configuration.
+- Selecting a preset in the card's dropdown switches that chat to it immediately; the card library is preserved either way.
+- "Clear presets from this card" reverts to the global configuration.
 - You can layer personal tweaks on top of a card-bound configuration.
 
-All four modes now support card overrides.
+All four modes now support card presets.
 
 ### Import / Export
 

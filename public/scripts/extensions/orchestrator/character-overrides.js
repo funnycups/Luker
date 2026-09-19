@@ -1,36 +1,33 @@
 /**
- * Per-character override accessors for the orchestrator.
+ * Per-character preset state accessors for the orchestrator.
  *
  * Characters override the global orchestration spec / agenda / loop / director
  * profile by storing their own per-mode preset libraries under
  * `character.data.extensions.orchestrator.presetLibraries.<mode>` (with the
- * active id in `activePresetIds.<mode>`). A boolean flag per mode in
- * `overrideEnabled.<mode>` decides whether the card's library is actually
- * applied or the global profile wins. A small `override` envelope persists
- * the saved execution mode for the card (`override.mode`).
+ * active id in `activePresetIds.<mode>`). Under the single-scope model the
+ * active slot alone decides what runs: a non-empty slot pointing at a real
+ * library entry means the card library is applied; an empty slot (or a
+ * missing container) means the global active preset wins. A small
+ * `override` envelope persists the saved execution mode for the card
+ * (`override.mode`).
  *
  * Three layers of helpers live here:
  *
  *   1. Character lookup — `getCharacterByAvatar`, `getCharacterIndexByAvatar`,
  *      `getCharacterDisplayName`, `getCharacterDisplayNameByAvatar`.
- *   2. Override read accessors — `getCharacterExtensionDataByAvatar`,
- *      `getCharacterOverrideByAvatar`, `getCharacterAgendaOverrideByAvatar`,
- *      `getCharacterLoopOverrideByAvatar`, `getCharacterDirectorOverrideByAvatar`,
+ *   2. Preset state reads — `getCharacterExtensionDataByAvatar`,
+ *      `getCharacterActivePresetId`, `getRuntimePresetScope`,
  *      `hasCharacterSpecOverride`, `hasCharacterAgendaOverride`,
  *      `hasCharacterLoopOverride`, `hasCharacterDirectorOverride`,
  *      `hasCharacterOverride`, `hasCharacterSpecPresetLibrary`,
  *      `hasCharacterAgendaPresetLibrary`, `hasCharacterLoopPresetLibrary`,
  *      `hasCharacterDirectorPresetLibrary`, `getCharacterCardSnapshot`.
- *      The four per-mode `getCharacter*OverrideByAvatar` accessors return
- *      a lightweight `{ mode, enabled }` view stitched together from the
- *      `overrideEnabled[mode]` flag — they exist for UI render paths that
- *      only need the enabled bit, not the full preset payload. The two
- *      predicate families are NOT interchangeable: `has*Override` means
- *      "actively applied right now" (library + toggle on), while
- *      `has*PresetLibrary` means "library saved on card regardless of
- *      toggle" and is only for UI plumbing that must keep working while
- *      the toggle is off (the toggle itself, the "configured, currently
- *      disabled" label branch, the profile-title renderer).
+ *      The two predicate families are NOT interchangeable: `has*Override`
+ *      means "the card library runs for this mode right now" (active slot
+ *      non-empty), while `has*PresetLibrary` means "a library is saved on
+ *      the card regardless of which preset is active" and is only for UI
+ *      plumbing (library visibility, profile-title rendering, the saved
+ *      execution-mode pin walk).
  *   3. Execution-mode resolution — `normalizeExecutionMode`,
  *      `getExecutionMode`, `getCharacterSavedExecutionModeByAvatar`,
  *      `applyCharacterExecutionModeForAvatar`. The card pins the saved
@@ -104,40 +101,6 @@ export function getCharacterExtensionDataByAvatar(context, avatar) {
     return payload && typeof payload === 'object' ? payload : {};
 }
 
-function readOverrideEnabledFlag(ext, mode) {
-    const flags = ext?.overrideEnabled;
-    if (!flags || typeof flags !== 'object') return false;
-    return Boolean(flags[mode]);
-}
-
-/**
- * Light `{ mode, enabled }` view of a card's override for one mode. UI
- * render paths only need the enabled bit; the full preset payload is
- * read separately through the preset-library accessors. Returns null
- * when the card has no library for this mode.
- */
-function makeOverrideView(context, avatar, mode) {
-    if (!cardHasPresetLibraryForMode(context, avatar, mode)) return null;
-    const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
-    return { mode, enabled: readOverrideEnabledFlag(ext, mode) };
-}
-
-export function getCharacterOverrideByAvatar(context, avatar) {
-    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_SPEC);
-}
-
-export function getCharacterAgendaOverrideByAvatar(context, avatar) {
-    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
-}
-
-export function getCharacterLoopOverrideByAvatar(context, avatar) {
-    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_LOOP);
-}
-
-export function getCharacterDirectorOverrideByAvatar(context, avatar) {
-    return makeOverrideView(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
-}
-
 export function getCharacterSavedExecutionModeByAvatar(context, avatar) {
     const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
     const pinned = normalizeExecutionMode(ext?.override?.mode);
@@ -169,23 +132,21 @@ function cardHasPresetLibraryForMode(context, avatar, mode) {
 }
 
 /**
- * Two override predicates per mode:
+ * Two per-mode predicates:
  *
- *   `hasCharacter<Mode>Override`         — "the card's override is
- *       actively taking effect right now". True iff the library exists
- *       AND the per-mode `overrideEnabled` flag is on. This is the
- *       predicate for anything that decides which profile/scope to use
- *       (displayed scope, runtime skill filter, iter-studio's exposed
- *       reset tool, etc.) — the toggle-off state must be indistinguishable
- *       from "no override at all".
+ *   `hasCharacter<Mode>Override`         — "the card's preset is
+ *       actively taking effect right now". True iff the card's active
+ *       slot is non-empty (single-scope model). This is the predicate
+ *       for anything that decides which profile/scope to use (displayed
+ *       scope, runtime skill filter, iter-studio's exposed reset tool,
+ *       etc.).
  *
  *   `hasCharacter<Mode>PresetLibrary`    — "the card has a saved
- *       library for this mode regardless of the toggle". This is the
- *       predicate for UI plumbing that must keep working while the
- *       toggle is off: the override toggle itself needs to stay
- *       visible so the user can re-enable, the "configured, currently
- *       disabled" chip label branch fires here, and the profile-title
- *       renderer treats it as a persisted (not draft) card override.
+ *       library for this mode". This is the predicate for UI plumbing
+ *       that must keep working even while the runtime runs the global
+ *       preset: chip labels keep showing the card's saved preset, and
+ *       the profile-title renderer treats it as a persisted (not draft)
+ *       card override.
  *
  * Callers must not confuse the two: mistaking library-presence for
  * "active" is exactly the bug that made toggle-off refresh only the
@@ -193,19 +154,19 @@ function cardHasPresetLibraryForMode(context, avatar, mode) {
  * silently stayed pinned to the card.
  */
 export function hasCharacterSpecOverride(context, avatar) {
-    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_SPEC);
+    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_SPEC) === 'character';
 }
 
 export function hasCharacterAgendaOverride(context, avatar) {
-    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
+    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_AGENDA) === 'character';
 }
 
 export function hasCharacterLoopOverride(context, avatar) {
-    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_LOOP);
+    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_LOOP) === 'character';
 }
 
 export function hasCharacterDirectorOverride(context, avatar) {
-    return isCharacterPresetActiveOverrideEnabled(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR);
+    return getRuntimePresetScope(context, avatar, ORCH_EXECUTION_MODE_DIRECTOR) === 'character';
 }
 
 export function hasCharacterOverride(context, avatar) {
@@ -243,36 +204,74 @@ export function getCharacterPresetLibrary(context, avatar, mode) {
 }
 
 export function getCharacterActivePresetId(context, avatar, mode) {
+    // Single-scope model: read the card's own active slot strictly. No
+    // first-key fallback — an empty slot is the explicit "run the global
+    // active preset" state, and resurrecting the first library entry
+    // here would override that choice on every read.
     const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
-    const fromNew = ext.activePresetIds?.[mode];
-    if (fromNew && ext.presetLibraries?.[mode]?.[fromNew]) return String(fromNew);
-    const lib = getCharacterPresetLibrary(context, avatar, mode);
-    const firstKey = Object.keys(lib)[0];
-    return firstKey || '';
+    const id = ext.activePresetIds?.[mode];
+    if (id && ext.presetLibraries?.[mode]?.[id]) return String(id);
+    return '';
 }
 
 /**
- * True when the card's preset library for this mode should override the
- * global active preset. Requires both (a) a `presetLibraries.<mode>`
- * entry exists, and (b) `overrideEnabled.<mode>` is true.
+ * One-time migration: consume the legacy `overrideEnabled.<mode>` flags
+ * and settle each mode's active slot accordingly, then drop the flag
+ * field entirely.
  *
- * Cards freshly imported under the legacy `override.<mode>` shape (no
- * preset library, no `overrideEnabled` container) are migrated in place
- * on first read so the probe and the downstream `getActivePreset` call
- * both see the new shape. Without this, the runtime gate in
- * `getEffectiveProfile` would short-circuit before the lazy migration
- * inside `getActivePreset(scope:'character')` ever runs.
+ * - `true` keeps the slot (filling it with the library's first key when
+ *   empty, preserving the "override was on" intent).
+ * - `false` clears the slot (the card falls back to the global active).
+ *
+ * Returns true when the card was mutated, so callers can persist.
  */
-export function isCharacterPresetActiveOverrideEnabled(context, avatar, mode) {
+export function migrateCardOverrideEnabledFlags(context, avatar) {
     const ext = getCharacterExtensionDataByAvatar(context, avatar) || {};
-    if (hasLegacyOverridePayload(ext, mode)) {
-        migrateAndPersistLegacyCardOverrideForMode(context, avatar, mode);
+    const flags = ext?.overrideEnabled;
+    if (!flags || typeof flags !== 'object') return false;
+    if (!ext.activePresetIds || typeof ext.activePresetIds !== 'object') {
+        ext.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
     }
-    if (!readOverrideEnabledFlag(ext, mode)) return false;
-    const id = getCharacterActivePresetId(context, avatar, mode);
-    if (!id) return false;
-    const lib = getCharacterPresetLibrary(context, avatar, mode);
-    return Boolean(lib[id]);
+    for (const mode of ['spec', 'agenda', 'loop', 'director']) {
+        if (typeof flags[mode] !== 'boolean') continue;
+        if (flags[mode]) {
+            const lib = ext.presetLibraries?.[mode];
+            if (!ext.activePresetIds[mode] && lib && Object.keys(lib).length > 0) {
+                ext.activePresetIds[mode] = Object.keys(lib)[0];
+            }
+        } else {
+            ext.activePresetIds[mode] = '';
+        }
+    }
+    delete ext.overrideEnabled;
+    return true;
+}
+
+/**
+ * Which library runs for this (avatar, mode) under the single-scope
+ * model: the card's active slot when it holds a real preset id, else
+ * the global active. Runs both lazy migrations first so freshly
+ * imported legacy cards settle before the read.
+ */
+export function getRuntimePresetScope(context, avatar, mode) {
+    const safeAvatar = String(avatar || '').trim();
+    if (!safeAvatar) return 'global';
+    // Flag migration runs FIRST: an explicit new-shape `overrideEnabled`
+    // flag wins over the legacy `override.<mode>` payload. Running the
+    // legacy migration first would let a stale legacy `enabled:true`
+    // re-seed the flag container after the user's explicit `false` was
+    // consumed, resurrecting a slot the user cleared.
+    migrateCardOverrideEnabledFlags(context, safeAvatar);
+    const ext = getCharacterExtensionDataByAvatar(context, safeAvatar) || {};
+    if (hasLegacyOverridePayload(ext, mode)) {
+        migrateAndPersistLegacyCardOverrideForMode(context, safeAvatar, mode);
+        // The legacy migration translates `override.<mode>.enabled` into
+        // a fresh flag container — consume it in the same pass so the
+        // slot settles before the read.
+        migrateCardOverrideEnabledFlags(context, safeAvatar);
+    }
+    const id = getCharacterActivePresetId(context, safeAvatar, mode);
+    return id ? 'character' : 'global';
 }
 
 function hasLegacyOverridePayload(ext, mode) {
@@ -291,13 +290,14 @@ function hasLegacyOverridePayload(ext, mode) {
 }
 
 /**
- * Compute the next character-extension payload after a "Clear Character
- * Override" click for the given execution mode. Strips
- * `presetLibraries.<mode>`, `activePresetIds.<mode>`, and the
- * `overrideEnabled.<mode>` flag, dropping empty containers so the
- * `hasCharacter*Override` probe reads false afterwards. Also drops the
- * `override.mode` pin when it was pointing at the cleared mode so the
- * dispatcher does not keep that mode active after the data is gone.
+ * Compute the next character-extension payload after a "Clear presets
+ * from this card" click for the given execution mode. Strips
+ * `presetLibraries.<mode>` and `activePresetIds.<mode>` (plus any
+ * stale `overrideEnabled.<mode>` flag from pre-migration cards),
+ * dropping empty containers so the `hasCharacter*Override` probe reads
+ * false afterwards. Also drops the `override.mode` pin when it was
+ * pointing at the cleared mode so the dispatcher does not keep that
+ * mode active after the data is gone.
  * Pure (no I/O) so it can be unit-tested independent of the click
  * handler — main.js wires this into the persistence + UI reload path.
  */

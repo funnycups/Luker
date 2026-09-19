@@ -392,7 +392,7 @@ describe('getEffectiveProfile — picks active preset from current scope', () =>
         expect(profile.source).toBe('global');
     });
 
-    test('director mode + character with overrideEnabled.director → returns character active preset', () => {
+    test('director mode + card with active slot → returns character active preset', () => {
         extensionSettings.orchestrator = {
             executionMode: 'director',
             presetLibrariesMigrationDone: 1,
@@ -414,8 +414,6 @@ describe('getEffectiveProfile — picks active preset from current scope', () =>
             activePresetIds: { spec: '', agenda: '', loop: '', director: 'gd' },
         };
         const ctx = ctxWithCard('alice.png', {
-            override: { mode: 'director' },
-            overrideEnabled: { director: true },
             presetLibraries: {
                 director: {
                     cd: {
@@ -436,6 +434,52 @@ describe('getEffectiveProfile — picks active preset from current scope', () =>
         const profile = main.getEffectiveProfile(ctx);
         expect(profile.mainAgent.systemPrompt).toBe('CARD-D');
         expect(profile.source).toBe('character');
+    });
+
+    test('director mode + card with empty slot falls back to global active', () => {
+        // Single-scope model: the card library is present but its active
+        // slot is empty — the user picked a global preset for this card.
+        extensionSettings.orchestrator = {
+            executionMode: 'director',
+            presetLibrariesMigrationDone: 1,
+            presetLibraries: {
+                spec: {}, agenda: {}, loop: {},
+                director: {
+                    gd: {
+                        name: 'GD',
+                        mainAgent: { systemPrompt: 'GLOBAL-D' },
+                        subAgents: [],
+                        maxRounds: 10,
+                        maxConcurrentSubagents: 2,
+                        maxTotalSubagentRuns: 8,
+                        tools: {},
+                        discardOnAbort: false,
+                    },
+                },
+            },
+            activePresetIds: { spec: '', agenda: '', loop: '', director: 'gd' },
+        };
+        const ctx = ctxWithCard('alice.png', {
+            presetLibraries: {
+                director: {
+                    cd: {
+                        name: 'CD',
+                        mainAgent: { systemPrompt: 'CARD-D' },
+                        subAgents: [],
+                        maxRounds: 10,
+                        maxConcurrentSubagents: 2,
+                        maxTotalSubagentRuns: 8,
+                        tools: {},
+                        discardOnAbort: false,
+                    },
+                },
+            },
+            activePresetIds: { director: '' },
+        });
+        currentAvatar = 'alice.png';
+        const profile = main.getEffectiveProfile(ctx);
+        expect(profile.mainAgent.systemPrompt).toBe('GLOBAL-D');
+        expect(profile.source).toBe('global');
     });
 });
 
