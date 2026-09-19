@@ -25,7 +25,7 @@ function newRequest(source = 'openai') {
 function getEntry(request) {
     const handle = request.user.profile.handle;
     const buf = getBufferForHandle(handle);
-    return buf.find(e => e.id === request.__inspectorId);
+    return buf.find(e => e.id === request.__inspectorId) ?? null;
 }
 
 describe('request-inspector: 200-but-error detection', () => {
@@ -239,5 +239,27 @@ describe('request-inspector: TTL cleanup', () => {
         entry.timestamp = Date.now() - (6 * 60 * 60 * 1000) - 1000;
         expect(cleanupExpiredEntries(Date.now())).toBe(1);
         expect(getEntry(req)).toBeNull();
+    });
+
+    test('全部记录过期后清理空缓冲区条目', () => {
+        const req = newRequest();
+        startInspection(req);
+        completeInspection(req, {
+            choices: [{ message: { content: 'to expire' }, finish_reason: 'stop' }],
+        });
+
+        const entry = getEntry(req);
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
+
+        // 模拟 /list 路由为无记录用户重建的空缓冲区——下一轮清理应删除该键,
+        // 不让空数组长期占用 Map。
+        const beforeKeys = cleanupExpiredEntries(Date.now());
+        expect(beforeKeys).toBe(0);
+        // getBufferForHandle on a deleted key returns [] without recreating,
+        // so a second sweep observing zero removals confirms the empty
+        // buffer didn't linger as a live Map entry with stale data.
+        expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
     });
 });
