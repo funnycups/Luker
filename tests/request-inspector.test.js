@@ -3,6 +3,7 @@ import {
     startInspection,
     completeInspection,
     completeInspectionFromStream,
+    cleanupExpiredEntries,
     getBufferForHandle,
 } from '../src/request-inspector.js';
 
@@ -24,7 +25,7 @@ function newRequest(source = 'openai') {
 function getEntry(request) {
     const handle = request.user.profile.handle;
     const buf = getBufferForHandle(handle);
-    return buf.find(e => e.id === request.__inspectorId);
+    return buf.find(e => e.id === request.__inspectorId) ?? null;
 }
 
 describe('request-inspector: 200-but-error detection', () => {
@@ -201,5 +202,64 @@ describe('request-inspector: 200-but-error detection', () => {
             expect(e.status).toBe('success');
             expect(e.error).toBe('');
         });
+    });
+});
+
+describe('request-inspector: TTL cleanup', () => {
+    test('保留有效记录，超过 TTL 后删除完整记录', () => {
+        const req = newRequest();
+        startInspection(req);
+        completeInspection(req, {
+            choices: [{ message: { content: 'full response' }, finish_reason: 'stop' }],
+        });
+
+        const entry = getEntry(req);
+        const fullMessages = [{ role: 'user', content: 'complete request body' }];
+        entry.fullMessages = fullMessages;
+        entry.wireRequest = { messages: fullMessages };
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) + 1000;
+
+        expect(cleanupExpiredEntries(Date.now())).toBe(0);
+        expect(getEntry(req)).toBe(entry);
+
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
+    });
+
+    test('运行中的请求在扩展保留期内不会被删除', () => {
+        const req = newRequest();
+        startInspection(req);
+        const entry = getEntry(req);
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+
+        expect(cleanupExpiredEntries(Date.now())).toBe(0);
+        expect(getEntry(req)).toBe(entry);
+
+        entry.timestamp = Date.now() - (6 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getEntry(req)).toBeNull();
+    });
+
+    test('全部记录过期后清理空缓冲区条目', () => {
+        const req = newRequest();
+        startInspection(req);
+        completeInspection(req, {
+            choices: [{ message: { content: 'to expire' }, finish_reason: 'stop' }],
+        });
+
+        const entry = getEntry(req);
+        entry.timestamp = Date.now() - (2 * 60 * 60 * 1000) - 1000;
+        expect(cleanupExpiredEntries(Date.now())).toBe(1);
+        expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
+
+        // 模拟 /list 路由为无记录用户重建的空缓冲区——下一轮清理应删除该键,
+        // 不让空数组长期占用 Map。
+        const beforeKeys = cleanupExpiredEntries(Date.now());
+        expect(beforeKeys).toBe(0);
+        // getBufferForHandle on a deleted key returns [] without recreating,
+        // so a second sweep observing zero removals confirms the empty
+        // buffer didn't linger as a live Map entry with stale data.
+        expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
     });
 });

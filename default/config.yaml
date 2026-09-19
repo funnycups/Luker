@@ -360,6 +360,15 @@ git:
 # Additional model tokenizers can be downloaded on demand.
 # Disabling will fallback to another locally available tokenizer.
 enableDownloadableTokenizers: true
+# -- REQUEST INSPECTOR CONFIGURATION --
+requestInspector:
+  # How long (in milliseconds) completed request records stay in the in-memory
+  # ring buffer before being swept. Records hold full message and response
+  # bodies, so this bounds heap retention of request diagnostics.
+  ttlMs: 7200000
+  # How often (in milliseconds) the expiry sweeper runs. A record survives at
+  # most ttlMs + cleanupIntervalMs past its deadline.
+  cleanupIntervalMs: 300000
 # -- OPENAI CONFIGURATION --
 # A placeholder message to use in strict prompt post-processing mode when the prompt doesn't start with a user message
 promptPlaceholder: "[Start a new chat]"

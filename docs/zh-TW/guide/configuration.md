@@ -222,11 +222,16 @@ thumbnails:
   enabled: true
   format: jpg
   quality: 95
+
+requestInspector:
+  ttlMs: 7200000
+  cleanupIntervalMs: 300000
 ```
 
 - `logging`：日誌設定，`minLogLevel` 控制最低日誌等級
 - `rateLimiting`：速率限制，`preferRealIpHeader` 在反向代理後使用真實 IP
 - `thumbnails`：縮圖產生設定
+- `requestInspector`：請求記錄的記憶體保留，見[請求檢查器](/zh-TW/improvements/request-inspector#記錄保留)
 
 ## 外掛與擴充路徑
 

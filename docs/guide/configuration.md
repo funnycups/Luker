@@ -222,11 +222,16 @@ thumbnails:
   enabled: true
   format: jpg
   quality: 95
+
+requestInspector:
+  ttlMs: 7200000
+  cleanupIntervalMs: 300000
 ```
 
 - `logging`: Log configuration; `minLogLevel` controls the minimum log level
 - `rateLimiting`: Rate limiting; `preferRealIpHeader` uses the real IP behind a reverse proxy
 - `thumbnails`: Thumbnail generation configuration
+- `requestInspector`: In-memory request record retention; see [Request Inspector](/improvements/request-inspector#record-retention)
 
 ## Plugin and Extension Paths
 
