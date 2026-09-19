@@ -45,6 +45,7 @@ import {
     buildGeminiFunctionDeclaration,
     convertGeminiToolChoice,
     getConfigValue,
+    modelIdMatchesFamily,
     tryParse,
 } from '../../../util.js';
 import { normalizeGeminiResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
@@ -188,8 +189,8 @@ export async function dispatchMakerSuite(ctx) {
             'gemini-3.1-flash-image-preview',
         ];
 
-        const isThinkingConfigModel = m => (/^gemini-2.5-(flash|pro)/.test(m) && !/-image(-preview)?$/.test(m)) || (/^gemini-3[.\d]*-(flash|pro)/.test(m));
-        const isImageSizeModel = m => /^gemini-3/.test(m);
+        const isThinkingConfigModel = m => (modelIdMatchesFamily(m, /^gemini-2.5-(flash|pro)/) && !/-image(-preview)?$/.test(m)) || (modelIdMatchesFamily(m, /^gemini-3[.\d]*-(flash|pro)/));
+        const isImageSizeModel = m => modelIdMatchesFamily(m, /^gemini-3/);
 
         const noSearchModels = [
             'gemini-2.0-flash-lite',

@@ -1111,6 +1111,21 @@ export function trimV1(str) {
 }
 
 /**
+ * Tests a model id against a family regex after stripping vendor namespace
+ * prefixes (e.g. "moonshotai/kimi-k3", "publishers/google/models/gemini-2.5-pro").
+ * The regex is matched against the last "/"-separated segment only, so a
+ * caller-provided anchored pattern like /^kimi-k3/ works for both bare and
+ * vendor-prefixed ids.
+ * @param {string} model Model id (bare or vendor-prefixed)
+ * @param {RegExp} familyRegex Anchored regex for the model family
+ * @returns {boolean} True when the tail segment matches the family regex
+ */
+export function modelIdMatchesFamily(model, familyRegex) {
+    const tail = String(model ?? '').split('/').pop() ?? '';
+    return familyRegex.test(tail);
+}
+
+/**
  * Normalizes a user-provided URL to a proper OpenAI-compatible base URL.
  * Handles common mistakes: missing /v1, trailing slash, full endpoint paths.
  *

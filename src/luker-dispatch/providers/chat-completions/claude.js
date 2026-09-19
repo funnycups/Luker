@@ -33,6 +33,7 @@ import {
     excludeKeysByYaml,
     getConfigValue,
     mergeObjectWithYaml,
+    modelIdMatchesFamily,
 } from '../../../util.js';
 
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -149,13 +150,13 @@ export async function dispatchClaude(ctx) {
             useTools,
             getPromptNames({ body }),
         );
-        const useThinking = /^claude-(3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/.test(body.model);
-        const useWebSearch = /^claude-(3-5|3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/.test(body.model) && Boolean(body.enable_web_search);
-        const isLimitedSampling = /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6)/.test(body.model);
-        const useVerbosity = /^claude-(opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/.test(body.model);
-        const noPrefillModel = /^claude-(opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/.test(body.model);
-        const isAdaptiveModel = /^claude-(opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/.test(body.model) || (enableAdaptiveThinking && /^claude-(opus-4-6|sonnet-4-6)/.test(body.model));
-        const noSamplingModel = /^claude-(opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/.test(body.model);
+        const useThinking = modelIdMatchesFamily(body.model, /^claude-(3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
+        const useWebSearch = modelIdMatchesFamily(body.model, /^claude-(3-5|3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/) && Boolean(body.enable_web_search);
+        const isLimitedSampling = modelIdMatchesFamily(body.model, /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6)/);
+        const useVerbosity = modelIdMatchesFamily(body.model, /^claude-(opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
+        const noPrefillModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
+        const isAdaptiveModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/) || (enableAdaptiveThinking && modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6)/));
+        const noSamplingModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
         let fixThinkingPrefill = false;
 
         const stopSequences = [];

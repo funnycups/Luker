@@ -41,6 +41,7 @@ import {
     excludeKeysByYaml,
     getConfigValue,
     mergeObjectWithYaml,
+    modelIdMatchesFamily,
     normalizeOpenAIBaseUrl,
     uuidv4,
 } from '../../../util.js';
@@ -502,14 +503,13 @@ function applyKimiPartial(messages, content, name) {
  * (moonshotai/kimi-k3, moonshot/kimi-k2.6, ...) resolve to the same family.
  */
 function getKimiModelFamily(model) {
-    const tail = String(model || '').split('/').pop() ?? '';
-    if (/^kimi-k3/.test(tail)) {
+    if (modelIdMatchesFamily(model, /^kimi-k3/)) {
         return 'k3';
     }
-    if (/^kimi-k2\.7-code/.test(tail)) {
+    if (modelIdMatchesFamily(model, /^kimi-k2\.7-code/)) {
         return 'k2.7-code';
     }
-    if (/^kimi-k2\.6/.test(tail)) {
+    if (modelIdMatchesFamily(model, /^kimi-k2\.6/)) {
         return 'k2.6';
     }
     return null;
