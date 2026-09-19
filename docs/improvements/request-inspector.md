@@ -74,6 +74,23 @@ Beyond text generation, the Request Inspector also tracks image generation reque
 
 The Request Inspector also spans the vector subsystem, recording embedding, query, and rerank calls sent to every remote vector provider (OpenAI, Cohere, Jina, Ollama, VLLM, Voyage, and so on) and the KoboldCpp direct-embed bridge. Local-only inference sources that never leave the process are skipped so the ring buffer stays focused on actual upstream traffic.
 
+## Record Retention
+
+Request records live in memory, capped at 200 per user. Each user keeps only their most recent records; once the cap is reached, the oldest record is dropped to make room.
+
+Completed records are kept for two hours, then removed. A record that is still generating is not held to this clock: in-flight requests are kept for up to six hours so a long generation or a stalled stream is never swept before its completion callback runs. Expired records are swept every five minutes, which means a record survives at most two hours and five minutes past its start.
+
+Both values can be tuned in `config.yaml`:
+
+```yaml
+requestInspector:
+  ttlMs: 7200000
+  cleanupIntervalMs: 300000
+```
+
+- `ttlMs`: How long completed records are kept, in milliseconds
+- `cleanupIntervalMs`: How often the expiry sweep runs, in milliseconds
+
 ## Relation to Storage Quotas
 
 The token usage tracked by the Request Inspector is an independent statistics feature that helps users and administrators understand the resource consumption of AI generation. This is separate from the storage quota management in [Auth & Quota](/improvements/auth-and-quota):
@@ -82,4 +99,4 @@ The token usage tracked by the Request Inspector is an independent statistics fe
 - **Storage quota management**: Manages the allocation and limits of file storage space
 
 > [!TIP]
-> The Request Inspector starts automatically with the server; no additional configuration is required.
+> The Request Inspector starts automatically with the server. The defaults work out of the box; the retention settings above are there when you want to adjust them.
