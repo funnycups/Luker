@@ -500,28 +500,29 @@ On non-scoped macros the flag is accepted but has no behavioral effect.
 | `!` | Resolve before other macros in the same text | Parsed only |
 | `?` | Resolve after other macros | Parsed only |
 | `~` | Mark for re-evaluation | Parsed only |
-| `>` | Treat `\|` as an output-filter pipe | Parsed only (see *Pipe* below) |
+| `>` | Treat `\|` as an output-filter pipe | No effect (see *Pipe* below) |
 
 These tokens are recognized by the parser today but no runtime hook consumes them, so they have no effect on output. The lone `!` in <code v-pre>{{if !.dead}}</code> is a separate construct — it's *condition negation* inside <code v-pre>{{if}}</code>, not the flag.
 
 Flags can be combined and whitespace between flag and name is allowed: <code v-pre>{{ #each ::list}} … {{/each}}</code>.
 
-### `|` — pipe (argument terminator)
+### `|` — pipe (ordinary character)
 
-The pipe character is special inside macro arguments **even without the `>` flag**. The lexer transitions out of argument mode when it sees `\|`, so:
-
-```text
-{{getvar::name|filter}}
-```
-
-…parses as the macro `getvar` with the single argument `name` followed by a "filter" identifier `filter`. The filter handler isn't wired up yet, so the filter name is discarded and the macro behaves as <code v-pre>{{getvar::name}}</code>. The practical implication is that **a literal `\|` inside an argument terminates that argument** — to keep `\|` as part of the value, escape it as `\|`:
+The pipe has no special meaning inside macro arguments. The lexer does not treat `|` as an argument terminator, so the character is ordinary content and reaches the macro verbatim:
 
 ```text
-{{setvar::menu::sword \| shield \| bow}}
+{{setvar::menu::sword | shield | bow}}   → stores "sword | shield | bow"
+{{getvar::name|filter}}                  → reads the variable `name|filter`
 ```
 
-::: warning Pipe is reserved
-Today, writing <code v-pre>{{macro\|uppercase}}</code> does **not** uppercase anything — it just parses without error, drops the filter name, and runs the macro on the args before the pipe. If you need string transforms, register a custom macro or use a regex extension. The pipe-filter chain itself is reserved for a future engine version.
+There is no escape for the pipe; a backslash is stored literally:
+
+```text
+{{setvar::k::a \| b}}   → stores "a \| b"
+```
+
+::: warning Output modifiers are unavailable
+<code v-pre>{{macro|uppercase}}</code> does not uppercase anything. If you need string transforms, register a custom macro or use a regex extension.
 :::
 
 ## Slash command pipes — <code v-pre>{{pipe}}</code>, <code v-pre>{{var::name}}</code>
@@ -535,7 +536,7 @@ Inside a **slash command closure** (STscript — `/command1 | /command2 | …` c
 
 Both only exist inside the slash command parser. Outside an STscript context they render literally (no closure to bind them to).
 
-The `\|` character is also the slash command pipe operator at the STscript level — that's a feature of the command parser, not the macro engine. Inside a single macro's args, `\|` follows the *macro* pipe rule described above.
+The `|` character is also the slash command pipe operator at the STscript level — that's a feature of the command parser, not the macro engine. Inside a single macro's args, `|` follows the *macro* pipe rule described above.
 
 ## Resolution semantics
 
