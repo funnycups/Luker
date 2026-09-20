@@ -144,13 +144,15 @@ export class AutoComplete {
         textarea.addEventListener('blur', () => this.hide());
         if (isFloating) {
             textarea.addEventListener('scroll', () => {
-                if (power_user.stscript.autocomplete.state === AUTOCOMPLETE_STATE.DISABLED) return;
-                this.updateFloatingPositionDebounced();
+                if (this.isActive) {
+                    this.updateFloatingPositionDebounced();
+                }
             });
         }
         window.addEventListener('resize', () => {
-            if (power_user.stscript.autocomplete.state === AUTOCOMPLETE_STATE.DISABLED) return;
-            this.updatePositionDebounced();
+            if (this.isActive) {
+                this.updatePositionDebounced();
+            }
         });
     }
 
@@ -538,7 +540,7 @@ export class AutoComplete {
      * Update position of DOM.
      */
      updatePosition() {
-        if (!this.visible) return;
+        if (!this.isActive) return;
         if (this.isFloating) {
             this.updateFloatingPosition();
         } else {
@@ -705,7 +707,9 @@ export class AutoComplete {
                     this._cursorLocator = null;
                 }
             });
-            mo.observe(this.textarea.parentElement, { childList: true });
+            if (this.textarea.parentElement) {
+                mo.observe(this.textarea.parentElement, { childList: true });
+            }
         }
         this._cursorClone.style.height = `${inputRect.height}px`;
         this._cursorClone.style.left = `${inputRect.left}px`;

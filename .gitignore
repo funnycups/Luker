@@ -37,6 +37,7 @@ whitelist.txt
 .vscode/**
 !.vscode/extensions.json
 .idea/
+.windsurf/
 secrets.json
 /dist
 /backups/*

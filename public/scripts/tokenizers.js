@@ -735,7 +735,7 @@ export function getTokenCount(str, padding = undefined) {
  * @deprecated Use counterWrapperOpenAIAsync instead.
  */
 function counterWrapperOpenAI(text) {
-    const message = { role: 'system', content: text };
+    const message = { content: text };
     return countTokensOpenAI(message, true);
 }
 
@@ -745,7 +745,7 @@ function counterWrapperOpenAI(text) {
  * @returns {Promise<number>} Token count.
  */
 function counterWrapperOpenAIAsync(text) {
-    const message = { role: 'system', content: text };
+    const message = { content: text };
     return countTokensOpenAIAsync(message, true);
 }
 
@@ -755,7 +755,7 @@ function counterWrapperOpenAIAsync(text) {
  * @returns {Promise<number[]>} Token counts.
  */
 async function counterWrapperOpenAIMultiAsync(texts) {
-    const messages = texts.map(text => ({ role: 'system', content: text }));
+    const messages = texts.map(text => ({ content: text }));
     return countTokensOpenAIItemsAsync(messages, true);
 }
 
@@ -845,7 +845,7 @@ export function getTokenizerModel({ tokenizerType = tokenizers.BEST_MATCH } = {}
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.ELECTRONHUB && oai_settings.electronhub_model) {
-        if (oai_settings.electronhub_model.includes('gpt-4o') || oai_settings.electronhub_model.includes('gpt-5')) {
+        if (oai_settings.electronhub_model.includes('gpt-4o') || oai_settings.electronhub_model.includes('gpt-5') || oai_settings.electronhub_model.includes('gpt-6-astra')) {
             return gpt4oTokenizer;
         } else if (oai_settings.electronhub_model.includes('gpt-4.1') || oai_settings.electronhub_model.includes('gpt-4.5')) {
             return gpt4oTokenizer;
@@ -1037,7 +1037,7 @@ export function countTokensOpenAI(messages, full = false) {
         messages = [messages];
     }
 
-    let token_count = model ? -1 : 0;
+    let token_count = 0;
 
     for (const message of messages) {
         if (model === 'claude') {

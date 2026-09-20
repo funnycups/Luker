@@ -11,12 +11,14 @@ import storage from 'node-persist';
 import express from 'express';
 import ipaddr from 'ipaddr.js';
 import yauzl from 'yauzl';
+import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 
 import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, createBackupArchive, ensurePublicDirectoriesExist, toAvatarKey, getAccountVersion, getUserDirectories, getUserBackupTargets, normalizeUserBackupSelection } from '../users.js';
 import { SETTINGS_FILE, PUBLIC_DIRECTORIES, UPLOADS_DIRECTORY } from '../constants.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { invalidateRecentChatIndex } from './chats.js';
 import { color, Cache, getConfigValue, ensureDirectory, isValidUrl, normalizeZipEntryPath, trimTrailingSlash } from '../util.js';
+import { getIpAddress, retryAfter } from '../express-common.js';
 import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
 import { listForUser, mergeReadIds } from '../announcements.js';
 import { getStorageEngine } from '../storage/index.js';
@@ -71,6 +73,8 @@ class RestoreLegacyFsOnDbModeError extends Error {
     }
 }
 
+const RESET_POINTS = getConfigValue('rateLimiting.accountsResetMaxAttempts', 5, 'number');
+const PREFER_REAL_IP_HEADER = getConfigValue('rateLimiting.preferRealIpHeader', false, 'boolean');
 const RESET_CACHE = new Cache(5 * 60 * 1000);
 const FULL_IMPORT_SELECTION = Object.freeze({
     ...Object.fromEntries(Object.keys(normalizeUserBackupSelection({})).map((key) => [key, true])),
@@ -927,7 +931,13 @@ function beginRestoreProgressStream(response) {
     };
 }
 
+const generateResetCode = () => Array.from({ length: 6 }, () => crypto.randomInt(0, 10)).join('');
+
 export const router = express.Router();
+const resetLimiter = new RateLimiterMemory({
+    points: RESET_POINTS > 0 ? RESET_POINTS : Number.MAX_SAFE_INTEGER,
+    duration: 300,
+});
 
 router.post('/logout', async (request, response) => {
     try {
@@ -1563,14 +1573,27 @@ router.post('/change-name', async (request, response) => {
 
 router.post('/reset-step1', async (request, response) => {
     try {
-        const resetCode = String(crypto.randomInt(1000, 9999));
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
+        const rateLimit = await resetLimiter.get(ip);
+
+        // Check for existing rate limits, but allow requesting a new code unless locked out
+        if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) {
+            throw rateLimit;
+        }
+
+        const resetCode = generateResetCode();
         console.log();
         console.log(color.magenta(`${request.user.profile.name}, your account reset code is: `) + color.red(resetCode));
         console.log();
         RESET_CACHE.set(request.user.profile.handle, resetCode);
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Recover step 1 failed:', error);
+        if (error instanceof RateLimiterRes) {
+            console.error('Reset step 1 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
+            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+        }
+
+        console.error('Reset step 1 failed:', error);
         return response.sendStatus(500);
     }
 });
@@ -1578,19 +1601,27 @@ router.post('/reset-step1', async (request, response) => {
 router.post('/reset-step2', async (request, response) => {
     try {
         if (!request.body.code) {
-            console.warn('Recover step 2 failed: Missing required fields');
+            console.warn('Reset step 2 failed: Missing required fields');
             return response.status(400).json({ error: 'Missing required fields' });
         }
 
         if (request.user.profile.password && request.user.profile.password !== getPasswordHash(request.body.password, request.user.profile.salt)) {
-            console.warn('Recover step 2 failed: Incorrect password');
+            console.warn('Reset step 2 failed: Incorrect password');
             return response.status(400).json({ error: 'Incorrect password' });
+        }
+
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
+        const rateLimit = await resetLimiter.get(ip);
+
+        if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) {
+            throw rateLimit;
         }
 
         const code = RESET_CACHE.get(request.user.profile.handle);
 
         if (!code || code !== request.body.code) {
-            console.warn('Recover step 2 failed: Incorrect code');
+            await resetLimiter.consume(ip);
+            console.warn('Reset step 2 failed: Incorrect code');
             return response.status(400).json({ error: 'Incorrect code' });
         }
 
@@ -1600,10 +1631,16 @@ router.post('/reset-step2', async (request, response) => {
         await ensurePublicDirectoriesExist();
         await checkForNewContent([request.user.directories]);
 
+        await resetLimiter.delete(ip);
         RESET_CACHE.remove(request.user.profile.handle);
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Recover step 2 failed:', error);
+        if (error instanceof RateLimiterRes) {
+            console.error('Reset step 2 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
+            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+        }
+
+        console.error('Reset step 2 failed:', error);
         return response.sendStatus(500);
     }
 });

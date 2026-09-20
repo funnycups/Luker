@@ -35,7 +35,7 @@ SillyTavern 提供一個統一的前端介面，整合多種大型語言模型�
 
 SillyTavern（簡稱 ST）是一款本地安裝的使用者介面，讓您能與大型語言模型（LLM）、影像生成引擎以及語音合成模型互動的前端。
 
-SillyTavern 起源於 2023 年 2 月，作為 TavernAI 1.2.8 的分支版本發展至今。目前已有超過 200 位貢獻者，並擁有超過兩年的獨立開發歷史。如今，它已成為 AI 愛好者中備受推崇的軟體之一。
+SillyTavern 起源於 2023 年 2 月，作為 TavernAI 1.2.8 的分支版本發展至今。目前已有超過 300 位貢獻者，並擁有超過三年的獨立開發歷史。如今，它已成為 AI 愛好者中備受推崇的軟體之一。
 
 ## 我們的願景
 
@@ -51,7 +51,7 @@ SillyTavern 的硬體需求相當低。任何能夠運行 NodeJS 20 或更高版
 
 ### 歡迎加入我們的 Discord 伺服器
 
-| [![][discord-shield-badge]][discord-link] | [加入我們的 Disocrd 伺服器](https://discord.gg/sillytavern) 以獲得技術支援、分享您喜愛的角色與提示詞。 |
+| [![][discord-shield-badge]][discord-link] | [加入我們的 Discord 伺服器](https://discord.gg/sillytavern) 以獲得技術支援、分享您喜愛的角色與提示詞。 |
 | :---------------------------------------- | :----------------------------------------------------------------------------------------------------------------- |
 
 或直接聯繫開發者：
@@ -88,6 +88,7 @@ SillyTavern 的硬體需求相當低。任何能夠運行 NodeJS 20 或更高版
 * 經授權使用部分來自 CncAnon 的 TavernAITurbo 模組
 * 視覺小說模式（Visual Novel Mode）的靈感，來源於 PepperTaco 的貢獻（<https://github.com/peppertaco/Tavern/>）
 * Noto Sans 字體由 Google 提供（OFL 許可）
+* Lexer/Parser 由 Chevrotain 提供 (Apache-2.0 許可) <https://github.com/chevrotain/chevrotain>
 * 主題圖示由 Font Awesome <https://fontawesome.com> 提供（圖示：CC BY 4.0，字體：SIL OFL 1.1，程式碼：MIT 許可）
 * 預設資源來源於 @OtisAlejandro（包含角色 Seraphina 與知識書）與 @kallmeflocc（SillyTavern 官方 Discord 伺服器成員突破 10K 的慶祝背景）
 * Docker 安裝指南由 [@mrguymiah](https://github.com/mrguymiah) 和 [@Bronya-Rand](https://github.com/Bronya-Rand) 編寫

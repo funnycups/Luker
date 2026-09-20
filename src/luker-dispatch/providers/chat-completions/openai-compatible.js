@@ -32,10 +32,13 @@ import {
     OPENAI_REASONING_EFFORT_MODELS,
     OPENAI_VERBOSITY_MODELS,
     OPENROUTER_HEADERS,
+    POLLINATIONS_ENDPOINT,
     SILICONFLOW_ENDPOINT,
     ZAI_ENDPOINT,
 } from '../../../constants.js';
+import { createHmac } from 'node:crypto';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
+import { getCookieSecret } from '../../../users.js';
 import { TEXT_COMPLETION_MODELS } from '../../../endpoints/tokenizers.js';
 import {
     excludeKeysByYaml,
@@ -69,6 +72,7 @@ const API_PERPLEXITY = 'https://api.perplexity.ai';
 const API_GROQ = 'https://api.groq.com/openai/v1';
 const API_NANOGPT = 'https://nano-gpt.com/api/v1';
 const API_POLLINATIONS = 'https://gen.pollinations.ai/v1';
+const API_POLLINATIONS_ANON = 'https://text.pollinations.ai/v1';
 const API_MOONSHOT = 'https://api.moonshot.ai/v1';
 const API_FIREWORKS = 'https://api.fireworks.ai/inference/v1';
 const API_COMETAPI = 'https://api.cometapi.com/v1';
@@ -77,6 +81,18 @@ const API_ZAI_CODING = 'https://api.z.ai/api/coding/paas/v4';
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_SILICONFLOW_CN = 'https://api.siliconflow.cn/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
+
+/**
+ * Lazily-cached HMAC key (instance cookie secret) for session-affinity hashing.
+ * @type {string|undefined}
+ */
+let affinityKey;
+function getAffinityKey() {
+    if (affinityKey === undefined) {
+        affinityKey = getCookieSecret(globalThis.DATA_ROOT);
+    }
+    return affinityKey;
+}
 
 // Cache for cacheable (writing) OpenRouter model IDs. Populated on-demand by
 // isOpenRouterModelCacheable; mirrors the module-scope cache used by the
@@ -253,6 +269,10 @@ async function resolveOpenRouter(ctx) {
         plugins: getOpenRouterPlugins(body),
         reasoning: { exclude: !includeReasoning },
     };
+    if (body.logprobs > 0) {
+        bodyParams['top_logprobs'] = body.logprobs;
+        bodyParams['logprobs'] = true;
+    }
     if (body.min_p !== undefined) bodyParams['min_p'] = body.min_p;
     if (body.top_a !== undefined) bodyParams['top_a'] = body.top_a;
     if (body.repetition_penalty !== undefined) bodyParams['repetition_penalty'] = body.repetition_penalty;
@@ -402,6 +422,9 @@ async function resolveFireworks(ctx) {
     const headers = {};
     /** @type {any} */
     const bodyParams = {};
+    if (body.reasoning_effort) {
+        bodyParams['reasoning_effort'] = body.reasoning_effort;
+    }
     if (body.json_schema) {
         bodyParams['response_format'] = {
             type: 'json_schema',
@@ -412,6 +435,9 @@ async function resolveFireworks(ctx) {
                 strict: body.json_schema.strict ?? true,
             },
         };
+    }
+    if (body.chat_id) {
+        headers['x-session-affinity'] = createHmac('sha256', getAffinityKey()).update(body.chat_id).digest('hex').slice(0, 16);
     }
     return { apiUrl, apiKey, headers, bodyParams };
 }
@@ -451,20 +477,23 @@ async function resolveNanogpt(ctx) {
 /** POLLINATIONS — chat-completions.js:3169-3184 (uses readSecret with secret_id, not readProviderSecret) */
 async function resolvePollinations(ctx) {
     const body = ctx.body;
-    const apiUrl = API_POLLINATIONS;
+    const isAnonymous = body.pollinations_endpoint === POLLINATIONS_ENDPOINT.ANONYMOUS;
+    const apiUrl = isAnonymous ? API_POLLINATIONS_ANON : API_POLLINATIONS;
     const secretId = typeof body.secret_id === 'string' ? body.secret_id : undefined;
-    const apiKey = ctx.secrets.read(SECRET_KEYS.POLLINATIONS, { secretId });
+    const apiKey = isAnonymous ? 'anonymous' : ctx.secrets.read(SECRET_KEYS.POLLINATIONS, { secretId });
     const headers = {};
     /** @type {any} */
     const bodyParams = {
-        reasoning_effort: body.reasoning_effort,
         seed: body.seed ?? Math.floor(Math.random() * 99999999),
     };
-    if (body.json_schema) {
-        bodyParams['response_format'] = {
-            type: 'json_schema',
-            json_schema: { schema: body.json_schema.value },
-        };
+    if (!isAnonymous) {
+        bodyParams['reasoning_effort'] = body.reasoning_effort;
+        if (body.json_schema) {
+            bodyParams['response_format'] = {
+                type: 'json_schema',
+                json_schema: { schema: body.json_schema.value },
+            };
+        }
     }
     return { apiUrl, apiKey, headers, bodyParams };
 }

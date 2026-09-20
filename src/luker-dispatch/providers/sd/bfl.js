@@ -10,15 +10,15 @@
 // Preserved from the legacy handler:
 //   • Read API key from SECRET_KEYS.BFL; missing key surfaces as an
 //     error event (the legacy handler returned HTTP 400).
-//   • POST task to `https://api.bfl.ml/v1/${body.model}` with the
+//   • POST task to `https://api.bfl.ai/v1/${body.model}` with the
 //     x-key header, safety_tolerance=6, output_format=jpeg.
 //   • Model-name suffix rewrites the payload:
 //       -ultra    → drops steps/guidance/width/height/prompt_upsampling,
 //                   adds aspect_ratio computed from width/height
 //                   (clamped to the [9/21, 21/9] range).
 //       -pro-1.1  → drops steps/guidance only.
-//   • Poll `https://api.bfl.ml/v1/get_result?id=${id}` every 2500ms
-//     for up to MAX_ATTEMPTS=100 attempts.
+//   • Poll the task's `polling_url` (or `https://api.bfl.ai/v1/get_result?id=${id}`)
+//     every 2500ms with the x-key header for up to MAX_ATTEMPTS=100 attempts.
 //     status='Pending' → continue; status='Ready' → fetch sample URL
 //     and emit `{image:<b64>}`; any other status throws.
 //
@@ -101,7 +101,7 @@ export async function dispatchSdBfl(ctx) {
 
         console.debug('BFL request:', requestBody);
 
-        const bflUrl = `https://api.bfl.ml/v1/${body.model}`;
+        const bflUrl = `https://api.bfl.ai/v1/${body.model}`;
         ctx.inspection.attach(bflUrl, key);
         const result = await ctx.fetch(bflUrl, {
             method: 'POST',
@@ -138,12 +138,17 @@ export async function dispatchSdBfl(ctx) {
         /** @type {any} */
         const taskData = await result.json();
         const { id } = taskData;
+        const pollingUrl = taskData.polling_url ?? `https://api.bfl.ai/v1/get_result?id=${id}`;
 
         for (let i = 0; i < MAX_ATTEMPTS; i++) {
             if (ctx.signal.aborted) throw new Error('Aborted');
             await delay(POLL_INTERVAL_MS);
 
-            const statusResult = await ctx.fetch(`https://api.bfl.ml/v1/get_result?id=${id}`, {
+            // The bfl.ai API requires authentication on the polling request as well
+            const statusResult = await ctx.fetch(pollingUrl, {
+                headers: {
+                    'x-key': key,
+                },
                 signal: ctx.signal,
             });
 

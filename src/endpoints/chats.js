@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -54,6 +55,23 @@ const monthNames = [
 ];
 
 /**
+ * Builds a stable filename key for a chat's backups.
+ * Non-ASCII characters are replaced with underscores, so names such as CJK ones
+ * would all collapse to the same key and share one backup quota. A short hash of
+ * the raw name keeps those keys distinct while ASCII names stay unchanged (#5780).
+ * @param {string} name The name of the chat.
+ * @returns {string} Sanitized filename key for the backup files.
+ */
+export function getBackupKey(name) {
+    const sanitized = sanitize(name).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    if (/[^\x20-\x7E]/.test(name)) {
+        const hash = crypto.createHash('sha256').update(name).digest('hex').slice(0, 8);
+        return `${sanitized}_${hash}`;
+    }
+    return sanitized;
+}
+
+/**
  * Saves a chat to the backups directory.
  * @param {string} directory The user's backup directory.
  * @param {string} name The name of the chat.
@@ -67,8 +85,7 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
         if (!fs.existsSync(directory)) {
             console.error(`The chat couldn't be backed up because no directory exists at ${directory}!`);
         }
-        // replace non-alphanumeric characters with underscores
-        name = sanitize(name).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        name = getBackupKey(name);
 
         const backupFile = path.join(directory, `${backupPrefix}${name}_${generateTimestamp()}.jsonl`);
 
@@ -89,15 +106,19 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
 const backupFunctions = new Map();
 
 /**
- * Gets a backup function for a user.
+ * Gets a backup function for a user and chat.
+ * Throttling is keyed per user and chat so that rapid saves in one chat cannot
+ * swallow the throttled backup of another chat saved in the same window.
  * @param {string} handle User handle
+ * @param {string} name The name of the chat, as passed to backupChat
  * @returns {typeof backupChat} Backup function
  */
-function getBackupFunction(handle) {
-    if (!backupFunctions.has(handle)) {
-        backupFunctions.set(handle, _.throttle(backupChat, throttleInterval, { leading: true, trailing: true }));
+function getBackupFunction(handle, name) {
+    const key = `${handle} ${name}`;
+    if (!backupFunctions.has(key)) {
+        backupFunctions.set(key, _.throttle(backupChat, throttleInterval, { leading: true, trailing: true }));
     }
-    return backupFunctions.get(handle) || (() => { });
+    return backupFunctions.get(key) || (() => { });
 }
 
 /**
@@ -750,7 +771,7 @@ function readChatHeaderIntegrity(filePath) {
     }
 
     const firstLine = tryReadFileSync(filePath)?.split('\n')[0] ?? '';
-    const header = tryParse(firstLine);
+    const header = tryParse(firstLine.replace(/^\uFEFF/, ''));
     const integrity = typeof header?.chat_metadata?.integrity === 'string'
         ? header.chat_metadata.integrity.trim()
         : '';
@@ -906,8 +927,25 @@ async function checkChatIntegrity(filePath, integritySlug) {
         return true;
     }
 
+    // If the chat file is empty, there is nothing that could be lost by overwriting it
+    if (fs.statSync(filePath).size === 0) {
+        return true;
+    }
+
+    // Parse the first line of the chat file as JSON. Strip a UTF-8 BOM an external editor may have added.
+    const firstLine = await readFirstLine(filePath);
+    const jsonData = tryParse(String(firstLine ?? '').replace(/^\uFEFF/, ''));
+
+    // If the first line of a non-empty file is not a JSON object, the file may be corrupted or truncated.
+    // Fail the check so the client asks for an explicit overwrite confirmation instead of silently losing data.
+    if (typeof jsonData !== 'object' || jsonData === null || Array.isArray(jsonData)) {
+        console.warn(`File "${filePath}" is not empty, but its first line could not be parsed as a chat header. Overwriting it requires an explicit confirmation.`);
+        return false;
+    }
+
     const currentIntegrity = getCurrentChatIntegrity(filePath);
     if (!currentIntegrity) {
+        console.debug(`File "${filePath}" does not have integrity metadata matching "${expectedIntegrity}". The integrity validation has been skipped.`);
         return true;
     }
 
@@ -947,32 +985,65 @@ function createIntegrityMismatchError(filePath, expectedIntegrity) {
  * @typedef {(textArray: string[]) => boolean} ChatMatchFunction
  */
 export async function getChatInfo(pathToFile, additionalData = {}, withMetadata = false, matcher = null) {
-    return new Promise(async (res) => {
-        const parsedPath = path.parse(pathToFile);
-        const stats = await fs.promises.stat(pathToFile);
-        const hasMatcher = (typeof matcher === 'function');
+    const parsedPath = path.parse(pathToFile);
+    const hasMatcher = (typeof matcher === 'function');
 
-        const chatData = {
-            match: false,
-            file_id: parsedPath.name,
-            file_name: parsedPath.base,
-            file_size: formatBytes(stats.size),
-            chat_items: 0,
-            mes: '[The chat is empty]',
-            last_mes: stats.mtimeMs,
-            sort_time: stats.mtimeMs,
-            ...additionalData,
-        };
+    // A chat that is deleted while a scan is running is not an error: treat it like a corrupted chat and move on.
+    const chatVanished = () => {
+        console.warn('Chat file was deleted while it was being scanned:', pathToFile);
+        return { match: false };
+    };
 
-        if (stats.size === 0) {
-            res(chatData);
-            return;
+    let stats;
+    try {
+        stats = await fs.promises.stat(pathToFile);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            return chatVanished();
         }
+        throw error;
+    }
 
+    const chatData = {
+        match: false,
+        file_id: parsedPath.name,
+        file_name: parsedPath.base,
+        file_size: formatBytes(stats.size),
+        chat_items: 0,
+        mes: '[The chat is empty]',
+        last_mes: stats.mtimeMs,
+        sort_time: stats.mtimeMs,
+        ...additionalData,
+    };
+
+    if (stats.size === 0) {
+        return chatData;
+    }
+
+    return new Promise((res, rej) => {
         const fileStream = fs.createReadStream(pathToFile);
+
+        // The file can still disappear between the stat above and the stream opening
+        fileStream.on('error', (error) => {
+            if (error.code === 'ENOENT') {
+                res(chatVanished());
+                return;
+            }
+            rej(error);
+        });
+
         const rl = readline.createInterface({
             input: fileStream,
             crlfDelay: Infinity,
+        });
+
+        // readline re-emits input stream errors; without a listener the emit throws
+        rl.on('error', (error) => {
+            if (error.code === 'ENOENT') {
+                res(chatVanished());
+                return;
+            }
+            rej(error);
         });
 
         let lastLine;
@@ -1001,8 +1072,6 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
             lastLine = line;
         });
         rl.on('close', () => {
-            rl.close();
-
             if (lastLine) {
                 const jsonData = tryParse(lastLine);
                 if (jsonData && (jsonData.name || jsonData.character_name || jsonData.chat_metadata)) {
@@ -1014,9 +1083,19 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
 
                     res(chatData);
                 } else {
-                    console.warn('Found an invalid or corrupted chat file:', pathToFile);
-                    res({});
+                    // The last line is unparseable or lacks known fields (e.g. a truncated write or an external edit).
+                    // Resolve a degraded preview from the stat data instead of hiding an otherwise intact chat
+                    // from the chat list, search and recents.
+                    console.warn('Found an invalid or corrupted last line in a chat file:', pathToFile);
+                    // Exclude both the metadata line and the unreadable trailing line.
+                    chatData.chat_items = Math.max(itemCounter - 2, 0);
+                    chatData.mes = '[The message is empty]';
+                    chatData.match = hasMatcher ? hasAnyMatch : true;
+                    res(chatData);
                 }
+            } else {
+                // The file was truncated after the stat reported a non-zero size; treat it like an empty chat
+                res(chatData);
             }
         });
     });
@@ -2131,7 +2210,7 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
 
     tryWriteFileSync(filePath, jsonlData);
     writeChatSyncState(filePath, { integrity: nextIntegrity, updated_at: Date.now() });
-    getBackupFunction(handle)(backupDirectory, cardName, jsonlData);
+    getBackupFunction(handle, cardName)(backupDirectory, cardName, jsonlData);
     return nextIntegrity;
 }
 
@@ -2186,7 +2265,7 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
                 chat_metadata: applyIntegrityToMetadata(headerInput.chat_metadata, integrity),
             };
             const jsonlData = [headerWithIntegrity, ...body].map(m => JSON.stringify(m)).join('\n');
-            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+            getBackupFunction(handle, cardName)(request.user.directories.backups, cardName, jsonlData);
         } catch (backupErr) {
             console.error('Chat backup after save failed', backupErr);
         }
@@ -2339,7 +2418,7 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
                     chat_metadata: applyIntegrityToMetadata(header.chat_metadata, newIntegrity),
                 };
                 const jsonlData = [headerWithIntegrity, ...cleanedMessages].map(m => JSON.stringify(m)).join('\n');
-                getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+                getBackupFunction(handle, cardName)(request.user.directories.backups, cardName, jsonlData);
             } catch (backupErr) {
                 console.error('Chat backup after append failed', backupErr);
             }
@@ -2402,7 +2481,7 @@ router.post('/append', validateAvatarUrlMiddleware, async function (request, res
                 chat_metadata: applyIntegrityToMetadata(existing.header?.chat_metadata, newIntegrity),
             };
             const jsonlData = [headerWithIntegrity, ...mergedBody].map(m => JSON.stringify(m)).join('\n');
-            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+            getBackupFunction(handle, cardName)(request.user.directories.backups, cardName, jsonlData);
         } catch (backupErr) {
             console.error('Chat backup after append failed', backupErr);
         }
@@ -2521,7 +2600,7 @@ router.post('/patch', validateAvatarUrlMiddleware, async function (request, resp
                 chat_metadata: applyIntegrityToMetadata(mergedHeader.chat_metadata, newIntegrity),
             };
             const jsonlData = [headerWithIntegrity, ...patchedMessages].map(m => JSON.stringify(m)).join('\n');
-            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+            getBackupFunction(handle, cardName)(request.user.directories.backups, cardName, jsonlData);
         } catch (backupErr) {
             console.error('Chat backup after patch failed', backupErr);
         }
@@ -2656,7 +2735,7 @@ router.post('/meta/patch', validateAvatarUrlMiddleware, async function (request,
                     chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, saved.integrity),
                 };
                 const jsonlData = [headerWithIntegrity].map(m => JSON.stringify(m)).join('\n');
-                getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+                getBackupFunction(handle, cardName)(request.user.directories.backups, cardName, jsonlData);
             } catch (backupErr) {
                 console.error('Chat backup after meta/patch failed', backupErr);
             }
@@ -2690,7 +2769,7 @@ router.post('/meta/patch', validateAvatarUrlMiddleware, async function (request,
                 chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, result.integrity),
             };
             const jsonlData = [headerWithIntegrity, ...(existing.body ?? [])].map(m => JSON.stringify(m)).join('\n');
-            getBackupFunction(handle)(request.user.directories.backups, cardName, jsonlData);
+            getBackupFunction(handle, cardName)(request.user.directories.backups, cardName, jsonlData);
         } catch (backupErr) {
             console.error('Chat backup after meta/patch failed', backupErr);
         }
@@ -2954,7 +3033,7 @@ router.post('/state/patch', async function (request, response) {
                 const backupName = repoKey.isGroup ? repoKey.groupId : (repoKey.charDir ?? '');
                 if (backupName) {
                     const jsonlData = [headerWithIntegrity, ...(chatDoc.body ?? [])].map(m => JSON.stringify(m)).join('\n');
-                    getBackupFunction(repoKey.handle)(request.user.directories.backups, backupName, jsonlData);
+                    getBackupFunction(repoKey.handle, backupName)(request.user.directories.backups, backupName, jsonlData);
                 }
             }
         } catch (backupErr) {
@@ -3694,7 +3773,7 @@ router.post('/group/append', async function (request, response) {
                         chat_metadata: applyIntegrityToMetadata(chatDoc.header?.chat_metadata, chatDoc.integrity),
                     };
                     const jsonlData = [headerWithIntegrity, ...(chatDoc.body ?? [])].map(m => JSON.stringify(m)).join('\n');
-                    getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+                    getBackupFunction(handle, id)(request.user.directories.backups, id, jsonlData);
                 }
             } catch (backupErr) {
                 console.error('Chat backup after group/append failed', backupErr);
@@ -3769,7 +3848,7 @@ router.post('/group/patch', async function (request, response) {
                     chat_metadata: applyIntegrityToMetadata(patched.header?.chat_metadata, saved.integrity),
                 };
                 const jsonlData = [headerWithIntegrity, ...(patched.body ?? [])].map(m => JSON.stringify(m)).join('\n');
-                getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+                getBackupFunction(handle, id)(request.user.directories.backups, id, jsonlData);
             } catch (backupErr) {
                 console.error('Chat backup after group/patch failed', backupErr);
             }
@@ -3904,7 +3983,7 @@ router.post('/group/meta/patch', async function (request, response) {
                     chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, saved.integrity),
                 };
                 const jsonlData = [headerWithIntegrity].map(m => JSON.stringify(m)).join('\n');
-                getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+                getBackupFunction(handle, id)(request.user.directories.backups, id, jsonlData);
             } catch (backupErr) {
                 console.error('Chat backup after group/meta/patch failed', backupErr);
             }
@@ -3930,7 +4009,7 @@ router.post('/group/meta/patch', async function (request, response) {
                 chat_metadata: applyIntegrityToMetadata(newHeader.chat_metadata, result.integrity),
             };
             const jsonlData = [headerWithIntegrity, ...(existing.body ?? [])].map(m => JSON.stringify(m)).join('\n');
-            getBackupFunction(handle)(request.user.directories.backups, id, jsonlData);
+            getBackupFunction(handle, id)(request.user.directories.backups, id, jsonlData);
         } catch (backupErr) {
             console.error('Chat backup after group/meta/patch failed', backupErr);
         }

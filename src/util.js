@@ -157,7 +157,7 @@ export async function getVersion() {
         // suppress exception
     }
 
-    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.18.0').trim() || '1.18.0';
+    const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.19.0').trim() || '1.19.0';
     const agent = `Luker:${pkgVersion}:Cohee#1207`;
     const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
     const isDockerRuntime = isDocker();
@@ -709,6 +709,20 @@ export async function readAllChunks(readableStream) {
     });
 }
 
+/**
+ * Creates a precisely-sized ArrayBuffer from a Uint8Array view such as a Node Buffer.
+ * This avoids leaking unrelated bytes from the underlying backing store.
+ * @param {Uint8Array} view Source byte view
+ * @returns {ArrayBuffer} Exact ArrayBuffer slice for the provided view
+ */
+export function getArrayBufferSlice(view) {
+    if (!(view instanceof Uint8Array)) {
+        throw new TypeError('Expected Uint8Array');
+    }
+
+    return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+}
+
 function isObject(item) {
     return (item && typeof item === 'object' && !Array.isArray(item));
 }
@@ -887,18 +901,7 @@ export function removeOldBackups(directory, prefix, limit = null) {
  * @returns {string[]} List of image file names
  */
 export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_TYPE.IMAGE) {
-    function getSortFunction() {
-        switch (sortBy) {
-            case 'name':
-                return Intl.Collator().compare;
-            case 'date':
-                return (a, b) => fs.statSync(path.join(directoryPath, a)).mtimeMs - fs.statSync(path.join(directoryPath, b)).mtimeMs;
-            default:
-                return (_a, _b) => 0;
-        }
-    }
-
-    return fs
+    const files = fs
         .readdirSync(directoryPath, { withFileTypes: true })
         .filter(dirent => dirent.isFile())
         .map(dirent => dirent.name)
@@ -917,8 +920,28 @@ export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_T
                 return true;
             }
             return false;
-        })
-        .sort(getSortFunction());
+        });
+
+    switch (sortBy) {
+        case 'name':
+            return files.sort(Intl.Collator().compare);
+        case 'date': {
+            const mtimes = new Map();
+            for (const file of files) {
+                try {
+                    mtimes.set(file, fs.statSync(path.join(directoryPath, file)).mtimeMs);
+                } catch (err) {
+                    if (err?.code !== 'ENOENT') {
+                        throw err;
+                    }
+                    mtimes.set(file, 0);
+                }
+            }
+            return files.sort((a, b) => mtimes.get(a) - mtimes.get(b));
+        }
+        default:
+            return files;
+    }
 }
 
 /**

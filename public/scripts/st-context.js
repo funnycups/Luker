@@ -160,6 +160,7 @@ import { getChatCompletionConnectionProfiles, resolveChatCompletionRequestProfil
 import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName, removeReasoningFromString } from './reasoning.js';
 import { IGNORE_SYMBOL, inject_ids } from './constants.js';
 import { macros } from './macros/macro-system.js';
+import { MessageFormatter } from './message-formatter.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 import { createFloorState } from './floor-state.js';
@@ -2685,6 +2686,7 @@ export function getContext() {
         scrollChatToBottom,
         scrollOnMediaLoad,
         macros,
+        messageFormatter: MessageFormatter,
         loader,
         swipe: {
             left: swipe_left,

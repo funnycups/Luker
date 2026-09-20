@@ -504,6 +504,49 @@ describe('MacroLexer', () => {
             expect(tokens).toEqual(expectedTokens);
         });
         // TODO: test invalid argument name identifiers
+
+        // REGRESSION TEST: https://github.com/SillyTavern/SillyTavern/issues/5618
+        // {{setvar::foo::|bar}} - pipe character should NOT be treated as Filter.Pipe (which breaks parsing)
+        test('should handle pipe character in argument values (issue #5618)', async () => {
+            const input = '{{setvar::foo::|bar}}';
+            const tokens = await runLexerGetTokens(input);
+
+            const expectedTokens = [
+                { type: 'Macro.Start', text: '{{' },
+                { type: 'Macro.Identifier', text: 'setvar' },
+                { type: 'Args.DoubleColon', text: '::' },
+                { type: 'Identifier', text: 'foo' },
+                { type: 'Args.DoubleColon', text: '::' },
+                // Pipe is captured as Unknown (not Filter.Pipe), which allows the macro to parse correctly
+                { type: 'Unknown', text: '|' },
+                { type: 'Identifier', text: 'bar' },
+                { type: 'Macro.End', text: '}}' },
+            ];
+
+            expect(tokens).toEqual(expectedTokens);
+        });
+
+        // Test multiple pipes in argument values
+        test('should handle multiple pipe characters in argument values', async () => {
+            const input = '{{setvar::key::a|b|c}}';
+            const tokens = await runLexerGetTokens(input);
+
+            const expectedTokens = [
+                { type: 'Macro.Start', text: '{{' },
+                { type: 'Macro.Identifier', text: 'setvar' },
+                { type: 'Args.DoubleColon', text: '::' },
+                { type: 'Identifier', text: 'key' },
+                { type: 'Args.DoubleColon', text: '::' },
+                { type: 'Identifier', text: 'a' },
+                { type: 'Unknown', text: '|' },
+                { type: 'Identifier', text: 'b' },
+                { type: 'Unknown', text: '|' },
+                { type: 'Identifier', text: 'c' },
+                { type: 'Macro.End', text: '}}' },
+            ];
+
+            expect(tokens).toEqual(expectedTokens);
+        });
     });
 
     describe('Macro Execution Modifiers', () => {
@@ -927,7 +970,8 @@ describe('MacroLexer', () => {
         });
     });
 
-    describe('Macro Output Modifiers', () => {
+    // SKIPPED: Pipe/filter feature temporarily disabled. See https://github.com/SillyTavern/SillyTavern/issues/5618
+    describe.skip('Macro Output Modifiers', () => {
         // {{macro | outputModifier}}
         test('should support output modifier without arguments', async () => {
             const input = '{{macro | outputModifier}}';

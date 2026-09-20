@@ -35,7 +35,7 @@ SillyTavernは、多くのLLM API（KoboldAI/CPP、Horde、NovelAI、Ooba、Tabb
 
 SillyTavern（略してST）は、テキスト生成LLM、画像生成エンジン、TTS音声モデルと対話するための、ローカルにインストールされるユーザーインターフェースです。
 
-2023年2月にTavernAI 1.2.8のフォークとして始まり、SillyTavernは現在200人以上の貢献者と2年間の独立した開発を経て、知識豊富なAI愛好家のための主要なソフトウェアとして機能し続けています。
+2023年2月にTavernAI 1.2.8のフォークとして始まり、SillyTavernは現在300人以上の貢献者と3年間の独立した開発を経て、知識豊富なAI愛好家のための主要なソフトウェアとして機能し続けています。
 
 ## 私たちのビジョン
 
@@ -88,6 +88,7 @@ SillyTavern（略してST）は、テキスト生成LLM、画像生成エンジ�
 * CncAnonのTavernAITurbo modの一部を許可を得て使用
 * PepperTacoの作品に触発されたビジュアルノベルモード (<https://github.com/peppertaco/Tavern/>)
 * GoogleによるNoto Sansフォント (OFLライセンス)
+* Chevrotainによるレキサー/パーサー (Apache-2.0ライセンス) <https://github.com/chevrotain/chevrotain>
 * Font Awesomeによるアイコンテーマ <https://fontawesome.com> (アイコン: CC BY 4.0, フォント: SIL OFL 1.1, コード: MITライセンス)
 * @OtisAlejandroによるデフォルトコンテンツ（Seraphinaキャラクターと伝承本）と@kallmefloccによる10K Discordユーザー記念背景
 * [@mrguymiah](https://github.com/mrguymiah)と[@Bronya-Rand](https://github.com/Bronya-Rand)によるDockerガイド

@@ -220,14 +220,24 @@ export async function dispatchClaude(ctx) {
         }
 
         if (body.json_schema) {
-            const jsonTool = buildClaudeTool({
-                name: body.json_schema.name,
-                description: body.json_schema.description || 'Well-formed JSON object',
-                parameters: body.json_schema.value,
-            });
-            if (jsonTool) {
-                requestBody.tools = [...(requestBody.tools || []), jsonTool];
-                requestBody.tool_choice = { type: 'tool', name: jsonTool.name };
+            if (modelIdMatchesFamily(body.model, /^claude-fable-5-1/)) {
+                // Fable 5.1 rejects forced tools, but supports native JSON outputs.
+                requestBody.output_config = {
+                    format: {
+                        type: 'json_schema',
+                        schema: body.json_schema.value,
+                    },
+                };
+            } else {
+                const jsonTool = buildClaudeTool({
+                    name: body.json_schema.name,
+                    description: body.json_schema.description || 'Well-formed JSON object',
+                    parameters: body.json_schema.value,
+                });
+                if (jsonTool) {
+                    requestBody.tools = [...(requestBody.tools || []), jsonTool];
+                    requestBody.tool_choice = { type: 'tool', name: jsonTool.name };
+                }
             }
         }
 
@@ -255,18 +265,22 @@ export async function dispatchClaude(ctx) {
         }
 
         const reasoningEffort = body.reasoning_effort;
+        const includeReasoning = Boolean(body.include_reasoning);
         const budgetTokens = calculateClaudeBudgetTokens(requestBody.max_tokens, reasoningEffort, requestBody.stream, isAdaptiveModel);
 
         if (useThinking && typeof budgetTokens === 'string') {
             fixThinkingPrefill = true;
             requestBody.thinking = { type: 'adaptive' };
-            const includeReasoning = Boolean(body.include_reasoning);
             if (noSamplingModel && includeReasoning) {
                 requestBody.thinking.display = 'summarized';
             }
             requestBody.output_config ??= {};
             requestBody.output_config.effort = budgetTokens;
             delete requestBody.top_k;
+        } else if (useThinking && modelIdMatchesFamily(body.model, /^claude-(fable|mythos-5|mythos-preview|opus-5|sonnet-5)/) && reasoningEffort === 'auto' && includeReasoning) {
+            // Fable/Claude 5 auto thinking is already enabled, but readable summaries require an explicit display request.
+            fixThinkingPrefill = true;
+            requestBody.thinking = { type: 'adaptive', display: 'summarized' };
         } else if (useThinking && Number.isInteger(budgetTokens)) {
             fixThinkingPrefill = true;
             const minThinkTokens = 1024;

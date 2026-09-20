@@ -36,7 +36,7 @@ describe('dispatchSdBfl', () => {
     test('happy path: submit → poll → Ready → emit {image}', async () => {
         const fetchMock = jest.fn(async (url) => {
             const s = String(url);
-            if (/api\.bfl\.ml\/v1\/flux-pro$/.test(s)) {
+            if (/api\.bfl\.ai\/v1\/flux-pro$/.test(s)) {
                 return new Response(JSON.stringify({ id: 'task-1' }), { status: 200, headers: { 'content-type': 'application/json' } });
             }
             if (s.includes('/get_result')) {
@@ -54,7 +54,7 @@ describe('dispatchSdBfl', () => {
         const payload = JSON.parse(chunkToStr(chunks[0]));
         expect(payload.image).toBe(Buffer.from([1, 2, 3]).toString('base64'));
         const [firstUrl, firstInit] = fetchMock.mock.calls[0];
-        expect(String(firstUrl)).toBe('https://api.bfl.ml/v1/flux-pro');
+        expect(String(firstUrl)).toBe('https://api.bfl.ai/v1/flux-pro');
         expect(firstInit.headers['x-key']).toBe('bfl-key');
         expect(firstInit.signal).toBeDefined();
     }, 15000);
@@ -63,7 +63,7 @@ describe('dispatchSdBfl', () => {
         let pollCount = 0;
         const fetchMock = jest.fn(async (url) => {
             const s = String(url);
-            if (/api\.bfl\.ml\/v1\/flux-pro$/.test(s)) {
+            if (/api\.bfl\.ai\/v1\/flux-pro$/.test(s)) {
                 return new Response(JSON.stringify({ id: 'task-1' }), { status: 200, headers: { 'content-type': 'application/json' } });
             }
             if (s.includes('/get_result')) {

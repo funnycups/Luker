@@ -185,12 +185,14 @@ export async function dispatchMakerSuite(ctx) {
             'gemini-2.0-flash-preview-image-generation',
             'gemini-2.5-flash-image-preview',
             'gemini-2.5-flash-image',
-            'gemini-3-pro-image-preview',
-            'gemini-3.1-flash-image-preview',
+            'gemini-3-pro-image',
+            'gemini-3.1-flash-image',
         ];
 
         const isThinkingConfigModel = m => (modelIdMatchesFamily(m, /^gemini-2.5-(flash|pro)/) && !/-image(-preview)?$/.test(m)) || (modelIdMatchesFamily(m, /^gemini-3[.\d]*-(flash|pro)/));
         const isImageSizeModel = m => modelIdMatchesFamily(m, /^gemini-3/);
+        // https://ai.google.dev/gemini-api/docs/latest-model#api-changes-and-parameter-updates
+        const noSamplingModel = modelIdMatchesFamily(model, /^gemini-3\.[67]-flash|^gemini-3\.5-flash-lite/);
 
         const noSearchModels = [
             'gemini-2.0-flash-lite',
@@ -202,6 +204,13 @@ export async function dispatchMakerSuite(ctx) {
 
         if (!Array.isArray(generationConfig.stopSequences) || !generationConfig.stopSequences.length) {
             delete generationConfig.stopSequences;
+        }
+
+        if (noSamplingModel) {
+            delete generationConfig.temperature;
+            delete generationConfig.topP;
+            delete generationConfig.topK;
+            delete generationConfig.candidateCount;
         }
 
         const enableImageModality = requestImages && imageGenerationModels.includes(model);

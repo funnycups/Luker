@@ -8,6 +8,7 @@ import {
     CHAT_COMPLETION_SOURCES,
     OPENROUTER_HEADERS,
     SILICONFLOW_ENDPOINT,
+    POLLINATIONS_ENDPOINT,
 } from '../../constants.js';
 import {
     color,
@@ -55,6 +56,7 @@ import { dispatchElectronHub } from '../../luker-dispatch/providers/chat-complet
 import { dispatchAzureOpenAI } from '../../luker-dispatch/providers/chat-completions/azure-openai.js';
 import { dispatchOpenAICompatible } from '../../luker-dispatch/providers/chat-completions/openai-compatible.js';
 import { dispatchOpenAIResponses } from '../../luker-dispatch/providers/chat-completions/openai-responses.js';
+import { fetchGoogleModels, GoogleModelsHttpError } from './google-models.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -609,8 +611,9 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = readProviderSecret(request, SECRET_KEYS.AIMLAPI);
             headers = { ...AIMLAPI_HEADERS };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.POLLINATIONS) {
+            const isAnonymous = request.body.pollinations_endpoint === POLLINATIONS_ENDPOINT.ANONYMOUS;
             apiUrl = 'https://gen.pollinations.ai/text';
-            apiKey = readSecret(request.user.directories, SECRET_KEYS.POLLINATIONS, request.body.secret_id);
+            apiKey = isAnonymous ? 'anonymous' : readSecret(request.user.directories, SECRET_KEYS.POLLINATIONS, request.body.secret_id);
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.GROQ) {
             apiUrl = API_GROQ;
@@ -626,9 +629,61 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MOONSHOT) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.FIREWORKS) {
-            apiUrl = API_FIREWORKS;
             apiKey = readProviderSecret(request, SECRET_KEYS.FIREWORKS);
-            headers = {};
+            const modelsUrl = 'https://api.fireworks.ai/v1/accounts/fireworks/models?filter=supports_serverless%3Dtrue&pageSize=200';
+
+            try {
+                const response = await fetch(modelsUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': 'Bearer ' + apiKey,
+                        ...headers,
+                    },
+                });
+
+                if (response.ok) {
+                    /** @type {any} */
+                    const data = await response.json();
+                    const models = Array.isArray(data?.models)
+                        ? data.models
+                            .filter(m => m?.contextLength > 0 && m?.kind !== 'EMBEDDING_MODEL')
+                            .map(m => ({
+                                id: m.name,
+                                name: m.displayName,
+                                context_length: m.contextLength,
+                                supports_tools: m.supportsTools,
+                                supports_image_input: m.supportsImageInput,
+                            }))
+                        : [];
+
+                    // Add fast router versions for models that have them
+                    const fastRouters = {
+                        'accounts/fireworks/models/glm-5p2': 'accounts/fireworks/routers/glm-5p2-fast',
+                        'accounts/fireworks/models/kimi-k2p6': 'accounts/fireworks/routers/kimi-k2p6-fast',
+                        'accounts/fireworks/models/kimi-k2p7-code': 'accounts/fireworks/routers/kimi-k2p7-code-fast',
+                        'accounts/fireworks/models/kimi-k3': 'accounts/fireworks/routers/kimi-k3-fast',
+                    };
+                    for (const [standardId, fastId] of Object.entries(fastRouters)) {
+                        const standard = models.find(m => m.id === standardId);
+                        if (standard) {
+                            models.push({
+                                ...standard,
+                                id: fastId,
+                                name: standard.name + ' (fast)',
+                            });
+                        }
+                    }
+
+                    console.debug('Available Fireworks models:', models.map(m => m.id));
+                    return statusResponse.send({ data: models });
+                } else {
+                    console.warn('Fireworks models endpoint failed:', response.status, response.statusText);
+                    return statusResponse.send({ error: true, data: { data: [] } });
+                }
+            } catch (error) {
+                console.error('Error fetching Fireworks models:', error);
+                return statusResponse.send({ error: true, data: { data: [] } });
+            }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CLAUDE) {
             apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_CLAUDE).toString();
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.CLAUDE) || '';
@@ -646,14 +701,14 @@ router.post('/status', async function (request, statusResponse) {
                     headers: {
                         'anthropic-version': '2023-06-01',
                         ...(apiKey ? { 'x-api-key': apiKey } : {}),
-                        ...headers,
+                       ...headers,
                     },
                 });
 
                 if (response.ok) {
                     /** @type {any} */
                     const data = await response.json();
-                    const models = (Array.isArray(data?.data) ? data.data : [])
+                   const models = (Array.isArray(data?.data) ? data.data : [])
                         .map(model => ({ id: String(model?.id || '').trim() }))
                         .filter(model => model.id.length > 0);
 
@@ -752,7 +807,7 @@ router.post('/status', async function (request, statusResponse) {
             } catch (error) {
                 console.error('Error fetching Vertex AI models:', error);
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
-            }
+           }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MAKERSUITE) {
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
             apiUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || API_MAKERSUITE);
@@ -767,26 +822,15 @@ router.post('/status', async function (request, statusResponse) {
             }
 
             try {
-                const response = await fetch(modelsUrl);
-
-                if (response.ok) {
-                    /** @type {any} */
-                    const data = await response.json();
-                    // Transform Google AI Studio models to OpenAI format
-                    const models = data.models
-                        ?.filter(model => model.supportedGenerationMethods?.includes('generateContent'))
-                        ?.map(model => ({
-                            ...model,
-                            id: model.name.replace('models/', ''),
-                        })) || [];
-
-                    console.info('Available Google AI Studio models:', models.map(m => m.id));
-                    return statusResponse.send({ data: models });
-                } else {
-                    console.warn('Google AI Studio models endpoint failed:', response.status, response.statusText);
+                const models = await fetchGoogleModels(modelsUrl);
+                console.info('Available Google AI Studio models:', models.map(m => m.id));
+                return statusResponse.send({ data: models });
+            } catch (error) {
+                if (error instanceof GoogleModelsHttpError) {
+                    console.warn('Google AI Studio models endpoint failed:', error.status, error.statusText);
                     return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
                 }
-            } catch (error) {
+
                 console.error('Error fetching Google AI Studio models:', error);
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
             }
