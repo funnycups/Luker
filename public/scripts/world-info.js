@@ -10647,7 +10647,7 @@ export async function importWorldInfo(file) {
  * Forces the world info editor to open on a specific world.
  * @param {string} worldName The name of the world to open
  */
-export function openWorldInfoEditor(worldName) {
+export async function openWorldInfoEditor(worldName) {
     console.log(`Opening lorebook for ${worldName}`);
     const worldInfo = $('#WorldInfo');
     const selectWorld = () => {
@@ -10666,7 +10666,7 @@ export function openWorldInfoEditor(worldName) {
     // event handlers. Wait for the drawer to have a real layout before
     // rendering entries, otherwise autoSetHeight textareas measure at 0px
     // and long entry titles keep the same height as short ones.
-    void waitUntilCondition(() => {
+    await waitUntilCondition(() => {
         const element = worldInfo[0];
         if (!(element instanceof HTMLElement) || !element.classList.contains('openDrawer')) {
             return false;
@@ -10674,9 +10674,9 @@ export function openWorldInfoEditor(worldName) {
 
         const rect = element.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
-    }, 1000, 16, { rejectOnTimeout: false })
-        .then(() => new Promise((resolve) => requestAnimationFrame(resolve)))
-        .then(selectWorld);
+    }, 1000, 16, { rejectOnTimeout: false });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    selectWorld();
 }
 
 /**
