@@ -289,6 +289,39 @@ This pairs naturally with <span v-pre>`{{each}}`</span>: an NPC roster, an inven
 {{/each}}
 ```
 
+### Single-key access — <span v-pre>`{{getvarkey}}`</span> / <span v-pre>`{{setvarkey}}`</span>
+
+::: tip Implementation provenance
+The key-addressed family below comes from stock SillyTavern. The [dotted paths](#dotted-paths-for-structured-values) are a Luker extension that reaches arbitrary depth in a single macro. Both forms are available for compatibility with content written for stock SillyTavern.
+:::
+
+SillyTavern's key-addressed family is available as-is:
+
+| Macro | Alias | Scope |
+|---|---|---|
+| <span v-pre>`{{getvarkey::name::key}}`</span> | `getvarindex` | Local |
+| <span v-pre>`{{setvarkey::name::key::value}}`</span> | `setvarindex` | Local |
+| <span v-pre>`{{getglobalvarkey::name::key}}`</span> | `getglobalvarindex` | Global |
+| <span v-pre>`{{setglobalvarkey::name::key::value}}`</span> | `setglobalvarindex` | Global |
+
+These read or write **one** key (or array index) of a JSON-stringified variable. A numeric-looking key creates an array, anything else an object:
+
+```text
+{{setvarkey::roster::alice::40}}[{{getvarkey::roster::alice}}]  → [40]
+{{setvarkey::log::0::first}}{{setvarkey::log::1::second}}        → numeric keys, so `log` is an array
+[{{getvarkey::log::1}}]                                          → [second]
+```
+
+Prefer the [dotted paths](#dotted-paths-for-structured-values) above for new content: they reach any depth in one macro and write through the same syntax. The `varkey` form addresses a single level only, so reaching `roster.alice.hp` takes a read-modify-write you have to spell out yourself.
+
+The one thing it does that dotted paths cannot: the key is taken **verbatim**, so it is the way to address a key that itself contains a dot.
+
+```text
+{{setvarkey::metrics::p95.latency::120}}   → sets the literal key "p95.latency"
+{{getvarkey::metrics::p95.latency}}        → 120
+{{getvar::metrics.p95.latency}}            → empty: the dotted form splits at each dot
+```
+
 ### Per-message (floor) variables {#per-message-variables}
 
 In stock SillyTavern, side-effect macros like <span v-pre>`{{setvar::hp::50}}`</span> only run when they appear in a *prompt template* — preset, world info, or the very first message. When the AI writes the same literal in its reply, it does nothing and shows up verbatim in the chat.
@@ -507,6 +540,10 @@ These tokens are recognized by the parser today but no runtime hook consumes the
 Flags can be combined and whitespace between flag and name is allowed: <code v-pre>{{ #each ::list}} … {{/each}}</code>.
 
 ### `|` — pipe (ordinary character)
+
+::: tip Why this differs from SillyTavern
+Stock SillyTavern parses a pipe as an argument terminator and supports output filters such as <code v-pre>{{macro|uppercase}}</code>. That implementation is temporarily disabled upstream (issue #5618), and Luker follows the upstream lexer, so the behavior described here matches upstream.
+:::
 
 The pipe has no special meaning inside macro arguments. The lexer does not treat `|` as an argument terminator, so the character is ordinary content and reaches the macro verbatim:
 

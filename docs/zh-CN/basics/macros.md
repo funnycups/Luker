@@ -289,6 +289,39 @@ body 里：
 {{/each}}
 ```
 
+### 单键读写 —— <code v-pre>{{getvarkey}}</code> / <code v-pre>{{setvarkey}}</code>
+
+::: tip 实现来源说明
+本节的按键寻址宏族来自 SillyTavern 原版；[点号路径](#结构化值的点号路径)则是 Luker 的扩展，单个宏即可访问任意深度。为兼容面向原版 SillyTavern 编写的内容，两种写法均可用。
+:::
+
+SillyTavern 的按键寻址宏族可以直接使用：
+
+| 宏 | 别名 | 作用域 |
+|---|---|---|
+| <code v-pre>{{getvarkey::name::key}}</code> | `getvarindex` | 局部 |
+| <code v-pre>{{setvarkey::name::key::value}}</code> | `setvarindex` | 局部 |
+| <code v-pre>{{getglobalvarkey::name::key}}</code> | `getglobalvarindex` | 全局 |
+| <code v-pre>{{setglobalvarkey::name::key::value}}</code> | `setglobalvarindex` | 全局 |
+
+它们读写 JSON 字符串化变量里的**单个**键（或数组下标）。键看起来是数字时会建成数组，否则建成对象：
+
+```text
+{{setvarkey::roster::alice::40}}[{{getvarkey::roster::alice}}]  → [40]
+{{setvarkey::log::0::first}}{{setvarkey::log::1::second}}        → 键是数字，所以 `log` 是数组
+[{{getvarkey::log::1}}]                                          → [second]
+```
+
+新写的内容建议优先用上面的[点号路径](#结构化值的点号路径)：一个宏就能抵达任意深度，写入也用同一套语法。`varkey` 只能处理一层，要写到 `roster.alice.hp` 得自己拼「读—改—写」。
+
+它有一件点号路径做不到的事：键会被**原样**取用，所以当键本身含点号时只能用它。
+
+```text
+{{setvarkey::metrics::p95.latency::120}}   → 设置字面键 "p95.latency"
+{{getvarkey::metrics::p95.latency}}        → 120
+{{getvar::metrics.p95.latency}}            → 空：点号形式会在每个点处切分
+```
+
 ### 逐楼层变量 {#per-message-variables}
 
 原生 SillyTavern 里，副作用宏 <code v-pre>{{setvar::hp::50}}</code> 只在 *prompt 范本* 里（预设、世界书、首楼）才会运行。AI 在回复里写同样的字面量什么都不会发生，还会原样显示出来污染叙事。
@@ -507,6 +540,10 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 标志位之间、标志位和宏名之间都允许空白，多个可以组合：<code v-pre>{{ #each ::list}} … {{/each}}</code>。
 
 ### `|` — 管道符（普通字符）
+
+::: tip 与 SillyTavern 行为差异的由来
+原版 SillyTavern 将管道符解析为参数终止符，并支持 <code v-pre>{{macro|uppercase}}</code> 一类输出修饰器。该实现在上游被暂时禁用（issue #5618），Luker 遵循上游的词法分析器，因此本节描述的行为与上游保持一致。
+:::
 
 管道符在宏参数里没有特殊含义。lexer 不把 `|` 当参数终止符，所以它是普通内容，会原样传给宏：
 

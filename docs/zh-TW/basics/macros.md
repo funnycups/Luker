@@ -289,6 +289,39 @@ body 裡：
 {{/each}}
 ```
 
+### 單鍵讀寫 —— <code v-pre>{{getvarkey}}</code> / <code v-pre>{{setvarkey}}</code>
+
+::: tip 實作來源說明
+本節的按鍵尋址巨集族來自 SillyTavern 原版；[點號路徑](#結構化值的點號路徑)則是 Luker 的擴充，單一巨集即可存取任意深度。為相容面向原版 SillyTavern 編寫的內容，兩種寫法皆可使用。
+:::
+
+SillyTavern 的按鍵尋址巨集族可以直接使用：
+
+| 巨集 | 別名 | 作用域 |
+|---|---|---|
+| <code v-pre>{{getvarkey::name::key}}</code> | `getvarindex` | 區域 |
+| <code v-pre>{{setvarkey::name::key::value}}</code> | `setvarindex` | 區域 |
+| <code v-pre>{{getglobalvarkey::name::key}}</code> | `getglobalvarindex` | 全域 |
+| <code v-pre>{{setglobalvarkey::name::key::value}}</code> | `setglobalvarindex` | 全域 |
+
+它們讀寫 JSON 字串化變數裡的**單個**鍵（或陣列索引）。鍵看起來是數字時會建成陣列，否則建成物件：
+
+```text
+{{setvarkey::roster::alice::40}}[{{getvarkey::roster::alice}}]  → [40]
+{{setvarkey::log::0::first}}{{setvarkey::log::1::second}}        → 鍵是數字，所以 `log` 是陣列
+[{{getvarkey::log::1}}]                                          → [second]
+```
+
+新寫的內容建議優先使用上面的[點號路徑](#結構化值的點號路徑)：一個巨集就能抵達任意深度，寫入也用同一套語法。`varkey` 只能處理一層，要寫到 `roster.alice.hp` 得自己拼「讀—改—寫」。
+
+它有一件點號路徑做不到的事：鍵會被**原樣**取用，所以當鍵本身含點號時只能用它。
+
+```text
+{{setvarkey::metrics::p95.latency::120}}   → 設定字面鍵 "p95.latency"
+{{getvarkey::metrics::p95.latency}}        → 120
+{{getvar::metrics.p95.latency}}            → 空：點號形式會在每個點處切分
+```
+
 ### 逐樓層變數 {#per-message-variables}
 
 原生 SillyTavern 裡，副作用巨集 <code v-pre>{{setvar::hp::50}}</code> 只在 *prompt 範本* 裡（預設、世界書、首樓）才會執行。AI 在回覆裡寫同樣的字面量什麼都不會發生，還會原樣顯示出來污染敘事。
@@ -507,6 +540,10 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 旗標之間、旗標和巨集名之間都允許空白，多個可以組合：<code v-pre>{{ #each ::list}} … {{/each}}</code>。
 
 ### `|` — 管道符（普通字元）
+
+::: tip 與 SillyTavern 行為差異的由來
+原版 SillyTavern 將管道符解析為參數終止符，並支援 <code v-pre>{{macro|uppercase}}</code> 一類輸出修飾器。該實現在上游被暫時停用（issue #5618），Luker 遵循上游的詞法分析器，因此本節描述的行為與上游保持一致。
+:::
 
 管道符在巨集參數裡沒有特殊含義。lexer 不把 `|` 當參數終止符，所以它是普通內容，會原樣傳給巨集：
 
