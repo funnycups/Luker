@@ -486,6 +486,7 @@ let lukerRecoveryJobId = '';
 let lukerRecoveryChatId = '';
 let lukerRecoveryEventSource = null;
 let lukerRecoveryLastSeq = 0;
+let lukerRecoveryFinalizeBusy = false;
 const LUKER_RECOVERY_PREVIEW_ID = 'luker_generation_recovery_preview';
 const LUKER_SERVER_PERSISTENCE_APIS = new Set(['openai', 'textgenerationwebui', 'kobold', 'novel']);
 let lastLukerGenerationId = '';
@@ -666,6 +667,75 @@ function removeLukerRecoveryPreview() {
     chatElement.find(`#${LUKER_RECOVERY_PREVIEW_ID}`).remove();
 }
 
+/**
+ * Complete a server-side generation recovered through the SSE/poll preview
+ * flow. Mirrors the normal generation-finish contract (onFinishStreaming /
+ * the takeover commit path) so extensions see a recovered reply exactly like
+ * a locally-received one:
+ *
+ *   1. reloadCurrentChat() re-reads the server-persisted message into chat[].
+ *   2. extractMessageById runs the side-effect-macro scan on the recovered
+ *      reply (the server persisted the raw text; without this, {{setvar}}
+ *      etc. in a recovered reply never fire and the var-ops panel never
+ *      shows the op).
+ *   3. The mutation is persisted BEFORE any event fires (6c99b32d0
+ *      persist-before-emit contract — extension listeners that react by
+ *      saving the chat must not race us into a double write).
+ *   4. GENERATION_ENDED → MESSAGE_RECEIVED → CHARACTER_MESSAGE_RENDERED
+ *      fire in that order (2edca162d ordering contract) with the recovered
+ *      message id and generation type 'normal', so memory-graph extraction,
+ *      vectors indexing, TTS teardown, token display, and reasoning parse
+ *      all see the message.
+ *
+ * Skipped when another generation is running (the recovery was torn down by
+ * GENERATION_STARTED; a live Generate owns the events), when the chat
+ * changed since recovery started, or when the terminal payload carried no
+ * text (failed/cancelled jobs have nothing to announce — the reload still
+ * happens so any partial server-persisted state becomes visible).
+ *
+ * @param {string} finalText Terminal job text (may be empty on failure)
+ */
+async function finalizeLukerRecoveredGeneration(finalText = '') {
+    if (lukerRecoveryFinalizeBusy) {
+        return;
+    }
+    lukerRecoveryFinalizeBusy = true;
+    try {
+        const finalizingChatId = lukerRecoveryChatId;
+        const wasBusyAnnounced = is_send_press;
+        stopLukerGenerationRecovery();
+        await reloadCurrentChat();
+
+        if (!finalText || wasBusyAnnounced || isGenerating() || !selected_group && this_chid === undefined) {
+            return;
+        }
+        if (finalizingChatId !== getCurrentChatId()) {
+            return;
+        }
+
+        const messageId = chat.length - 1;
+        const message = chat[messageId];
+        if (!message || message.is_user) {
+            return;
+        }
+
+        extractMessageById(messageId);
+        redrawMessageBubble(messageId);
+        await saveChatConditional();
+
+        await eventSource.emit(event_types.GENERATION_ENDED, chat.length);
+        await eventSource.emit(event_types.MESSAGE_RECEIVED, messageId, 'normal');
+        await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, messageId, 'normal');
+
+        playMessageSound();
+        notifyMessageComplete(String(message.mes || ''), String(message.name || ''));
+    } catch (error) {
+        console.warn('[LukerGeneration] Failed to finalize recovered generation', error);
+    } finally {
+        lukerRecoveryFinalizeBusy = false;
+    }
+}
+
 function stopLukerGenerationRecovery() {
     if (lukerRecoveryPollTimer) {
         clearInterval(lukerRecoveryPollTimer);
@@ -809,8 +879,7 @@ function startLukerRecoverySseStream(chatIdSnapshot) {
         if (payload?.status === 'failed') {
             stopLukerGenerationRecovery();
         } else if (payload?.status === 'completed') {
-            stopLukerGenerationRecovery();
-            void reloadCurrentChat();
+            void finalizeLukerRecoveredGeneration(liveText);
         }
     };
 
@@ -833,8 +902,13 @@ function startLukerRecoverySseStream(chatIdSnapshot) {
         // polling if the connection truly closed (readyState === CLOSED).
         if (source.readyState === EventSource.CLOSED) {
             lukerRecoveryEventSource = null;
-            // Job may have completed and the server closed the stream cleanly —
-            // refresh chat to pick up the persisted message either way.
+            // CLOSED without a terminal status frame means reconnects failed
+            // fatally — we can't distinguish "job completed, final status
+            // frame lost" from "connection died mid-job", so do NOT fire the
+            // completion event chain here (a still-running job would get
+            // phantom events). A terminal status, when it exists, is always
+            // re-delivered on the next successful reconnect via handleStatus;
+            // here just refresh the chat so any persisted state shows up.
             const stillHere = lukerRecoveryChatId === getCurrentChatId();
             stopLukerGenerationRecovery();
             if (stillHere) void reloadCurrentChat();
@@ -876,8 +950,7 @@ function startLukerRecoveryPollFallback(chatIdSnapshot) {
             }
 
             if (statusData?.status === 'completed') {
-                stopLukerGenerationRecovery();
-                await reloadCurrentChat();
+                await finalizeLukerRecoveredGeneration(String(statusData?.text || ''));
             }
         } catch (error) {
             console.warn('Failed to poll recovered generation status', error);
@@ -21652,7 +21725,17 @@ jQuery(async function () {
 
     $(window).on('beforeunload', (event) => {
         cancelTtsPlay();
-        if (streamingProcessor) {
+        // Only abort the in-flight stream when the reply is NOT recoverable
+        // server-side. For a recoverable generation (normal / regenerate on a
+        // server-persistence API) the job survives the disconnect by design:
+        // aborting here would fire the ws-delivery abort notification
+        // (/api/generation/:id/abort), kill the upstream fetch mid-stream
+        // (inspector shows 'The operation was aborted' / status 'aborted')
+        // and leave nothing to recover for the reopened tab.
+        const isRecoverableGeneration = Boolean(streamingProcessor)
+            && shouldUseLukerServerPersistenceForType(streamingProcessor.type)
+            && supportsLukerServerPersistence(main_api);
+        if (streamingProcessor && !isRecoverableGeneration) {
             console.log('Page reloaded. Aborting streaming...');
             streamingProcessor.onStopStreaming();
         }
