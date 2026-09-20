@@ -16020,12 +16020,16 @@ async function messageEditCancel(messageId = this_edit_mes_id) {
     thisMesDiv.find('.mes_edit_buttons').css('display', 'none');
     thisMesBlock.find('.mes_buttons').css('display', '');
 
-    const reasoningEditDone = thisMesBlock.find('.mes_reasoning_edit_cancel:visible');
-    if (reasoningEditDone.length > 0) {
-        reasoningEditDone.trigger('click');
-    }
-
+    // Render the message text first so the message editor is gone before the
+    // reasoning editor is cancelled: while both editors are open CSS hides
+    // `.mes_reasoning_actions`, so the `:visible` check below would match
+    // nothing and the reasoning textarea would be stranded.
     renderEditedMessage(messageId);
+
+    const reasoningEditCancel = thisMesBlock.find('.mes_reasoning_edit_cancel:visible');
+    if (reasoningEditCancel.length > 0) {
+        reasoningEditCancel.trigger('click');
+    }
 
     if (messageId == this_edit_mes_id) {
         this_edit_mes_id = undefined;
@@ -16106,17 +16110,21 @@ async function messageEditDone(div) {
     messageElement.find('.mes_edit_buttons').css('display', 'none');
     mesBlock.find('.mes_buttons').css('display', '');
 
-    const reasoningEditDone = mesBlock.find('.mes_reasoning_edit_done:visible');
-    if (reasoningEditDone.length > 0) {
-        reasoningEditDone.trigger('click');
-    }
-
     // Close the editor before async MESSAGE_EDITED listeners run, so slow listeners
     // cannot leave the textarea stranded after the action buttons disappear.
     renderEditedMessage(editedMessageId, {
         bias: chat[editedMessageId]?.extra?.bias ?? bias,
         updateBias: true,
     });
+
+    // Must run after the message textarea is gone: while both editors are open
+    // CSS hides `.mes_reasoning_actions`, so the visible check below would match
+    // nothing and the reasoning editor would stay stranded.
+    const reasoningEditDone = mesBlock.find('.mes_reasoning_edit_done:visible');
+    if (reasoningEditDone.length > 0) {
+        reasoningEditDone.trigger('click');
+    }
+
     this_edit_mes_id = undefined;
 
     await eventSource.emit(event_types.MESSAGE_EDITED, editedMessageId, getChatMessageMutationMeta(editedMessageId));

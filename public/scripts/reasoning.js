@@ -34,6 +34,15 @@ export const reasoning_templates = [];
 export const DEFAULT_REASONING_TEMPLATE = 'Think XML';
 
 /**
+ * Guards {@link initReasoning} so delegated handlers and app-event listeners
+ * are registered at most once. Duplicate registration makes a single click run
+ * its handler repeatedly, which corrupts state when the handler is not
+ * re-entrant (e.g. reading a textarea it already removed).
+ * @type {boolean}
+ */
+let reasoningInitialized = false;
+
+/**
  * @type {Record<string, JQuery<HTMLElement>>} List of UI elements for reasoning settings
  * @readonly
  */
@@ -1385,6 +1394,15 @@ function setReasoningEventHandlers() {
         }
 
         const textarea = messageBlock.find('.reasoning_edit_textarea');
+        // The edit may already have been committed by an earlier invocation of
+        // this handler (delegated handlers can run more than once for one
+        // click). `val()` on an empty selection is undefined, and
+        // `String(undefined)` would be persisted as the literal reasoning
+        // "undefined" — bail out instead of corrupting the message.
+        if (textarea.length === 0) {
+            closeReasoningDetailsWithoutContent(messageBlock);
+            return;
+        }
         let newReasoning = String(textarea.val());
         newReasoning = substituteParams(newReasoning);
         textarea.remove();
@@ -1770,6 +1788,10 @@ export async function loadReasoningTemplates(data) {
  * Initializes reasoning settings and event handlers.
  */
 export function initReasoning() {
+    if (reasoningInitialized) {
+        return;
+    }
+    reasoningInitialized = true;
     loadReasoningSettings();
     setReasoningEventHandlers();
     registerReasoningMacros();
