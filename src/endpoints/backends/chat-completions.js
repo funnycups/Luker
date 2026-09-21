@@ -34,7 +34,7 @@ import {
     webTokenizers,
     getWebTokenizer,
 } from '../tokenizers.js';
-import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
+import { getVertexAIAuth } from '../google.js';
 import {
     cancelGenerationJobForRequest,
     getActiveGenerationJobsForRequest,
@@ -57,6 +57,7 @@ import { dispatchAzureOpenAI } from '../../luker-dispatch/providers/chat-complet
 import { dispatchOpenAICompatible } from '../../luker-dispatch/providers/chat-completions/openai-compatible.js';
 import { dispatchOpenAIResponses } from '../../luker-dispatch/providers/chat-completions/openai-responses.js';
 import { fetchGoogleModels, GoogleModelsHttpError } from './google-models.js';
+import { buildVertexModelsUrl, fetchVertexModels, VertexModelsHttpError } from './vertex-models.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -64,7 +65,6 @@ const API_MISTRAL = 'https://api.mistral.ai/v1';
 const API_COHERE_V1 = 'https://api.cohere.ai/v1';
 const API_GROQ = 'https://api.groq.com/openai/v1';
 const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
-const API_VERTEX_AI = 'https://us-central1-aiplatform.googleapis.com';
 const API_CHUTES = 'https://llm.chutes.ai/v1';
 const API_ELECTRONHUB = 'https://api.electronhub.ai/v1';
 const API_NANOGPT = 'https://nano-gpt.com/api/v1';
@@ -735,76 +735,25 @@ router.post('/status', async function (request, statusResponse) {
 
                 if (authType === 'express') {
                     const keyParam = authHeader.replace('Bearer ', '');
-                    const projectId = String(request.body.vertexai_express_project_id || '').trim();
-                    const baseUrl = region === 'global'
-                        ? 'https://aiplatform.googleapis.com'
-                        : `https://${region}-aiplatform.googleapis.com`;
-                    modelsUrl = projectId
-                        ? `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models?key=${keyParam}`
-                        : `${baseUrl}/v1/publishers/google/models?key=${keyParam}`;
+                    modelsUrl = `${buildVertexModelsUrl({ region })}?key=${keyParam}`;
                 } else if (authType === 'full') {
-                    const serviceAccountJson = readProviderSecret(request, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT);
-
-                    if (!serviceAccountJson) {
-                        console.warn('Vertex AI Service Account JSON is missing.');
-                        return statusResponse.status(400).send({ error: true });
-                    }
-
-                    let projectId;
-                    try {
-                        const serviceAccount = JSON.parse(serviceAccountJson);
-                        projectId = getProjectIdFromServiceAccount(serviceAccount);
-                    } catch (error) {
-                        console.error('Failed to extract project ID from Service Account JSON:', error);
-                        return statusResponse.status(400).send({ error: true });
-                    }
-
-                    modelsUrl = region === 'global'
-                        ? `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models`
-                        : `https://${region}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models`;
+                    modelsUrl = buildVertexModelsUrl({ region });
                     modelHeaders['Authorization'] = authHeader;
                 } else {
-                    apiUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || API_VERTEX_AI);
-                    modelsUrl = `${apiUrl}/v1/publishers/google/models`;
+                    const proxyUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || '');
+                    modelsUrl = buildVertexModelsUrl({ region, origin: proxyUrl });
                     modelHeaders['Authorization'] = authHeader;
                 }
 
-                const response = await fetch(modelsUrl, {
-                    method: 'GET',
-                    headers: modelHeaders,
-                });
-
-                if (response.ok) {
-                    /** @type {any} */
-                    const data = await response.json();
-                    const rawModels = Array.isArray(data?.publisherModels) ? data.publisherModels : (Array.isArray(data?.models) ? data.models : []);
-                    const models = rawModels
-                        .filter(model =>
-                            model?.supportedActions?.includes('generateContent') ||
-                            model?.supportedActions?.includes('streamGenerateContent') ||
-                            model?.supportedGenerationMethods?.includes('generateContent') ||
-                            model?.supportedGenerationMethods?.includes('streamGenerateContent'))
-                        .map(model => String(model?.name || model?.id || '').trim())
-                        .map(name => name
-                            .replace(/^projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\//, '')
-                            .replace(/^publishers\/[^/]+\/models\//, '')
-                            .replace(/^models\//, ''))
-                        .filter(Boolean)
-                        .map(id => ({ id }));
-
-                    const uniqueModelMap = new Map();
-                    for (const model of models) {
-                        uniqueModelMap.set(model.id, model);
-                    }
-
-                    const uniqueModels = [...uniqueModelMap.values()].sort((a, b) => a.id.localeCompare(b.id));
-                    console.info('Available Vertex AI models:', uniqueModels.map(m => m.id));
-                    return statusResponse.send({ data: uniqueModels });
+                const models = await fetchVertexModels(modelsUrl, { headers: modelHeaders });
+                console.info('Available Vertex AI models:', models.map(m => m.id));
+                return statusResponse.send({ data: models });
+            } catch (error) {
+                if (error instanceof VertexModelsHttpError) {
+                    console.warn('Vertex AI models endpoint failed:', error.status, error.statusText);
+                    return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
                 }
 
-                console.warn('Vertex AI models endpoint failed:', response.status, response.statusText);
-                return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
-            } catch (error) {
                 console.error('Error fetching Vertex AI models:', error);
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
            }
