@@ -502,6 +502,28 @@ export function getStoreCoveredSeqTo(store) {
     );
 }
 
+/**
+ * Normalize an optional commit `seq` against the store's covered watermark.
+ *
+ * Every commit path stamps `normalizedSeq` onto the log entry and derives the
+ * floor from the SAME number — if the two sides disagree, floor derivation
+ * yields null and commit-diff throws "caller did not supply a valid floor".
+ *
+ * Absent seq (null / undefined / 0) resolves to `getStoreCoveredSeqTo(store)`.
+ * The graph-view editor save passes `seq = null`; coercing that to 0
+ * (`Number(null) === 0`) while the commit layer stamped the covered seq is
+ * exactly the mismatch that broke editor saves. `seqToFloor` also returns null
+ * for 0 (no assistant turn maps there), so 0 can never be a valid anchor and
+ * is treated as absent. A present finite seq is preserved.
+ */
+export function resolveStoreCommitSeq(seq, store) {
+    const covered = getStoreCoveredSeqTo(store);
+    if (seq === null || seq === undefined) return covered;
+    const numeric = Number(seq);
+    if (!Number.isFinite(numeric) || numeric === 0) return covered;
+    return Math.max(0, Math.floor(numeric));
+}
+
 function normalizePersistedStateBase(raw) {
     const normalized = createEmptyPersistedMemoryState();
     if (!raw || typeof raw !== 'object') {
