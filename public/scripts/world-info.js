@@ -4840,23 +4840,60 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
     // the menu). z-index in CSS lifts it above the drawer chrome.
     document.body.appendChild(menu);
     const rect = anchorEl.getBoundingClientRect();
-    menu.style.position = 'absolute';
-    menu.style.top = `${window.scrollY + rect.bottom + 2}px`;
-    menu.style.left = `${window.scrollX + rect.left}px`;
+    // The anchor lives in a position:fixed drawer, so fixed coordinates track it
+    // exactly; the app page itself never scrolls, so no scroll compensation.
+    menu.style.position = 'fixed';
+    menu.style.left = `${rect.left}px`;
+
+    // Clamp the menu inside the viewport. The page cannot be scrolled, so a
+    // menu that extends past the window's bottom edge would put its lower
+    // items out of reach: the menu's overflow-y only scrolls content inside
+    // the menu's own box, it can't bring the box itself back on screen.
+    // Size the menu to the space actually available below the anchor; when
+    // that's too tight to be usable, flip the menu above the anchor like a
+    // standard dropdown.
+    const ANCHOR_GAP_PX = 2;   // visual gap between the anchor button and the menu
+    const EDGE_MARGIN_PX = 8;  // breathing room so the menu doesn't touch the window edge
+    const MIN_MENU_HEIGHT_PX = 120; // ~4 leaf rows — a shorter below-anchor menu isn't usable, prefer flipping up
+    const spaceBelow = window.innerHeight - EDGE_MARGIN_PX - (rect.bottom + ANCHOR_GAP_PX);
+    let topPx = rect.bottom + ANCHOR_GAP_PX;
+    if (spaceBelow < MIN_MENU_HEIGHT_PX) {
+        // menu.offsetHeight is the natural height measured right after mount
+        // (CSS 70vh cap applies, inline max-height not yet set).
+        topPx = Math.max(EDGE_MARGIN_PX, rect.top - ANCHOR_GAP_PX - menu.offsetHeight);
+    }
+    const availableHeight = window.innerHeight - EDGE_MARGIN_PX - topPx;
+    menu.style.top = `${topPx}px`;
+    menu.style.maxHeight = `${Math.max(availableHeight, MIN_MENU_HEIGHT_PX)}px`;
 
     // Belt-and-suspenders: stop pointer events from bubbling out of the menu so that no
     // outer listener (drawer close-on-outside-click, focus trackers, etc.) reacts to a
-    // click that is logically inside our menu.
+    // click that is logically inside our menu. touchstart must be shielded too: the
+    // global drawer auto-close handler (script.js) listens for BOTH touchstart and
+    // mousedown on <html>, and the menu lives on document.body — outside every drawer
+    // — so an unshielded touchstart closes the drawer before the tap's click even fires.
     const stopBubble = (event) => { event.stopPropagation(); };
+    menu.addEventListener('touchstart', stopBubble, { passive: true });
     menu.addEventListener('mousedown', stopBubble);
     menu.addEventListener('click', stopBubble);
 
     const onOutside = (event) => {
         if (menu.contains(event.target)) {
-            // Click is INSIDE our menu — also stop the event in capture phase so
-            // any other capture-phase listener that runs after us doesn't react
+            // Click is INSIDE our menu — also stop the event in capture stage so
+            // any other capture-stage listener that runs after us doesn't react
             // to a click that logically belongs to us. Click events still dispatch
-            // to the leaf's bubble-phase handler, so menu items remain clickable.
+            // to the leaf's bubble-stage handler, so menu items remain clickable.
+            event.stopPropagation();
+            return;
+        }
+        closeBulkSetFieldMenu();
+    };
+    const onOutsideTouch = (event) => {
+        if (menu.contains(event.target)) {
+            // Same capture-stage shield for touch: the global drawer
+            // auto-close handler listens for touchstart on <html> in bubble
+            // stage; this document-level capture runs first and keeps the
+            // drawer open while the user taps inside the menu.
             event.stopPropagation();
             return;
         }
@@ -4864,15 +4901,22 @@ function openBulkSetFieldMenu(name, data, anchorEl) {
     };
     const onEscape = (event) => {
         if (event.key === 'Escape') {
+            // Dismiss the dropdown only. stopPropagation keeps the global
+            // Escape handler (RossAscends-mods.js #handleEscape) from also
+            // closing the World Info drawer underneath — Escape dismissal of
+            // a transient dropdown must not cascade to the host panel.
+            event.stopPropagation();
             closeBulkSetFieldMenu();
         }
     };
     document.addEventListener('mousedown', onOutside, true);
+    document.addEventListener('touchstart', onOutsideTouch, { capture: true, passive: true });
     document.addEventListener('keydown', onEscape, true);
 
     _activeBulkMenuTeardown = () => {
         menu.remove();
         document.removeEventListener('mousedown', onOutside, true);
+        document.removeEventListener('touchstart', onOutsideTouch, { capture: true, passive: true });
         document.removeEventListener('keydown', onEscape, true);
     };
 }
