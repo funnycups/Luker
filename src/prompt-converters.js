@@ -348,11 +348,17 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
             message.content = [...reasoningBlocks, ...message.content];
         }
 
-        // Remove offending properties
+        // Remove offending properties. Root-level `reasoning`, `signature`, and
+        // `reasoning_details` are OAI/OpenRouter/Gemini-shaped sidecars that
+        // /v1/messages rejects as extra inputs; thinking state already travelled
+        // into the content array via the extracted `reasoning_blocks` above.
         delete message.name;
         delete message.tool_calls;
         delete message.tool_call_id;
         delete message.reasoning_blocks;
+        delete message.reasoning;
+        delete message.signature;
+        delete message.reasoning_details;
     });
 
     // Images in assistant messages should be moved to the next user message

@@ -1340,6 +1340,47 @@ describe('convertClaudeMessages', () => {
         expect(redacted).toHaveLength(1);
         expect(redacted[0].data).toBe('valid');
     });
+
+    test('deletes root-level reasoning/signature/reasoning_details sidecars from output', () => {
+        // Anthropic /v1/messages rejects any property outside its message schema
+        // (`messages.N.reasoning: Extra inputs are not permitted`). OAI-shaped root
+        // sidecars must never survive conversion regardless of what the client sent.
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'a' }],
+                reasoning: 'chain-of-thought-text',
+                signature: 'sig-abc',
+                reasoning_details: [{ type: 'reasoning', text: 'detail' }],
+                reasoning_blocks: [{ type: 'thinking', thinking: 't', signature: 's' }],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        for (const message of result.messages) {
+            expect(message.reasoning).toBeUndefined();
+            expect(message.signature).toBeUndefined();
+            expect(message.reasoning_details).toBeUndefined();
+        }
+    });
+
+    test('deletes root-level sidecars even when reasoning_blocks is absent', () => {
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: 'a',
+                reasoning: 'stray-root-reasoning',
+                signature: 'stray-root-signature',
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+        for (const message of result.messages) {
+            expect(message.reasoning).toBeUndefined();
+            expect(message.signature).toBeUndefined();
+            expect(message.reasoning_details).toBeUndefined();
+        }
+    });
 });
 
 
