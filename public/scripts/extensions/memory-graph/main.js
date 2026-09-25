@@ -2601,6 +2601,26 @@ export function findAffectedAssistantSeqFromMessageIndex(context, messageIndex) 
             return assistantSeq;
         }
     }
+    // Extractable-walk miss on an assistant-role target: the slot's body was
+    // wiped before MESSAGE_SWIPED fired (overswipe REGENERATE clears
+    // chat[mesId].mes before animateSwipe emits), so the walk above skips it
+    // and would return null — which applyMutationInvalidationImpl feeds to
+    // shouldPreserveLatestRecallSnapshotForAssistantMutation as fromSeq=null,
+    // killing the recall snapshot and forcing a fresh RAG recall on every
+    // swipe retry. Fall back to role-based counting (!is_user && !is_system),
+    // the same coordinate system buildLastUserAnchorFromMessages uses for
+    // anchorAssistantFloor, so the preserve check compares like with like.
+    const target = source[targetIndex];
+    if (target && !target.is_user && !target.is_system) {
+        let roleAssistantSeq = 0;
+        for (let i = 0; i <= targetIndex && i < source.length; i++) {
+            const message = source[i];
+            if (message && !message.is_user && !message.is_system) {
+                roleAssistantSeq += 1;
+            }
+        }
+        return roleAssistantSeq;
+    }
     return null;
 }
 
