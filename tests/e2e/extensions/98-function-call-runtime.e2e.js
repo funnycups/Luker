@@ -15,6 +15,8 @@
 //      side effect — invocations record — landed in the chat.
 
 import { test, expect } from '@playwright/test';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
@@ -30,6 +32,15 @@ test.beforeAll(async () => {
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    // Keep the memory-graph extractor from firing its own /chat/completions
+    // rounds (crawl tools) against the shared scripted queue after every
+    // reply — this file scripts exactly two completions and reads the last
+    // requests, so extractor traffic crowds out the assertions.
+    const sp = resolve(server.dataRoot, 'default-user', 'settings.json');
+    const s = JSON.parse(readFileSync(sp, 'utf8'));
+    s.extension_settings = s.extension_settings || {};
+    s.extension_settings.memory_graph = { ...(s.extension_settings.memory_graph || {}), enabled: false };
+    writeFileSync(sp, JSON.stringify(s, null, 4));
 });
 
 test.afterAll(async () => {

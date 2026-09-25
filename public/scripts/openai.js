@@ -1100,6 +1100,9 @@ function setOpenAIMessages(chat) {
         // Tool invocation summaries are persisted as compact system display messages.
         // When building prompt history, merge them back into the immediately preceding
         // assistant turn so the request shape matches assistant -> tool results flow.
+        // Summaries that arrive without a preceding assistant turn are kept with the
+        // display HTML stripped from their content; their structured invocations are
+        // expanded into the wire tool_calls + role:tool pair by populateChatHistory.
         const previousMessage = messages[i + 1];
         const shouldMergeInvocationSummary =
             chat[j]?.extra?.isSmallSys === true
@@ -1113,6 +1116,19 @@ function setOpenAIMessages(chat) {
                 : invocations;
             j++;
             continue;
+        }
+
+        // Summaries that could not merge are display-only; never send the
+        // "Tool calls: ..." HTML block as message content. The structured
+        // invocations must survive, though: populateChatHistory turns them
+        // into the wire tool_calls + role:tool pair downstream, which is
+        // the legitimate wire shape for non-streaming histories where the
+        // summary sits between the user turn and the final reply.
+        const isUnmergedInvocationSummary = chat[j]?.extra?.isSmallSys === true
+            && Array.isArray(invocations)
+            && invocations.length > 0;
+        if (isUnmergedInvocationSummary) {
+            content = '';
         }
 
         messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations, 'signature': signature, 'reasoning': reasoning, 'reasoning_blocks': reasoningBlocks, 'reasoning_details': reasoningDetails };

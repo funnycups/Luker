@@ -3711,6 +3711,122 @@ async function maybeDeleteCharacterBoundImportedLorebook(character, { alreadyPro
     return { lorebookName, deleted: Boolean(deleted) };
 }
 
+/**
+ * Whether a chat message's text is empty after trimming. Used at prompt-build
+ * time to detect turns a user hid by blanking the text (regex script on the
+ * prompt lane, manual edit), which must cascade to the turn's tool records.
+ * @param {any} mes Message text
+ * @returns {boolean}
+ */
+function isBlankMessageText(mes) {
+    return typeof mes !== 'string' || mes.trim().length === 0;
+}
+
+/**
+ * Whether a chat message carries a reasoning payload. Reasoning tool rounds
+ * legitimately produce an empty-text assistant turn; their invocations must
+ * not be dropped by the blank-owner rule.
+ * @param {ChatMessage} message Chat message
+ * @returns {boolean}
+ */
+function hasMessageReasoning(message) {
+    if (typeof message?.extra?.reasoning === 'string' && message.extra.reasoning.trim().length > 0) {
+        return true;
+    }
+    if (Array.isArray(message?.extra?.reasoning_blocks) && message.extra.reasoning_blocks.length > 0) {
+        return true;
+    }
+    if (Array.isArray(message?.extra?.reasoning_details) && message.extra.reasoning_details.length > 0) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Whether a chat message is hidden from the prompt: /hide sets is_system
+ * on a message that is otherwise a normal turn, and the ignore symbol
+ * marks a message for complete exclusion.
+ * @param {ChatMessage} message Chat message
+ * @returns {boolean}
+ */
+function isHiddenChatMessage(message) {
+    return !message || message.is_system === true || message?.extra?.[IGNORE_SYMBOL] === true;
+}
+
+/**
+ * Resolve, for every tool invocation summary that survived into coreChat,
+ * the assistant turn that owns it. The summary is stored right after its
+ * owner's final reply; the owner is the nearest preceding assistant
+ * message, skipping other invocation summaries. When no assistant turn
+ * precedes the summary within the chat, the owner is the final reply that
+ * follows it (a pure tool round — no text, no reasoning — deletes its
+ * empty assistant message before the summary is saved, so the summary
+ * sits directly after the user turn and its result feeds the reply
+ * generated afterwards). An owner that cannot be resolved at all (the
+ * recursive generation mid-round, where the summary is the last message)
+ * is reported as missing — those summaries must survive so the tool
+ * results can reach the model that has yet to produce the final reply.
+ * @param {ChatMessage[]} rawChat Unfiltered chat snapshot
+ * @param {ChatMessage[]} coreChat Post-filter chat snapshot
+ * @returns {Map<number, {hidden: boolean, ownerCoreIndex: number}>} Per-summary (keyed by coreChat index)
+ * whether the owner turn is hidden, and the owner's coreChat index (-1 when absent).
+ */
+function resolveToolInvocationOwners(rawChat, coreChat) {
+    const isInvocationSummary = (message) => message?.extra?.isSmallSys === true
+        && Array.isArray(message.extra.tool_invocations)
+        && message.extra.tool_invocations.length > 0;
+
+    // coreChat is a filtered subset of rawChat with order preserved, and the
+    // regex map step (which replaces every entry with a spread copy) runs
+    // AFTER this pass — so identify entries by raw index, not by object
+    // identity, and report indexes the merge step can look up post-map.
+    const coreIndexOfRawIndex = new Map();
+    const summaryCoreIndexes = [];
+    for (let coreIndex = 0; coreIndex < coreChat.length; coreIndex++) {
+        const rawIndex = rawChat.indexOf(coreChat[coreIndex]);
+        if (rawIndex === -1) {
+            continue;
+        }
+        coreIndexOfRawIndex.set(rawIndex, coreIndex);
+        if (isInvocationSummary(coreChat[coreIndex])) {
+            summaryCoreIndexes.push([coreIndex, rawIndex]);
+        }
+    }
+
+    const summaryOwners = new Map();
+    for (const [coreIndex, rawIndex] of summaryCoreIndexes) {
+        // Nearest preceding assistant turn, skipping other summaries.
+        let ownerRawIndex = -1;
+        for (let i = rawIndex - 1; i >= 0; i--) {
+            const candidate = rawChat[i];
+            if (isInvocationSummary(candidate)) {
+                continue;
+            }
+            if (!candidate?.is_user) {
+                ownerRawIndex = i;
+            }
+            break;
+        }
+        // Pure tool round: owner is the final reply generated after the results.
+        if (ownerRawIndex === -1) {
+            for (let i = rawIndex + 1; i < rawChat.length; i++) {
+                const candidate = rawChat[i];
+                if (isInvocationSummary(candidate) || candidate?.is_user) {
+                    continue;
+                }
+                ownerRawIndex = i;
+                break;
+            }
+        }
+
+        summaryOwners.set(coreIndex, {
+            hidden: ownerRawIndex !== -1 && isHiddenChatMessage(rawChat[ownerRawIndex]),
+            ownerCoreIndex: ownerRawIndex === -1 ? -1 : (coreIndexOfRawIndex.get(ownerRawIndex) ?? -1),
+        });
+    }
+    return summaryOwners;
+}
+
 function getMessageDeletionStartId(id, deleteToolCalls = true) {
     const message = chat[id];
     if (!deleteToolCalls || message?.is_user || message?.is_system) {
@@ -7697,6 +7813,17 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         coreChat.pop();
     }
 
+    // Tool invocation summaries are persisted as compact system display messages
+    // that get merged back into their owning assistant turn at prompt-build time
+    // (see below). When that owner turn is hidden — via /hide (is_system), the
+    // ignore symbol, or a regex script blanking the message text — the merged
+    // tool_calls would keep flowing to the provider on top of a hidden turn.
+    // Resolve the owner of every invocation summary while the full raw chat is
+    // still available (hidden messages are filtered out of coreChat above, so
+    // the merge step below cannot see them), and drop summaries whose owner is
+    // hidden. The message-emptiness check happens post-regex at the merge step.
+    const invocationOwnerBySummary = canUseTools ? resolveToolInvocationOwners(chat, coreChat) : null;
+
     coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
         let message = chatItem.mes;
         let regexType = chatItem.is_user ? regex_placement.USER_INPUT : regex_placement.AI_OUTPUT;
@@ -7728,35 +7855,72 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }));
 
     if (canUseTools) {
-        const normalizedCoreChat = [];
+        const coreChatByIndex = new Map(coreChat.map(x => [x.index, x]));
+        // Summaries absorbed into an owner turn (merged) or dropped by a
+        // hiding gesture. Anything else survives as a standalone entry —
+        // most importantly the summary of the round currently generating:
+        // the recursive Generate() call runs before the final reply
+        // exists, so its owner is not in the chat yet and the tool results
+        // must reach the model unmerged.
+        const consumedSummaryIndexes = new Set();
         for (const chatItem of coreChat) {
             const invocations = chatItem?.extra?.tool_invocations;
-            const previousMessage = normalizedCoreChat[normalizedCoreChat.length - 1];
-            const shouldMergeToolInvocationSummary =
-                chatItem?.extra?.isSmallSys === true
-                && Array.isArray(invocations)
-                && invocations.length > 0
-                && previousMessage
-                && !previousMessage.is_user
-                && previousMessage?.extra?.type !== system_message_types.NARRATOR;
+            const isInvocationSummary = chatItem?.extra?.isSmallSys === true && Array.isArray(invocations) && invocations.length > 0;
 
-            if (shouldMergeToolInvocationSummary) {
-                normalizedCoreChat[normalizedCoreChat.length - 1] = {
-                    ...previousMessage,
-                    extra: {
-                        ...(previousMessage.extra || {}),
-                        tool_invocations: Array.isArray(previousMessage?.extra?.tool_invocations)
-                            ? previousMessage.extra.tool_invocations.concat(invocations)
-                            : invocations.slice(),
-                    },
-                };
-                continue;
+            if (isInvocationSummary) {
+                const owner = invocationOwnerBySummary?.get(chatItem.index);
+                // The summary's owner turn is hidden (dropped above) — drop the
+                // summary with it so hidden tool history cannot reach the provider.
+                if (owner?.hidden) {
+                    consumedSummaryIndexes.add(chatItem.index);
+                    continue;
+                }
+                // Non-streaming histories store the summary between the user
+                // turn and the final reply, so the owning assistant turn sits
+                // AFTER the summary, not before it. Merge by resolved owner
+                // index instead of guessing from the normalized tail.
+                if (owner && owner.ownerCoreIndex >= 0) {
+                    const targetMessage = coreChatByIndex.get(owner.ownerCoreIndex);
+                    // A regex script on the prompt lane may blank out the owner's
+                    // text. That is a hiding gesture the same way /hide is, so the
+                    // tool records owned by a blanked turn drop too — the summary
+                    // must NOT survive as a standalone entry, or its structured
+                    // invocations would still reach the provider. Reasoning
+                    // rounds legitimately produce an empty-text owner (the model
+                    // returned reasoning + tool_calls, no visible text) — those
+                    // must keep their invocations or the wire shape for reasoning
+                    // models breaks.
+                    if (targetMessage && isBlankMessageText(targetMessage.mes) && !hasMessageReasoning(targetMessage)) {
+                        consumedSummaryIndexes.add(chatItem.index);
+                        continue;
+                    }
+                    const shouldMergeIntoOwner =
+                        targetMessage
+                        && !targetMessage.is_user
+                        && targetMessage?.extra?.type !== system_message_types.NARRATOR;
+
+                    if (shouldMergeIntoOwner) {
+                        coreChatByIndex.set(owner.ownerCoreIndex, {
+                            ...targetMessage,
+                            extra: {
+                                ...(targetMessage.extra || {}),
+                                tool_invocations: Array.isArray(targetMessage?.extra?.tool_invocations)
+                                    ? targetMessage.extra.tool_invocations.concat(invocations)
+                                    : invocations.slice(),
+                            },
+                        });
+                        consumedSummaryIndexes.add(chatItem.index);
+                        continue;
+                    }
+                }
             }
-
-            normalizedCoreChat.push(chatItem);
         }
 
-        coreChat = normalizedCoreChat;
+        // Rebuild in original order: owner entries that absorbed invocations
+        // substitute in, summaries consumed above drop out.
+        coreChat = coreChat
+            .filter(x => !(x?.extra?.isSmallSys === true && Array.isArray(x.extra?.tool_invocations) && x.extra.tool_invocations.length > 0 && consumedSummaryIndexes.has(x.index)))
+            .map(x => coreChatByIndex.get(x.index) ?? x);
     }
 
     const promptReasoning = new PromptReasoning();
