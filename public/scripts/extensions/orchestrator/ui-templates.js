@@ -1536,6 +1536,10 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
             <label for="${s('luker_orch_llm_preset')}">${escapeHtml(i18n('LLM node preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent', agentMode: 'dynamic', targetSelectId: s('luker_orch_llm_preset') })}</label>
             <select id="${s('luker_orch_llm_preset')}" class="text_pole"></select>
             <small style="opacity:0.8">${escapeHtml(i18n('Used when a specific agent has no preset filled in'))}</small>
+            <label class="checkbox_label">
+                <input id="${s('luker_orch_include_world_info')}" type="checkbox" />
+                ${escapeHtml(i18n('Include world info in agent prompts'))}${fh('About include world info', 'Include world info help body')}
+            </label>
         </fieldset>
         <fieldset class="luker_orch_general_fieldset">
             <legend>${escapeHtml(i18n('Runtime limits'))}</legend>
@@ -1619,10 +1623,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
             <select id="${s('luker_orch_request_api_preset')}" class="text_pole"></select>
             <label for="${s('luker_orch_request_llm_preset')}">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: s('luker_orch_request_llm_preset') })}</label>
             <select id="${s('luker_orch_request_llm_preset')}" class="text_pole"></select>
-            <label class="checkbox_label">
-                <input id="${s('luker_orch_include_world_info')}" type="checkbox" />
-                ${escapeHtml(i18n('Include world info'))}${fh('About include world info', 'Include world info help body')}
-            </label>
             <label for="${s('luker_orch_request_system_prompt')}">${escapeHtml(i18n('Iteration AI base system prompt'))}${fh('About iteration system prompt', 'Iteration system prompt help body')}</label>
             <textarea id="${s('luker_orch_request_system_prompt')}" class="text_pole textarea_compact" rows="6"></textarea>
             <div class="flex-container">
