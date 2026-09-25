@@ -9,7 +9,7 @@
 //
 // Providers routed here (dispatch key = ctx.body.chat_completion_source):
 //   OPENAI, OPENROUTER, CUSTOM, PERPLEXITY, GROQ, FIREWORKS, NANOGPT,
-//   POLLINATIONS, MOONSHOT, COMETAPI, ZAI, SILICONFLOW, WORKERS_AI
+//   POLLINATIONS, MOONSHOT, COMETAPI, ZAI, SILICONFLOW, WORKERS_AI, REQUESTY
 //
 // Everything else (CLAUDE, AI21, MAKERSUITE, VERTEXAI, MISTRALAI, COHERE,
 // DEEPSEEK, AIMLAPI, XAI, CHUTES, MINIMAX, ELECTRONHUB, AZURE_OPENAI) has
@@ -33,6 +33,7 @@ import {
     OPENAI_VERBOSITY_MODELS,
     OPENROUTER_HEADERS,
     POLLINATIONS_ENDPOINT,
+    REQUESTY_HEADERS,
     SILICONFLOW_ENDPOINT,
     ZAI_ENDPOINT,
 } from '../../../constants.js';
@@ -76,6 +77,7 @@ const API_POLLINATIONS_ANON = 'https://text.pollinations.ai/v1';
 const API_MOONSHOT = 'https://api.moonshot.ai/v1';
 const API_FIREWORKS = 'https://api.fireworks.ai/inference/v1';
 const API_COMETAPI = 'https://api.cometapi.com/v1';
+const API_REQUESTY = 'https://router.requesty.ai/v1';
 const API_ZAI_COMMON = 'https://api.z.ai/api/paas/v4';
 const API_ZAI_CODING = 'https://api.z.ai/api/coding/paas/v4';
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
@@ -668,6 +670,18 @@ async function resolveWorkersai(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
+/** REQUESTY */
+async function resolveRequesty(ctx) {
+    const body = ctx.body;
+    const apiUrl = API_REQUESTY;
+    const apiKey = ctx.secrets.read(SECRET_KEYS.REQUESTY);
+    const headers = { ...REQUESTY_HEADERS };
+    /** @type {any} */
+    const bodyParams = {};
+    if (body.reasoning_effort) bodyParams.reasoning_effort = body.reasoning_effort;
+    return { apiUrl, apiKey, headers, bodyParams };
+}
+
 const RESOLVERS = {
     [CHAT_COMPLETION_SOURCES.OPENAI]: resolveOpenAI,
     [CHAT_COMPLETION_SOURCES.OPENROUTER]: resolveOpenRouter,
@@ -682,6 +696,7 @@ const RESOLVERS = {
     [CHAT_COMPLETION_SOURCES.ZAI]: resolveZai,
     [CHAT_COMPLETION_SOURCES.SILICONFLOW]: resolveSiliconflow,
     [CHAT_COMPLETION_SOURCES.WORKERS_AI]: resolveWorkersai,
+    [CHAT_COMPLETION_SOURCES.REQUESTY]: resolveRequesty,
 };
 
 /**

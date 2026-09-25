@@ -861,5 +861,24 @@ describe('dispatchOpenAICompatible', () => {
             const parsed = JSON.parse(init.body);
             expect(parsed.transforms).toEqual([]);
         });
+
+        test('REQUESTY (URL, attribution headers, reasoning_effort forwarded)', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.REQUESTY,
+                    model: 'openai/gpt-4o-mini',
+                    reasoning_effort: 'low',
+                },
+                secretMap: { api_key_requesty: 'rk' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            const [url, init] = ctx.fetch.mock.calls[0];
+            expect(String(url)).toBe('https://router.requesty.ai/v1/chat/completions');
+            expect(init.headers['Authorization']).toBe('Bearer rk');
+            expect(init.headers['X-Title']).toBe('Luker');
+            const parsed = JSON.parse(init.body);
+            expect(parsed.model).toBe('openai/gpt-4o-mini');
+            expect(parsed.reasoning_effort).toBe('low');
+        });
     });
 });

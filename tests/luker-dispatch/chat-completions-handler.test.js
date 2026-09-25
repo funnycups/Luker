@@ -74,9 +74,9 @@ describe('selectChatCompletionDispatch', () => {
         }
     });
 
-    test('all 13 shared OpenAI-compatible providers route to dispatchOpenAICompatible', () => {
+    test('all 14 shared OpenAI-compatible providers route to dispatchOpenAICompatible', () => {
         const shared = ['openai', 'openrouter', 'custom', 'perplexity', 'groq', 'fireworks',
-            'nanogpt', 'pollinations', 'moonshot', 'cometapi', 'zai', 'siliconflow', 'workers_ai'];
+            'nanogpt', 'pollinations', 'moonshot', 'cometapi', 'zai', 'siliconflow', 'workers_ai', 'requesty'];
         for (const source of shared) {
             expect(selectChatCompletionDispatch({ chat_completion_source: source })).toBe(dispatchOpenAICompatible);
         }

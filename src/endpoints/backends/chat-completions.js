@@ -7,6 +7,7 @@ import {
     AIMLAPI_HEADERS,
     CHAT_COMPLETION_SOURCES,
     OPENROUTER_HEADERS,
+    REQUESTY_HEADERS,
     SILICONFLOW_ENDPOINT,
     POLLINATIONS_ENDPOINT,
 } from '../../constants.js';
@@ -74,6 +75,7 @@ const API_AIMLAPI = 'https://api.aimlapi.com/v1';
 const API_MOONSHOT = 'https://api.moonshot.ai/v1';
 const API_FIREWORKS = 'https://api.fireworks.ai/inference/v1';
 const API_COMETAPI = 'https://api.cometapi.com/v1';
+const API_REQUESTY = 'https://router.requesty.ai/v1';
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_SILICONFLOW_CN = 'https://api.siliconflow.cn/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
@@ -566,6 +568,10 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = readProviderSecret(request, SECRET_KEYS.OPENROUTER);
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
             headers = { ...OPENROUTER_HEADERS };
+        } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.REQUESTY) {
+            apiUrl = API_REQUESTY;
+            apiKey = readProviderSecret(request, SECRET_KEYS.REQUESTY);
+            headers = { ...REQUESTY_HEADERS };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MISTRALAI) {
             apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_MISTRAL).toString();
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MISTRALAI) || '';
@@ -959,6 +965,15 @@ router.post('/status', async function (request, statusResponse) {
                     });
             }
 
+            if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.REQUESTY && Array.isArray(data?.data)) {
+                // List managed routing policies first, then the full model catalog.
+                const managedResponse = await fetch(urlJoin(apiUrl, '/models/managed')).catch(() => null);
+                /** @type {any} */
+                const managed = managedResponse?.ok ? await managedResponse.json() : null;
+                const managedModels = Array.isArray(managed?.data) ? managed.data : [];
+                data.data = [...managedModels, ...data.data].filter(model => model?.id && (!model.api || model.api === 'chat'));
+            }
+
             statusResponse.send(data);
 
             if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.COHERE && Array.isArray(data?.models)) {
@@ -1122,7 +1137,7 @@ const CHAT_COMPLETION_DISPATCH_TABLE = {
     [CHAT_COMPLETION_SOURCES.MINIMAX]: dispatchMinimax,
     [CHAT_COMPLETION_SOURCES.ELECTRONHUB]: dispatchElectronHub,
     [CHAT_COMPLETION_SOURCES.AZURE_OPENAI]: dispatchAzureOpenAI,
-    // Shared OpenAI-compatible cascade (13 providers)
+    // Shared OpenAI-compatible cascade (14 providers)
     [CHAT_COMPLETION_SOURCES.OPENAI]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.OPENROUTER]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.CUSTOM]: dispatchOpenAICompatible,
@@ -1137,6 +1152,7 @@ const CHAT_COMPLETION_DISPATCH_TABLE = {
     [CHAT_COMPLETION_SOURCES.ZAI]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.SILICONFLOW]: dispatchOpenAICompatible,
     [CHAT_COMPLETION_SOURCES.WORKERS_AI]: dispatchOpenAICompatible,
+    [CHAT_COMPLETION_SOURCES.REQUESTY]: dispatchOpenAICompatible,
 };
 
 /**

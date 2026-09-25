@@ -728,6 +728,8 @@ export class ToolManager {
                     return currentModel.supports_tools;
                 case chat_completion_sources.OPENROUTER:
                     return currentModel.supported_parameters?.includes('tools');
+                case chat_completion_sources.REQUESTY:
+                    return currentModel.supports_tool_calling;
                 case chat_completion_sources.MISTRALAI:
                     return currentModel.capabilities?.function_calling;
                 case chat_completion_sources.AIMLAPI:
@@ -760,6 +762,7 @@ export class ToolManager {
             chat_completion_sources.MOONSHOT,
             chat_completion_sources.FIREWORKS,
             chat_completion_sources.COMETAPI,
+            chat_completion_sources.REQUESTY,
             chat_completion_sources.CHUTES,
             chat_completion_sources.ELECTRONHUB,
             chat_completion_sources.AZURE_OPENAI,

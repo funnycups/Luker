@@ -227,6 +227,7 @@ export const CHAT_COMPLETION_SOURCES = {
     SILICONFLOW: 'siliconflow',
     MINIMAX: 'minimax',
     WORKERS_AI: 'workers_ai',
+    REQUESTY: 'requesty',
 };
 
 /**
@@ -390,6 +391,11 @@ export const OPENROUTER_HEADERS = {
 };
 
 export const AIMLAPI_HEADERS = {
+    'HTTP-Referer': 'https://sillytavern.app',
+    'X-Title': 'Luker',
+};
+
+export const REQUESTY_HEADERS = {
     'HTTP-Referer': 'https://sillytavern.app',
     'X-Title': 'Luker',
 };
