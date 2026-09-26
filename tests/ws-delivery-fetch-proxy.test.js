@@ -36,7 +36,7 @@ describe('installFetchProxy', () => {
             });
         });
         global.crypto = { randomUUID: () => 'test-uuid-fixed' };
-        global.window = { Response, Headers, DOMException };
+        global.window = global.window || {};
     });
 
     test('passes through non-proxied URLs untouched', async () => {

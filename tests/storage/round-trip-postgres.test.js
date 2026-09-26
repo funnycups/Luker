@@ -343,7 +343,6 @@ describePostgres('round-trip via PgEngine: GroupRepo', () => {
         const original = {
             id: 'grp-1',
             name: 'Crew',
-            date_added: 1700000000000,
             members: ['alice.png', 'bob.png', 'carol.png'],
             chats: ['chat-a', 'chat-b'],
             metadata: { created_at: 12345, tags: ['x', 'y'] },
@@ -377,7 +376,6 @@ describePostgres('round-trip via PgEngine: GroupRepo', () => {
         const original = {
             id: 'grp-2',
             name: '剧组',
-            date_added: 1700000000001,
             members: ['x.png', 'y.png'],
             chats: ['gc-1'],
             metadata: { tags: ['α'], extra: { nested: { a: 1, b: null } } },
@@ -409,7 +407,6 @@ describePostgres('round-trip via PgEngine: GroupRepo', () => {
         const original = {
             id: 'grp-3',
             name: 'Trio',
-            date_added: 1700000000002,
             members: ['m1.png', 'm2.png', 'm3.png'],
             chats: [],
             metadata: { created_at: 9999, tags: [] },

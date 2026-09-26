@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
 
-const configPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../default/config.yaml');
+const configPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../config.yaml');
 
 let app;
 let chatStore;
