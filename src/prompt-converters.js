@@ -435,7 +435,10 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
         if (last && last.role === message.role) {
             last.content.push(...keptContent);
         } else {
-            compactedMessages.push({ ...message, content: keptContent });
+            // Claude input messages accept only role and content. Chat history may
+            // carry provider-specific metadata such as reasoning, which the
+            // Messages API rejects even when the content itself is valid.
+            compactedMessages.push({ role: message.role, content: keptContent });
         }
     }
 
