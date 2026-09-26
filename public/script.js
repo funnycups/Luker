@@ -2703,41 +2703,53 @@ export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
 }
 
 export async function getOneCharacter(avatarUrl, { preserveChat = false } = {}) {
-    const response = await fetch('/api/characters/get', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({
-            avatar_url: avatarUrl,
-        }),
-    });
+    let getData;
+    try {
+        const response = await fetch('/api/characters/get', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                avatar_url: avatarUrl,
+            }),
+        });
 
-    if (response.ok) {
-        const getData = await response.json();
-        getData.name = DOMPurify.sanitize(getData.name);
-        getData.chat = String(getData.chat ?? '');
-
-        const indexOf = characters.findIndex(x => x.avatar === avatarUrl);
-
-        if (indexOf !== -1) {
-            // Preserve any non-empty .chat the client already has for
-            // this character. The server returns '' when the PNG has
-            // no embedded chat field (it deliberately stopped minting
-            // a placeholder timestamp — cf. characters.js
-            // projectRuntimeCharacterFields), but we don't want that
-            // empty string to overwrite a real chat name the client
-            // mint-fallback set in getCharacters (script.js initial
-            // load) or that an active session already wrote.
-            const existingChat = characters[indexOf]?.chat;
-            if (!getData.chat && existingChat) {
-                getData.chat = existingChat;
-            }
-            if (preserveChat && existingChat) {
-                getData.chat = existingChat;
-            }
-            characters[indexOf] = getData;
-        } else {
-            console.warn(`Character ${avatarUrl} not found in the list; skip in-place refresh.`);
+        if (!response.ok) {
+            return;
         }
+
+        getData = await response.json();
+    } catch (error) {
+        // A dropped connection or unreadable body must not abort the caller:
+        // every caller treats this as a best-effort in-place refresh, and a
+        // later full getCharacters() reload heals the slot.
+        console.warn(`Failed to refresh character ${avatarUrl}; keeping current data`, error);
+        return;
+    }
+
+    getData.name = DOMPurify.sanitize(getData.name);
+    getData.chat = String(getData.chat ?? '');
+
+    const indexOf = characters.findIndex(x => x.avatar === avatarUrl);
+
+    if (indexOf !== -1) {
+        // Preserve any non-empty .chat the client already has for
+        // this character. The server returns '' when the PNG has
+        // no embedded chat field (it deliberately stopped minting
+        // a placeholder timestamp — cf. characters.js
+        // projectRuntimeCharacterFields), but we don't want that
+        // empty string to overwrite a real chat name the client
+        // mint-fallback set in getCharacters (script.js initial
+        // load) or that an active session already wrote.
+        const existingChat = characters[indexOf]?.chat;
+        if (!getData.chat && existingChat) {
+            getData.chat = existingChat;
+        }
+        if (preserveChat && existingChat) {
+            getData.chat = existingChat;
+        }
+        characters[indexOf] = getData;
+    } else {
+        console.warn(`Character ${avatarUrl} not found in the list; skip in-place refresh.`);
     }
 }
 
