@@ -22,13 +22,20 @@ async function startServer() {
             },
         }));
     const httpServer = http.createServer(app);
-    createDeliveryServer({ httpServer, verifyTicket: () => ({ user_handle: 'alice' }) });
+    const delivery = createDeliveryServer({ httpServer, verifyTicket: () => ({ user_handle: 'alice' }) });
     await new Promise(r => httpServer.listen(0, r));
-    return { port: httpServer.address().port, close: () => new Promise(r => httpServer.close(r)) };
+    return {
+        port: httpServer.address().port,
+        close: () => {
+            delivery.close();
+            return new Promise(r => httpServer.close(r));
+        },
+    };
 }
 
 test('end-to-end: HTTP POST → task created → WS subscribe → chunk delivered', async () => {
     const server = await startServer();
+    let ws;
     try {
         const requestId = 'e2e-1';
         const httpResp = await fetch(`http://127.0.0.1:${server.port}/api/backends/chat-completions/generate`, {
@@ -40,7 +47,7 @@ test('end-to-end: HTTP POST → task created → WS subscribe → chunk delivere
         expect(httpResp.headers.get('x-luker-generation-id')).toBe(requestId);
         await httpResp.json();
 
-        const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/ws-delivery`, ['luker-ws-ticket.dummy']);
+        ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/ws-delivery`, ['luker-ws-ticket.dummy']);
         await new Promise(r => ws.once('open', r));
         // Match production JS client (public/scripts/ws-delivery.js): always
         // resume from seq 1 to avoid the setImmediate race where the dispatch
@@ -64,6 +71,12 @@ test('end-to-end: HTTP POST → task created → WS subscribe → chunk delivere
         const chunkMsg = messages.find(m => m.type === 'chunk');
         expect(chunkMsg.data).toBe(Buffer.from([104, 105]).toString('base64'));
         expect(messages.some(m => m.type === 'end')).toBe(true);
-        ws.close();
-    } finally { await server.close(); }
+    } finally {
+        if (ws && ws.readyState !== WebSocket.CLOSED) {
+            const closed = new Promise(resolve => ws.once('close', resolve));
+            ws.close();
+            await closed;
+        }
+        await server.close();
+    }
 });
