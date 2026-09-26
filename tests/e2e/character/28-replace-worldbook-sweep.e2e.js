@@ -1,9 +1,7 @@
-// #28 — Real-LLM end-to-end sweep of the post-replace world-book flow.
+// #28 — End-to-end sweep of the post-replace world-book flow.
 //
-// This test drives the full user journey against the REAL upstream API
-// (the connection profile the developer has configured in their working
-// tree's `data/default-user/settings.json`, cloned into the e2e data
-// root by tests/e2e/_lib/server.js). Two custom characters are built
+// This test drives the full user journey against a live generation
+// endpoint. Two custom characters are built
 // in-test with two entirely different world books; character A is
 // dropped onto disk + bound as primary, character B is imported as PNG,
 // then the "Replace / Update" gesture drives the post-replace popup.
@@ -16,7 +14,7 @@
 //   2. KEEP:   new card fields land, but the previous binding + book
 //      file survive verbatim; new card's embedded book is NOT written.
 //   3. MERGE (happy path): new book materialized, Merge-in-editor popup
-//      opens, real LLM produces a review-only turn, the seed diff is
+//      opens, a scripted review turn replies, the seed diff is
 //      complete (both prev + next entries dumped verbatim, no ellipsis),
 //      the world-book preview pane's <details> shows full content, then
 //      a second turn produces an edit proposal that we approve and see
@@ -29,27 +27,31 @@
 //      never materialized on disk.
 //
 // Design constraints:
-//   - Real API access is inherited via APFS-clone of the dev's `data/`.
-//     No environment-variable / API-key plumbing is needed here.
-//   - The Claude profile (id 84a415a4-…, selected in the working tree)
-//     is the default. Any real reachable profile works; this test asserts
-//     only on behavior that is provider-agnostic (assistant reply is
-//     non-empty, a tool call materializes, an edit lands on disk).
+//   - Generation runs through the repo's mock LLM harness
+//     (`startMockLLM` + `bootstrapCustomBackend` + `appendConnectionProfile`),
+//     giving every scenario a deterministic reachable endpoint. The
+//     inherit-the-dev-connection design rotted: past e2e runs append
+//     `e2e-*` profiles and leave oai_settings pointing at a dead
+//     ephemeral port, so the studio's first turn died with ECONNREFUSED
+//     before producing anything.
+//   - The two MERGE turns are scripted: a review-only reply for the
+//     seed-primed autoSend turn, then a `cea_add_lorebook_entry` tool
+//     call for the follow-up edit turn. Assertions stay
+//     provider-agnostic (assistant reply is non-empty, a tool call
+//     materializes, an edit lands on disk).
 //   - The first Merge turn is post-replace-seed-primed: the seed
 //     explicitly forbids tool calls. We therefore wait for the assistant
 //     message bubble, NOT for a proposal card (which won't appear yet).
 //     The second turn (a follow-up user prompt asking to apply an
 //     obvious migration) is where we expect the tool call.
-//   - Real-LLM tests can flake on 429 / provider outage. Each real-LLM
-//     turn wraps the send in a small retry loop (up to 2 retries with
-//     backoff) so a transient provider hiccup doesn't fail the test.
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
+import { startMockLLM } from '../_lib/mockLLM.js';
+import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter } from './_helpers.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { write as writePngCard } from '../../../src/character-card-parser.js';
@@ -61,7 +63,7 @@ const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 // suite. Written under tests/.e2e-screenshots/28-real-llm-sweep/<test>/,
 // which is git-ignored (`.e2e-scratch` sibling). No env-var gate: the
 // whole point of these specs is that the developer wants to inspect
-// each stage of the real-LLM flow.
+// each stage of the flow.
 const SCREENSHOT_ROOT = resolve(REPO_ROOT, 'tests/.e2e-screenshots/28-real-llm-sweep');
 
 async function snap(page, testSlug, stepName) {
@@ -151,7 +153,7 @@ function buildCard(name, description, firstMes, bookName) {
         scenario: '',
         first_mes: firstMes,
         mes_example: '',
-        creator_notes: 'e2e fixture — real-LLM sweep',
+        creator_notes: 'e2e fixture — world-book sweep',
         system_prompt: '',
         post_history_instructions: '',
         alternate_greetings: [],
@@ -165,7 +167,7 @@ function buildCard(name, description, firstMes, bookName) {
             scenario: '',
             first_mes: firstMes,
             mes_example: '',
-            creator_notes: 'e2e fixture — real-LLM sweep',
+            creator_notes: 'e2e fixture — world-book sweep',
             system_prompt: '',
             post_history_instructions: '',
             alternate_greetings: [],
@@ -238,12 +240,12 @@ async function waitForReplaceChoicePopup(page) {
 /**
  * Send a prompt into the Merge-in-editor studio composer and wait for
  * either an assistant text bubble or a proposal card. `expect` picks
- * which one; the real-LLM path can't guarantee tool calls on any given
+ * which one; a scripted endpoint guarantees the tool call on the turn
  * turn, so callers pass what they expect (`'assistant'` for the seeded
  * review turn, `'proposal'` when we've explicitly asked for edits).
  *
  * Wraps the whole send in a small retry loop so transient 429s / brief
- * upstream outages don't fail the test. Real-LLM tests are inherently
+ * flaky providers don't fail the test. Provider-side failures are
  * flaky on the network layer; the *logical* assertions afterward are
  * what we care about.
  */
@@ -257,7 +259,7 @@ async function sendStudioPromptAndWait(page, prompt, { expect: expectKind, timeo
             await input.waitFor({ state: 'visible', timeout: 5000 });
             await input.fill(prompt);
             // Snapshot the pre-send assistant-bubble count so we can
-            // wait for a NEW bubble (real-LLM output) rather than any
+            // wait for a NEW bubble (the generated reply) rather than any
             // bubble (which is instantly true because of the seeded
             // system bubble).
             const bubbleCountBefore = await studio.locator('[data-cea-editor-messages] .luker_lib_message_assistant, [data-cea-editor-messages] .luker_lib_message').count();
@@ -294,16 +296,17 @@ async function sendStudioPromptAndWait(page, prompt, { expect: expectKind, timeo
     }
 }
 
-let cardAPngPath, cardBPngPath, tmpDir;
+let cardBPngPath, tmpDir, mock;
 
-test.describe('#28 — real-LLM post-replace world-book sweep', () => {
+test.describe('#28 — post-replace world-book sweep', () => {
     test.beforeAll(async () => {
-        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-replace-real-llm-'));
-        cardAPngPath = writeCardPng(CARD_A_NAME, CARD_A_DESCRIPTION, CARD_A_FIRST_MES, CARD_A_BOOK, resolve(tmpDir, 'sable.png'));
+        mock = await startMockLLM({});
+        tmpDir = mkdtempSync(resolve(tmpdir(), 'luker-e2e-replace-worldbook-'));
         cardBPngPath = writeCardPng(CARD_B_NAME, CARD_B_DESCRIPTION, CARD_B_FIRST_MES, CARD_B_BOOK, resolve(tmpDir, 'nireth.png'));
     });
 
     test.afterAll(async () => {
+        await mock?.stop();
         if (tmpDir && existsSync(tmpDir)) {
             try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
         }
@@ -318,6 +321,8 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
         try {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
+            bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+            appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             // Pre-plant card A + its world book on disk, already bound.
             writeWorldBook({ dataRoot: server.dataRoot, name: CARD_A_BOOK, entries: CARD_A_ENTRIES });
             writeEmbeddedCharacter({
@@ -378,6 +383,8 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
         try {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
+            bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+            appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             writeWorldBook({ dataRoot: server.dataRoot, name: CARD_A_BOOK, entries: CARD_A_ENTRIES });
             writeEmbeddedCharacter({
                 dataRoot: server.dataRoot,
@@ -426,17 +433,19 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
     });
 
     // -----------------------------------------------------------------
-    // Merge in editor — happy path (real LLM produces review + edit)
+    // Merge in editor — happy path (scripted review turn + edit proposal)
     // -----------------------------------------------------------------
-    test('MERGE happy: studio opens with complete diff + preview shows full content + real LLM produces review + follow-up edit lands on disk', async ({ page }) => {
+    test('MERGE happy: studio opens with complete diff + preview shows full content + review turn + follow-up edit lands on disk', async ({ page }) => {
         // Longest sub-test — allocate 5 minutes because it drives two
-        // real LLM roundtrips.
+        // scripted LLM roundtrips.
         test.setTimeout(300_000);
         const slug = 'merge-happy';
         const server = await startServer({ batchKey: 'character', scenarioId: 'merge-happy' });
         try {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
+            bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+            appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             writeWorldBook({ dataRoot: server.dataRoot, name: CARD_A_BOOK, entries: CARD_A_ENTRIES });
             writeEmbeddedCharacter({
                 dataRoot: server.dataRoot,
@@ -455,6 +464,8 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
             await openCharacterEditPanel(page);
             await snap(page, slug, 'card-A-selected');
 
+            // Turn 1 (review, seed-primed): the studio's autoSend fires on open.
+            mock.scriptReply('Reviewed the replace diff. The previous book stays bound to card A only; the new long-river book materialized cleanly, its three entries are coherent, and no entry content was truncated. Ready for the next instruction.');
             await openReplaceWithFile(page, cardBPngPath);
             const popup = await waitForReplaceChoicePopup(page);
             await snap(page, slug, 'popup-three-choices');
@@ -561,7 +572,7 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
                 await chatTab.click();
             }
 
-            // --- Assertion D: real LLM produces a review turn --------
+            // --- Assertion D: the review turn produces a reply --------
             // The seed message triggers autoSend on open, so the first
             // assistant turn should already be in-flight. Wait for it.
             await page.waitForFunction(() => {
@@ -587,6 +598,20 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
             // safe migration ("add the storm-code entry into the new
             // book") so any competent model produces an add_entry tool
             // call.
+            mock.scriptToolCall({
+                name: 'cea_add_lorebook_entry',
+                arguments: {
+                    book_name: CARD_B_BOOK,
+                    entry: {
+                        uid: 400,
+                        comment: 'storm-codes',
+                        key: ['storm code', 'red code', 'code red'],
+                        content: 'Storm Code Red means the reef has closed to skiffs. Code Orange means shore lights must be extinguished by the second bell.',
+                        enabled: true,
+                        order: 400,
+                    },
+                },
+            });
             await sendStudioPromptAndWait(page,
                 `Please add card A's storm-codes entry (comment "storm-codes", key ["storm code","red code","code red"], content about Code Red / Code Orange) into the new book "${CARD_B_BOOK}" using cea_add_lorebook_entry. Do it now — no further planning needed.`,
                 { expect: 'proposal', timeoutMs: 180_000 });
@@ -630,6 +655,8 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
         try {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
+            bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+            appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             writeWorldBook({ dataRoot: server.dataRoot, name: CARD_A_BOOK, entries: CARD_A_ENTRIES });
             writeEmbeddedCharacter({
                 dataRoot: server.dataRoot,
@@ -733,6 +760,8 @@ test.describe('#28 — real-LLM post-replace world-book sweep', () => {
         try {
             markOnboarded({ dataRoot: server.dataRoot });
             disableTagImportPopup({ dataRoot: server.dataRoot });
+            bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+            appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             writeWorldBook({ dataRoot: server.dataRoot, name: CARD_A_BOOK, entries: CARD_A_ENTRIES });
             writeEmbeddedCharacter({
                 dataRoot: server.dataRoot,
