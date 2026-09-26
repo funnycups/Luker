@@ -1268,6 +1268,29 @@ describe('convertClaudeMessages', () => {
         expect(assistant.reasoning_blocks).toBeUndefined();
     });
 
+    test('does not forward reasoning metadata from chat history to Claude', () => {
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: 'a',
+                reasoning: 'plain reasoning',
+                reasoning_content: 'provider reasoning',
+                reasoning_details: [{ type: 'reasoning.text', text: 'provider detail' }],
+                reasoning_blocks: [{ type: 'thinking', thinking: 'signed thought', signature: 's' }],
+            },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, false, names);
+
+        expect(result.messages[1]).toEqual({
+            role: 'assistant',
+            content: [
+                { type: 'thinking', thinking: 'signed thought', signature: 's' },
+                { type: 'text', text: 'a' },
+            ],
+        });
+    });
+
     test('ignores reasoning_blocks on non-assistant messages', () => {
         // Only assistant turns can carry thinking blocks per Anthropic spec.
         // User-role reasoning_blocks (nonsensical shape) must not leak into content.
