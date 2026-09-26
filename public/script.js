@@ -21822,14 +21822,21 @@ jQuery(async function () {
                             : this_chid;
                         let replacedCharacter = null;
                         if (previousAvatar) {
-                            const response = await fetch('/api/characters/get', {
-                                method: 'POST',
-                                headers: getRequestHeaders(),
-                                body: JSON.stringify({ avatar_url: previousAvatar }),
-                                cache: 'no-cache',
-                            });
-                            if (response.ok) {
-                                replacedCharacter = await response.json();
+                            try {
+                                const response = await fetch('/api/characters/get', {
+                                    method: 'POST',
+                                    headers: getRequestHeaders(),
+                                    body: JSON.stringify({ avatar_url: previousAvatar }),
+                                    cache: 'no-cache',
+                                });
+                                if (response.ok) {
+                                    replacedCharacter = await response.json();
+                                }
+                            } catch (error) {
+                                // A dropped connection or unreadable body must not
+                                // skip the post-replace event: the !replacedCharacter
+                                // fallback below emits with the in-memory character.
+                                console.warn(`Failed to refresh character ${previousAvatar} for the replaced event; falling back to current data`, error);
                             }
                         }
                         if (!replacedCharacter) {
