@@ -21893,6 +21893,9 @@ jQuery(async function () {
                     case POPUP_RESULT_FILE: {
                         async function uploadReplacementCard(e) {
                             const file = e.target.files[0];
+                            // Clear the input up front: a kept value makes re-selecting
+                            // the same card fire no change event, so the retry dies silently.
+                            e.target.value = '';
                             if (!file) {
                                 return;
                             }
@@ -21903,7 +21906,8 @@ jQuery(async function () {
                                 await processDroppedFiles([file], data);
                                 await postReplace();
                                 await emitCharacterReplacedEvent();
-                            } catch {
+                            } catch (error) {
+                                console.error('Failed to replace the character card', error);
                                 toastr.error('Failed to replace the character card.', 'Something went wrong');
                             }
                         }
