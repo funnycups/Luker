@@ -91,6 +91,8 @@ declare global {
     interface BaseMessageExtra {
         api?: string;
         model?: string;
+        /** Normalized OAI finish reason (`stop`, `tool_calls`, `length`, …). Absent on turns written before this field existed. */
+        finish_reason?: string;
         type?: string;
         gen_id?: number;
         bias?: string;

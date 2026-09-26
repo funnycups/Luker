@@ -303,6 +303,7 @@ import { AbortReason } from './scripts/util/AbortReason.js';
 import { initSystemPrompts } from './scripts/sysprompt.js';
 import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
 import { ToolManager } from './scripts/tool-calling.js';
+import { classifyInvocationSummary, getOpenToolTaskTailStart } from './scripts/tool-invocation-hide.js';
 import { registerSkillEmbedLifecycle } from './scripts/skills/embed-lifecycle.js';
 import { addShowdownPatch } from './scripts/util/showdown-patch.js';
 import { applyBrowserFixes } from './scripts/browser-fixes.js';
@@ -3780,8 +3781,8 @@ function isHiddenChatMessage(message) {
  * results can reach the model that has yet to produce the final reply.
  * @param {ChatMessage[]} rawChat Unfiltered chat snapshot
  * @param {ChatMessage[]} coreChat Post-filter chat snapshot
- * @returns {Map<number, {hidden: boolean, ownerCoreIndex: number}>} Per-summary (keyed by coreChat index)
- * whether the owner turn is hidden, and the owner's coreChat index (-1 when absent).
+ * @returns {Map<number, {hidden: boolean, ownerCoreIndex: number, inOpenTail: boolean}>} Per-summary (keyed by coreChat index)
+ * whether the owner turn is hidden, the owner's coreChat index (-1 when absent), and whether the summary sits in the open tool-task tail.
  */
 function resolveToolInvocationOwners(rawChat, coreChat) {
     const isInvocationSummary = (message) => message?.extra?.isSmallSys === true
@@ -3805,6 +3806,7 @@ function resolveToolInvocationOwners(rawChat, coreChat) {
         }
     }
 
+    const openTailStart = getOpenToolTaskTailStart(rawChat);
     const summaryOwners = new Map();
     for (const [coreIndex, rawIndex] of summaryCoreIndexes) {
         // Nearest preceding assistant turn, skipping other summaries.
@@ -3834,6 +3836,7 @@ function resolveToolInvocationOwners(rawChat, coreChat) {
         summaryOwners.set(coreIndex, {
             hidden: ownerRawIndex !== -1 && isHiddenChatMessage(rawChat[ownerRawIndex]),
             ownerCoreIndex: ownerRawIndex === -1 ? -1 : (coreIndexOfRawIndex.get(ownerRawIndex) ?? -1),
+            inOpenTail: rawIndex >= openTailStart,
         });
     }
     return summaryOwners;
@@ -6755,6 +6758,19 @@ class StreamingProcessor {
         await this.onProgressStreaming(messageId, text, true);
         const messageElement = chatElement.find(`.mes[mesid="${messageId}"]`);
         const message = chat[messageId];
+        // Stamp before swipe_info clones extra. A non-stop reason (`tool_calls`,
+        // `length`) keeps this turn from closing the tool task, so the next
+        // prompt build will not strip the in-progress tail's tool records.
+        // Infer `tool_calls` when the stream carried calls but the provider
+        // omitted a finish reason — missing would look like a legacy close.
+        if (message) {
+            const finishReason = this.finishReason
+                || (Array.isArray(this.toolCalls) && this.toolCalls.length > 0 ? 'tool_calls' : '');
+            if (finishReason) {
+                message.extra = message.extra || {};
+                message.extra.finish_reason = String(finishReason);
+            }
+        }
         addCopyToCodeBlocks(messageElement);
 
         await this.reasoningHandler.finish(messageId);
@@ -7832,8 +7848,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // tool_calls would keep flowing to the provider on top of a hidden turn.
     // Resolve the owner of every invocation summary while the full raw chat is
     // still available (hidden messages are filtered out of coreChat above, so
-    // the merge step below cannot see them), and drop summaries whose owner is
-    // hidden. The message-emptiness check happens post-regex at the merge step.
+    // the merge step below cannot see them). Closed tasks drop those summaries.
+    // The open tail (no assistant `stop` yet) must keep them: stripping tool
+    // records mid-task makes the model call the same tools again.
     const invocationOwnerBySummary = canUseTools ? resolveToolInvocationOwners(chat, coreChat) : null;
 
     coreChat = await Promise.all(coreChat.map(async (/** @type {ChatMessage} */ chatItem, index) => {
@@ -7881,49 +7898,45 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
             if (isInvocationSummary) {
                 const owner = invocationOwnerBySummary?.get(chatItem.index);
-                // The summary's owner turn is hidden (dropped above) — drop the
-                // summary with it so hidden tool history cannot reach the provider.
-                if (owner?.hidden) {
-                    consumedSummaryIndexes.add(chatItem.index);
-                    continue;
-                }
+                const targetMessage = owner && owner.ownerCoreIndex >= 0
+                    ? coreChatByIndex.get(owner.ownerCoreIndex)
+                    : null;
                 // Non-streaming histories store the summary between the user
                 // turn and the final reply, so the owning assistant turn sits
                 // AFTER the summary, not before it. Merge by resolved owner
                 // index instead of guessing from the normalized tail.
-                if (owner && owner.ownerCoreIndex >= 0) {
-                    const targetMessage = coreChatByIndex.get(owner.ownerCoreIndex);
-                    // A regex script on the prompt lane may blank out the owner's
-                    // text. That is a hiding gesture the same way /hide is, so the
-                    // tool records owned by a blanked turn drop too — the summary
-                    // must NOT survive as a standalone entry, or its structured
-                    // invocations would still reach the provider. Reasoning
-                    // rounds legitimately produce an empty-text owner (the model
-                    // returned reasoning + tool_calls, no visible text) — those
-                    // must keep their invocations or the wire shape for reasoning
-                    // models breaks.
-                    if (targetMessage && isBlankMessageText(targetMessage.mes) && !hasMessageReasoning(targetMessage)) {
-                        consumedSummaryIndexes.add(chatItem.index);
-                        continue;
-                    }
-                    const shouldMergeIntoOwner =
-                        targetMessage
+                // A regex script on the prompt lane may blank out the owner's
+                // text. That is a hiding gesture the same way /hide is, so a
+                // closed task drops the tool records owned by a blanked turn.
+                // Reasoning rounds legitimately produce an empty-text owner —
+                // those are not blank for this check. The open tail never drops:
+                // the model still needs the calls. A hidden owner in that tail
+                // is not merged into, or the filtered turn would swallow them.
+                const action = classifyInvocationSummary({
+                    inOpenTail: owner?.inOpenTail === true,
+                    ownerHidden: owner?.hidden === true,
+                    ownerPresent: Boolean(targetMessage),
+                    ownerBlank: Boolean(targetMessage && isBlankMessageText(targetMessage.mes) && !hasMessageReasoning(targetMessage)),
+                    ownerMergeable: Boolean(targetMessage)
                         && !targetMessage.is_user
-                        && targetMessage?.extra?.type !== system_message_types.NARRATOR;
-
-                    if (shouldMergeIntoOwner) {
-                        coreChatByIndex.set(owner.ownerCoreIndex, {
-                            ...targetMessage,
-                            extra: {
-                                ...(targetMessage.extra || {}),
-                                tool_invocations: Array.isArray(targetMessage?.extra?.tool_invocations)
-                                    ? targetMessage.extra.tool_invocations.concat(invocations)
-                                    : invocations.slice(),
-                            },
-                        });
-                        consumedSummaryIndexes.add(chatItem.index);
-                        continue;
-                    }
+                        && targetMessage?.extra?.type !== system_message_types.NARRATOR,
+                });
+                if (action === 'drop') {
+                    consumedSummaryIndexes.add(chatItem.index);
+                    continue;
+                }
+                if (action === 'merge') {
+                    coreChatByIndex.set(owner.ownerCoreIndex, {
+                        ...targetMessage,
+                        extra: {
+                            ...(targetMessage.extra || {}),
+                            tool_invocations: Array.isArray(targetMessage?.extra?.tool_invocations)
+                                ? targetMessage.extra.tool_invocations.concat(invocations)
+                                : invocations.slice(),
+                        },
+                    });
+                    consumedSummaryIndexes.add(chatItem.index);
+                    continue;
                 }
             }
         }
@@ -9491,12 +9504,16 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             // the merged final message, not one per intermediate round.
             const nonStreamFinishReason = data?.choices?.[0]?.finish_reason ?? null;
             const willAutoContinue = shouldAutoContinueOnTruncated(nonStreamFinishReason, isImpersonate);
+            // Same contract as the streaming stamp: a tool round with no
+            // provider reason must not look like a legacy close.
+            const stampedFinishReason = nonStreamFinishReason
+                || (canPerformToolCalls && ToolManager.hasToolCalls(data) ? 'tool_calls' : null);
 
             // Without streaming we'll be having a full message on continuation. Treat it as a last chunk.
             if (originalType !== 'continue') {
-                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue }));
+                ({ type, getMessage } = await saveReply({ type, getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue, finishReason: stampedFinishReason }));
             } else {
-                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue }));
+                ({ type, getMessage } = await saveReply({ type: 'appendFinal', getMessage, title, swipes, reasoning, imageUrls, reasoningSignature, reasoningBlocks, reasoningDetails, suppressEmit: willAutoContinue, finishReason: stampedFinishReason }));
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
@@ -11059,7 +11076,7 @@ function applyPostGenerationText(text, isImpersonate, isContinue) {
     return out;
 }
 
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null, reasoningDetails = null, suppressEmit = false }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, reasoningBlocks = null, reasoningDetails = null, suppressEmit = false, finishReason = null }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
@@ -11251,6 +11268,10 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     }
 
     const item = chat[chat.length - 1];
+    if (finishReason && item && !item.is_user) {
+        item.extra = item.extra || {};
+        item.extra.finish_reason = String(finishReason);
+    }
     if (item.swipe_info === undefined) {
         item.swipe_info = [];
     }
