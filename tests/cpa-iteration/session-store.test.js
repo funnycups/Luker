@@ -17,7 +17,7 @@ describe('CPA — session store', () => {
         context = {
             presets: {
                 state: {
-                    get: jest.fn(async (_ns, _opts) => structuredClone(stateBackend._state)),
+                    get: jest.fn(async (_ns, _opts) => ({ ok: true, state: structuredClone(stateBackend._state) })),
                     update: jest.fn(async (_ns, fn, _opts) => {
                         const next = fn(structuredClone(stateBackend._state));
                         stateBackend._state = next;
@@ -165,7 +165,7 @@ describe('CPA session — new message schema', () => {
         const context = {
             presets: {
                 state: {
-                    get: jest.fn(async () => structuredClone(stateBackend._state)),
+                    get: jest.fn(async () => ({ ok: true, state: structuredClone(stateBackend._state) })),
                     update: jest.fn(async (_ns, fn) => {
                         const next = fn(structuredClone(stateBackend._state));
                         stateBackend._state = next;

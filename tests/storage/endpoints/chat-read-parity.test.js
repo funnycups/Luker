@@ -146,10 +146,11 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
 
         const res = await request(harness.app)
             .post('/api/chats/export')
-            .send({ avatar_url: 'Alice.png', file: 'expo.jsonl', format: 'jsonl', is_group: false })
+            .send({ avatar_url: 'Alice.png', file: 'expo.jsonl', exportfilename: 'expo.jsonl', format: 'jsonl', is_group: false })
             .expect(200);
-        // The endpoint wraps the file contents in `{message, result}`.
-        const exported = res.body.result;
+        expect(res.headers['content-type']).toContain('application/x-ndjson');
+        expect(res.headers['content-disposition']).toBe('attachment; filename="expo.jsonl"');
+        const exported = res.text;
         expect(typeof exported).toBe('string');
         expect(exported.length).toBeGreaterThan(0);
         const lines = exported.split('\n').filter((l) => l.length);
