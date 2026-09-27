@@ -303,9 +303,14 @@ export function findEntry(request) {
  * Normalize to the string data line.
  */
 function normalizeEvent(e) {
-    if (typeof e === 'string') return e;
-    if (e && typeof e.data === 'string') return e.data;
-    return '';
+    let raw = '';
+    if (typeof e === 'string') raw = e;
+    else if (e && typeof e.data === 'string') raw = e.data;
+    if (!raw) return '';
+    if (raw.startsWith('data:')) {
+        raw = raw.slice(5).replace(/^\s+/, '');
+    }
+    return raw;
 }
 
 // ---- Provider-error detection ----
@@ -382,17 +387,28 @@ function extractProviderErrorMessage(err) {
 function extractUsageFromOAI(payload) {
     const usage = payload?.usage;
     if (!usage || typeof usage !== 'object') return {};
+    const inputDetails = usage.prompt_tokens_details
+        ?? usage.prompt_token_details
+        ?? usage.input_tokens_details
+        ?? usage.input_token_details;
     return {
         prompt_tokens: usage.prompt_tokens ?? null,
         completion_tokens: usage.completion_tokens ?? null,
         total_tokens: usage.total_tokens ?? null,
-        cache_read: usage.prompt_tokens_details?.cached_tokens
- ?? usage.cache_read_input_tokens
- ?? usage.prompt_cache_hit_tokens
- ?? null,
-        cache_write: usage.cache_creation_input_tokens
- ?? usage.prompt_cache_miss_tokens
- ?? null,
+        cache_read: inputDetails?.cached_tokens
+            ?? inputDetails?.cache_read_input_tokens
+            ?? usage.cache_read_input_tokens
+            ?? usage.prompt_cache_hit_tokens
+            ?? usage.cached_tokens
+            ?? usage.cachedContentTokenCount
+            ?? payload?.usageMetadata?.cachedContentTokenCount
+            ?? null,
+        cache_write: inputDetails?.cache_creation_tokens
+            ?? inputDetails?.cache_creation_input_tokens
+            ?? usage.cache_creation_input_tokens
+            ?? usage.prompt_cache_miss_tokens
+            ?? usage.cache_write
+            ?? null,
     };
 }
 
@@ -417,6 +433,48 @@ function extractUsageFromGemini(payload) {
         total_tokens: meta.totalTokenCount ?? null,
         cache_read: meta.cachedContentTokenCount ?? null,
         cache_write: null,
+    };
+}
+
+function extractUsageFromResponses(payload) {
+    const usage = payload?.usage;
+    if (!usage || typeof usage !== 'object') return {};
+    const promptTokens = usage.input_tokens ?? usage.prompt_tokens ?? null;
+    const completionTokens = usage.output_tokens ?? usage.completion_tokens ?? null;
+    let totalTokens = usage.total_tokens ?? null;
+    if (totalTokens == null && (promptTokens != null || completionTokens != null)) {
+        totalTokens = (promptTokens ?? 0) + (completionTokens ?? 0);
+    }
+    const inputDetails = usage.input_tokens_details
+        ?? usage.input_token_details
+        ?? usage.prompt_tokens_details
+        ?? usage.prompt_token_details;
+    const cacheRead = inputDetails?.cached_tokens
+        ?? inputDetails?.cache_read_input_tokens
+        ?? inputDetails?.cache_read_tokens
+        ?? usage.cache_read_input_tokens
+        ?? usage.cache_read_tokens
+        ?? usage.prompt_cache_hit_tokens
+        ?? usage.cached_tokens
+        ?? usage.cachedContentTokenCount
+        ?? payload?.usageMetadata?.cachedContentTokenCount
+        ?? null;
+    const cacheWrite = inputDetails?.cache_creation_tokens
+        ?? inputDetails?.cache_creation_input_tokens
+        ?? inputDetails?.cache_write_tokens
+        ?? usage.cache_creation_input_tokens
+        ?? usage.cache_creation_tokens
+        ?? usage.cache_write_input_tokens
+        ?? usage.cache_write_tokens
+        ?? usage.cache_write
+        ?? usage.prompt_cache_miss_tokens
+        ?? null;
+    return {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: totalTokens,
+        cache_read: cacheRead,
+        cache_write: cacheWrite,
     };
 }
 
@@ -489,6 +547,14 @@ function extractFinishReasonFromPayload(payload, rawApiResponse, source) {
         finishReason = COHERE_FINISH_TO_OAI[nativeFinishReason] ?? null;
     }
 
+    const respObj = (source === 'openai_responses' && rawApiResponse) ? rawApiResponse : payload;
+    if (source === 'openai_responses' || Array.isArray(respObj?.output)) {
+        const hasToolCall = Array.isArray(respObj?.output) && respObj.output.some(item => item?.type === 'function_call');
+        const status = respObj?.status ? String(respObj.status) : null;
+        nativeFinishReason = status;
+        finishReason = hasToolCall ? 'tool_calls' : (status === 'completed' ? 'stop' : (status === 'incomplete' ? 'length' : (status ?? null)));
+    }
+
     // Fall back / augment from the OAI-shaped choices array. This is the
     // primary path for OpenAI, DeepSeek, Mistral, xAI, AIMLAPI, OpenRouter,
     // Azure, MiniMax, Chutes, ElectronHub, AI21, and any other OAI-compatible
@@ -556,6 +622,17 @@ export function extractFinishReasonFromStreamEvents(events, source) {
             continue;
         }
 
+        if (source === 'openai_responses' || parsed?.type === 'response.completed' || parsed?.type === 'response.incomplete') {
+            const resp = parsed?.response || parsed;
+            const status = resp?.status ? String(resp.status) : (parsed?.type === 'response.completed' ? 'completed' : 'incomplete');
+            const hasToolCalls = events.some(ev => {
+                const s = typeof ev === 'string' ? ev : ev?.data;
+                return s && (s.includes('function_call') || s.includes('function_call_arguments'));
+            });
+            const norm = hasToolCalls ? 'tool_calls' : (status === 'completed' ? 'stop' : (status === 'incomplete' ? 'length' : status));
+            return { finishReason: norm, nativeFinishReason: status };
+        }
+
         // OpenAI / OpenAI-compatible. finish_reason on the choice (either
         // in delta or on the choice itself for providers that fold it in).
         // Also pick up OpenRouter's `native_finish_reason` when present.
@@ -611,8 +688,18 @@ export function extractUsageFromStreamEvents(events, source) {
             }
         }
 
+        if (source === 'openai_responses' || parsed?.type === 'response.completed' || parsed?.type === 'response.incomplete') {
+            const usageObj = parsed?.response?.usage || parsed?.usage;
+            if (usageObj) {
+                return extractUsageFromResponses({ usage: usageObj });
+            }
+        }
+
         if (parsed?.usage) {
-            return extractUsageFromOAI(parsed);
+            const oai = extractUsageFromOAI(parsed);
+            if (oai.prompt_tokens != null) return oai;
+            const respUsage = extractUsageFromResponses(parsed);
+            if (respUsage.prompt_tokens != null) return respUsage;
         }
     }
 
@@ -646,6 +733,12 @@ function extractTextFromStreamEvents(events, source) {
             const parts = parsed?.candidates?.[0]?.content?.parts;
             if (Array.isArray(parts)) {
                 for (const p of parts) if (typeof p?.text === 'string') out.push(p.text);
+            }
+            continue;
+        }
+        if (source === 'openai_responses' || parsed?.type?.startsWith?.('response.')) {
+            if (parsed?.type === 'response.output_text.delta' && typeof parsed.delta === 'string') {
+                out.push(parsed.delta);
             }
             continue;
         }
@@ -763,6 +856,70 @@ function extractPartsFromStreamEvents(events, source) {
         return parts;
     }
 
+    if (source === 'openai_responses') {
+        const parts = [];
+        let textAccum = '';
+        let reasoningAccum = '';
+        /** @type {Map<number, {id: string, name: string, argsStr: string}>} */
+        const toolCalls = new Map();
+        const toolOrder = [];
+
+        const flushText = () => {
+            if (textAccum) { parts.push({ type: 'text', text: textAccum }); textAccum = ''; }
+        };
+        const flushReasoning = () => {
+            if (reasoningAccum) { parts.push({ type: 'reasoning', kind: 'text', text: reasoningAccum }); reasoningAccum = ''; }
+        };
+
+        for (const ev of events) {
+            const raw = normalizeEvent(ev);
+            if (!raw || raw === '[DONE]') continue;
+            let parsed;
+            try { parsed = JSON.parse(raw); } catch { continue; }
+            if (parsed?.luker) continue;
+
+            const type = parsed?.type;
+            if (type === 'response.output_text.delta' && typeof parsed.delta === 'string') {
+                flushReasoning();
+                textAccum += parsed.delta;
+            } else if ((type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') && typeof parsed.delta === 'string') {
+                flushText();
+                reasoningAccum += parsed.delta;
+            } else if (type === 'response.output_item.added') {
+                const item = parsed.item;
+                if (item?.type === 'function_call') {
+                    const idx = Number(parsed.output_index ?? toolOrder.length);
+                    toolCalls.set(idx, {
+                        id: String(item.call_id || item.id || ''),
+                        name: String(item.name || ''),
+                        argsStr: '',
+                    });
+                    if (!toolOrder.includes(idx)) toolOrder.push(idx);
+                }
+            } else if (type === 'response.function_call_arguments.delta') {
+                const idx = Number(parsed.output_index ?? 0);
+                const tc = toolCalls.get(idx);
+                if (tc && typeof parsed.delta === 'string') {
+                    tc.argsStr += parsed.delta;
+                }
+            }
+        }
+        flushReasoning();
+        flushText();
+        for (const idx of toolOrder) {
+            const tc = toolCalls.get(idx);
+            if (tc) {
+                parts.push({
+                    type: 'tool_call',
+                    id: tc.id,
+                    name: tc.name,
+                    args: coerceToolArgs(tc.argsStr),
+                });
+            }
+        }
+        return parts;
+    }
+
     // OpenAI / OpenAI-compatible
     let textAccum = '';
     let reasoningTextAccum = '';
@@ -870,6 +1027,20 @@ function extractTextFromPayload(payload, source, rawApiResponse) {
             }
         }
     }
+    const respObj = (source === 'openai_responses' && rawApiResponse) ? rawApiResponse : payload;
+    if (source === 'openai_responses' || Array.isArray(respObj?.output)) {
+        const out = [];
+        for (const item of Array.isArray(respObj?.output) ? respObj.output : []) {
+            if (item?.type === 'message' && Array.isArray(item.content)) {
+                for (const part of item.content) {
+                    if (part?.type === 'output_text' && typeof part.text === 'string') {
+                        out.push(part.text);
+                    }
+                }
+            }
+        }
+        if (out.length > 0) return out.join('');
+    }
     const choice = payload?.choices?.[0];
     const msgContent = choice?.message?.content ?? choice?.text;
     if (typeof msgContent === 'string') return msgContent;
@@ -939,6 +1110,36 @@ function extractPartsFromPayload(payload, source, rawApiResponse) {
                 return parts;
             }
         }
+    }
+
+    const respObj = (source === 'openai_responses' && rawApiResponse) ? rawApiResponse : payload;
+    if (source === 'openai_responses' || Array.isArray(respObj?.output)) {
+        for (const item of Array.isArray(respObj?.output) ? respObj.output : []) {
+            if (item?.type === 'message' && Array.isArray(item.content)) {
+                for (const p of item.content) {
+                    if (p?.type === 'output_text' && typeof p.text === 'string' && p.text) {
+                        parts.push({ type: 'text', text: p.text });
+                    }
+                }
+            } else if (item?.type === 'reasoning') {
+                for (const summary of Array.isArray(item.summary) ? item.summary : []) {
+                    if (summary?.type === 'summary_text' && typeof summary.text === 'string' && summary.text) {
+                        parts.push({ type: 'reasoning', kind: 'thinking', text: summary.text });
+                    }
+                }
+                if (typeof item.text === 'string' && item.text) {
+                    parts.push({ type: 'reasoning', kind: 'thinking', text: item.text });
+                }
+            } else if (item?.type === 'function_call') {
+                parts.push({
+                    type: 'tool_call',
+                    id: String(item.call_id || item.id || ''),
+                    name: String(item.name || ''),
+                    args: coerceToolArgs(item.arguments),
+                });
+            }
+        }
+        return parts;
     }
 
     const choice = payload?.choices?.[0];
@@ -1021,6 +1222,17 @@ export function completeInspection(request, payload, rawApiResponse) {
             usage = extractUsageFromClaude(rawApiResponse);
         } else if (source === 'makersuite' || source === 'vertexai') {
             usage = extractUsageFromGemini(rawApiResponse);
+        } else if (source === 'openai_responses') {
+            usage = extractUsageFromResponses(rawApiResponse);
+        }
+    }
+
+    if (!usage.prompt_tokens) {
+        if (source === 'openai_responses' || payload?.usage?.input_tokens != null || Array.isArray(payload?.output)) {
+            const respUsage = extractUsageFromResponses(payload);
+            if (respUsage.prompt_tokens != null) {
+                usage = respUsage;
+            }
         }
     }
 

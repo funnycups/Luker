@@ -263,3 +263,147 @@ describe('request-inspector: TTL cleanup', () => {
         expect(getBufferForHandle(req.user.profile.handle)).toEqual([]);
     });
 });
+
+describe('request-inspector: openai_responses support', () => {
+    test('non-streaming payload extracts tokens, responseText, responseParts, and finishReason', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const payload = {
+            id: 'resp_123',
+            object: 'response',
+            status: 'completed',
+            output: [
+                {
+                    type: 'reasoning',
+                    summary: [{ type: 'summary_text', text: 'Thinking about greetings' }],
+                },
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [
+                        { type: 'output_text', text: 'Hello, how can I assist you today?' },
+                    ],
+                },
+            ],
+            usage: {
+                input_tokens: 15169,
+                output_tokens: 1436,
+                total_tokens: 16605,
+                input_token_details: { cached_tokens: 7600 },
+            },
+        };
+
+        completeInspection(req, payload, payload);
+
+        const entry = getEntry(req);
+        expect(entry.status).toBe('success');
+        expect(entry.usage.prompt_tokens).toBe(15169);
+        expect(entry.usage.completion_tokens).toBe(1436);
+        expect(entry.usage.total_tokens).toBe(16605);
+        expect(entry.usage.cache_read).toBe(7600);
+        expect(entry.responseText).toBe('Hello, how can I assist you today?');
+        expect(entry.responseParts).toEqual([
+            { type: 'reasoning', kind: 'thinking', text: 'Thinking about greetings' },
+            { type: 'text', text: 'Hello, how can I assist you today?' },
+        ]);
+        expect(entry.finishReason).toBe('stop');
+        expect(entry.nativeFinishReason).toBe('completed');
+    });
+
+    test('non-streaming payload with function_call extracts tool call and sets finishReason to tool_calls', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const payload = {
+            id: 'resp_tool',
+            object: 'response',
+            status: 'completed',
+            output: [
+                {
+                    type: 'function_call',
+                    call_id: 'call_999',
+                    name: 'get_current_weather',
+                    arguments: '{"location":"Taipei"}',
+                },
+            ],
+            usage: {
+                input_tokens: 100,
+                output_tokens: 50,
+            },
+        };
+
+        completeInspection(req, payload, payload);
+
+        const entry = getEntry(req);
+        expect(entry.status).toBe('success');
+        expect(entry.usage.prompt_tokens).toBe(100);
+        expect(entry.usage.completion_tokens).toBe(50);
+        expect(entry.usage.total_tokens).toBe(150);
+        expect(entry.responseParts).toEqual([
+            {
+                type: 'tool_call',
+                id: 'call_999',
+                name: 'get_current_weather',
+                args: { location: 'Taipei' },
+            },
+        ]);
+        expect(entry.finishReason).toBe('tool_calls');
+        expect(entry.nativeFinishReason).toBe('completed');
+    });
+
+    test('streaming events extract tokens, responseText, responseParts, and finishReason', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const events = [
+            'data: {"type":"response.reasoning_text.delta","delta":"Hmm..."}',
+            'data: {"type":"response.output_text.delta","delta":"Hello"}',
+            'data: {"type":"response.output_text.delta","delta":" world!"}',
+            'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":500,"output_tokens":20,"total_tokens":520,"input_tokens_details":{"cached_tokens":120,"cache_creation_tokens":45}}}}',
+        ];
+
+        completeInspectionFromStream(req, events);
+
+        const entry = getEntry(req);
+        expect(entry.status).toBe('success');
+        expect(entry.usage.prompt_tokens).toBe(500);
+        expect(entry.usage.completion_tokens).toBe(20);
+        expect(entry.usage.total_tokens).toBe(520);
+        expect(entry.usage.cache_read).toBe(120);
+        expect(entry.usage.cache_write).toBe(45);
+        expect(entry.responseText).toBe('Hello world!');
+        expect(entry.responseParts).toEqual([
+            { type: 'reasoning', kind: 'text', text: 'Hmm...' },
+            { type: 'text', text: 'Hello world!' },
+        ]);
+        expect(entry.finishReason).toBe('stop');
+        expect(entry.nativeFinishReason).toBe('completed');
+    });
+
+    test('non-streaming payload with input_tokens_details extracts cache_read: 0 and cache_write', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const payload = {
+            id: 'resp_cache_0',
+            object: 'response',
+            status: 'completed',
+            output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'hi' }] }],
+            usage: {
+                input_tokens: 2,
+                input_tokens_details: { cached_tokens: 0, cache_creation_tokens: 10 },
+                output_tokens: 145,
+                total_tokens: 147,
+            },
+        };
+
+        completeInspection(req, payload, payload);
+
+        const entry = getEntry(req);
+        expect(entry.status).toBe('success');
+        expect(entry.usage.cache_read).toBe(0);
+        expect(entry.usage.cache_write).toBe(10);
+    });
+});
+

@@ -21,8 +21,8 @@ function finiteOrZero(n) {
 
 function extractFromOpenAIShape(rawUsage) {
     if (!rawUsage || typeof rawUsage !== 'object') return null;
-    const prompt = Number(rawUsage.prompt_tokens);
-    const completion = Number(rawUsage.completion_tokens);
+    const prompt = Number(rawUsage.prompt_tokens ?? rawUsage.input_tokens);
+    const completion = Number(rawUsage.completion_tokens ?? rawUsage.output_tokens);
     const total = Number(rawUsage.total_tokens);
     if (!Number.isFinite(prompt) && !Number.isFinite(completion) && !Number.isFinite(total)) {
         return null;
@@ -32,11 +32,19 @@ function extractFromOpenAIShape(rawUsage) {
         completion_tokens: finiteOrZero(completion),
         total_tokens: Number.isFinite(total) ? total : finiteOrZero(prompt) + finiteOrZero(completion),
     };
-    if (rawUsage.prompt_tokens_details && typeof rawUsage.prompt_tokens_details === 'object') {
-        out.prompt_tokens_details = { ...rawUsage.prompt_tokens_details };
+    const inputDetails = rawUsage.prompt_tokens_details
+        ?? rawUsage.prompt_token_details
+        ?? rawUsage.input_tokens_details
+        ?? rawUsage.input_token_details;
+    if (inputDetails && typeof inputDetails === 'object') {
+        out.prompt_tokens_details = { ...inputDetails };
     }
-    if (rawUsage.completion_tokens_details && typeof rawUsage.completion_tokens_details === 'object') {
-        out.completion_tokens_details = { ...rawUsage.completion_tokens_details };
+    const outputDetails = rawUsage.completion_tokens_details
+        ?? rawUsage.completion_token_details
+        ?? rawUsage.output_tokens_details
+        ?? rawUsage.output_token_details;
+    if (outputDetails && typeof outputDetails === 'object') {
+        out.completion_tokens_details = { ...outputDetails };
     }
     return out;
 }

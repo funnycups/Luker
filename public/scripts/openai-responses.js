@@ -166,14 +166,35 @@ export function responsesResultToChatCompletion(responseObj) {
 }
 
 function mapUsage(usage) {
-    const promptTokens = Number(usage?.input_tokens ?? 0);
-    const completionTokens = Number(usage?.output_tokens ?? 0);
+    const promptTokens = Number(usage?.input_tokens ?? usage?.prompt_tokens ?? 0);
+    const completionTokens = Number(usage?.output_tokens ?? usage?.completion_tokens ?? 0);
     const totalTokens = Number.isFinite(Number(usage?.total_tokens))
         ? Number(usage.total_tokens)
         : (Number.isFinite(promptTokens) && Number.isFinite(completionTokens) ? promptTokens + completionTokens : 0);
-    return {
+    const out = {
         prompt_tokens: Number.isFinite(promptTokens) ? promptTokens : 0,
         completion_tokens: Number.isFinite(completionTokens) ? completionTokens : 0,
         total_tokens: totalTokens,
     };
+    const inputDetails = usage?.input_tokens_details
+        ?? usage?.input_token_details
+        ?? usage?.prompt_tokens_details
+        ?? usage?.prompt_token_details;
+    const cacheRead = Number(inputDetails?.cached_tokens ?? usage?.cache_read_input_tokens);
+    const cacheCreate = Number(inputDetails?.cache_creation_tokens ?? inputDetails?.cache_creation_input_tokens ?? usage?.cache_creation_input_tokens);
+    const promptDetails = {};
+    if (Number.isFinite(cacheRead)) promptDetails.cached_tokens = cacheRead;
+    if (Number.isFinite(cacheCreate)) promptDetails.cache_creation_tokens = cacheCreate;
+    if (Object.keys(promptDetails).length) out.prompt_tokens_details = promptDetails;
+
+    const outputDetails = usage?.output_tokens_details
+        ?? usage?.output_token_details
+        ?? usage?.completion_tokens_details
+        ?? usage?.completion_token_details;
+    const reasoning = Number(outputDetails?.reasoning_tokens ?? usage?.reasoning_tokens);
+    if (Number.isFinite(reasoning)) {
+        out.completion_tokens_details = { reasoning_tokens: reasoning };
+    }
+
+    return out;
 }

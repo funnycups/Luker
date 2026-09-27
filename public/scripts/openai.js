@@ -566,22 +566,6 @@ export const MINIMAX_ENDPOINT = {
     CN: 'cn',
 };
 
-const sensitiveFields = [
-    'reverse_proxy',
-    'proxy_password',
-    'base_url',
-    'custom_url',
-    'responses_url',
-    'custom_include_body',
-    'custom_exclude_body',
-    'custom_include_headers',
-    'vertexai_region',
-    'vertexai_express_project_id',
-    'azure_base_url',
-    'azure_deployment_name',
-    'workers_ai_account_id',
-];
-
 /**
  * preset_name -> [selector, setting_name, is_checkbox, is_connection]
  * @type {Record<string, [string, string, boolean, boolean]>}
@@ -1539,7 +1523,6 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
     const batchedMessages = await Message.createManyAsync(batchedMessageDefinitions);
     for (const entry of chatEntries) {
         const chatMessage = batchedMessages[entry.chatMessageIndex];
-        const toolResultMessages = batchedMessages.slice(entry.toolResultStartIndex, entry.toolResultStartIndex + entry.toolResultCount);
 
         if (entry.postCountSignature) {
             chatMessage.signature = entry.postCountSignature;
@@ -3547,6 +3530,12 @@ function getReasoningEffort(settings = null, model = null) {
 
         switch (settings.reasoning_effort) {
             case reasoning_effort_types.auto:
+                // Custom endpoints may be proxies whose model names are not OpenAI's.
+                // "auto" must stay on the wire so those proxies can request thought text.
+                // koboldcpp already returned above and still omits auto.
+                if (settings.chat_completion_source === chat_completion_sources.CUSTOM) {
+                    return reasoning_effort_types.auto;
+                }
                 return undefined;
             case reasoning_effort_types.min:
                 if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)) {

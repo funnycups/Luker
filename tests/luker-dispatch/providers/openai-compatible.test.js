@@ -231,6 +231,102 @@ describe('dispatchOpenAICompatible', () => {
         });
     });
 
+    describe('reasoning effort forwarding', () => {
+        function wireBody(ctx) {
+            return JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        }
+
+        test('CUSTOM forwards resolved effort for non-OpenAI model names, including auto', async () => {
+            for (const effort of ['low', 'auto']) {
+                const ctx = fakeCtx({
+                    body: {
+                        chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM,
+                        custom_url: 'http://127.0.0.1:8317/v1',
+                        model: 'gemini-3.8-flash-high',
+                        reasoning_effort: effort,
+                    },
+                    secretMap: { api_key_custom: 'c-key' },
+                });
+                await dispatchOpenAICompatible(ctx);
+                expect(wireBody(ctx).reasoning_effort).toBe(effort);
+            }
+
+            const kobold = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM,
+                    custom_url: 'http://127.0.0.1:5001/v1',
+                    model: 'koboldcpp/local',
+                    reasoning_effort: 'minimal',
+                },
+                secretMap: { api_key_custom: 'c-key' },
+            });
+            await dispatchOpenAICompatible(kobold);
+            expect(wireBody(kobold).reasoning_effort).toBe('minimal');
+        });
+
+        test('CUSTOM omits reasoning_effort when the client did not set one', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM,
+                    custom_url: 'http://127.0.0.1:8317/v1',
+                    model: 'gemini-3.8-flash-high',
+                },
+                secretMap: { api_key_custom: 'c-key' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+
+        test('OPENAI still drops effort for models outside the allowlist', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    model: 'gemini-3.8-flash-high',
+                    reasoning_effort: 'low',
+                },
+                secretMap: { api_key_openai: 'oa-key' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+
+        test('OPENAI still maps allowlisted models', async () => {
+            const mapped = fakeCtx({
+                body: {
+                    model: 'gpt-5',
+                    reasoning_effort: 'min',
+                },
+                secretMap: { api_key_openai: 'oa-key' },
+            });
+            await dispatchOpenAICompatible(mapped);
+            expect(wireBody(mapped).reasoning_effort).toBe('minimal');
+
+            const fixed = fakeCtx({
+                body: {
+                    model: 'gpt-5.3-chat-latest',
+                    reasoning_effort: 'high',
+                },
+                secretMap: { api_key_openai: 'oa-key' },
+            });
+            await dispatchOpenAICompatible(fixed);
+            expect(wireBody(fixed).reasoning_effort).toBe('medium');
+        });
+
+        test('CUSTOM custom_exclude_body can still remove reasoning_effort', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM,
+                    custom_url: 'http://127.0.0.1:8317/v1',
+                    model: 'gemini-3.8-flash-high',
+                    reasoning_effort: 'auto',
+                    custom_exclude_body: 'reasoning_effort: true\n',
+                },
+                secretMap: { api_key_custom: 'c-key' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+    });
+
     test('non-streaming: emits chunk with JSON body then end', async () => {
         const ctx = fakeCtx({ secretMap: { api_key_openai: 'oa-key' } });
         await dispatchOpenAICompatible(ctx);
