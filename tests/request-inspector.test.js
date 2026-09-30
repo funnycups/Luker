@@ -405,5 +405,88 @@ describe('request-inspector: openai_responses support', () => {
         expect(entry.usage.cache_read).toBe(0);
         expect(entry.usage.cache_write).toBe(10);
     });
+
+    test('streaming: function_call output_item is detected as tool_calls finish reason', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const events = [
+            'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"f","arguments":""}}',
+            'data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{}"}',
+            'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":4}}}',
+        ];
+
+        completeInspectionFromStream(req, events);
+
+        const entry = getEntry(req);
+        expect(entry.finishReason).toBe('tool_calls');
+        expect(entry.nativeFinishReason).toBe('completed');
+    });
+
+    test('streaming: body text mentioning function_call does not fake tool_calls', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const events = [
+            'data: {"type":"response.output_text.delta","delta":"Call the function_call helper next."}',
+            'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":4}}}',
+        ];
+
+        completeInspectionFromStream(req, events);
+
+        const entry = getEntry(req);
+        expect(entry.finishReason).toBe('stop');
+    });
+
+    test('non-streaming incomplete with content_filter reason maps to content_filter', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const payload = {
+            id: 'resp_filter',
+            object: 'response',
+            status: 'incomplete',
+            incomplete_details: { reason: 'content_filter' },
+            output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'partial' }] }],
+        };
+
+        completeInspection(req, payload, payload);
+
+        const entry = getEntry(req);
+        expect(entry.finishReason).toBe('content_filter');
+        expect(entry.nativeFinishReason).toBe('incomplete');
+    });
+
+    test('streaming incomplete with content_filter reason maps to content_filter', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const events = [
+            'data: {"type":"response.output_text.delta","delta":"partial"}',
+            'data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}',
+        ];
+
+        completeInspectionFromStream(req, events);
+
+        const entry = getEntry(req);
+        expect(entry.finishReason).toBe('content_filter');
+        expect(entry.nativeFinishReason).toBe('incomplete');
+    });
+
+    test('streaming incomplete without content_filter reason still maps to length', () => {
+        const req = newRequest('openai_responses');
+        startInspection(req);
+
+        const events = [
+            'data: {"type":"response.output_text.delta","delta":"partial"}',
+            'data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}',
+        ];
+
+        completeInspectionFromStream(req, events);
+
+        const entry = getEntry(req);
+        expect(entry.finishReason).toBe('length');
+        expect(entry.nativeFinishReason).toBe('incomplete');
+    });
 });
 

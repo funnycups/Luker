@@ -551,8 +551,15 @@ function extractFinishReasonFromPayload(payload, rawApiResponse, source) {
     if (source === 'openai_responses' || Array.isArray(respObj?.output)) {
         const hasToolCall = Array.isArray(respObj?.output) && respObj.output.some(item => item?.type === 'function_call');
         const status = respObj?.status ? String(respObj.status) : null;
+        const incompleteReason = respObj?.incomplete_details?.reason ? String(respObj.incomplete_details.reason) : null;
         nativeFinishReason = status;
-        finishReason = hasToolCall ? 'tool_calls' : (status === 'completed' ? 'stop' : (status === 'incomplete' ? 'length' : (status ?? null)));
+        finishReason = hasToolCall
+            ? 'tool_calls'
+            : (status === 'completed'
+                ? 'stop'
+                : (status === 'incomplete'
+                    ? (incompleteReason === 'content_filter' ? 'content_filter' : 'length')
+                    : (status ?? null)));
     }
 
     // Fall back / augment from the OAI-shaped choices array. This is the
@@ -626,10 +633,23 @@ export function extractFinishReasonFromStreamEvents(events, source) {
             const resp = parsed?.response || parsed;
             const status = resp?.status ? String(resp.status) : (parsed?.type === 'response.completed' ? 'completed' : 'incomplete');
             const hasToolCalls = events.some(ev => {
-                const s = typeof ev === 'string' ? ev : ev?.data;
-                return s && (s.includes('function_call') || s.includes('function_call_arguments'));
+                const evRaw = normalizeEvent(ev);
+                if (!evRaw || evRaw === '[DONE]') return false;
+                let evParsed;
+                try { evParsed = JSON.parse(evRaw); } catch { return false; }
+                if (evParsed?.type === 'response.output_item.added') {
+                    return evParsed?.item?.type === 'function_call';
+                }
+                return evParsed?.type === 'response.function_call_arguments.delta';
             });
-            const norm = hasToolCalls ? 'tool_calls' : (status === 'completed' ? 'stop' : (status === 'incomplete' ? 'length' : status));
+            const incompleteReason = resp?.incomplete_details?.reason ? String(resp.incomplete_details.reason) : null;
+            const norm = hasToolCalls
+                ? 'tool_calls'
+                : (status === 'completed'
+                    ? 'stop'
+                    : (status === 'incomplete'
+                        ? (incompleteReason === 'content_filter' ? 'content_filter' : 'length')
+                        : status));
             return { finishReason: norm, nativeFinishReason: status };
         }
 
