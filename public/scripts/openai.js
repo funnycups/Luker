@@ -3531,12 +3531,6 @@ function getReasoningEffort(settings = null, model = null) {
 
         switch (settings.reasoning_effort) {
             case reasoning_effort_types.auto:
-                // Custom endpoints may be proxies whose model names are not OpenAI's.
-                // "auto" must stay on the wire so those proxies can request thought text.
-                // koboldcpp already returned above and still omits auto.
-                if (settings.chat_completion_source === chat_completion_sources.CUSTOM) {
-                    return reasoning_effort_types.auto;
-                }
                 return undefined;
             case reasoning_effort_types.min:
                 if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)) {

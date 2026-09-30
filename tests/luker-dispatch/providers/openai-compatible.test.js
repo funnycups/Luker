@@ -236,8 +236,8 @@ describe('dispatchOpenAICompatible', () => {
             return JSON.parse(ctx.fetch.mock.calls[0][1].body);
         }
 
-        test('CUSTOM forwards resolved effort for non-OpenAI model names, including auto', async () => {
-            for (const effort of ['low', 'auto']) {
+        test('CUSTOM forwards resolved effort for non-OpenAI model names', async () => {
+            for (const effort of ['minimal', 'low', 'medium', 'high']) {
                 const ctx = fakeCtx({
                     body: {
                         chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM,
@@ -317,7 +317,7 @@ describe('dispatchOpenAICompatible', () => {
                     chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM,
                     custom_url: 'http://127.0.0.1:8317/v1',
                     model: 'gemini-3.8-flash-high',
-                    reasoning_effort: 'auto',
+                    reasoning_effort: 'high',
                     custom_exclude_body: 'reasoning_effort: true\n',
                 },
                 secretMap: { api_key_custom: 'c-key' },

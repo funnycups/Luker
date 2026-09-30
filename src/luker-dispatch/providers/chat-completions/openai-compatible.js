@@ -717,8 +717,8 @@ export async function dispatchOpenAICompatible(ctx) {
         const { apiUrl, apiKey, headers, bodyParams, geminiCacheOptions } = await resolver(ctx);
 
         // Reasoning effort. Official OpenAI stays on the model allowlist.
-        // Custom forwards any resolved effort, including "auto": the endpoint
-        // may be a proxy whose model names are not in OPENAI_REASONING_EFFORT_MODELS.
+        // Custom forwards any resolved effort: the endpoint may be a proxy
+        // whose model names are not in OPENAI_REASONING_EFFORT_MODELS.
         if (body.reasoning_effort && source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             bodyParams.reasoning_effort = body.reasoning_effort;
         } else if (body.reasoning_effort && source === CHAT_COMPLETION_SOURCES.OPENAI && OPENAI_REASONING_EFFORT_MODELS.includes(body.model)) {
