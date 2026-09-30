@@ -492,9 +492,16 @@ describe('getPersistChatKey', () => {
         expect(getPersistChatKey({ kind: 'group' })).toBe('group:');
     });
 
-    test('character-style target produces char:<avatar>:<file_name> raw (no sanitization)', () => {
+    test('character-style target strips a .jsonl suffix to match Repo keys', () => {
         expect(getPersistChatKey({ avatar_url: 'a.png', file_name: 'x.jsonl' }))
-            .toBe('char:a.png:x.jsonl');
+            .toBe('char:a.png:x');
+        expect(getPersistChatKey({ avatar_url: 'a.png', file_name: 'x' }))
+            .toBe('char:a.png:x');
+    });
+
+    test('group target strips a .jsonl suffix to match Repo keys', () => {
+        expect(getPersistChatKey({ kind: 'group', id: 'g1.jsonl' })).toBe('group:g1');
+        expect(getPersistChatKey({ kind: 'group', id: 'g1' })).toBe('group:g1');
     });
 
     test('character-style needs both avatar_url and file_name to yield a key', () => {

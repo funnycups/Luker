@@ -43,7 +43,7 @@ const FIELD = 'chat_completion_preset';
  * @param {object} character
  * @returns {BoundState}
  */
-function readCharacterBoundStateRaw(character) {
+export function readCharacterBoundStateRaw(character) {
     const raw = character?.data?.extensions?.[NAMESPACE]?.[FIELD];
     if (raw == null) return { presets: [], defaultPresetName: null };
 
@@ -107,6 +107,26 @@ async function persistCharacterBoundState(character, state) {
         ? character.data.extensions[NAMESPACE]
         : {};
     await context.writeExtensionField(id, NAMESPACE, { ...currentLuker, [FIELD]: value });
+}
+
+/**
+ * Persist a full normalized bound state onto the character at `characterId`.
+ * Used by the replace-preservation engine, which holds the previous card's
+ * normalized state and must overlay it onto the freshly replaced card.
+ * @param {number} characterId - Index into `context.characters`.
+ * @param {BoundState} state - Normalized state (see `readCharacterBoundStateRaw`).
+ * @returns {Promise<void>}
+ */
+export async function writeCharacterBoundStateById(characterId, state) {
+    const context = getContext();
+    const character = context.characters?.[characterId];
+    if (!character) {
+        throw new Error(`writeCharacterBoundStateById: character not found at index ${characterId}`);
+    }
+    await persistCharacterBoundState(character, {
+        presets: Array.isArray(state?.presets) ? state.presets : [],
+        defaultPresetName: typeof state?.defaultPresetName === 'string' ? state.defaultPresetName : null,
+    });
 }
 
 /** microtask-coalesced migration flush; keyed by avatar. */

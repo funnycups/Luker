@@ -81,7 +81,7 @@ getCharaFilename(
 ): string | null
 ```
 
-Returns the avatar filename **without extension** for a character. Falls back to the current character when `chid` is omitted. Pass `manualAvatarKey` when you only have the avatar key string (e.g. from a state entry). Returns `null` if no avatar can be resolved.
+Returns the avatar filename **without extension** for a character. Falls back to the current character when `chid` is omitted. Pass `manualAvatarKey` when only the avatar key string is available (e.g. from a state entry). Returns `null` if no avatar can be resolved.
 
 ```js
 const ctx = Luker.getContext();
@@ -116,7 +116,7 @@ Switches the active character. Bails silently when:
 unshallowCharacter(characterId: number | string): Promise<void>
 ```
 
-Loads the full record for a character that was returned in shallow form (only avatar + basic metadata). No-op when the character is already fully loaded. Always call before reading large fields like `description` or `mes_example` if you obtained the character from a list endpoint.
+Loads the full record for a character that was returned in shallow form (only avatar + basic metadata). No-op when the character is already fully loaded. Always call this before reading large fields such as `description` or `mes_example` when the character was obtained from a list endpoint.
 
 ### unshallowGroupMembers
 
@@ -140,7 +140,7 @@ writeExtensionField(
 
 Writes `data.extensions[key]` on a character card and persists.
 
-**Replace semantics.** The full `value` becomes the new `data.extensions[key]` on disk. Sibling subkeys present in the previous on-disk value are **not** preserved — callers wanting a partial update must read the previous value, spread it, and overlay changes themselves. Other extension keys under `data.extensions.*` (other plugins' data) are never touched.
+**Replace semantics.** The full `value` becomes the new `data.extensions[key]` on disk. Sibling subkeys present in the previous on-disk value are **not** preserved — callers that require a partial update must read the previous value, spread it, and apply the changes themselves. Other extension keys under `data.extensions.*` (other plugins' data) are never touched.
 
 Pass `value: context.constants.unset` (the `UNSET_VALUE` sentinel) to delete the key entirely. Plain `null` writes a literal `null` (the key remains).
 
@@ -222,11 +222,11 @@ Emits [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event) 
 persistCharacterData(charId: number | string): Promise<void>
 ```
 
-Flush a character's current in-memory `data` to disk by serializing it into the multipart shape `/api/characters/edit` expects, and POSTing. The form is **not** consulted — only `characters[charId]`. The server deep-merges the payload with the existing on-disk JSON, which is the correct behavior for form-level fields (it preserves unknown extension data the form never touches).
+Flush a character's current in-memory `data` to disk by serializing it into the multipart shape expected by `/api/characters/edit`, and sending a POST request. The form is **not** consulted — only `characters[charId]`. The server deep-merges the payload with the existing on-disk JSON, which is the correct behavior for form-level fields (it preserves unknown extension data the form never touches).
 
 Throws on HTTP failure. Extension data does **not** flow through here — it has its own `/api/characters/merge-attributes` path with replace semantics ([`writeExtensionField`](#writeextensionfield)).
 
-Most callers should use `updateCharacterData` (which schedules this for you). Call directly only when you've already mutated the in-memory object yourself and want to flush.
+Most callers should use `updateCharacterData`, which schedules this call. Call `persistCharacterData` directly only when the in-memory object has already been mutated and an immediate flush is required.
 
 ### persistCharacterDataDebounced
 
@@ -276,7 +276,7 @@ importTags(
 ): Promise<boolean>
 ```
 
-Imports the character's declared tags (`character.tags[]`) into the master tag list and assigns them. Caps imports at 50 tags per character to guard against troll cards. Returns `true` when at least one tag was actually added.
+Imports the character's declared tags (`character.tags[]`) into the master tag list and assigns them. Caps imports at 50 tags per character as a guard against malicious cards. Returns `true` when at least one tag was actually added.
 
 ## Import / Export
 
@@ -329,9 +329,9 @@ await ctx.setCharacterState(character.avatar, 'my-plugin', {
 const state = await ctx.getCharacterState(character.avatar, 'my-plugin');
 ```
 
-::: tip Sidecar vs Extension Field
+::: tip Character State vs Extension Field
 - Extension field (`writeExtensionField` → `data.extensions.<key>`) is part of the card. It exports with the card and is visible to anyone who has the card.
-- Sidecar (`get/setCharacterState`) is a separate file kept next to the card. It does not export with the card.
+- Character state (`get/setCharacterState`) is a separate file kept next to the card. It does not export with the card.
 :::
 
 ## Proxy Semantics

@@ -8,7 +8,7 @@ permissions:
   issues: write
 
 jobs:
-  # This runs commits to staging/release, reading the commit messages. Check `pr-auto-manager.yml`:`update-linked-issues` for PR-linked updates.
+  # This labels the issues referenced in commit messages on release. Check `pr-auto-manager.yml`:`update-linked-issues` for PR-linked updates.
   update-linked-issues:
     name: 🔗 Mark Linked Issues Done on Push
     runs-on: ubuntu-latest
@@ -42,10 +42,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
             for ISSUE in $(echo $issues | jq -r '.[]'); do
-            if [ "${{ github.ref }}" == "refs/heads/staging" ]; then
-              LABEL="✅ Done (staging)"
-              gh issue edit $ISSUE -R ${{ github.repository }} --add-label "$LABEL" --remove-label "🧑‍💻 In Progress"
-            elif [ "${{ github.ref }}" == "refs/heads/release" ]; then
+            if [ "${{ github.ref }}" == "refs/heads/release" ]; then
               LABEL="✅ Done"
               gh issue edit $ISSUE -R ${{ github.repository }} --add-label "$LABEL" --remove-label "🧑‍💻 In Progress"
             fi

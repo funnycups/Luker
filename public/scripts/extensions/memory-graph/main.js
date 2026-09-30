@@ -48,6 +48,7 @@ import {
     persistCharacterAdvancedOverride,
     removeCharacterAdvancedOverride,
 } from './character-overrides.js';
+import { registerMemoryGraphCardBindingSlot } from './card-binding-slot.js';
 import {
     sanitizeMemoryGraphFileNamePart,
     getMemoryGraphExportFileName,
@@ -60,6 +61,7 @@ import {
 } from './import-export.js';
 import { openSchemaIterationStudio } from './schema-iteration/studio.js';
 import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './schema-iteration/system-prompt.js';
+import { openGraphIterationStudio } from './graph-iteration/studio.js';
 import {
     EVENT_SUMMARY_RULES_BODY,
     DEFAULT_EXTRACT_SYSTEM_PROMPT,
@@ -86,6 +88,7 @@ import {
     getRerankProfileFromSettings,
     validateVectorConfig,
     syncVectorIndex,
+    findSimilarNodes,
     ensureVectorIndexState,
     buildCollectionId,
     purgeVectorCollection,
@@ -95,6 +98,8 @@ import {
     upsertEmbeddingProfile,
     upsertRerankProfile,
 } from '../connection-manager/embed-rerank.js';
+import { getEmbeddingProfileById } from '../connection-manager/embed-rerank.js';
+import { resolveGraphVectorProfile, syncGraphVectorsAfterMutation as runGraphVectorSync } from './graph-iteration/vector-sync.js';
 
 // Symmetric relations collapse direction: A→B and B→A merge into a single
 // canonical edge sorted by node id. Used by the extraction writer and edge
@@ -1029,6 +1034,7 @@ function normalizeAdvancedSettings(source = null, fallbackSource = null) {
         extractSystemPrompt: String(input.extractSystemPrompt || '').trim() || String(base.extractSystemPrompt || DEFAULT_EXTRACT_SYSTEM_PROMPT),
         extractCrawlSystemPrompt: String(input.extractCrawlSystemPrompt || '').trim() || String(base.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT),
         schemaIterSystemPrompt: String(input.schemaIterSystemPrompt || '').trim() || String(base.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT),
+        graphIterSystemPrompt: String(input.graphIterSystemPrompt || '').trim() || String(base.graphIterSystemPrompt || ''),
         recallRouteSystemPrompt: String(input.recallRouteSystemPrompt || '').trim() || String(base.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
         recallFinalizeSystemPrompt: String(input.recallFinalizeSystemPrompt || '').trim() || String(base.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
         ragRewriteSystemPrompt: String(input.ragRewriteSystemPrompt || '').trim() || String(base.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT),
@@ -1062,6 +1068,7 @@ function applyAdvancedSettings(target, values) {
     target.extractSystemPrompt = normalized.extractSystemPrompt;
     target.extractCrawlSystemPrompt = normalized.extractCrawlSystemPrompt;
     target.schemaIterSystemPrompt = normalized.schemaIterSystemPrompt;
+    target.graphIterSystemPrompt = normalized.graphIterSystemPrompt;
     target.recallRouteSystemPrompt = normalized.recallRouteSystemPrompt;
     target.recallFinalizeSystemPrompt = normalized.recallFinalizeSystemPrompt;
     target.ragRewriteSystemPrompt = normalized.ragRewriteSystemPrompt;
@@ -1143,7 +1150,7 @@ function refreshOpenAIPresetSelectors(root, context, settings) {
     }
 }
 
-function getChatKey(context, explicitTarget = null) {
+export function getChatKey(context, explicitTarget = null) {
     const target = buildMemoryTargetFromContext(context, explicitTarget);
     if (!target) {
         return 'invalid_target';
@@ -1943,6 +1950,85 @@ export function removeStoreCommitListener(cb) {
     return storeCommitListeners.delete(cb);
 }
 
+/**
+ * Shared persistence entry for graph mutations performed outside the
+ * extraction pipeline (graph inspector saves, graph-iteration studio
+ * approvals). Anchors at the store's covered watermark so the commit lands
+ * on the latest settled assistant floor, then syncs meta + the persistent
+ * lorebook projection and notifies store-commit subscribers.
+ *
+ * Returns the commit envelope from the diff/replace helper unchanged
+ * (`{ skipped, reason, hint }`) so callers can surface skips accurately.
+ */
+export async function commitGraphUiMutation(context, chatKey, {
+    beforeStore = null,
+    afterStore = null,
+    replaceGraph = false,
+    seq = null,
+} = {}) {
+    const key = String(chatKey || '').trim();
+    const latest = afterStore;
+    if (!key || !latest || typeof latest !== 'object') {
+        throw new Error('commitGraphUiMutation: chatKey and afterStore are required.');
+    }
+    memoryStoreCache.set(key, latest);
+    clearRollbackHistory(key);
+    const effectiveSeq = resolveStoreCommitSeq(seq, latest);
+    const floor = seqToFloor(context, effectiveSeq);
+    let innerResult = { skipped: false, reason: null, hint: null };
+    if (replaceGraph) {
+        innerResult = await replacePersistedGraphWithStore(context, key, latest, effectiveSeq, { floor });
+    } else if (beforeStore) {
+        innerResult = await appendPersistedDiffEntry(context, key, beforeStore, latest, effectiveSeq, { floor });
+    }
+    try {
+        await persistMemoryStoreByChatKey(context, key, latest, { syncPersistentProjection: true });
+    } catch (err) {
+        console.warn('[memory-graph] commitGraphUiMutation: lorebook projection sync failed, persisting graph only', err);
+        await persistMemoryStoreByChatKey(context, key, latest, { syncPersistentProjection: false });
+    }
+    try { refreshUiStats(); } catch (_) { /* UI optional in headless / test env */ }
+    emitStoreCommit(key);
+    return innerResult;
+}
+
+function emitStoreCommit(chatKey) {
+    if (storeCommitListeners.size === 0) return;
+    // Frozen signal — re-query through the Lookup API for fresh data; the
+    // cached runtime store is not exposed. Each listener is wrapped
+    // individually so one throw doesn't abort iteration over the rest.
+    const snapshot = Object.freeze({ chatKey: String(chatKey || '') });
+    for (const cb of storeCommitListeners) {
+        try {
+            cb(snapshot);
+        } catch (err) {
+            try {
+                console.warn(`[${MODULE_NAME}] store-commit listener threw:`, err);
+            } catch (_) { /* logger itself failed; ignore */ }
+        }
+    }
+}
+
+/**
+ * Incremental vector-index sync after graph-iteration approvals. Resolves
+ * the effective (character-override aware) embedding profile; no profile →
+ * no-op. Meta is flushed explicitly because syncVectorIndex only mutates
+ * the in-memory vectorIndexState mirror.
+ */
+export async function syncGraphVectorsAfterMutation(context, chatKey, store) {
+    const effectiveSettings = getEffectiveSettings(context, getSettings());
+    const profile = resolveGraphVectorProfile(effectiveSettings, getEmbeddingProfileById);
+    return await runGraphVectorSync({
+        store,
+        chatKey,
+        settings: effectiveSettings,
+        profile,
+        schema: effectiveSettings.nodeTypeSchema,
+        syncFn: syncVectorIndex,
+        persistFn: () => persistMemoryStoreByChatKey(context, String(chatKey || ''), store, { syncPersistentProjection: false }),
+    });
+}
+
 export async function commitSessionMutation(context, chatKey, beforeStore, afterStore) {
     const key = String(chatKey || '').trim();
     const store = afterStore;
@@ -1976,21 +2062,7 @@ export async function commitSessionMutation(context, chatKey, beforeStore, after
         await persistMemoryStoreByChatKey(context, key, store, { syncPersistentProjection: false });
     }
     try { refreshUiStats(); } catch (_) { /* UI optional in headless / test env */ }
-    if (storeCommitListeners.size > 0) {
-        // Frozen signal — re-query through the Lookup API for fresh data; the
-        // cached runtime store is not exposed. Each listener is wrapped
-        // individually so one throw doesn't abort iteration over the rest.
-        const snapshot = Object.freeze({ chatKey: key });
-        for (const cb of storeCommitListeners) {
-            try {
-                cb(snapshot);
-            } catch (err) {
-                try {
-                    console.warn(`[${MODULE_NAME}] store-commit listener threw:`, err);
-                } catch (_) { /* logger itself failed; ignore */ }
-            }
-        }
-    }
+    emitStoreCommit(key);
 }
 
 /**
@@ -2803,7 +2875,7 @@ export function getChildren(store, nodeId) {
     return node.childrenIds.map(id => store.nodes[id]).filter(child => Boolean(child) && !child.archived);
 }
 
-function archiveNode(store, oldId, replacementId = null) {
+export function archiveNode(store, oldId, replacementId = null) {
     const node = store.nodes[oldId];
     if (!node) {
         return;
@@ -6161,7 +6233,9 @@ export function applyExtractionOpsImpl(store, operations, {
                     links: Array.isArray(item?.links) ? item.links : [],
                     raw: item,
                 });
-                applied.push(item);
+                // Carry the resolved node id so write-api can report the real
+                // node (create may merge into an existing latestOnly target).
+                applied.push({ ...item, nodeId: targetNode.id });
             }
         } catch (err) {
             rejected.push({
@@ -8539,7 +8613,7 @@ function alignStoreCoverageToChat(store, context, settings = null) {
     return { changed: false, latestSeq };
 }
 
-async function ensureStoreSyncedWithChat(context) {
+export async function ensureStoreSyncedWithChat(context) {
     // floor-state's settle is driven by core BEFORE this function ever runs
     // (see settleMessageDeleted/settleMessageSwiped/etc in floor-state.js),
     // so the data namespace is already current. We just need to load the
@@ -8555,6 +8629,71 @@ async function ensureStoreSyncedWithChat(context) {
     }
     updateStoreSourceState(store, context);
     return store;
+}
+
+/**
+ * Read a slice of the chat transcript by assistant-seq range (1-based,
+ * the same ordinals the graph stores in `seqTo` / `floorRange`). Each
+ * assistant frame contributes its preceding user turn (when present) and
+ * the assistant message itself, so the caller sees both sides of the
+ * exchange around each floor.
+ */
+export function readChatRange(context, fromAssistantSeq, toAssistantSeq) {
+    const frames = buildPlayableFramesFromContext(context);
+    const from = Math.max(0, Math.floor(Number(fromAssistantSeq) || 0));
+    const to = Math.max(from, Math.floor(Number(toAssistantSeq) || from));
+    const out = [];
+    for (const frame of frames) {
+        const seq = Number(frame?.seq || 0);
+        if (seq < from || seq > to) {
+            continue;
+        }
+        const lastUserText = String(frame?.last_user_mes || '');
+        if (lastUserText) {
+            out.push({ seq, role: 'user', content: lastUserText });
+        }
+        out.push({ seq, role: frame?.is_user ? 'user' : 'assistant', content: String(frame?.mes || '') });
+    }
+    return out;
+}
+
+/**
+ * Semantic search over the current chat's graph using the configured
+ * embedding profile. Throws when no valid profile is configured so the
+ * tool layer can hand the model a precise retry hint (keyword search).
+ */
+export async function searchGraphSimilarNodes(context, query, { topK = 20 } = {}) {
+    const currentSettings = getSettings();
+    const effectiveSettings = getEffectiveSettings(context, currentSettings);
+    const profile = getVectorConfigFromSettings(effectiveSettings);
+    const validation = validateVectorConfig(profile);
+    if (!validation.valid) {
+        throw new Error(`no embedding profile configured: ${validation.error || 'unknown reason'}`);
+    }
+    const store = await ensureStoreSyncedWithChat(context);
+    if (!store) {
+        return [];
+    }
+    return await findSimilarNodes(String(query || ''), store, profile, getChatKey(context), { topK });
+}
+
+/** Assemble the graph-iteration studio's deps from module-scope helpers. */
+async function openGraphIterationStudioWithDeps(context) {
+    const settings = getSettings();
+    await openGraphIterationStudio({
+        context,
+        settings,
+        ensureStoreSyncedWithChat,
+        commitGraphUiMutation,
+        getChatKey,
+        getEffectiveSettings,
+        getEffectiveNodeTypeSchema,
+        syncGraphVectorsAfterMutation,
+        readChatRange,
+        searchGraphSimilarNodes,
+        i18n,
+        i18nFormat,
+    });
 }
 
 async function injectMemoryPrompts(context, payload) {
@@ -9604,6 +9743,7 @@ function renderGraphInspectorHtml(store, options = {}) {
                 <div class="luker-rpg-memory-graph-cy"></div>
                 <div class="luker-graph-canvas-toolbar">
                     <div class="menu_button menu_button_small luker-rpg-memory-graph-fit" title="${escapeHtml(i18n('Fit View'))}"><i class="fa-solid fa-expand fa-fw"></i></div>
+                    <div class="menu_button menu_button_small luker-rpg-memory-graph-ai-edit" title="${escapeHtml(i18n('AI Edit Graph'))}"><i class="fa-solid fa-robot fa-fw"></i></div>
                     <div class="menu_button menu_button_small luker-rpg-memory-edge-add" title="${escapeHtml(i18n('Add Edge'))}"><i class="fa-solid fa-plus fa-fw"></i></div>
                     <div class="menu_button menu_button_small luker-rpg-memory-edge-edit" title="${escapeHtml(i18n('Edit Selected Edge'))}"><i class="fa-solid fa-pen fa-fw"></i></div>
                     <div class="menu_button menu_button_small luker-rpg-memory-node-delete" title="${escapeHtml(i18n('Delete Selected Node'))}"><i class="fa-solid fa-trash fa-fw"></i></div>
@@ -10822,20 +10962,12 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
         }
     };
     const persistLatest = async (latest, successText, statusText, { beforeStore = null, replaceGraph = false, seq = null } = {}) => {
-        memoryStoreCache.set(chatKey, latest);
-        clearRollbackHistory(chatKey);
-        const effectiveSeq = resolveStoreCommitSeq(seq, latest);
-        const editorSaveFloor = seqToFloor(context, effectiveSeq);
-        // Defaults assume "no inner commit was attempted" → treated as success
-        // for the paths that don't call commitMemoryStore*ByChatKey at all.
-        let innerResult = { skipped: false, reason: null, hint: null };
-        if (replaceGraph) {
-            innerResult = await replacePersistedGraphWithStore(context, chatKey, latest, effectiveSeq, { floor: editorSaveFloor });
-        } else if (beforeStore) {
-            innerResult = await appendPersistedDiffEntry(context, chatKey, beforeStore, latest, effectiveSeq, { floor: editorSaveFloor });
-        }
-        await persistMemoryStoreByChatKey(context, chatKey, latest, { syncPersistentProjection: true });
-        refreshUiStats();
+        const innerResult = await commitGraphUiMutation(context, chatKey, {
+            beforeStore,
+            afterStore: latest,
+            replaceGraph,
+            seq,
+        });
         if (statusText) {
             updateUiStatus(statusText);
         }
@@ -11666,6 +11798,10 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
         }
         cy.center();
         updateSelectionText(i18n('Fitted graph view.'));
+    });
+
+    jQuery(document).on(`click${namespace}`, `${selector} .luker-rpg-memory-graph-ai-edit`, async function () {
+        await openGraphIterationStudioWithDeps(context);
     });
 
     jQuery(document).on(`click${namespace}`, `${selector} .luker-rpg-memory-edge-edit`, async function () {
@@ -14364,6 +14500,7 @@ function hydrateAdvancedTabFields(root, source) {
     root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val(String(source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val(String(source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT));
     root.find('#luker_rpg_memory_advanced_schema_iter_system_prompt').val(String(source.schemaIterSystemPrompt || DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT));
+    root.find('#luker_rpg_memory_advanced_graph_iter_system_prompt').val(String(source.graphIterSystemPrompt || ''));
     const ragRewriteVisible = String(source.recallMethod || 'llm') === 'rag' && Boolean(source.ragUseQueryRewrite);
     root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt_block').toggle(ragRewriteVisible);
 }
@@ -14392,6 +14529,7 @@ function readAdvancedTabFields(root) {
         recallFinalizeSystemPrompt: String(root.find('#luker_rpg_memory_advanced_recall_finalize_prompt').val() || '').trim(),
         ragRewriteSystemPrompt: String(root.find('#luker_rpg_memory_advanced_rag_rewrite_prompt').val() || '').trim(),
         schemaIterSystemPrompt: String(root.find('#luker_rpg_memory_advanced_schema_iter_system_prompt').val() || '').trim(),
+        graphIterSystemPrompt: String(root.find('#luker_rpg_memory_advanced_graph_iter_system_prompt').val() || '').trim(),
     };
 }
 
@@ -14980,7 +15118,10 @@ function bindUi() {
             },
         });
     });
-    // Advanced tab: change handlers on the 14 fields — apply to live settings
+    root.find('#luker_rpg_memory_open_graph_studio').off('click').on('click', async function () {
+        await openGraphIterationStudioWithDeps(context);
+    });
+    // Advanced tab: change handlers on the 21 fields — apply to live settings
     // immediately (in-memory) but do NOT persist. Dirty note appears until a
     // scope save button is clicked (or a fresh bindUi() clears the note).
     const advancedFieldSelectors = [
@@ -15004,6 +15145,7 @@ function bindUi() {
         '#luker_rpg_memory_advanced_recall_finalize_prompt',
         '#luker_rpg_memory_advanced_rag_rewrite_prompt',
         '#luker_rpg_memory_advanced_schema_iter_system_prompt',
+        '#luker_rpg_memory_advanced_graph_iter_system_prompt',
     ].join(', ');
     root.find(advancedFieldSelectors).off('input change').on('input change', function () {
         applyAdvancedTabToLiveSettings(root, settings);
@@ -15996,6 +16138,7 @@ jQuery(() => {
         normalizeAdvancedSettings,
         getSettings,
     });
+    registerMemoryGraphCardBindingSlot(getContext());
     generationVisibleHistoryRegexProvider = registerManagedRegexProvider(GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID);
     syncGenerationVisibleHistoryRuntimeRegexScripts();
     saveSettingsDebounced();

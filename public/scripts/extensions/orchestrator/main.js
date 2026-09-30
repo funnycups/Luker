@@ -163,6 +163,7 @@ import {
     hasCharacterSpecPresetLibrary,
     normalizeExecutionMode,
 } from './character-overrides.js';
+import { registerOrchestratorCardBindingSlot } from './card-binding-slot.js';
 import {
     createAgendaPlannerDraft,
     createPresetDraft,
@@ -364,6 +365,7 @@ registerExtensionApi(MODULE_NAME, {
     // (see `public/scripts/skills/embed-export-hook.js`).
     collectResolvedSkillsForOrchPreset,
 });
+registerOrchestratorCardBindingSlot(__ctx);
 // Module-scope cache for the director content payload captured at
 // GENERATE_TAKEOVER_DISPATCH. Director's main + sub agents read from this
 // to build their taskMessages — single source of truth across the whole

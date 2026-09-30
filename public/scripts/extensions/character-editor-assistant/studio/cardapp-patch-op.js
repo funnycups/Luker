@@ -18,7 +18,7 @@ export function createCardAppPatchFileOp({ applyPatch }) {
     }
 
     return {
-        apply(live, edit) {
+        apply(deps, edit, live) {
             const current = live?.files?.[edit.path] ?? '';
             const next = applyPatch(current, edit.old_text, edit.new_text);
             if (next === null) {

@@ -46,6 +46,18 @@ const VARIANT_MAP = {
         actionAttr: 'data-mg-schema-it-action',
         inputSelector: '[data-mg-schema-it-input], .mg_schema_it_composer_input textarea, .mg_schema_it_composer_input [contenteditable="true"]',
     },
+    'mg-graph': {
+        // MG graph-revision studio: opened via the MG settings panel's
+        // "AI Edit Graph" button (the graph inspector toolbar exposes the
+        // same entry point).
+        openTrigger: '#luker_rpg_memory_open_graph_studio',
+        actionAttr: 'data-mg-graph-it-action',
+        inputSelector: '[data-mg-graph-it-input], .mg_graph_it_composer textarea, .mg_graph_it_composer [contenteditable="true"]',
+        // The MG settings panel is tabbed and the open trigger lives in a
+        // non-default tab pane (`hidden` until its tab is active). Click
+        // the tab first, exactly like a user would.
+        tabSelector: '#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="advanced"]',
+    },
 };
 
 /**
@@ -54,7 +66,7 @@ const VARIANT_MAP = {
  * the open trigger. Throws if the popup doesn't mount within timeoutMs.
  *
  * @param {import('@playwright/test').Page} page
- * @param {'cpa'|'orch'|'cea'|'mg'} variant
+ * @param {'cpa'|'orch'|'cea'|'mg'|'mg-graph'} variant
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs]
  */
@@ -68,10 +80,19 @@ export async function openIterStudio(page, variant, { timeoutMs = 20_000 } = {})
         orch: 'orchestrator_settings',
         cea: 'character_editor_assistant_settings',
         mg: 'memory_graph_settings',
+        'mg-graph': 'memory_graph_settings',
     };
     const host = hostMap[variant];
     if (host) {
         await openInlineDrawer(page, host).catch(() => { /* may already be open */ });
+    }
+    // Some panels put the open trigger inside a tab pane; the inactive
+    // panes stay `hidden` until their tab is clicked (real user gesture).
+    if (v.tabSelector) {
+        const tab = page.locator(v.tabSelector).first();
+        if (await tab.isVisible({ timeout: 1000 }).catch(() => false)) {
+            await tab.click();
+        }
     }
     // For the orchestrator there are several "Open AI Iteration Studio"
     // buttons (one per mode panel + per director board). Pick the first

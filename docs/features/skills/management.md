@@ -47,7 +47,7 @@ The bundled tab compares your local copy of each shipped skill against what ship
 | Badge | Meaning |
 |---|---|
 | **installed (matches)** | Local copy is byte-identical to the bundled version. |
-| **installed (your version differs)** | A local copy exists but its hash doesn't match the bundled one — you (or an iter-studio session) edited it. |
+| **installed (your version differs)** | A local copy exists but its hash doesn't match the bundled one — you (or an Iteration Studio session) edited it. |
 | **not installed** | No local copy. Click **Install** to materialize it into `global`. |
 
 ![Browse bundled, mixed states](/_screenshots/skills/manager-bundled-tab.png)
@@ -82,9 +82,9 @@ The same action as **Import all bundled** in the Browse bundled tab. Listed here
 
 When you import a character card (PNG) or preset (JSON) that has an `embedded_skills_source` field, Luker shows a preview dialog automatically:
 
-![Embed import preview](/_screenshots/skills/embed-import-preview.png)
+![Embed import preview with a conflict](/_screenshots/skills/skill-conflict-replace-dialog.png)
 
-The dialog lists every embedded skill with its conflict state. For each conflict, you choose **Skip** (keep your local version) or **Replace** (use the bundled version from the embed). Same-content (`same`) entries are silently no-op. New entries (`new`) install directly.
+The dialog lists every embedded skill with its conflict state. For each conflict, you choose **Skip** (keep your local version) or **Replace** (use the bundled version from the embed). Same-content (`same`) entries are skipped silently. New entries (`new`) install directly.
 
 The embed payload is removed from the character card / preset on disk after extraction — the skills now live in `skills/character/<file>/` or `skills/preset/<api>/<preset>/`. This avoids a "stale embed" trap where the inline payload diverges from the materialized files.
 
@@ -100,10 +100,10 @@ Clicking **Edit** on a skill row opens an in-popup editor:
 
 Writes go through the same `.staging/` discipline as install: the new content is validated (path safety, size limits, frontmatter parse), and only on full validation does the staging file atomically replace the original. Failed writes leave the original untouched.
 
-`SKILL.md` is special — you can edit it but you can't delete it from the editor (it's the required entry point). The skill itself can be deleted from the row action.
+`SKILL.md` is special — it can be edited but not deleted from the editor (it is the required entry point). The skill itself can be deleted from the row action.
 
-::: tip Don't want to hand-edit?
-The [AI Iteration Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) can write and modify skills for you — describe the change in a sentence and the Studio drafts it through the same install path. Useful when you want a new skill or a rewrite of an existing one without typing the Markdown yourself.
+::: tip Prefer not to edit manually?
+The [AI Iteration Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) can write and modify skills for you — describe the change in a sentence and the Studio drafts it through the same install path. Useful when a new skill is needed, or an existing one needs a rewrite, without writing the Markdown by hand.
 :::
 
 ## Embed export — into presets and cards
@@ -128,7 +128,7 @@ Small text-only skills use `inline-files-v1` format (Markdown content embedded d
 
 You can move a skill from `global` → `preset` → `character` (or back) at any time via the **Move to…** row action. The migration is an atomic filesystem rename — no copy, no temp state.
 
-Why this is safe: orchestrator profiles reference skills by **name only**, never by scope. A skill named `voice-rules` resolves through later-wins precedence (character > preset > global) regardless of which scope it currently sits in. Moving the skill doesn't break any reference; it only changes when the skill is visible.
+Why this is safe: orchestrator profiles reference skills by **name only**, never by scope. A skill named `voice-rules` resolves through later-wins precedence (character > preset > global) regardless of the scope it currently resides in. Moving the skill doesn't break any reference; it only changes when the skill is visible.
 
 Typical migrations:
 
@@ -140,7 +140,7 @@ Typical migrations:
 
 When you rename or delete a skill that an orchestrator profile references, the profile's `skills.visible` list keeps the old name. The runtime can't find it, so the agent quietly doesn't see it (no error, no blocked dispatch).
 
-In the orchestrator config editor, stale references are greyed out and tooltipped **"skill not installed."** Two clicks fix it — either rename in the profile, or re-add the skill.
+In the orchestrator config editor, stale references are greyed out and show the tooltip **"skill not installed."** Two clicks fix it — either rename in the profile, or re-add the skill.
 
 This soft-fail discipline is deliberate. It means a missing skill never blocks an agent dispatch, and adding/removing skills doesn't require simultaneous profile edits.
 

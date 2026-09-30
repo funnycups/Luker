@@ -7,6 +7,7 @@ import { textgen_types, textgenerationwebui_settings } from '../textgen-settings
 import { getTokenCountAsync } from '../tokenizers.js';
 import { createThumbnail, isValidUrl } from '../utils.js';
 import { acquire as acquireRequestSlot } from './connection-manager/request-throttler.js';
+import { getProfileRequestTimeoutMs } from './connection-manager/request-timeout.js';
 
 function parseProfileBoolean(value) {
     if (typeof value === 'boolean') {
@@ -478,6 +479,11 @@ export class ConnectionManagerRequestService {
         const profile = this.getProfile(profileId);
         const selectedApiMap = this.validateProfile(profile);
 
+        const requestTimeoutMs = getProfileRequestTimeoutMs(profile);
+        const requestTimeoutFields = requestTimeoutMs > 0
+            ? { luker_generation: { ...(overridePayload?.luker_generation || {}), request_timeout_ms: requestTimeoutMs } }
+            : {};
+
         const rpmLimit = Number(profile['rpm-limit']) || 0;
         if (rpmLimit > 0) {
             await acquireRequestSlot(profileId, rpmLimit, { signal, label: profile.name || profileId });
@@ -546,6 +552,7 @@ export class ConnectionManagerRequestService {
                         ...(openrouterUseFallback !== null ? { use_fallback: openrouterUseFallback } : {}),
                         ...(openrouterMiddleout !== null ? { middleout: openrouterMiddleout } : {}),
                         ...overridePayload,
+                        ...requestTimeoutFields,
                     }, {
                         presetName: includePreset ? profile.preset : undefined,
                     }, extractData, signal);
@@ -564,6 +571,7 @@ export class ConnectionManagerRequestService {
                         api_server: profile['api-url'],
                         secret_id: profile['secret-id'],
                         ...overridePayload,
+                        ...requestTimeoutFields,
                     }, {
                         instructName: includeInstruct ? profile.instruct : undefined,
                         presetName: includePreset ? profile.preset : undefined,

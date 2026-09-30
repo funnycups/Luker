@@ -28,7 +28,7 @@ presets.getSelected(collection?: string): PresetRef | null
 presets.getLive(collection?: string): PresetBody | null
 ```
 
-取得當前 UI 中正在編輯的預設內容（包括未儲存的修改）。適合需要讀取當前實際生效設定的場景。
+取得當前 UI 中正在編輯的預設內容（包括未儲存的修改）。適用於讀取當前實際生效設定的場景。
 
 ### presets.getStored
 
@@ -36,7 +36,7 @@ presets.getLive(collection?: string): PresetBody | null
 presets.getStored(ref: { collection: string, name: string }): PresetBody | null
 ```
 
-取得指定預設的已儲存內容。適合跨預設比較或複製內容。
+取得指定預設的已儲存內容。適用於跨預設比較或複製內容。
 
 ### presets.save
 
@@ -66,7 +66,7 @@ presets.resolve(
 
 ### presets.state
 
-綁定到預設的外掛執行時/會話資料。State sidecar 與預設檔案並排存放，**不會隨預設一起匯出**，僅供外掛側執行時使用（例如編排器的「按預設記憶 agent 覆寫」、預設助手的「上次使用的範本」）。不要把外掛資料塞進預設 body，用 `presets.state.*`。
+綁定到預設的外掛執行時/會話資料。預設狀態與預設檔案並排存放，**不會隨預設一起匯出**，僅供外掛側執行時使用（例如編排器的「按預設記憶 agent 覆寫」、預設助手的「上次使用的範本」）。不要把外掛資料寫入預設 body，應使用 `presets.state.*`。
 
 所有方法都接受 `options.target`（`PresetRef`）和 `options.collection` 做跨預設讀寫；兩者預設指向當前選中的預設。
 
@@ -115,7 +115,7 @@ presets.state.update(
 >
 ```
 
-**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統底層自動計算最小增量 patch，只有變化的那部分上網。回傳 `null` / `undefined` 視為「無變更」，結果為 `{ok: true, updated: false}`。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。該函式永不拋出；reducer 內部拋出的例外會被捕獲並以 `reason: 'VALIDATION_ARGS'` 形式回報。
+**推薦的讀—改—寫介面。** `updater` 取得目前狀態（不存在時為 `{}`），回傳下一份狀態。系統在內部自動計算最小增量 patch，只有變化的部分會被傳輸。回傳 `null` / `undefined` 視為「無變更」，結果為 `{ok: true, updated: false}`。409 衝突（並行改動）會自動重試；重試預算由 `options.maxRetries` 控制（預設 1）。失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。該函式永不拋出；reducer 內部拋出的例外會被捕獲並以 `reason: 'VALIDATION_ARGS'` 形式回報。
 
 ```js
 await context.presets.state.update('my-plugin', (current = {}) => ({
@@ -138,7 +138,7 @@ presets.state.patch(
 >
 ```
 
-直接施加 RFC 6902 patch 操作。典型的讀—改—寫流程優先用 `update()`；只有當你已有操作列表（例如重放此前計算好的 diff）時才用 `patch()`。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
+直接施加 RFC 6902 patch 操作。典型的讀—改—寫流程優先用 `update()`；僅在已有操作列表（例如重放此前計算好的 diff）時才使用 `patch()`。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
 
 #### presets.state.delete
 
@@ -152,7 +152,7 @@ presets.state.delete(
 >
 ```
 
-刪除指定命名空間的預設狀態。冪等 —— sidecar 不存在時也會成功回傳。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
+刪除指定命名空間的預設狀態。冪等 —— 狀態不存在時也會成功回傳。成功時回傳 `{ok: true}`；失敗時回傳 `{ok: false, reason, hint}` —— 見下方[錯誤原因](#錯誤原因)。
 
 #### presets.state.deleteAll
 
@@ -167,9 +167,9 @@ presets.state.deleteAll(target?: PresetRef | string | null): Promise<
 
 #### 最佳實踐
 
-- 優先用 `presets.state.update()`，不要手動串 `get()` + 整份覆寫 —— helper 只發 diff，並替你處理 409 重試。
+- 優先用 `presets.state.update()`，不要手動串接 `get()` 與整份覆寫 —— helper 僅傳送 diff，並代為處理 409 重試。
 - 負載保持為可 JSON 序列化的普通物件；頂層陣列或基本型別不支援。
-- 一個命名空間裝一片邏輯狀態，不要把無關資料塞同一個命名空間。
+- 一個命名空間承載一片邏輯狀態，不要將無關資料寫入同一命名空間。
 - 處理 `ok: false` 回傳值，保持外掛 UI 的彈性 —— 依 `reason` 分支處理，不要翻譯 `hint`（見[錯誤原因](#錯誤原因)）。
 
 #### 錯誤原因
@@ -195,7 +195,7 @@ presets.state.deleteAll(target?: PresetRef | string | null): Promise<
 - `list()` 和 `getSelected()` 只回傳已儲存的預設
 - 編輯中的預設用 `getLive()`
 - 角色卡綁定的執行時預設不算「已儲存」，`getSelected()` 回傳 `null`，但 `getLive()` 仍可讀取
-- 不要將外掛執行時資料塞進預設 body，使用 `presets.state.*`
+- 不要將外掛執行時資料寫入預設 body，使用 `presets.state.*`
 
 ## 提示詞與世界書組裝
 
@@ -214,7 +214,7 @@ buildPresetAwarePromptMessages(options: {
 }): PromptMessage[]
 ```
 
-基於當前預設設定，將外掛的訊息按照 prompt 預設的排列順序組裝為可發送給 API 的提示詞訊息列表。這是一個**可選的**組裝工具——簡單的 LLM 呼叫不需要它，只有當你需要複用角色卡、世界書或 prompt 範本時才需要使用。
+基於當前預設設定，將外掛的訊息按照 prompt 預設的排列順序組裝為可發送給 API 的提示詞訊息列表。這是一個**可選的**組裝工具——簡單的 LLM 呼叫不需要它，僅在需要複用角色卡、世界書或 prompt 範本時才使用。
 
 **參數說明：**
 
@@ -362,7 +362,7 @@ getActivePromptPresetEnvelope(options?: {
 - `promptCatalog` —— `prompt.identifier` → `{ name, role, content, marker, systemPrompt }` 的映射
 - `characterCard` —— 當前角色欄位（當 `includeCharacterCard !== false` 時）
 
-這就是 `buildPresetAwarePromptMessages` 內部使用的同一份資料。在發送前向使用者展示「外掛的請求會長什麼樣」時很有用。
+這就是 `buildPresetAwarePromptMessages` 內部使用的同一份資料。適用於在發送前向使用者展示外掛請求的樣貌。
 
 ### getActivePromptLayout
 
@@ -401,7 +401,7 @@ parseReasoningFromString(
 ): { reasoning: string, content: string } | null
 ```
 
-依照推理範本（或當前活躍的 `power_user.reasoning` 範本）的 `prefix` 與 `suffix`，把模型輸出字串切成 `reasoning` 與 `content`。範本缺 prefix / suffix 或解析失敗時回傳 `null`。
+依照推理範本（或當前活躍的 `power_user.reasoning` 範本）的 `prefix` 與 `suffix`，將模型輸出字串拆分為 `reasoning` 與 `content`。範本缺 prefix / suffix 或解析失敗時回傳 `null`。
 
 | 選項 | 說明 |
 |------|------|
@@ -424,7 +424,7 @@ updateReasoningUI(
 ): void
 ```
 
-觸發某條訊息推理區塊的 UI 重新整理。可傳聊天索引、原始 DOM 元素或 JQuery 包裝物件。`reset: true` 會跳過讀取訊息當前的推理狀態——在 swipe 期間新推理還沒寫入時用得到。
+觸發某條訊息推理區塊的 UI 重新整理。可傳聊天索引、原始 DOM 元素或 JQuery 包裝物件。`reset: true` 會跳過讀取訊息當前的推理狀態——在 swipe 期間新推理尚未寫入時使用。
 
 ```js
 const ctx = Luker.getContext();
@@ -437,7 +437,7 @@ if (parsed) {
 
 ## 設定視圖（唯讀）
 
-下面這些屬性暴露實時設定物件。它們是可變的參照——只能透過正規 API（`presets.save`、`saveSettingsDebounced` 等）寫入。直接突變可能無法正確持久化。
+以下屬性暴露實時設定物件。它們是可變的參照——只能透過正規 API（`presets.save`、`saveSettingsDebounced` 等）寫入。直接突變可能無法正確持久化。
 
 ### chatCompletionSettings
 

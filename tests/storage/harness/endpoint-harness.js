@@ -34,6 +34,7 @@ import bodyParser from 'body-parser';
 import express from 'express';
 import mysql from 'mysql2/promise';
 import pg from 'pg';
+import request from 'supertest';
 
 import { initStorage, getStorageEngine } from '../../../src/storage/index.js';
 
@@ -298,3 +299,39 @@ export const ENDPOINT_HARNESSES = allEntries.filter(
 );
 
 export const DB_ONLY_HARNESSES = ENDPOINT_HARNESSES.filter((e) => e.mode !== 'fs');
+
+/**
+ * Upload a backup archive through the chunked session endpoints so tests can
+ * reference it by uploadId — the same sequence the browser performs.
+ *
+ * @param {import('express').Express} app  app built by makeEndpointHarness
+ * @param {Buffer} bytes                   raw ZIP bytes
+ * @param {{handle: string, chunkSize?: number}} opts
+ * @returns {Promise<string>} uploadId
+ */
+export async function uploadArchiveToSession(app, bytes, { handle, chunkSize = bytes.length } = {}) {
+    const initRes = await request(app)
+        .post('/api/users/restore-backup/uploads')
+        .send({ handle, fileName: 'backup.zip', size: bytes.length });
+    if (initRes.status !== 200) {
+        throw new Error(`upload init failed: ${initRes.status} ${JSON.stringify(initRes.body)}`);
+    }
+    const { uploadId } = initRes.body;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const slice = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
+        const res = await request(app)
+            .put(`/api/users/restore-backup/uploads/${uploadId}/chunks/${offset}`)
+            .set('Content-Type', 'application/octet-stream')
+            .send(slice);
+        if (res.status !== 200) {
+            throw new Error(`chunk ${offset} failed: ${res.status} ${JSON.stringify(res.body)}`);
+        }
+    }
+    const finRes = await request(app)
+        .post(`/api/users/restore-backup/uploads/${uploadId}/finalize`)
+        .send({});
+    if (finRes.status !== 200) {
+        throw new Error(`finalize failed: ${finRes.status} ${JSON.stringify(finRes.body)}`);
+    }
+    return uploadId;
+}

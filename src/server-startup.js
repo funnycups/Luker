@@ -9,6 +9,7 @@ import { router as usersPrivateRouter } from './endpoints/users-private.js';
 import { router as usersAdminRouter } from './endpoints/users-admin.js';
 import { router as movingUIRouter } from './endpoints/moving-ui.js';
 import { router as imagesRouter } from './endpoints/images.js';
+import { router as mediaCleanupRouter } from './endpoints/media-cleanup.js';
 import { router as quickRepliesRouter } from './endpoints/quick-replies.js';
 import { router as avatarsRouter } from './endpoints/avatars.js';
 import { router as themesRouter } from './endpoints/themes.js';
@@ -83,6 +84,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/users', usersAdminRouter);
     app.use('/api/moving-ui', movingUIRouter);
     app.use('/api/images', imagesRouter);
+    app.use('/api/media', mediaCleanupRouter);
     app.use('/api/quick-replies', quickRepliesRouter);
     app.use('/api/avatars', avatarsRouter);
     app.use('/api/themes', themesRouter);

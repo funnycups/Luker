@@ -22,7 +22,7 @@ The Popup Updater provides an in-app update flow. When a new version is availabl
 
 ## Image Generation Enhancements
 
-Luker's improvement to image generation is ComfyUI WebSocket connection support — using WebSocket instead of frequent HTTP polling endpoints to communicate with ComfyUI, improving generation efficiency and real-time responsiveness, with smart fallback and reconnection retry support.
+Luker enhances image generation with ComfyUI WebSocket connection support — WebSocket communication with ComfyUI replaces frequent HTTP polling endpoints, improving generation efficiency and real-time responsiveness, with smart fallback and reconnection retry support.
 
 ## Plugin Regex Provider
 
@@ -33,12 +33,13 @@ Plugins can dynamically register regex rules into the regex processing system. S
 Onboarding Config Import optimizes the first-use onboarding flow. During initial setup, you can directly import existing configuration files, including:
 
 - Complete application settings
-- Extension configurations (supports flat zip layout extension packages)
+- Extension configurations
 
 This is particularly useful for migrating from other instances or quickly restoring your working environment on a new device, avoiding the tedious process of configuring from scratch.
 
 ## Related Features
 
+- [User Settings Additions](/features/user-settings-additions) — the Luker-only controls inside User Settings, plus backup, migration and storage tools
 - [Search Tools](/features/search-tools) — AI web search capabilities
 - [Character Card Editor Assistant](/features/card-editor/) — Enhanced character card editing experience
 - [Memory Graph](/features/memory-graph) — Knowledge graph-based memory system

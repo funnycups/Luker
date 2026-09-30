@@ -18,7 +18,7 @@ import request from 'supertest';
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
 import { router as chatsRouter } from '../../../src/endpoints/chats.js';
 import { router as charactersRouter } from '../../../src/endpoints/characters.js';
-import { getChatRepo } from '../../../src/storage/index.js';
+import { getChatRepo, getGroupRepo } from '../../../src/storage/index.js';
 
 const SAMPLE_HEADER = {
     user_name: 'tester',
@@ -125,6 +125,34 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         expect(newChat.body[0].mes).toBe(SAMPLE_MESSAGES[0].mes);
     });
 
+    test('REGRESSION: /api/chats/rename strips repeated .jsonl from both sides', async () => {
+        await getChatRepo().save(harness.handle, 'Alice', 'old-sfx', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+
+        const res = await request(harness.app)
+            .post('/api/chats/rename')
+            .send({ avatar_url: 'Alice.png', original_file: 'old-sfx.jsonl.jsonl', renamed_file: 'new-sfx.jsonl.jsonl', is_group: false })
+            .expect(200);
+        expect(res.body.sanitizedFileName).toBe('new-sfx');
+
+        expect(await getChatRepo().get(harness.handle, 'Alice', 'old-sfx')).toBeNull();
+        const renamed = await getChatRepo().get(harness.handle, 'Alice', 'new-sfx');
+        expect(renamed).not.toBeNull();
+        expect(renamed.body[0].mes).toBe(SAMPLE_MESSAGES[0].mes);
+    });
+
+    test('REGRESSION: /api/chats/rename preserves dots in bare names (v1.2 stays v1.2)', async () => {
+        await getChatRepo().save(harness.handle, 'Alice', 'dotted-src', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+
+        const res = await request(harness.app)
+            .post('/api/chats/rename')
+            .send({ avatar_url: 'Alice.png', original_file: 'dotted-src.jsonl', renamed_file: 'v1.2', is_group: false })
+            .expect(200);
+        expect(res.body.sanitizedFileName).toBe('v1.2');
+
+        const renamed = await getChatRepo().get(harness.handle, 'Alice', 'v1.2');
+        expect(renamed).not.toBeNull();
+    });
+
     // --- /api/chats/delete ---
 
     test('REGRESSION: /api/chats/delete works for Repo-resident chats', async () => {
@@ -139,6 +167,51 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         expect(after).toBeNull();
     });
 
+    test('REGRESSION: /api/chats/delete treats dotted bare names as full chat ids', async () => {
+        await getChatRepo().save(harness.handle, 'Alice', 'v1', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+        await getChatRepo().save(harness.handle, 'Alice', 'v1.2', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+
+        await request(harness.app)
+            .post('/api/chats/delete')
+            .send({ avatar_url: 'Alice.png', chatfile: 'v1.2', is_group: false })
+            .expect(200);
+
+        expect(await getChatRepo().get(harness.handle, 'Alice', 'v1.2')).toBeNull();
+        expect(await getChatRepo().get(harness.handle, 'Alice', 'v1')).not.toBeNull();
+    });
+
+    test('REGRESSION: /api/chats/delete strips repeated .jsonl', async () => {
+        await getChatRepo().save(harness.handle, 'Alice', 'doomed-sfx', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+
+        await request(harness.app)
+            .post('/api/chats/delete')
+            .send({ avatar_url: 'Alice.png', chatfile: 'doomed-sfx.jsonl.jsonl', is_group: false })
+            .expect(200);
+
+        expect(await getChatRepo().get(harness.handle, 'Alice', 'doomed-sfx')).toBeNull();
+    });
+
+    // --- /api/chats/merge ---
+
+    test('REGRESSION: /api/chats/merge accepts suffixed source names from list endpoints', async () => {
+        await getChatRepo().save(harness.handle, 'Alice', 'seg-a', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+        await getChatRepo().save(harness.handle, 'Alice', 'seg-b', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
+
+        const res = await request(harness.app)
+            .post('/api/chats/merge')
+            .send({
+                avatar_url: 'Alice.png',
+                segments: [{ source: 'seg-a.jsonl' }, { source: 'seg-b.jsonl' }],
+                target_name: 'merged-sfx',
+            })
+            .expect(200);
+        expect(res.body.new_chat.file_name).toBe('merged-sfx');
+
+        const merged = await getChatRepo().get(harness.handle, 'Alice', 'merged-sfx');
+        expect(merged).not.toBeNull();
+        expect(merged.body).toHaveLength(SAMPLE_MESSAGES.length * 2);
+    });
+
     // --- /api/chats/export ---
 
     test('REGRESSION: /api/chats/export returns Repo-resident chat content (jsonl format)', async () => {
@@ -146,10 +219,10 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
 
         const res = await request(harness.app)
             .post('/api/chats/export')
-            .send({ avatar_url: 'Alice.png', file: 'expo.jsonl', format: 'jsonl', is_group: false })
+            .send({ avatar_url: 'Alice.png', file: 'expo.jsonl', format: 'jsonl', is_group: false, exportfilename: 'expo.jsonl' })
             .expect(200);
         // The endpoint wraps the file contents in `{message, result}`.
-        const exported = res.body.result;
+        const exported = res.body.result ?? res.text;
         expect(typeof exported).toBe('string');
         expect(exported.length).toBeGreaterThan(0);
         const lines = exported.split('\n').filter((l) => l.length);
@@ -177,6 +250,31 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         const ids = res.body.map((r) => r.file_name);
         expect(ids).toContain('topic-elephants.jsonl');
         expect(ids).not.toContain('topic-tigers.jsonl');
+    });
+
+    test('REGRESSION: /api/chats/search resolves a group\'s chats through the group doc', async () => {
+        await getChatRepo().save(harness.handle, '', 'gchat-reef', SAMPLE_HEADER, [
+            { name: 'User', mes: 'tell me about the reef' },
+        ], null, { isGroup: true, groupId: 'gchat-reef' });
+        await getChatRepo().save(harness.handle, '', 'gchat-harbor', SAMPLE_HEADER, [
+            { name: 'User', mes: 'tell me about the reef' },
+        ], null, { isGroup: true, groupId: 'gchat-harbor' });
+        await getGroupRepo().save(harness.handle, 'grp-reef', {
+            id: 'grp-reef',
+            name: 'Reef Watch',
+            members: [],
+            chats: ['gchat-reef'],
+            chat_id: 'gchat-reef',
+        });
+
+        const res = await request(harness.app)
+            .post('/api/chats/search')
+            .send({ query: '', avatar_url: null, group_id: 'grp-reef' })
+            .expect(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        const ids = res.body.map((r) => r.file_name);
+        expect(ids).toContain('gchat-reef.jsonl');
+        expect(ids.includes('gchat-harbor.jsonl')).toBe(false);
     });
 
     // --- /api/chats/recent ---

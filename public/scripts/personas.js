@@ -458,7 +458,7 @@ function getPersonaDescriptorByAvatar(personaAvatar, { preferredCharacterAvatar 
     };
 }
 
-function getDedicatedPersonaEntriesFromCharacter(character) {
+export function getDedicatedPersonaEntriesFromCharacter(character) {
     const entries = character?.data?.extensions?.luker?.dedicated_personas;
     return Array.isArray(entries) ? entries : [];
 }
@@ -809,7 +809,7 @@ function normalizeDedicatedPersonaEntries(entries) {
     return normalized;
 }
 
-async function setCharacterDedicatedPersonaEntries(characterAvatar, entries, { restoreRemovedToGlobal = true } = {}) {
+export async function setCharacterDedicatedPersonaEntries(characterAvatar, entries, { restoreRemovedToGlobal = true } = {}) {
     const character = getCharacterByAvatar(characterAvatar);
     if (!character) {
         return false;

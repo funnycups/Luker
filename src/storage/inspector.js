@@ -482,7 +482,7 @@ export async function enumerateCategory(userRoot, categoryKey) {
             { label: 'Storage', path: [] },
             { label: cat.label, path: [categoryKey] },
         ],
-        isLeaf: true,
+        isLeaf: entries.every(e => !e.canDrill),
         entries,
     };
 }
@@ -581,9 +581,47 @@ async function enumerateDirEntries(dirAbs) {
 }
 
 /**
- * L2 → L3 · grouped category 里某 sub-category 下的叶子文件列表。
+ * Leaf 层目录深入 · 用户点击目录行后列出该目录的内容。
+ *
+ * baseRel 来自 taxonomy(不是用户输入),relSegments 是前端回传的目录段
+ * (每段已过 assertSafeSegment)。最终路径必须存在且是目录 · 否则
+ * E_INVALID_PATH。目录行继续可钻(允许图库按角色/日期嵌套),文件行是叶子。
+ */
+async function enumerateDirAtPath(userRoot, baseRel, relSegments, categoryKey, subLabel) {
+    const dirAbs = path.join(userRoot, baseRel, ...relSegments);
+    const st = await fsPromises.stat(dirAbs).catch(() => null);
+    if (!st || !st.isDirectory()) {
+        throw new StorageInspectorError('E_INVALID_PATH', `not a directory: ${relSegments.join('/')}`);
+    }
+    const entries = await enumerateDirEntries(dirAbs);
+    const cat = CATEGORY_MAP[categoryKey];
+    const breadcrumbs = [
+        { label: 'Storage', path: [] },
+        { label: cat.label, path: [categoryKey] },
+    ];
+    if (subLabel) {
+        breadcrumbs.push({ label: subLabel.label, path: [categoryKey, subLabel.key] });
+    }
+    let currentPath = breadcrumbs[breadcrumbs.length - 1].path;
+    for (const seg of relSegments) {
+        currentPath = [...currentPath, seg];
+        breadcrumbs.push({ label: seg, path: currentPath });
+    }
+    return {
+        target: { type: 'self', handle: null },
+        quota: null,
+        path: currentPath,
+        breadcrumbs,
+        isLeaf: entries.every(e => !e.canDrill),
+        entries,
+    };
+}
+
+/**
+ * L2 → L3 · grouped category 里某 sub-category 下的内容列表。
  * 例:enumerateSubDir(userRoot, 'images', 'backgrounds')
- *     → readdir 该 sub 的 rel 目录下每文件。
+ *     → readdir 该 sub 的 rel 目录下每项;目录行可继续深入
+ *       (见 enumerateDirAtPath),文件行是叶子。
  *
  * multi-rel (如 UI Elements 覆盖 themes+movingUI+QuickReplies) 展平合并,
  * 每 entry 的 label 前缀带子目录名以消歧。
@@ -622,6 +660,9 @@ export async function enumerateSubDir(userRoot, categoryKey, subKey) {
             for (const r of rows) {
                 collected.push({
                     ...r,
+                    // 多 rel 合并的 entry key 不回传 rel 维度 · 无法解析目录深入,
+                    // 目录行退化为聚合叶子(单 rel 目录行保持可钻)。
+                    canDrill: dirs.length === 1 ? r.canDrill : false,
                     label: dirs.length > 1 ? `${rel}/${r.label}` : r.label,
                 });
             }
@@ -663,7 +704,7 @@ export async function enumerateSubDir(userRoot, categoryKey, subKey) {
             { label: cat.label, path: [categoryKey] },
             { label: sub.label, path: [categoryKey, subKey] },
         ],
-        isLeaf: true,
+        isLeaf: collected.every(e => !e.canDrill),
         entries: collected,
     };
 }
@@ -1265,18 +1306,31 @@ export async function resolvePath(userRoot, pathArr, opts) {
         throw new StorageInspectorError('E_INVALID_PATH', 'other category is a leaf');
     }
 
-    // grouped(images/attachments/presets/backups) · L3 = enumerateSubDir · 最大深度 2
+    // grouped(images/attachments/presets/backups) · L3 = enumerateSubDir ·
+    // 更深一段 = 深入该 sub 的单 rel 目录(多 rel / glob / files 子类保持叶子)
     if (GROUPED_L2[categoryKey]) {
         const [subKey, ...rest] = deeper;
-        if (rest.length > 0) {
-            throw new StorageInspectorError('E_INVALID_PATH', `${categoryKey} path max depth = 2`);
+        const sub = GROUPED_L2[categoryKey].find(s => s.key === subKey);
+        if (!sub) {
+            throw new StorageInspectorError('E_INVALID_PATH', `unknown sub-dir: ${subKey}`);
         }
-        return enumerateSubDir(userRoot, categoryKey, subKey);
+        if (rest.length === 0) {
+            return enumerateSubDir(userRoot, categoryKey, subKey);
+        }
+        if (!sub.rel || sub.rels || sub.globs || sub.files) {
+            throw new StorageInspectorError('E_INVALID_PATH', `${categoryKey}/${subKey} has no drilldown`);
+        }
+        return enumerateDirAtPath(userRoot, sub.rel, rest, categoryKey, { label: sub.label, key: subKey });
     }
 
-    // simple category(worlds/extensions/vectors) · L2 已是叶子 · deeper 未知
+    // simple category(worlds/extensions/vectors) · L2 行里的目录可继续深入
     if (CATEGORY_MAP[categoryKey]) {
-        throw new StorageInspectorError('E_INVALID_PATH', `${categoryKey} category is a leaf`);
+        const cat = CATEGORY_MAP[categoryKey];
+        const dirInc = cat.includes.find(i => i.kind === 'dir');
+        if (!dirInc) {
+            throw new StorageInspectorError('E_INVALID_PATH', `category ${categoryKey} has no dir include`);
+        }
+        return enumerateDirAtPath(userRoot, dirInc.rel, deeper, categoryKey, null);
     }
 
     // 未知 category · assertSafeSegment 已过 · 但 taxonomy 不认

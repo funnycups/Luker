@@ -1,104 +1,174 @@
-> [!IMPORTANT]  
-> 此處資訊可能已經過時或不完整，僅供您參考。請使用英文版本以取得最新資訊。
-
 <a name="readme-top"></a>
 
-![][cover]
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/hero-dark.png">
+  <img alt="Luker —— 下一代角色扮演聊天平台" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/hero-light.png">
+</picture>
 
 <div align="center">
 
-[English](readme.md)  | [German](readme-de_de.md) | [中文](readme-zh_cn.md) | 繁體中文 | [日本語](readme-ja_jp.md) | [Русский](readme-ru_ru.md) | [한국어](readme-ko_kr.md)
+[English](readme.md) | [Deutsch](readme-de_de.md) | [简体中文](readme-zh_cn.md) | **繁體中文** | [日本語](readme-ja_jp.md) | [Русский](readme-ru_ru.md) | [한국어](readme-ko_kr.md)
 
-[![GitHub 星標](https://img.shields.io/github/stars/SillyTavern/SillyTavern.svg)](https://github.com/SillyTavern/SillyTavern/stargazers)
-[![GitHub 分支](https://img.shields.io/github/forks/SillyTavern/SillyTavern.svg)](https://github.com/SillyTavern/SillyTavern/forks)
-[![GitHub 問題](https://img.shields.io/github/issues/SillyTavern/SillyTavern.svg)](https://github.com/SillyTavern/SillyTavern/issues)
-[![GitHub 拉取請求](https://img.shields.io/github/issues-pr/SillyTavern/SillyTavern.svg)](https://github.com/SillyTavern/SillyTavern/pulls)
+[![GitHub Stars](https://img.shields.io/github/stars/funnycups/Luker.svg?style=flat)](https://github.com/funnycups/Luker/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/funnycups/Luker.svg?style=flat)](https://github.com/funnycups/Luker/forks)
+[![GitHub Issues](https://img.shields.io/github/issues/funnycups/Luker.svg?style=flat)](https://github.com/funnycups/Luker/issues)
+[![License](https://img.shields.io/github/license/funnycups/Luker.svg?style=flat)](../LICENSE)
+[![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe/zh-TW/)
+[![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
 
 </div>
 
 ---
 
-## Luker 分支說明
+Luker 是一款下一代角色扮演聊天平台。和真正記得住劇情的角色對話，讓一整支導演帶隊的 agent 團在每次回覆前先把這場戲排好，透過和 AI 聊天來修改角色卡，讓角色能在對話中途即時聯網檢索。
 
-Luker 是 SillyTavern 的一個 fork，重點在更優雅的 API 設計與更強的擴充能力。
+## Luker 是什麼
 
-- 增量聊天儲存 API（`append` / `patch` / `meta/patch` / `state/patch`）。
-- 後端託管的生成任務恢復能力（前端斷線後可恢復）。
-- 內建 `Orchestrator` 與 `Memory` 外掛。
-- API 遷移文件：[docs/luker-api-migration.md](https://github.com/funnycups/Luker/blob/release/docs/luker-api-migration.md)
+Luker 是一個為大型語言模型角色扮演場景專門打造的平台。開箱即用，不需要裝第三方擴充，內建了：基於知識圖譜的長期記憶、自帶可重用技能庫的多 Agent 場景編排、AI 輔助的角色卡編輯工作台、聊天補全預設助手、區域網路同步，以及一個可在手機上執行完整後端的原生 Android 應用。
 
-SillyTavern 提供一個統一的前端介面，整合多種大型語言模型的 API（包括：KoboldAI/CPP、Horde、NovelAI、Ooba、Tabby、OpenAI、OpenRouter、Claude、Mistral 等）。同時具備對行動裝置友善的佈局、視覺小說模式（Visual Novel Mode）、Automatic1111 與 ComfyUI 的影像生成 API 整合、TTS（語音合成）、世界資訊（Lorebook）、可自訂 UI、自動翻譯功能，以及強大的提示詞（prompt）設定選項和無限的第三方擴充潛力。
+Luker 基於 [SillyTavern](https://github.com/SillyTavern/SillyTavern) 深度重構而來，與其保持**雙向 100% 資料相容**。角色卡、世界書、預設、聊天記錄都可以在兩者之間無損搬遷，零遷移成本。
 
-我們擁有一個 [官方文件網站](https://docs.sillytavern.app/) 可以幫助解答絕大多數的使用問題，並幫助您順利入門。
+## 核心亮點
 
-## SillyTavern 是什麼？
+### 記憶圖 —— 讓角色真的記得住
 
-SillyTavern（簡稱 ST）是一款本地安裝的使用者介面，讓您能與大型語言模型（LLM）、影像生成引擎以及語音合成模型互動的前端。
+一套基於知識圖譜的長期記憶。每一場戲都會被提取成帶類型的節點（角色、地點、事件、劇情線），節點之間互相連邊。每次回覆前，召回環節會在圖上游走，把最相關的記憶注入上下文——所以三十輪之後使用者隨口問一句「通往廢棄神殿的第三條路徑呢」，角色能準確翻出之前的那次對話。
 
-SillyTavern 起源於 2023 年 2 月，作為 TavernAI 1.2.8 的分支版本發展至今。目前已有超過 300 位貢獻者，並擁有超過三年的獨立開發歷史。如今，它已成為 AI 愛好者中備受推崇的軟體之一。
+![記憶圖演示](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/memory-graph-demo.gif)
 
-## 我們的願景
+→ [記憶圖文件](https://luker.cups.moe/zh-TW/features/memory-graph)
 
-1. 我們致力於賦予使用者對 LLM 提示詞的最大控制權與實用性，並認為學習過程中的挑戰是樂趣的一部分。
-2. 我們不提供任何線上或託管服務，也不會程式化追蹤任何使用者數據。
-3. SillyTavern 是由一群熱衷於 LLM 的開發者社群所打造的專案，並將永遠保持免費與開源。
+### 多 Agent 編排 —— 一整支導演隊伍替你把每場戲排好
 
-## 我需要高效能電腦才能運行 SillyTavern 嗎？
+在創作 LLM 開口之前，一支可自由配置的 agent 隊伍先行執行：蒸餾器壓縮最近上下文，規劃師草擬下一場戲，評審員做最後審校。最終回覆出來的同時，附帶一份可展開檢查的執行時 trace。五種執行模式任選：Spec（固定流水線）、單 Agent、Agenda（流程動態派發 agent）、Loop（單一 agent 進行迴圈迭代）、Director（主 agent 帶一支子 agent 團隊直接寫正文）。
 
-SillyTavern 的硬體需求相當低。任何能夠運行 NodeJS 20 或更高版本的設備都可以執行。若您打算在本地機器上進行 LLM 推理，我們建議使用擁有至少 6GB VRAM 的 3000 系列 NVIDIA 顯示卡，但實際需求可能因模型和您使用的後端而異。
+![多 Agent 編排演示](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/orchestrator-demo.gif)
 
-## 有任何問題或建議？
+→ [多 Agent 編排文件](https://luker.cups.moe/zh-TW/features/orchestrator/)
 
-### 歡迎加入我們的 Discord 伺服器
+### 技能 —— 按需讀取的可重用知識包
 
-| [![][discord-shield-badge]][discord-link] | [加入我們的 Discord 伺服器](https://discord.gg/sillytavern) 以獲得技術支援、分享您喜愛的角色與提示詞。 |
-| :---------------------------------------- | :----------------------------------------------------------------------------------------------------------------- |
+agent 按需讀取的可重用知識包：寫作規則、口吻約定、反八股清單。格式相容 Anthropic Claude Skills，為 Claude Code 撰寫的技能可原樣遷移至 Luker，也可遷移回去。編排器預設的 Director profile 自帶 24 個內建技能，技能也可以隨角色卡或預設一起分發。
 
-或直接聯繫開發者：
+<img alt="技能管理器：已安裝與內建技能" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/_screenshots/skills/manager-installed-tab.png" width="720">
 
-* Discord: cohee, rossascends, wolfsblvt
-* Reddit: [/u/RossAscends](https://www.reddit.com/user/RossAscends/), [/u/sillylossy](https://www.reddit.com/user/sillylossy/), [u/Wolfsblvt](https://www.reddit.com/user/Wolfsblvt/)
-* [提交 GitHub 問題](https://github.com/SillyTavern/SillyTavern/issues)
+→ [技能文件](https://luker.cups.moe/zh-TW/features/skills/)
 
-### 我喜歡這個專案，我該如何貢獻呢？
+### CardApp Studio 與角色卡編輯助手 —— 透過和 AI 對話來編輯角色卡
 
-1. **提交拉取要求（Pull Request）**：想了解如何貢獻，請參閱 [CONTRIBUTING.md](../CONTRIBUTING.md)。 
-2. **提供功能建議與問題報告**：使用本專案所提供的模板提交建議或問題報告。
-3. **仔細閱讀此 README 文件及相關文檔**：請避免提出重複問題或建議。
+一整套針對角色卡的編輯環境：CodeMirror 6 程式碼編輯器、AI 聊天面板、每批改動都以 diff 形式讓你逐條批准。普通角色卡使用輕量彈窗版編輯助手；帶 **CardApp**（內嵌在角色卡裡的迷你應用）的卡片則進入功能完整的 Studio，內含檔案樹、即時預覽、歷史記錄。
 
-## 螢幕截圖
+![CardApp Studio 演示](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/cardapp-studio-demo.gif)
 
-<img width="500" alt="image" src="https://github.com/user-attachments/assets/9b5f32f0-c3b3-4102-b3f5-0e9213c0f50f">
-<img width="500" alt="image" src="https://github.com/user-attachments/assets/913fdbaa-7d33-42f1-ae2c-89dca41c53d1">
+→ [角色卡編輯助手](https://luker.cups.moe/zh-TW/features/card-editor/) · [CardApp Studio](https://luker.cups.moe/zh-TW/features/card-editor/studio)
 
-## 安裝指南
+### 聊天補全預設助手 —— 透過描述構建預設
 
-有關詳細的安裝說明，請訪問我們的文檔：
+告訴助手你想讓某個聊天補全預設做什麼，它會與你逐輪迭代，每次改動都以 diff 形式供你審閱，直至符合預期——讀取參數、編輯提示詞條目、並與參考預設對比。同一套工作流也覆蓋多 Agent 編排的預設。
 
-* **[Windows 安裝指南](https://docs.sillytavern.app/installation/windows/)**
-* **[MacOS/Linux 安裝指南](https://docs.sillytavern.app/installation/linuxmacos/)**
-* **[Android (Termux) 安裝指南](https://docs.sillytavern.app/installation/android-(termux)/)**
-* **[Docker 安裝指南](https://docs.sillytavern.app/installation/docker/)**
+<img alt="聊天補全預設助手" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/preset-assistant/cpa-overview.png" width="720">
 
-## 授權與致謝
+→ [聊天補全預設助手文件](https://luker.cups.moe/zh-TW/features/preset-assistant)
 
-**本程式（SillyTavern）的發布是基於其可能對使用者有所幫助的期許，但不提供任何形式的保證；包括但不限於對可銷售性（marketability）或特定用途適用性的隱含保證。如需更多詳情，請參閱 GNU Affero 通用公共許可證。**
+### 原生 Android 應用 —— 把整個平台裝進手機
 
-* [TavernAI](https://github.com/TavernAI/TavernAI) 1.2.8 由 Humi 提供：MIT 許可
-* 經授權使用部分來自 CncAnon 的 TavernAITurbo 模組
-* 視覺小說模式（Visual Novel Mode）的靈感，來源於 PepperTaco 的貢獻（<https://github.com/peppertaco/Tavern/>）
-* Noto Sans 字體由 Google 提供（OFL 許可）
-* Lexer/Parser 由 Chevrotain 提供 (Apache-2.0 許可) <https://github.com/chevrotain/chevrotain>
-* 主題圖示由 Font Awesome <https://fontawesome.com> 提供（圖示：CC BY 4.0，字體：SIL OFL 1.1，程式碼：MIT 許可）
-* 預設資源來源於 @OtisAlejandro（包含角色 Seraphina 與知識書）與 @kallmeflocc（SillyTavern 官方 Discord 伺服器成員突破 10K 的慶祝背景）
-* Docker 安裝指南由 [@mrguymiah](https://github.com/mrguymiah) 和 [@Bronya-Rand](https://github.com/Bronya-Rand) 編寫
-* kokoro-js 函式庫由 [@hexgrad](https://github.com/hexgrad) 提供 (Apache-2.0 許可)
+Luker 的後端**內嵌於** Android 應用執行。安裝 APK 並打開，即可在一部裝置上獲得完整的伺服端與介面——無需 Termux、無需手動安裝 Node、無需連接埠轉送。首次啟動畫面支援備份 ZIP 匯入，遷移便捷。
+
+![Android APK 演示](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/android-apk-demo.gif)
+
+→ [Android 應用指南](https://luker.cups.moe/zh-TW/guide/android)
+
+### 搜尋外掛 —— 角色也能聯網搜尋
+
+為寫作 LLM 提供一個即時聯網搜尋工具（DuckDuckGo、SearXNG、Brave），或者讓搜尋作為預請求 agent 在生成前自動執行，把結果寫入世界書。這些結果來自真正的搜尋引擎，而非訓練語料中的記憶。
+
+→ [搜尋外掛文件](https://luker.cups.moe/zh-TW/features/search-tools)
+
+### 區域網路同步
+
+同一區域網路內兩台 Luker 實例互相配對，聊天記錄、角色卡、世界書、設定在兩者之間自動同步。桌面端和手機端保持一致，不用推任何東西到雲上。
+
+→ [區域網路同步指南](https://luker.cups.moe/zh-TW/improvements/lan-sync)
+
+### 聊天合併與拆分
+
+任意位置拆分長聊天，或將兩段聊天合併成一條；分支歷史保持一致。適用於劇情失控、希望保留精彩片段並拆分另開分支的場景。
+
+<img alt="聊天合併與拆分" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/chat-merge-split/07-split-dialog-three-segments.png" width="720">
+
+→ [聊天管理](https://luker.cups.moe/zh-TW/basics/chat-management)
+
+### TTS NPC 對白歸屬
+
+開啟 TTS 之後，一則回覆裡每一句引號台詞都可以用說話者自己的聲音唸出來。後台會有一個 AI 環節判斷每句台詞是誰說的——它發現的 NPC 會自動出現在語音映射裡；你事先手動加進去的名字，從第一次播放起就能被辨識。
+
+<img alt="訊息中每句台詞旁的播放按鈕" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
+
+→ [TTS NPC 對白歸屬](https://luker.cups.moe/zh-TW/features/tts-npc-attribution)
+
+### 換模型不必重配提示詞
+
+SillyTavern 中 API 連線與聊天補全預設是聯動的，切換模型會連帶變更你的提示詞設定。Luker 把兩者解耦：換模型不用重新配提示詞，換預設不用重新填 API key。
+
+### 關掉分頁，回覆照樣在寫
+
+生成在後端執行，透過 WebSocket 串流推送給介面。重新整理分頁、蓋上筆電、丟失 Wi-Fi——後端上的這次回覆會繼續寫下去，你回來的那一刻自動重連到介面。沒有丟失，沒有重啟。
+
+→ [後端儲存與生命週期](https://luker.cups.moe/zh-TW/improvements/backend-storage)
+
+---
+
+此外還有一長串小便利功能：預設與提示詞的分組、聊天人設鎖定、復原 Toast、能看到世界書條目因何啟動的追蹤、從各提供商即時拉取的模型列表。詳見[文件](https://luker.cups.moe/zh-TW/)。
+
+## 介面截圖
+
+<table>
+  <tr>
+    <td width="50%"><img alt="記憶圖檢查器" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/memory-graph/memory-graph-view.png"></td>
+    <td width="50%"><img alt="多 Agent 編排執行時 trace" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/orchestrator/orch-runtime-trace.png"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img alt="CardApp Studio 工作台" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/cardapp-studio/studio-overview.png"></td>
+    <td width="50%"><img alt="聊天補全預設助手" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/preset-assistant/cpa-overview.png"></td>
+  </tr>
+</table>
+
+## 開始使用
+
+- **桌面（Node.js）** —— `git clone https://github.com/funnycups/Luker.git && cd Luker && npm install && node server.js`。需要 Node.js 24 或更新版本。→ [快速開始](https://luker.cups.moe/zh-TW/guide/getting-started)
+- **Android APK** —— 從 [Releases](https://github.com/funnycups/Luker/releases) 頁面下載最新簽名 APK，安裝即用。→ [Android 應用指南](https://luker.cups.moe/zh-TW/guide/android)
+- **Docker** —— 用倉庫根目錄的 compose 檔案執行 `docker compose up`。→ [快速開始](https://luker.cups.moe/zh-TW/guide/getting-started)
+
+## 從 SillyTavern 遷移過來？
+
+Luker 與 SillyTavern 保持雙向 100% 資料相容。把 `data/` 目錄整個拷過來即可——角色卡、世界書、預設、聊天記錄、人設、設定全部無損。全域第三方擴充存放在 `data/` 之外，位於 `public/scripts/extensions/third-party/`，需要另外複製。想回去也是一樣，反向拷回來；Luker 獨家資料（記憶圖、多 Agent 編排設定）存在獨立狀態檔案裡，SillyTavern 會自動忽略。**遷移前無論如何都請先做備份。**
+
+→ [遷移指南](https://luker.cups.moe/zh-TW/guide/migration)
+
+## 社群與回饋
+
+- Bug 回報和功能請求：[GitHub Issues](https://github.com/funnycups/Luker/issues)
+- 提交 Issue 之前請先閱讀文件：[luker.cups.moe](https://luker.cups.moe/zh-TW/)
+
+## 參與貢獻
+
+歡迎 PR。請先閱讀 [CONTRIBUTING.md](../CONTRIBUTING.md)；提交 Issue 之前請先檢索是否已有相同問題。
+
+## 授權與鳴謝
+
+以 **AGPL-3.0** 開源。本程式按現狀分發，不附帶任何擔保；詳見 [GNU Affero 通用公共許可證](../LICENSE)。
+
+- 建構於 **SillyTavern** —— 由 Cohee、RossAscends、Wolfsblvt 以及 300 多位貢獻者共同打造：<https://github.com/SillyTavern/SillyTavern>
+- [TavernAI](https://github.com/TavernAI/TavernAI-v1) 1.2.8 by Humi（MIT 許可）
+- 部分程式碼源自 CncAnon 的 TavernAITurbo mod，已獲授權
+- Visual Novel 模式靈感來自 [PepperTaco](https://github.com/peppertaco/Tavern/)
+- Noto Sans 字體 by Google（OFL 許可）
+- Lexer / Parser 使用 [Chevrotain](https://github.com/chevrotain/chevrotain)（Apache-2.0）
+- 圖示主題 [Font Awesome](https://fontawesome.com)（圖示 CC BY 4.0、字體 SIL OFL 1.1、程式碼 MIT）
+- 預設角色內容 by @OtisAlejandro（Seraphina）和 @kallmeflocc
+- Docker 指南 by [@mrguymiah](https://github.com/mrguymiah) 與 [@Bronya-Rand](https://github.com/Bronya-Rand)
+- kokoro-js 函式庫 by [@hexgrad](https://github.com/hexgrad)（Apache-2.0）
 
 ## 主要貢獻者
 
-[![Contributors](https://contrib.rocks/image?repo=SillyTavern/SillyTavern)](https://github.com/SillyTavern/SillyTavern/graphs/contributors)
-
-<!-- LINK GROUP -->
-[cover]: https://github.com/user-attachments/assets/01a6ae9a-16aa-45f2-8bff-32b5dc587e44
-[discord-link]: https://discord.gg/sillytavern
-[discord-shield-badge]: https://img.shields.io/discord/1100685673633153084?color=5865F2&label=discord&labelColor=black&logo=discord&logoColor=white&style=for-the-badge
+[![Contributors](https://contrib.rocks/image?repo=funnycups/Luker)](https://github.com/funnycups/Luker/graphs/contributors)

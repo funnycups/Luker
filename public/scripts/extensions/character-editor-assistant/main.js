@@ -44,7 +44,6 @@ const updateCharacterState = __ctx.updateCharacterState;
 const addLocaleData = __ctx.addLocaleData;
 const translate = __ctx.translate;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
-const Popup = __ctx.Popup;
 const newWorldInfoEntryTemplate = __ctx.worldInfoEntry.template;
 const setWorldInfoButtonClass = __ctx.worldInfoEntry.setButtonClass;
 const updateWorldInfoList = __ctx.updateWorldInfoList;
@@ -86,7 +85,6 @@ const CHARACTER_EDITOR_SELECTIVE_LOGIC_LABELS = Object.freeze({
 });
 
 const defaultSettings = {
-    replaceLorebookSyncEnabled: true,
     requestLlmPresetName: '',
     requestApiPresetName: '',
     toolCallRetryMax: 2,
@@ -160,17 +158,9 @@ function registerLocaleData() {
         'Edit': '编辑',
         'Edit and regenerate from here': '编辑并从此处重新生成',
         'Edit message — saving will regenerate from this turn:': '编辑消息——保存将从此轮开始重新生成：',
-        'Enable lorebook sync popup after Replace/Update': '替换／更新角色卡后弹出世界书处理选项',
-        'Replace: what should happen to the world book?': '替换角色卡：要如何处理世界书？',
-        'You just replaced or updated this character card. Choose what to do with its world book:': '你刚替换或更新了这张角色卡。请选择如何处理它的世界书：',
-        'Import new book': '导入新世界书',
-        'Keep old book': '保留旧世界书',
         'Merge in editor': '在编辑器中合并',
         'Cancel': '取消',
-        'Save the new card\'s embedded world book as a standalone file and bind it to this character. Use when you want the new card\'s shipped lore verbatim.': '把新卡自带的内置世界书另存为独立文件并绑定给这个角色。当你想原样使用新卡自带的设定时选它。',
-        'Re-bind the previously bound book (${0}) and ignore the new card\'s embedded book. Use when you only wanted to refresh the character fields.': '把原本绑定的世界书（${0}）重新绑回来，忽略新卡自带的内置世界书。当你只想更新角色卡字段、不动世界书时选它。',
         'Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.': '在迭代工作台里打开新旧对比，让 AI 把你先前的手工修改迁移到新世界书。当你有想保留的手动修改时选它。',
-        'Kept the previous primary world book bound: ${0}': '已保留原主世界书的绑定：${0}',
         'Just imported this card — review the baseline and suggest tweaks.': '刚导入了这张角色卡。请先审视卡片当前的基础设定与世界书条目，然后与我多轮对话、逐步给出改进建议或直接动手编辑。',
         'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '刚更新了这张角色卡。下方是与上一版的差异——请审阅这些变化，然后给出后续调整建议或直接动手编辑。',
         'Character card diff (previous → current):': '角色卡差异（旧 → 新）：',
@@ -496,17 +486,9 @@ function registerLocaleData() {
         'Edit': '編輯',
         'Edit and regenerate from here': '編輯並從此處重新產生',
         'Edit message — saving will regenerate from this turn:': '編輯訊息——儲存將從此輪開始重新產生：',
-        'Enable lorebook sync popup after Replace/Update': '替換／更新角色卡後彈出世界書處理選項',
-        'Replace: what should happen to the world book?': '替換角色卡：要如何處理世界書？',
-        'You just replaced or updated this character card. Choose what to do with its world book:': '你剛替換或更新了這張角色卡。請選擇如何處理它的世界書：',
-        'Import new book': '匯入新世界書',
-        'Keep old book': '保留舊世界書',
         'Merge in editor': '在編輯器中合併',
         'Cancel': '取消',
-        'Save the new card\'s embedded world book as a standalone file and bind it to this character. Use when you want the new card\'s shipped lore verbatim.': '把新卡自帶的內建世界書另存為獨立檔案並綁定給這個角色。當你想原樣使用新卡自帶的設定時選它。',
-        'Re-bind the previously bound book (${0}) and ignore the new card\'s embedded book. Use when you only wanted to refresh the character fields.': '把原本綁定的世界書（${0}）重新綁回來，忽略新卡自帶的內建世界書。當你只想更新角色卡欄位、不動世界書時選它。',
         'Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.': '在迭代工作台裡開啟新舊對比，讓 AI 把你先前的手工修改遷移到新世界書。當你有想保留的手動修改時選它。',
-        'Kept the previous primary world book bound: ${0}': '已保留原主世界書的綁定：${0}',
         'Just imported this card — review the baseline and suggest tweaks.': '剛匯入了這張角色卡。請先審視卡片目前的基礎設定與世界書條目，然後與我多輪對話、逐步給出改進建議或直接動手編輯。',
         'Just updated this card. Diff vs the previous version is below — review what changed and suggest follow-up tweaks, or apply edits directly.': '剛更新了這張角色卡。下方是與上一版的差異——請審閱這些變化，然後給出後續調整建議或直接動手編輯。',
         'Character card diff (previous → current):': '角色卡差異（舊 → 新）：',
@@ -886,7 +868,6 @@ function ensureSettings() {
         extension_settings[MODULE_NAME] = clone(defaultSettings);
     }
     const settings = extension_settings[MODULE_NAME];
-    settings.replaceLorebookSyncEnabled = settings.replaceLorebookSyncEnabled !== false;
     if (settings.lorebookSyncLlmPresetName !== undefined) {
         settings.requestLlmPresetName ||= String(settings.lorebookSyncLlmPresetName || '');
         delete settings.lorebookSyncLlmPresetName;
@@ -4037,122 +4018,6 @@ export async function buildPostReplaceSeedMessage(context, detail) {
     return sections.join('\n');
 }
 
-export const REPLACE_POPUP_CHOICE = Object.freeze({
-    IMPORT_NEW_BOOK: 'import_new_book',
-    OPEN_EDITOR: 'open_editor',
-    KEEP_OLD_BOOK: 'keep_old_book',
-    CANCELLED: 'cancelled',
-});
-
-export const REPLACE_POPUP_RESULT_VALUE = Object.freeze({
-    IMPORT_NEW_BOOK: 1001, // POPUP_RESULT.CUSTOM1
-    OPEN_EDITOR: 1002,     // POPUP_RESULT.CUSTOM2
-    KEEP_OLD_BOOK: 1003,   // POPUP_RESULT.CUSTOM3
-});
-
-/**
- * Post-replace confirm popup. Surfaces up to three choices, each one a
- * concrete next-step the user actually wants after dropping a new card
- * onto an existing one:
- *
- *   - import_new_book — import the new card's embedded character_book as a
- *     standalone world book and bind it (hidden when the new card carries
- *     no embedded book).
- *   - open_editor — open the iter studio with the prev/next diff seed so
- *     the AI can carry forward edits from the old book into the new one.
- *   - keep_old_book — re-bind the previous primary book to the replaced
- *     card (hidden when there was no prior binding) so the user does not
- *     silently lose a hand-curated world.
- *
- * Returns a REPLACE_POPUP_CHOICE constant. Cancelled (Esc, click-outside)
- * returns CANCELLED so the caller does nothing — never confuse cancel
- * with skip-and-rebind.
- */
-async function promptReplaceOutcomeChoice({ hasNewEmbeddedBook, previousBookName, previousBookExists }) {
-    // Button text is short and action-oriented — the concrete
-    // trade-offs live in the body copy above. Historically all three
-    // buttons carried a full-sentence explanation each, which:
-    //   1. overflowed to two lines on narrow popups, breaking alignment
-    //   2. gave every button equal visual weight (all `popup-button-ok`)
-    //      so the user couldn't tell which one was the safe default
-    //   3. duplicated the same info the body was already explaining,
-    //      then contradicted it when the two drifted out of sync
-    // Now: body carries `<strong>Label</strong> — explanation` per
-    // option, buttons carry only the labels.
-    const buttons = [];
-    if (hasNewEmbeddedBook) {
-        buttons.push({
-            text: i18n('Import new book'),
-            result: REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK,
-            // Only the recommended default gets the solid `popup-button-ok`
-            // treatment. The other two intentionally stay neutral so the
-            // user can spot the recommended action at a glance.
-            classes: ['popup-button-ok'],
-        });
-    }
-    if (previousBookName && previousBookExists) {
-        buttons.push({
-            text: i18n('Keep old book'),
-            result: REPLACE_POPUP_RESULT_VALUE.KEEP_OLD_BOOK,
-            classes: hasNewEmbeddedBook ? [] : ['popup-button-ok'],
-        });
-    }
-    buttons.push({
-        text: i18n('Merge in editor'),
-        result: REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR,
-        classes: (!hasNewEmbeddedBook && !(previousBookName && previousBookExists)) ? ['popup-button-ok'] : [],
-    });
-
-    // Body: one framing sentence + one option-per-line with the label
-    // in <strong>. Each line reads as a self-contained mini-summary
-    // so the user can pick without hovering / squinting at the buttons.
-    const optionRows = [];
-    if (hasNewEmbeddedBook) {
-        optionRows.push({
-            label: i18n('Import new book'),
-            body: i18n('Save the new card\'s embedded world book as a standalone file and bind it to this character. Use when you want the new card\'s shipped lore verbatim.'),
-        });
-    }
-    if (previousBookName && previousBookExists) {
-        optionRows.push({
-            label: i18n('Keep old book'),
-            body: i18nFormat('Re-bind the previously bound book (${0}) and ignore the new card\'s embedded book. Use when you only wanted to refresh the character fields.', previousBookName),
-        });
-    }
-    optionRows.push({
-        label: i18n('Merge in editor'),
-        body: i18n('Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.'),
-    });
-
-    const bodyHtml = [
-        `<div style="margin-bottom:12px;">${escapeHtml(i18n('You just replaced or updated this character card. Choose what to do with its world book:'))}</div>`,
-        '<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;">',
-        ...optionRows.map(row => `<li style="line-height:1.45;"><strong>${escapeHtml(row.label)}</strong> — ${escapeHtml(row.body)}</li>`),
-        '</ul>',
-    ].join('');
-    const html = DOMPurify.sanitize(bodyHtml);
-
-    const result = await Popup.show.confirm(
-        i18n('Replace: what should happen to the world book?'),
-        html,
-        {
-            okButton: false,
-            cancelButton: i18n('Cancel'),
-            customButtons: buttons,
-            defaultResult: hasNewEmbeddedBook
-                ? REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK
-                : (previousBookName && previousBookExists
-                    ? REPLACE_POPUP_RESULT_VALUE.KEEP_OLD_BOOK
-                    : REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR),
-        },
-    );
-
-    if (result === REPLACE_POPUP_RESULT_VALUE.IMPORT_NEW_BOOK) return REPLACE_POPUP_CHOICE.IMPORT_NEW_BOOK;
-    if (result === REPLACE_POPUP_RESULT_VALUE.OPEN_EDITOR) return REPLACE_POPUP_CHOICE.OPEN_EDITOR;
-    if (result === REPLACE_POPUP_RESULT_VALUE.KEEP_OLD_BOOK) return REPLACE_POPUP_CHOICE.KEEP_OLD_BOOK;
-    return REPLACE_POPUP_CHOICE.CANCELLED;
-}
-
 async function openCharacterEditorPopup(context = getContext(), opts = {}) {
     const character = context?.characters?.[context?.characterId] || null;
     const avatarFromCtx = String(character?.avatar || '').trim();
@@ -4994,6 +4859,7 @@ jQuery(async () => {
     ensureSimulationReviewLocaleData();
     ensureSettings();
     registerTools(getContext());
+    registerPostReplaceMergeAction(getContext());
     ensureUi();
     bindHistoryUiActions();
     setStatus(i18n('Character editor tools are ready.'));
@@ -5020,215 +4886,140 @@ jQuery(async () => {
     eventSource.on(eventTypes.SETTINGS_UPDATED, async () => {
         await refreshUiState();
     });
-
-    const characterReplacedEvent = eventTypes?.CHARACTER_REPLACED || 'character_replaced';
-    eventSource.on(characterReplacedEvent, async (event) => {
-        const settings = getSettings();
-        // This gate also controls whether the post-replace confirm popup
-        // appears at all — historically the only behavior here was an
-        // auto-opening "lorebook sync" popup, so the field name still
-        // says "sync popup". The setting now gates the confirm + editor
-        // flow; renaming the key would orphan any user who already
-        // toggled it on. Disable it to suppress the whole post-replace
-        // prompt.
-        if (!settings.replaceLorebookSyncEnabled) {
-            return;
-        }
-        const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
-        const avatar = String(detail.character?.avatar || '').trim();
-        if (!avatar) {
-            return;
-        }
-        try {
-            await handlePostReplaceWorldBookChoice(detail, avatar);
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] Character editor iteration failed`, error);
-            notifyError(String(error?.message || error));
-        }
-    });
 });
 
-async function handlePostReplaceWorldBookChoice(detail, avatar) {
-    const context = getContext();
-    const nextCharacter = detail.character && typeof detail.character === 'object' ? detail.character : null;
-    const previousLorebookSnapshot = detail.previousLorebookSnapshot && typeof detail.previousLorebookSnapshot === 'object'
-        ? detail.previousLorebookSnapshot
-        : null;
-    const previousBookName = String(previousLorebookSnapshot?.bookName || detail.previousCharacter?.data?.extensions?.world || '').trim();
-    const previousBookExists = previousBookName ? worldBookExists(context, previousBookName) : false;
-    const hasNewEmbeddedBook = Boolean(nextCharacter?.data?.character_book
-        && Array.isArray(nextCharacter.data.character_book.entries)
-        && nextCharacter.data.character_book.entries.length > 0);
-
-    // The replace flow triggers `select_selected_character` -> `checkEmbeddedWorld`
-    // which shows ST's legacy "import embedded world book?" popup whenever
-    // the new card carries `data.character_book` AND the previous card
-    // didn't (so the per-avatar `AlertWI_*` key was never set). That
-    // legacy popup is a strict subset of CEA's three-choice popup —
-    // showing both at once stacks dialogs and confuses the user. Mark
-    // the per-avatar key now to suppress any future fire of the legacy
-    // popup for this avatar, and dismiss any legacy popup currently on
-    // screen by cancelling its underlying confirm. CEA's popup is
-    // strictly more capable.
-    suppressLegacyEmbeddedWorldPopup(avatar);
-
-    const choice = await promptReplaceOutcomeChoice({ hasNewEmbeddedBook, previousBookName, previousBookExists });
-
-    if (choice === REPLACE_POPUP_CHOICE.CANCELLED) {
-        return;
-    }
-
-    if (choice === REPLACE_POPUP_CHOICE.KEEP_OLD_BOOK) {
-        if (!previousBookName) return;
-        await rebindPreviousPrimaryBook(context, avatar, previousBookName);
-        notifySuccess(i18nFormat('Kept the previous primary world book bound: ${0}', previousBookName));
-        return;
-    }
-
-    if (choice === REPLACE_POPUP_CHOICE.IMPORT_NEW_BOOK) {
-        if (!hasNewEmbeddedBook) return;
-        await importEmbeddedBookForAvatar(context, avatar);
-        return;
-    }
-
-    // OPEN_EDITOR — materialize the new card's embedded book FIRST so the
-    // diff the AI sees compares the real prev book entries against the
-    // real new book entries. Without this, `nextBookName` resolves to a
-    // book file that doesn't exist yet on disk and `loadLorebookData`
-    // returns `{ entries: {} }` — the diff degenerates into "every prev
-    // entry is Removed, no entries Added", and the AI ends up reading
-    // "the new world book is empty, all your old lore is gone" instead
-    // of "here are the additions / removals between the two versions".
-    //
-    // Skip the import only when (a) the new card carries no embedded
-    // book at all, (b) the new card's bookName equals the previous
-    // bookName (importing would overwrite the previous book the user
-    // may still want to keep), or (c) the new card's bookName already
-    // exists locally as a different book the user manages — overwriting
-    // a third-party book the user owns would be data loss.
-    const newEmbeddedBookName = String(nextCharacter?.data?.character_book?.name || '').trim();
-    const newBindingTarget = String(nextCharacter?.data?.extensions?.world || '').trim();
-    const effectiveNewBookName = newEmbeddedBookName || newBindingTarget;
-    const shouldMaterializeNewBook = hasNewEmbeddedBook
-        && effectiveNewBookName
-        && effectiveNewBookName !== previousBookName
-        && !worldBookExists(context, effectiveNewBookName);
-    let materializedBookName = '';
-    if (shouldMaterializeNewBook) {
-        try {
-            await importEmbeddedBookForAvatar(context, avatar);
-            // The materialize path uses `character_book.name` when set
-            // and falls back to `${characterName}'s Lorebook`. Compute
-            // the final resolved name the same way so rollback can find
-            // the file to delete.
-            const chars = Array.isArray(context?.characters) ? context.characters : (Array.isArray(__ctx.characters) ? __ctx.characters : []);
-            const chid = chars.findIndex(c => String(c?.avatar || '').trim() === avatar);
-            const resolvedName = String(chars[chid]?.data?.character_book?.name || `${chars[chid]?.name}'s Lorebook`).trim();
-            materializedBookName = resolvedName || effectiveNewBookName;
-        } catch (error) {
-            console.warn(`[${MODULE_NAME}] OPEN_EDITOR: failed to materialize new card's embedded book before diff`, error);
-            // Fall through — we still want the AI session to open. The
-            // diff will be degraded but the user can still iterate manually.
-        }
-    }
-
-    // Post-replace rollback context. If the user closes the popup
-    // WITHOUT applying any edit, the popup calls this callback so the
-    // world book state can be restored to what it was before
-    // OPEN_EDITOR ran:
-    //   1. Re-bind the character to previousBookName (undoes the
-    //      binding switch that importEmbeddedBookForAvatar did).
-    //   2. If we materialized a new book file that did NOT exist
-    //      pre-replace, delete it from disk (undoes the disk write).
-    // Applied even a single edit → the user chose to iterate on the
-    // new book; rollback is skipped and the new book stays.
-    const postReplaceRollback = (shouldMaterializeNewBook && (previousBookName || materializedBookName))
-        ? async () => {
-            try {
-                if (previousBookName) {
-                    await rebindPreviousPrimaryBook(context, avatar, previousBookName);
-                }
-                if (materializedBookName && typeof __ctx?.deleteWorldBook === 'function') {
-                    try { await __ctx.deleteWorldBook(materializedBookName); }
-                    catch (delErr) { console.warn(`[${MODULE_NAME}] OPEN_EDITOR rollback: deleteWorldBook failed`, delErr); }
-                }
-                notifySuccess(i18nFormat('Cancelled — restored previous world book: ${0}', previousBookName || '(none)'));
-            } catch (err) {
-                console.warn(`[${MODULE_NAME}] OPEN_EDITOR rollback failed`, err);
-                notifyError(i18nFormat('Rollback failed: ${0}', err?.message || err));
+/**
+ * Build the "Merge in editor" action registered with the core post-replace
+ * registry. The core owns the popup, availability and error envelope;
+ * everything beyond the decision (materialize the new card's embedded book,
+ * seed the diff, open the studio, roll back when the user closes without
+ * applying) stays here.
+ */
+function buildPostReplaceMergeAction() {
+    return {
+        id: 'character-editor-assistant-merge',
+        label: () => i18n('Merge in editor'),
+        description: () => i18n('Open the iteration studio with a prev vs next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.'),
+        isAvailable: () => true,
+        run: async (detail) => {
+            const context = getContext();
+            const nextCharacter = detail?.character && typeof detail.character === 'object' ? detail.character : null;
+            const avatar = String(nextCharacter?.avatar || '').trim();
+            if (!avatar) {
+                throw new Error('post-replace merge action: character avatar is unavailable');
             }
-        }
-        : null;
+            const characters = Array.isArray(context?.characters) ? context.characters : (Array.isArray(__ctx.characters) ? __ctx.characters : []);
+            let chid = Number.isInteger(detail?.characterId) ? detail.characterId : -1;
+            if (chid < 0 || String(characters[chid]?.avatar || '').trim() !== avatar) {
+                chid = characters.findIndex(c => String(c?.avatar || '').trim() === avatar);
+            }
+            if (chid < 0) {
+                throw new Error('post-replace merge action: replaced character not found in characters list');
+            }
 
-    const seedSystemMessage = await buildPostReplaceSeedMessage(context, detail);
-    // Build the structured replace context the studio surfaces via the
-    // topbar "View full replace diff" button. Reuses the same
-    // previousLorebookSnapshot + resolvePostReplaceNextLorebookData helpers
-    // as the seed builder so the visual diff and the LLM's seed prose
-    // describe the same "next" book (embedded-authoritative when the card
-    // ships one, disk fallback otherwise).
-    const replaceContext = detail?.previousCharacter
-        ? {
-            previousCharacter: detail.previousCharacter,
-            previousLorebookSnapshot: detail.previousLorebookSnapshot || null,
-            nextCharacter: detail?.character || null,
-            nextLorebookData: await resolvePostReplaceNextLorebookData(context, detail?.character || null),
-        }
-        : null;
-    await openCharacterEditorPopup(context, {
-        avatar,
-        seedSystemMessage,
-        // The seed message is a long prose brief written for the LLM to
-        // read on its first turn. The user gets the same information in a
-        // structured, interactive form via the topbar "View full replace
-        // diff" button, so we hide the prose from the chat pane. Keeping
-        // it in state.session.messages means buildTaskMessages still ships
-        // it to the model on the first turn.
-        hideSeedFromUi: true,
-        autoSend: true,
-        postReplaceRollback,
-        replaceContext,
-        // Give the studio the same renderLineDiffHtml instance the CEA
-        // editor uses for per-edit proposal cards, so the full-replace-
-        // diff popup renders side-by-side line diffs identical to those
-        // the user sees later when reviewing AI edits.
-        renderLineDiffHtml,
-    });
+            const previousLorebookSnapshot = detail?.previousLorebookSnapshot && typeof detail.previousLorebookSnapshot === 'object'
+                ? detail.previousLorebookSnapshot
+                : null;
+            const previousBookName = String(previousLorebookSnapshot?.bookName || detail?.previousCharacter?.data?.extensions?.world || '').trim();
+            const hasNewEmbeddedBook = Boolean(nextCharacter?.data?.character_book
+                && Array.isArray(nextCharacter.data.character_book.entries)
+                && nextCharacter.data.character_book.entries.length > 0);
+
+            // Materialize the new card's embedded book FIRST so the diff the
+            // AI sees compares the real prev book entries against the real new
+            // book entries. Skip the import only when (a) the new card carries
+            // no embedded book, (b) its bookName equals the previous bookName
+            // (importing would overwrite the book the user may still want to
+            // keep), or (c) the name already exists locally as a different
+            // book the user manages — overwriting a third-party book the user
+            // owns would be data loss.
+            const newEmbeddedBookName = String(nextCharacter?.data?.character_book?.name || '').trim();
+            const newBindingTarget = String(nextCharacter?.data?.extensions?.world || '').trim();
+            const effectiveNewBookName = newEmbeddedBookName || newBindingTarget;
+            const shouldMaterializeNewBook = hasNewEmbeddedBook
+                && effectiveNewBookName
+                && effectiveNewBookName !== previousBookName
+                && !worldBookExists(context, effectiveNewBookName);
+            let materializedBookName = '';
+            if (shouldMaterializeNewBook) {
+                try {
+                    const importEmbeddedBook = context?.importEmbeddedBookForCharacter;
+                    if (typeof importEmbeddedBook !== 'function') {
+                        throw new Error('importEmbeddedBookForCharacter is unavailable');
+                    }
+                    await importEmbeddedBook(chid);
+                    // Resolve the final book name the same way the import
+                    // path does (`character_book.name`, falling back to
+                    // `${characterName}'s Lorebook`) so rollback can find the
+                    // file to delete.
+                    const refreshed = characters[chid];
+                    const resolvedName = String(refreshed?.data?.character_book?.name || `${refreshed?.name}'s Lorebook`).trim();
+                    materializedBookName = resolvedName || effectiveNewBookName;
+                } catch (error) {
+                    console.warn(`[${MODULE_NAME}] merge action: failed to materialize new card's embedded book before diff`, error);
+                    // Fall through — the AI session still opens; the diff is degraded.
+                }
+            }
+
+            // Close-without-applying rollback: re-bind the previous book and
+            // delete the book file we materialized. Applied even a single
+            // edit -> the user chose to iterate on the new book; rollback is
+            // skipped by the studio's hasEverApplied gate.
+            const postReplaceRollback = (shouldMaterializeNewBook && (previousBookName || materializedBookName))
+                ? async () => {
+                    try {
+                        if (previousBookName) {
+                            const rebind = getContext()?.rebindPreviousPrimaryBook;
+                            if (typeof rebind === 'function') {
+                                await rebind(chid, previousBookName);
+                            } else if (typeof __ctx.charUpdatePrimaryWorld === 'function') {
+                                await __ctx.charUpdatePrimaryWorld(previousBookName);
+                            }
+                        }
+                        if (materializedBookName && typeof __ctx?.deleteWorldBook === 'function') {
+                            try { await __ctx.deleteWorldBook(materializedBookName); }
+                            catch (delErr) { console.warn(`[${MODULE_NAME}] merge rollback: deleteWorldBook failed`, delErr); }
+                        }
+                        notifySuccess(i18nFormat('Cancelled — restored previous world book: ${0}', previousBookName || '(none)'));
+                    } catch (err) {
+                        console.warn(`[${MODULE_NAME}] merge rollback failed`, err);
+                        notifyError(i18nFormat('Rollback failed: ${0}', err?.message || err));
+                    }
+                }
+                : null;
+
+            const seedSystemMessage = await buildPostReplaceSeedMessage(context, detail);
+            // Structured replace context for the studio's "View full replace
+            // diff" button; same helpers as the seed builder so both describe
+            // the same "next" book.
+            const replaceContext = detail?.previousCharacter
+                ? {
+                    previousCharacter: detail.previousCharacter,
+                    previousLorebookSnapshot: detail.previousLorebookSnapshot || null,
+                    nextCharacter: detail?.character || null,
+                    nextLorebookData: await resolvePostReplaceNextLorebookData(context, detail?.character || null),
+                }
+                : null;
+            await openCharacterEditorPopup(context, {
+                avatar,
+                seedSystemMessage,
+                // The seed message is a long prose brief for the LLM; the
+                // user gets the structured form via "View full replace diff".
+                hideSeedFromUi: true,
+                autoSend: true,
+                postReplaceRollback,
+                replaceContext,
+                renderLineDiffHtml,
+            });
+        },
+    };
 }
 
-function suppressLegacyEmbeddedWorldPopup(avatar) {
-    const trimmed = String(avatar || '').trim();
-    if (!trimmed) return;
-    // ST's `checkEmbeddedWorld` gates its popup on `accountStorage.getItem('AlertWI_' + avatar)`.
-    // Stamp the key so any future call short-circuits before opening the
-    // legacy dialog (matches what the legacy popup itself does on first
-    // show — we're just doing it earlier and from the replace path).
-    try {
-        const storage = __ctx?.accountStorage;
-        if (storage && typeof storage.setItem === 'function') {
-            storage.setItem(`AlertWI_${trimmed}`, 'true');
-        }
-    } catch { /* best-effort */ }
-    // The legacy popup may have already opened (`select_selected_character`
-    // runs synchronously inside the replace-flow's selectImportedChar
-    // earlier than CHARACTER_REPLACED fires). Walk the open popup list
-    // and cancel any dialog whose body matches the legacy embedded-world
-    // copy. Matches both default English and the Chinese fallbacks ST
-    // ships with so localized installs still get the dismiss.
-    try {
-        const dialogs = document.querySelectorAll('dialog.popup[open]');
-        dialogs.forEach(dlg => {
-            const body = dlg.querySelector('.popup-body, .popup-content');
-            const text = String(body?.textContent || '');
-            if (!text) return;
-            if (/embedded World\/Lorebook|内置的世界书\/Lorebook|內嵌的世界書\/Lorebook/i.test(text)) {
-                const cancelBtn = dlg.querySelector('.popup-button-cancel');
-                const closeBtn = dlg.querySelector('.popup-button-close');
-                if (cancelBtn instanceof HTMLElement) cancelBtn.click();
-                else if (closeBtn instanceof HTMLElement) closeBtn.click();
-            }
-        });
-    } catch { /* best-effort */ }
+function registerPostReplaceMergeAction(context) {
+    if (typeof context?.registerPostReplaceAction !== 'function') {
+        return;
+    }
+    context.registerPostReplaceAction(buildPostReplaceMergeAction());
 }
 
 function worldBookExists(context, name) {
@@ -5252,68 +5043,6 @@ function worldBookExists(context, name) {
         } catch { /* fall through */ }
     }
     return false;
-}
-
-async function rebindPreviousPrimaryBook(context, avatar, previousBookName) {
-    if (typeof __ctx.charUpdatePrimaryWorld !== 'function') {
-        throw new Error('rebindPreviousPrimaryBook: charUpdatePrimaryWorld is unavailable');
-    }
-    // charUpdatePrimaryWorld reads `this_chid` from the script.js module
-    // scope, not from a parameter. The replaced character was just
-    // selected by the import flow (`selectImportedChar` →
-    // `select_selected_character`), so this_chid points at it by the
-    // time CHARACTER_REPLACED fires. Still — double-check the visible
-    // edit panel reflects the right card before writing, otherwise we
-    // could persist the binding onto the wrong character.
-    const characters = Array.isArray(context?.characters) ? context.characters : (Array.isArray(__ctx.characters) ? __ctx.characters : []);
-    const chid = characters.findIndex(c => String(c?.avatar || '').trim() === avatar);
-    if (chid < 0) {
-        throw new Error('rebindPreviousPrimaryBook: replaced character not found in characters list');
-    }
-    const editPanelChid = jQuery('#set_character_world').data('chid');
-    if (editPanelChid !== chid && typeof __ctx.selectCharacterById === 'function') {
-        try { await __ctx.selectCharacterById(chid); } catch { /* best-effort — fall through */ }
-    }
-    await __ctx.charUpdatePrimaryWorld(previousBookName);
-    // Mirror the UI gesture so the visible #character_world select picks
-    // up the value (the writeExtensionField path persists the binding,
-    // but it does not touch the visible dropdown).
-    jQuery('#character_world').val(previousBookName).trigger('change');
-    if (typeof __ctx.worldInfoEntry?.setButtonClass === 'function') {
-        __ctx.worldInfoEntry.setButtonClass(chid, true);
-    }
-}
-
-async function importEmbeddedBookForAvatar(context, avatar) {
-    const characters = Array.isArray(context?.characters) ? context.characters : (Array.isArray(__ctx.characters) ? __ctx.characters : []);
-    const chid = characters.findIndex(c => String(c?.avatar || '').trim() === avatar);
-    if (chid < 0) {
-        throw new Error('importEmbeddedBookForAvatar: replaced character not found in characters list');
-    }
-    // Make sure the chid the import dialog reads from points at the
-    // replaced character. After a replace, `select_selected_character`
-    // already called `checkEmbeddedWorld(chid)` which set this — but
-    // the per-avatar "AlertWI_*" gate may have suppressed the legacy
-    // popup, leaving the visible `#import_character_info` hidden. We
-    // re-arm it here so `importEmbeddedWorldInfo` can find the chid.
-    jQuery('#import_character_info').data('chid', chid).show();
-    if (typeof __ctx.importEmbeddedWorldInfo !== 'function') {
-        throw new Error('importEmbeddedBookForAvatar: importEmbeddedWorldInfo is unavailable');
-    }
-    await __ctx.importEmbeddedWorldInfo(true);
-    // `importEmbeddedWorldInfo` saves the world book file and updates
-    // the visible select, but it does NOT persist
-    // `data.extensions.world` to the character file (the More-menu
-    // caller does that via `saveCharacterDebounced` after the await).
-    // Mirror that here so the binding survives a reload.
-    const bookName = String(characters[chid]?.data?.character_book?.name || `${characters[chid]?.name}'s Lorebook`).trim();
-    if (bookName && typeof __ctx.charUpdatePrimaryWorld === 'function') {
-        const editPanelChid = jQuery('#set_character_world').data('chid');
-        if (editPanelChid !== chid && typeof __ctx.selectCharacterById === 'function') {
-            try { await __ctx.selectCharacterById(chid); } catch { /* best-effort */ }
-        }
-        await __ctx.charUpdatePrimaryWorld(bookName);
-    }
 }
 
 // Lorebook read/write tools used to be exposed here for orchestrator

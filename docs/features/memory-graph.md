@@ -189,9 +189,47 @@ Open the Memory panel after 3–5 turns:
 
 If you don't see anything, raise a few characters or events in chat — extraction needs concrete things to grab onto.
 
+## Revise the graph with AI
+
+Extraction and compression build the graph automatically, but they can misread a scene, duplicate an entry, or keep a fact that changed later. Instead of editing nodes one by one, describe the problem and let the AI graph editor fix it.
+
+Open the graph studio from either place:
+
+- In the graph viewer toolbar — the robot button
+- In the Memory panel → **Advanced** → **AI Edit Graph**
+
+![AI Edit Graph and Iteration AI presets](/images/memory-graph/memory-ai-revise-entry.png)
+
+![Robot button in the graph viewer toolbar](/images/memory-graph/memory-ai-revise-graph-view.png)
+
+Both open the same popup, scoped to the current chat. Before the first run, pick the **Iteration AI** connection profile and prompt preset in the same Advanced section (the pair is shared with the schema studio). To replace the built-in instructions, edit **Graph Revision Prompt**; leave it empty to use the default.
+
+Describe what's wrong in plain language. The studio reads the graph on demand — and the chat or your world books when that helps — then turns its plan into reviewable cards:
+
+![Pending graph change with a per-record diff](/images/memory-graph/memory-ai-revise-proposal.png)
+
+It can:
+
+- edit a node's fields or title, and delete junk nodes
+- merge duplicate nodes — the survivor keeps the merged content, the others are archived and their links repoint to the survivor
+- create nodes (built-in or custom types), and add, edit, or remove links
+- read the chat and world books to double-check facts before touching them
+
+Each round stages its changes as one card, with every record shown separately. **Approve** applies a change, **Reject** discards it, **Rollback** undoes an applied change. Sessions belong to the chat: close the popup and come back later — after a reload, pending cards are still waiting for review. **Auto-apply edits** writes without asking; leave it off until you trust the results.
+
+![Applied graph change](/images/memory-graph/memory-ai-revise-applied.png)
+
+::: tip Treat it as a conversation
+Ask follow-up questions or point at a specific node — the studio reads on demand, so it can explain or revise its plan across rounds. Approve what's right and reject the rest.
+:::
+
 ## I want…
 
 Common questions, in order from "common" to "niche":
+
+### I want to fix wrong or duplicate memories
+
+Describe the problem to the AI graph editor instead of editing nodes one by one — see [Revise the graph with AI](#revise-the-graph-with-ai).
 
 ### I want my fantasy card to remember magic systems / factions
 

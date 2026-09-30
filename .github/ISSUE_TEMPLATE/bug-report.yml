@@ -8,13 +8,14 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Where are you running SillyTavern?
+      description: Where are you running Luker?
       options:
         - 🪟 Windows
         - 🐧 Linux
         - 📱 Termux
         - 🐋 Docker
         - 🍎 Mac
+        - 🤖 Android app
     validations:
       required: true
 
@@ -33,7 +34,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: What version of SillyTavern are you running?
+      description: What version of Luker are you running?
       placeholder: (check User Settings to see the version)
     validations:
       required: true
@@ -46,7 +47,7 @@ body:
       placeholder: |
         - Node.js version (if applicable): [run `node --version` in cmd]
         - Generation API [e.g. KoboldAI, OpenAI]
-        - Branch [staging, release]
+        - Branch [release, or the branch you built from source]
         - Model [e.g. Pygmalion 6b, LLaMa 13b]
     validations:
       required: false
@@ -77,17 +78,17 @@ body:
       options:
         - label: I have explained the issue clearly, and I included all relevant info
           required: true
-        - label: I have checked that this [issue hasn't already been raised](https://github.com/SillyTavern/SillyTavern/issues?q=is%3Aissue)
+        - label: I have checked that this [issue hasn't already been raised](https://github.com/funnycups/Luker/issues?q=is%3Aissue)
           required: true
-        - label: I have checked the [docs](https://docs.sillytavern.app/) ![important](https://img.shields.io/badge/Important!-F6094E)
+        - label: I have checked the [docs](https://luker.cups.moe/) ![important](https://img.shields.io/badge/Important!-F6094E)
           required: true
-        - label: I confirm that my issue is not related to third-party content, unofficial extension or patch. If in doubt, check with a new [user account](https://docs.sillytavern.app/administration/multi-user/) and with extensions disabled
+        - label: I confirm that my issue is not related to third-party content, unofficial extension or patch. If in doubt, check with a new user account and with extensions disabled
           required: true
 
   - type: markdown
     attributes:
       value: |-
         ## Thanks 🙏
-        Thank you for raising this ticket - in doing so you are helping to make SillyTavern better for everyone.
+        Thank you for raising this ticket - in doing so you are helping to make Luker better for everyone.
     validations:
       required: false

@@ -501,7 +501,10 @@ export async function deleteMessageViaUI(page, mesid) {
  */
 export async function openOptionsAndClick(page, optionId) {
     await page.locator('#options_button').click();
-    const item = page.locator(`#${optionId}`);
+    // Some upstream option ids exist twice in index.html (e.g.
+    // option_close_chat has a permanently displayNone twin); pick the
+    // visible one so strict mode doesn't reject the locator.
+    const item = page.locator(`#${optionId}:visible`).first();
     await item.waitFor({ state: 'visible', timeout: 5000 });
     await item.click();
     // Close the dropdown if it's still showing.

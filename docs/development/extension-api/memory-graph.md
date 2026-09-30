@@ -1,7 +1,5 @@
 # Memory Graph Extension API
 
-> Status: experimental (subject to breaking changes for 2-3 minor versions per spec §9)
->
 > Entry points:
 > - **Recommended:** `getExtensionApi('memory-graph').openSession(context)` from `public/scripts/extensions.js` (session facade)
 > - Lower-level: `getMemoryGraphReadApi(store, context)` from `public/scripts/extensions/memory-graph/read-api.js` (read factory)
@@ -41,11 +39,11 @@ The `'memory-graph'` extension api is published via Luker's `registerExtensionAp
 
 ### Lifetime
 
-Each `openSession` call resolves the current chat's store snapshot. If the user switches chats, or you want a fresh read of in-flight edits made by another path, call `openSession` again — sessions are cheap to open.
+Each `openSession` call resolves the current chat's store snapshot. If the user switches chats, or you want a fresh read of in-flight edits made by another path, call `openSession` again — opening a session is inexpensive.
 
 ### Empty store
 
-A chat that has never had extraction run still gets a writable session. Read methods return empty arrays; write methods populate the store and persist through the same floor-state path the native extraction pipeline uses. This means the first write on a fresh chat works without any precondition setup.
+A chat that has never had extraction run still gets a writable session. Read methods return empty arrays; write methods populate the store and persist through the same floor-state path the native extraction pipeline uses. The first write on a fresh chat therefore requires no precondition setup.
 
 ### When `openSession` returns `null`
 
@@ -117,7 +115,7 @@ These accessors only touch the character card (`character.data.extensions.memory
 
 Alongside `openSession` and the override accessors, the `'memory-graph'` extension api publishes a set of lookup methods for read-only, frozen access to nodes / edges of the active chat's store. The intended consumers are external frontends (e.g. inline message UIs, sidebar viewers) and any extension that wants targeted node/edge access without opening a full session.
 
-All returns follow the same `NodeView` / `EdgeView` freeze contract as `openSession`'s read surface — caller never sees a mutable store reference.
+All returns follow the same `NodeView` / `EdgeView` freeze contract as `openSession`'s read surface — caller never receives a mutable store reference.
 
 ```js
 const mg = ctx.getExtensionApi('memory-graph');
@@ -193,16 +191,16 @@ mg.offStoreCommit(callback);
 | `offStoreCommit(cb)` | — | Symmetric remove for `onStoreCommit`. Returns `boolean`. |
 | `onInjectionChanged(cb)` | [`InjectionState`](#injectionstate) | Fires when the main-flow recall pipeline settles on a new injection decision. Returns an idempotent unsubscribe. |
 
-Listener errors are caught and logged; one bad subscriber cannot block the others.
+Listener errors are caught and logged; a failing subscriber cannot block the others.
 
 
 ## Overview
 
 The memory-graph extension drives Luker's long-term recall by feeding a curated pool of nodes (`character_sheet`, `event`, `relationship`, ...) plus a per-node `edge_summary` to a "route" LLM that picks which memories to inject into the next turn. The native pipeline (`chooseRecallRoute` / `collectRootCandidates` in `main.js`) constructs that LLM input from internal helpers — `buildProjectedEdges`, `getNearestVisibleAncestorId`, `formatNodeBrief`, etc.
 
-`getMemoryGraphReadApi(store, context)` exposes the same data, topology, and recall primitives as a frozen, caller-safe API surface. The intended consumer is an agent-style plugin that wants to run its own LLM-driven recall — for example the orchestrator's `memory_scout` sub-agent — with whatever model / preset its operator prefers, against the exact same candidate pool and field projection the native router sees.
+`getMemoryGraphReadApi(store, context)` exposes the same data, topology, and recall primitives as a frozen, caller-safe API surface. The intended consumer is an agent-style plugin that wants to run its own LLM-driven recall — for example the orchestrator's `memory_scout` sub-agent — with a model / preset of the operator's choosing, against the exact same candidate pool and field projection the native router sees.
 
-`getMemoryGraphWriteApi(store, context)` is the companion mutation surface: an extractor-style agent (or a curator agent that edits the graph between turns) goes through it instead of touching store internals. The Write API is documented in [Write API](#write-api) below.
+`getMemoryGraphWriteApi(store, context)` is the companion mutation surface: an extractor-style agent (or a curator agent that edits the graph between turns) uses it instead of accessing store internals directly. The Write API is documented in [Write API](#write-api) below.
 
 The read surface is strictly read-only:
 
@@ -240,7 +238,7 @@ const unsubscribe = api.onInjectionChanged(state => {
 
 ## Type Reference
 
-All interfaces are returned as deep-frozen plain objects (and frozen `Set` wrappers where annotated `ReadonlySet`). Field semantics mirror spec §4.1.
+All interfaces are returned as deep-frozen plain objects (and frozen `Set` wrappers where annotated `ReadonlySet`).
 
 ### NodeView
 
@@ -406,7 +404,7 @@ console.log(events.length, 'events on or after seq 100');
 - Does **not** filter on `archived` — archived nodes are returned with `archived: true`, allowing callers that need to inspect them to do so explicitly.
 - Whitespace-only / empty ids return `null`.
 
-**When to use:** dereferencing an id you obtained from another API call (a child id, a neighbour id, an injection state id).
+**When to use:** dereferencing an id obtained from another API call (a child id, a neighbour id, an injection state id).
 
 **Minimal example:**
 
@@ -517,7 +515,7 @@ const rollup = api.getAncestor('event_99', {
 - Returns descendants in BFS order (level 1 first, then level 2, ...).
 - Excludes the root node itself.
 
-**When to use:** enumerating the contents of a rollup, or grabbing every event chained under a `character_sheet`.
+**When to use:** enumerating the contents of a rollup, or enumerating every event chained under a `character_sheet`.
 
 **Minimal example:**
 
@@ -627,7 +625,7 @@ if (exposure === 'high_only') {
 - Default `limit: 8` matches the native router.
 - Always returns a frozen `EdgeSummaryView`; missing / unknown nodes get a zero-degree summary, never `null`.
 
-**When to use:** attaching a compact edge view to a custom candidate row, or inspecting a node's neighbourhood without paying for full topology traversal.
+**When to use:** attaching a compact edge view to a custom candidate row, or inspecting a node's neighbourhood without a full topology traversal.
 
 **Minimal example:**
 
@@ -883,7 +881,7 @@ const persistingApi = getMemoryGraphWriteApi(store, context, {
 });
 ```
 
-Returns a frozen object exposing the methods documented below. The factory binds to the supplied `store` reference — pass the live store you obtained from the floor-state loader. Methods throw `{ code: 'MEMORY_STORE_MISSING' }` when invoked against a `null` store. Third-party extensions should normally use `openSession` instead of constructing this factory directly — it wires `onCommit` for you. Callers that omit `onCommit` get the legacy in-memory semantics (mutations stay in `store` but are never persisted).
+Returns a frozen object exposing the methods documented below. The factory binds to the supplied `store` reference — pass the live store obtained from the floor-state loader. Methods throw `{ code: 'MEMORY_STORE_MISSING' }` when invoked against a `null` store. Third-party extensions should normally use `openSession` instead of constructing this factory directly — it wires `onCommit`. Callers that omit `onCommit` get the legacy in-memory semantics (mutations stay in `store` but are never persisted).
 
 ### Recommended entry: applyExtractionBatch(options)
 
@@ -947,7 +945,7 @@ const { id } = await writeApi.createNode({
 - `setFields` patches columns; `clearFields` resets the listed columns; passing `title` updates the node title.
 - `ok: true` when the node was found and the patch was applied; `ok: false` when the node was missing, archived, or otherwise skipped (silent skip — no throw).
 
-**When to use:** mutating an existing node in place. Always check `ok` to confirm the patch landed.
+**When to use:** mutating an existing node in place. Always check `ok` to confirm the patch was applied.
 
 **Minimal example:**
 
@@ -1058,16 +1056,15 @@ if (groups.length > 0) {
 - `external-api.js` legacy exports (`getCurrentlyInjectedNodeIds`, `__recordInjectedNodeIds`, `applyMemoryGraphInjectionUpdate`, `createEmptyInjectionState`) remain in place — existing plugins do not need to change.
 - `getMemoryGraphInjectionState(context)` is re-exported from `read-api.js` for symmetry: it returns the same shape (`alwaysInjectIds`, `recallSelectedIds`, `visibleIds`) as `getInjectionState()`.
 - The factories `getMemoryGraphReadApi(store, context)` and `getMemoryGraphWriteApi(store, context, options?)` do not pollute the legacy namespace; importing them has no side effects beyond loading the respective module.
-- Both APIs are marked `@experimental` for 2-3 minor versions per spec §9. Breaking changes during that window are permitted; field semantics will be preserved, but field names and signatures may shift in response to real-world plugin usage before the API is frozen.
 
 ## Performance
 
 - `listNodes` / `listEdges` iterate the full store — use for offline / one-shot analysis only. Cost grows linearly with the node / edge count.
-- `listVisibleCandidates` is the hot-path equivalent — equivalent cost to one native `collectRootCandidates` call. Pre-applies the recall-side filters so callers do not pay for them again.
-- `getEdgeSummary` / `projectEdges` are not cached — each call recomputes from raw edges. This is acceptable for typical recall workloads (1-2 calls per turn) per spec §7. If you find yourself calling `getEdgeSummary` per candidate in a hot loop, consider caching the result yourself keyed on the visible-id set.
-- `keywordSearch` is pure token-overlap over the candidate pool — synchronous, always available, no recency fallback. `vectorSearch` depends on the vector index being built and an embedding profile being configured; it throws `NO_EMBEDDING_PROFILE` rather than falling back silently, so callers pick their own fallback (typically `keywordSearch`).
+- `listVisibleCandidates` is the hot-path equivalent — equivalent cost to one native `collectRootCandidates` call. Pre-applies the recall-side filters so callers do not repeat that work.
+- `getEdgeSummary` / `projectEdges` are not cached — each call recomputes from raw edges. This is acceptable for typical recall workloads (1-2 calls per turn). If `getEdgeSummary` is called per candidate in a hot loop, consider caching the result keyed on the visible-id set.
+- `keywordSearch` is pure token-overlap over the candidate pool — synchronous, always available, no recency fallback. `vectorSearch` depends on the vector index being built and an embedding profile being configured; it throws `NO_EMBEDDING_PROFILE` rather than falling back silently, so callers select their own fallback (typically `keywordSearch`).
 - Write-API ops persist the store and rebuild downstream indices (vector / edge summaries) at the batch boundary. Prefer `applyExtractionBatch` over a sequence of per-primitive calls when several ops belong to the same logical action — the rollback / persist boundary then applies to the whole batch.
-- All returned views are frozen lazily during construction. Re-freezing already-frozen objects is a no-op, so repeated reads of the same node are cheap on the consumer side.
+- All returned views are frozen lazily during construction. Re-freezing already-frozen objects is a no-op, so repeated reads of the same node are inexpensive on the consumer side.
 
 ## See Also
 

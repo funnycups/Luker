@@ -17,11 +17,12 @@
 //   3. Engine-kind mismatch — a hand-crafted ZIP whose engine_meta declares
 //      a foreign kind must 400.
 //
-// The route accepts a multer-uploaded file under the field name `avatar` (per
-// `multer().single('avatar')` in src/server-main.js — see
-// public/scripts/user.js:776 for the real client). The test mounts a thin
-// shim that delegates multipart parsing to real multer pointed at a temp
-// uploads dir, so the request-handling path is exercised end-to-end.
+// The route no longer takes multipart uploads itself: the client first pushes
+// the ZIP through the chunked `/restore-backup/uploads` session endpoints and
+// then posts the returned `uploadId` as JSON. `/import/data-zip` still takes a
+// multer-uploaded file under the field name `avatar` (per
+// `multer().single('avatar')` in src/server-main.js), so the test mounts a thin
+// shim for that route only.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,7 +33,7 @@ import request from 'supertest';
 import yauzl from 'yauzl';
 import archiver from 'archiver';
 
-import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
+import { ENDPOINT_HARNESSES, makeEndpointHarness, uploadArchiveToSession } from '../harness/endpoint-harness.js';
 import { router as usersPrivateRouter } from '../../../src/endpoints/users-private.js';
 import {
     getChatRepo,
@@ -95,19 +96,17 @@ async function probeAllRepos(handle) {
 }
 
 function mountMulterShim(app, uploadsDir) {
-    // Real multer is the production middleware (server-main.js mounts it
-    // globally with `single('avatar')` against an uploads dir under the data
-    // root). Re-creating it here keeps the request path identical to prod.
-    // /import/data-zip uses the same multer instance in prod (also keyed on
-    // 'avatar'); mount it on both routes so the kind-mismatch / legacy-fs
-    // 400 paths can be exercised end-to-end.
+    // Real multer is the production middleware for /import/data-zip
+    // (server-main.js mounts it globally with `single('avatar')` against an
+    // uploads dir under the data root). Re-creating it here keeps that
+    // request path identical to prod for the kind-mismatch / legacy-fs 400
+    // paths exercised end-to-end below.
     fs.mkdirSync(uploadsDir, { recursive: true });
     const upload = multer({
         storage: multer.diskStorage({
             destination: (_req, _file, cb) => cb(null, uploadsDir),
         }),
     }).single('avatar');
-    app.use('/api/users/restore-backup', upload);
     app.use('/api/users/import/data-zip', upload);
 }
 
@@ -185,6 +184,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
                 app.use('/api/users', usersPrivateRouter);
             },
         });
+        globalThis.DATA_ROOT = harness.dataRoot;
     });
 
     afterEach(async () => {
@@ -260,12 +260,10 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         // is gone.
         expect(wipedSettings?.user_name).not.toBe('roundtrip');
 
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const restoreRes = await request(harness.app)
             .post('/api/users/restore-backup')
-            .field('handle', harness.handle)
-            .field('mode', 'merge')
-            .field('selection', JSON.stringify(ALL_SELECTION))
-            .attach('avatar', zipBytes, 'backup.zip');
+            .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         expect(restoreRes.status).toBe(200);
 
         const afterProbe = await probeAllRepos(harness.handle);
@@ -310,12 +308,10 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         });
         const zipBytes = fs.readFileSync(zipPath);
 
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const restoreRes = await request(harness.app)
             .post('/api/users/restore-backup')
-            .field('handle', harness.handle)
-            .field('mode', 'merge')
-            .field('selection', JSON.stringify(ALL_SELECTION))
-            .attach('avatar', zipBytes, 'backup.zip');
+            .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         expect(restoreRes.status).toBe(400);
         // The body must signal cross-mode-scratch-required so the UI knows
         // to prompt for a scratch DB URL and re-submit.
@@ -347,12 +343,10 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         });
         const zipBytes = fs.readFileSync(zipPath);
 
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const restoreRes = await request(harness.app)
             .post('/api/users/restore-backup')
-            .field('handle', harness.handle)
-            .field('mode', 'merge')
-            .field('selection', JSON.stringify(ALL_SELECTION))
-            .attach('avatar', zipBytes, 'backup.zip');
+            .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         // Cross-mode delegation succeeds — the orchestrator built a transient
         // FsEngine, ingested the chats/Alice/c1.jsonl tree, and copied it
         // into the live db engine. The response carries the crossMode envelope

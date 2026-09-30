@@ -62,7 +62,7 @@ getCharacterCardFields(options?: { chid?: number }): {
 }
 ```
 
-回傳經過巨集替換和 persona 注入後解析完成的角色欄位。`chid` 省略時預設取當前角色。當你需要為 prompt 組裝準備好的欄位時，應該用這個函式取代直接讀 `character.data.*`。
+回傳經過巨集替換和 persona 注入後解析完成的角色欄位。`chid` 省略時預設取當前角色。需要為 prompt 組裝準備欄位時，應使用此函式取代直接讀 `character.data.*`。
 
 ### getCharacterSource
 
@@ -81,7 +81,7 @@ getCharaFilename(
 ): string | null
 ```
 
-回傳角色的頭像檔案名稱**不含副檔名**。`chid` 省略時退回到當前角色。當你只持有 avatar key 字串時（例如來自角色狀態條目）可傳 `manualAvatarKey`。無法解析出 avatar 時回傳 `null`。
+回傳角色的頭像檔案名稱**不含副檔名**。`chid` 省略時退回到當前角色。當僅持有 avatar key 字串時（例如來自角色狀態條目），可傳 `manualAvatarKey`。無法解析出 avatar 時回傳 `null`。
 
 ```js
 const ctx = Luker.getContext();
@@ -116,7 +116,7 @@ selectCharacterById(id: number, options?: { switchMenu?: boolean }): Promise<voi
 unshallowCharacter(characterId: number | string): Promise<void>
 ```
 
-為以淺層形式回傳的角色（只有 avatar + 基本中繼資料）載入完整紀錄。已完整載入時為 no-op。如果你從列表端點取得角色，在讀取 `description`、`mes_example` 這類大欄位前一定要先呼叫這個。
+為以淺層形式回傳的角色（只有 avatar + 基本中繼資料）載入完整紀錄。已完整載入時為 no-op。如果角色來自列表端點，在讀取 `description`、`mes_example` 這類大欄位前一定要先呼叫這個。
 
 ### unshallowGroupMembers
 
@@ -140,7 +140,7 @@ writeExtensionField(
 
 寫入角色卡的 `data.extensions[key]` 並持久化。
 
-**替換語義。** 完整的 `value` 會成為磁碟上新的 `data.extensions[key]`。先前磁碟值中存在的兄弟子鍵**不會**被保留——希望做局部更新的呼叫方必須自行讀取舊值、展開並疊加變更。`data.extensions.*` 下的其他擴充 key（其他外掛的資料）則永遠不會被觸碰。
+**替換語義。** 完整的 `value` 會成為磁碟上新的 `data.extensions[key]`。先前磁碟值中存在的兄弟子鍵**不會**被保留——需要做局部更新的呼叫方必須自行讀取舊值、展開並疊加變更。`data.extensions.*` 下的其他擴充 key（其他外掛的資料）則永遠不會被觸碰。
 
 傳 `value: context.constants.unset`（即 `UNSET_VALUE` 哨兵值）可徹底刪除該 key。傳裸 `null` 寫入的是字面量 `null`（key 仍然保留）。
 
@@ -222,11 +222,11 @@ await ctx.updateCharacterData(ctx.characterId, { 'extensions.world': 'my_book' }
 persistCharacterData(charId: number | string): Promise<void>
 ```
 
-把某張卡當前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 後 POST 落盤。表單**不參與** — 只看 `characters[charId]`。伺服器會把 payload 與磁碟上現有的 JSON 深合併，這對表單層欄位是正確行為（保留了表單從未觸及的未知擴充資料）。
+把某張卡當前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 後以 POST 請求落盤。表單**不參與** — 只看 `characters[charId]`。伺服器會把 payload 與磁碟上現有的 JSON 深合併，這對表單層欄位是正確行為（保留了表單從未觸及的未知擴充資料）。
 
 HTTP 失敗時擲出例外。擴充資料**不會**走這條路徑——它有自己的 `/api/characters/merge-attributes` 路徑，採用替換語義（[`writeExtensionField`](#writeextensionfield)）。
 
-絕大多數呼叫方應該用 `updateCharacterData`（它會替你排程這個）。只有當你已經親自 mutate 過 in-memory 物件、想 flush 時才直接呼叫。
+絕大多數呼叫方應使用 `updateCharacterData`（它會代為排程此呼叫）。僅在已自行修改 in-memory 物件、需要 flush 時才直接呼叫。
 
 ### persistCharacterDataDebounced
 
@@ -276,7 +276,7 @@ importTags(
 ): Promise<boolean>
 ```
 
-把角色宣告的標籤（`character.tags[]`）匯入到主標籤列表並指派。為了防範惡作劇卡，每張角色最多匯入 50 個標籤。當至少有一個標籤被新增時回傳 `true`。
+把角色宣告的標籤（`character.tags[]`）匯入到主標籤列表並指派。為了防範惡意卡片，每張角色最多匯入 50 個標籤。當至少有一個標籤被新增時回傳 `true`。
 
 ## 匯入 / 匯出
 
@@ -329,9 +329,9 @@ await ctx.setCharacterState(character.avatar, 'my-plugin', {
 const state = await ctx.getCharacterState(character.avatar, 'my-plugin');
 ```
 
-::: tip Sidecar vs 擴充欄位
-- 擴充欄位（`writeExtensionField` → `data.extensions.<key>`）是角色卡的一部分。隨卡匯出，任何人拿到卡都能看到。
-- Sidecar（`get/setCharacterState`）是與卡放在一起的另一個檔案。**不會**隨卡匯出。
+::: tip 角色狀態 vs 擴充欄位
+- 擴充欄位（`writeExtensionField` → `data.extensions.<key>`）是角色卡的一部分。隨卡匯出，任何擁有該角色卡的人都能看到。
+- 角色狀態（`get/setCharacterState`）是與卡放在一起的另一個檔案。**不會**隨卡匯出。
 :::
 
 ## Proxy 語義 {#proxy-semantics}

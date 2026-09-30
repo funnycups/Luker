@@ -14,6 +14,8 @@
 // with one chunk per word and a final [DONE] frame. Tools: if request
 // has tools, the mock can be scripted to reply with a tool_calls choice
 // via `nextTool({name, arguments})` before the next chat call.
+// Test hooks: setStreamStall({afterChunks, stallMs}) halts a streaming
+// reply mid-flight; latencyMs is abort-aware.
 //
 // ─────────────────────────────────────────────────────────────────────────
 // Director-aware routing (for orchestrator director-mode runtime tests)
@@ -132,6 +134,25 @@ const MAIN_ONLY_TOOL_NAMES = new Set([
     'finalize',
 ]);
 
+// Pacing applied to the frames leading up to a configured stream stall.
+// The client-side streaming renderer is rate-limited by a Stopwatch at
+// `1000 / power_user.streaming_fps` (default 30 fps ≈ 33 ms) and silently
+// drops updates that land inside one tick window. Two back-to-back frames
+// therefore leave the DOM at its placeholder for the whole stall, so the
+// pre-stall prefix must be spaced out for the partial text to be painted.
+const STALL_PACING_MS = 150;
+
+// Resolves when the response is closed by the peer (client abort) or the
+// window elapses, whichever first. Keeps a stalled mock request from
+// holding timers / sockets open after the client went away.
+function waitForCloseOrTimeout(res, ms) {
+    return new Promise((resolve) => {
+        if (res.destroyed || res.writableEnded) { resolve(); return; }
+        const timer = setTimeout(resolve, ms);
+        res.once('close', () => { clearTimeout(timer); resolve(); });
+    });
+}
+
 /**
  * @param {object} opts
  * @param {string[]} [opts.scriptedReplies]
@@ -150,10 +171,16 @@ const MAIN_ONLY_TOOL_NAMES = new Set([
  *   stop:()=>Promise<void>,
  * }>}
  */
-export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [], latencyMs = 0, streamChunkDelayMs = 0 } = {}) {
+export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [], latencyMs = 0, streamChunkDelayMs = 0, streamStallAfterChunks = -1, streamStallMs = 0 } = {}) {
     const replies = [...scriptedReplies];
     const tools = [...scriptedToolCalls];
     const requests = [];
+    let stallAfterChunks = Number.isInteger(streamStallAfterChunks) ? streamStallAfterChunks : -1;
+    let stallMsGlobal = Math.max(0, Number(streamStallMs) || 0);
+    function setStreamStall({ afterChunks = -1, stallMs = 0 } = {}) {
+        stallAfterChunks = Number.isInteger(afterChunks) ? afterChunks : -1;
+        stallMsGlobal = Math.max(0, Number(stallMs) || 0);
+    }
     // Per-stream drip delay between SSE frames (default 0 = burst).
     // 11.2 (reconnect) uses this to keep a stream open long enough that
     // the test can go offline mid-flight; server-side buffering + WS
@@ -306,7 +333,10 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
             return origEnd(chunk, ...rest);
         };
 
-        if (latencyMs > 0) await new Promise(r => setTimeout(r, latencyMs));
+        if (latencyMs > 0) {
+            await waitForCloseOrTimeout(res, latencyMs);
+            if (res.destroyed || res.writableEnded) return;
+        }
 
         // Models list endpoint — Luker probes this for the model dropdown.
         if (req.url.endsWith('/models') || req.url.endsWith('/v1/models')) {
@@ -453,8 +483,15 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                 } else {
                     const words = reply.split(/\s+/);
                     for (let i = 0; i < words.length; i++) {
+                        if (stallAfterChunks >= 0 && i <= stallAfterChunks) {
+                            await new Promise(r => setTimeout(r, STALL_PACING_MS));
+                        }
                         const piece = (i === 0 ? '' : ' ') + words[i];
                         res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] })}\n\n`);
+                        if (stallAfterChunks >= 0 && i === stallAfterChunks) {
+                            await waitForCloseOrTimeout(res, stallMsGlobal || 30_000);
+                            if (res.destroyed || res.writableEnded) return;
+                        }
                         if (chunkDelayMsGlobal > 0 && i < words.length - 1) {
                             await new Promise(r => setTimeout(r, chunkDelayMsGlobal));
                         }
@@ -475,6 +512,51 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
                 created: 0,
                 model: parsed.model || 'mock-gpt-4o',
                 choices: [choice],
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }));
+            return;
+        }
+
+        // Text completions (generic / OAI-compatible /v1/completions). Same
+        // scripted reply queue, word-drip and stall helpers as chat
+        // completions; SSE frames use `choices[].text` which is what
+        // textgen-settings.js#generateTextGenWithStreaming parses.
+        if (req.url.endsWith('/completions') && !req.url.endsWith('/chat/completions')) {
+            const isStream = parsed.stream === true;
+            const reply = replies.length ? replies.shift() : deriveEcho(parsed);
+            if (isStream) {
+                res.writeHead(200, {
+                    'content-type': 'text/event-stream',
+                    'cache-control': 'no-cache',
+                    'connection': 'keep-alive',
+                });
+                const words = reply.split(/\s+/);
+                for (let i = 0; i < words.length; i++) {
+                    if (stallAfterChunks >= 0 && i <= stallAfterChunks) {
+                        await new Promise(r => setTimeout(r, STALL_PACING_MS));
+                    }
+                    const piece = (i === 0 ? '' : ' ') + words[i];
+                    res.write(`data: ${JSON.stringify({ choices: [{ text: piece, index: 0, finish_reason: null }] })}\n\n`);
+                    if (stallAfterChunks >= 0 && i === stallAfterChunks) {
+                        await waitForCloseOrTimeout(res, stallMsGlobal || 30_000);
+                        if (res.destroyed || res.writableEnded) return;
+                    }
+                    if (chunkDelayMsGlobal > 0 && i < words.length - 1) {
+                        await new Promise(r => setTimeout(r, chunkDelayMsGlobal));
+                    }
+                }
+                res.write(`data: ${JSON.stringify({ choices: [{ text: '', index: 0, finish_reason: 'stop' }] })}\n\n`);
+                res.write('data: [DONE]\n\n');
+                res.end();
+                return;
+            }
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({
+                id: 'mock-cmpl-text-1',
+                object: 'text_completion',
+                created: 0,
+                model: parsed.model || 'textgen-mock-model',
+                choices: [{ text: reply, index: 0, finish_reason: 'stop' }],
                 usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
             }));
             return;
@@ -576,6 +658,7 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         scriptReply(s) { replies.push(s); },
         scriptToolCall(t) { tools.push(t); },
         setStreamChunkDelayMs(ms) { setChunkDelay(ms); },
+        setStreamStall,
         scriptDirectorRun({ route } = {}) { setDirectorRoute(route); },
         clearDirectorRun() { setDirectorRoute(null); },
         scriptCompletion(route) { setGenericRoute(route); },

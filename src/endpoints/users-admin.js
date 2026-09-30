@@ -199,6 +199,7 @@ async function importGlobalExtensionsZip(uploadPath, originalName = '') {
                         }
 
                         try {
+                            await fsPromises.chmod(targetPath, 0o644).catch(() => {});
                             await pipeline(readStream, fs.createWriteStream(targetPath, { mode: 0o644 }));
                             result.importedCount += 1;
                             zipfile.readEntry();

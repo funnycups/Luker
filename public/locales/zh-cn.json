@@ -966,6 +966,8 @@
     "Auto-fix Markdown": "自动修复 Markdown",
     "Disallow embedded media from other domains in chat messages": "禁止在聊天消息中嵌入来自其他域的媒体。",
     "Forbid External Media": "禁止外部媒体",
+    "Lazy-load message images and videos to reduce chat rendering cost. Plugins can opt out by adding data-no-lazy-media.": "懒加载消息中的图片和视频，降低聊天渲染开销。插件可添加 data-no-lazy-media 选择退出。",
+    "Lazy-load Message Media": "懒加载消息媒体",
     "Allow {{char}}: in bot messages": "在机器人消息中允许 {{char}}: ",
     "Allow {{user}}: in bot messages": "在机器人消息中允许 {{user}}: ",
     "Skip encoding  and  characters in message text, allowing a subset of HTML markup as well as Markdown": "跳过消息文本中的编码和字符，允许一部分HTML标记以及Markdown",
@@ -1643,7 +1645,26 @@
     "Replace Character": "替换角色",
     "Choose a new character card to replace this character with.": "请选择一个新的角色卡来替换该角色。",
     "You can also replace this character with the one from the online source.": "你也可以用在线来源中的角色替换此角色。",
-    "All chats, assets and group memberships will be preserved, but local changes to the character data will be lost.": "所有聊天、资源和群组成员关系都会保留，但对角色数据的本地更改将会丢失。",
+    "All chats, assets and group memberships will be preserved. Local bindings on this card (presets, personas, orchestration, memory graph, CardApp) are kept. If the new card brings conflicting bindings, you will be asked.": "所有聊天、资源和群组成员关系都会保留。本卡的本地绑定（预设、人设、编排、记忆图、CardApp）会保留。如果新卡带有冲突的绑定，将会询问你的选择。",
+    "Local bindings found on both cards": "两张角色卡都有本地绑定",
+    "Replace: what should happen to the world book?": "替换角色卡：要如何处理世界书？",
+    "You just replaced or updated this character card. Choose what to do with its world book:": "你刚替换或更新了这张角色卡。请选择如何处理它的世界书：",
+    "Import new book": "导入新世界书",
+    "Keep old book": "保留旧世界书",
+    "Save the new card's embedded world book as a standalone file and bind it to this character. Use when you want the new card's shipped lore verbatim.": "把新卡自带的内置世界书另存为独立文件并绑定给这个角色。当你想原样使用新卡自带的设定时选它。",
+    "Re-bind the previously bound book (${0}) and ignore the new card's embedded book. Use when you only wanted to refresh the character fields.": "把原本绑定的世界书（${0}）重新绑回来，忽略新卡自带的内置世界书。当你只想更新角色卡字段、不动世界书时选它。",
+    "Kept the previous primary world book bound: ${0}": "已保留原主世界书的绑定：${0}",
+    "Failed to apply the world book choice: ${0}": "应用世界书选择失败：${0}",
+    "The new card defines its own local bindings of the same kind. Uncheck a category to use the new card value. Checked categories keep the value from the replaced card.": "新卡自带同类本地绑定。取消勾选表示采用新卡的值；保持勾选则保留被替换卡上的值。",
+    "Local:": "本地：",
+    "New card:": "新卡：",
+    "Keep local": "保留本地",
+    "Some local bindings were not kept": "部分本地绑定未能保留",
+    "The local binding for ${0} could not be kept.": "未能保留 ${0} 的本地绑定。",
+    "Bound chat completion presets": "绑定对话补全预设",
+    "Character-dedicated personas": "角色专属人设",
+    "${0} preset(s) · default: ${1}": "${0} 个预设 · 默认：${1}",
+    "${0} dedicated persona(s)": "${0} 个专属人设",
     "Proceed?": "继续吗？",
     "Replace with URL": "用 URL 替换",
     "Replace with File": "用文件替换",
@@ -4109,7 +4130,7 @@
     "Permission denied": "权限不足",
     "This viewer shows runtime backend logs captured in memory.": "该查看器显示运行时在内存中捕获的后端日志。",
     "This viewer shows frontend console logs captured in this app session.": "该查看器显示在本次应用会话中捕获的前端控制台日志。",
-    "Verbose frontend debug logs are off. Only frontend errors are captured until you enable them in User Settings.": "前端详细调试日志当前已关闭。启用用户设置中的该开关前，只会捕获前端错误。",
+    "Frontend debug logs are off. Console output of every level is still recorded here; turn the switch on in User Settings to also record API request logs and echo routine output to the browser console.": "前端调试日志已关闭。控制台各层级的输出仍会记录在这里；打开用户设置中的开关后，才会一并记录 API 请求日志，并把常规输出同步到浏览器控制台。",
     "Frontend debug logs": "前端调试日志",
     "Android debug recording": "Android 调试记录",
     "Record additional Android-side diagnostics for crash reports. Off by default. Turn on and reproduce to get more details.": "为崩溃报告记录额外的 Android 端诊断信息。默认关闭。打开后复现问题以获得更详细的信息。",
@@ -4175,6 +4196,12 @@
     "Import Global Extensions ZIP": "导入全局扩展 ZIP",
     "Importing ${0}...": "正在导入 ${0}…",
     "Uploading ${0}: ${1}% (${2} / ${3})": "正在上传 ${0}：${1}%（${2} / ${3}）",
+    "Upload interrupted at ${0}%. Retry from where it stopped?": "上传在 ${0}% 处中断。要从断点重试吗？",
+    "Backup upload cancelled.": "备份上传已取消。",
+    "Chunk too large for the server, splitting and retrying…": "分片超过服务器限制，正在拆分重试……",
+    "Chunk upload failed, retrying (${0}/${1})…": "分片上传失败，正在重试（${0}/${1}）……",
+    "Assembling backup archive: ${0} / ${1} (${2}%)": "正在组装备份压缩包：${0} / ${1}（${2}%）",
+    "Assembling backup archive...": "正在组装备份压缩包……",
     "Processing ${0}...": "正在处理 ${0}…",
     "Downloading ${0}...": "正在下载 ${0}…",
     "Analyzing ${0}: ${1} / ${2} entries (${3}%)": "正在分析 ${0}：${1} / ${2} 项（${3}%）",
@@ -5640,9 +5667,11 @@
     ,"📑 List docs": "📑 列出文档"
     ,"📖 Read doc": "📖 读取文档"
     ,"🔌 Toggle CardApp": "🔌 启用/停用 CardApp"
-    ,"Max request retries (0 = disabled)": "请求重试次数上限（0 表示关闭）"
     ,"Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.": "对文本生成和图像生成请求都生效。遇到网络错误、上游限流或服务器错误时会自动重试。流式响应开始后断开不会重试。"
     ,"Max request retries": "请求重试次数上限"
+    ,"Request timeout": "请求超时"
+    ,"Request timeout (seconds, 0 = disabled)": "请求超时（秒，0 = 禁用）"
+    ,"Streaming: maximum silence between chunks. Non-streaming: maximum wait for the reply. Timed-out requests are cancelled.": "流式：相邻块之间的最大静默时间。非流式：等待回复的最长时间。超时的请求会被取消。"
     ,"Retry status whitelist": "重试状态码白名单"
     ,"Whitelist accepts comma-separated HTTP status codes and ranges (100–599). Examples: 429, 500-599, or 429, 500-504. Leave empty to retry the default set (429 and any 5xx). When non-empty, only listed codes are retried.": "白名单接受用逗号分隔的 HTTP 状态码或范围（100–599）。例如：429、500-599、429, 500-504。留空则重试默认集合（429 与所有 5xx）；非空则只重试列出的状态码。"
     ,"Auto-continue when the response is truncated": "回复被截断时自动继续"
@@ -6310,4 +6339,15 @@
     ,"Sets OpenRouter Gemini stable history caching on/off. Gets current value if no argument is provided.": "设置 OpenRouter Gemini 稳定历史缓存的开启/关闭。如未提供参数，则获取当前值。"
     ,"Number of recent turns excluded from Gemini history caching": "Gemini 历史缓存不覆盖的最近回合数"
     ,"Keeps this many completed turns plus the current input outside the cache. Default: 2.": "将最近这么多完整回合连同当前输入留在缓存之外。默认：2。"
+    ,"Deselect all": "全不选"
+    ,"Delete chat and selected images": "删除聊天并删除选中图片"
+    ,"Delete chat only": "仅删除聊天"
+    ,"Delete group chat and selected images": "删除群聊并删除选中图片"
+    ,"Delete group chat only": "仅删除群聊"
+    ,"Delete character and selected images": "删除角色并删除选中图片"
+    ,"Delete character only": "仅删除角色"
+    ,"Selected: ${0}": "已选择：${0}"
+    ,"Another character shares this name — shared folders were skipped.": "检测到同名角色，已跳过共享目录。"
+    ,"Some files could not be deleted.": "部分文件未能删除。"
+    ,"Media cleanup": "图片清理"
 }

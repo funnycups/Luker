@@ -21,10 +21,9 @@ import { randomBytes } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 
 import archiver from 'archiver';
-import multer from 'multer';
 import request from 'supertest';
 
-import { makeEndpointHarness } from '../harness/endpoint-harness.js';
+import { makeEndpointHarness, uploadArchiveToSession } from '../harness/endpoint-harness.js';
 import { router as usersPrivateRouter } from '../../../src/endpoints/users-private.js';
 import {
     getChatRepo,
@@ -82,16 +81,6 @@ function maybeSkip({ src, dst }) {
     if ((src === 'mysql' || dst === 'mysql') && SKIP_MYSQL) return true;
     if ((src === 'postgres' || dst === 'postgres') && SKIP_PG) return true;
     return false;
-}
-
-function mountMulterShim(app, uploadsDir) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    const upload = multer({
-        storage: multer.diskStorage({
-            destination: (_req, _file, cb) => cb(null, uploadsDir),
-        }),
-    }).single('avatar');
-    app.use(upload);
 }
 
 function buildDirs(userRoot) {
@@ -302,9 +291,7 @@ describe.each(pairs())('cross-mode restore: $src → $dst', ({ src, dst, sameMod
     beforeEach(async () => {
         harness = await makeEndpointHarness({
             mode: dst,
-            mount: (app, { dirs }) => {
-                const uploadsDir = path.join(dirs.root, 'cm-uploads');
-                mountMulterShim(app, uploadsDir);
+            mount: (app) => {
                 app.use('/api/users', usersPrivateRouter);
             },
         });
@@ -353,13 +340,16 @@ describe.each(pairs())('cross-mode restore: $src → $dst', ({ src, dst, sameMod
         }
 
         try {
-            const req = request(harness.app)
+            const uploadId = await uploadArchiveToSession(harness.app, sourceArtifact.zipBytes, { handle: harness.handle });
+            const res = await request(harness.app)
                 .post('/api/users/restore-backup')
-                .field('handle', harness.handle)
-                .field('mode', 'overwrite')
-                .field('selection', JSON.stringify(FULL_SELECTION));
-            for (const [k, v] of Object.entries(scratchFields)) req.field(k, v);
-            const res = await req.attach('avatar', sourceArtifact.zipBytes, 'source.zip');
+                .send({
+                    uploadId,
+                    handle: harness.handle,
+                    mode: 'overwrite',
+                    selection: FULL_SELECTION,
+                    ...scratchFields,
+                });
 
             if (res.status !== 200) console.log(`PARITY ${src}→${dst} FAILED:`, res.status, res.body);
             expect(res.status).toBe(200);

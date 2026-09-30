@@ -61,6 +61,13 @@ export async function seedFixtureUser(dataRoot, handle) {
     // non-trivial size for L1 bar visibility
     await w('backgrounds/city.jpg', Buffer.alloc(20_000));
 
+    // Character gallery images live under user/images/<character name>/.
+    // One folder with two files exercises the Images → Chat Images →
+    // character-folder drill (the folder row is one level deeper than the
+    // sub-category).
+    await w('user/images/default_Seraphina/Seraphina_2024-12-22@12h37m57s.png', Buffer.alloc(12_000));
+    await w('user/images/default_Seraphina/Seraphina_2024-12-24@08h10m03s.png', Buffer.alloc(8_000));
+
     // Secrets file — the Other category will show it as a sensitive blob
     // with a lock icon (drill blocked at both API and UI).
     await w('secrets.json', JSON.stringify({ api_key_openai: 'sk-FAKE' }));

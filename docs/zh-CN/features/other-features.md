@@ -22,8 +22,7 @@ Luker 会记录世界书条目从匹配到注入的完整链路，帮助你调�
 
 ## 图像生成增强
 
-Luker 对图像生成的改进为 ComfyUI WebSocket 连接支持——使用 WebSocket 替代频繁的 HTTP 轮询端点与 ComfyUI 通信，提升生成效率和实时性，支持智能回退和断线重连重试。
-
+Luker 对图像生成的增强是 ComfyUI WebSocket 连接支持——使用 WebSocket 与 ComfyUI 通信，替代频繁的 HTTP 轮询端点，提升生成效率和实时性，支持智能回退和断线重连重试。
 
 ## 插件注册正则
 
@@ -34,12 +33,13 @@ Luker 对图像生成的改进为 ComfyUI WebSocket 连接支持——使用 Web
 引导配置导入（Onboarding Config Import）优化了首次使用的引导流程。在初始设置阶段，你可以直接导入已有的配置文件，包括：
 
 - 完整的应用设置
-- 扩展配置（支持扁平 zip 布局的扩展包）
+- 扩展配置
 
 这对于从其他实例迁移或在新设备上快速恢复工作环境特别有用，避免了从零开始配置的繁琐过程。
 
 ## 相关功能
 
+- [用户设置新增功能](/zh-CN/features/user-settings-additions) — 用户设置里 Luker 独有的控制项，外加备份、迁移与存储工具
 - [搜索插件](/zh-CN/features/search-tools) — AI 联网搜索能力
-- [角色卡编辑器](/zh-CN/features/card-editor/) — 增强的角色卡编辑体验
-- [记忆图谱](/zh-CN/features/memory-graph) — 基于知识图谱的记忆系统
+- [角色卡编辑助手](/zh-CN/features/card-editor/) — 增强的角色卡编辑体验
+- [记忆图](/zh-CN/features/memory-graph) — 基于知识图谱的记忆系统

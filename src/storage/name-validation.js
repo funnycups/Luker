@@ -63,3 +63,21 @@ export function assertSafeRepoName(raw, { field = 'name' } = {}) {
     }
     return trimmed;
 }
+
+/**
+ * Storage key form of a chat file name: no .jsonl extension.
+ * ChatRepo's storage layer pins .jsonl on writes via the storage key's `name`
+ * field, so endpoints that receive a `file_name` from the frontend must
+ * strip the extension before forwarding — otherwise a caller that includes
+ * .jsonl produces X.jsonl.jsonl on disk, and the same chat gets two
+ * disconnected sidecar tracks (one under base `X`, one under base `X.jsonl`).
+ * @param {string} fileName Raw file name from request body.
+ * @returns {string} Trimmed name without trailing .jsonl.
+ */
+export function stripJsonlExt(fileName) {
+    let out = String(fileName ?? '').trim();
+    while (/\.jsonl$/i.test(out)) {
+        out = out.slice(0, -'.jsonl'.length);
+    }
+    return out;
+}

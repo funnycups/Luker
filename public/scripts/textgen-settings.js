@@ -19,6 +19,7 @@ import { deriveTemplatesFromChatTemplate } from './chat-templates.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
 import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
+import { getRequestTimeoutMs } from './extensions/connection-manager/request-timeout.js';
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
@@ -1314,6 +1315,17 @@ function setSettingByName(setting, value, trigger) {
  */
 export async function generateTextGenWithStreaming(generate_data, signal, { onLukerMeta = null } = {}) {
     generate_data.stream = true;
+
+    const requestTimeoutMs = getRequestTimeoutMs();
+    if (requestTimeoutMs > 0) {
+        generate_data = {
+            ...generate_data,
+            luker_generation: {
+                ...(generate_data?.luker_generation || {}),
+                request_timeout_ms: requestTimeoutMs,
+            },
+        };
+    }
 
     const response = await withProfileRetry(async () => {
         return await fetch('/api/backends/text-completions/generate', {

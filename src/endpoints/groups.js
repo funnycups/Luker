@@ -10,6 +10,7 @@ import { color, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { invalidateRecentChatIndex } from './chats.js';
 import { getGroupRepo } from '../storage/index.js';
+import { stripJsonlExt } from '../storage/name-validation.js';
 
 export const router = express.Router();
 
@@ -67,14 +68,15 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
                     }
                     for (const chatId of groupData.chats) {
                         try {
-                            const chatFileName = sanitize(`${chatId}.jsonl`);
+                            const bareChatId = stripJsonlExt(String(chatId));
+                            const chatFileName = sanitize(`${bareChatId}.jsonl`);
                             const chatFileDirent = groupChatFiles.find(f => f.isFile() && f.name === chatFileName);
                             if (!chatFileDirent) {
                                 console.warn(color.yellow(`Group chat file ${chatId} not found, skipping migration.`));
                                 continue;
                             }
                             const chatFilePath = path.join(userDirs.groupChats, chatFileName);
-                            const chatMetadata = allMetadata[chatId] || {};
+                            const chatMetadata = allMetadata[chatId] ?? allMetadata[bareChatId] ?? {};
                             const chatDataRaw = await fsPromises.readFile(chatFilePath, 'utf8');
                             const chatData = chatDataRaw.split('\n').filter(line => line.trim()).map(line => tryParse(line)).filter(Boolean);
                             const alreadyHasMetadata = chatData.length > 0 && Object.hasOwn(chatData[0], 'chat_metadata');

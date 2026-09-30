@@ -2,7 +2,7 @@
 
 Luker has a built-in comprehensive log capture and management system covering both the backend server and the frontend browser. When you encounter issues that need troubleshooting, the logging system helps you quickly identify the cause.
 
-The logging system is a standalone feature module that does not depend on other Luker features (such as Memory Graph, CardApp, etc.) and works out of the box.
+The logging system is a standalone feature module that does not depend on other Luker features (such as Memory Graph, CardApp, etc.) and requires no additional configuration.
 
 ## Backend Logs
 
@@ -12,11 +12,13 @@ Luker's backend logging system automatically intercepts all console output from 
 
 - **Auto-interception**: On server startup, Luker automatically intercepts `console.log`, `console.warn`, `console.error`, and other outputs
 - **Ring buffer**: Logs are stored in a fixed-size memory buffer. When the buffer is full, the oldest logs are automatically discarded, ensuring memory usage stays bounded
-- **Timestamps and levels**: Each log entry records a precise timestamp and log level (info, warn, error), making it easy to filter by time and severity
+- **Timestamps and levels**: Each log entry records a precise timestamp and log level, making it easy to filter by time and severity
 
 ### Viewing and Management
 
-Administrators can remotely view server logs through the frontend admin panel without needing to log into the server to check the console. The log buffer can also be cleared with one click.
+Both log sources are located in the **User Settings** drawer: open it and select **Logs**. Select **Server** or **Frontend** as the source, filter by start/end time or entry count, search the contents, then copy or clear the buffer. Server logs are visible to administrators, and on installs without user accounts.
+
+Next to it, **Export Debug Logs** downloads a single JSON bundle — frontend logs, performance marks, device and viewport info, server logs, and recent request-inspector entries — which is the most convenient item to attach to a bug report.
 
 ::: tip
 Backend logs are only kept in memory and are cleared on server restart. If you need persistent log records, it is recommended to redirect Luker's console output to a file.
@@ -38,7 +40,7 @@ In addition to console output, the frontend log manager automatically records AP
 - Response status code and latency
 - Error messages for failed or aborted requests
 
-This information is processed with **smart summarization** — only key fields (such as model name, message count, etc.) are extracted. Full request content is not recorded, balancing debugging value with privacy protection.
+This information is processed with **smart summarization** — only key fields are extracted. Full request content is not recorded, balancing debugging value with privacy protection.
 
 ### Global Error Capture
 
@@ -62,13 +64,14 @@ When Luker exhibits abnormal behavior, the logging system is the most direct tro
 
 ### Error Reporting
 
-If you need to report an issue to developers, you can export a frontend log snapshot that contains complete contextual information before and after the issue occurred — much more helpful for issue diagnosis than screenshots alone.
+If you need to report an issue to developers, use **Export Debug Logs** in the User Settings drawer — it bundles the log snapshot with the surrounding context, which is considerably more helpful for diagnosis than screenshots alone.
 
 ::: warning
-Logs may contain partial API request information. When sharing logs, please check whether they contain sensitive content (such as API keys). The frontend log manager already sanitizes sensitive fields (e.g., CSRF tokens are recorded as "present" rather than their actual values), but it is still recommended to review before sharing.
+Logs may contain partial API request information. When sharing logs, please check whether they contain sensitive content (such as API keys). The frontend log manager already sanitizes sensitive fields, but it is still recommended to review logs before sharing.
 :::
 
 ## Related Pages
 
+- [User Settings Additions](/features/user-settings-additions) — where the Logs and Export Debug Logs buttons are located
 - [Basic Configuration](/guide/configuration) — Log-related configuration options
 - [Auth & Quota](/improvements/auth-and-quota) — Authentication, permissions, and storage quota controls

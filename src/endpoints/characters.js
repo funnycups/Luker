@@ -17,6 +17,7 @@ import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction, 
 import { deepMerge, humanizedDateTime, tryParse, tryReadFileSync, MemoryLimitedMap, getConfigValue, clientRelativePath, getUniqueName, sanitizeSafeCharacterReplacements, formatBytes, getArrayBufferSlice } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
+import { readCharacterFolderName, isCharacterFolderNameShared } from '../character-assets.js';
 import { invalidateThumbnail } from './thumbnails.js';
 import { importRisuSprites } from './sprites.js';
 import { getUserDirectories } from '../users.js';
@@ -1983,9 +1984,42 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         return response.sendStatus(400);
     }
 
+    // Resolve the name-keyed asset folder before the card is unlinked —
+    // chat image uploads and expression sprites both file themselves under
+    // the sanitized display name, never under the avatar filename.
+    const ownedFolderName = await readCharacterFolderName(avatarPath);
+
     deleteAllCharacterStateSidecars(avatarPath);
     fs.unlinkSync(avatarPath);
     invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
+
+    // Take the character-owned asset folders with the card, or they linger
+    // on disk with no UI path to reach them again. Callers that already
+    // offered a per-file selection pass skip_asset_cascade to disable this.
+    const skipAssetCascade = Boolean(request.body.skip_asset_cascade);
+    if (ownedFolderName && !skipAssetCascade) {
+        const sharedName = await isCharacterFolderNameShared(
+            request.user.directories.characters,
+            ownedFolderName,
+            { excludeAvatars: [String(request.body.avatar_url)] },
+        );
+        if (sharedName) {
+            console.warn(`Skipping asset cascade for "${ownedFolderName}": another card resolves to the same folder name.`);
+        } else {
+            const ownedDirs = [
+                path.join(request.user.directories.characters, ownedFolderName),
+                path.join(request.user.directories.userImages, ownedFolderName),
+            ];
+            for (const ownedDir of ownedDirs) {
+                try {
+                    await fsPromises.rm(ownedDir, { recursive: true, force: true });
+                } catch (error) {
+                    console.warn('Failed to delete character-owned assets:', ownedDir, error);
+                }
+            }
+        }
+    }
+
     let dir_name = (request.body.avatar_url.replace('.png', ''));
 
     if (!dir_name.length) {
@@ -2463,12 +2497,26 @@ function getPreservedName(request) {
         : undefined;
 }
 
+/**
+ * Gets the preserved chat pointer for the uploaded file if the request is valid.
+ * @param {import("express").Request} request - Express request object
+ * @returns {string | undefined} - The preserved chat pointer if the request is valid, otherwise undefined
+ */
+function getPreservedChat(request) {
+    const value = typeof request.body.preserved_chat === 'string' ? request.body.preserved_chat.trim() : '';
+    if (!value || value === '.' || value === '..' || value.includes('/') || value.includes('\\')) {
+        return undefined;
+    }
+    return value;
+}
+
 router.post('/import', async function (request, response) {
     if (!request.body || !request.file) return response.sendStatus(400);
 
     const uploadPath = path.join(request.file.destination, request.file.filename);
     const format = request.body.file_type;
     const preservedFileName = getPreservedName(request);
+    const preservedChat = getPreservedChat(request);
 
     const formatImportFunctions = {
         'yaml': importFromYaml,
@@ -2511,6 +2559,24 @@ router.post('/import', async function (request, response) {
             }
         } catch (cardAppErr) {
             console.warn('[card-app] Failed to extract CardApp files during import:', cardAppErr);
+        }
+
+        // Replace / update keeps the chat that was open on the old card. The
+        // pointer is written as part of the import so it survives even when a
+        // later client-side merge-attributes write is dropped. Fresh imports
+        // send no preserved_chat and keep the value produced by the importer.
+        if (preservedFileName && preservedChat) {
+            try {
+                const charFilePath = path.join(request.user.directories.characters, `${fileName}.png`);
+                const rawData = await readCharacterData(charFilePath);
+                if (rawData) {
+                    const charData = JSON.parse(rawData);
+                    charData.chat = preservedChat;
+                    await writeCharacterData(charFilePath, JSON.stringify(charData), fileName.replace('.png', ''), request, undefined, { requireExistingOutput: true });
+                }
+            } catch (preservedChatError) {
+                console.warn('Failed to preserve the chat pointer during import:', preservedChatError);
+            }
         }
 
         response.send({ file_name: fileName });

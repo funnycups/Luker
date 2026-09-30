@@ -22,6 +22,7 @@ import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
 import { clampMaxRetries, formatRetryStatusWhitelist, parseRetryStatusWhitelist } from './max-retries.js';
+import { clampRequestTimeout } from './request-timeout.js';
 import { clampAutoContinueMaxAttempts } from './auto-continue-truncated.js';
 import {
     createEmbeddingProfileStub,
@@ -174,6 +175,7 @@ const FANCY_NAMES = {
     'vertexai-express-project-id': 'Vertex AI Express Project',
     'rpm-limit': 'Requests per minute',
     'max-request-retries': 'Max request retries',
+    'request-timeout': 'Request timeout',
     'retry-status-whitelist': 'Retry status whitelist',
     'auto-continue-on-truncated': 'Auto-continue on truncated',
     'auto-continue-on-truncated-max-attempts': 'Max auto-continue attempts',
@@ -1228,6 +1230,7 @@ export async function init() {
     const plainTextFunctionCallingRetryAttemptsInput = document.getElementById('connection_profile_function_calling_plain_text_error_retry_max_attempts');
     const rpmLimitInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_rpm_limit'));
     const maxRequestRetriesInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_max_request_retries'));
+    const requestTimeoutInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_request_timeout'));
     const retryStatusWhitelistInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_retry_status_whitelist'));
     const autoContinueOnTruncatedToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated'));
     const autoContinueOnTruncatedMaxAttemptsInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated_max_attempts'));
@@ -1313,6 +1316,15 @@ export async function init() {
             maxRequestRetriesInput.disabled = !supportedForRetries;
             if (document.activeElement !== maxRequestRetriesInput) {
                 maxRequestRetriesInput.value = String(retriesValue);
+            }
+        }
+
+        if (requestTimeoutInput) {
+            const supportedForTimeout = !!profile && (profileMode === 'cc' || profileMode === 'tc');
+            const timeoutValue = profile ? clampRequestTimeout(profile['request-timeout']) : 0;
+            requestTimeoutInput.disabled = !supportedForTimeout;
+            if (document.activeElement !== requestTimeoutInput) {
+                requestTimeoutInput.value = String(timeoutValue);
             }
         }
 
@@ -1606,6 +1618,35 @@ export async function init() {
                 delete profile['max-request-retries'];
             } else {
                 profile['max-request-retries'] = value;
+            }
+            saveSettingsDebounced();
+            await renderDetailsContent(detailsContent);
+            await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+            syncProfileEditorControls();
+        });
+    }
+
+    if (requestTimeoutInput) {
+        requestTimeoutInput.addEventListener('change', async () => {
+            const value = clampRequestTimeout(requestTimeoutInput.value);
+            requestTimeoutInput.value = String(value);
+
+            const profile = getSelectedProfile();
+            if (!profile) {
+                syncProfileEditorControls();
+                return;
+            }
+            const mode = resolveProfileMode(profile);
+            if (mode !== 'cc' && mode !== 'tc') {
+                syncProfileEditorControls();
+                return;
+            }
+
+            const oldProfile = structuredClone(profile);
+            if (value <= 0) {
+                delete profile['request-timeout'];
+            } else {
+                profile['request-timeout'] = value;
             }
             saveSettingsDebounced();
             await renderDetailsContent(detailsContent);

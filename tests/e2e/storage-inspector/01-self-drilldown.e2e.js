@@ -121,5 +121,26 @@ test.describe('Storage Inspector · self drill-down', () => {
         await inspector.locator('.storageInspectorBreadcrumbCrumb').first().click();
         await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
         await expect(inspector.locator('.storageInspectorEntry[data-key="chats"]')).toBeVisible();
+
+        // Drill Images → Chat Images → character gallery folder. The
+        // folder row sits one level below the sub-category; clicking it
+        // must list the images inside instead of surfacing the
+        // E_INVALID_PATH max-depth error.
+        await inspector.locator('.storageInspectorEntry[data-key="images"]').click();
+        await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
+        await expect(inspector.locator('.storageInspectorBreadcrumbCurrent')).toHaveText(/Images|图片/);
+
+        await inspector.locator('.storageInspectorEntry[data-key="user-images"]').click();
+        await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
+        const galleryFolder = inspector.locator('.storageInspectorEntry[data-key="default_Seraphina"]');
+        await expect(galleryFolder).toBeVisible();
+        await galleryFolder.click();
+        await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
+
+        // The folder opens to its files and the breadcrumb names it; no
+        // error banner is left behind.
+        await expect(inspector.locator('.storageInspectorBreadcrumbCurrent')).toHaveText('default_Seraphina');
+        await expect(inspector.locator('.storageInspectorEntry[data-key="Seraphina_2024-12-22@12h37m57s.png"]')).toBeVisible();
+        await expect(inspector.locator('.storageInspectorError')).toBeHidden();
     });
 });

@@ -86,6 +86,9 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js', () => ({
     openSchemaIterationStudio: () => Promise.resolve(),
 }));
+jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/graph-iteration/studio.js', () => ({
+    openGraphIterationStudio: () => Promise.resolve(),
+}));
 jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
     performFuzzySearch: () => [],
 }));
@@ -163,5 +166,16 @@ describe('commitSessionMutation in-flight anchoring', () => {
         await expect(
             commitSessionMutation(ctx, 'fake-chat-key', before, after),
         ).rejects.toThrow(/Memory store target is unavailable/i);
+    });
+});
+
+describe('graph-iteration commit surface', () => {
+    test('main.js exports commitGraphUiMutation and it validates required args', async () => {
+        const mod = await import(
+            '../../public/scripts/extensions/memory-graph/main.js'
+        );
+        expect(typeof mod.commitGraphUiMutation).toBe('function');
+        await expect(mod.commitGraphUiMutation({}, 'chat', {})).rejects.toThrow();
+        await expect(mod.commitGraphUiMutation({}, '', { afterStore: { nodes: {} } })).rejects.toThrow();
     });
 });

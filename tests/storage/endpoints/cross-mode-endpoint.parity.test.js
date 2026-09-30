@@ -14,18 +14,17 @@
 //   - /restore-backup of a sqlite-source ZIP on a sqlite-mode server uses
 //     the original same-mode path (no conversion).
 //
-// These tests exercise the real HTTP shape end-to-end (multer + supertest +
-// real engines), so any regression in the wiring between users-private.js
-// and cross-mode-restore.js will show up here.
+// These tests exercise the real HTTP shape end-to-end (chunked upload
+// session + supertest + real engines), so any regression in the wiring
+// between users-private.js and cross-mode-restore.js will show up here.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import archiver from 'archiver';
-import multer from 'multer';
 import request from 'supertest';
 
-import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
+import { ENDPOINT_HARNESSES, makeEndpointHarness, uploadArchiveToSession } from '../harness/endpoint-harness.js';
 import { router as usersPrivateRouter } from '../../../src/endpoints/users-private.js';
 import {
     getChatRepo,
@@ -44,19 +43,6 @@ const ALL_SELECTION = {
     lorebooks: true, presets: true, assets: true, extensions: true,
     globalExtensions: false, vectors: true,
 };
-
-function mountMulterShim(app, uploadsDir) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    // Mirror production (src/server-main.js): single global mount, no
-    // per-path mount. This way the request body is parsed exactly once
-    // per request regardless of which route handles it.
-    const upload = multer({
-        storage: multer.diskStorage({
-            destination: (_req, _file, cb) => cb(null, uploadsDir),
-        }),
-    }).single('avatar');
-    app.use(upload);
-}
 
 // Build a sqlite-source ZIP from a real engine instance + seeded data.
 async function buildSqliteSourceZip(zipPath, srcDir, handle) {
@@ -109,9 +95,7 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
     beforeEach(async () => {
         harness = await makeEndpointHarness({
             mode,
-            mount: (app, { dirs }) => {
-                const uploadsDir = path.join(dirs.root, 'cm-uploads');
-                mountMulterShim(app, uploadsDir);
+            mount: (app) => {
                 app.use('/api/users', usersPrivateRouter);
             },
         });
@@ -142,9 +126,10 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
             await buildForeignDbSourceZip(zipPath, mode, harness.handle);
         }
         const zipBytes = fs.readFileSync(zipPath);
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const res = await request(harness.app)
             .post('/api/users/restore-backup/probe')
-            .attach('avatar', zipBytes, 'probe.zip');
+            .send({ uploadId });
         expect(res.status).toBe(200);
         expect(res.body.crossModeRequired).toBe(false);
         expect(res.body.scratchCredsNeeded).toBeNull();
@@ -157,9 +142,10 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
         const zipPath = path.join(harness.dataRoot, `probe-foreign-${randomBytes(4).toString('hex')}.zip`);
         await buildForeignDbSourceZip(zipPath, foreignKind, harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const res = await request(harness.app)
             .post('/api/users/restore-backup/probe')
-            .attach('avatar', zipBytes, 'probe.zip');
+            .send({ uploadId });
         expect(res.status).toBe(200);
         expect(res.body.engineKind).toBe(foreignKind);
         expect(res.body.crossModeRequired).toBe(true);
@@ -179,9 +165,10 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
             arc.finalize();
         });
         const zipBytes = fs.readFileSync(zipPath);
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const res = await request(harness.app)
             .post('/api/users/restore-backup/probe')
-            .attach('avatar', zipBytes, 'probe.zip');
+            .send({ uploadId });
         expect(res.status).toBe(200);
         expect(res.body.engineKind).toBe('fs');
         expect(res.body.crossModeRequired).toBe(true);
@@ -197,12 +184,10 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
         await buildSqliteSourceZip(zipPath, srcDir, harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
 
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const res = await request(harness.app)
             .post('/api/users/restore-backup')
-            .field('handle', harness.handle)
-            .field('mode', 'overwrite')
-            .field('selection', JSON.stringify(ALL_SELECTION))
-            .attach('avatar', zipBytes, 'xmode.zip');
+            .send({ uploadId, handle: harness.handle, mode: 'overwrite', selection: ALL_SELECTION });
         expect(res.status).toBe(200);
         expect(res.body.crossMode?.sourceKind).toBe('sqlite');
         expect(res.body.crossMode?.destKind).toBe('fs');

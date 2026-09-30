@@ -1823,17 +1823,19 @@ export async function getSanitizedFilename(fileName) {
  * @param {string} subFolder - The character name to determine the sub-directory for saving.
  * @param {string} fileName - The name of the file to save the image as (without extension).
  * @param {string} extension - The file extension for the image (e.g., 'jpg', 'png', 'webp').
+ * @param {object|null} [attribution] Optional chat attribution for the upload.
  *
  * @returns {Promise<string>} - Resolves to the saved image's path on the server.
  *                              Rejects with an error if the upload fails.
  */
-export async function saveBase64AsFile(base64Data, subFolder, fileName, extension) {
+export async function saveBase64AsFile(base64Data, subFolder, fileName, extension, attribution = null) {
     // Prepare the request body
     const requestBody = {
         image: base64Data,
         format: extension,
         ch_name: subFolder,
         filename: String(fileName).replace(/\./g, '_'),
+        ...(attribution ? { attribution } : {}),
     };
 
     // Send the data URL to your backend using fetch
@@ -3256,9 +3258,10 @@ export function setupScrollToTop({ scrollContainerId, buttonId, drawerId, visibi
  * @param {string} url URL or UUID of the content to import.
  * @param {Object} [options={}] Options object.
  * @param {string|null} [options.preserveFileName=null] Optional file name to use for the imported content.
+ * @param {string|null} [options.preserveChat=null] Optional chat pointer to keep on the stored card when replacing.
  * @returns {Promise<void>} A promise that resolves when the import is complete.
  */
-export async function importFromExternalUrl(url, { preserveFileName = null } = {}) {
+export async function importFromExternalUrl(url, { preserveFileName = null, preserveChat = null } = {}) {
     let request;
 
     if (isValidUrl(url)) {
@@ -3296,7 +3299,7 @@ export async function importFromExternalUrl(url, { preserveFileName = null } = {
 
     switch (customContentType) {
         case 'character':
-            await processDroppedFiles([file], extraData);
+            await processDroppedFiles([file], extraData, { preserveChat });
             break;
         case 'lorebook':
             await importWorldInfo(file);

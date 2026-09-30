@@ -90,7 +90,7 @@ import {
 import {
     buildEditToolResultPayload,
     buildPayloadForOutcome,
-} from '../../orchestrator/iter-studio/edit-tool-result-envelope.js';
+} from '../../../iteration-library/edit-tool-result-envelope.js';
 
 const MODULE = 'mg-schema-iteration';
 const STYLESHEET_ID = 'mg_schema_it_studio_stylesheet';

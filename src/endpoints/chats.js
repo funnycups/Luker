@@ -28,7 +28,7 @@ import {
 import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
 import { getChatRepo, getGroupRepo, getStorageEngine } from '../storage/index.js';
 import { ConflictError, InvalidArgumentError, NotFoundError } from '../storage/errors.js';
-import { assertSafeRepoName } from '../storage/name-validation.js';
+import { assertSafeRepoName, stripJsonlExt } from '../storage/name-validation.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
 const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
@@ -1161,24 +1161,6 @@ function normalizeJsonlFileName(fileName) {
 }
 
 /**
- * Storage key form of a chat file name: no .jsonl extension.
- * ChatRepo's storage layer pins .jsonl on writes via the storage key's `name`
- * field, so endpoints that receive a `file_name` from the frontend must
- * strip the extension before forwarding — otherwise a caller that includes
- * .jsonl produces X.jsonl.jsonl on disk, and the same chat gets two
- * disconnected sidecar tracks (one under base `X`, one under base `X.jsonl`).
- * @param {string} fileName Raw file name from request body.
- * @returns {string} Trimmed name without trailing .jsonl.
- */
-function stripJsonlExt(fileName) {
-    let out = String(fileName ?? '').trim();
-    while (/\.jsonl$/i.test(out)) {
-        out = out.slice(0, -'.jsonl'.length);
-    }
-    return out;
-}
-
-/**
  * Builds the merged body and header for a chat-merge operation.
  * Pure function; throws Error with `.status` set to 400/404 on bad input.
  * @param {Map<string, {header: object, body: object[]}>} sourcesMap Map of source name -> {header, body}.
@@ -2301,7 +2283,7 @@ router.post('/merge', validateAvatarUrlMiddleware, async (request, response) => 
         const sourcesMap = new Map();
         for (const srcName of distinctSources) {
             if (!srcName) return response.sendStatus(400);
-            const safeSrc = sanitize(srcName);
+            const safeSrc = sanitize(stripJsonlExt(srcName));
             const src = await repo.get(handle, charDir, safeSrc);
             if (!src) return response.status(404).send({ ok: false, error: `source_not_found:${srcName}` });
             sourcesMap.set(srcName, src);
@@ -3095,8 +3077,13 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         if (!isGroup && !isPathUnderParent(request.user.directories.chats, pathToFolder)) {
             return response.sendStatus(400);
         }
-        const safeOriginal = sanitize(String(request.body.original_file));
-        const safeRenamed = sanitize(String(request.body.renamed_file));
+        const originalBase = stripJsonlExt(String(request.body.original_file));
+        const renamedBase = stripJsonlExt(String(request.body.renamed_file));
+        if (!originalBase || !renamedBase) {
+            return response.sendStatus(400);
+        }
+        const safeOriginal = sanitize(`${originalBase}.jsonl`);
+        const safeRenamed = sanitize(`${renamedBase}.jsonl`);
         const pathToOriginalFile = path.join(pathToFolder, safeOriginal);
         const pathToRenamedFile = path.join(pathToFolder, safeRenamed);
         const sanitizedFileName = path.parse(pathToRenamedFile).name;
@@ -3156,13 +3143,13 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 
 router.post('/delete', validateAvatarUrlMiddleware, async function (request, response) {
     try {
-        if (!path.extname(request.body.chatfile)) {
-            request.body.chatfile += '.jsonl';
+        if (!request.body || !request.body.chatfile) {
+            return response.sendStatus(400);
         }
 
         const handle = request.user.profile.handle;
         const dirName = String(request.body.avatar_url).replace('.png', '');
-        const chatFileName = String(request.body.chatfile);
+        const chatFileName = `${stripJsonlExt(String(request.body.chatfile))}.jsonl`;
         const safeFileName = sanitize(chatFileName);
         const chatFilePath = path.join(request.user.directories.chats, dirName, safeFileName);
         if (!isPathUnderParent(request.user.directories.chats, chatFilePath)) {
@@ -3428,7 +3415,7 @@ router.post('/group/get', async (request, response) => {
         return response.sendStatus(400);
     }
 
-    const id = String(request.body.id);
+    const id = stripJsonlExt(String(request.body.id));
     const handle = request.user.profile.handle;
     const chat = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
     if (chat == null) {
@@ -3451,7 +3438,7 @@ router.post('/group/get-delta', async (request, response) => {
         return response.sendStatus(400);
     }
 
-    const id = String(request.body.id);
+    const id = stripJsonlExt(String(request.body.id));
     const fromIndex = Number(request.body.from_index) || 0;
     const limit = Number(request.body.limit) || 0;
     const handle = request.user.profile.handle;
@@ -3486,7 +3473,7 @@ router.post('/group/info', async (request, response) => {
             return response.sendStatus(400);
         }
 
-        const id = String(request.body.id);
+        const id = stripJsonlExt(String(request.body.id));
         const handle = request.user.profile.handle;
         const info = await getChatRepo().getInfo(handle, '', id, { isGroup: true, groupId: id });
         if (info == null) {
@@ -3518,7 +3505,7 @@ router.post('/group/delete', async (request, response) => {
             return response.sendStatus(400);
         }
 
-        const id = String(request.body.id);
+        const id = stripJsonlExt(String(request.body.id));
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
 
@@ -3544,7 +3531,7 @@ router.post('/group/save', async function (request, response) {
             return response.sendStatus(400);
         }
 
-        const id = String(request.body.id);
+        const id = stripJsonlExt(String(request.body.id));
         assertSafeRepoName(id, { field: 'id' });
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
@@ -3627,7 +3614,7 @@ router.post('/group/merge', async (request, response) => {
         const sourcesMap = new Map();
         for (const srcName of distinctSources) {
             if (!srcName) return response.sendStatus(400);
-            const safeSrc = sanitize(srcName);
+            const safeSrc = sanitize(stripJsonlExt(srcName));
             const src = await repo.get(handle, '', safeSrc, { isGroup: true, groupId: safeSrc });
             if (!src) return response.status(404).send({ ok: false, error: `source_not_found:${srcName}` });
             sourcesMap.set(srcName, src);
@@ -3733,7 +3720,7 @@ router.post('/group/append', async function (request, response) {
             return response.sendStatus(400);
         }
 
-        const id = String(request.body.id);
+        const id = stripJsonlExt(String(request.body.id));
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
@@ -3798,7 +3785,7 @@ router.post('/group/patch', async function (request, response) {
             return response.sendStatus(400);
         }
 
-        const id = String(request.body.id);
+        const id = stripJsonlExt(String(request.body.id));
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatMetadata = _.isObjectLike(request.body.chat_metadata) ? request.body.chat_metadata : {};
@@ -3891,7 +3878,7 @@ router.post('/group/meta', async function (request, response) {
             return response.status(400).send({ error: 'Expected body.chat_metadata object.' });
         }
 
-        const id = String(request.body.id);
+        const id = stripJsonlExt(String(request.body.id));
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const chatMetadata = request.body.chat_metadata;
@@ -3951,7 +3938,7 @@ router.post('/group/meta/patch', async function (request, response) {
             return response.status(400).send({ error: 'No metadata patch operations found. Expected body.operations or body.operation.' });
         }
 
-        const id = String(request.body.id);
+        const id = stripJsonlExt(String(request.body.id));
         const handle = request.user.profile.handle;
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
         const integritySlug = typeof request.body.integrity === 'string' ? request.body.integrity : null;
@@ -4040,8 +4027,15 @@ router.post('/search', validateAvatarUrlMiddleware, async function (request, res
         // Find candidate chats based on the scope (group id or character).
         let candidates = [];
         if (group_id) {
-            // Group chats live in ChatRepo too; let the engine filter by groupId.
-            candidates = await repo.listForGroup(handle, String(group_id), { orderBy: 'updatedAt' });
+            // Group chats are keyed by their own chat id in the Repo; the
+            // association with a parent group only lives in the group doc's
+            // `chats` array. Resolve membership through GroupRepo.
+            const group = await getGroupRepo().get(handle, String(group_id));
+            const groupChatIds = new Set(Array.isArray(group?.chats) ? group.chats.map(String) : []);
+            if (groupChatIds.size > 0) {
+                const allGroupChats = await repo.listAllGroupChats(handle, { orderBy: 'updatedAt' });
+                candidates = allGroupChats.filter((entry) => groupChatIds.has(String(entry.key.name)));
+            }
         } else if (avatar_url) {
             const charDir = String(avatar_url).replace('.png', '');
             candidates = await repo.listForCharacter(handle, charDir, { orderBy: 'updatedAt' });

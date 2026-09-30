@@ -293,7 +293,9 @@ export function cleanUploads() {
             console.debug(`Cleaning uploads folder (${uploads.length} files)`);
             uploads.forEach(file => {
                 const pathToFile = path.join(uploadsPath, file);
-                fs.unlinkSync(pathToFile);
+                // Recursive so restore-upload session directories (not just
+                // multer's flat temp files) are purged on boot too.
+                fs.rmSync(pathToFile, { recursive: true, force: true });
             });
         }
     } catch (err) {

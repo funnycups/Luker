@@ -145,22 +145,25 @@ export const BRYN_ENTRIES = [
 
 /**
  * Write a connection-manager profile pointing at the in-process mock LLM.
- * Stored under settings.json -> extensionSettings.connectionManager.profiles.
+ * Stored under settings.json -> extension_settings.connectionManager.profiles
+ * (snake_case — the key the client actually hydrates from; a camelCase
+ * `extensionSettings` slot is silently ignored, so the profile must live
+ * under the same key `bootstrapVectorsBackend` writes).
  */
-export function appendConnectionProfile({ dataRoot, handle = 'default-user', name = 'e2e-mock', baseURL, model = 'mock-gpt-4o', source = 'custom' }) {
+export function appendConnectionProfile({ dataRoot, handle = 'default-user', name = 'e2e-mock', baseURL, model = 'mock-gpt-4o', source = 'custom', mode = 'cc', api = 'openai', profileOverrides = {} }) {
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     if (!existsSync(settingsPath)) {
         throw new Error(`settings.json not found at ${settingsPath} — start the server once before adding profiles`);
     }
     const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
-    s.extensionSettings = s.extensionSettings || {};
-    s.extensionSettings.connectionManager = s.extensionSettings.connectionManager || { profiles: [], selectedProfile: null };
+    s.extension_settings = s.extension_settings || {};
+    s.extension_settings.connectionManager = s.extension_settings.connectionManager || { profiles: [], selectedProfile: null };
     const profileId = `e2e-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
     const profile = {
         id: profileId,
         name,
-        api: 'openai',
-        mode: 'cc',
+        api,
+        mode,
         preset: '',
         model,
         proxy: '',
@@ -176,10 +179,16 @@ export function appendConnectionProfile({ dataRoot, handle = 'default-user', nam
         // 'api-url' into responses_url (profile-resolver.js), so write that
         // key instead of 'custom-url'.
         'chat-completion-source': source,
-        ...(source === 'openai_responses' ? { 'api-url': baseURL } : { 'custom-url': baseURL }),
+        // 'api-url' is the server-URL key every runtime consumer reads
+        // (shared.js#sendRequest, profile-resolver.js). cc custom profiles
+        // additionally carry the legacy 'custom-url' field name so raw
+        // settings inspection keeps matching the historical shape.
+        'api-url': baseURL,
+        ...(mode !== 'tc' && source !== 'openai_responses' ? { 'custom-url': baseURL } : {}),
+        ...profileOverrides,
     };
-    s.extensionSettings.connectionManager.profiles.push(profile);
-    s.extensionSettings.connectionManager.selectedProfile = profileId;
+    s.extension_settings.connectionManager.profiles.push(profile);
+    s.extension_settings.connectionManager.selectedProfile = profileId;
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
     return { profileId, name };
 }
@@ -196,7 +205,7 @@ export function appendConnectionProfile({ dataRoot, handle = 'default-user', nam
  * oai_settings (= our mock) instead of routing via a missing connection
  * profile or a real-API connection name.
  */
-export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', baseURL, model = 'mock-gpt-4o' }) {
+export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', baseURL, model = 'mock-gpt-4o', stream = true }) {
     const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
     const s = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {};
     s.main_api = 'openai';
@@ -206,7 +215,7 @@ export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', base
     s.oai_settings.custom_url = baseURL;
     s.oai_settings.custom_model = model;
     s.oai_settings.openai_model = model;
-    s.oai_settings.stream_openai = true;
+    s.oai_settings.stream_openai = stream;
     // Wipe legacy fields the dev's settings.json may have left behind that
     // would otherwise reroute orchestrator/CPA/MG/CEA LLM calls via a real
     // provider URL. The mirrored values live under extension_settings
@@ -230,6 +239,26 @@ export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', base
     // / "Gemini" profile blob.
     ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };
     ext.connectionManager.selectedProfile = null;
+    writeFileSync(settingsPath, JSON.stringify(s, null, 4));
+}
+
+/**
+ * Seed the main-chat text-completion (tc) backend so the very first turn
+ * routes to the mock. Counterpart of bootstrapCustomBackend for
+ * `main_api = 'textgenerationwebui'`: writes the server URL for the chosen
+ * textgen type + the streaming flag that Generate() branches on.
+ */
+export function bootstrapTextgenMain({ dataRoot, handle = 'default-user', baseURL, type = 'generic', streaming = true }) {
+    const settingsPath = resolve(userRoot(dataRoot, handle), 'settings.json');
+    const s = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    s.main_api = 'textgenerationwebui';
+    s.textgenerationwebui_settings = s.textgenerationwebui_settings || {};
+    s.textgenerationwebui_settings.type = type;
+    s.textgenerationwebui_settings.server_urls = {
+        ...(s.textgenerationwebui_settings.server_urls || {}),
+        [type]: baseURL,
+    };
+    s.textgenerationwebui_settings.streaming = streaming;
     writeFileSync(settingsPath, JSON.stringify(s, null, 4));
 }
 

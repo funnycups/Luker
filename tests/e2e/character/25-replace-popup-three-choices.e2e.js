@@ -13,10 +13,9 @@
 // real browser + real file picker. The user-visible regression behind
 // this test: the prior popup only had "Open editor / Skip", clicking
 // Skip silently broke the primary world-book binding, and there was no
-// way to import the new card's embedded world from the popup. See
-// `confirmOpenCharacterEditorAfterReplace` (removed) and the new
-// `promptReplaceOutcomeChoice` in
-// public/scripts/extensions/character-editor-assistant/main.js.
+// way to import the new card's embedded world from the popup. The popup
+// now comes from the core post-replace action registry:
+// public/scripts/character/post-replace-actions.js.
 //
 // Test fixture layout per test:
 //   - PRE: write Ash (bound to the bryn-headland world book on disk)

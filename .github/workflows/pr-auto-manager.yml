@@ -210,7 +210,6 @@ jobs:
               "🔨 Needs Work",
               "🔬 Needs Testing",
               "⛔ Waiting For External/Upstream",
-              "❗ Against Release Branch",
               "💥💣 Breaking Changes"
             ];
             const hasBlockingLabel = prLabels.some(label => blockingLabels.includes(label));
@@ -264,15 +263,15 @@ jobs:
           config_file: .github/pr-auto-comments.yml
           github_token: ${{ steps.app.outputs.token }}
 
-  # This runs on merged PRs to staging, reading the PR body and directly linked issues. Check `issues-updates-on-merge.yml`:`update-linked-issues` for commit-based updates.
+  # This runs on merged PRs to release, reading the PR body and directly linked issues. Check `issues-updates-on-merge.yml`:`update-linked-issues` for commit-based updates.
   update-linked-issues:
-    name: 🔗 Mark Linked Issues Done on Staging Merge
+    name: 🔗 Mark Linked Issues Done on Merge
     runs-on: ubuntu-latest
     if: >
       always() &&
       github.event_name == 'pull_request_target' &&
       github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'staging'
+      github.event.pull_request.base.ref == 'release'
 
     # Override permissions, We need to be able to write to issues
     permissions:
@@ -318,6 +317,6 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           for ISSUE in $(echo $final_issues | jq -r '.[]'); do
-            gh issue edit $ISSUE -R ${{ github.repository }} --add-label "✅ Done (staging)" --remove-label "🧑‍💻 In Progress"
-            echo "Added label '✅ Done (staging)' (and removed '🧑‍💻 In Progress' if present) in issue #$ISSUE"
+            gh issue edit $ISSUE -R ${{ github.repository }} --add-label "✅ Done" --remove-label "🧑‍💻 In Progress"
+            echo "Added label '✅ Done' (and removed '🧑‍💻 In Progress' if present) in issue #$ISSUE"
           done

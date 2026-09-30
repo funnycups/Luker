@@ -12,6 +12,7 @@ const event_types = __ctx.eventTypes;
 const getRequestHeaders = __ctx.getRequestHeaders;
 const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
+const registerCardBindingSlot = __ctx.registerCardBindingSlot;
 const getCharacterState = __ctx.getCharacterState;
 const updateCharacterState = __ctx.updateCharacterState;
 const addLocaleData = __ctx.addLocaleData;
@@ -32,10 +33,14 @@ function t(text) {
 addLocaleData('zh-cn', {
     'Enable CardApp': '启用 CardApp',
     'Entry file': '入口文件',
+    'CardApp (card enablement)': 'CardApp（本卡开关）',
+    'Entry configured': '已配置入口文件',
 });
 addLocaleData('zh-tw', {
     'Enable CardApp': '啟用 CardApp',
     'Entry file': '入口檔案',
+    'CardApp (card enablement)': 'CardApp（本卡開關）',
+    'Entry configured': '已設定入口檔案',
 });
 
 // State
@@ -400,6 +405,38 @@ registerExtensionApi('card-app', {
     isActive,
     getCardAppConfig,
     getCharId,
+});
+
+registerCardBindingSlot({
+    id: 'card-app',
+    label: () => t('CardApp (card enablement)'),
+    read: character => {
+        const config = character?.data?.extensions?.card_app;
+        if (!config || typeof config !== 'object' || Array.isArray(config)) {
+            return null;
+        }
+        return { enabled: config.enabled === true, entry: String(config.entry || '') };
+    },
+    isPresent: value => Boolean(value) && (value.enabled === true || value.entry !== ''),
+    summarize: value => {
+        if (value.enabled === true) {
+            return value.entry ? `${t('Enabled')} · ${value.entry}` : t('Enabled');
+        }
+        return `${t('Entry configured')}${value.entry ? ` · ${value.entry}` : ''}`;
+    },
+    write: async (characterId, value) => {
+        const context = getContext();
+        const character = context.characters?.[characterId];
+        if (!character) {
+            throw new Error(`${MODULE_NAME}: character not found at index ${characterId}`);
+        }
+        const previous = character?.data?.extensions?.card_app;
+        const next = { ...(previous && typeof previous === 'object' ? previous : {}), enabled: value.enabled === true };
+        if (value.entry) {
+            next.entry = value.entry;
+        }
+        await context.writeExtensionField(characterId, 'card_app', next);
+    },
 });
 
 console.log(`[${MODULE_NAME}] Extension loaded`);

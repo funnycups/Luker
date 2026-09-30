@@ -18,10 +18,13 @@
 //      complete (both prev + next entries dumped verbatim, no ellipsis),
 //      the world-book preview pane's <details> shows full content, then
 //      a second turn produces an edit proposal that we approve and see
-//      land on disk.
+//      land on disk. Closing the popup afterwards must PRESERVE the new
+//      book + binding — an applied edit latches the pre-materialize
+//      rollback off.
 //   4. MERGE-then-close-without-apply: rolls back the pre-materialize
 //      step (deletes the newly-created book file, restores the previous
-//      binding). This is the fix for the bug that started this session.
+//      binding). Closing without applying is the only path that rolls
+//      back.
 //   5. CANCEL: clicking Cancel on the popup does nothing — the character
 //      keeps its previous binding and the new card's embedded book is
 //      never materialized on disk.
@@ -435,7 +438,7 @@ test.describe('#28 — post-replace world-book sweep', () => {
     // -----------------------------------------------------------------
     // Merge in editor — happy path (scripted review turn + edit proposal)
     // -----------------------------------------------------------------
-    test('MERGE happy: studio opens with complete diff + preview shows full content + review turn + follow-up edit lands on disk', async ({ page }) => {
+    test('MERGE happy: complete diff + preview + review turn + edit lands on disk + close preserves it', async ({ page }) => {
         // Longest sub-test — allocate 5 minutes because it drives two
         // scripted LLM roundtrips.
         test.setTimeout(300_000);
@@ -463,6 +466,10 @@ test.describe('#28 — post-replace world-book sweep', () => {
             await dismissAnyPopup(page);
             await openCharacterEditPanel(page);
             await snap(page, slug, 'card-A-selected');
+
+            const oldBookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${CARD_A_BOOK}.json`);
+            const newBookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${CARD_B_BOOK}.json`);
+            const oldBookContentBefore = readFileSync(oldBookPath, 'utf8');
 
             // Turn 1 (review, seed-primed): the studio's autoSend fires on open.
             mock.scriptReply('Reviewed the replace diff. The previous book stays bound to card A only; the new long-river book materialized cleanly, its three entries are coherent, and no entry content was truncated. Ready for the next instruction.');
@@ -640,6 +647,53 @@ test.describe('#28 — post-replace world-book sweep', () => {
                 } catch { return false; }
             }, { bookName: CARD_B_BOOK }, { timeout: 15_000 });
             await snap(page, slug, 'edit-landed-on-disk');
+
+            // --- Assertion G: close after an applied edit keeps the
+            // new book + binding ---------------------------------------
+            // The postReplaceRollback teardown is scoped to "closed
+            // without applying anything". Once any edit commits (here
+            // via the proposal card's Approve), closing the studio must
+            // NOT delete the materialized book or rebind the old one —
+            // otherwise the user's just-applied merge vanishes.
+            //
+            // Wait for the auto-continue round triggered by the commit
+            // outcome to settle before closing; onClosing blocks on an
+            // abort handshake while a round is in flight. The send
+            // button toggles between 'Send' and 'Stop' as state.isBusy
+            // flips, so a non-'Stop' label is the idle proxy.
+            await page.waitForFunction(() => {
+                const btn = document.querySelector('[data-cea-editor-action="send"]');
+                if (!btn) return false;
+                const label = (btn.textContent || '').trim();
+                return !/^(Stop|终止|終止)$/.test(label);
+            }, null, { timeout: 180_000, polling: 500 }).catch(() => { /* fall through; abort path still works */ });
+
+            const closeBtn = studio.locator('.popup-button-close, [data-popup-close]').first();
+            if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+                await closeBtn.click().catch(() => {});
+            } else {
+                await page.keyboard.press('Escape');
+            }
+            const closedFirst = await studio.waitFor({ state: 'detached', timeout: 8000 }).then(() => true).catch(() => false);
+            if (!closedFirst) {
+                await page.keyboard.press('Escape').catch(() => {});
+                await studio.waitFor({ state: 'detached', timeout: 30_000 });
+            }
+            // Give a (buggy) rollback a beat to land so the regression
+            // fails visibly instead of racing the assertion.
+            await page.waitForTimeout(1500);
+
+            expect(existsSync(newBookPath), 'new book file must survive close-after-apply').toBe(true);
+            expect(readFileSync(oldBookPath, 'utf8')).toBe(oldBookContentBefore);
+            expect((await page.locator('#character_world').inputValue()) || '').toBe(CARD_B_BOOK);
+            const persistedBook = JSON.parse(readFileSync(newBookPath, 'utf8'));
+            expect(
+                Object.values(persistedBook.entries).some(e =>
+                    String(e?.comment || '').toLowerCase().includes('storm')
+                    || String(e?.content || '').toLowerCase().includes('code red')),
+                'approved edit still on disk after close',
+            ).toBe(true);
+            await snap(page, slug, 'close-after-apply-persists');
         } finally {
             await tearDownServer(server);
         }

@@ -2,6 +2,9 @@
 // playwright plugin misfires on jest `test.each` (reads as standalone expect).
 // Every expect here is inside a jest test block.
 
+import path from 'node:path';
+import { promises as fsPromises } from 'node:fs';
+
 import { makeFixtureUser } from './_fixture-helper.js';
 import {
     walkDirSize,
@@ -207,6 +210,34 @@ describe('enumerateSubDir — grouped category L3 leaves', () => {
             expect(res.path).toEqual(['images', 'backgrounds']);
             expect(res.isLeaf).toBe(true);
             expect(res.entries.some(e => e.label === 'city.jpg')).toBe(true);
+        } finally {
+            await cleanup();
+        }
+    });
+
+    test('single-rel sub-category keeps directory rows drillable', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ images: true });
+        try {
+            await fsPromises.mkdir(path.join(userRoot, 'user/images/Seraphina'), { recursive: true });
+            await fsPromises.writeFile(path.join(userRoot, 'user/images/Seraphina/shot.png'), Buffer.alloc(64));
+            const res = await enumerateSubDir(userRoot, 'images', 'user-images');
+            const folder = res.entries.find(e => e.label === 'Seraphina');
+            expect(folder.canDrill).toBe(true);
+            expect(res.isLeaf).toBe(false);
+        } finally {
+            await cleanup();
+        }
+    });
+
+    test('multi-rel sub-category directory rows are aggregated leaves', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ presets: true });
+        try {
+            await fsPromises.mkdir(path.join(userRoot, 'themes/solarized'), { recursive: true });
+            await fsPromises.writeFile(path.join(userRoot, 'themes/solarized/theme.css'), 'body{}');
+            const res = await enumerateSubDir(userRoot, 'presets', 'ui-elements');
+            const row = res.entries.find(e => e.label === 'themes/solarized');
+            expect(row).toBeDefined();
+            expect(row.canDrill).toBe(false);
         } finally {
             await cleanup();
         }

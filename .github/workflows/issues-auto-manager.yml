@@ -69,7 +69,7 @@ jobs:
           labels: '👍 Approved'
 
       - name: ❌ Remove progress labels when issue is marked done or stale
-        if: contains(fromJSON('["✅ Done", "✅ Done (staging)", "⚰️ Stale", "❌ wontfix"]'), github.event.label.name)
+        if: contains(fromJSON('["✅ Done", "⚰️ Stale", "❌ wontfix"]'), github.event.label.name)
         # 🤖 Issues Helper
         # https://github.com/marketplace/actions/issues-helper
         uses: actions-cool/issues-helper@a610082f8ac0cf03e357eb8dd0d5e2ba075e017e # v3.6.0

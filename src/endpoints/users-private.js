@@ -30,6 +30,17 @@ import {
     CrossModeConversionFailedError,
 } from '../storage/migration/cross-mode-errors.js';
 import { resolvePath, StorageInspectorError } from '../storage/inspector.js';
+import {
+    RESTORE_UPLOAD_ID_PATTERN,
+    RESTORE_UPLOAD_TTL_MS,
+    createRestoreUploadSession,
+    readRestoreUploadMeta,
+    writeRestoreUploadChunk,
+    finalizeRestoreUpload,
+    deleteRestoreUploadSession,
+    sweepStaleRestoreUploadSessions,
+    getRestoreUploadArchivePath,
+} from '../restore-upload-sessions.js';
 import { getAdminSettings } from '../admin-settings.js';
 
 // Two sentinel filenames the backup ZIP carries when the storage engine isn't
@@ -493,6 +504,16 @@ async function analyzeRestoreArchive(uploadPath, targetRoot, targetFiles, target
                         return;
                     }
 
+                    // Backup manifest sentinel — metadata the archive writer
+                    // adds itself and the restore path never writes to disk
+                    // (resolveAllowedRestorePath refuses it). Skip it without
+                    // counting it as skipped, otherwise every same-mode restore
+                    // reports a spurious warning for it.
+                    if (entry.fileName === 'manifest.json') {
+                        zipfile.readEntry();
+                        return;
+                    }
+
                     const normalized = normalizeRestoreArchiveEntryPath(entry.fileName);
                     if (!normalized) {
                         report.rejectedEntries += 1;
@@ -835,6 +856,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
                             }
 
                             try {
+                                await fsPromises.chmod(targetPath, 0o644).catch(() => {});
                                 await pipeline(readStream, fs.createWriteStream(targetPath, { mode: 0o644 }));
                                 const zipLastModified = typeof entry.getLastModDate === 'function'
                                     ? entry.getLastModDate()
@@ -1136,6 +1158,147 @@ router.post('/lan-migration/offer', async (request, response) => {
 });
 
 /**
+ * Resolve an upload session from the current request and enforce ownership.
+ * Writes the error response itself and returns null on failure so routes can
+ * bail out with `if (!session) return;`.
+ */
+async function loadRestoreUploadSession(request, response, { requireArchive = false } = {}) {
+    const uploadId = String(request.params?.uploadId || request.body?.uploadId || '');
+    if (!RESTORE_UPLOAD_ID_PATTERN.test(uploadId)) {
+        response.status(400).json({ error: 'Invalid upload id' });
+        return null;
+    }
+    const meta = await readRestoreUploadMeta(globalThis.DATA_ROOT, uploadId);
+    if (!meta) {
+        response.status(404).json({ error: 'Upload session not found' });
+        return null;
+    }
+    const isAdminUser = Boolean(request.user?.profile?.admin);
+    if (meta.handle !== request.user.profile.handle && !isAdminUser) {
+        response.status(403).json({ error: 'Unauthorized' });
+        return null;
+    }
+    if (requireArchive) {
+        const archivePath = getRestoreUploadArchivePath(globalThis.DATA_ROOT, uploadId);
+        const ready = await fsPromises.stat(archivePath).then((stat) => stat.isFile()).catch(() => false);
+        if (!ready) {
+            response.status(400).json({ error: 'Upload not finalized' });
+            return null;
+        }
+    }
+    return { uploadId, meta };
+}
+
+router.post('/restore-backup/uploads', async (request, response) => {
+    try {
+        const handle = String(request.body?.handle || '').trim();
+        if (!handle) {
+            return response.status(400).json({ error: 'Missing required fields' });
+        }
+        if (handle !== request.user.profile.handle && !request.user.profile.admin) {
+            return response.status(403).json({ error: 'Unauthorized' });
+        }
+        const fileName = String(request.body?.fileName || '');
+        if (!fileName.toLowerCase().endsWith('.zip')) {
+            return response.status(400).json({ error: 'Backup file must be a .zip archive' });
+        }
+        const size = Number(request.body?.size);
+        if (!Number.isSafeInteger(size) || size <= 0) {
+            return response.status(400).json({ error: 'Invalid backup size' });
+        }
+        // Lazy sweep: boot already wipes _uploads; this covers long-running
+        // servers with abandoned sessions.
+        sweepStaleRestoreUploadSessions({ dataRoot: globalThis.DATA_ROOT, maxAgeMs: RESTORE_UPLOAD_TTL_MS })
+            .catch((err) => console.warn('[restore-uploads] sweep failed (non-fatal):', err?.message || err));
+        const { uploadId } = await createRestoreUploadSession({ dataRoot: globalThis.DATA_ROOT, handle, fileName, size });
+        return response.json({ uploadId });
+    } catch (error) {
+        console.error('Restore upload init failed', error);
+        return response.status(500).json({ error: 'Failed to init upload' });
+    }
+});
+
+router.put('/restore-backup/uploads/:uploadId/chunks/:offset', async (request, response) => {
+    try {
+        if (!String(request.headers['content-type'] || '').startsWith('application/octet-stream')) {
+            return response.status(400).json({ error: 'Chunks must be application/octet-stream' });
+        }
+        const session = await loadRestoreUploadSession(request, response);
+        if (!session) return;
+        const offset = Number(request.params.offset);
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset >= session.meta.size) {
+            return response.status(400).json({ error: 'Invalid chunk offset' });
+        }
+        try {
+            const { bytes } = await writeRestoreUploadChunk({
+                dataRoot: globalThis.DATA_ROOT,
+                uploadId: session.uploadId,
+                offset,
+                stream: request,
+                declaredSize: session.meta.size,
+            });
+            return response.json({ ok: true, offset, bytes });
+        } catch (err) {
+            if (err instanceof RangeError && err.message === 'chunk_exceeds_declared_size') {
+                return response.status(400).json({ error: 'Chunk exceeds declared upload size' });
+            }
+            if (request.destroyed) {
+                return; // socket gone; .part already cleaned up, client will retry
+            }
+            throw err;
+        }
+    } catch (error) {
+        console.error('Restore upload chunk failed', error);
+        return response.status(500).json({ error: 'Failed to store chunk' });
+    }
+});
+
+router.post('/restore-backup/uploads/:uploadId/finalize', async (request, response) => {
+    const streaming = wantsRestoreProgressStream(request);
+    let stream = null;
+    try {
+        const session = await loadRestoreUploadSession(request, response);
+        if (!session) return;
+        if (streaming) {
+            stream = beginRestoreProgressStream(response);
+        }
+        const result = await finalizeRestoreUpload({
+            dataRoot: globalThis.DATA_ROOT,
+            uploadId: session.uploadId,
+            meta: session.meta,
+            onProgress: stream ? (event) => stream.onProgress({ phase: 'assemble', ...event }) : null, // banned-words-allow
+        });
+        if (stream) {
+            stream.sendResult({ size: result.size });
+            return;
+        }
+        return response.json({ size: result.size });
+    } catch (error) {
+        if (stream) {
+            stream.sendError(error?.message || 'Failed to assemble upload');
+            return;
+        }
+        if (error?.code === 'UPLOAD_INCOMPLETE') {
+            return response.status(400).json({ error: error.message, missingOffset: error.missingOffset });
+        }
+        console.error('Restore upload finalize failed', error);
+        return response.status(500).json({ error: 'Failed to assemble upload' });
+    }
+});
+
+router.delete('/restore-backup/uploads/:uploadId', async (request, response) => {
+    try {
+        const session = await loadRestoreUploadSession(request, response);
+        if (!session) return;
+        await deleteRestoreUploadSession({ dataRoot: globalThis.DATA_ROOT, uploadId: session.uploadId });
+        return response.sendStatus(204);
+    } catch (error) {
+        console.error('Restore upload delete failed', error);
+        return response.status(500).json({ error: 'Failed to delete upload' });
+    }
+});
+
+/**
  * Pull out only the `_engine_meta.json` payload from a backup ZIP. Returns
  * null when the ZIP has no engine meta (legacy fs-only backup). Used by the
  * `/restore-backup/probe` endpoint to tell the client whether a cross-mode
@@ -1195,13 +1358,11 @@ function readEngineMetaFromZip(zipPath) {
 }
 
 router.post('/restore-backup/probe', async (request, response) => {
-    let uploadPath = '';
     try {
-        if (!request.file) {
-            return response.status(400).json({ error: 'No backup file uploaded' });
-        }
-        uploadPath = request.file.path;
-        const meta = await readEngineMetaFromZip(uploadPath);
+        const session = await loadRestoreUploadSession(request, response, { requireArchive: true });
+        if (!session) return;
+        const archivePath = getRestoreUploadArchivePath(globalThis.DATA_ROOT, session.uploadId);
+        const meta = await readEngineMetaFromZip(archivePath);
         const currentEngine = getStorageEngine();
         if (!meta) {
             // Legacy fs-only ZIP — only restorable on fs servers.
@@ -1227,17 +1388,13 @@ router.post('/restore-backup/probe', async (request, response) => {
     } catch (err) {
         console.error('Restore backup probe failed:', err);
         return response.status(500).json({ error: err?.message || 'Probe failed' });
-    } finally {
-        if (uploadPath) {
-            await fsPromises.rm(uploadPath, { force: true }).catch(() => {});
-        }
     }
 });
 
 router.post('/restore-backup', async (request, response) => {
-    let uploadPath = '';
     const streaming = wantsRestoreProgressStream(request);
     let stream = null;
+    let session = null;
 
     try {
         const handle = request.body.handle;
@@ -1251,27 +1408,12 @@ router.post('/restore-backup', async (request, response) => {
             return response.status(403).json({ error: 'Unauthorized' });
         }
 
-        if (!request.file) {
-            return response.status(400).json({ error: 'No backup file uploaded' });
-        }
+        session = await loadRestoreUploadSession(request, response, { requireArchive: true });
+        if (!session) return;
+        const uploadPath = getRestoreUploadArchivePath(globalThis.DATA_ROOT, session.uploadId);
 
-        const originalName = String(request.file.originalname || '');
-        if (!originalName.toLowerCase().endsWith('.zip')) {
-            return response.status(400).json({ error: 'Backup file must be a .zip archive' });
-        }
-
-        uploadPath = request.file.path;
         const mode = String(request.body.mode || 'merge').toLowerCase() === 'overwrite' ? 'overwrite' : 'merge';
-
-        let parsedSelection = request.body.selection;
-        if (typeof parsedSelection === 'string' && parsedSelection.trim()) {
-            try {
-                parsedSelection = JSON.parse(parsedSelection);
-            } catch {
-                parsedSelection = {};
-            }
-        }
-
+        const parsedSelection = parseBackupSelectionPayload(request.body.selection);
         const isAdminUser = Boolean(request.user?.profile?.admin);
         const selection = sanitizeBackupSelectionForUser(parsedSelection, isAdminUser);
         if (!Object.values(selection).some(Boolean)) {
@@ -1280,12 +1422,6 @@ router.post('/restore-backup', async (request, response) => {
 
         const directories = handle === request.user.profile.handle ? request.user.directories : getUserDirectories(handle);
 
-        // Cross-mode restore optionally needs scratch DB connection strings
-        // when the backup's source engine is mysql or postgres. These are
-        // multipart fields the UI fills in after a probe-endpoint call
-        // returns `crossModeScratchRequired`. Absent fields stay null and
-        // cross-mode-restore raises CrossModeScratchCredsRequiredError →
-        // 400, which the UI translates into the creds prompt.
         const scratchCreds = parseScratchCreds(request.body);
 
         if (streaming) {
@@ -1352,8 +1488,8 @@ router.post('/restore-backup', async (request, response) => {
         const statusCode = isValidationError ? 400 : 500;
         return response.status(statusCode).json({ error: message });
     } finally {
-        if (uploadPath) {
-            await fsPromises.rm(uploadPath, { force: true });
+        if (session) {
+            await deleteRestoreUploadSession({ dataRoot: globalThis.DATA_ROOT, uploadId: session.uploadId }).catch(() => {});
         }
     }
 });

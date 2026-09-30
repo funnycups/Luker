@@ -12,7 +12,7 @@
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook, BRYN_ENTRIES, listCharacters } from '../_lib/fixtures.js';
@@ -20,7 +20,7 @@ import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCh
 import { awaitMainUI } from '../_lib/page.js';
 import { deleteSelectedCharacter } from '../_lib/ui-character.js';
 
-let server, mock, avatar, bookName;
+let server, mock, avatar, bookName, galleryDir, spritesDir;
 
 const ASH_NAME = 'Ash the Cartographer';
 
@@ -36,6 +36,16 @@ test.beforeAll(async () => {
         dataRoot: server.dataRoot,
         overrides: { extensions: { world: bookName } },
     });
+
+    // Character-owned assets: chat image uploads land under
+    // user/images/<name>/, expression sprites under characters/<name>/.
+    // Both must go away with the card.
+    galleryDir = resolve(server.dataRoot, 'default-user', 'user/images', ASH_NAME);
+    spritesDir = resolve(server.dataRoot, 'default-user', 'characters', ASH_NAME);
+    mkdirSync(galleryDir, { recursive: true });
+    mkdirSync(spritesDir, { recursive: true });
+    writeFileSync(resolve(galleryDir, 'ash-portrait.png'), Buffer.alloc(4_096));
+    writeFileSync(resolve(spritesDir, 'happy.png'), Buffer.alloc(2_048));
 });
 
 test.afterAll(async () => {
@@ -104,6 +114,10 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
         // ── DELETE VIA UI: click trash icon → tick "Also delete the
         //    chat files" checkbox → click OK. ────────────────────────
         await deleteSelectedCharacter(page);
+        // The media preview dialog opens after the confirm popup; both
+        // planted assets are pre-selected, confirm them.
+        await page.locator('.mediaDeletionConfirm').click();
+        await expect(page.locator('.mediaDeletionDialog')).not.toBeVisible();
         // The shared helper handles the checkbox + OK click. Wait for
         // CHARACTER_DELETED to propagate.
         await page.waitForFunction((wantAvatar) => {
@@ -121,6 +135,11 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
 
         const serverDeleted = !listCharacters({ dataRoot: server.dataRoot }).includes(avatar);
         expect(serverDeleted, 'avatar file gone from disk after delete').toBe(true);
+
+        // Character-owned asset files (chat images + expression sprites)
+        // went with the card.
+        expect(existsSync(resolve(galleryDir, 'ash-portrait.png')), 'gallery file removed with character').toBe(false);
+        expect(existsSync(resolve(spritesDir, 'happy.png')), 'sprite file removed with character').toBe(false);
 
         // Wait for the undo-toast window to expire (default 5000ms) so
         // commitDeletedCharacterUndoSnapshot fires CHARACTER_DELETED.

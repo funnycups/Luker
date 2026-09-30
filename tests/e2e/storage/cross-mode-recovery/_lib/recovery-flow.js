@@ -8,15 +8,18 @@
 //   5. Re-write config.yaml with storage.mode=<destMode> (+ creds for db destinations).
 //   6. Restart server.
 //   7. Login → confirm chat history is gone.
-//   8. Open Backup Manager → select the ZIP → click Restore → fill scratch DB creds
-//      via the cross-mode prompt when source is mysql/pg.
-//   9. Wait for the success toast.
+//   8. Open Backup Manager → select the ZIP → click Restore → confirm. The
+//      client then uploads the ZIP in chunks, assembles it server-side, and
+//      probes the assembled archive; when the source is mysql/pg, the
+//      cross-mode prompt asks for the scratch DB connection after the probe.
+//   9. Wait for the success reload (the restore callback reloads the page).
 //  10. Verify chat / lorebook / preset readable via DOM probes.
 //  11. Screenshot the verified state for visual review.
 //
 // Each per-pair spec is just a parameterized call to runCrossModeRecoveryFlow.
 
 import { expect } from '@playwright/test';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -38,8 +41,12 @@ const SEED_REPLY = '*Nods* Acknowledged, the lantern stays lit through the swap.
  * @param {'fs'|'sqlite'|'mysql'|'postgres'} ctx.destMode
  * @param {string} ctx.specId           Short id used for batch/scenario naming.
  * @param {string} ctx.tempDir          Directory for the backup ZIP + restart marker.
+ * @param {number} [ctx.seedLargeAssetBytes]  When > 0, writes that many random
+ *   bytes into the source user's assets (files) dir before the backup download.
+ *   Values above 8 MiB force the browser upload through the real multi-chunk
+ *   path (0 = do not seed).
  */
-export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, specId, tempDir }) {
+export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, specId, tempDir, seedLargeAssetBytes = 0 }) {
     fs.mkdirSync(tempDir, { recursive: true });
 
     // Step 1: optional testcontainers for db sourceMode/destMode.
@@ -94,6 +101,15 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
             }).catch(() => {});
             await page.waitForTimeout(2000);
 
+            // Optional multi-chunk fixture: incompressible random bytes land
+            // in the user files dir (assets category) so the backup ZIP
+            // exceeds the 8 MiB client chunk size.
+            if (seedLargeAssetBytes > 0) {
+                const filesDir = path.join(sourceServer.dataRoot, 'default-user', 'user', 'files');
+                fs.mkdirSync(filesDir, { recursive: true });
+                fs.writeFileSync(path.join(filesDir, 'multichunk-asset.bin'), crypto.randomBytes(seedLargeAssetBytes));
+            }
+
             // Step 3: download backup ZIP via the Backup Manager UI.
             const backupZipPath = path.join(tempDir, 'backup.zip');
             await downloadBackupViaUI(page, backupZipPath);
@@ -128,25 +144,46 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
                 expect(preChatSnapshot.some(m => m.includes('跨模式恢复'))).toBe(false);
 
                 // Step 8: open Backup Manager and run restore via real DOM clicks.
+                // The runRestore success path ends in `location.reload()` (the
+                // Backup Manager callback), which destroys the success toast
+                // before it can be asserted on and reloads the page away from
+                // the Backup Manager. That navigation is the end-of-restore
+                // signal we wait on before reading the destination engine.
                 const scratchDbConfig = mapSourceModeToScratchCreds(sourceMode, containers);
-                await restoreBackupViaUI(page, backupZipPath, { sourceMode, scratchDbConfig });
-
-                // Step 9: poll the engine until the migrated chat lands.
-                // The runRestore POST is in flight after we resolved the
-                // confirm popup; the cross-mode orchestrator runs
-                // synchronously server-side and writes the chat before
-                // returning the HTTP response.
-                const dataDir = destServer.dataRoot;
-                let verify = { hasSeed: false, bodyLen: 0 };
-                const deadline = Date.now() + 60_000;
-                while (Date.now() < deadline) {
-                    verify = await readChatFromEngine(dataDir, destMode, destDbConfig);
-                    if (verify.hasSeed) break;
-                    await page.waitForTimeout(250);
+                const restoreReload = page.waitForEvent('framenavigated', {
+                    predicate: (frame) => frame === page.mainFrame(),
+                    timeout: 120_000,
+                });
+                // Count chunk PUTs while the restore upload is in flight.
+                // restoreBackupViaUI returns right after the confirm popup is
+                // resolved — the chunked upload starts after that, so the
+                // listener must stay attached through the reload.
+                const chunkRequests = [];
+                const recordChunkRequest = (req) => {
+                    if (req.url().includes('/restore-backup/uploads/') && req.url().includes('/chunks/')) {
+                        chunkRequests.push(req.url());
+                    }
+                };
+                page.on('request', recordChunkRequest);
+                try {
+                    await restoreBackupViaUI(page, backupZipPath, { sourceMode, scratchDbConfig });
+                    await restoreReload;
+                } finally {
+                    page.off('request', recordChunkRequest);
                 }
-                // Step 10: assertions.
+
+                // Step 9+10: assertions against the destination engine.
+                const dataDir = destServer.dataRoot;
+                const verify = await readChatFromEngine(dataDir, destMode, destDbConfig);
                 expect(verify.hasSeed).toBe(true);
                 expect(verify.bodyLen).toBeGreaterThanOrEqual(2);
+
+                if (seedLargeAssetBytes > 0) {
+                    const restoredAsset = path.join(destServer.dataRoot, 'default-user', 'user', 'files', 'multichunk-asset.bin');
+                    expect(fs.existsSync(restoredAsset)).toBe(true);
+                    expect(fs.statSync(restoredAsset).size).toBe(seedLargeAssetBytes);
+                    expect(chunkRequests.length).toBeGreaterThanOrEqual(2);
+                }
 
                 // Step 11: screenshot for visual review.
                 await page.screenshot({ path: path.join(tempDir, `verified-${specId}.png`), fullPage: true });
@@ -170,7 +207,7 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
 // DOM-level helpers
 // --------------------------------------------------------------------------
 
-async function openBackupManagerViaUI(page) {
+export async function openBackupManagerViaUI(page) {
     await ensureUserSettingsDrawerOpen(page);
     // The Backup Manager opens from inside the User Profile popup, which is
     // reached via the `#account_button` in the user-settings drawer.
@@ -228,10 +265,11 @@ async function restoreBackupViaUI(page, zipPath, { sourceMode, scratchDbConfig }
     // ends up taking, just without the DOM event plumbing.
     await resolveTopmostPopupAffirmative(page, baseOpenCount + 1);
 
-    // For mysql/pg source: a probe-driven prompt asks for the scratch URL.
+    // For mysql/pg source: the chunked upload + server-side assembly + probe
+    // run first, then the probe-driven prompt asks for the scratch URL.
     if ((sourceMode === 'mysql' || sourceMode === 'postgres') && scratchDbConfig) {
         const credsBlock = page.locator('.crossModeScratchCreds').last();
-        await credsBlock.waitFor({ state: 'visible', timeout: 15_000 });
+        await credsBlock.waitFor({ state: 'visible', timeout: 30_000 });
         const url = sourceMode === 'mysql' ? scratchDbConfig.mysql?.url : scratchDbConfig.postgres?.url;
         const inputSel = sourceMode === 'mysql' ? '.crossModeScratchMysqlUrl' : '.crossModeScratchPostgresUrl';
         // Use evaluate to set value directly and dispatch input event so

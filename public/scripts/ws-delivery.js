@@ -88,6 +88,40 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         }
     }
 
+    // Per-request inactivity timer. Armed when a proxied generation
+    // subscribes with { timeoutMs } (see proxiedFetch); reset on every
+    // head/chunk frame; cleared on end/error/unsubscribe/close. When it
+    // fires we reuse the user-abort teardown: unsubscribe with a
+    // TimeoutError (rejects headPromise pre-head, errors the stream
+    // post-head) and let the caller's onTimeout notify the server.
+    function disarmEntryTimer(entry) {
+        if (entry && entry.timeoutTimer) {
+            clearTimeout(entry.timeoutTimer);
+            entry.timeoutTimer = null;
+        }
+    }
+
+    function handleEntryTimeout(requestId, entry) {
+        entry.timeoutTimer = null;
+        const secondsText = String(Math.round((entry.timeoutMs / 1000) * 10) / 10);
+        const err = new DOMException(`No upstream activity for ${secondsText}s (request timed out)`, 'TimeoutError');
+        console.warn(`[ws-delivery] request timed out request_id=${requestId} timeout_ms=${entry.timeoutMs}`);
+        unsubscribe(requestId, err);
+        try {
+            if (typeof entry.onTimeout === 'function') entry.onTimeout(requestId);
+        } catch (cbErr) {
+            console.warn('[ws-delivery] onTimeout callback threw:', cbErr?.message || cbErr);
+        }
+    }
+
+    function armEntryTimer(requestId, entry) {
+        disarmEntryTimer(entry);
+        const ms = Number(entry?.timeoutMs);
+        if (!Number.isFinite(ms) || ms <= 0) return;
+        entry.timeoutTimer = setTimeout(() => handleEntryTimeout(requestId, entry), ms);
+        if (typeof entry.timeoutTimer?.unref === 'function') entry.timeoutTimer.unref();
+    }
+
     async function connectOnce() {
         // Coalesce concurrent connect attempts (initial connect + reconnect
         // + forceReconnect can all race). Without this the socket slot `ws`
@@ -173,8 +207,10 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                     const headers = (msg.headers && typeof msg.headers === 'object') ? msg.headers : {};
                     entry.resolveHead({ status, headers });
                 }
+                armEntryTimer(msg.request_id, entry);
             } else if (msg.type === 'chunk') {
                 if (typeof msg.seq === 'number') entry.lastSeq = msg.seq;
+                armEntryTimer(msg.request_id, entry);
                 // Fallback: if head frame never arrived (dispatch bug / very
                 // old server), resolve with 200 so the caller doesn't hang.
                 if (!entry.headResolved) {
@@ -184,6 +220,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0));
                 try { entry.controller.enqueue(bytes); } catch {}
             } else if (msg.type === 'end') {
+                disarmEntryTimer(entry);
                 if (typeof msg.seq === 'number') entry.lastSeq = msg.seq;
                 if (!entry.headResolved) {
                     entry.headResolved = true;
@@ -192,6 +229,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 try { entry.controller.close(); } catch {}
                 pending.delete(msg.request_id);
             } else if (msg.type === 'error') {
+                disarmEntryTimer(entry);
                 // Structured error frame from dispatch (thrown Error path).
                 // If head hasn't resolved, surface as HTTP 502 with the
                 // error message as body so callers can do `await response.text()`
@@ -268,7 +306,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         }
     }
 
-    function subscribeInternal(requestId, initialHeaders, fromSeq) {
+    function subscribeInternal(requestId, initialHeaders, fromSeq, options = {}) {
         let controller;
         const stream = new ReadableStream({
             start(c) { controller = c; },
@@ -289,14 +327,20 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         let resolveHead;
         let rejectHead;
         const headPromise = new Promise((res, rej) => { resolveHead = res; rejectHead = rej; });
-        pending.set(requestId, {
+        const entry = {
             controller,
             lastSeq: fromSeq > 0 ? fromSeq - 1 : 0,
             initialHeaders,
             resolveHead,
             rejectHead,
             headResolved: false,
-        });
+            timeoutMs: Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+                ? Math.floor(Number(options.timeoutMs))
+                : 0,
+            onTimeout: typeof options.onTimeout === 'function' ? options.onTimeout : null,
+            timeoutTimer: null,
+        };
+        pending.set(requestId, entry);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(fromSeq > 0
                 ? { type: 'resume', request_id: requestId, from_seq: fromSeq }
@@ -306,6 +350,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             // pick this up. Log so a hung request in this state is diagnosable.
             console.warn(`[ws-delivery] subscribe queued (ws not open, readyState=${ws?.readyState ?? 'null'}) request_id=${requestId}`);
         }
+        armEntryTimer(requestId, entry);
         return {
             stream,
             headPromise,
@@ -315,6 +360,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
 
     function unsubscribe(requestId, reason = null) {
         const entry = pending.get(requestId);
+        disarmEntryTimer(entry);
         if (ws && ws.readyState === WebSocket.OPEN) {
             try { ws.send(JSON.stringify({ type: 'unsubscribe', request_id: requestId })); } catch {}
         }
@@ -326,7 +372,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             // SimpleMutex.isBusy reset) is silently skipped.
             if (!entry.headResolved) {
                 entry.headResolved = true;
-                const err = reason instanceof Error
+                const err = reason instanceof Error || (reason && typeof reason.message === 'string')
                     ? reason
                     : new Error('ws-delivery: subscription cancelled before head');
                 entry.rejectHead(err);
@@ -355,13 +401,13 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             ticketProvider = provider;
             await connectOnce();
         },
-        subscribe(requestId, initialHeaders) {
+        subscribe(requestId, initialHeaders, options = {}) {
             // Always request replay from seq 1 to avoid a race: server-side
             // runLukerDispatch uses setImmediate, so dispatch may begin (and
             // events accumulate) before the client's WS subscribe arrives.
             // Bare `subscribe` is live-only and would drop those early events;
             // `resume {from_seq: 1}` replays from the start of the stream.
-            return subscribeInternal(requestId, initialHeaders || {}, 1);
+            return subscribeInternal(requestId, initialHeaders || {}, 1, options);
         },
         resume(requestId, fromSeq) {
             return subscribeInternal(requestId, {}, fromSeq);
@@ -384,6 +430,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             // callers still `await`ing headPromise / reader.read() hang
             // forever, orphaning their async chains (see unsubscribe).
             for (const entry of pending.values()) {
+                disarmEntryTimer(entry);
                 if (!entry.headResolved) {
                     entry.headResolved = true;
                     entry.rejectHead(new Error('ws-delivery: closed'));
@@ -525,12 +572,17 @@ export function installFetchProxy(delivery, options = {}) {
         // /jobs/status?id= with the same uuid). Otherwise mint a fresh one
         // and let the server echo it via x-luker-generation-id.
         let requestId = uuidv4();
+        let requestTimeoutMs = 0;
         try {
             const b = init?.body;
             if (typeof b === 'string') {
                 const parsed = JSON.parse(b);
                 const bodyId = String(parsed?.luker_generation?.job_id || '').trim();
                 if (bodyId) requestId = bodyId;
+                const bodyTimeout = Number(parsed?.luker_generation?.request_timeout_ms);
+                if (Number.isFinite(bodyTimeout) && bodyTimeout > 0) {
+                    requestTimeoutMs = Math.floor(bodyTimeout);
+                }
             }
         } catch { /* body not JSON or unparseable — keep the minted uuid */ }
         // Normalize caller headers to a plain object so `spread` works even
@@ -554,7 +606,10 @@ export function installFetchProxy(delivery, options = {}) {
         httpResp.headers.forEach((v, k) => {
             if (k.toLowerCase().startsWith('x-luker-')) initialHeaders[k] = v;
         });
-        const { stream, headPromise, unsubscribe } = delivery.subscribe(requestId, initialHeaders);
+        const { stream, headPromise, unsubscribe } = delivery.subscribe(requestId, initialHeaders, {
+            timeoutMs: requestTimeoutMs,
+            onTimeout: () => sendAbortNotification(requestId),
+        });
         console.info(`[ws-delivery] proxiedFetch subscribe request_id=${requestId} url=${String(url).split('?')[0]}`);
         // Wire caller-supplied AbortSignal: on abort, unsubscribe (which cancels
         // the WS-side stream) AND notify the server so it can stop the upstream

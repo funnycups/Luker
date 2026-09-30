@@ -107,7 +107,7 @@ import {
 import {
     buildEditToolResultPayload,
     buildPayloadForOutcome,
-} from '../../orchestrator/iter-studio/edit-tool-result-envelope.js';
+} from '../../../iteration-library/edit-tool-result-envelope.js';
 import { buildCpaSkillsBlock } from './skill-prompt.js';
 const skillsApi = Luker.getContext().skills;
 import { createCpaIterationSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';

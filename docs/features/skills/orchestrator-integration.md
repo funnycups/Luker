@@ -1,8 +1,8 @@
 # Orchestrator integration
 
-This page covers how skills attach to an orchestrator profile and how each agent ends up seeing the right ones at dispatch time.
+This page covers how skills attach to an orchestrator profile and how each agent sees the correct set at dispatch time.
 
-The high-level picture: an orchestrator profile carries a `skills` policy at two levels — **mode-level** (defaults) and **per-agent override** — and the runtime resolves both against the physical inventory before each dispatch. Agents see only their resolved visible set; the rest is filtered out.
+At a high level, an orchestrator profile carries a `skills` policy at two levels — **mode-level** (defaults) and **per-agent override** — and the runtime resolves both against the physical inventory before each dispatch. Agents see only their resolved visible set; the rest is filtered out.
 
 ## The policy shape
 
@@ -79,7 +79,7 @@ Effective visible = agent visible. The mode defaults are completely replaced.
 // Effective: ["only-this-one"]
 ```
 
-This is useful for agents that should be quarantined from the mode-wide writing rules — for example, an agent that just produces structured data should not see the prose-critic skills.
+This is useful for agents that should be quarantined from the mode-wide writing rules — for example, an agent that only produces structured data should not see the prose-critic skills.
 
 ### Deny is always union
 
@@ -96,7 +96,7 @@ This is useful for agents that should be quarantined from the mode-wide writing 
 
 ### Wildcards
 
-`visible` accepts `"*"` to mean "all installed skills." Useful early on when you want an agent to see whatever's around without listing names:
+`visible` accepts `"*"` to mean "all installed skills." Useful in early iterations, when an agent should see all installed skills without listing names:
 
 ```jsonc
 "mainAgent": {
@@ -104,7 +104,7 @@ This is useful for agents that should be quarantined from the mode-wide writing 
 }
 ```
 
-Wildcards combine with `"+"` and `deny` as you'd expect.
+Wildcards combine with `"+"` and `deny` as expected.
 
 ## What the agent actually sees
 
@@ -127,7 +127,7 @@ A short `<available_skills>` block is appended to the agent's system message:
 
 This is the catalog only — name + description. The agent learns what's available without spending a tool round on `skill_list`.
 
-The 18-ish entries for the default director profile come in at ~150–300 tokens total — cheap.
+The roughly 18 entries of the default director profile total about 150–300 tokens — inexpensive.
 
 ### 2. Three function tools
 
@@ -139,9 +139,9 @@ Gated to the visible set, these are the only way the agent can access skill cont
 | `skill_read({ name, path?, offset?, limit? })` | `path` defaults to SKILL.md; `offset`/`limit` are line numbers | `{ content, totalLines, truncated }` |
 | `skill_search({ name, query, path?, limit?, contextLines? })` | substring search inside a single skill's files | `{ hits: [{ path, lineStart, lineEnd, snippet }] }` |
 
-The agent calls `skill_read` the moment it needs the actual body. `skill_search` is for when the skill is large and only a section is relevant.
+The agent calls `skill_read` the moment it needs the actual body. `skill_search` is intended for large skills where only one section is relevant.
 
-Hard runtime cap: `skill_read` responses are capped at 50 KB. If truncated, the agent uses `offset` to continue. This bounds context cost even when a skill ships large references.
+Hard runtime cap: `skill_read` responses are capped at 50 KB. If truncated, the agent uses `offset` to continue. This bounds context cost even when a skill includes large reference files.
 
 ## A worked director example
 
@@ -209,7 +209,7 @@ Each orchestrator mode injects the catalog at slightly different points but the 
 In all modes, an agent without an explicit `skills.skills` field inherits the mode-level defaults via Rule 1 above.
 
 ::: info Review nodes are catalog-skipped
-For spec mode's review nodes, the catalog injection is deliberately skipped — review is a structured judgment task, not a content-generation one, and adding `<available_skills>` to its prompt just adds noise. The review node still sees skills if it explicitly calls `skill_list` or `skill_read`, but the autoinjected catalog is omitted.
+For spec mode's review nodes, the catalog injection is deliberately skipped — review is a structured judgment task, not a content-generation one, and adding `<available_skills>` to its prompt just adds noise. The review node still sees skills if it explicitly calls `skill_list` or `skill_read`, but the auto-injected catalog is omitted.
 :::
 
 ## Stale references
@@ -221,7 +221,7 @@ For spec mode's review nodes, the catalog injection is deliberately skipped — 
 
 This soft-fail behavior is deliberate. It means:
 
-- Importing a card whose bundled skills you skipped doesn't break anything — the references just dangle.
+- Importing a card whose bundled skills you skipped does not break anything — the references remain dangling.
 - Deleting a skill doesn't require you to clean up every profile that referenced it.
 - Renaming a skill is a 1-step operation — references go stale, but dispatch keeps working until you choose to fix them.
 
@@ -229,7 +229,7 @@ This soft-fail behavior is deliberate. It means:
 
 In the orchestrator panel, each agent's settings card shows a **Skills** row:
 
-![Per-agent skill chips with + inherit](/_screenshots/skills/agent-skill-chips.png)
+![Skill chips with the + inherit marker](/_screenshots/skills/rp-demo-11-director-chip-added.png)
 
 - **`+`** chip — the explicit "inherit mode default" marker (appears when `visible` starts with `"+"`).
 - One chip per named skill. Click to remove; click **Add…** to pick from your installed inventory.
@@ -237,7 +237,7 @@ In the orchestrator panel, each agent's settings card shows a **Skills** row:
 
 The mode-level **Skills** row at the top of the panel works the same way. Editing it updates `mode.skills`; editing an agent's row updates that agent's override.
 
-For AI-driven editing, the [iter-studio](/features/orchestrator/iteration-studio) ships skill-binding tools (`skill_bind_to_agent`, `skill_unbind_from_agent`, `skill_set_mode_defaults`) — describe what you want in natural language and the AI patches the policy via tool calls.
+For AI-driven editing, the [AI Iteration Studio](/features/orchestrator/iteration-studio) ships skill-binding tools (`skill_bind_to_agent`, `skill_unbind_from_agent`, `skill_set_mode_defaults`) — describe what you want in natural language and the AI patches the policy via tool calls.
 
 ## Mode-switch invalidation
 

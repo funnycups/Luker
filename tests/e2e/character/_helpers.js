@@ -233,3 +233,26 @@ export function writeEmbeddedCharacter({ dataRoot, handle = 'default-user', avat
     writeFileSync(resolve(charsDir, avatarFile), png);
     return avatarFile;
 }
+
+/**
+ * Drive the More-menu replace flow up to the point where the replacement
+ * card file has been handed to the hidden file input. The caller is
+ * responsible for whatever popup follows (binding conflicts, world book).
+ */
+export async function openReplaceWithFile(page, pngPath) {
+    await page.evaluate(() => {
+        const sel = document.querySelector('#char-management-dropdown');
+        if (!sel) throw new Error('#char-management-dropdown not found');
+        const opt = sel.querySelector('#replace_update');
+        if (!opt) throw new Error('#replace_update option not found');
+        opt.selected = true;
+        if (window.jQuery) window.jQuery(sel).trigger('change');
+        else sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const firstPopup = page.locator('dialog.popup[open]').last();
+    await firstPopup.waitFor({ state: 'visible', timeout: 5000 });
+    const fileBtn = firstPopup.locator('.popup-button-custom', { hasText: /Replace with File/i }).first();
+    await fileBtn.click();
+    await firstPopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    await page.locator('#character_replace_file').setInputFiles(pngPath);
+}

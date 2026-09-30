@@ -57,6 +57,7 @@ import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
 import { extension_settings } from './extensions.js';
 import { acquire as acquireRequestSlot } from './extensions/connection-manager/request-throttler.js';
 import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
+import { getRequestTimeoutMs } from './extensions/connection-manager/request-timeout.js';
 import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
 import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
 
@@ -4273,11 +4274,11 @@ function isChatCompletionResponseEmpty(data) {
 
 /**
  * @typedef {object} PostChatCompletionResult
- * @property {Response} response The raw fetch Response.
- * @property {any|null} cachedJson Pre-parsed body when the fetcher peeked it
- *   for empty-response detection; caller should prefer this over calling
- *   `response.json()` again. `null` when body was not peeked (stream request,
- *   maxRetries=0, non-JSON body, or HTTP error).
+ * @property {Response} response The raw fetch Response, body unconsumed. The
+ *   caller must read it through `response.json()` so instance-level wrappers
+ *   installed by third-party scripts (e.g. SPreset's non-streaming tool-call
+ *   consumption hook) transform the payload. The empty-response peek inside
+ *   the fetcher parses a clone and must never feed the caller.
  */
 
 /**
@@ -4293,13 +4294,21 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
     // consumer and must not have their body pre-read.
     const shouldDetectEmpty = !isStreamRequest && getMaxRequestRetries(apiPresetName) > 0;
 
-    let cachedJson = null;
+    const requestTimeoutMs = getRequestTimeoutMs(apiPresetName);
+    const requestBodyWithTimeout = requestTimeoutMs > 0
+        ? {
+            ...requestBody,
+            luker_generation: {
+                ...(requestBody?.luker_generation || {}),
+                request_timeout_ms: requestTimeoutMs,
+            },
+        }
+        : requestBody;
 
     const response = await withProfileRetry(async () => {
-        cachedJson = null;
         const r = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
-            body: JSON.stringify(unescapeMacroBracesInRequestData(requestBody)),
+            body: JSON.stringify(unescapeMacroBracesInRequestData(requestBodyWithTimeout)),
             headers: getRequestHeaders(),
             signal,
         });
@@ -4320,7 +4329,6 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
             // as a retriable network-class error.
             throw err;
         }
-        cachedJson = parsed;
         return r;
     }, {
         profileName: apiPresetName,
@@ -4349,7 +4357,7 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
         throw new Error(`Got response status ${response.status} from ${response.url}: ${responseBody.substring(0, 200)}`);
     }
 
-    return { response, cachedJson };
+    return { response };
 }
 
 async function attemptPlainTextFunctionCallRetry({
@@ -4408,8 +4416,8 @@ async function attemptPlainTextFunctionCallRetry({
                 requestBody.secret_id = requestSecretId;
             }
 
-            const { response: retryResponse, cachedJson: retryCachedJson } = await postChatCompletionGenerateRequest(requestBody, signal, { quietErrors: true, apiPresetName });
-            const retryData = retryCachedJson ?? await retryResponse.json();
+            const { response: retryResponse } = await postChatCompletionGenerateRequest(requestBody, signal, { quietErrors: true, apiPresetName });
+            const retryData = await retryResponse.json();
             checkQuotaError(retryData, { quiet: true });
             checkModerationError(retryData, { quiet: true });
 
@@ -4600,7 +4608,7 @@ async function sendOpenAIRequest(type, messages, signal, {
             });
         }
     }
-    const { response, cachedJson } = await postChatCompletionGenerateRequest(requestBody, signal, { apiPresetName });
+    const { response } = await postChatCompletionGenerateRequest(requestBody, signal, { apiPresetName });
     const generationIdHeader = response.headers.get('x-luker-generation-id');
     if (shouldTrackLukerGenerationState && generationIdHeader) {
         lastOpenAIGenerationId = generationIdHeader;
@@ -4805,7 +4813,12 @@ async function sendOpenAIRequest(type, messages, signal, {
                 persisted: lastOpenAIReplyPersistedByServer,
             });
         }
-        let data = cachedJson ?? await response.json();
+        // Read through the response instance's own json(): third-party hooks
+        // (e.g. SPreset's non-streaming tool-call consumption) patch it to
+        // transform the payload before ST sees it. The retry empty-body peek
+        // must not short-circuit this — its clone-based parse bypasses those
+        // instance patches.
+        let data = await response.json();
 
         if (requestSettings.chat_completion_source === chat_completion_sources.OPENAI_RESPONSES && !data.error) {
             data = responsesResultToChatCompletion(data);

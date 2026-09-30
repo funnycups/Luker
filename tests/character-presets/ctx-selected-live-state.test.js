@@ -218,6 +218,7 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
     hasUnsavedOpenAIPresetChanges: () => false,
     promptManager: {},
     applyPresetByName: () => Promise.resolve(),
+    maybeApplyCharacterBoundPreset: () => Promise.resolve(),
     parseExampleIntoIndividual: () => [],
     getChatCompletionPreset: () => null,
     chat_completion_sources: {},
@@ -270,8 +271,13 @@ jest.unstable_mockModule('../../public/scripts/action-loader.js', () => ({
 jest.unstable_mockModule('../../public/scripts/macros.js', () => ({
     MacrosParser: { registerMacro: () => {}, unregisterMacro: () => {} },
 }));
+jest.unstable_mockModule('../../public/scripts/personas.js', () => ({
+    getDedicatedPersonaEntriesFromCharacter: () => null,
+    setCharacterDedicatedPersonaEntries: async () => {},
+}));
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
     callGenericPopup: () => Promise.resolve(''), Popup: class {}, POPUP_RESULT: { CANCELLED: 0, AFFIRMATIVE: 1 }, POPUP_TYPE: { DISPLAY: 0 },
+    PopupUtils: { BuildTextWithHeader: (header, text) => `${header}\n${text ?? ''}` },
 }));
 jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
     power_user: {}, registerDebugFunction: () => {}, performFuzzySearch: () => [],
@@ -332,6 +338,17 @@ jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
     getStringHash: () => '',
     createThumbnail: () => Promise.resolve(''),
     isValidUrl: () => false,
+    equalsIgnoreCaseAndAccents: (a, b) => {
+        if (!a || !b) return a === b;
+        const normalizeLookupText = (value) => {
+            const text = String(value ?? '').trim();
+            if (!text) return '';
+            return text.normalize('NFC').replace(/[\uFE0E\uFE0F\u{E0100}-\u{E01EF}]/gu, '');
+        };
+        const normalizedA = normalizeLookupText(a).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+        const normalizedB = normalizeLookupText(b).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+        return normalizedA === normalizedB;
+    },
 }));
 jest.unstable_mockModule('../../public/scripts/variables.js', () => ({
     addGlobalVariable: () => {}, addLocalVariable: () => {},

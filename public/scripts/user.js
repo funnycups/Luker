@@ -1,4 +1,4 @@
-import { getRequestHeaders, uploadWithProgress } from '../script.js';
+import { getRequestHeaders } from '../script.js';
 import {
     clearFrontendLogs,
     getFrontendLogsSnapshot,
@@ -11,6 +11,7 @@ import { canViewSecrets } from './secrets.js';
 import { renderTemplateAsync } from './templates.js';
 import { copyText, debounce, ensureImageFormatSupported, getBase64Async, humanFileSize } from './utils.js';
 import { downloadFromServer } from './luker-download.js';
+import { uploadFileInChunks, finalizeRestoreUpload, abortRestoreUpload, RestoreUploadError } from './luker-chunked-upload.js';
 import { formatAnnouncementBody } from './announcements.js';
 import { buildStorageBackendCreds } from './admin-storage-backend.js';
 import { openLanSyncPanel } from './lan-sync.js';
@@ -732,6 +733,10 @@ function formatRestorePhaseMessage(event, archiveLabel) {
             return total > 0
                 ? t`Snapshotting existing data: ${current} / ${total} (${pct}%)`
                 : t`Snapshotting existing data...`;
+        case 'assemble':
+            return total > 0
+                ? t`Assembling backup archive: ${humanFileSize(current, true, 1)} / ${humanFileSize(total, true, 1)} (${pct}%)`
+                : t`Assembling backup archive...`;
         case 'extract':
             return total > 0
                 ? t`Restoring files: ${current} / ${total} (${pct}%)`
@@ -751,43 +756,23 @@ function formatRestorePhaseMessage(event, archiveLabel) {
     }
 }
 
-async function restoreUserData(handle, file, selection, mode, callback, { onProgress = null, onPhaseProgress = null, scratchCreds = null } = {}) {
-    const formData = new FormData();
-    formData.append('avatar', file);
-    formData.append('handle', handle);
-    formData.append('mode', mode);
-    formData.append('selection', JSON.stringify(selection));
-    if (scratchCreds?.mysqlUrl) formData.append('scratchMysqlUrl', scratchCreds.mysqlUrl);
-    if (scratchCreds?.postgresUrl) formData.append('scratchPostgresUrl', scratchCreds.postgresUrl);
-    if (scratchCreds?.mysqlPoolSize != null) formData.append('scratchMysqlPoolSize', String(scratchCreds.mysqlPoolSize));
-    if (scratchCreds?.postgresPoolSize != null) formData.append('scratchPostgresPoolSize', String(scratchCreds.postgresPoolSize));
+async function restoreUserData(uploadId, handle, selection, mode, callback, { onPhaseProgress = null, scratchCreds = null } = {}) {
+    const payload = { uploadId, handle, mode, selection };
+    if (scratchCreds?.mysqlUrl) payload.scratchMysqlUrl = scratchCreds.mysqlUrl;
+    if (scratchCreds?.postgresUrl) payload.scratchPostgresUrl = scratchCreds.postgresUrl;
+    if (scratchCreds?.mysqlPoolSize != null) payload.scratchMysqlPoolSize = scratchCreds.mysqlPoolSize;
+    if (scratchCreds?.postgresPoolSize != null) payload.scratchPostgresPoolSize = scratchCreds.postgresPoolSize;
 
     const stream = createRestoreProgressStream(onPhaseProgress);
-    const response = await uploadWithProgress('/api/users/restore-backup', formData, {
-        onProgress,
-        onResponseChunk: stream.onChunk,
-        headers: { ...getRequestHeaders({ omitContentType: true }), 'Accept': 'application/x-ndjson, application/json' },
+    const response = await fetch('/api/users/restore-backup', {
+        method: 'POST',
+        headers: { ...getRequestHeaders(), 'Accept': 'application/x-ndjson, application/json' },
+        body: JSON.stringify(payload),
     });
-    stream.finish(response.text);
 
-    if (stream.streamed) {
-        if (stream.error) {
-            const err = new Error(stream.error);
-            // NDJSON stream cannot carry the structured crossModeScratchRequired payload, so a
-            // creds-missing error in streaming mode surfaces as a plain message. Callers wanting
-            // the structured prompt rely on the non-streaming path (or the probe endpoint).
-            throw err;
-        }
-        if (!stream.result) {
-            throw new Error('Restore stream ended without a result.');
-        }
-        callback?.(stream.result);
-        return stream.result;
-    }
-
-    const data = response.json();
     if (!response.ok) {
-        const err = new Error(data?.error || 'Failed to restore backup');
+        const data = await response.json().catch(() => ({}));
+        const err = new Error(data?.error || `Failed to restore backup (${response.status})`);
         // Forward the structured cross-mode payloads on the error so the UI
         // can drive the scratch-creds prompt without parsing the message.
         if (data?.crossModeScratchRequired) err.crossModeScratchRequired = data.crossModeScratchRequired;
@@ -796,6 +781,33 @@ async function restoreUserData(handle, file, selection, mode, callback, { onProg
         throw err;
     }
 
+    const contentType = String(response.headers.get('content-type') || '');
+    let finalText = '';
+    if (response.body && contentType.includes('application/x-ndjson')) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            stream.onChunk(decoder.decode(value, { stream: true }));
+        }
+    } else {
+        finalText = await response.text();
+    }
+    stream.finish(finalText);
+
+    if (stream.streamed) {
+        if (stream.error) {
+            throw new Error(stream.error);
+        }
+        if (!stream.result) {
+            throw new Error('Restore stream ended without a result.');
+        }
+        callback?.(stream.result);
+        return stream.result;
+    }
+
+    const data = finalText ? JSON.parse(finalText) : {};
     callback?.(data);
     return data;
 }
@@ -809,13 +821,11 @@ async function restoreUserData(handle, file, selection, mode, callback, { onProg
  * Returns `{ engineKind, schemaVersion, sourceHandle, crossModeRequired,
  * scratchCredsNeeded }` from POST /api/users/restore-backup/probe.
  */
-async function probeBackupArchive(file) {
-    const formData = new FormData();
-    formData.append('avatar', file);
+async function probeBackupArchive(uploadId) {
     const response = await fetch('/api/users/restore-backup/probe', {
         method: 'POST',
-        headers: { ...getRequestHeaders({ omitContentType: true }) },
-        body: formData,
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ uploadId }),
     });
     if (!response.ok) {
         const txt = await response.text().catch(() => '');
@@ -1227,37 +1237,6 @@ async function openBackupManager(handle, callback) {
             return;
         }
 
-        // Probe the ZIP first to detect whether cross-mode conversion is
-        // needed and (if mysql/pg source) whether the user must supply a
-        // scratch DB URL before the actual upload starts. The probe is a
-        // separate POST that only reads the ZIP's _engine_meta.json — it
-        // doesn't kick off the snapshot/extract pipeline.
-        let scratchCreds = null;
-        try {
-            setActionBusy(true);
-            const probe = await probeBackupArchive(file);
-            if (probe?.crossModeRequired) {
-                if (probe.scratchCredsNeeded) {
-                    const reveal = await revealCrossModeScratchPrompt(template, probe.scratchCredsNeeded);
-                    if (!reveal.ok) {
-                        toastr.info(t`Restore cancelled — scratch DB connection not provided.`, t`Cross-Mode Restore`);
-                        setActionBusy(false);
-                        return;
-                    }
-                    scratchCreds = reveal.creds;
-                } else {
-                    // fs-source on db server — no creds needed; just notify.
-                    toastr.info(t`Cross-mode restore: converting backup into current storage engine.`, t`Cross-Mode Restore`);
-                }
-            }
-        } catch (err) {
-            console.warn('Probe failed (continuing with direct restore):', err);
-            // Probe failures are non-fatal — fall through to the real restore;
-            // it'll surface a definitive error if the ZIP is truly invalid.
-        } finally {
-            setActionBusy(false);
-        }
-
         let progressToast;
         const updateProgressMessage = (text) => {
             if (progressToast && typeof progressToast.find === 'function') {
@@ -1269,6 +1248,10 @@ async function openBackupManager(handle, callback) {
             return t`Uploading ${file.name}: ${pct}% (${humanFileSize(loaded, true, 1)} / ${humanFileSize(total, true, 1)})`;
         };
         const formatRestorePhase = (event) => formatRestorePhaseMessage(event, file.name);
+
+        let uploadState = null;
+        let restoreStarted = false;
+
         try {
             progressToast = toastr.info(
                 formatUploadingStatus(0, file.size),
@@ -1276,14 +1259,93 @@ async function openBackupManager(handle, callback) {
                 { timeOut: 0, extendedTimeOut: 0, closeButton: false, tapToDismiss: false },
             );
             setActionBusy(true);
-            const result = await restoreUserData(handle, file, selection, mode, undefined, {
-                onProgress: ({ loaded, total, done }) => {
-                    if (done) {
-                        updateProgressMessage(t`Processing ${file.name}...`);
+
+            // 1. Chunked upload. Every chunk retries internally; when the
+            // budget is exhausted the server-side session survives, so the
+            // operator can resume from the last acknowledged offset.
+            for (;;) {
+                try {
+                    uploadState = await uploadFileInChunks(file, {
+                        handle,
+                        headers: getRequestHeaders(),
+                        resume: uploadState
+                            ? { uploadId: uploadState.uploadId, uploadedBytes: uploadState.uploadedBytes }
+                            : null,
+                        onProgress: ({ loaded, total }) => updateProgressMessage(formatUploadingStatus(loaded, total)),
+                        onRetry: ({ reason, attempt, maxRetries }) => {
+                            updateProgressMessage(reason === 'payload_too_large'
+                                ? t`Chunk too large for the server, splitting and retrying…`
+                                : t`Chunk upload failed, retrying (${attempt}/${maxRetries})…`);
+                        },
+                    });
+                    break;
+                } catch (error) {
+                    if (!(error instanceof RestoreUploadError)) {
+                        throw error;
+                    }
+                    uploadState = { uploadId: error.uploadId, uploadedBytes: error.uploadedBytes };
+                    const pct = file.size > 0 ? Math.round((error.uploadedBytes / file.size) * 100) : 0;
+                    const retry = await callGenericPopup(
+                        t`Upload interrupted at ${pct}%. Retry from where it stopped?`,
+                        POPUP_TYPE.CONFIRM,
+                        '',
+                        { okButton: t`Retry`, cancelButton: t`Cancel`, wide: false, large: false },
+                    );
+                    if (retry !== POPUP_RESULT.AFFIRMATIVE) {
+                        await abortRestoreUpload(error.uploadId, { headers: getRequestHeaders() });
+                        toastr.info(t`Backup upload cancelled.`, t`Backup and Restore`);
                         return;
                     }
-                    updateProgressMessage(formatUploadingStatus(loaded, total));
-                },
+                }
+            }
+
+            // 2. Assemble the chunks server-side (streamed progress — a
+            // multi-GB concat is not instant). Retry once: the server-side
+            // finalize is idempotent, so a transient network blip must not
+            // throw away the whole upload.
+            updateProgressMessage(formatRestorePhase({ phase: 'assemble', current: 0, total: file.size })); // banned-words-allow
+            for (let attempt = 1; ; attempt += 1) {
+                try {
+                    await finalizeRestoreUpload(uploadState.uploadId, {
+                        headers: getRequestHeaders(),
+                        onProgress: ({ copied, total }) => updateProgressMessage(formatRestorePhase({ phase: 'assemble', current: copied, total })), // banned-words-allow
+                    });
+                    break;
+                } catch (assembleError) {
+                    if (attempt >= 2) {
+                        throw assembleError;
+                    }
+                    console.warn('Upload assembly failed; retrying once:', assembleError);
+                }
+            }
+
+            // 3. Probe the assembled ZIP to detect whether cross-mode
+            // conversion is needed. Probe failures stay non-fatal: the
+            // restore request surfaces a definitive error for invalid ZIPs.
+            let scratchCreds = null;
+            try {
+                const probe = await probeBackupArchive(uploadState.uploadId);
+                if (probe?.crossModeRequired) {
+                    if (probe.scratchCredsNeeded) {
+                        const reveal = await revealCrossModeScratchPrompt(template, probe.scratchCredsNeeded);
+                        if (!reveal.ok) {
+                            toastr.info(t`Restore cancelled — scratch DB connection not provided.`, t`Cross-Mode Restore`);
+                            return;
+                        }
+                        scratchCreds = reveal.creds;
+                    } else {
+                        // fs-source on db server — no creds needed; just notify.
+                        toastr.info(t`Cross-mode restore: converting backup into current storage engine.`, t`Cross-Mode Restore`);
+                    }
+                }
+            } catch (err) {
+                console.warn('Probe failed (continuing with direct restore):', err);
+            }
+
+            // 4. Restore. The server consumes the upload session in its own
+            // finally block, so no client-side cleanup is needed past here.
+            restoreStarted = true;
+            const result = await restoreUserData(uploadState.uploadId, handle, selection, mode, undefined, {
                 onPhaseProgress: (event) => {
                     const message = formatRestorePhase(event);
                     if (message) {
@@ -1310,6 +1372,14 @@ async function openBackupManager(handle, callback) {
             callback?.(result);
         } catch (error) {
             console.error('Error restoring user data:', error);
+            // The server consumes the upload session in its own finally, but
+            // that only happens once the restore request reaches it. A
+            // transport-level failure (offline, DNS, proxy drop) leaves the
+            // session on disk, so drop it best-effort here. Idempotent: a
+            // session the server already consumed answers with 404.
+            if (restoreStarted && uploadState?.uploadId) {
+                abortRestoreUpload(uploadState.uploadId, { headers: getRequestHeaders() });
+            }
             // If the server told us we still need scratch creds (e.g. probe
             // race or operator skipped it), reveal the prompt so they can
             // retry from a clean state.
@@ -1318,6 +1388,9 @@ async function openBackupManager(handle, callback) {
             }
             toastr.error(String(error.message || error), t`Failed to restore backup`);
         } finally {
+            if (uploadState?.uploadId && !restoreStarted) {
+                abortRestoreUpload(uploadState.uploadId, { headers: getRequestHeaders() });
+            }
             if (progressToast) {
                 toastr.clear(progressToast);
             }
@@ -1684,7 +1757,7 @@ async function openLogsViewer() {
 
         noteElement.text(isFrontendConsoleDebugLoggingEnabled()
             ? t`This viewer shows frontend console logs captured in this app session.`
-            : t`Verbose frontend debug logs are off. Only frontend errors are captured until you enable them in User Settings.`);
+            : t`Frontend debug logs are off. Console output of every level is still recorded here; turn the switch on in User Settings to also record API request logs and echo routine output to the browser console.`);
     };
 
     const isBackendSearchActive = () => currentSource === 'server' && currentSearchTerm.length > 0;

@@ -3422,6 +3422,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
 
     let result = { format: '', data: '' };
     const currentChatId = getCurrentChatId();
+    const context = getContext();
 
     try {
         result = await withProfileRetry(async () => {
@@ -3541,7 +3542,12 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
     }
 
     const filename = characterName ? `${characterName}_${humanizedDateTime()}` : humanizedDateTime();
-    const base64Image = await saveBase64AsFile(result.data, characterName, filename, result.format);
+    const savedAttribution = currentChatId ? {
+        char_dir: context.groupId ? '' : String(context.characters[context.characterId]?.avatar || '').replace(/\.png$/i, ''),
+        chat_name: String(currentChatId),
+        is_group: !!context.groupId,
+    } : null;
+    const base64Image = await saveBase64AsFile(result.data, characterName, filename, result.format, savedAttribution);
     callback
         ? await callback(prompt, base64Image, generationType, additionalNegativePrefix, initiator, prefixedPrompt, result.format)
         : await sendMessage(prompt, base64Image, generationType, additionalNegativePrefix, initiator, prefixedPrompt, result.format);

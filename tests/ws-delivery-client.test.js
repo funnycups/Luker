@@ -260,3 +260,64 @@ describe('lukerDelivery client', () => {
         expect(combined).toBe('hello');
     });
 });
+
+describe('lukerDelivery request inactivity timeout', () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    async function setup() {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const ws = MockWebSocket.instances.at(-1);
+        return { delivery, ws };
+    }
+
+    test('pre-head timeout rejects headPromise with TimeoutError, unsubscribes, fires onTimeout', async () => {
+        const { delivery, ws } = await setup();
+        const onTimeout = jest.fn();
+        const { headPromise } = delivery.subscribe('req-t1', {}, { timeoutMs: 40, onTimeout });
+        await expect(headPromise).rejects.toMatchObject({ name: 'TimeoutError' });
+        expect(onTimeout).toHaveBeenCalledWith('req-t1');
+        expect(ws.sent.some(s => s.includes('"unsubscribe"'))).toBe(true);
+    });
+
+    test('head and chunk frames reset the timer; silence after them errors the stream', async () => {
+        const { delivery, ws } = await setup();
+        const onTimeout = jest.fn();
+        const { stream } = delivery.subscribe('req-t2', {}, { timeoutMs: 100, onTimeout });
+        ws._receive({ type: 'head', request_id: 'req-t2', status: 200, headers: {} });
+        for (let i = 0; i < 4; i++) {
+            ws._receive({ type: 'chunk', request_id: 'req-t2', seq: i + 1, data: 'QQ==' });
+            await sleep(40);
+        }
+        expect(onTimeout).not.toHaveBeenCalled();
+        const reader = stream.getReader();
+        await reader.read();
+        await sleep(250);
+        expect(onTimeout).toHaveBeenCalledTimes(1);
+        await expect(reader.read()).rejects.toMatchObject({ name: 'TimeoutError' });
+    });
+
+    test('end clears the timer', async () => {
+        const { delivery, ws } = await setup();
+        const onTimeout = jest.fn();
+        delivery.subscribe('req-t3', {}, { timeoutMs: 40, onTimeout });
+        ws._receive({ type: 'head', request_id: 'req-t3', status: 200, headers: {} });
+        ws._receive({ type: 'end', request_id: 'req-t3', seq: 1 });
+        await sleep(120);
+        expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    test('timeoutMs 0 or missing keeps the old no-timer behavior', async () => {
+        const { delivery } = await setup();
+        const { headPromise } = delivery.subscribe('req-t4', {}, { timeoutMs: 0 });
+        const outcome = await Promise.race([
+            // two-arg then: absorbs the not-a-timer rejection that delivery.close()
+            // causes later, so Jest sees no unhandled rejection.
+            headPromise.then(() => 'resolved', () => 'rejected'),
+            sleep(80).then(() => 'pending'),
+        ]);
+        expect(outcome).toBe('pending');
+        delivery.close();
+    });
+});

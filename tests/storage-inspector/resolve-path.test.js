@@ -2,6 +2,9 @@
 // playwright plugin misfires on jest `test.each` (reads as standalone expect).
 // Every expect here is inside a jest test block.
 
+import path from 'node:path';
+import { promises as fsPromises } from 'node:fs';
+
 import { makeFixtureUser } from './_fixture-helper.js';
 import { resolvePath, StorageInspectorError } from '../../src/storage/inspector.js';
 
@@ -82,6 +85,81 @@ describe('resolvePath — L0/L1/L2/L3/L4 dispatch', () => {
             const res = await resolvePath(userRoot, ['images', 'backgrounds'], OPTS);
             expect(res.path).toEqual(['images', 'backgrounds']);
             expect(res.isLeaf).toBe(true);
+        } finally { await cleanup(); }
+    });
+});
+
+describe('resolvePath — directory drill-down', () => {
+    test('["images","user-images","<folder>"] lists the images inside the character folder', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ images: true });
+        try {
+            const folder = path.join(userRoot, 'user/images/Seraphina Recalled');
+            await fsPromises.mkdir(folder, { recursive: true });
+            await fsPromises.writeFile(path.join(folder, 'portrait.png'), Buffer.alloc(2_048));
+            const res = await resolvePath(userRoot, ['images', 'user-images', 'Seraphina Recalled'], OPTS);
+            expect(res.path).toEqual(['images', 'user-images', 'Seraphina Recalled']);
+            expect(res.entries.map(e => e.label)).toContain('portrait.png');
+            expect(res.breadcrumbs.map(c => c.label)).toEqual(['Storage', 'Images', 'Chat Images', 'Seraphina Recalled']);
+            expect(res.breadcrumbs.at(-1).path).toEqual(['images', 'user-images', 'Seraphina Recalled']);
+        } finally { await cleanup(); }
+    });
+
+    test('["extensions","foo"] lists the files inside an extension folder', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ extensions: true });
+        try {
+            const res = await resolvePath(userRoot, ['extensions', 'foo'], OPTS);
+            expect(res.entries.map(e => e.label).sort()).toEqual(['index.js', 'manifest.json']);
+            expect(res.breadcrumbs.map(c => c.label)).toEqual(['Storage', 'Extensions', 'foo']);
+        } finally { await cleanup(); }
+    });
+
+    test('["vectors","index_a"] lists the vector index files', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ vectors: true });
+        try {
+            const res = await resolvePath(userRoot, ['vectors', 'index_a'], OPTS);
+            expect(res.entries.map(e => e.label)).toContain('data.bin');
+        } finally { await cleanup(); }
+    });
+
+    test('nested folders keep drilling until files', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ images: true });
+        try {
+            const nested = path.join(userRoot, 'user/images/Seraphina/2024');
+            await fsPromises.mkdir(nested, { recursive: true });
+            await fsPromises.writeFile(path.join(nested, 'shot.png'), Buffer.alloc(512));
+
+            const mid = await resolvePath(userRoot, ['images', 'user-images', 'Seraphina'], OPTS);
+            const sub = mid.entries.find(e => e.label === '2024');
+            expect(sub.canDrill).toBe(true);
+
+            const leaf = await resolvePath(userRoot, ['images', 'user-images', 'Seraphina', '2024'], OPTS);
+            expect(leaf.entries.map(e => e.label)).toContain('shot.png');
+        } finally { await cleanup(); }
+    });
+
+    test('drilling into a file rejects with E_INVALID_PATH', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ images: true });
+        try {
+            await expect(resolvePath(userRoot, ['images', 'backgrounds', 'city.jpg'], OPTS))
+                .rejects.toMatchObject({ code: 'E_INVALID_PATH' });
+        } finally { await cleanup(); }
+    });
+
+    test('drilling into a missing folder rejects with E_INVALID_PATH', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ images: true });
+        try {
+            await expect(resolvePath(userRoot, ['images', 'user-images', 'no-such-folder'], OPTS))
+                .rejects.toMatchObject({ code: 'E_INVALID_PATH' });
+        } finally { await cleanup(); }
+    });
+
+    test('multi-rel sub-category has no drilldown', async () => {
+        const { userRoot, cleanup } = await makeFixtureUser({ presets: true });
+        try {
+            await fsPromises.mkdir(path.join(userRoot, 'themes/solarized'), { recursive: true });
+            await fsPromises.writeFile(path.join(userRoot, 'themes/solarized/theme.css'), 'body{}');
+            await expect(resolvePath(userRoot, ['presets', 'ui-elements', 'solarized'], OPTS))
+                .rejects.toMatchObject({ code: 'E_INVALID_PATH' });
         } finally { await cleanup(); }
     });
 });
@@ -174,7 +252,7 @@ describe('resolvePath — depth limits', () => {
         } finally { await cleanup(); }
     });
 
-    test('grouped path exceeding depth 2 rejects', async () => {
+    test('grouped drill-down only enters directories, not files', async () => {
         const { userRoot, cleanup } = await makeFixtureUser({ images: true });
         try {
             await expect(resolvePath(userRoot,
@@ -183,7 +261,7 @@ describe('resolvePath — depth limits', () => {
         } finally { await cleanup(); }
     });
 
-    test('simple category exceeding depth 1 rejects', async () => {
+    test('simple category drill-down only enters directories, not files', async () => {
         const { userRoot, cleanup } = await makeFixtureUser({ worlds: true });
         try {
             await expect(resolvePath(userRoot, ['worlds', 'lorebook_a.json'], OPTS))

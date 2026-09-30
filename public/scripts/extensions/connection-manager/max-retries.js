@@ -288,7 +288,7 @@ export function getRetryStatusWhitelist(profileName = '') {
  * @param {string} profileName
  * @returns {any|null}
  */
-function resolveProfile(profileName) {
+export function resolveProfile(profileName) {
     const cmSettings = extension_settings?.connectionManager;
     const profiles = cmSettings?.profiles;
     if (!Array.isArray(profiles) || profiles.length === 0) return null;

@@ -20,10 +20,10 @@
 
 ## 在插件请求中读取聊天楼层
 
-自己驱动 LLM 请求的插件（多智能体编排、记忆图整理、迭代重建等）需要把聊天历史变成 prompt 消息。不要自己遍历 `context.chat`：
+自行驱动 LLM 请求的插件（多智能体编排、记忆图整理、迭代重建等）需要把聊天历史变成 prompt 消息。不要自行遍历 `context.chat`：
 
-- **深度很容易算错。** 带 `minDepth` / `maxDepth` 的正则脚本期望的深度是从可用聊天的末尾起算（跳过系统楼层）。手写遍历通常用数组位置当深度——那是另一个数字。
-- **裸 `.mes` 会漏涂正则。** 主生成管线在文本进入模型前会把每个楼层都过一遍用户的正则脚本。手写遍历喂给 agent 的是原始文本，而主聊天里看到的是改写后的文本。
+- **深度计算很容易出错。** 带 `minDepth` / `maxDepth` 的正则脚本期望的深度是从可用聊天的末尾起算（跳过系统楼层）。自行编写的遍历通常用数组位置当深度——那是另一个数字。
+- **裸 `.mes` 会漏掉正则。** 主生成管线在文本进入模型前会把每个楼层都过一遍用户的正则脚本。自行编写的遍历会把原始文本提供给 agent，而主聊天里看到的是改写后的文本。
 
 ### readPluginFloors
 
@@ -37,7 +37,7 @@ context.readPluginFloors(options?: {
 }): FloorRecord[]
 ```
 
-把当前聊天读成可直接进 prompt 的楼层记录。只遍历 `context.chat` 一次，每个楼层都带着真实的「距末尾深度」走一遍插件正则通道——脚本上的 `maxDepth` 在这里和在主管线里含义一致。
+把当前聊天读成可直接进 prompt 的楼层记录。只遍历 `context.chat` 一次，每个楼层都携带真实的「距末尾深度」经过一次插件正则通道——脚本上的 `maxDepth` 在这里和在主管线里含义一致。
 
 过滤器决定返回哪些记录；返回的每条记录始终带有下面表格里的全部字段。默认角色白名单会排除系统楼层，与主管线对它们的处理一致。传 `roles: ['user', 'assistant', 'system']` 可以把它们加回来——这类记录的 `depth` 为 `undefined`，因为系统楼层不在深度编号之内。
 
@@ -51,7 +51,7 @@ context.readPluginFloors(options?: {
 | `mesRaw` | `string` | 原始 `.mes` 文本，未做任何处理 |
 | `mesCooked` | `string` | 经过插件正则通道后的文本 |
 
-绝大多数场景应该用 `mesCooked`：注入定位跟随作者身份（`is_user` → 用户输入规则，否则 AI 输出规则），插件作用域的正则脚本会在读取时按该楼层的真实聊天深度套用。
+绝大多数场景应使用 `mesCooked`：注入定位跟随作者身份（`is_user` → 用户输入规则，否则 AI 输出规则），插件作用域的正则脚本会在读取时按该楼层的真实聊天深度套用。
 
 ### floorRecordToTaskMessage
 
@@ -79,21 +79,21 @@ const result = await ctx.generateTask({ taskMessages });
 
 ### 楼层来源标记
 
-转换后消息上的 `sourceFloorIndex` 是一个来源标记：它告诉派发层这段文本已经由 `readPluginFloors` 涂过正则，自己的正则 pass 会跳过这条消息，避免脚本被套用第二次。
+转换后消息上的 `sourceFloorIndex` 是一个来源标记：它告诉派发层这段文本已经由 `readPluginFloors` 完成正则处理，自身的正则 pass 会跳过这条消息，避免脚本被套用第二次。
 
 这份契约分三部分：
 
-- 读 API 给它产出的每条消息都盖戳——你永远不需要自己计算或维护这个字段
-- 派发层识别标记，原样放行带戳消息，并在任何内容发往网络之前剥掉标记
-- 插件只负责搬运带戳的消息（重排、过滤、嵌进更大的 payload）；标记在常规的对象操作中自然保留
+- 读 API 为其产出的每条消息盖上标记——调用方永远不需要自行计算或维护这个字段
+- 派发层识别标记，原样放行带标记消息，并在任何内容发往网络之前剥掉标记
+- 插件代码只负责传递带标记的消息（重排、过滤、嵌入更大的 payload）；标记在常规对象操作中自动保留
 
-因此无论数组被派发多少次，每个楼层只会被涂一次正则。
+因此，无论数组被派发多少次，每个楼层都只会经过一次正则处理。
 
 ### tool 载荷豁免
 
-派发层的正则 pass 只处理 `role: 'user'` 或 `'assistant'` 且 content 为字符串的消息。工具流量（`tool_result` 等）一律不动。所以嵌进 tool JSON 里的楼层文本保持 `readPluginFloors` 读取时涂好的样子——不会被二次套用，历史经工具重放时也不会有重复涂抹的风险。
+派发层的正则 pass 只处理 `role: 'user'` 或 `'assistant'` 且 content 为字符串的消息。工具流量（`tool_result` 等）一律不动。因此嵌入 tool JSON 的楼层文本保持 `readPluginFloors` 读取时完成正则处理后的样子——不会被二次套用，历史经工具重放时也不会有重复处理的风险。
 
-响应方向同样无需做任何事：子代理输出经工具信封重新进入 LLM 上下文（例如父 agent 消费子代理的报告）时，核心会在送达前自动完成涂抹。插件侧代码永远不需要自己套正则。
+响应方向同样无需任何操作：子代理输出经工具信封重新进入 LLM 上下文（例如父 agent 消费子代理的报告）时，核心会在送达前自动完成正则处理。插件侧代码永远不需要自行套用正则。
 
 ### 哪些正则规则在哪条通道生效
 
@@ -216,7 +216,7 @@ getMessageCount(): number
 sendTextareaMessage(): Promise<void>
 ```
 
-像「用户在消息文本框里打了字然后按了发送」一样，程序化触发用户侧发送管道。会发送文本框里现有内容（先 `$('#send_textarea').val(...)` 喂入），然后跑标准生成流程。发送完成时解析。
+像「用户在消息文本框里打了字然后按了发送」一样，程序化触发用户侧发送管道。会发送文本框中现有内容（先用 `$('#send_textarea').val(...)` 写入内容），然后执行标准生成流程。发送完成时解析。
 
 ---
 
@@ -243,7 +243,7 @@ saveChatMetadata(withMetadata?: object): Promise<boolean>
 
 ## 聊天状态
 
-聊天状态是 Luker 新增的聊天绑定状态机制，让插件可以将结构化数据绑定到特定聊天，而不是塞进 `chat_metadata`。
+聊天状态是 Luker 新增的聊天绑定状态机制，让插件可以将结构化数据绑定到特定聊天，而不是写入 `chat_metadata`。
 
 ### getChatState
 
@@ -316,7 +316,7 @@ deleteChatState(
 - 保持 payload 为可 JSON 序列化的纯对象
 - 处理 `ok: false` 返回值，保持插件 UI 的弹性 —— 按 `reason` 分支处理，不要翻译 `hint`（见[错误原因](#错误原因)）
 - 对于大型插件数据，优先使用聊天状态而非 `chat_metadata`
-- 如果状态需要随 swipe、删消息、切换聊天自动跟进，请使用 [楼层状态](#楼层状态)，而不是在 `updateChatState` 之上自己写对账逻辑
+- 如果状态需要随 swipe、删消息、切换聊天自动跟进，请使用 [楼层状态](#楼层状态)，而不是在 `updateChatState` 之上自行编写对账逻辑
 
 ### 错误原因
 
@@ -361,7 +361,7 @@ if (!result.ok) {
 
 ## 楼层状态
 
-楼层状态在聊天状态之上加了一层薄封装：每次写入都会附带聊天尾部的位置（楼层索引 + swipe 编号）记到日志里，聊天结构变化时自动重放幸存提交。需要让状态跟着 swipe、删消息、切换聊天而不用手动对账的插件或 CardApp，应该用这套 API 而不是直接调用 `updateChatState`。
+楼层状态在聊天状态之上加了一层薄封装：每次写入都会附带聊天尾部的位置（楼层索引 + swipe 编号）记到日志里，聊天结构变化时自动重放幸存提交。需要让状态跟着 swipe、删消息、切换聊天而无需手动对账的插件或 CardApp，应该使用这套 API 而不是直接调用 `updateChatState`。
 
 ### 工作方式
 
@@ -462,14 +462,14 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 不传 `options` 时按聊天尾部推断。`floor` 必须是当前 `chat` 的有效索引（`0 <= floor < chat.length`），越界、负数、非整数、负 `swipeId` 都会被拒绝并返回 `{ok: false, reason: 'VALIDATION_COMMIT', hint}`，避免悄无声息地把状态错挂到不存在的楼层。
 
 ::: tip
-覆写只影响这条提交在日志里的标签——`MESSAGE_DELETED` 仍按 floor 截断，`MESSAGE_SWIPE_DELETED` 仍按 （floor， swipeId） 重编号。重建顺序由日志的写入顺序决定，不会因为你指定了较小的 `floor` 就被「插队」到前面执行。
+覆写只影响这条提交在日志里的标签——`MESSAGE_DELETED` 仍按 floor 截断，`MESSAGE_SWIPE_DELETED` 仍按 （floor， swipeId） 重编号。重建顺序由日志的写入顺序决定，指定较小的 `floor` 不会让该提交提前执行。
 :::
 
 ### 进阶：预先算好的 patch
 
-如果你已经手上有一份针对当前 materialized 状态的增量 RFC 6902 diff——比如出于性能考虑自己算了 diff、或者在跑一次性迁移——可以调 `instance.patch(operations, options?)` 直接追加。operations 必须是 `buildObjectPatchOperationsAsync(prev, next)` 形式的增量 diff，prev 取自 `await fs.get()`；不能传「整盘覆写」式的 snapshot patch，因为重建假设每条提交的 patch 跟前面幸存提交的 patch 顺序组合。
+如果已持有一份针对当前 materialized 状态的增量 RFC 6902 diff——例如出于性能考虑自行计算了 diff、或正在执行一次性迁移——可以调用 `instance.patch(operations, options?)` 直接追加。operations 必须是 `buildObjectPatchOperationsAsync(prev, next)` 形式的增量 diff，prev 取自 `await fs.get()`；不能传「整盘覆写」式的 snapshot patch，因为重建假设每条提交的 patch 跟前面幸存提交的 patch 顺序组合。
 
-其他场景一律走 `update`——它会帮你算好 diff。
+其他场景一律使用 `update`——它会计算所需的 diff。
 
 ### buildObjectPatchOperationsAsync
 
@@ -481,7 +481,7 @@ context.buildObjectPatchOperationsAsync(
 ): Promise<RFC6902Operation[]>
 ```
 
-驱动 Luker patch-first 持久化的 diff 引擎。回传把 `previousState` 变成 `nextState` 的最小 RFC 6902 操作。需要给 `instance.patch()` 喂一份预先算好的 diff 时用。同一个引擎内部驱动聊天持久化、聊天状态、楼层状态、预设状态——直接调它能让插件代码加入同一份增量保存管道。
+驱动 Luker patch-first 持久化的 diff 引擎。回传把 `previousState` 变成 `nextState` 的最小 RFC 6902 操作。需要向 `instance.patch()` 提供预先计算好的 diff 时使用。同一个引擎内部驱动聊天持久化、聊天状态、楼层状态、预设状态——直接调它能让插件代码加入同一份增量保存管道。
 
 ### 何时要 `await ready()`
 
@@ -498,8 +498,8 @@ context.buildObjectPatchOperationsAsync(
 ### 参考
 
 - `createFloorState({ namespace })`——异步工厂，返回冻结的实例。
-- `instance.update(reducer, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>`——读—改—写；reducer 收到当前状态、返回下一份状态，差异自动算完并提交。可选的 `options = { floor, swipeId? }` 把提交挂到指定楼层而非聊天尾部。**这是推荐的写入 API。**
-- `instance.patch(operations, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>`——进阶：追加一条「自己已经算好 patch」的提交。operations 必须是相对 `await instance.get()` 的增量 RFC 6902 diff（`buildObjectPatchOperationsAsync(prev, next)`），不能是整盘覆写式 snapshot。`options` 与 `update` 相同。
+- `instance.update(reducer, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>`——读—改—写；reducer 收到当前状态、返回下一份状态，差异自动计算并提交。可选的 `options = { floor, swipeId? }` 把提交挂到指定楼层而非聊天尾部。**这是推荐的写入 API。**
+- `instance.patch(operations, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>`——进阶：追加一条「已自行计算好 patch」的提交。operations 必须是相对 `await instance.get()` 的增量 RFC 6902 diff（`buildObjectPatchOperationsAsync(prev, next)`），不能是整盘覆写式 snapshot。`options` 与 `update` 相同。
 - `instance.reset(commits): Promise<{ok: true} | {ok: false, reason, hint}>`——原子性整盘替换日志为给定提交列表。用于导入 / 重建 / 重置类工作流。每条提交都会被校验，任意一条结构非法或 `floor` 越界，整批拒绝。
 - `instance.get(): Promise<{ok: true, state} | {ok: false, state: null, reason, hint}>`——读取当前 materialized 状态。按需对日志做重放（以当前 swipe map 为准），不读独立的 data 命名空间。
 - `instance.ready(): Promise<void>`——所有在飞写入完成时解决。
@@ -555,7 +555,7 @@ if (!result.ok) {
 context.resolveChatStateTarget(target?: { chatId?: string, characterId?: number | string } | null): { chatId: string, characterId: number | string } | null
 ```
 
-把 chat-state target 描述符按当前活跃聊天做归一化。传 `null`（或省略）拿到当前聊天的 `{ chatId, characterId }`；传部分对象则用提供的字段覆盖，另一字段从活跃状态填补。没有活跃聊天且 `target` 缺 `chatId` 时返回 `null`。
+把 chat-state target 描述符按当前活跃聊天做归一化。传 `null`（或省略）可获取当前聊天的 `{ chatId, characterId }`；传部分对象则用提供的字段覆盖，另一字段从活跃状态填补。没有活跃聊天且 `target` 缺 `chatId` 时返回 `null`。
 
 实现「默认跟随活跃聊天但允许程序化指定目标」的存储层时使用（例如 floor-state、chat-state API）。
 
@@ -613,7 +613,7 @@ setCharacterState(
 >
 ```
 
-以整份覆盖的方式写入指定命名空间下的角色状态。传入 `null` 作为 `data` 可以删除该命名空间的状态。非平凡负载请优先用 `updateCharacterState` —— `setCharacterState` 每次都会把整份文档上网。成功时返回 `{ok: true, state}` 回显存储的值；失败时返回 `{ok: false, reason, hint}`。
+以整份覆盖的方式写入指定命名空间下的角色状态。传入 `null` 作为 `data` 可以删除该命名空间的状态。非平凡负载请优先用 `updateCharacterState` —— `setCharacterState` 每次都会传输整份文档。成功时返回 `{ok: true, state}` 回显存储的值；失败时返回 `{ok: false, reason, hint}`。
 
 | 参数 | 说明 |
 |------|------|
@@ -636,7 +636,7 @@ updateCharacterState(
 >
 ```
 
-**推荐的读—改—写接口。** `updater` 取得当前状态（不存在时为 `{}`），返回下一份状态。系统底层自动计算最小增量 patch，只有变化的那部分上网。返回 `null` / `undefined` 视为「无变更」。409 冲突（并发改动）会自动重试；重试预算由 `options.maxRetries` 控制（默认 1）。该函数永不抛出；reducer 内部抛出的异常会被捕获并以 `reason: 'VALIDATION_ARGS'` 形式上报。
+**推荐的读—改—写接口。** `updater` 取得当前状态（不存在时为 `{}`），返回下一份状态。系统在内部自动计算最小增量 patch，只有变化的部分会被传输。返回 `null` / `undefined` 视为「无变更」。409 冲突（并发改动）会自动重试；重试预算由 `options.maxRetries` 控制（默认 1）。该函数永不抛出；reducer 内部抛出的异常会被捕获并以 `reason: 'VALIDATION_ARGS'` 形式上报。
 
 ```js
 await context.updateCharacterState(character.avatar, 'my-plugin', (current = {}) => ({
@@ -655,12 +655,12 @@ deleteCharacterState(
 ): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
 ```
 
-删除指定命名空间的角色状态 sidecar。幂等 —— sidecar 不存在时也会成功返回。语义等价于 `setCharacterState(avatar, namespace, null)`，提供给希望使用显式删除动词的调用方。成功时返回 `{ok: true}`，失败时返回 `{ok: false, reason, hint}`。
+删除指定命名空间的角色状态。幂等 —— 状态不存在时也会成功返回。语义等价于 `setCharacterState(avatar, namespace, null)`，提供给希望使用显式删除动词的调用方。成功时返回 `{ok: true}`，失败时返回 `{ok: false, reason, hint}`。
 
 ### 最佳实践
 
 - 优先用 `updateCharacterState()`，不要手动串 `getCharacterState()` + `setCharacterState()` —— helper 只发 diff，并替你处理 409 重试。
-- `setCharacterState()` 只用于首次初始化或确实想整份替换 sidecar 的场景。
+- `setCharacterState()` 只用于首次初始化或确实想整份替换状态的场景。
 - 负载保持为可 JSON 序列化的普通对象；顶层数组或基本类型不支持。
 - 检查 `result.ok` 并根据 `result.reason` 切换处理 —— 这些 API 不再在 HTTP 失败时抛出异常（见上方行为变更与[错误原因](#错误原因-2)）。
 
@@ -801,7 +801,7 @@ openGroupChat(groupId: string, chatId: string): Promise<void>
 saveChat(): Promise<void>
 ```
 
-如果当前没有正在保存，则把当前聊天写入磁盘。会等待短暂时间窗口让正在进行的保存完成，再触发自己的保存。大多数插件不需要调用——[消息 API](#消息-api) 会自动持久化。
+如果当前没有正在保存，则把当前聊天写入磁盘。会等待短暂时间窗口让正在进行的保存完成，再触发自身的保存。大多数插件不需要调用——[消息 API](#消息-api) 会自动持久化。
 
 ### saveChatDebounced
 

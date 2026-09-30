@@ -62,7 +62,7 @@ getCharacterCardFields(options?: { chid?: number }): {
 }
 ```
 
-返回经过宏替换和 persona 注入后解析好的卡片字段。省略 `chid` 时使用当前角色。当你需要为提示词组装准备字段时，请用这个函数而不是直接读 `character.data.*`。
+返回经过宏替换和 persona 注入后解析好的卡片字段。省略 `chid` 时使用当前角色。需要为提示词组装准备字段时，应使用此函数而不是直接读 `character.data.*`。
 
 ### getCharacterSource
 
@@ -81,7 +81,7 @@ getCharaFilename(
 ): string | null
 ```
 
-返回角色头像文件名（**不带扩展名**）。省略 `chid` 时回退到当前角色。当你只有头像 key 字符串时（例如来自角色状态条目），传入 `manualAvatarKey`。无法解析头像时返回 `null`。
+返回角色头像文件名（**不带扩展名**）。省略 `chid` 时回退到当前角色。当仅有头像 key 字符串可用时（例如来自角色状态条目），传入 `manualAvatarKey`。无法解析头像时返回 `null`。
 
 ```js
 const ctx = Luker.getContext();
@@ -116,7 +116,7 @@ selectCharacterById(id: number, options?: { switchMenu?: boolean }): Promise<voi
 unshallowCharacter(characterId: number | string): Promise<void>
 ```
 
-为以浅形式（仅 avatar + 基础元数据）返回的角色加载完整记录。角色已是完整状态时为 no-op。如果你从列表端点拿到的角色，在读取 `description`、`mes_example` 等大字段前必须先调用此函数。
+为以浅形式（仅 avatar + 基础元数据）返回的角色加载完整记录。角色已是完整状态时为 no-op。如果角色来自列表端点，在读取 `description`、`mes_example` 等大字段前必须先调用此函数。
 
 ### unshallowGroupMembers
 
@@ -140,7 +140,7 @@ writeExtensionField(
 
 写入角色卡的 `data.extensions[key]` 并持久化。
 
-**替换语义。** 完整的 `value` 会成为磁盘上新的 `data.extensions[key]`。先前磁盘值中存在的兄弟子键**不会**被保留——希望做局部更新的调用方必须自行读取旧值、展开并叠加变更。`data.extensions.*` 下的其他扩展 key（其他插件的数据）则永远不会被触碰。
+**替换语义。** 完整的 `value` 会成为磁盘上新的 `data.extensions[key]`。先前磁盘值中存在的兄弟子键**不会**被保留——需要做局部更新的调用方必须自行读取旧值、展开并叠加变更。`data.extensions.*` 下的其他扩展 key（其他插件的数据）则永远不会被触碰。
 
 传 `value: context.constants.unset`（即 `UNSET_VALUE` 哨兵值）可彻底删除该 key。传裸 `null` 写入的是字面量 `null`（key 仍然保留）。
 
@@ -222,11 +222,11 @@ await ctx.updateCharacterData(ctx.characterId, { 'extensions.world': 'my_book' }
 persistCharacterData(charId: number | string): Promise<void>
 ```
 
-把某张卡当前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 后 POST 落盘。表单**不参与** — 只看 `characters[charId]`。服务器会把 payload 与磁盘上现有的 JSON 深合并，这对表单层字段是正确行为（保留了表单从未触及的未知扩展数据）。
+把某张卡当前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 后以 POST 请求落盘。表单**不参与** — 只看 `characters[charId]`。服务器会把 payload 与磁盘上现有的 JSON 深合并，这对表单层字段是正确行为（保留了表单从未触及的未知扩展数据）。
 
 HTTP 失败时抛错。扩展数据**不会**走这条路径——它有自己的 `/api/characters/merge-attributes` 路径，采用替换语义（[`writeExtensionField`](#writeextensionfield)）。
 
-绝大多数调用方应该用 `updateCharacterData`（它会替你调度这个）。只有当你已经亲自 mutate 过 in-memory 对象、想 flush 时才直接调用。
+绝大多数调用方应使用 `updateCharacterData`（它会代为调度此调用）。仅在已自行修改 in-memory 对象、需要 flush 时才直接调用。
 
 ### persistCharacterDataDebounced
 
@@ -330,7 +330,7 @@ const state = await ctx.getCharacterState(character.avatar, 'my-plugin');
 ```
 
 ::: tip 角色状态 vs 扩展字段
-- 扩展字段（`writeExtensionField` → `data.extensions.<key>`）是卡片的一部分。会随卡片一起导出，对拿到卡片的任何人可见。
+- 扩展字段（`writeExtensionField` → `data.extensions.<key>`）是卡片的一部分。会随卡片一起导出，对拥有该卡片的任何人可见。
 - 角色状态（`get/setCharacterState`）是放在卡片旁边的独立文件，不会随卡片导出。
 :::
 

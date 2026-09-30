@@ -389,6 +389,7 @@ export async function extractFsTreeCategories(zipPath, dirs, selection, opts = {
                     zipfile.openReadStream(entry, async (streamErr, readStream) => {
                         if (streamErr) return finish(streamErr);
                         try {
+                            await fsPromises.chmod(target, 0o644).catch(() => {});
                             await pipeline(readStream, fs.createWriteStream(target, { mode: 0o644 }));
                             restoredCount += 1;
                             reportProgress(restoredCount + failedCount, extractTotal, false);

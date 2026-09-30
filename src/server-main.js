@@ -2,7 +2,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import util from 'node:util';
-import net from 'node:net';
 import dns from 'node:dns';
 import process from 'node:process';
 import http from 'node:http';
@@ -147,14 +146,6 @@ import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
 import { initializeAllUserMetadata } from './endpoints/image-metadata.js';
 import { applyPendingSafeMode } from './safe-mode.js';
-
-// Work around a node v20.0.0, v20.1.0, and v20.2.0 bug. The issue was fixed in v20.3.0.
-// https://github.com/nodejs/node/issues/47822#issuecomment-1564708870
-// Safe to remove once support for Node v20 is dropped.
-if (process.versions && process.versions.node && process.versions.node.match(/20\.[0-2]\.0/)) {
-    // @ts-ignore
-    if (net.setDefaultAutoSelectFamily) net.setDefaultAutoSelectFamily(false);
-}
 
 // Unrestrict console logs display limit
 util.inspect.defaultOptions.maxArrayLength = null;

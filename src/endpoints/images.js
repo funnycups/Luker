@@ -7,6 +7,7 @@ import sanitize from 'sanitize-filename';
 
 import { clientRelativePath, removeFileExtension, getImages, isPathUnderParent } from '../util.js';
 import { MEDIA_EXTENSIONS, MEDIA_REQUEST_TYPE } from '../constants.js';
+import { appendMediaAttribution } from './media-attribution.js';
 
 /**
  * Ensure the directory for the provided file path exists.
@@ -70,7 +71,15 @@ router.post('/upload', async (request, response) => {
         ensureDirectoryExistence(pathToNewFile);
         const imageBuffer = Buffer.from(image, 'base64');
         await fs.promises.writeFile(pathToNewFile, new Uint8Array(imageBuffer));
-        response.send({ path: clientRelativePath(request.user.directories.root, pathToNewFile) });
+        const savedPath = clientRelativePath(request.user.directories.root, pathToNewFile);
+        if (request.body.attribution) {
+            try {
+                await appendMediaAttribution(request.user, request.body.attribution, savedPath, request.body.ch_name);
+            } catch (error) {
+                console.warn('Failed to record media attribution:', error);
+            }
+        }
+        response.send({ path: savedPath });
     } catch (error) {
         console.error(error);
         response.status(500).send({ error: 'Failed to save the image' });

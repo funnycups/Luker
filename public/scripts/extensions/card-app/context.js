@@ -1303,11 +1303,19 @@ export function buildContext(container, charId, config) {
          * Render raw text through SillyTavern's formatting pipeline (markdown,
          * macro substitution, sanitization). Returns the html string
          * directly so callers can `el.innerHTML = ctx.renderText(...)`
-         * without awaiting. (Previously this was async and returned
-         * `{html}` — both forms are kept for backward compatibility: the
-         * returned string has an `.html` getter that resolves to itself,
-         * so `(await ctx.renderText(x)).html` still works for any old code
-         * that expected the previous shape.)
+         * without awaiting.
+         *
+         * Historically this was async and returned `{html}`. Both call shapes
+         * are supported by returning a String subclass that carries an `.html`
+         * property and is thenable:
+         *
+         *   el.innerHTML = ctx.renderText(x)          // sync, coerces to html
+         *   el.innerHTML = (await ctx.renderText(x)).html   // awaited, `.html` read
+         *   `${await ctx.renderText(x)}`              // awaited, coerces to html
+         *
+         * The thenable resolves to a wrapper that still carries `.html` but is
+         * NOT itself thenable — resolving to the original wrapper would make
+         * the promise chain try to unwrap it forever.
          * @param {string} rawText
          * @param {number} [messageId=-1]
          * @returns {string} html
@@ -1318,14 +1326,15 @@ export function buildContext(container, charId, config) {
             // and similar reasoning blocks leak into the rendered body.
             const cleaned = removeReasoningFromString(String(rawText ?? ''));
             const html = messageFormatting(cleaned, '', false, false, messageId, {}, false);
-            // Wrap in a String subclass that exposes `.html` and is thenable.
-            // The thenable resolves to the html string itself (NOT `{ html }`)
-            // so `${await ctx.renderText(...)}` interpolates the html, instead of
-            // stringifying a wrapper object as "[object Object]".
+            // `html` property for `(await x).html`; `then` for `await x`.
+            // The settled wrapper deliberately has no `then` so awaiting twice
+            // is stable and `await`ing the resolved value can't loop.
+            const settled = new String(html);
+            Object.defineProperty(settled, 'html', { value: html, enumerable: false });
             const result = new String(html);
             Object.defineProperty(result, 'html', { value: html, enumerable: false });
             Object.defineProperty(result, 'then', {
-                value: (resolve) => resolve(html),
+                value: (resolve) => resolve(settled),
                 enumerable: false,
             });
             return result;

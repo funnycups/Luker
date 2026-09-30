@@ -1842,10 +1842,12 @@ the Preview tab is a dedicated viewport — hide the
        render output of each popup (verified before adding):
        CPA  → details.cpa_it_history
        MG   → details.mg_schema_it_history
+       MG graph → details.mg_graph_it_history
        Orch → details.orch_it_history
        Only CPA renders a toolbar inside the workspace (.cpa_it_toolbar). */
     .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.cpa_it_history,
 .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.mg_schema_it_history,
+.popup .luker-iter-workspace[data-iter-active-tab="preview"] details.mg_graph_it_history,
 .popup .luker-iter-workspace[data-iter-active-tab="preview"] details.orch_it_history,
 .popup .luker-iter-workspace[data-iter-active-tab="preview"] .cpa_it_toolbar {
         display: none;

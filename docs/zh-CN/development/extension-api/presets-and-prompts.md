@@ -28,7 +28,7 @@ presets.getSelected(collection?: string): PresetRef | null
 presets.getLive(collection?: string): PresetBody | null
 ```
 
-获取当前 UI 中正在编辑的预设内容（包括未保存的修改）。适合需要读取当前实际生效配置的场景。
+获取当前 UI 中正在编辑的预设内容（包括未保存的修改）。适用于读取当前实际生效配置的场景。
 
 ### presets.getStored
 
@@ -36,7 +36,7 @@ presets.getLive(collection?: string): PresetBody | null
 presets.getStored(ref: { collection: string, name: string }): PresetBody | null
 ```
 
-获取指定预设的已保存内容。适合跨预设比较或复制内容。
+获取指定预设的已保存内容。适用于跨预设比较或复制内容。
 
 ### presets.save
 
@@ -66,7 +66,7 @@ presets.resolve(
 
 ### presets.state
 
-绑定到预设的插件运行时/会话数据。State sidecar 与预设文件并排存放，**不会随预设一起导出**，仅供插件侧运行时使用（例如编排器的「按预设记忆 agent 覆盖」、预设助手的「上次使用的模板」）。不要把插件数据塞进预设 body，用 `presets.state.*`。
+绑定到预设的插件运行时/会话数据。预设状态与预设文件并排存放，**不会随预设一起导出**，仅供插件侧运行时使用（例如编排器的「按预设记忆 agent 覆盖」、预设助手的「上次使用的模板」）。不要把插件数据写入预设 body，应使用 `presets.state.*`。
 
 所有方法都接受 `options.target`（`PresetRef`）和 `options.collection` 做跨预设读写；两者默认指向当前选中的预设。
 
@@ -115,7 +115,7 @@ presets.state.update(
 >
 ```
 
-**推荐的读—改—写接口。** `updater` 取得当前状态（不存在时为 `{}`），返回下一份状态。系统底层自动计算最小增量 patch，只有变化的那部分上网。返回 `null` / `undefined` 视为「无变更」，结果为 `{ok: true, updated: false}`。409 冲突（并发改动）会自动重试；重试预算由 `options.maxRetries` 控制（默认 1）。失败时返回 `{ok: false, reason, hint}` —— 见下方[错误原因](#错误原因)。该函数永不抛出；reducer 内部抛出的异常会被捕获并以 `reason: 'VALIDATION_ARGS'` 形式返回。
+**推荐的读—改—写接口。** `updater` 取得当前状态（不存在时为 `{}`），返回下一份状态。系统在内部自动计算最小增量 patch，只有变化的部分会被传输。返回 `null` / `undefined` 视为「无变更」，结果为 `{ok: true, updated: false}`。409 冲突（并发改动）会自动重试；重试预算由 `options.maxRetries` 控制（默认 1）。失败时返回 `{ok: false, reason, hint}` —— 见下方[错误原因](#错误原因)。该函数永不抛出；reducer 内部抛出的异常会被捕获并以 `reason: 'VALIDATION_ARGS'` 形式返回。
 
 ```js
 await context.presets.state.update('my-plugin', (current = {}) => ({
@@ -138,7 +138,7 @@ presets.state.patch(
 >
 ```
 
-直接施加 RFC 6902 patch 操作。典型的读—改—写流程优先用 `update()`；只有当你已有操作列表（例如重放此前计算好的 diff）时才用 `patch()`。成功时返回 `{ok: true}`；失败时返回 `{ok: false, reason, hint}` —— 见下方[错误原因](#错误原因)。
+直接施加 RFC 6902 patch 操作。典型的读—改—写流程优先用 `update()`；仅在已有操作列表（例如重放此前计算好的 diff）时才使用 `patch()`。成功时返回 `{ok: true}`；失败时返回 `{ok: false, reason, hint}` —— 见下方[错误原因](#错误原因)。
 
 #### presets.state.delete
 
@@ -152,7 +152,7 @@ presets.state.delete(
 >
 ```
 
-删除指定命名空间的预设状态。幂等 —— sidecar 不存在时也会成功返回。成功时返回 `{ok: true}`；失败时返回 `{ok: false, reason, hint}` —— 见下方[错误原因](#错误原因)。
+删除指定命名空间的预设状态。幂等 —— 状态不存在时也会成功返回。成功时返回 `{ok: true}`；失败时返回 `{ok: false, reason, hint}` —— 见下方[错误原因](#错误原因)。
 
 #### presets.state.deleteAll
 
@@ -167,9 +167,9 @@ presets.state.deleteAll(target?: PresetRef | string | null): Promise<
 
 #### 最佳实践
 
-- 优先用 `presets.state.update()`，不要手动串 `get()` + 整份覆盖 —— helper 只发 diff，并替你处理 409 重试。
+- 优先用 `presets.state.update()`，不要手动串联 `get()` 与整份覆盖 —— helper 仅发送 diff，并代为处理 409 重试。
 - 负载保持为可 JSON 序列化的普通对象；顶层数组或基本类型不支持。
-- 一个命名空间装一片逻辑状态，不要把无关数据塞同一个命名空间。
+- 一个命名空间承载一片逻辑状态，不要将无关数据写入同一命名空间。
 - 处理 `ok: false` 返回值，保持插件 UI 的弹性 —— 按 `reason` 分支处理，不要翻译 `hint`（见[错误原因](#错误原因)）。
 
 #### 错误原因
@@ -195,7 +195,7 @@ presets.state.deleteAll(target?: PresetRef | string | null): Promise<
 - `list()` 和 `getSelected()` 只返回已保存的预设
 - 编辑中的预设用 `getLive()`
 - 角色卡绑定的运行时预设不算「已保存」，`getSelected()` 返回 `null`，但 `getLive()` 仍可读取
-- 不要将插件运行时数据塞进预设 body，使用 `presets.state.*`
+- 不要将插件运行时数据写入预设 body，使用 `presets.state.*`
 
 ## 提示词与世界书组装
 
@@ -214,7 +214,7 @@ buildPresetAwarePromptMessages(options: {
 }): PromptMessage[]
 ```
 
-基于当前预设配置，将插件的消息按照 prompt 预设的排列顺序组装为可发送给 API 的提示词消息列表。这是一个**可选的**组装工具——简单的 LLM 调用不需要它，只有当你需要复用角色卡、世界书或 prompt 模板时才需要使用。
+基于当前预设配置，将插件的消息按照 prompt 预设的排列顺序组装为可发送给 API 的提示词消息列表。这是一个**可选的**组装工具——简单的 LLM 调用不需要它，仅在需要复用角色卡、世界书或 prompt 模板时才使用。
 
 **参数说明：**
 
@@ -362,7 +362,7 @@ getActivePromptPresetEnvelope(options?: {
 - `promptCatalog`——`prompt.identifier` → `{ name, role, content, marker, systemPrompt }` 的映射
 - `characterCard`——当前角色字段（`includeCharacterCard !== false` 时）
 
-这与 `buildPresetAwarePromptMessages` 内部使用的数据是同一份。适合在发送前向用户展示插件请求的样子。
+这与 `buildPresetAwarePromptMessages` 内部使用的数据是同一份。适用于在发送前向用户展示插件请求的样貌。
 
 ### getActivePromptLayout
 
@@ -401,7 +401,7 @@ parseReasoningFromString(
 ): { reasoning: string, content: string } | null
 ```
 
-根据推理模板（或当前 `power_user.reasoning` 模板）的 `prefix` 和 `suffix`，把模型输出字符串拆成 `reasoning` 和 `content`。模板缺少 prefix / suffix 或解析失败时返回 `null`。
+根据推理模板（或当前 `power_user.reasoning` 模板）的 `prefix` 和 `suffix`，将模型输出字符串拆分为 `reasoning` 和 `content`。模板缺少 prefix / suffix 或解析失败时返回 `null`。
 
 | 选项 | 说明 |
 |------|------|
@@ -424,7 +424,7 @@ updateReasoningUI(
 ): void
 ```
 
-触发某条消息推理块的 UI 刷新。可传聊天索引、原生 DOM 元素或 JQuery 包装。`reset: true` 时跳过读取消息当前的 reasoning 状态——在 swipe 时新的 reasoning 还没写入时使用。
+触发某条消息推理块的 UI 刷新。可传聊天索引、原生 DOM 元素或 JQuery 包装。`reset: true` 时跳过读取消息当前的 reasoning 状态——在 swipe 期间新 reasoning 尚未写入时使用。
 
 ### removeReasoningFromString
 
@@ -445,7 +445,7 @@ if (parsed) {
 
 ## 设置视图（只读）
 
-下面这些属性暴露的是活的设置对象。它们是可变引用——只能通过对应的规范 API（`presets.save`、`saveSettingsDebounced` 等）写入。直接修改可能不会被正确持久化。
+以下属性暴露的是实时设置对象。它们是可变引用——只能通过对应的规范 API（`presets.save`、`saveSettingsDebounced` 等）写入。直接修改可能不会被正确持久化。
 
 ### chatCompletionSettings
 

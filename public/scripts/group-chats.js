@@ -105,6 +105,7 @@ import {
     getCharacterTalkativeness,
     cloneJsonValue,
     invalidateChatWriteSnapshot,
+    isChatTransitionInProgress,
 } from '../script.js';
 import { settleChatChanged } from './floor-state.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect, printTagFilters, tag_filter_type } from './tags.js';
@@ -115,6 +116,7 @@ import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { showUndoToast } from './undo-toast.js';
 import { compressRequest } from './request-compression.js';
+import { fetchMediaDeletionCandidates, deleteMediaFiles, promptMediaDeletion, notifyMediaDeleteResult } from './media-deletion-dialog.js';
 
 export {
     selected_group,
@@ -673,6 +675,10 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     // null-integrity path skips the integrity check and overwrites server
     // data. See saveChatInternal (script.js) for the full rationale.
     if (!chat_metadata?.integrity) {
+        if (isChatTransitionInProgress()) {
+            console.debug('[ChatWrite] Group save dropped: chat transition in progress.');
+            return;
+        }
         console.error('[ChatWrite] Group save refused: chat not fully loaded (integrity missing).');
         toastr.error(
             t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
@@ -932,7 +938,6 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
                                 integrity: messages?.[0]?.chat_metadata?.integrity,
                             }),
                         });
-                        const saveChatResponse = await fetch('/api/chats/group/save', saveChatRequest);
 
                         if (!patchResponse.ok) {
                             throw new Error('Group member could not be renamed');
@@ -2465,11 +2470,38 @@ async function restoreGroupChatSnapshot(chatId, chatFile) {
     return response.ok;
 }
 
-async function deleteGroupChatInternal(groupId, chatId, { jumpToNewChat = true } = {}) {
+async function deleteGroupChatInternal(groupId, chatId, { jumpToNewChat = true, mediaPrompt = true } = {}) {
     const group = groups.find(x => x.id === groupId);
 
     if (!group || !group.chats.includes(chatId)) {
         return false;
+    }
+
+    let mediaPathsToDelete = null;
+    if (mediaPrompt) {
+        try {
+            const candidates = await fetchMediaDeletionCandidates({
+                scope: 'chat',
+                is_group: true,
+                chat_name: String(chatId),
+            });
+            const items = (candidates.groups || []).flatMap(groupEntry => groupEntry.items || []);
+            if (items.length > 0) {
+                const decision = await promptMediaDeletion({
+                    groups: [{ kind: 'image', title: t`Images`, items }],
+                    confirmLabel: t`Delete group chat and selected images`,
+                    skipLabel: t`Delete group chat only`,
+                });
+                if (decision.action === 'cancel') {
+                    return false;
+                }
+                if (decision.action === 'delete') {
+                    mediaPathsToDelete = decision.paths;
+                }
+            }
+        } catch (error) {
+            console.warn('Media candidate lookup failed; continuing without the media prompt.', error);
+        }
     }
 
     const rawChatSnapshot = structuredClone(await loadGroupChat(chatId));
@@ -2487,6 +2519,15 @@ async function deleteGroupChatInternal(groupId, chatId, { jumpToNewChat = true }
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Group chat could not be deleted`);
         console.error('Group chat could not be deleted');
         return false;
+    }
+
+    if (mediaPathsToDelete && mediaPathsToDelete.length > 0) {
+        try {
+            notifyMediaDeleteResult(await deleteMediaFiles(mediaPathsToDelete));
+        } catch (error) {
+            console.warn('Failed to delete selected media files.', error);
+            toastr.error(t`Some files could not be deleted.`, t`Media cleanup`);
+        }
     }
 
     group.chats = group.chats.filter(name => name !== chatId);
@@ -2572,10 +2613,12 @@ async function deleteGroupChatInternal(groupId, chatId, { jumpToNewChat = true }
  * Deletes a group chat by its name. Doesn't affect displayed chat.
  * @param {string} groupId Group ID
  * @param {string} chatName Name of the chat to delete
+ * @param {object} [options={}] Options for the deletion.
+ * @param {boolean} [options.mediaPrompt=true] Whether to offer associated media for deletion.
  * @returns {Promise<void>}
  */
-export async function deleteGroupChatByName(groupId, chatName) {
-    return await deleteGroupChatInternal(groupId, chatName, { jumpToNewChat: false });
+export async function deleteGroupChatByName(groupId, chatName, options = {}) {
+    return await deleteGroupChatInternal(groupId, chatName, { jumpToNewChat: false, ...options });
 }
 
 /**
@@ -2584,9 +2627,10 @@ export async function deleteGroupChatByName(groupId, chatName) {
  * @param {string} chatId The id/name of the chat to delete.
  * @param {object} [options={}] Options for the deletion.
  * @param {boolean} [options.jumpToNewChat=true] Whether to jump to a new chat after deletion (existing one, or create a new one if none exists)
+ * @param {boolean} [options.mediaPrompt=true] Whether to offer associated media for deletion.
  */
-export async function deleteGroupChat(groupId, chatId, { jumpToNewChat = true } = {}) {
-    return await deleteGroupChatInternal(groupId, chatId, { jumpToNewChat });
+export async function deleteGroupChat(groupId, chatId, { jumpToNewChat = true, mediaPrompt = true } = {}) {
+    return await deleteGroupChatInternal(groupId, chatId, { jumpToNewChat, mediaPrompt });
 }
 
 /**

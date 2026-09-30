@@ -20,10 +20,10 @@ The following properties provide read-only access to the current chat:
 
 ## Reading Chat Floors in Plugin Requests
 
-Plugins that drive their own LLM requests (orchestrator agents, memory-graph curation, iteration rebuilds, ...) need the chat history as prompt messages. Do not walk `context.chat` yourself:
+Plugins that drive their own LLM requests (orchestrator agents, memory-graph curation, iteration rebuilds, ...) need the chat history as prompt messages. Do not traverse `context.chat` manually:
 
-- **Depth is easy to get wrong.** Regex scripts authored with `minDepth` / `maxDepth` expect depth counted from the end of the usable chat (system floors skipped). Hand-rolled walks usually derive depth from array position — a different number.
-- **Raw `.mes` skips regex.** The main generation pipeline cooks every floor through the user's regex scripts before the text reaches the model. A hand-rolled walk feeds your agents raw text while the main chat shows rewritten text.
+- **Depth computation is error-prone.** Regex scripts authored with `minDepth` / `maxDepth` expect depth counted from the end of the usable chat (system floors skipped). Ad-hoc traversals usually derive depth from array position — a different number.
+- **Raw `.mes` skips regex.** The main generation pipeline cooks every floor through the user's regex scripts before the text reaches the model. An ad-hoc traversal feeds raw text to the agents while the main chat shows rewritten text.
 
 ### readPluginFloors
 
@@ -51,7 +51,7 @@ Filters narrow which records come back; every returned record always carries all
 | `mesRaw` | `string` | Raw `.mes` text, untouched |
 | `mesCooked` | `string` | Text after the plugin regex lane |
 
-`mesCooked` is what you almost always want: placement follows authorship (`is_user` → user input rules, otherwise AI output rules) and plugin-scoped regex scripts apply at read time with the floor's real chat depth.
+`mesCooked` is the field to use in most cases: placement follows authorship (`is_user` → user input rules, otherwise AI output rules) and plugin-scoped regex scripts apply at read time with the floor's real chat depth.
 
 ### floorRecordToTaskMessage
 
@@ -83,17 +83,17 @@ The `sourceFloorIndex` field on converted messages is a provenance stamp: it tel
 
 The contract has three parts:
 
-- The read API stamps every message it produces — you never compute or maintain the field yourself
+- The read API stamps every message it produces; the field is never computed or maintained by the caller
 - The dispatcher recognizes the stamp, passes those messages through uncooked, and strips the marker before anything leaves for the network
-- Your plugin only carries stamped messages around (reordering, filtering, embedding in larger payloads); the stamp survives normal object handling
+- Plugin code only transports stamped messages (reordering, filtering, embedding in larger payloads); the stamp survives normal object handling
 
-This means cooking happens exactly once per floor no matter how many times the array is dispatched.
+As a result, each floor is cooked exactly once regardless of how many times the array is dispatched.
 
 ### Tool payloads are exempt
 
 The dispatch-layer regex pass only touches messages with `role: 'user'` or `'assistant'` and string content. Tool traffic (`tool_result` and friends) is never modified. Floor text embedded inside tool JSON therefore stays exactly as `readPluginFloors` cooked it at read time — no second application, and no risk of double-cooking when history is replayed through tools.
 
-On the response direction there is also nothing to do: sub-agent output that re-enters an LLM context through a tool envelope (e.g. a sub-agent's report consumed by the parent agent) is cooked automatically by core before delivery. Plugin-side code never needs to apply regex itself.
+No action is required on the response side either: sub-agent output that re-enters an LLM context through a tool envelope (e.g. a sub-agent's report consumed by the parent agent) is cooked automatically by core before delivery. Plugin-side code is never required to apply regex itself.
 
 ### Which regex rules apply where
 
@@ -216,7 +216,7 @@ Returns the total number of messages in the current chat.
 sendTextareaMessage(): Promise<void>
 ```
 
-Programmatically triggers the user-send pipeline as if the user typed in the message textarea and pressed the send button. Sends whatever is currently in the textarea (use `$('#send_textarea').val(...)` first to seed it), then runs the standard generation flow. Resolves once the send completes.
+Programmatically triggers the user-send pipeline as if the user typed in the message textarea and pressed the send button. Sends whatever is currently in the textarea (seed it first with `$('#send_textarea').val(...)`), then runs the standard generation flow. Resolves once the send completes.
 
 ---
 
@@ -361,7 +361,7 @@ if (!result.ok) {
 
 ## Floor State
 
-Floor State is a thin layer on top of Chat State that tracks every write at the chat tail (floor index + swipe id) and replays the surviving commits whenever the chat structure changes. Plugins and CardApps that need state to follow swipes, deletes, and chat switches without reconciling manually should use this API instead of `updateChatState` directly.
+Floor State is a thin layer on top of Chat State that tracks every write at the chat tail (floor index + swipe id) and replays the surviving commits whenever the chat structure changes. Plugins and CardApps that need state to follow swipes, deletes, and chat switches without manual reconciliation should use this API instead of `updateChatState` directly.
 
 ### How it works
 
@@ -444,7 +444,7 @@ if (!result.ok) {
 await fs.reset([]);
 ```
 
-Every commit is validated against the same structural checks `patch` uses (positive integer `floor` and `swipeId`, non-empty `patches` array), plus a chat-range check on `floor` (must be `< chat.length`). The whole batch is rejected if any commit fails — the log never lands in a partly-valid state. There is no separate data namespace to keep in sync; the next `get()` re-replays the new log and the in-memory cache is invalidated for you.
+Every commit is validated against the same structural checks `patch` uses (positive integer `floor` and `swipeId`, non-empty `patches` array), plus a chat-range check on `floor` (must be `< chat.length`). The whole batch is rejected if any commit fails — the log never lands in a partly-valid state. There is no separate data namespace to keep in sync; the next `get()` re-replays the new log and the in-memory cache is invalidated automatically.
 
 ### Attaching state to a non-tail floor
 
@@ -464,14 +464,14 @@ await fs.update((current) => nextState, { floor: targetFloor, swipeId: 0 });
 When `options` is omitted the chat tail is used. `floor` must be a valid index into the current `chat` (`0 <= floor < chat.length`); out-of-range, negative, non-integer, or negative `swipeId` overrides are rejected and the call returns `{ok: false, reason: 'VALIDATION_COMMIT', hint}`, so misuse fails fast instead of silently mis-attributing the commit.
 
 ::: tip
-The override only changes what label this commit carries in the log — `MESSAGE_DELETED` still truncates by floor and `MESSAGE_SWIPE_DELETED` still renumbers by (floor, swipeId). Replay order is the log's insertion order; specifying a smaller `floor` does not "jump the queue" during replay.
+The override only changes what label this commit carries in the log — `MESSAGE_DELETED` still truncates by floor and `MESSAGE_SWIPE_DELETED` still renumbers by (floor, swipeId). Replay order is the log's insertion order; specifying a smaller `floor` does not move the commit earlier in the replay order.
 :::
 
 ### Advanced: pre-computed patches
 
-If you already have an incremental RFC 6902 diff against the current materialized state — for example, you computed it yourself for performance reasons or you're driving a one-shot migration — you can call `instance.patch(operations, options?)` to append it directly. The operations MUST be diffed against `await fs.get()`; a snapshot-from-empty patch (one that overwrites the whole state) is not a valid commit because rebuild assumes each commit's patches compose with the prior surviving commits' patches.
+If you already have an incremental RFC 6902 diff against the current materialized state — for example, it was computed locally for performance reasons, or a one-shot migration is in progress — you can call `instance.patch(operations, options?)` to append it directly. The operations MUST be diffed against `await fs.get()`; a snapshot-from-empty patch (one that overwrites the whole state) is not a valid commit because rebuild assumes each commit's patches compose with the prior surviving commits' patches.
 
-For everything else, prefer `update` — it computes the right diff for you.
+For all other cases, prefer `update`, which computes the required diff.
 
 ### buildObjectPatchOperationsAsync
 
@@ -500,8 +500,8 @@ The four structural transitions are settled by core synchronously before the mat
 ### Reference
 
 - `createFloorState({ namespace })` — async factory; returns a frozen instance.
-- `instance.update(reducer, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>` — read-modify-write; reducer receives the current state and returns the next, the diff is computed and committed for you. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail. **This is the recommended write API.**
-- `instance.patch(operations, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>` — advanced: append a commit whose patches you already computed yourself. Operations must be an incremental RFC 6902 diff (`buildObjectPatchOperationsAsync(prev, next)` against `await instance.get()`); not for snapshot-style overwrites. Same `options` shape as `update`.
+- `instance.update(reducer, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>` — read-modify-write; reducer receives the current state and returns the next, the diff is computed and committed automatically. Optional `options = { floor, swipeId? }` pins the commit to an explicit floor instead of the chat tail. **This is the recommended write API.**
+- `instance.patch(operations, options?): Promise<{ok: true, updated: boolean} | {ok: false, reason, hint}>` — advanced: append a commit whose patches the caller has already computed. Operations must be an incremental RFC 6902 diff (`buildObjectPatchOperationsAsync(prev, next)` against `await instance.get()`); not for snapshot-style overwrites. Same `options` shape as `update`.
 - `instance.reset(commits): Promise<{ok: true} | {ok: false, reason, hint}>` — atomically replace the log with a fresh commit list. Use for import / rebuild / reset workflows. Every commit is validated; the whole batch is rejected if any commit is malformed or its `floor` is out of chat range.
 - `instance.get(): Promise<{ok: true, state} | {ok: false, state: null, reason, hint}>` — read the current materialized state. Derived on demand by replaying the log against the current swipe map; never reads a separate data namespace.
 - `instance.ready(): Promise<void>` — resolves when no in-flight write is pending.
@@ -638,7 +638,7 @@ updateCharacterState(
 >
 ```
 
-**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change". 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1). This function never throws; reducer exceptions are caught and surfaced as `reason: 'VALIDATION_ARGS'`.
+**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch internally, so only the changed slice is transmitted. Returning `null` / `undefined` is treated as "no change". 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1). This function never throws; reducer exceptions are caught and surfaced as `reason: 'VALIDATION_ARGS'`.
 
 ```js
 await context.updateCharacterState(character.avatar, 'my-plugin', (current = {}) => ({
@@ -657,12 +657,12 @@ deleteCharacterState(
 ): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
 ```
 
-Removes the character state sidecar for the given namespace. Idempotent — succeeds when the sidecar does not exist. Equivalent to `setCharacterState(avatar, namespace, null)` for callers that prefer an explicit delete verb. Returns `{ok: true}` on success; `{ok: false, reason, hint}` on failure.
+Removes the character state for the given namespace. Idempotent — succeeds when no state exists. Equivalent to `setCharacterState(avatar, namespace, null)` for callers that prefer an explicit delete verb. Returns `{ok: true}` on success; `{ok: false, reason, hint}` on failure.
 
 ### Best Practices
 
-- Use `updateCharacterState()` for read-modify-write instead of manually chaining `getCharacterState()` + `setCharacterState()` — the helper ships only the diff and handles the 409 retry for you.
-- Use `setCharacterState()` only for first-time seeding or when you genuinely want to replace the whole sidecar.
+- Use `updateCharacterState()` for read-modify-write instead of manually chaining `getCharacterState()` + `setCharacterState()` — the helper transmits only the diff and handles the 409 retry.
+- Use `setCharacterState()` only for first-time seeding or when you genuinely want to replace the whole state.
 - Keep payloads as JSON-serializable plain objects; arrays and primitives at the top level are not supported.
 - Inspect `result.ok` and switch on `result.reason` — these APIs no longer throw on HTTP failures (see the behavior change above and [Error reasons](#error-reasons-2)).
 

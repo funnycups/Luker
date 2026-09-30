@@ -78,7 +78,7 @@ import {
 import {
     buildEditToolResultPayload,
     buildPayloadForOutcome,
-} from '../../orchestrator/iter-studio/edit-tool-result-envelope.js';
+} from '../../../iteration-library/edit-tool-result-envelope.js';
 import {
     commitCharacterEditorOperations,
     commitLorebookOperations,
@@ -1373,11 +1373,12 @@ async function applyPendingEdits(state, { persistSession, render, i18n, context,
         // Latch: at least one edit has hit disk this popup session.
         // The postReplaceRollback path (see openUnifiedCharacterEditorPopup
         // onClosing) checks this flag to decide whether to undo the
-        // pre-materialize step done before the popup opened. We also
-        // mirror to rollbackEnvelope (owned by the outer wrapper) so
-        // the finally-block rollback check sees the same truth even
-        // when state creation itself was fine but a later teardown
-        // rethrow needs to be recovered.
+        // pre-materialize step done before the popup opened. Proposal-card
+        // commits latch the same flag via the bus onCommitted hook; batch
+        // applies latch it here. We also mirror to rollbackEnvelope (owned
+        // by the outer wrapper) so the finally-block rollback check sees
+        // the same truth even when state creation itself was fine but a
+        // later teardown rethrow needs to be recovered.
         state.hasEverApplied = true;
         if (state.rollbackEnvelope) state.rollbackEnvelope.hasEverApplied = true;
         const stampedAt = Date.now();
@@ -1852,12 +1853,13 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         aborting: false,
         abortController: null,
         // Set to true the first time any edit successfully lands on
-        // disk (see applyPendingEdits below). Used by the
-        // postReplaceRollback path: if the user closes the popup after
-        // OPEN_EDITOR without ever applying an edit, the popup rolls
-        // back the pre-materialize step (book file deletion + binding
-        // restore) so their disk state matches what it was before they
-        // clicked OPEN_EDITOR.
+        // disk. Flips from the bus onCommitted hook (proposal-card /
+        // approve-all / auto-apply commits) and from applyPendingEdits
+        // below (batch path). Used by the postReplaceRollback path: if
+        // the user closes the popup after OPEN_EDITOR without ever
+        // applying an edit, the popup rolls back the pre-materialize
+        // step (book file deletion + binding restore) so their disk
+        // state matches what it was before they clicked OPEN_EDITOR.
         hasEverApplied: false,
         // Shared reference with the outer openUnifiedCharacterEditorPopup
         // wrapper's finally block — the same latch, exposed as an
@@ -1889,6 +1891,17 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         onChange: () => {
             if (state.__suspendBusOnChange) return;
             scheduleBusRender();
+        },
+        // Any forward commit — per-card Approve, approve-all-pending,
+        // or the auto-apply toggle — means an edit actually hit disk.
+        // Latch the same flag the batch applyPendingEdits path sets so
+        // the outer wrapper's postReplaceRollback stands down on close;
+        // without this, closing the post-replace merge editor after
+        // applying edits would delete the materialized book and rebind
+        // the old one, taking the user's just-applied changes with it.
+        onCommitted: () => {
+            state.hasEverApplied = true;
+            if (state.rollbackEnvelope) state.rollbackEnvelope.hasEverApplied = true;
         },
     });
 

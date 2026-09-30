@@ -16,7 +16,7 @@
 // pipelines that defer their own commit) get the legacy in-memory
 // semantics.
 
-import { applyExtractionOpsImpl, createRollupWithChildren } from './main.js';
+import { applyExtractionOpsImpl, createRollupWithChildren, archiveNode as archiveNodeImpl } from './main.js';
 import { resolveInFlightAnchor } from './persistence.js';
 
 // Accept both the Layer-1 public shape `{ target: { id, ref }, relation, direction }`
@@ -49,7 +49,21 @@ function normalizeLinkList(links) {
     return links.map(normalizeLinkSpec);
 }
 
-export function getMemoryGraphWriteApi(store, context = null, { onCommit = null } = {}) {
+// `useInFlightAnchor: false` keeps every op's `maxSeq` at the store's own
+// `seqCounter` instead of bumping it to the turn currently being generated.
+// Session writers (orchestrator director / loop sub-agents) WANT the bump:
+// their commit lands on the in-flight turn's floor. The graph-iteration
+// studio must NOT take it: approvals commit through `commitGraphUiMutation`
+// at the store's covered watermark, so an edit that raised a node's `seqTo`
+// past coverage would make `seqToFloor(covered)` unresolvable and park the
+// approval as a conflict.
+//
+// `preserveSeqOnEdit: true` keeps an edit from moving the node's `seqTo` at
+// all — manual-edit parity. The graph-iteration studio approves corrective
+// edits, not conversation turns, so the diff must not claim a timeline move
+// (`Field updated: seqTo`) the user never asked for; extraction and session
+// writers keep the default bump.
+export function getMemoryGraphWriteApi(store, context = null, { onCommit = null, settings = null, useInFlightAnchor = true, preserveSeqOnEdit = false } = {}) {
     function resolveStore() {
         return (store && typeof store === 'object') ? store : null;
     }
@@ -64,15 +78,18 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
         return resolved;
     }
 
-    function applyOne(method, op) {
+    function applyOne(method, op, maxSeqOverride = null) {
         const resolved = requireStore(method);
-        const anchor = resolveInFlightAnchor(context);
-        const maxSeq = anchor !== null
-            ? anchor.turnSeq
-            : Number(resolved.seqCounter || 0);
+        const anchor = useInFlightAnchor ? resolveInFlightAnchor(context) : null;
+        const maxSeq = Number.isFinite(maxSeqOverride)
+            ? maxSeqOverride
+            : anchor !== null
+                ? anchor.turnSeq
+                : Number(resolved.seqCounter || 0);
         const result = applyExtractionOpsImpl(resolved, [op], {
             maxSeq,
             context,
+            settings,
         });
         return { store: resolved, result };
     }
@@ -92,23 +109,43 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
             ...(Array.isArray(links) ? { links: normalizeLinkList(links) } : {}),
             ...(ref ? { ref } : {}),
         };
-        const { store: mutated, result } = applyOne('createNode', op);
+        const { result } = applyOne('createNode', op);
         if (result.applied.length === 0) {
             const err = new Error('createNode failed.');
             err.code = 'OP_FAILED';
             err.rejected = result.rejected;
             throw err;
         }
-        // Identify the newly-added node. applyExtractionOpsImpl mutates store.nodes;
-        // the newest entry should be the one we just added.
-        const nodes = Object.values(mutated.nodes);
-        const newest = nodes[nodes.length - 1];
+        const appliedEntry = result.applied.find((entry) => String(entry?.nodeId || '')) || null;
+        const id = String(appliedEntry?.nodeId || '');
+        if (!id) {
+            const err = new Error('createNode did not resolve the written node id.');
+            err.code = 'OP_FAILED';
+            throw err;
+        }
         await flushCommit();
-        return { id: String(newest?.id || ''), ...(ref ? { ref } : {}) };
+        return { id, ...(ref ? { ref } : {}) };
+    }
+
+    function wouldEditChange(target, op) {
+        if (!target) return true;
+        if (op?.hasTitlePatch) {
+            const patched = String(op?.title || '').trim();
+            if (patched && patched !== String(target.title || '')) return true;
+        }
+        for (const [key, value] of Object.entries(op?.setFields || {})) {
+            if (value === undefined || value === null) continue;
+            if (JSON.stringify(target.fields?.[key] ?? null) !== JSON.stringify(value)) return true;
+        }
+        for (const key of Array.isArray(op?.clearFields) ? op.clearFields : []) {
+            if (Object.prototype.hasOwnProperty.call(target.fields || {}, key)) return true;
+        }
+        return false;
     }
 
     async function editNode({ id, setFields, clearFields, title } = {}) {
         if (!id) throw new Error('editNode: id is required.');
+        const resolved = requireStore('editNode');
         const op = {
             op: 'edit',
             nodeId: id,
@@ -116,11 +153,15 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
             clearFields: clearFields || [],
             ...(title !== undefined ? { title, hasTitlePatch: true } : {}),
         };
-        const { result } = applyOne('editNode', op);
+        const target = resolved.nodes?.[id];
+        if (target && !target.archived && !wouldEditChange(target, op)) {
+            return { ok: true, changed: false, note: 'values already match' };
+        }
+        const { result } = applyOne('editNode', op, preserveSeqOnEdit ? 0 : null);
         const ok = result.applied.length > 0;
         if (ok) {
             await flushCommit();
-            return { ok: true };
+            return { ok: true, changed: true };
         }
         const firstReject = Array.isArray(result.rejected) ? result.rejected[0] : null;
         const error = firstReject?.error || { code: 'OP_FAILED', message: 'editNode produced no change.' };
@@ -142,17 +183,19 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
 
     async function upsertLinks({ source, links } = {}) {
         if (!source || !Array.isArray(links)) throw new Error('upsertLinks: source and links are required.');
+        const resolved = requireStore('upsertLinks');
         const op = {
             op: 'link_upsert',
             sourceNodeId: source.id || '',
             sourceRef: source.ref || '',
             links: normalizeLinkList(links),
         };
+        const beforeCount = (resolved.edges || []).length;
         const { result } = applyOne('upsertLinks', op);
-        const applied = result.applied.length;
-        if (applied > 0) {
+        const appliedEdges = Math.max(0, (resolved.edges || []).length - beforeCount);
+        if (result.applied.length > 0) {
             await flushCommit();
-            return { applied };
+            return { applied: appliedEdges };
         }
         const firstReject = Array.isArray(result.rejected) ? result.rejected[0] : null;
         if (firstReject?.error) {
@@ -171,22 +214,44 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
             direction: direction || 'bidirectional',
         };
         const resolved = requireStore('deleteLinks');
-        const anchor = resolveInFlightAnchor(context);
+        const anchor = useInFlightAnchor ? resolveInFlightAnchor(context) : null;
         const maxSeq = anchor !== null
             ? anchor.turnSeq
             : Number(resolved.seqCounter || 0);
         const beforeCount = (resolved.edges || []).length;
-        applyExtractionOpsImpl(resolved, [op], { maxSeq, context });
+        applyExtractionOpsImpl(resolved, [op], { maxSeq, context, settings });
         const removed = beforeCount - (resolved.edges || []).length;
         if (removed > 0) await flushCommit();
         return { removed };
+    }
+
+    // Archive-semantics primitive shared with the graph-iteration studio's
+    // merge flow: marks the node archived, rewrites every incident edge to
+    // the replacement (deduped, self-loops dropped), never physically
+    // deletes. A missing replacement archives without rewiring.
+    async function archiveNode({ id, replacementId = null } = {}) {
+        if (!id) throw new Error('archiveNode: id is required.');
+        const resolved = requireStore('archiveNode');
+        const target = resolved.nodes?.[id];
+        if (!target) {
+            return { ok: false, error: { code: 'NODE_NOT_FOUND', message: `archiveNode: node ${id} does not exist.` } };
+        }
+        if (target.archived) {
+            return { ok: true, changed: false, note: 'node already archived' };
+        }
+        if (replacementId && !resolved.nodes?.[replacementId]) {
+            return { ok: false, error: { code: 'NODE_NOT_FOUND', message: `archiveNode: replacement ${replacementId} does not exist.` } };
+        }
+        archiveNodeImpl(resolved, id, replacementId || null);
+        await flushCommit();
+        return { ok: true, changed: true };
     }
 
     async function applyExtractionBatch({ ops, maxSeq } = {}) {
         if (!Array.isArray(ops)) throw new Error('applyExtractionBatch: ops must be an array.');
         const resolved = requireStore('applyExtractionBatch');
         const seq = Number.isFinite(Number(maxSeq)) ? Number(maxSeq) : Number(resolved.seqCounter || 0);
-        const result = applyExtractionOpsImpl(resolved, ops, { maxSeq: seq, context });
+        const result = applyExtractionOpsImpl(resolved, ops, { maxSeq: seq, context, settings });
         if (result.applied.length > 0) await flushCommit();
         return result;
     }
@@ -213,6 +278,7 @@ export function getMemoryGraphWriteApi(store, context = null, { onCommit = null 
         deleteNode,
         upsertLinks,
         deleteLinks,
+        archiveNode,
         compactNodes,
         applyExtractionBatch,
     });

@@ -274,11 +274,11 @@ test.describe('Iter-studio workspace split — Orchestrator', () => {
 test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
     test.setTimeout(90000);
 
-    // The CEA character iteration popup opens via the `CHARACTER_REPLACED`
-    // event handler in main.js — gated on `settings.replaceLorebookSyncEnabled`
-    // and the active character's avatar. There is no direct "open studio"
-    // button to click, so this test synthesizes the event with the currently
-    // selected character. Soft-skips if no character is loaded.
+    // The CEA character iteration studio has no direct "open studio"
+    // button — it opens from the "Merge in editor" action that CEA
+    // registers with the core post-replace registry. This test invokes
+    // that registered action directly with the active character.
+    // Fails fast when no character is loaded — PW_INCLUDE_INTEGRATION runs need seed data.
     async function ensureActiveCharacter(page) {
         const avatar = await page.evaluate(() => {
             const ctx = window.Luker?.getContext?.();
@@ -288,45 +288,21 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         return avatar;
     }
 
-    // After CHARACTER_REPLACED, the handler shows a confirm popup ("Open the
-    // character editor?") before mounting the iter-studio. We click its OK
-    // button to proceed; the cancel button maps to "Skip" and would suppress
-    // the studio entirely. Targets `.popup-button-ok` (the CONFIRM popup's
-    // affirmative class) so the locale-specific button label doesn't have to
-    // be threaded through.
-    async function acknowledgePostReplaceConfirmPopup(page) {
-        const okButton = page.locator('dialog.popup[open] .popup-button-ok').first();
-        await expect(okButton).toBeVisible({ timeout: 10000 });
-        await okButton.click();
-    }
-
     test('CEA Char: workspace mounts with split layout + preview + auto-apply control', async ({ page }) => {
         await awaitMainUI(page);
         const avatar = await ensureActiveCharacter(page);
 
-        // Force-enable the setting + emit the CHARACTER_REPLACED event with
-        // the current character's detail shape (matching main.js's reader:
-        // `event.detail.character.avatar`).
-        await page.evaluate(async (avatarId) => {
+        // Drive the same action the replace popup would run. The studio
+        // mounts asynchronously, so this is fire-and-forget — awaiting the
+        // call would deadlock because the page step never returns control
+        // to Playwright while the popup is open.
+        await page.evaluate((avatarId) => {
             const ctx = window.Luker?.getContext?.();
-            const settings = ctx?.extensionSettings?.['character_editor_assistant'];
-            if (settings && typeof settings === 'object') {
-                settings.replaceLorebookSyncEnabled = true;
-            }
-            const eventTypes = ctx?.event_types || {};
-            const evtName = eventTypes.CHARACTER_REPLACED || 'character_replaced';
+            const action = ctx?.listPostReplaceActions?.().find(a => a?.id === 'character-editor-assistant-merge');
+            if (!action) throw new Error('CEA merge post-replace action is not registered');
             const character = ctx?.characters?.find(c => String(c?.avatar) === avatarId) || { avatar: avatarId };
-            // SillyTavern's eventSource.emit forwards a plain object that the
-            // handler reads via event.detail.character — the CustomEvent shape
-            // is the canonical wire format used by ST internals.
-            const evt = new CustomEvent(evtName, { detail: { character } });
-            // Fire-and-forget: the handler is async and blocks on the confirm
-            // popup; awaiting here would deadlock because the page test step
-            // never returns control to Playwright to click the popup.
-            try { ctx?.eventSource?.emit?.(evtName, evt); } catch (e) { console.warn('emit threw', e); }
+            void action.run({ character, previousCharacter: null, previousLorebookSnapshot: null });
         }, avatar);
-
-        await acknowledgePostReplaceConfirmPopup(page);
 
         // Unified editor popup — `.cea_editor_studio.luker-iter-workspace`.
         // The older `.cea_charit_popup` class never existed for this surface.
@@ -367,20 +343,17 @@ test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
         await ensureConnectionProfile(page);
         const avatar = await ensureActiveCharacter(page);
 
-        await page.evaluate(async (avatarId) => {
+        // Drive the same action the replace popup would run. The studio
+        // mounts asynchronously, so this is fire-and-forget — awaiting the
+        // call would deadlock because the page step never returns control
+        // to Playwright while the popup is open.
+        await page.evaluate((avatarId) => {
             const ctx = window.Luker?.getContext?.();
-            const settings = ctx?.extensionSettings?.['character_editor_assistant'];
-            if (settings && typeof settings === 'object') {
-                settings.replaceLorebookSyncEnabled = true;
-            }
-            const eventTypes = ctx?.event_types || {};
-            const evtName = eventTypes.CHARACTER_REPLACED || 'character_replaced';
+            const action = ctx?.listPostReplaceActions?.().find(a => a?.id === 'character-editor-assistant-merge');
+            if (!action) throw new Error('CEA merge post-replace action is not registered');
             const character = ctx?.characters?.find(c => String(c?.avatar) === avatarId) || { avatar: avatarId };
-            const evt = new CustomEvent(evtName, { detail: { character } });
-            try { ctx?.eventSource?.emit?.(evtName, evt); } catch (e) { console.warn('emit threw', e); }
+            void action.run({ character, previousCharacter: null, previousLorebookSnapshot: null });
         }, avatar);
-
-        await acknowledgePostReplaceConfirmPopup(page);
 
         const popup = page.locator('.cea_editor_studio.luker-iter-workspace').first();
         await expect(popup).toBeVisible({ timeout: 15000 });

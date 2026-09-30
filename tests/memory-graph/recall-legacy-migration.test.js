@@ -81,6 +81,9 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
 jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/schema-iteration/studio.js', () => ({
     openSchemaIterationStudio: () => Promise.resolve(),
 }));
+jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/graph-iteration/studio.js', () => ({
+    openGraphIterationStudio: () => Promise.resolve(),
+}));
 jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
     performFuzzySearch: () => [],
 }));

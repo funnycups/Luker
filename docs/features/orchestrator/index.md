@@ -1,10 +1,10 @@
 # Multi-Agent Orchestration
 
-Have you ever had the AI just... not get it? You set up a careful scene — a tense standoff, a delicate political negotiation, a slow-burn romance — and the reply skips past your last beat, forgets a rule you established two scenes ago, breaks character to summarize, or rushes to a resolution you didn't want. This isn't because the model is dumb. It's because the model can only think about one thing at a time, and you've asked it to do too many in one shot: stay in character, recall context, respect world rules, plan a next beat, *and* write good prose.
+A carefully prepared scene — a tense standoff, a delicate political negotiation, a slow-burn romance — can still be spoiled by the reply: it skips your last beat, forgets a rule you established two scenes ago, breaks character to summarize, or rushes to a resolution you did not want. This is not because the model is weak; it is because a single pass can only focus on one thing at a time, while you are asking it to handle several at once: stay in character, recall context, respect world rules, plan the next beat, *and* write good prose.
 
-The Orchestrator solves this by sending in a small team before the main reply. One agent extracts the important state from your recent chat. Another checks what world rules apply right now. A third drafts a plan for what this turn should accomplish. A fourth reviews their work. A final agent packages everything the team came up with into a single short briefing. By the time the main model writes its reply, it has been handed that briefing (and only that briefing), so it can spend its budget on the prose, not on bookkeeping.
+The Orchestrator solves this by dispatching a small team before the main reply. One agent extracts the important state from the recent chat. Another determines which world rules currently apply. A third drafts a plan for what the turn should accomplish. A fourth reviews the team's work. A final agent packages the team's findings into a single short briefing. By the time the main model writes its reply, it has received that briefing (and only that briefing), so its budget can go to the prose rather than to bookkeeping.
 
-**The orchestrator ships with a working default Spec workflow — you don't have to design anything. Toggle it on and it just runs.** When you want a different shape later, every execution mode has its own dedicated editor.
+**The orchestrator ships with a working default Spec workflow, so no design work is required to begin. Enable it and it runs.** When a different shape is needed later, every execution mode has its own dedicated editor.
 
 ::: info When does it run?
 The Orchestrator triggers on five generation types: `normal`, `continue`, `regenerate`, `swipe`, and `impersonate`. It runs **after** World Info parsing and **before** the main reply. The Run Panel is kept in memory only — it's cleared when you switch chats.
@@ -12,7 +12,7 @@ The Orchestrator triggers on five generation types: `normal`, `continue`, `regen
 
 ## 5-Minute Walkthrough (using the default workflow)
 
-You don't pick a mode first. You don't write a workflow first. The default Spec is already running. This section just gets it turned on so you can see what it actually does for you.
+No mode selection or workflow authoring is required first — the default Spec is already configured. This section only enables it so its behavior can be observed.
 
 ### Step 0 — Prerequisites {#step-0}
 
@@ -30,16 +30,16 @@ Open the Extensions drawer (top bar) and find the **Multi-Agent Orchestration** 
 Scroll within the same panel to **LLM Node API Preset** and **AI Generation API Preset**. These tell the orchestrator agents which API and which Chat Completion preset to use.
 
 ::: tip Save money here
-The orchestrator can call the LLM 5–10 times per turn (one per node). If your main chat uses an expensive model like Claude Opus, point the orchestrator at something cheaper — Haiku, Gemini Flash — and you'll cut 70%+ of the cost. If you need higher quality, route different nodes to different models (each node has its own API/preset override).
+The orchestrator can call the LLM 5–10 times per turn (one call per node). If the main chat uses an expensive model such as Claude Opus, point the orchestrator at a cheaper one — Haiku or Gemini Flash — to cut 70%+ of the cost. If higher quality is needed, route different nodes to different models (each node has its own API/preset override).
 :::
 
 ### Step 3 — Just send a message {#step-3}
 
-Send a message in the chat — no other settings to touch. Before the main model replies, the default Spec workflow runs in the background. The first time will be slower than usual (running 5–10 agents in sequence); after that it settles in.
+Send a message in the chat — no other settings are needed. Before the main model replies, the default Spec workflow runs in the background. The first run is slower than usual (5–10 agents run in sequence); subsequent runs are faster.
 
 ### Step 4 — See what it did for you {#step-4}
 
-The moment a run starts, the **Run Panel** slides in beside the chat (or rises from the bottom on narrow screens). It's live: each round is a collapsible card; expand one to see what the model thought, which tools it called, and what they returned.
+As soon as a run starts, the **Run Panel** slides in beside the chat (or rises from the bottom on narrow screens). It updates in real time: each round is a collapsible card; expand one to see what the model thought, which tools it called, and what they returned.
 
 ![The Run Panel as a director run begins](/_screenshots/run-panel/01-panel-initial.png)
 
@@ -55,23 +55,23 @@ On narrow screens, the panel becomes a bottom drawer you can drag up or dismiss:
 
 ![Run Panel on a phone-sized viewport](/_screenshots/run-panel/05-panel-drawer.png)
 
-The panel is in-memory only. Switching chats or refreshing clears it; the chat thread keeps only the final reply, preserved verbatim. You can also:
+The panel is kept in memory only. Switching chats or refreshing clears it; the chat thread keeps only the final reply, preserved verbatim. The following actions are also available:
 
-- **Stop** the run mid-flight
+- **Stop** the run while it is in progress
 - **Copy** the raw content of any section
-- **Export** the full run as JSON (handy for bug reports)
+- **Export** the full run as JSON (useful for bug reports)
 - **Collapse all** to fold every card at once
 
-This is the physical meaning of "the AI thinks before replying." If the reply is bad, open the panel and find exactly where the bad signal came in.
+This is what "the AI thinks before replying" means in practice. If the reply is poor, open the panel and locate exactly where the problem entered.
 
-You're using the orchestrator now. From here, three branches based on what you want:
+The orchestrator is now active. From here, three directions depending on what is needed:
 
-- The default Spec isn't enough — customize it (yourself or with AI help) → [Spec mode](/features/orchestrator/spec)
-- Need the flow to change based on situation, can't pre-write a DAG → [Agenda mode](/features/orchestrator/agenda)
-- Want a single agent that calls tools (memory, lorebook…) until it says "I'm done" → [Loop mode](/features/orchestrator/loop)
+- The default Spec is not sufficient and needs customization (manual or AI-assisted) → [Spec mode](/features/orchestrator/spec)
+- The flow must adapt to the situation and cannot be pre-written as a DAG → [Agenda mode](/features/orchestrator/agenda)
+- A single agent should call tools (memory, lorebook, …) until it declares completion → [Loop mode](/features/orchestrator/loop)
 
 ::: tip Whichever mode you pick, customization starts here
-**[AI Iteration Studio](/features/orchestrator/iteration-studio)** is the orchestrator's primary customization tool — describe what you want in one sentence, the AI returns a proposal, you approve change-by-change. All three modes share it, and **it beats hand-editing in 99% of cases**.
+**[AI Iteration Studio](/features/orchestrator/iteration-studio)** is the orchestrator's primary customization tool — describe the goal in one sentence, the AI returns a proposal, and each change is approved individually. Spec, Agenda, Loop and Director all share it, and **in 99% of cases it is preferable to manual editing**.
 :::
 
 ## Pick your execution mode
@@ -79,19 +79,19 @@ You're using the orchestrator now. From here, three branches based on what you w
 | Mode | What it is | When to use | Skills | Detailed docs |
 |---|---|---|---|---|
 | **Spec** (default) | A fixed Stage → Node DAG | Default. You want a predictable pipeline | Catalog injected per node; per-node `skills.visible` overrides | [Spec mode](/features/orchestrator/spec) |
-| **Single Agent** | A Spec with exactly one node | Cheap and fast. No multi-agent coordination needed | Catalog injected on the single node | [Single Agent mode](/features/orchestrator/single) |
+| **Single Agent** | A Spec with exactly one node | Low cost, high speed. No multi-agent coordination needed | Catalog injected on the single node | [Single Agent mode](/features/orchestrator/single) |
 | **Agenda** | A Planner agent dispatches other agents via tool calls | Flow needs to decide who runs based on what's happening, like an agent loop | Catalog injected on planner + each dispatched worker | [Agenda mode](/features/orchestrator/agenda) |
-| **Loop** | One agent calls tools in a single conversation until `finalize` | Strikes the speed/quality balance; exploratory research, dynamic decisions | Catalog injected on the loop agent | [Loop mode](/features/orchestrator/loop) |
+| **Loop** | One agent calls tools in a single conversation until `finalize` | Balances speed and quality; exploratory research, dynamic decisions | Catalog injected on the loop agent | [Loop mode](/features/orchestrator/loop) |
 | **Director** | A main agent + sub-agent team writes the message body directly | Takeover mode for high-quality long-form RP; ships with 24 bundled skills pre-bound | Catalog injected on main agent + each sub-agent dispatch | [Director mode](/features/orchestrator/director) |
 
-Switch modes from the **Execution mode** dropdown in the extension drawer. Spec and Agenda can convert into each other from the editor (best-effort); Loop has a different shape, no analogous conversion.
+Switch modes from the **Execution mode** dropdown in the extension drawer. Spec and Agenda can convert into each other from the editor (best-effort); Loop has a different structure, for which no analogous conversion exists.
 
 ::: tip Want to customize? Start with the Studio
-After switching to any mode, the [**AI Iteration Studio**](/features/orchestrator/iteration-studio) is the first stop. Spec and Agenda surface diffs you approve; Loop patches the profile directly. Same panel, same workflow.
+After switching to any mode, the [**AI Iteration Studio**](/features/orchestrator/iteration-studio) is the first stop. Spec and Agenda present diffs for approval; Loop patches the profile directly. Both use the same panel and workflow.
 :::
 
 ::: info Skills column
-All five modes use the same skills policy shape (`skills.visible` / `skills.deny` at the mode level, optional `+`-inheritance overrides per agent). For the full model, see [Orchestrator integration](/features/skills/orchestrator-integration). Director is the only mode that ships with pre-bound default skills out of the box; other modes start with `visible: ["*"]` (every installed skill is visible).
+All five modes use the same skills policy shape (`skills.visible` / `skills.deny` at the mode level, optional `+`-inheritance overrides per agent). For the full model, see [Orchestrator integration](/features/skills/orchestrator-integration). Director is the only mode with pre-bound default skills in its bundled profile; other modes start with `visible: ["*"]` (every installed skill is visible).
 :::
 
 ## Common configuration
@@ -118,12 +118,12 @@ Orchestration configurations can be bound to a character card. When bound:
 - The configuration exports with the card. Anyone importing the card gets the recommended workflow automatically.
 - Card creators can ship a workflow that's tuned for their character.
 - Switching to the card auto-applies its workflow.
-- The card can specify its own execution mode (all four modes are supported).
+- The card can specify its own execution mode: Spec, Agenda, Loop, or Director.
 - Selecting a preset in the card's dropdown switches that chat to it immediately; the card library is preserved either way.
 - "Clear presets from this card" reverts to the global configuration.
 - You can layer personal tweaks on top of a card-bound configuration.
 
-All four modes now support card presets.
+Card presets work in all four modes.
 
 ### Import / Export
 
@@ -139,7 +139,7 @@ Filenames look like `luker-orchestrator-[agenda-][global|character-{name}].json`
 On import, the file's mode (Spec/Agenda) must match your current execution mode. You choose whether to apply to the global config or to a specific card.
 
 ::: info Loop import/export
-Loop mode doesn't have file-level Profile import/export buttons yet. Use the [AI Iteration Studio](/features/orchestrator/iteration-studio) to reuse loop workflows.
+Loop mode does not yet provide file-level Profile import/export buttons. Use the [AI Iteration Studio](/features/orchestrator/iteration-studio) to reuse loop workflows.
 :::
 
 ### Common configuration reference
@@ -171,7 +171,7 @@ The most common settings:
 | `<thought>` Tag Stripping | Strip thinking tags from agent output |
 | Message Folding Threshold | 1200 chars / 18 lines |
 
-Mode-specific parameters (per-node, review, planner, loop tool toggles…) live in the per-mode pages.
+Mode-specific parameters (per-node, review, planner, loop tool toggles…) are documented in the per-mode pages.
 
 </details>
 
@@ -230,4 +230,4 @@ context.eventSource.on('luker.orchestrator.result', (evt) => {
 - [Notes — author-side plot threads](/features/orchestrator/notes) — agent-as-author thread tracker, scoped to the current chat
 - [Function Call Runtime](/improvements/function-call-runtime) — Agenda and Loop both rely on it
 - [Character Card Editor](/features/card-editor/) — shares the diff engine with Iteration Studio
-- [Card-Bound Presets and Personas](/improvements/card-bound-presets) — how the orchestration config rides along with character cards
+- [Card-Bound Presets and Personas](/improvements/card-bound-presets) — how the orchestration configuration is carried with character cards

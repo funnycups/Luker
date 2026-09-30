@@ -120,9 +120,12 @@ describe('CEA post-replace rollback', () => {
         const rollback = jest.fn(async () => {});
         // Flip the shared rollbackEnvelope BEFORE the popup mount runs
         // to simulate "user applied at least one edit this session".
-        // Production sets this flag from inside applyPendingEdits when
-        // the commit succeeds — mirroring here has the same observable
-        // effect without needing to drive the popup UI to completion.
+        // Production flips this flag on every successful commit: the
+        // bus onCommitted hook (proposal-card / approve-all / auto-
+        // apply) and the batch applyPendingEdits path. Mirroring here
+        // exercises the finally-block branch without driving the popup
+        // UI to completion — the real commit-to-latch wiring is covered
+        // by the #28 MERGE happy-path e2e (close after apply).
         try {
             await studio.openUnifiedCharacterEditorPopup(makeContext(), {
                 avatar: 'a.png',

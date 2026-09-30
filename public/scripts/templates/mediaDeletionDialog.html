@@ -1,0 +1,30 @@
+<div class="mediaDeletionDialog">
+    <div class="info-block warning margin0">
+        <small data-i18n="Once deleted, the files will be gone forever!">Once deleted, the files will be gone forever!</small>
+    </div>
+    {{#if notes.length}}
+    <ul class="mediaDeletionNotes">
+        {{#each notes}}<li>{{this}}</li>{{/each}}
+    </ul>
+    {{/if}}
+    <div class="mediaDeletionToolbar">
+        <span class="mediaDeletionSelectedCount"></span>
+        <button type="button" class="menu_button mediaDeletionToggleAll" data-i18n="Select all">Select all</button>
+        <button type="button" class="menu_button mediaDeletionToggleNone" data-i18n="Deselect all">Deselect all</button>
+    </div>
+    {{#each groups}}
+    <section class="mediaDeletionGroup" data-kind="{{kind}}">
+        <h4>{{title}} ({{items.length}} · {{totalLabel}})</h4>
+        <div class="mediaDeletionItems">
+            {{#each items}}
+            <label class="mediaDeletionItem">
+                <input type="checkbox" class="mediaDeletionItemCheckbox" data-path="{{path}}" checked>
+                <img class="mediaDeletionThumb" src="{{path}}" loading="lazy" alt="">
+                <span class="mediaDeletionItemName">{{name}}</span>
+                <span class="mediaDeletionItemSize">{{sizeLabel}}</span>
+            </label>
+            {{/each}}
+        </div>
+    </section>
+    {{/each}}
+</div>

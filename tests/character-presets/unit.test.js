@@ -18,7 +18,8 @@ const {
     addCharacterBoundPreset, updateCharacterBoundPreset,
     removeCharacterBoundPreset, setCharacterBoundDefault,
     resolveCharacterBoundPresetByName, readCharacterBoundState,
-    clearAllCharacterBoundPresets,
+    clearAllCharacterBoundPresets, readCharacterBoundStateRaw,
+    writeCharacterBoundStateById,
 } = await import('/scripts/character/presets.js');
 
 const mockCharacter = (avatar = 'Aqua.png') => ({ avatar, data: { extensions: {} } });
@@ -270,4 +271,40 @@ test('clearAll from populated state (2 presets + default) empties everything', a
     await setCharacterBoundDefault(c, 'Bar');
     await clearAllCharacterBoundPresets(c);
     expect(readCharacterBoundState(c)).toEqual({ presets: [], defaultPresetName: null });
+});
+
+test('readCharacterBoundStateRaw is pure and does not schedule the migration flush', async () => {
+    const c = mockCharacter();
+    c.data.extensions.luker = { chat_completion_preset: 'LegacyName' };
+    const state = readCharacterBoundStateRaw(c);
+    expect(state).toEqual({ presets: [], defaultPresetName: 'LegacyName', _migrated: true });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(ctx.writeExtensionField).not.toHaveBeenCalled();
+});
+
+test('writeCharacterBoundStateById overlays the luker namespace and preserves siblings', async () => {
+    const c = ctx.characters[0];
+    c.data.extensions.luker = { embedded_skills_source: ['keep-me'] };
+    await writeCharacterBoundStateById(0, {
+        presets: [{ name: 'P', preset: { temperature: 1 } }],
+        defaultPresetName: 'P',
+    });
+    const call = ctx.writeExtensionField.mock.calls.at(-1);
+    expect(call[0]).toBe(0);
+    expect(call[1]).toBe('luker');
+    expect(call[2].embedded_skills_source).toEqual(['keep-me']);
+    expect(call[2].chat_completion_preset).toEqual({
+        presets: [{ name: 'P', preset: { temperature: 1 } }],
+        defaultPresetName: 'P',
+    });
+});
+
+test('writeCharacterBoundStateById clears the field for an empty state', async () => {
+    await writeCharacterBoundStateById(0, { presets: [], defaultPresetName: null });
+    expect(ctx.writeExtensionField.mock.calls.at(-1)[2].chat_completion_preset).toBeNull();
+});
+
+test('writeCharacterBoundStateById throws for an unknown index', async () => {
+    await expect(writeCharacterBoundStateById(99, { presets: [], defaultPresetName: null }))
+        .rejects.toThrow(/not found/);
 });

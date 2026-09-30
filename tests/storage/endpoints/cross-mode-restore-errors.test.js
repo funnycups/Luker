@@ -3,27 +3,14 @@
 // can react to.
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import archiver from 'archiver';
-import multer from 'multer';
 import request from 'supertest';
 
-import { makeEndpointHarness } from '../harness/endpoint-harness.js';
+import { makeEndpointHarness, uploadArchiveToSession } from '../harness/endpoint-harness.js';
 import { router as usersPrivateRouter } from '../../../src/endpoints/users-private.js';
 import { ENGINE_DUMP_ENTRY, ENGINE_META_ENTRY } from '../../../src/storage/engine-backup-entries.js';
 import { acquireMigrationLock, releaseMigrationLock, makeHolderId } from '../../../src/storage/migration/lock.js';
-
-function mountMulterShim(app, uploadsDir) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    const upload = multer({
-        storage: multer.diskStorage({
-            destination: (_req, _file, cb) => cb(null, uploadsDir),
-        }),
-    }).single('avatar');
-    app.use(upload);
-}
 
 const ALL_SELECTION = {
     settings: true, secrets: true, characters: true, chats: true,
@@ -50,9 +37,7 @@ describe('cross-mode restore error mapping (on fs server)', () => {
     beforeEach(async () => {
         harness = await makeEndpointHarness({
             mode: 'fs',
-            mount: (app, { dirs }) => {
-                const uploadsDir = path.join(dirs.root, 'cm-uploads');
-                mountMulterShim(app, uploadsDir);
+            mount: (app) => {
                 app.use('/api/users', usersPrivateRouter);
             },
         });
@@ -65,12 +50,10 @@ describe('cross-mode restore error mapping (on fs server)', () => {
         await buildForeignDbSourceZip(zipPath, 'mysql', harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
 
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const res = await request(harness.app)
             .post('/api/users/restore-backup')
-            .field('handle', harness.handle)
-            .field('mode', 'merge')
-            .field('selection', JSON.stringify(ALL_SELECTION))
-            .attach('avatar', zipBytes, 'mysql.zip');
+            .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         expect(res.status).toBe(400);
         expect(res.body?.crossModeScratchRequired?.kind).toBe('mysql');
         expect(res.body?.error).toMatch(/scratch mysql/i);
@@ -81,13 +64,16 @@ describe('cross-mode restore error mapping (on fs server)', () => {
         await buildForeignDbSourceZip(zipPath, 'mysql', harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
 
+        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
         const res = await request(harness.app)
             .post('/api/users/restore-backup')
-            .field('handle', harness.handle)
-            .field('mode', 'merge')
-            .field('selection', JSON.stringify(ALL_SELECTION))
-            .field('scratchMysqlUrl', 'mysql://nobody:wrong@127.0.0.1:1/none')
-            .attach('avatar', zipBytes, 'mysql.zip');
+            .send({
+                uploadId,
+                handle: harness.handle,
+                mode: 'merge',
+                selection: ALL_SELECTION,
+                scratchMysqlUrl: 'mysql://nobody:wrong@127.0.0.1:1/none',
+            });
         expect(res.status).toBe(400);
         expect(res.body?.crossModeScratchConnection?.kind).toBe('mysql');
         expect(res.body?.error).toMatch(/scratch mysql/i);
@@ -121,12 +107,10 @@ describe('cross-mode restore error mapping (on fs server)', () => {
         await acquireMigrationLock({ dataRoot: harness.dataRoot, holderId: otherHolder });
 
         try {
+            const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
             const res = await request(harness.app)
                 .post('/api/users/restore-backup')
-                .field('handle', harness.handle)
-                .field('mode', 'overwrite')
-                .field('selection', JSON.stringify(ALL_SELECTION))
-                .attach('avatar', zipBytes, 'sqlite.zip');
+                .send({ uploadId, handle: harness.handle, mode: 'overwrite', selection: ALL_SELECTION });
             expect(res.status).toBe(409);
         } finally {
             await releaseMigrationLock({ dataRoot: harness.dataRoot, holderId: otherHolder });

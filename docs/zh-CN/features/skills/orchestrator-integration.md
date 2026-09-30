@@ -1,8 +1,8 @@
 # 编排器集成
 
-本页讲 Skill 如何挂到编排器 profile 上、以及每个 agent 派遣时如何看到对的那一组。
+本页介绍 Skill 如何挂载到编排器 profile，以及每个 agent 在派遣时如何看到正确的 Skill 集合。
 
-整体图景：编排器 profile 在两个层级带着 `skills` 策略 —— **模式级**（默认值）与**每 agent 覆写** —— 运行时在每次派遣前把两层与物理库存对账。agent 只看到它解析后的可见集；其余被过滤掉。
+整体而言，编排器 profile 在两个层级上带有 `skills` 策略 —— **模式级**（默认值）与**每 agent 覆写** —— 运行时在每次派遣前把两层与物理库存对账。agent 只看到它解析后的可见集；其余被过滤掉。
 
 ## 策略形状
 
@@ -96,7 +96,7 @@
 
 ### 通配符
 
-`visible` 接受 `"*"`，意为「所有已安装 Skill」。早期想让 agent 看到所有可用项又不想列名时很有用：
+`visible` 接受 `"*"`，意为「所有已安装 Skill」。早期阶段，希望 agent 无需列名即可看到所有已安装 Skill 时很有用：
 
 ```jsonc
 "mainAgent": {
@@ -104,7 +104,7 @@
 }
 ```
 
-通配符按你预期的方式与 `"+"` 和 `deny` 组合。
+通配符与 `"+"` 和 `deny` 的组合方式符合预期。
 
 ## agent 实际看到什么
 
@@ -127,7 +127,7 @@
 
 只是目录 —— 名字 + 描述。agent 不用花一轮 `skill_list` 工具调用就知道有什么可用。
 
-默认 director profile 的 18 来项加起来约 150–300 token —— 很便宜。
+默认 director profile 的约 18 项合计约 150–300 token，开销很低。
 
 ### 2. 三个函数工具
 
@@ -139,7 +139,7 @@
 | `skill_read({ name, path?, offset?, limit? })` | `path` 缺省 SKILL.md；`offset`/`limit` 是行号 | `{ content, totalLines, truncated }` |
 | `skill_search({ name, query, path?, limit?, contextLines? })` | 在单个 Skill 的文件内做子串搜索 | `{ hits: [{ path, lineStart, lineEnd, snippet }] }` |
 
-agent 真的需要正文时就调 `skill_read`。`skill_search` 用于 Skill 很大、只有某一段相关的场景。
+agent 真正需要正文时才会调用 `skill_read`。`skill_search` 适用于 Skill 体积较大、只有某一段相关的场景。
 
 运行时硬上限：`skill_read` 响应不超过 50 KB。截断时 agent 用 `offset` 继续读。这保证即使 Skill 携带大块参考文件，上下文成本也是有界的。
 
@@ -221,18 +221,18 @@ spec 模式的审查节点（review nodes）的目录注入是有意跳过的 �
 
 这种「软失败」行为是有意的。意味着：
 
-- 导入一张你跳过其内嵌 Skill 的角色卡不会坏任何东西 —— 引用只是悬空。
+- 导入一张跳过了内嵌 Skill 的角色卡不会造成任何破坏 —— 这些引用只是悬空。
 - 删除一个 Skill 不需要清理每一个引用它的 profile。
-- 改名一个 Skill 是一步操作 —— 引用变失效，但派遣继续工作，直到你选择修。
+- 重命名一个 Skill 只需一步——引用会失效，但派遣仍可正常工作，直到你选择修复。
 
 ## 编辑策略
 
 在编排器面板里，每个 agent 的设置卡显示一行 **Skill**：
 
-![每 agent 的 Skill chip，带 + 继承标记](/_screenshots/skills/agent-skill-chips.png)
+![带 + 继承标记的 Skill chip](/_screenshots/skills/rp-demo-11-director-chip-added.png)
 
 - **`+`** chip —— 显式的「继承模式默认值」标记（`visible` 以 `"+"` 开头时出现）。
-- 每个具名 Skill 一个 chip。点击移除；点 **添加……** 从你已安装的库存里挑。
+- 每个具名 Skill 一个 chip。点击移除；点击 **添加……** 从已安装的库存中选择。
 - **禁用** 行 —— 同样的 chip，独立列表。
 
 面板顶部的模式级 **Skill** 行也一样。编辑它更新 `mode.skills`；编辑某个 agent 的行更新该 agent 的覆写。

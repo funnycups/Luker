@@ -33,10 +33,6 @@
                 <i id="delete_connection_profile" class="menu_button fa-solid fa-trash-can" title="Delete a connection profile" data-i18n="[title]Delete a connection profile"></i>
             </div>
         </div>
-        <div id="connection_profile_rpm_limit_block" class="flex-container alignItemsCenter gap10 marginTop10">
-            <label for="connection_profile_rpm_limit" data-i18n="Requests per minute (0 = unlimited)">Requests per minute (0 = unlimited)</label>
-            <input id="connection_profile_rpm_limit" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
-        </div>
         <div class="inline-drawer wide100p marginTop10">
             <div class="inline-drawer-toggle inline-drawer-header">
                 <b data-i18n="Advanced">Advanced</b>
@@ -57,8 +53,12 @@
                     <label for="connection_profile_function_calling_plain_text_error_retry_max_attempts" data-i18n="Plain-text retry attempts">Plain-text retry attempts</label>
                     <input id="connection_profile_function_calling_plain_text_error_retry_max_attempts" class="text_pole widthUnset" type="number" min="1" step="1" value="3" />
                 </div>
+                <div id="connection_profile_rpm_limit_block" class="flex-container alignItemsCenter gap10 marginTop10">
+                    <label for="connection_profile_rpm_limit" data-i18n="Requests per minute (0 = unlimited)">Requests per minute (0 = unlimited)</label>
+                    <input id="connection_profile_rpm_limit" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
+                </div>
                 <div id="connection_profile_max_request_retries_block" class="flex-container alignItemsCenter gap10 marginTop10">
-                    <label for="connection_profile_max_request_retries" data-i18n="Max request retries (0 = disabled)">Max request retries (0 = disabled)</label>
+                    <label for="connection_profile_max_request_retries" data-i18n="Max request retries">Max request retries</label>
                     <input id="connection_profile_max_request_retries" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
                 </div>
                 <div id="connection_profile_retry_status_whitelist_block" class="flex-container alignItemsCenter gap10 marginTop10">
@@ -69,6 +69,13 @@
                     <small class="opacity50p" data-i18n="Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.">Applies to both text and image generation. Retries on network errors and rate-limit / server errors. Streaming responses are not retried after the stream begins.</small>
                     <br>
                     <small class="opacity50p" data-i18n="Whitelist accepts comma-separated HTTP status codes and ranges (100–599). Examples: 429, 500-599, or 429, 500-504. Leave empty to retry the default set (429 and any 5xx). When non-empty, only listed codes are retried.">Whitelist accepts comma-separated HTTP status codes and ranges (100–599). Examples: 429, 500-599, or 429, 500-504. Leave empty to retry the default set (429 and any 5xx). When non-empty, only listed codes are retried.</small>
+                </div>
+                <div id="connection_profile_request_timeout_block" class="flex-container alignItemsCenter gap10 marginTop10">
+                    <label for="connection_profile_request_timeout" data-i18n="Request timeout (seconds, 0 = disabled)">Request timeout (seconds, 0 = disabled)</label>
+                    <input id="connection_profile_request_timeout" class="text_pole widthUnset" type="number" min="0" step="1" value="0" />
+                </div>
+                <div id="connection_profile_request_timeout_hint_block" class="marginTop5">
+                    <small class="opacity50p" data-i18n="Streaming: maximum silence between chunks. Non-streaming: maximum wait for the reply. Timed-out requests are cancelled.">Streaming: maximum silence between chunks. Non-streaming: maximum wait for the reply. Timed-out requests are cancelled.</small>
                 </div>
                 <div id="connection_profile_auto_continue_truncated_block" class="marginTop10">
                     <label class="checkbox_label" for="connection_profile_auto_continue_on_truncated">

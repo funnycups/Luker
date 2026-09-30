@@ -28,7 +28,7 @@ Gets the currently selected preset reference. Returns `null` if the current sele
 presets.getLive(collection?: string): PresetBody | null
 ```
 
-Gets the preset content currently being edited in the UI (including unsaved changes). Useful when you need to read the currently effective configuration.
+Gets the preset content currently being edited in the UI (including unsaved changes). Use this to read the configuration currently in effect.
 
 ### presets.getStored
 
@@ -36,7 +36,7 @@ Gets the preset content currently being edited in the UI (including unsaved chan
 presets.getStored(ref: { collection: string, name: string }): PresetBody | null
 ```
 
-Gets the saved content of a specific preset. Useful for cross-preset comparison or copying content.
+Gets the saved content of a specific preset. Use this for cross-preset comparison or content copying.
 
 ### presets.save
 
@@ -66,7 +66,7 @@ This function does **not** return API endpoint, model, or secret information. To
 
 ### presets.state
 
-Plugin runtime/session data bound to a preset. State sidecars live next to the preset on disk and are NOT exported with the preset itself — they are strictly for plugin-side runtime state (e.g., the orchestrator's per-preset agent override, the preset assistant's last-used template). Do not stuff plugin data into the preset body; use `presets.state.*` instead.
+Plugin runtime/session data bound to a preset. Preset state lives next to the preset on disk and is NOT exported with the preset itself — they are strictly for plugin-side runtime state (e.g., the orchestrator's per-preset agent override, the preset assistant's last-used template). Do not place plugin data in the preset body; use `presets.state.*` instead.
 
 All methods accept `options.target` (a `PresetRef`) and `options.collection` for cross-preset reads/writes; both default to the currently selected preset.
 
@@ -115,7 +115,7 @@ presets.state.update(
 >
 ```
 
-**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch under the hood, so only the changed slice crosses the wire. Returning `null` / `undefined` is treated as "no change" and resolves with `{ok: true, updated: false}`. 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1). On failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below. This function never throws; exceptions inside the reducer are caught and surfaced as `reason: 'VALIDATION_ARGS'`.
+**Recommended read-modify-write approach.** The `updater` function receives the current state (`{}` when none exists) and returns the new state. The system computes the minimal incremental patch internally, so only the changed slice is transmitted. Returning `null` / `undefined` is treated as "no change" and resolves with `{ok: true, updated: false}`. 409 conflicts (concurrent edit) are retried automatically; the retry budget is controlled by `options.maxRetries` (default 1). On failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below. This function never throws; exceptions inside the reducer are caught and surfaced as `reason: 'VALIDATION_ARGS'`.
 
 ```js
 await context.presets.state.update('my-plugin', (current = {}) => ({
@@ -138,7 +138,7 @@ presets.state.patch(
 >
 ```
 
-Applies RFC 6902 patch operations directly. Prefer `update()` for typical read-modify-write flows; reach for `patch()` only when you already have the operation list (e.g., re-applying a previously computed diff). On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below.
+Applies RFC 6902 patch operations directly. Prefer `update()` for typical read-modify-write flows; use `patch()` only when the operation list is already available (e.g., re-applying a previously computed diff). On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below.
 
 #### presets.state.delete
 
@@ -152,7 +152,7 @@ presets.state.delete(
 >
 ```
 
-Deletes the preset state for a given namespace. Idempotent — succeeds when the sidecar does not exist. On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below.
+Deletes the preset state for a given namespace. Idempotent — succeeds when no state exists. On success returns `{ok: true}`; on failure returns `{ok: false, reason, hint}` — see [Error reasons](#error-reasons-1) below.
 
 #### presets.state.deleteAll
 
@@ -167,7 +167,7 @@ Wipes every namespace under the given preset. Use sparingly — typically only w
 
 #### Best Practices
 
-- Use `presets.state.update()` for read-modify-write instead of manually chaining `get()` + a full overwrite — the helper ships only the diff and handles the 409 retry for you.
+- Use `presets.state.update()` for read-modify-write instead of manually chaining `get()` + a full overwrite — the helper transmits only the diff and handles the 409 retry.
 - Keep payloads as JSON-serializable plain objects; arrays and primitives at the top level are not supported.
 - One namespace per logical state slice; don't pack unrelated data under a single namespace.
 - Handle `ok: false` return values to keep your plugin UI resilient — switch on `reason` rather than translating `hint` (see [Error reasons](#error-reasons-1)).
@@ -195,7 +195,7 @@ The `hint` field is English, no longer than 120 characters, and contains actiona
 - `list()` and `getSelected()` only return saved presets
 - Use `getLive()` for the preset currently being edited
 - Runtime presets bound to a Character Card are not considered "saved" — `getSelected()` returns `null`, but `getLive()` can still read them
-- Do not stuff plugin runtime data into the preset body; use `presets.state.*` instead
+- Do not place plugin runtime data in the preset body; use `presets.state.*` instead
 
 ## Prompt and World Info Assembly
 
@@ -214,7 +214,7 @@ buildPresetAwarePromptMessages(options: {
 }): PromptMessage[]
 ```
 
-Assembles plugin messages into a prompt message list ready to be sent to an API, arranged according to the prompt preset's ordering. This is an **optional** assembly tool — simple LLM calls don't need it. You only need it when you want to reuse character cards, world info, or prompt templates.
+Assembles plugin messages into a prompt message list ready to be sent to an API, arranged according to the prompt preset's ordering. This is an **optional** assembly tool; simple LLM calls do not require it. You only need it when you want to reuse character cards, world info, or prompt templates.
 
 **Parameters:**
 
@@ -362,7 +362,7 @@ Returns a snapshot of the resolved prompt configuration including:
 - `promptCatalog` — map of `prompt.identifier` → `{ name, role, content, marker, systemPrompt }`
 - `characterCard` — current character fields (when `includeCharacterCard !== false`)
 
-This is the same data that `buildPresetAwarePromptMessages` consumes internally. Useful for showing users what their plugin's request will look like before sending.
+This is the same data that `buildPresetAwarePromptMessages` consumes internally. Use this to show users what a plugin's request will look like before it is sent.
 
 ### getActivePromptLayout
 
@@ -370,7 +370,7 @@ This is the same data that `buildPresetAwarePromptMessages` consumes internally.
 getActivePromptLayout(options?: object): PromptLayoutEntry[]
 ```
 
-Convenience accessor returning just the merged prompt layout. Each entry has `id`, `enabled`, `order`, `role`, `phase`, `source`, `content`, `path`, `promptIdentifier`, `tags`.
+Convenience accessor returning only the merged prompt layout. Each entry has `id`, `enabled`, `order`, `role`, `phase`, `source`, `content`, `path`, `promptIdentifier`, `tags`. <!-- banned-words-allow -->
 
 ### formatPromptPresetEnvelope
 
@@ -424,7 +424,7 @@ updateReasoningUI(
 ): void
 ```
 
-Triggers a UI refresh of the reasoning block on a message. Pass a chat index, a raw DOM element, or a JQuery wrapper. `reset: true` skips reading the message's current reasoning state — used during swipes when the new reasoning hasn't been written yet.
+Triggers a UI refresh of the reasoning block on a message. Pass a chat index, a raw DOM element, or a JQuery wrapper. `reset: true` skips reading the message's current reasoning state — used during swipes before the new reasoning has been written.
 
 ### removeReasoningFromString
 
@@ -432,7 +432,7 @@ Triggers a UI refresh of the reasoning block on a message. Pass a chat index, a 
 removeReasoningFromString(str: string): string
 ```
 
-Strips the reasoning prefix/suffix block from a string using the active reasoning template. Returns the input unchanged when no template is configured or no reasoning span is found. Use when you need just the user-facing answer text from a model output that may include `<thinking>...</thinking>`-style sections.
+Strips the reasoning prefix/suffix block from a string using the active reasoning template. Returns the input unchanged when no template is configured or no reasoning span is found. Use when only the user-facing answer text is needed from a model output that may include `<thinking>...</thinking>`-style sections.
 
 ```js
 const ctx = Luker.getContext();

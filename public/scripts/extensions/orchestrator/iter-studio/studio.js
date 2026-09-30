@@ -127,7 +127,7 @@ import { interpretSandboxOutcome, buildEditCallReply } from './sandbox-result.js
 import {
     buildEditToolResultPayload,
     buildPayloadForOutcome,
-} from './edit-tool-result-envelope.js';
+} from '../../../iteration-library/edit-tool-result-envelope.js';
 import {
     isReplayableIterationMessage,
 } from '../../../iteration-library/iter-message-filter.js';

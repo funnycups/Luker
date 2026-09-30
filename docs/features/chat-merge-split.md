@@ -62,7 +62,7 @@ appears in the group's Past Chats list and opens like any other group chat.
 ## Notes
 
 - The new chats contain only messages. **Plugin state — memory graph,
-  orchestrator, search tools, and similar per-chat sidecars — does not
+  orchestrator, search tools, and similar per-chat state — does not
   migrate.** You will need to regenerate it in the new chat.
 - Source chats are never modified or deleted.
 - If the target name is already in use, ` (2)`, ` (3)`, ... is appended

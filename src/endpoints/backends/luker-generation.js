@@ -7,6 +7,7 @@ import sanitize from 'sanitize-filename';
 import { CHAT_COMPLETION_SOURCES } from '../../constants.js';
 import { appendMessagesToChatFile } from '../chats.js';
 import { getConfigValue } from '../../util.js';
+import { stripJsonlExt } from '../../storage/name-validation.js';
 
 const generationJobs = new Map();
 const LUKER_GENERATION_JOB_MAX_ITEMS = 128;
@@ -447,7 +448,7 @@ export function getPersistChatKey(persistTarget) {
     }
 
     if (persistTarget.kind === 'group') {
-        return `group:${String(persistTarget.id || '')}`;
+        return `group:${stripJsonlExt(persistTarget.id)}`;
     }
 
     const avatar = String(persistTarget.avatar_url || '');
@@ -455,7 +456,7 @@ export function getPersistChatKey(persistTarget) {
     if (!avatar || !fileName) {
         return '';
     }
-    return `char:${avatar}:${fileName}`;
+    return `char:${avatar}:${stripJsonlExt(fileName)}`;
 }
 
 export function getTaskByRequestId(requestId, expectedOwner) {

@@ -14,7 +14,7 @@
  */
 export function createCardAppRenameFileOp() {
     return {
-        apply(live, edit) {
+        apply(deps, edit, live) {
             const files = { ...(live?.files || {}) };
             const content = files[edit.from];
             if (content === undefined) {

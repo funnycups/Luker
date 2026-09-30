@@ -6,6 +6,7 @@ import mime from 'mime-types';
 import { getSettingsBackupFilePrefix } from './settings.js';
 import { CHAT_BACKUPS_PREFIX } from './chats.js';
 import { isPathUnderParent, tryParse } from '../util.js';
+import { extractLocalMediaPaths, resolveUserImagePath } from '../media-references.js';
 import { SETTINGS_FILE } from '../constants.js';
 
 const sha256 = str => crypto.createHash('sha256').update(str).digest('hex');
@@ -213,6 +214,10 @@ export class DataMaidService {
                 }
                 knownImageFullPaths.add(path.normalize(path.join(this.directories.root, image)));
             });
+            const bodyReferencedPaths = await this.#collectBodyReferencedImagePaths();
+            for (const bodyPath of bodyReferencedPaths) {
+                knownImageFullPaths.add(bodyPath);
+            }
             const images = await fs.promises.readdir(this.directories.userImages, { withFileTypes: true });
             for (const dirent of images) {
                 const direntPath = path.join(dirent.parentPath, dirent.name);
@@ -641,6 +646,57 @@ export class DataMaidService {
             console.error(`[Data Maid] Error reading chat file ${filePath}:`, error);
             return [];
         }
+    }
+
+    /**
+     * Scans every chat file's raw text for local image references that the
+     * structured fields do not cover (extension-authored <img> tags, markers,
+     * markdown). Returns normalized absolute paths under user/images.
+     * @returns {Promise<Set<string>>}
+     */
+    async #collectBodyReferencedImagePaths() {
+        const diskPaths = new Set();
+
+        const scanFile = async (filePath) => {
+            try {
+                const raw = await fs.promises.readFile(filePath, 'utf-8');
+                for (const clientPath of extractLocalMediaPaths(raw)) {
+                    const diskPath = resolveUserImagePath(this.directories.root, clientPath);
+                    if (diskPath) {
+                        diskPaths.add(diskPath);
+                    }
+                }
+            } catch (error) {
+                console.error(`[Data Maid] Error scanning body references in ${filePath}:`, error);
+            }
+        };
+
+        try {
+            const groupChats = await fs.promises.readdir(this.directories.groupChats, { withFileTypes: true });
+            for (const file of groupChats) {
+                if (file.isFile() && path.parse(file.name).ext === '.jsonl') {
+                    await scanFile(path.join(this.directories.groupChats, file.name));
+                }
+            }
+
+            const chatDirectories = await fs.promises.readdir(this.directories.chats, { withFileTypes: true });
+            for (const directory of chatDirectories) {
+                if (!directory.isDirectory()) {
+                    continue;
+                }
+                const directoryPath = path.join(this.directories.chats, directory.name);
+                const chatFiles = await fs.promises.readdir(directoryPath, { withFileTypes: true });
+                for (const file of chatFiles) {
+                    if (file.isFile() && path.parse(file.name).ext === '.jsonl') {
+                        await scanFile(path.join(directoryPath, file.name));
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('[Data Maid] Error collecting body image references:', error);
+        }
+
+        return diskPaths;
     }
 
     /**

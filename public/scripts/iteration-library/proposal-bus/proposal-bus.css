@@ -27,9 +27,20 @@
     margin-bottom: 6px;
 }
 .iter_proposal_card_label { font-weight: 600; }
-.iter_proposal_card_target { opacity: 0.75; font-size: 0.88em; flex: 1; }
+.iter_proposal_card_target {
+    opacity: 0.75;
+    font-size: 0.88em;
+    flex: 1;
+    /* Long target descriptors (e.g. a full chat key) must ellipsize, not
+       collapse to a one-character column and wrap per glyph when the card
+       sits in a narrow pane. */
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
 
-.iter_proposal_card_status { padding: 2px 8px; border-radius: 4px; font-size: 0.84em; }
+.iter_proposal_card_status { padding: 2px 8px; border-radius: 4px; font-size: 0.84em; flex-shrink: 0; }
 .iter_proposal_card_status_pending { background: color-mix(in oklab, #88c 25%, transparent); }
 .iter_proposal_card_status_committed { background: color-mix(in oklab, #6c6 25%, transparent); }
 .iter_proposal_card_status_rejected { background: color-mix(in oklab, #c66 25%, transparent); }

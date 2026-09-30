@@ -1,59 +1,130 @@
 import { describe, test, expect } from '@jest/globals';
+import lodash from 'lodash';
+import { createEngine } from '../../public/scripts/lib/edits/engine.js';
 import { createCardAppPatchFileOp } from '../../public/scripts/extensions/character-editor-assistant/studio/cardapp-patch-op.js';
+import { createCardAppRenameFileOp } from '../../public/scripts/extensions/character-editor-assistant/studio/cardapp-rename-op.js';
 
+const deps = {
+    get: lodash.get,
+    set: lodash.set,
+    unset: lodash.unset,
+    isEqual: lodash.isEqual,
+    cloneDeep: lodash.cloneDeep,
+};
+
+// Exact-match stand-in for the Studio's 3-tier fuzzy matcher. The op only
+// requires a `(content, oldText, newText) => string|null` shape.
 function applyPatchExactOnly(content, oldText, newText) {
-    if (content === oldText) return newText;
     if (content.includes(oldText)) return content.replace(oldText, newText);
     return null;
 }
 
-const op = createCardAppPatchFileOp({ applyPatch: applyPatchExactOnly });
+function buildEngine() {
+    const engine = createEngine(deps);
+    engine.registerOp('cardapp_patch_file', createCardAppPatchFileOp({ applyPatch: applyPatchExactOnly }));
+    engine.registerOp('cardapp_rename_file', createCardAppRenameFileOp());
+    return engine;
+}
 
-describe('cardapp_patch_file op', () => {
-    test('apply: replaces old_text with new_text on exact match', () => {
-        const live = { files: { 'index.js': 'console.log("hi");' } };
-        const next = op.apply(live, { op: 'cardapp_patch_file', path: 'index.js', old_text: 'console.log("hi");', new_text: 'console.log("hello");' });
-        expect(next.files['index.js']).toBe('console.log("hello");');
+// These exercise the ops through the engine's real dispatch, which is the
+// only path that exists in production. Calling `op.apply(...)` directly
+// would bypass the `(deps, edit, live)` handler contract.
+describe('cardapp_patch_file through the edits engine', () => {
+    test('replaces old_text with new_text and keeps the file map', () => {
+        const engine = buildEngine();
+        const live = { files: { 'index.js': 'console.log("hi");', 'style.css': '.a{}' } };
+        const result = engine.applyEdits(
+            [{ op: 'cardapp_patch_file', path: 'index.js', old_text: 'console.log("hi");', new_text: 'console.log("hello");' }],
+            live,
+        );
+
+        expect(result.conflicts).toEqual([]);
+        expect(result.clean).toHaveLength(1);
+        expect(result.newLive.files['index.js']).toBe('console.log("hello");');
+        expect(result.newLive.files['style.css']).toBe('.a{}');
     });
 
-    test('apply: substring match (includes-based)', () => {
-        const live = { files: { 'index.js': 'foo BAR baz' } };
-        const next = op.apply(live, { op: 'cardapp_patch_file', path: 'index.js', old_text: 'BAR', new_text: 'qux' });
-        expect(next.files['index.js']).toBe('foo qux baz');
+    test('patches a multi-line anchor that spans several lines', () => {
+        const engine = buildEngine();
+        const content = 'const DEFAULT_STATE = {\n    aw_hp: 100,\n    aw_maxHp: 100,\n};';
+        const live = { files: { 'index.js': content } };
+        const result = engine.applyEdits(
+            [{
+                op: 'cardapp_patch_file',
+                path: 'index.js',
+                old_text: '    aw_hp: 100,\n    aw_maxHp: 100,\n',
+                new_text: '    aw_hp: 120,\n    aw_maxHp: 120,\n',
+            }],
+            live,
+        );
+
+        expect(result.conflicts).toEqual([]);
+        expect(result.newLive.files['index.js']).toContain('aw_hp: 120,');
+        expect(result.newLive.files['index.js']).toContain('aw_maxHp: 120,');
     });
 
-    test('inverse: swaps old_text and new_text', () => {
+    test('reports a conflict when the anchor is absent from the live file', () => {
+        const engine = buildEngine();
+        const live = { files: { 'index.js': 'unrelated content' } };
+        const result = engine.applyEdits(
+            [{ op: 'cardapp_patch_file', path: 'index.js', old_text: 'not in the file', new_text: 'X' }],
+            live,
+        );
+
+        expect(result.clean).toEqual([]);
+        expect(result.conflicts).toHaveLength(1);
+        expect(result.conflicts[0].reason).toBe('patch_target_missing');
+        expect(result.newLive.files['index.js']).toBe('unrelated content');
+    });
+
+    test('inverse swaps old_text and new_text', () => {
+        const engine = buildEngine();
         const edit = { op: 'cardapp_patch_file', path: 'index.js', old_text: 'A', new_text: 'B' };
-        const inv = op.inverse(edit);
-        expect(inv).toEqual({ op: 'cardapp_patch_file', path: 'index.js', old_text: 'B', new_text: 'A' });
+        expect(engine.inverseEdit(edit)).toEqual({
+            op: 'cardapp_patch_file',
+            path: 'index.js',
+            old_text: 'B',
+            new_text: 'A',
+        });
+    });
+});
+
+describe('cardapp_rename_file through the edits engine', () => {
+    test('moves content to the new path and drops the old one', () => {
+        const engine = buildEngine();
+        const live = { files: { 'old.js': 'body', 'keep.js': 'keep' } };
+        const result = engine.applyEdits(
+            [{ op: 'cardapp_rename_file', from: 'old.js', to: 'new.js' }],
+            live,
+        );
+
+        expect(result.conflicts).toEqual([]);
+        expect(result.newLive.files['new.js']).toBe('body');
+        expect(result.newLive.files['old.js']).toBeUndefined();
+        expect(result.newLive.files['keep.js']).toBe('keep');
     });
 
-    test('detectConflict: returns null when old_text matches', () => {
-        const live = { files: { 'index.js': 'hello' } };
-        const conflict = op.detectConflict({}, { op: 'cardapp_patch_file', path: 'index.js', old_text: 'hello', new_text: 'world' }, live);
-        expect(conflict).toBeNull();
+    test('reports a conflict when the rename source is absent', () => {
+        const engine = buildEngine();
+        const result = engine.applyEdits(
+            [{ op: 'cardapp_rename_file', from: 'missing.js', to: 'new.js' }],
+            { files: {} },
+        );
+
+        expect(result.clean).toEqual([]);
+        expect(result.conflicts).toHaveLength(1);
+        expect(result.conflicts[0].reason).toBe('rename_source_missing');
     });
 
-    test('detectConflict: emits patch_target_missing when old_text absent', () => {
-        const live = { files: { 'index.js': 'something else' } };
-        const conflict = op.detectConflict({}, { op: 'cardapp_patch_file', path: 'index.js', old_text: 'absent', new_text: 'X' }, live);
-        expect(conflict).toMatchObject({ reason: 'patch_target_missing' });
-    });
+    test('reports a conflict when the rename target already exists', () => {
+        const engine = buildEngine();
+        const result = engine.applyEdits(
+            [{ op: 'cardapp_rename_file', from: 'a.js', to: 'b.js' }],
+            { files: { 'a.js': 'A', 'b.js': 'B' } },
+        );
 
-    test('detectConflict: returns null when file absent and old_text empty (patch-as-create)', () => {
-        const live = { files: {} };
-        const conflict = op.detectConflict({}, { op: 'cardapp_patch_file', path: 'new.js', old_text: '', new_text: 'X' }, live);
-        expect(conflict).toBeNull();
-    });
-
-    test('detectConflict: emits patch_target_missing when file absent and old_text non-empty', () => {
-        const live = { files: {} };
-        const conflict = op.detectConflict({}, { op: 'cardapp_patch_file', path: 'absent.js', old_text: 'something', new_text: 'X' }, live);
-        expect(conflict).toMatchObject({ reason: 'patch_target_missing' });
-    });
-
-    test('apply: throws when patch matcher returns null', () => {
-        const live = { files: { 'index.js': 'unrelated' } };
-        expect(() => op.apply(live, { op: 'cardapp_patch_file', path: 'index.js', old_text: 'absent', new_text: 'X' })).toThrow();
+        expect(result.clean).toEqual([]);
+        expect(result.conflicts).toHaveLength(1);
+        expect(result.conflicts[0].reason).toBe('rename_target_exists');
     });
 });

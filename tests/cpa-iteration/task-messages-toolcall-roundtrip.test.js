@@ -42,7 +42,7 @@ import { describe, test, expect } from '@jest/globals';
 import {
     buildEditToolResultPayload,
     buildPayloadForOutcome,
-} from '../../public/scripts/extensions/orchestrator/iter-studio/edit-tool-result-envelope.js';
+} from '../../public/scripts/iteration-library/edit-tool-result-envelope.js';
 
 describe('CPA edit-tool tool_result envelope — pending shape', () => {
     test('pending payload carries status="proposal_pending" and a non-empty message', () => {

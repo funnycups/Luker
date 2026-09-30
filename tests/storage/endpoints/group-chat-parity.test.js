@@ -184,4 +184,65 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         expect(Array.isArray(res.body.chat)).toBe(true);
         expect(res.body.chat).toHaveLength(SAMPLE_MESSAGES.length);
     });
+
+    // --- .jsonl suffix tolerance (ids forwarded from list endpoints) ---
+
+    test('REGRESSION: /api/chats/group/save strips a .jsonl suffix from id', async () => {
+        await request(harness.app)
+            .post('/api/chats/group/save')
+            .send({ id: 'group-sfx-save.jsonl', chat: SAMPLE_MESSAGES, is_group: true })
+            .expect(200);
+
+        const chat = await getChatRepo().get(harness.handle, '', 'group-sfx-save',
+            { isGroup: true, groupId: 'group-sfx-save' });
+        expect(chat).not.toBeNull();
+        expect(chat.body).toHaveLength(SAMPLE_MESSAGES.length);
+    });
+
+    test('REGRESSION: /api/chats/group/get strips a .jsonl suffix from id', async () => {
+        const id = 'group-sfx-get';
+        await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
+            { isGroup: true, groupId: id });
+
+        const res = await request(harness.app)
+            .post('/api/chats/group/get')
+            .send({ id: `${id}.jsonl` })
+            .expect(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body.length).toBeGreaterThanOrEqual(SAMPLE_MESSAGES.length);
+    });
+
+    test('REGRESSION: /api/chats/group/delete strips a .jsonl suffix from id', async () => {
+        const id = 'group-sfx-delete';
+        await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
+            { isGroup: true, groupId: id });
+
+        await request(harness.app)
+            .post('/api/chats/group/delete')
+            .send({ id: `${id}.jsonl` })
+            .expect(200);
+
+        const after = await getChatRepo().get(harness.handle, '', id, { isGroup: true, groupId: id });
+        expect(after).toBeNull();
+    });
+
+    test('REGRESSION: /api/chats/group/merge accepts suffixed source names', async () => {
+        await getChatRepo().save(harness.handle, '', 'gseg-a', SAMPLE_HEADER, SAMPLE_MESSAGES, null,
+            { isGroup: true, groupId: 'gseg-a' });
+
+        const res = await request(harness.app)
+            .post('/api/chats/group/merge')
+            .send({
+                id: 'parent-grp-sfx',
+                segments: [{ source: 'gseg-a.jsonl' }],
+                target_name: 'gmerged-sfx',
+            })
+            .expect(200);
+        expect(res.body.new_chat.file_name).toBe('gmerged-sfx');
+
+        const merged = await getChatRepo().get(harness.handle, '', 'gmerged-sfx',
+            { isGroup: true, groupId: 'gmerged-sfx' });
+        expect(merged).not.toBeNull();
+        expect(merged.body).toHaveLength(SAMPLE_MESSAGES.length);
+    });
 });

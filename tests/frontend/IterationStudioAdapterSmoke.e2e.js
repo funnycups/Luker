@@ -23,10 +23,10 @@ import { test, expect } from '@playwright/test';
  *   `#extensions_settings2`, which itself is inside the right-side
  *   `#extensions-settings-button` drawer. Drawer toggles use SillyTavern's
  *   `.inline-drawer-toggle` slideToggle delegated handler.
- * - CEA Character has NO UI button: openCharacterEditorIteration() is only
- *   wired to the CHARACTER_REPLACED event (card overwrite during import),
- *   so it cannot be driven from a clean Playwright smoke without simulating
- *   a card import. This sub-test soft-skips with that reason.
+ * - CEA Character has NO UI button: the studio opens from the "Merge in
+ *   editor" action CEA registers with the core post-replace registry, so it
+ *   cannot be driven from a clean Playwright smoke without a card replace.
+ *   This sub-test soft-skips with that reason.
  */
 
 async function awaitMainUI(page) {
@@ -189,10 +189,9 @@ test.describe('UI-driven iter-studio adapter smoke', () => {
             },
             {
                 name: 'cea-character',
-                // openCharacterEditorIteration() is invoked only on the
-                // CHARACTER_REPLACED event (card overwrite during import).
-                // No UI button to drive from a clean smoke environment.
-                skipReason: 'no UI button — only fires on CHARACTER_REPLACED event during card overwrite',
+                // The studio opens from the "Merge in editor" action that CEA
+                // registers with the core post-replace registry.
+                skipReason: 'no UI button — only opens from the post-replace "Merge in editor" action',
             },
             {
                 name: 'orchestrator',

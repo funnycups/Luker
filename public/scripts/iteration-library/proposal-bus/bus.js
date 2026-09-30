@@ -10,7 +10,10 @@
  * Per-popup lifecycle: one bus per popup mount. Kinds register up front;
  * propose / approve / reject / rollback are the only public mutation
  * entry points. onChange fires after every mutation so the popup can
- * re-render off a single source of truth.
+ * re-render off a single source of truth. onCommitted (optional) fires
+ * once per successful forward commit — after an approve's disk write
+ * lands — so popups can observe "an edit actually hit disk this session"
+ * without inspecting entry state.
  *
  * Payload model: each entry stores the RFC 6902 inverse patch
  * `compare(after, before)` for its turn. Live read/write is routed
@@ -58,6 +61,7 @@ import { STATE_ERROR_REASONS } from '../../state-errors.js';
 export function createBus(opts = {}) {
     const i18n = typeof opts.i18n === 'function' ? opts.i18n : (s) => String(s ?? '');
     const onChange = typeof opts.onChange === 'function' ? opts.onChange : () => {};
+    const onCommitted = typeof opts.onCommitted === 'function' ? opts.onCommitted : null;
 
     const kinds = new Map();           // kindId -> handler
     const entries = [];                // ordered, append-only within a session
@@ -386,6 +390,13 @@ export function createBus(opts = {}) {
         entry.decidedAt = Date.now();
         entry.committedAt = Date.now();
         entry.conflictError = null;
+        // Forward-commit notification. Fires only here (never on
+        // rollback / reject), with a shallow copy so the hook cannot
+        // mutate bus state. A throwing hook must not break the commit
+        // contract — the write already landed.
+        if (onCommitted) {
+            try { onCommitted({ ...entry }); } catch { /* hook must not break commit */ }
+        }
         // Keep _pendingAfter on the committed entry so rollback can pre-check
         // path-overlap drift against it. It is still stripped at serialize.
         enqueueOutcome(entry);

@@ -216,6 +216,7 @@ function buildAdvancedTabHtml(deps) {
             <div class="flex-container">
                 <div id="luker_rpg_memory_open_schema_editor" class="menu_button">${escapeHtml(i18n('Open Schema Editor'))}</div>
                 <div id="luker_rpg_memory_open_schema_studio" class="menu_button">${escapeHtml(i18n('AI Iterate Schema'))}</div>
+                <div id="luker_rpg_memory_open_graph_studio" class="menu_button">${escapeHtml(i18n('AI Edit Graph'))}</div>
             </div>
             <label for="luker_rpg_memory_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}${fh('About Iteration AI API preset', 'Iteration AI API preset help body')}</label>
             <select id="luker_rpg_memory_request_api_preset" class="text_pole"></select>
@@ -223,6 +224,9 @@ function buildAdvancedTabHtml(deps) {
             <select id="luker_rpg_memory_request_llm_preset" class="text_pole"></select>
             <label>${escapeHtml(i18n('Schema Iteration Prompt (schema-editor AI)'))}${fh('About Schema Iteration Prompt', 'Schema Iteration Prompt help body')}
                 <textarea id="luker_rpg_memory_advanced_schema_iter_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
+            </label>
+            <label>${escapeHtml(i18n('Graph Revision Prompt (graph-editor AI)'))}${fh('About Graph Revision Prompt', 'Graph Revision Prompt help body')}
+                <textarea id="luker_rpg_memory_advanced_graph_iter_system_prompt" class="text_pole textarea_compact" rows="8"></textarea>
             </label>
         </fieldset>
         <fieldset class="luker_rpg_memory_advanced_fieldset">

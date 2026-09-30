@@ -1,6 +1,7 @@
 #rm_api_block .connection_profile_toolbar {
     align-items: center;
     display: flex;
+    flex-wrap: wrap;
     gap: 5px;
     min-width: 0;
 }
@@ -99,4 +100,30 @@
  */
 #rm_api_block.hide-chat-api > *:not(.wide100p) {
     display: none !important;
+}
+
+#rm_api_block .inline-drawer-content {
+    container-type: inline-size;
+}
+
+@container (max-width: 27rem) {
+    #rm_api_block .inline-drawer-content .flex-container {
+        align-items: center;
+        flex-wrap: nowrap;
+    }
+
+    #rm_api_block .inline-drawer-content .flex-container > label {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    #rm_api_block .inline-drawer-content .flex-container > input[type="number"] {
+        flex: 0 0 auto;
+        width: 4.5em;
+    }
+
+    #rm_api_block .inline-drawer-content .flex-container > input[type="text"] {
+        flex: 0 0 auto;
+        width: 9em;
+    }
 }
