@@ -1,10 +1,16 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
 
-const configPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../config.yaml');
+// CI only checks out tracked files, so the gitignored repo-root config.yaml
+// is absent there. Fall back to the committed default/config.yaml, matching
+// jest.setup.js, so re-pinning after jest.resetModules() works everywhere.
+const localConfigPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../config.yaml');
+const defaultConfigPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../default/config.yaml');
+const configPath = fs.existsSync(localConfigPath) ? localConfigPath : defaultConfigPath;
 
 let app;
 let chatStore;
