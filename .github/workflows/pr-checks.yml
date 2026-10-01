@@ -80,5 +80,8 @@ jobs:
       - name: Install test dependencies
         run: npm ci --ignore-scripts --prefix tests
 
+      - name: Build SQLite native dependency
+        run: npm rebuild better-sqlite3 --ignore-scripts=false
+
       - name: Run unit tests
         run: npm run test:unit --prefix tests
