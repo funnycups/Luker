@@ -4,6 +4,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { getConfigFilePath, reloadConfigCache, setConfigFilePath } from '../src/util.js';
+import { probeTcp, resolveDbEndpoint } from './util/db-probe.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +42,43 @@ if (!globalThis.DATA_ROOT) {
     const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-jest-data-'));
     globalThis.DATA_ROOT = scratchRoot;
 }
+
+// ---------------------------------------------------------------------------
+// Optional database suites. Mysql/Pg-backed tests are gated on
+// `LUKER_DISABLE_MYSQL_TESTS` / `LUKER_DISABLE_POSTGRES_TESTS`, but nothing
+// sets those flags on a machine without the containers, so the suites used to
+// run and fail with ECONNREFUSED. Probe the configured endpoints once per
+// test file (setupFiles runs before the test module is imported, so the flag
+// is set before the harness modules evaluate) and disable the suites when
+// nothing is listening. An explicit env var from the caller always wins, in
+// either direction.
+// ---------------------------------------------------------------------------
+async function gateOptionalDbSuites() {
+    const gates = [
+        {
+            env: 'LUKER_DISABLE_MYSQL_TESTS',
+            url: process.env.LUKER_TEST_MYSQL_ROOT_URL,
+            fallback: { host: '127.0.0.1', port: 53306 },
+        },
+        {
+            env: 'LUKER_DISABLE_POSTGRES_TESTS',
+            url: process.env.LUKER_TEST_POSTGRES_URL,
+            fallback: { host: '127.0.0.1', port: 55432 },
+        },
+    ];
+    for (const gate of gates) {
+        if (process.env[gate.env] !== undefined) {
+            continue;
+        }
+        const { host, port } = resolveDbEndpoint(gate.url, gate.fallback);
+        const reachable = await probeTcp(host, port);
+        if (!reachable) {
+            process.env[gate.env] = '1';
+        }
+    }
+}
+
+await gateOptionalDbSuites();
 
 if (typeof globalThis.Luker === 'undefined') {
     // ---------------------------------------------------------------------
