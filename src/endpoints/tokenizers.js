@@ -1031,7 +1031,7 @@ router.post('/openai/count', async function (req, res) {
     } catch (error) {
         console.error('An error counting tokens, using fallback estimation method', error);
         const jsonBody = JSON.stringify(req.body);
-        const numTokens = Math.ceil(jsonBody.length / CHARS_PER_TOKEN);
+        const numTokens = guesstimate(jsonBody);
         res.send({ 'token_count': numTokens });
     }
 });
@@ -1045,7 +1045,7 @@ router.post('/openai/count-batch', async function (req, res) {
         res.send({ 'token_count': tokenCount, 'token_counts': tokenCounts });
     } catch (error) {
         console.error('An error counting batched tokens, using fallback estimation method', error);
-        const tokenCounts = req.body.map(message => Math.ceil(JSON.stringify([message]).length / CHARS_PER_TOKEN));
+        const tokenCounts = req.body.map(message => guesstimate(JSON.stringify([message])));
         const tokenCount = tokenCounts.reduce((sum, count) => sum + Number(count || 0), 0);
         res.send({ 'token_count': tokenCount, 'token_counts': tokenCounts });
     }
