@@ -62,7 +62,6 @@ const POPUP_RESULT = __ctx.POPUP_RESULT;
 const stripOpenAIConnectionFieldsFromPreset = __ctx.openai.stripPresetConnectionFields;
 import {
     applyEdits,
-    inverseEdit,
     bindIterWorkspaceResizer,
     createRenderScheduler,
     render as ITER_RENDER,
@@ -90,13 +89,11 @@ import {
     runCpaSkillTool,
     commitApprovedSkillProposal,
     EDITABLE_TOOL_NAMES,
-    CONTROL_TOOL_NAMES,
     isCpaControlCall,
     isCpaReadTool,
     isCpaSkillTool,
 } from './tools.js';
 import {
-    buildModelSystemPrompt,
     sanitizeSessionMode,
     SESSION_MODES,
     SESSION_MODE_DEFAULT,
@@ -331,17 +328,6 @@ function createNewSession() {
         title: '',
         messages: [],
         pendingEdits: [],
-        // Per-card skill authoring proposals from the 7 authoring tools +
-        // skill_extract_from_text. Each entry: { id, kind, skillName,
-        // scope, path?, before, after, extras?, op:{name,args}, status:
-        // 'pending'|'approved'|'rejected', sourceCallId, createdAt }.
-        // Reviewed inline on the assistant message that emitted the call;
-        // approved entries commit at Apply time through
-        // commitApprovedSkillProposal (re-derives against on-disk state so
-        // parallel-session drift surfaces as a fresh error). Persisted
-        // alongside pendingEdits so closing mid-conversation preserves the
-        // staged proposals.
-        pendingSkillEdits: [],
         // Per-card preset clone proposals from preset_clone_to_new. Each
         // entry: { id, kind:'clone', sourceName, newName, op:{newName},
         // status, sourceCallId, createdAt }. Approved entries trigger the
@@ -445,7 +431,6 @@ function buildPopupHtml({
     <div class="luker-iter-workspace-grid">
         <div class="luker-iter-workspace-chat" data-iter-pane="chat">
             <div class="cpa_it_messages" data-cpa-it-messages></div>
-            <div class="cpa_it_skl_summary" data-cpa-it-skl-summary></div>
             <div class="cpa_it_composer">
                 <textarea class="text_pole" rows="2" data-cpa-it-input data-iter-input placeholder="${escapeHtmlLocal(composerPlaceholder)}"></textarea>
                 <div class="cpa_it_composer_actions">
@@ -1239,122 +1224,6 @@ export async function openCpaIterationStudio(deps) {
 
 
     // ──────────────────────────────────────────────────────────────────
-    // Skill authoring proposals. Same per-card approve/reject + Apply-time
-    // commit pattern the orchestrator iter-studio uses; the actual disk
-    // write happens at Apply time via commitApprovedSkillProposal, which
-    // re-derives against current on-disk state so a parallel session that
-    // edited the same file between proposal and apply surfaces as a fresh
-    // error.
-    // ──────────────────────────────────────────────────────────────────
-    const SKILL_KIND_META = Object.freeze({
-        content: { icon: '✏️', label: () => t('Update skill file') },
-        frontmatter: { icon: '🏷️', label: () => t('Update skill frontmatter') },
-        create: { icon: '✨', label: () => t('Create skill') },
-        rename: { icon: '🔤', label: () => t('Rename skill') },
-        change_scope: { icon: '📦', label: () => t('Move skill scope') },
-        delete: { icon: '🗑️', label: () => t('Delete skill') },
-    });
-
-    function scopeDisplay(scope) {
-        if (!scope || typeof scope !== 'object') return t('(unknown scope)');
-        if (scope.kind === 'global') return t('global');
-        if (scope.kind === 'preset' && scope.name) return tf('preset:${0}', String(scope.name));
-        if (scope.kind === 'orch-preset' && scope.mode && scope.name) {
-            return tf('orch-preset:${0}/${1}', String(scope.mode), String(scope.name));
-        }
-        if (scope.kind === 'character' && scope.characterFile) {
-            return tf('character:${0}', String(scope.characterFile));
-        }
-        return String(scope.kind || '?');
-    }
-
-    function renderSkillStructuralBody(edit) {
-        if (edit.kind === 'rename') {
-            return `<div class="cpa_it_skl_meta_row">
-                <span class="cpa_it_skl_meta_label">${escapeHtmlLocal(t('Name'))}:</span>
-                <span class="cpa_it_skl_meta_was">${escapeHtmlLocal(String(edit.before?.name || edit.skillName || ''))}</span>
-                <span class="cpa_it_skl_meta_arrow">→</span>
-                <span class="cpa_it_skl_meta_now">${escapeHtmlLocal(String(edit.after?.name || ''))}</span>
-            </div>`;
-        }
-        if (edit.kind === 'change_scope') {
-            return `<div class="cpa_it_skl_meta_row">
-                <span class="cpa_it_skl_meta_label">${escapeHtmlLocal(t('Scope'))}:</span>
-                <span class="cpa_it_skl_meta_was">${escapeHtmlLocal(scopeDisplay(edit.before?.scope))}</span>
-                <span class="cpa_it_skl_meta_arrow">→</span>
-                <span class="cpa_it_skl_meta_now">${escapeHtmlLocal(scopeDisplay(edit.after?.scope))}</span>
-            </div>`;
-        }
-        if (edit.kind === 'delete') {
-            return `<div class="cpa_it_skl_meta_row cpa_it_skl_meta_destructive">
-                ${escapeHtmlLocal(tf('Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.',
-        String(edit.skillName || ''), scopeDisplay(edit.scope)))}
-            </div>`;
-        }
-        return '';
-    }
-
-    function renderSkillDiffBody(edit) {
-        const path = String(edit.path || 'SKILL.md');
-        const diffEdit = {
-            op: 'set',
-            path,
-            oldValue: typeof edit.before === 'string' ? edit.before : '',
-            newValue: typeof edit.after === 'string' ? edit.after : '',
-        };
-        const html = ITER_UI.diff.renderDiffCard([diffEdit], { i18n: tf });
-        if (!html) {
-            return `<div class="cpa_it_skl_nochange">${escapeHtmlLocal(t('No content change'))}</div>`;
-        }
-        const extrasList = edit.kind === 'create' && Array.isArray(edit.extras?.extraFiles) && edit.extras.extraFiles.length > 0
-            ? `<div class="cpa_it_skl_extras">${escapeHtmlLocal(tf('Plus ${0} additional file(s): ${1}',
-                String(edit.extras.extraFiles.length), edit.extras.extraFiles.join(', ')))}</div>`
-            : '';
-        return `${html}${extrasList}`;
-    }
-
-    function renderSkillPendingCard(edit) {
-        const status = String(edit?.status || 'pending');
-        const kind = String(edit?.kind || '');
-        const meta = SKILL_KIND_META[kind] || { icon: '🔧', label: () => kind };
-        const statusLabel = status === 'approved'
-            ? `<span class="cpa_it_skl_status approved">✓ ${escapeHtmlLocal(t('Approved'))}</span>`
-            : status === 'rejected'
-                ? `<span class="cpa_it_skl_status rejected">✗ ${escapeHtmlLocal(t('Rejected'))}</span>`
-                : `<span class="cpa_it_skl_status pending">${escapeHtmlLocal(t('Pending approval'))}</span>`;
-        const body = (kind === 'rename' || kind === 'change_scope' || kind === 'delete')
-            ? renderSkillStructuralBody(edit)
-            : renderSkillDiffBody(edit);
-        const idAttr = escapeHtmlLocal(String(edit?.id || ''));
-        const controls = (status === 'approved' || status === 'rejected')
-            ? `<button class="menu_button cpa_it_skl_btn" data-cpa-it-action="reset-skill-decision" data-cpa-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Undo decision'))}</button>`
-            : `<button class="menu_button cpa_it_skl_btn cpa_it_skl_btn_approve" data-cpa-it-action="approve-skill" data-cpa-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Approve'))}</button>
-               <button class="menu_button cpa_it_skl_btn cpa_it_skl_btn_reject" data-cpa-it-action="reject-skill" data-cpa-it-pending-id="${idAttr}">${escapeHtmlLocal(t('Reject'))}</button>`;
-        const target = `${escapeHtmlLocal(String(edit?.skillName || ''))} <span class="cpa_it_skl_scope">(${escapeHtmlLocal(scopeDisplay(edit?.scope))})</span>${edit?.path ? ` <span class="cpa_it_skl_path">${escapeHtmlLocal(String(edit.path))}</span>` : ''}`;
-        return `<div class="cpa_it_skl_card cpa_it_skl_card_${escapeHtmlLocal(status)}" data-cpa-it-pending-id="${idAttr}">
-            <div class="cpa_it_skl_header">
-                <span class="cpa_it_skl_icon">${meta.icon}</span>
-                <span class="cpa_it_skl_label">${escapeHtmlLocal(meta.label())}</span>
-                <span class="cpa_it_skl_target">${target}</span>
-                ${statusLabel}
-            </div>
-            <div class="cpa_it_skl_body">${body}</div>
-            <div class="cpa_it_skl_controls">${controls}</div>
-        </div>`;
-    }
-
-    function renderSkillPendingForMessage(message) {
-        if (!message || message.role !== 'assistant') return '';
-        const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
-        if (toolCalls.length === 0) return '';
-        const callIds = new Set(toolCalls.map(tc => String(tc?.id || '')).filter(Boolean));
-        const pending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
-        const matched = pending.filter(p => callIds.has(String(p?.sourceCallId || '')));
-        if (matched.length === 0) return '';
-        return `<div class="cpa_it_skl_list">${matched.map(renderSkillPendingCard).join('')}</div>`;
-    }
-
-    // ──────────────────────────────────────────────────────────────────
     // Chat-message rendering. CPA delegates to
     // `iteration-library/ui/message.renderMessageCard` (M1.4) so the
     // four iter-library popups (CPA, MG schema, Orch, CEA char) share
@@ -1608,44 +1477,6 @@ export async function openCpaIterationStudio(deps) {
             $root.find('[data-iter-preview-pane]').html(
                 `<div class="luker-iter-workspace-preview-empty">${escapeHtmlLocal(t('Preview unavailable'))}</div>`,
             );
-        }
-
-        // Skill summary row — same pattern the orchestrator uses. Shows
-        // pending counts and exposes a "Commit skill" button when there
-        // are approved entries but no preset edits waiting (the regular
-        // Apply button covers the common case where both are in flight
-        // together).
-        try {
-            const $summary = $root.find('[data-cpa-it-skl-summary]');
-            if ($summary.length) {
-                const allPending = Array.isArray(state.pendingSkillEdits) ? state.pendingSkillEdits : [];
-                const pendCount = allPending.filter(p => p?.status === 'pending').length;
-                const apprCount = allPending.filter(p => p?.status === 'approved').length;
-                const rejCount = allPending.filter(p => p?.status === 'rejected').length;
-                const presetPending = Array.isArray(state.pendingEdits) && state.pendingEdits.length > 0;
-                if (allPending.length === 0) {
-                    $summary.empty();
-                } else {
-                    const parts = [];
-                    if (pendCount > 0) parts.push(tf('${0} pending', String(pendCount)));
-                    if (apprCount > 0) parts.push(tf('${0} approved', String(apprCount)));
-                    if (rejCount > 0) parts.push(tf('${0} rejected', String(rejCount)));
-                    const summaryLabel = `${t('Skill proposals')}: ${parts.join(', ')}`;
-                    const decisionCount = apprCount + rejCount;
-                    const showBtn = decisionCount > 0 && !presetPending;
-                    let btnHtml = '';
-                    if (showBtn) {
-                        const btnLabel = apprCount > 0
-                            ? tf('Commit ${0} skill decision(s)', String(decisionCount))
-                            : tf('Clear ${0} rejected', String(rejCount));
-                        btnHtml = `<button class="menu_button cpa_it_skl_commit_btn" data-cpa-it-action="commit-skill-only">${escapeHtmlLocal(btnLabel)}</button>`;
-                    }
-                    $summary.html(`<span class="cpa_it_skl_summary_text">${escapeHtmlLocal(summaryLabel)}</span>${btnHtml}`);
-                }
-            }
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] skill summary render failed`, err);
         }
     }
 
@@ -2096,9 +1927,9 @@ export async function openCpaIterationStudio(deps) {
         // their result threads back to the LLM unchanged.
         //
         // The 7 authoring tools (+ skill_extract_from_text) resolve to
-        // `{ ok, result, pendingSkillEdit }` — we park the pendingSkillEdit
-        // on `state.pendingSkillEdits` for per-card user review, and tell
-        // the LLM the call was proposed (not yet on disk). Apply-time
+        // `{ ok, result, pendingSkillEdit }` — we stage the pendingSkillEdit
+        // as a ProposalBus skill-author entry for per-card user review, and
+        // tell the LLM the call was proposed (not yet on disk). Apply-time
         // commit re-derives against current on-disk state through
         // `commitApprovedSkillProposal` so parallel-session drift surfaces
         // as a fresh validation error rather than clobbering with stale
@@ -2465,23 +2296,6 @@ export async function openCpaIterationStudio(deps) {
     // assistant message so renderMessageCard can show the Applied label
     // and a Rollback button.
     // ──────────────────────────────────────────────────────────────────
-
-    /**
-     * Commit approved skill proposals (the 7 authoring tools +
-     * skill_extract_from_text) at Apply time. Walks `state.pendingSkillEdits`
-     * in order, calling `commitApprovedSkillProposal` per approved entry —
-     * that helper replays the original op against current on-disk state
-     * through skillsApi so parallel-session drift surfaces as a fresh
-     * validation error rather than a clobbering write.
-     *
-     * Drops rejected entries unconditionally. Approved entries that
-     * commit successfully leave the pending list; approved entries that
-     * follow a failed one stay so the user can investigate and retry.
-     * On per-entry failure pushes a system message + toastr.error and
-     * halts the walk.
-     *
-     * Mirrors orchestrator/iter-studio/studio.js#commitApprovedSkillEdits.
-     */
 
     /**
      * Move the current (non-transient) session from the old preset's
@@ -2969,42 +2783,9 @@ export async function openCpaIterationStudio(deps) {
         await startNewSession();
     });
 
-    // Per-proposal approve/reject/undo for pending skill authoring edits.
-    // Flips the local status flag; commit happens at apply-batch time
-    // (after the preset commit) via commitApprovedSkillProposal.
-    $root.on('click.cpaIt', '[data-cpa-it-action="approve-skill"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-cpa-it-pending-id') || '');
-        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'approved';
-        await render();
-    });
+    // Per-proposal approve/reject/undo is handled by the ProposalBus
+    // click delegation above; skill-author cards render from bus entries.
 
-    $root.on('click.cpaIt', '[data-cpa-it-action="reject-skill"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-cpa-it-pending-id') || '');
-        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'rejected';
-        await render();
-    });
-
-    $root.on('click.cpaIt', '[data-cpa-it-action="reset-skill-decision"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const id = String($(e.currentTarget).attr('data-cpa-it-pending-id') || '');
-        const entry = (state.pendingSkillEdits || []).find(p => p?.id === id);
-        if (!entry) return;
-        entry.status = 'pending';
-        await render();
-    });
-
-    // Commit approved skill proposals when there's no preset commit in
-    // flight. Goes through applyPendingEdits' skill-only path.
-    $root.on('click.cpaIt', '[data-cpa-it-action="commit-skill-only"]', async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        await applyPendingEdits();
-    });
     $root.on('click.cpaIt', '[data-cpa-it-action="help-reference"]', async (e) => {
         // Sits inside the reference `<label>`; without preventDefault the label
         // delegation also opens the `<select>` dropdown behind the help popup.
