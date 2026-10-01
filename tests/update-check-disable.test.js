@@ -2,6 +2,7 @@ import { describe, test, expect, jest, beforeAll, afterAll, beforeEach, afterEac
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 let util;
 
@@ -69,11 +70,20 @@ describe('disableUpdateCheck', () => {
         await expect(util.checkRemoteVersion()).resolves.toEqual({ isLatest: true, updateCheckDisabled: true });
     });
 
-    test('getVersion exposes the opt-out so clients skip the request', async () => {
-        useConfigValue(true);
-        await expect(util.getVersion()).resolves.toMatchObject({ updateCheckDisabled: true });
+    test('getVersion does not require a config file path', () => {
+        // webpack.config.js calls getVersion() at import time, and docker/build-lib.js
+        // loads it without ever calling setConfigFilePath(). jest.setup.js always sets
+        // a config path, so run the call in a fresh process to reproduce that context.
+        const utilUrl = new URL('../src/util.js', import.meta.url).href;
+        const runner = `
+            import { getVersion } from ${JSON.stringify(utilUrl)};
+            const version = await getVersion();
+            process.stdout.write(JSON.stringify(version));
+        `;
+        const result = spawnSync(process.execPath, ['--input-type=module', '--eval', runner], { encoding: 'utf8' });
 
-        useConfigValue(false);
-        await expect(util.getVersion()).resolves.toMatchObject({ updateCheckDisabled: false });
+        expect(result.stderr).not.toContain('No config file path set');
+        expect(result.status).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({ pkgVersion: expect.any(String) });
     });
 });
