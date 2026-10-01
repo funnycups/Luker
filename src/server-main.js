@@ -112,6 +112,7 @@ import { storageErrorHandler } from './middleware/storage-errors.js';
 import {
     getVersion,
     checkRemoteVersion,
+    isUpdateCheckDisabled,
     color,
     removeColorFormatting,
     getSeparator,
@@ -601,7 +602,7 @@ app.use(multerMonkeyPatch);
 
 app.get('/version', async function (_, response) {
     const data = await getVersion();
-    response.send(data);
+    response.send({ ...data, updateCheckDisabled: isUpdateCheckDisabled() });
 });
 
 app.post('/api/system/update-check', async function (_, response) {
