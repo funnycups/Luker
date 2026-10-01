@@ -4077,6 +4077,7 @@ export async function sendTextareaMessage() {
         return;
     }
     const textareaText = textareaState.text;
+    const lastMessage = chat[chat.length - 1];
     if (power_user.continue_on_send &&
         !hasPendingFileAttachment() &&
         !textareaText &&
