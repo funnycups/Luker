@@ -11,6 +11,7 @@ function fakeCtx({ body = {}, onFetch, secretMap = {}, signal } = {}) {
     const emitted = [];
     const ac = new AbortController();
     const attachedInspections = [];
+    const attachCalls = [];
     return {
         body: {
             model: 'gpt-4o',
@@ -39,7 +40,10 @@ function fakeCtx({ body = {}, onFetch, secretMap = {}, signal } = {}) {
         },
         inspection: {
             start: jest.fn(),
-            attach: jest.fn((url) => attachedInspections.push(url)),
+            attach: jest.fn((...args) => {
+                attachedInspections.push(args[0]);
+                attachCalls.push(args);
+            }),
             fail: jest.fn(),
         },
         emit: {
@@ -51,6 +55,7 @@ function fakeCtx({ body = {}, onFetch, secretMap = {}, signal } = {}) {
         _emitted: emitted,
         _abortController: ac,
         _attachedInspections: attachedInspections,
+        _attachCalls: attachCalls,
     };
 }
 
@@ -228,6 +233,25 @@ describe('dispatchOpenAICompatible', () => {
             expect(ctx.fetch).toHaveBeenCalledTimes(1);
             const errs = ctx._emitted.filter(e => e.kind === 'error');
             expect(errs).toHaveLength(0);
+        });
+
+        test('inspector fingerprint reflects Authorization overridden by custom_include_headers', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM,
+                    custom_url: 'http://localhost:5001/v1',
+                    custom_include_headers: 'Authorization: Bearer plugin-proxy-key\n',
+                },
+                secretMap: { api_key_custom: 'c-key' },
+            });
+            await dispatchOpenAICompatible(ctx);
+
+            const [, init] = ctx.fetch.mock.calls[0];
+            expect(init.headers['Authorization']).toBe('Bearer plugin-proxy-key');
+
+            expect(ctx._attachCalls).toHaveLength(1);
+            const [, attachedKey] = ctx._attachCalls[0];
+            expect(attachedKey).toBe('plugin-proxy-key');
         });
     });
 

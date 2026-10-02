@@ -48,6 +48,7 @@ import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { getOverrideHeaders } from '../../../additional-headers.js';
 import { trimV1, getConfigValue } from '../../../util.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 
 /**
  * Per-api_type URL suffix. Mirrors legacy switch at
@@ -430,7 +431,7 @@ export async function dispatchTextCompletions(ctx) {
         }
 
         try {
-            ctx.inspection.attach(url, apiKey, upstreamBody);
+            ctx.inspection.attach(url, resolveEffectiveApiKey(headers, apiKey), upstreamBody);
             const resp = await ctx.fetch(url, {
                 method: 'POST',
                 body: JSON.stringify(upstreamBody),

@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Request Inspector
+
+- Fixed the Inspector showing the stored provider key instead of the key that actually went on the wire when a plugin overrode the auth header through custom include headers.
+
 ### Fixes
 
 - Fixed empty-input Send not continuing the last message when "Press Send to continue" is enabled.

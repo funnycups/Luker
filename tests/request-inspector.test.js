@@ -5,6 +5,7 @@ import {
     completeInspectionFromStream,
     cleanupExpiredEntries,
     getBufferForHandle,
+    resolveEffectiveApiKey,
 } from '../src/request-inspector.js';
 
 // Each test gets a unique handle so the module-level ring buffer stays
@@ -487,6 +488,44 @@ describe('request-inspector: openai_responses support', () => {
         const entry = getEntry(req);
         expect(entry.finishReason).toBe('length');
         expect(entry.nativeFinishReason).toBe('incomplete');
+    });
+});
+
+describe('request-inspector: resolveEffectiveApiKey', () => {
+    test('no headers → falls back to resolved key', () => {
+        expect(resolveEffectiveApiKey({}, 'stored-key')).toBe('stored-key');
+        expect(resolveEffectiveApiKey(undefined, 'stored-key')).toBe('stored-key');
+    });
+
+    test('Authorization Bearer overrides fallback and strips the prefix', () => {
+        expect(resolveEffectiveApiKey({ 'Authorization': 'Bearer proxy-key' }, 'stored-key')).toBe('proxy-key');
+    });
+
+    test('header lookup is case-insensitive', () => {
+        expect(resolveEffectiveApiKey({ 'authorization': 'Bearer proxy-key' }, 'stored-key')).toBe('proxy-key');
+        expect(resolveEffectiveApiKey({ 'X-API-KEY': 'proxy-key' }, 'stored-key', ['x-api-key'])).toBe('proxy-key');
+    });
+
+    test('preferred header order decides between competing credential headers', () => {
+        const headers = { 'Authorization': 'Bearer auth-key', 'x-api-key': 'x-key' };
+        expect(resolveEffectiveApiKey(headers, 'stored-key', ['x-api-key'])).toBe('x-key');
+        expect(resolveEffectiveApiKey(headers, 'stored-key', ['authorization'])).toBe('auth-key');
+    });
+
+    test('non-Bearer credential values are returned verbatim', () => {
+        expect(resolveEffectiveApiKey({ 'Authorization': 'Basic dXNlcjpwYXNz' }, 'stored-key')).toBe('Basic dXNlcjpwYXNz');
+    });
+
+    test('present-but-empty header wins over fallback (nothing goes on the wire)', () => {
+        expect(resolveEffectiveApiKey({ 'Authorization': '' }, 'stored-key')).toBe('');
+    });
+
+    test('null header value is treated as absent', () => {
+        expect(resolveEffectiveApiKey({ 'Authorization': null }, 'stored-key')).toBe('stored-key');
+    });
+
+    test('preferred headers absent → falls back to resolved key', () => {
+        expect(resolveEffectiveApiKey({ 'X-Custom': 'yes' }, 'stored-key')).toBe('stored-key');
     });
 });
 

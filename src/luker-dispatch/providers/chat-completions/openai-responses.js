@@ -19,6 +19,7 @@ import {
     normalizeOpenAIBaseUrl,
 } from '../../../util.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 
 const DEFAULT_RESPONSES_BASE_URL = 'https://api.openai.com/v1';
 
@@ -207,17 +208,18 @@ export async function dispatchOpenAIResponses(ctx) {
         excludeKeysByYaml(requestBody, body.custom_exclude_body);
 
         const endpointUrl = `${apiUrl}/responses`;
-        ctx.inspection.attach(endpointUrl, apiKey, requestBody);
+        const requestHeaders = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+            ...headers,
+        };
+        ctx.inspection.attach(endpointUrl, resolveEffectiveApiKey(requestHeaders, apiKey, ['authorization']), requestBody);
 
         console.debug('Responses request:', requestBody);
 
         const resp = await ctx.fetch(endpointUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-                ...headers,
-            },
+            headers: requestHeaders,
             body: JSON.stringify(requestBody),
             signal: ctx.signal,
         });

@@ -12,6 +12,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'deepseek-fake-key', signal } = 
     const emitted = [];
     const ac = new AbortController();
     const attachedInspections = [];
+    const attachCalls = [];
     return {
         body: {
             model: 'deepseek-chat',
@@ -49,7 +50,10 @@ function fakeCtx({ body = {}, onFetch, secret = 'deepseek-fake-key', signal } = 
         },
         inspection: {
             start: jest.fn(),
-            attach: jest.fn((url) => attachedInspections.push(url)),
+            attach: jest.fn((...args) => {
+                attachedInspections.push(args[0]);
+                attachCalls.push(args);
+            }),
             fail: jest.fn(),
         },
         emit: {
@@ -61,6 +65,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'deepseek-fake-key', signal } = 
         _emitted: emitted,
         _abortController: ac,
         _attachedInspections: attachedInspections,
+        _attachCalls: attachCalls,
     };
 }
 
@@ -170,5 +175,22 @@ describe('dispatchDeepSeek', () => {
         expect(chunks).toHaveLength(0);
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
+    });
+
+    test('inspector fingerprint reflects Authorization overridden by custom_include_headers', async () => {
+        const ctx = fakeCtx({
+            secret: 'deepseek-stored-key',
+            body: {
+                custom_include_headers: 'Authorization: Bearer plugin-proxy-key\n',
+            },
+        });
+        await dispatchDeepSeek(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        expect(init.headers['Authorization']).toBe('Bearer plugin-proxy-key');
+
+        expect(ctx._attachCalls).toHaveLength(1);
+        const [, attachedKey] = ctx._attachCalls[0];
+        expect(attachedKey).toBe('plugin-proxy-key');
     });
 });

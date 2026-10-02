@@ -19,6 +19,7 @@ import {
 } from '../../../prompt-converters.js';
 import { excludeKeysByYaml, mergeObjectWithYaml } from '../../../util.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 
 const API_DEEPSEEK = 'https://api.deepseek.com/beta';
 
@@ -126,7 +127,12 @@ export async function dispatchDeepSeek(ctx) {
         excludeKeysByYaml(requestBody, body.custom_exclude_body);
 
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'chat/completions' : apiUrl + '/chat/completions';
-        ctx.inspection.attach(fetchUrl, apiKey, requestBody);
+        const requestHeaders = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+            ...headers,
+        };
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(requestHeaders, apiKey, ['authorization']), requestBody);
 
         console.debug('DeepSeek request:', requestBody);
 
@@ -134,11 +140,7 @@ export async function dispatchDeepSeek(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-                ...headers,
-            },
+            headers: requestHeaders,
         });
 
         // Architectural contract: every dispatch emits a single head frame

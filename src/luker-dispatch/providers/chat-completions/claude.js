@@ -19,6 +19,7 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { normalizeClaudeResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import {
     convertClaudeMessages,
@@ -315,7 +316,13 @@ export async function dispatchClaude(ctx) {
         mergeObjectWithYaml(additionalHeaders, body.custom_include_headers);
 
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'messages' : apiUrl + '/messages';
-        ctx.inspection.attach(fetchUrl, secretKey, requestBody);
+        const requestHeaders = {
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01',
+            'x-api-key': secretKey,
+            ...additionalHeaders,
+        };
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(requestHeaders, secretKey, ['x-api-key']), requestBody);
 
         console.debug('Claude request:', requestBody);
 
@@ -323,12 +330,7 @@ export async function dispatchClaude(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'anthropic-version': '2023-06-01',
-                'x-api-key': secretKey,
-                ...additionalHeaders,
-            },
+            headers: requestHeaders,
         });
 
         // Architectural contract: every dispatch emits a single head frame

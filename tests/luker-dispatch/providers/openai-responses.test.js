@@ -5,6 +5,7 @@ import { CHAT_COMPLETION_SOURCES } from '../../../src/constants.js';
 
 function fakeCtx({ body = {}, onFetch, secretMap = {} } = {}) {
     const emitted = [];
+    const attachCalls = [];
     return {
         body: {
             model: 'gpt-5.5',
@@ -24,7 +25,11 @@ function fakeCtx({ body = {}, onFetch, secretMap = {} } = {}) {
             usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
         }), { status: 200, headers: { 'content-type': 'application/json' } })),
         secrets: { read: jest.fn((key) => secretMap[key] ?? '') },
-        inspection: { start: jest.fn(), attach: jest.fn(), fail: jest.fn() },
+        inspection: {
+            start: jest.fn(),
+            attach: jest.fn((...args) => attachCalls.push(args)),
+            fail: jest.fn(),
+        },
         emit: {
             head: (h) => emitted.push({ kind: 'head', data: h }),
             chunk: (b) => emitted.push({ kind: 'chunk', data: b }),
@@ -32,6 +37,7 @@ function fakeCtx({ body = {}, onFetch, secretMap = {} } = {}) {
             error: (e) => emitted.push({ kind: 'error', error: e }),
         },
         _emitted: emitted,
+        _attachCalls: attachCalls,
     };
 }
 
@@ -157,5 +163,23 @@ describe('dispatchOpenAIResponses', () => {
         const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
         expect(sent.reasoning).toEqual({ effort: 'high' });
         expect('store' in sent).toBe(false);
+    });
+
+    test('inspector fingerprint reflects Authorization overridden by custom_include_headers', async () => {
+        const ctx = fakeCtx({
+            body: {
+                responses_url: 'http://127.0.0.1:9/v1',
+                custom_include_headers: 'Authorization: Bearer plugin-proxy-key\n',
+            },
+            secretMap: { api_key_openai_responses: 'rk' },
+        });
+        await dispatchOpenAIResponses(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        expect(init.headers['Authorization']).toBe('Bearer plugin-proxy-key');
+
+        expect(ctx._attachCalls).toHaveLength(1);
+        const [, attachedKey] = ctx._attachCalls[0];
+        expect(attachedKey).toBe('plugin-proxy-key');
     });
 });

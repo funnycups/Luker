@@ -10,6 +10,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'sk-ant-fake', signal } = {}) {
     const emitted = [];
     const ac = new AbortController();
     const attachedInspections = [];
+    const attachCalls = [];
     return {
         body: {
             model: 'claude-3-5-sonnet-20241022',
@@ -45,7 +46,10 @@ function fakeCtx({ body = {}, onFetch, secret = 'sk-ant-fake', signal } = {}) {
         },
         inspection: {
             start: jest.fn(),
-            attach: jest.fn((url) => attachedInspections.push(url)),
+            attach: jest.fn((...args) => {
+                attachedInspections.push(args[0]);
+                attachCalls.push(args);
+            }),
             complete: jest.fn(),
             fail: jest.fn(),
         },
@@ -58,6 +62,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'sk-ant-fake', signal } = {}) {
         _emitted: emitted,
         _abortController: ac,
         _attachedInspections: attachedInspections,
+        _attachCalls: attachCalls,
     };
 }
 
@@ -322,5 +327,39 @@ describe('dispatchClaude', () => {
             warnSpy.mockRestore();
             infoSpy.mockRestore();
         }
+    });
+
+    test('inspector fingerprint reflects x-api-key overridden by custom_include_headers', async () => {
+        const ctx = fakeCtx({
+            secret: 'sk-ant-stored',
+            body: {
+                custom_include_headers: 'x-api-key: plugin-proxy-key\n',
+            },
+        });
+        await dispatchClaude(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        expect(init.headers['x-api-key']).toBe('plugin-proxy-key');
+
+        expect(ctx._attachCalls).toHaveLength(1);
+        const [, attachedKey] = ctx._attachCalls[0];
+        expect(attachedKey).toBe('plugin-proxy-key');
+    });
+
+    test('inspector fingerprint keeps resolved key when custom headers leave auth untouched', async () => {
+        const ctx = fakeCtx({
+            secret: 'sk-ant-stored',
+            body: {
+                custom_include_headers: 'X-Custom: yes\n',
+            },
+        });
+        await dispatchClaude(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        expect(init.headers['x-api-key']).toBe('sk-ant-stored');
+
+        expect(ctx._attachCalls).toHaveLength(1);
+        const [, attachedKey] = ctx._attachCalls[0];
+        expect(attachedKey).toBe('sk-ant-stored');
     });
 });

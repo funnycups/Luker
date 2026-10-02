@@ -62,6 +62,7 @@ import {
 } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { GeminiHistoryCache } from '../../gemini-history-cache.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 
 const geminiHistoryCache = new GeminiHistoryCache();
 
@@ -805,17 +806,18 @@ export async function dispatchOpenAICompatible(ctx) {
             console.debug('OpenRouter Gemini history cache:', plan);
         }
 
-        ctx.inspection.attach(endpointUrl, apiKey, requestBody);
+        const requestHeaders = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+            ...headers,
+        };
+        ctx.inspection.attach(endpointUrl, resolveEffectiveApiKey(requestHeaders, apiKey, ['authorization']), requestBody);
 
         console.debug('Chat Completion request:', requestBody);
 
         const resp = await ctx.fetch(endpointUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-                ...headers,
-            },
+            headers: requestHeaders,
             body: JSON.stringify(requestBody),
             signal: ctx.signal,
         });

@@ -142,6 +142,34 @@ export function fingerprintApiKey(apiKey) {
     return `${key.slice(0, 4)}...${key.slice(-4)} (${len} chars)`;
 }
 
+/**
+ * Resolve the credential that actually goes on the wire when provider headers
+ * merge user-supplied overrides (e.g. `custom_include_headers`) on top of the
+ * resolved API key. Scans `headers` case-insensitively for the first of
+ * `preferredHeaderNames` that is present; a present header wins over the
+ * fallback even when its value is empty, because that is what the wire
+ * carries. Strips a leading `Bearer ` (case-insensitive) from the value.
+ *
+ * @param {object} [headers] final outgoing request headers
+ * @param {string} fallbackKey credential resolved from secrets or proxy password
+ * @param {string[]} [preferredHeaderNames] candidate header names in priority order
+ * @returns {string}
+ */
+export function resolveEffectiveApiKey(headers, fallbackKey, preferredHeaderNames = ['authorization', 'x-api-key', 'api-key']) {
+    if (headers && typeof headers === 'object') {
+        const entries = Object.entries(headers);
+        for (const preferred of preferredHeaderNames) {
+            const match = entries.find(([name]) => String(name).toLowerCase() === preferred);
+            if (match) {
+                const value = match[1];
+                if (value == null) continue;
+                return String(value).replace(/^Bearer\s+/i, '');
+            }
+        }
+    }
+    return String(fallbackKey ?? '');
+}
+
 const REDACT_QUERY_KEYS = new Set(['key', 'api_key', 'apikey', 'access_token', 'token']);
 
 function sanitizeEndpointUrl(endpoint) {
