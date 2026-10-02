@@ -23,7 +23,7 @@
 // present in the repo (e.g. cold clones without local vendor copies).
 
 import { test, expect } from '@playwright/test';
-import { existsSync, symlinkSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';

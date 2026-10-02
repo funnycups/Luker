@@ -48,7 +48,7 @@ function cloneDataDir(targetDir) {
     // hides real failures).
     const chatsDir = resolve(targetDir, 'default-user/chats');
     if (existsSync(chatsDir)) {
-        try { rmSync(chatsDir, { recursive: true, force: true }); } catch {}
+        try { rmSync(chatsDir, { recursive: true, force: true }); } catch { /* ignore */ }
         mkdirSync(chatsDir, { recursive: true });
     }
     // Drop dev-time backups (they grow to hundreds of MB on a long-lived
@@ -56,7 +56,7 @@ function cloneDataDir(targetDir) {
     for (const noise of ['default-user/backups', 'default-user/_macros_cache']) {
         const p = resolve(targetDir, noise);
         if (existsSync(p)) {
-            try { rmSync(p, { recursive: true, force: true }); } catch {}
+            try { rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ }
         }
     }
     // Scrub the dev's personal prompt content out of the cloned settings.
@@ -211,22 +211,6 @@ function writeScenarioConfig(targetPath, extraConfig) {
     writeFileSync(targetPath, out, 'utf8');
 }
 
-async function probeReady(port, timeoutMs = READY_TIMEOUT_MS) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        try {
-            // `redirect: 'manual'` is critical when multi-user mode redirects
-            // `/` → `/login` (which may itself bounce). Without manual mode,
-            // Node fetch auto-follows and can hit "redirect count exceeded"
-            // before our 200/302/401 ready signal lands.
-            const res = await fetch(`http://127.0.0.1:${port}/`, { method: 'GET', redirect: 'manual' });
-            if (res.status === 200 || res.status === 302 || res.status === 401) return true;
-        } catch { /* not up yet */ }
-        await new Promise(r => setTimeout(r, READY_POLL_MS));
-    }
-    throw new Error(`server on port ${port} did not become ready within ${timeoutMs}ms`);
-}
-
 /**
  * @typedef {object} ServerHandle
  * @property {number} port
@@ -349,7 +333,7 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
             }
             throw new Error(`server on port ${port} did not become ready within ${READY_TIMEOUT_MS}ms`);
         } catch (err) {
-            try { child?.kill('SIGKILL'); } catch {}
+            try { child?.kill('SIGKILL'); } catch { /* ignore */ }
             child = null;
             throw err;
         }
@@ -360,7 +344,7 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
         try {
             child.kill('SIGTERM');
             await new Promise((resolve) => {
-                const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} ; resolve(); }, 3000);
+                const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ }  resolve(); }, 3000);
                 child.once('exit', () => { clearTimeout(t); resolve(); });
             });
         } catch { /* already gone */ }
@@ -392,9 +376,9 @@ export async function tearDownServer(handle, { removeData = true } = {}) {
     if (!handle) return;
     await handle.stop();
     if (removeData && handle.dataRoot && handle.dataRoot.startsWith(SCRATCH_ROOT)) {
-        try { rmSync(handle.dataRoot, { recursive: true, force: true }); } catch {}
+        try { rmSync(handle.dataRoot, { recursive: true, force: true }); } catch { /* ignore */ }
     }
     if (removeData && handle.configPath && handle.configPath.startsWith(SCRATCH_ROOT)) {
-        try { rmSync(handle.configPath, { force: true }); } catch {}
+        try { rmSync(handle.configPath, { force: true }); } catch { /* ignore */ }
     }
 }

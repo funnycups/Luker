@@ -1,6 +1,5 @@
 import { describe, test, expect } from '@jest/globals';
 import { runMigrationPipeline } from '../../../public/scripts/extensions/memory-graph/migrations/index.js';
-import { v2FloorState } from '../../../public/scripts/extensions/memory-graph/migrations/shapes/v2-floor-state.js';
 
 describe('runMigrationPipeline driver basics', () => {
     test('returns input unchanged when registry has no matching detect', async () => {
@@ -125,7 +124,7 @@ describe('runMigrationPipeline robustness', () => {
         }];
         const ctx = await makeRichCtx([]);
         await expect(
-            runMigrationPipeline({ data: { foo: 1 }, meta: null, log: null }, ctx, cycleShapes)
+            runMigrationPipeline({ data: { foo: 1 }, meta: null, log: null }, ctx, cycleShapes),
         ).rejects.toThrow(/MAX_HOPS/);
     });
 

@@ -6,9 +6,11 @@ import { awaitMainUI } from '../_lib/page.js';
 import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } from './_helpers.js';
 
 let server;
+
 test.beforeAll(async () => {
     server = await startServer({ batchKey: 'browser-storage-inspector', scenarioId: 'delete-cache' });
 });
+
 test.afterAll(async () => { await tearDownServer(server); });
 
 test.describe('Browser Storage Inspector · delete Cache Storage', () => {

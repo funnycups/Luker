@@ -59,10 +59,10 @@ function buildHarness(kind, dataRoot, handle = 'u') {
     const dirs = buildDirs(userDir);
     fs.mkdirSync(dirs.root, { recursive: true });
     for (const d of [dirs.chats, dirs.characters, dirs.worlds, dirs.groups, dirs.groupChats,
-                     dirs.themes, dirs.movingUI, dirs.quickreplies,
-                     dirs.openAI_Settings, dirs.novelAI_Settings, dirs.koboldAI_Settings,
-                     dirs.textGen_Settings, dirs.instruct, dirs.context, dirs.sysprompt,
-                     dirs.reasoning]) {
+        dirs.themes, dirs.movingUI, dirs.quickreplies,
+        dirs.openAI_Settings, dirs.novelAI_Settings, dirs.koboldAI_Settings,
+        dirs.textGen_Settings, dirs.instruct, dirs.context, dirs.sysprompt,
+        dirs.reasoning]) {
         fs.mkdirSync(d, { recursive: true });
     }
     const directoriesByHandle = (h) => {

@@ -1,4 +1,3 @@
-/* global globalThis */
 // Endpoint-level regression: restoring an archive over an existing read-only
 // file must overwrite it instead of aborting the whole restore.
 //

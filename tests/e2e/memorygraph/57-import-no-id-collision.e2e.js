@@ -31,7 +31,6 @@ import {
     openExtensionsDrawer,
     openInlineDrawer,
 } from '../_lib/page.js';
-import { importMgGraph } from '../_lib/ui-mg-varops.js';
 
 let server, mock, origPath, importedPath;
 
@@ -224,7 +223,7 @@ test.describe('#57 — MG import never produces ID collisions', () => {
         });
         expect(
             runtimeNodeSeq,
-            `runtime nodeSeq must be >= 3 after importing nodes at n_1..n_3 (would otherwise collide)`,
+            'runtime nodeSeq must be >= 3 after importing nodes at n_1..n_3 (would otherwise collide)',
         ).toBeGreaterThanOrEqual(3);
     });
 });

@@ -284,14 +284,14 @@ describe('spec §5.6 — i18n entries present in zh-CN and zh-TW', () => {
         const i18nPath = path.resolve(here, '../../public/scripts/extensions/memory-graph/i18n.js');
         const content = await fs.readFile(i18nPath, 'utf8');
         // Two blocks: addLocaleData('zh-cn', {...}) and addLocaleData('zh-tw', {...}).
-        const zhCnIdx = content.indexOf("addLocaleData('zh-cn'");
-        const zhTwIdx = content.indexOf("addLocaleData('zh-tw'");
+        const zhCnIdx = content.indexOf('addLocaleData(\'zh-cn\'');
+        const zhTwIdx = content.indexOf('addLocaleData(\'zh-tw\'');
         expect(zhCnIdx).toBeGreaterThan(-1);
         expect(zhTwIdx).toBeGreaterThan(zhCnIdx);
         const zhCnBlock = content.slice(zhCnIdx, zhTwIdx);
         const zhTwBlock = content.slice(zhTwIdx);
-        const labelKey = "'Main-context injection window (assistant turns; 0 = no limit)':";
-        const helpKey = "'0 = inject all always-on nodes (current behavior). N > 0 = drop always-on nodes older than N assistant turns from the main context; recall candidates and recall-selected nodes are unaffected.':";
+        const labelKey = '\'Main-context injection window (assistant turns; 0 = no limit)\':';
+        const helpKey = '\'0 = inject all always-on nodes (current behavior). N > 0 = drop always-on nodes older than N assistant turns from the main context; recall candidates and recall-selected nodes are unaffected.\':';
         expect(zhCnBlock).toContain(labelKey);
         expect(zhTwBlock).toContain(labelKey);
         expect(zhCnBlock).toContain(helpKey);

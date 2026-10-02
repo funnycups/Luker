@@ -75,10 +75,10 @@ function buildHarness(kind, dataRoot, handle = 'u') {
     // Pre-create dirs the engines / repos rely on.
     fs.mkdirSync(dirs.root, { recursive: true });
     for (const d of [dirs.chats, dirs.characters, dirs.worlds, dirs.groups, dirs.groupChats,
-                     dirs.themes, dirs.movingUI, dirs.quickreplies,
-                     dirs.openAI_Settings, dirs.novelAI_Settings, dirs.koboldAI_Settings,
-                     dirs.textGen_Settings, dirs.instruct, dirs.context, dirs.sysprompt,
-                     dirs.reasoning]) {
+        dirs.themes, dirs.movingUI, dirs.quickreplies,
+        dirs.openAI_Settings, dirs.novelAI_Settings, dirs.koboldAI_Settings,
+        dirs.textGen_Settings, dirs.instruct, dirs.context, dirs.sysprompt,
+        dirs.reasoning]) {
         fs.mkdirSync(d, { recursive: true });
     }
     const directoriesByHandle = (h) => {
@@ -341,7 +341,6 @@ describe('MigrationRunner: FS to SQLite', () => {
     test('migrateAllUsers per-user failure does not abort batch and is captured', async () => {
         await src.repos.settings.save(src.handle, { x: 1 });
         const backupRoot = path.join(tmpRoot, '_storage-migrations');
-        let firstCall = true;
         const runner = new MigrationRunner({
             sourceRepos: src.repos,
             destRepos: dst.repos,

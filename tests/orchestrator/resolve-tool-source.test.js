@@ -18,13 +18,13 @@ describe('resolveToolSource', () => {
         __getExtensionRegistryForTest().clear();
     });
 
-    test("returns 'builtin' for a Layer-1 builtin name (no ctx)", () => {
+    test('returns \'builtin\' for a Layer-1 builtin name (no ctx)', () => {
         // chat_read_range is registered at module load by loop-tools.js.
         expect(resolveToolSource('chat_read_range', {})).toBe('builtin');
         expect(resolveToolSource('chat_read_range', null)).toBe('builtin');
     });
 
-    test("returns 'profile' when ctx.__customToolRegistry has the name", () => {
+    test('returns \'profile\' when ctx.__customToolRegistry has the name', () => {
         const perRunReg = new Map();
         perRunReg.set('echo', {
             exec: async () => ({}),
@@ -36,7 +36,7 @@ describe('resolveToolSource', () => {
         expect(resolveToolSource('echo', ctx)).toBe('profile');
     });
 
-    test("returns 'extension' for a Layer-2 extension-registered tool", () => {
+    test('returns \'extension\' for a Layer-2 extension-registered tool', () => {
         registerOrchestrationTool({
             name: 'demo_ext', description: 'd', parameters: {},
             exec: async () => ({}), mode: 'read',
@@ -44,7 +44,7 @@ describe('resolveToolSource', () => {
         expect(resolveToolSource('demo_ext', {})).toBe('extension');
     });
 
-    test("returns 'st-bridge' for a Layer-2 entry with source='st-bridge'", () => {
+    test('returns \'st-bridge\' for a Layer-2 entry with source=\'st-bridge\'', () => {
         // Inject a synthetic bridged entry without going through bridgeSillyTavernTool
         // (which would lazy-import ToolManager). The registry shape is the
         // contract; source resolution checks `entry.source === 'st-bridge'`.
@@ -59,12 +59,12 @@ describe('resolveToolSource', () => {
         expect(resolveToolSource('st_read_world_info', {})).toBe('st-bridge');
     });
 
-    test("returns 'unknown' for an unregistered name", () => {
+    test('returns \'unknown\' for an unregistered name', () => {
         expect(resolveToolSource('nope_not_a_tool', {})).toBe('unknown');
         expect(resolveToolSource('', {})).toBe('unknown');
     });
 
-    test("Layer-3 wins over Layer-1 (matches executeLoopTool precedence)", () => {
+    test('Layer-3 wins over Layer-1 (matches executeLoopTool precedence)', () => {
         const perRunReg = new Map();
         perRunReg.set('chat_read_range', {
             exec: async () => ({}),
@@ -75,7 +75,7 @@ describe('resolveToolSource', () => {
         expect(resolveToolSource('chat_read_range', { __customToolRegistry: perRunReg })).toBe('profile');
     });
 
-    test("Layer-1 wins over Layer-2 (matches executeLoopTool precedence)", () => {
+    test('Layer-1 wins over Layer-2 (matches executeLoopTool precedence)', () => {
         // Forcefully insert a colliding extension entry under a builtin
         // name to assert the lookup order (registerOrchestrationTool would
         // reject this at runtime — we're directly probing precedence).

@@ -20,8 +20,6 @@
 //      it back into {avatar, name} for origin dispatch.
 //   3. Empty presets → no optgroup at all (avoids empty group flashing).
 
-import { jest } from '@jest/globals';
-
 if (typeof globalThis.structuredClone !== 'function') {
     globalThis.structuredClone = (v) => JSON.parse(JSON.stringify(v));
 }

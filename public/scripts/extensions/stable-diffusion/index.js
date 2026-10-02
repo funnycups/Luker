@@ -68,7 +68,6 @@ export { MODULE_NAME };
 const MODULE_NAME = 'sd';
 // This is a 1x1 transparent PNG
 const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-const CUSTOM_STOP_EVENT = 'sd_stop_generation';
 
 // Generation tracking for status indicator
 let activeGenerations = 0;
@@ -294,7 +293,6 @@ const defaultSettings = {
     // AUTOMATIC1111 settings
     auto_url: 'http://localhost:7860',
     auto_auth: '',
-    sdcpp_url: 'http://127.0.0.1:1234',
 
     // stable-diffusion.cpp settings
     sdcpp_url: 'http://127.0.0.1:1234',
@@ -5331,7 +5329,6 @@ async function writePromptFields(characterId) {
  */
 async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete, abortController = new AbortController()) {
     const stopButton = document.getElementById('sd_stop_gen');
-    const stopListener = () => abortController.abort('Aborted by user');
     const generationType = mediaAttachment.generation_type ?? message?.extra?.generationType ?? generationMode.FREE;
     let dimensions = { width: extension_settings.sd.width, height: extension_settings.sd.height };
     extension_settings.sd.original_seed = extension_settings.sd.seed;

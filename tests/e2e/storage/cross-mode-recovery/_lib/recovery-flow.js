@@ -192,13 +192,13 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
                 fs.rmSync(sourceDataRoot, { recursive: true, force: true });
             }
         } catch (err) {
-            try { await tearDownServer(sourceServer); } catch {}
+            try { await tearDownServer(sourceServer); } catch { /* ignore */ }
             throw err;
         }
     } finally {
         await mock?.stop();
         for (const c of containers) {
-            try { await c.stop(); } catch {}
+            try { await c.stop(); } catch { /* ignore */ }
         }
     }
 }
@@ -377,7 +377,7 @@ async function readChatFromEngine(dataRoot, destMode, destDbConfig) {
         const Database = (await import('better-sqlite3')).default;
         const db = new Database(sqlitePath, { readonly: true });
         try {
-            const rows = db.prepare(`SELECT char_dir, name, doc FROM chats`).all();
+            const rows = db.prepare('SELECT char_dir, name, doc FROM chats').all();
             for (const r of rows) {
                 let doc;
                 try { doc = JSON.parse(r.doc); } catch { continue; }

@@ -110,7 +110,7 @@ test.describe('#17 — merge name conflict resolves to (2) suffix', () => {
             const timer = setTimeout(() => reject(new Error('CHAT_RENAMED timeout')), 15000);
             const off = ctx.eventSource.on(ctx.eventTypes.CHAT_RENAMED, (data) => {
                 clearTimeout(timer);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_RENAMED, off); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_RENAMED, off); } catch { /* ignore */ }
                 resolve(data);
             });
         }));

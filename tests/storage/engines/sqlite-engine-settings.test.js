@@ -61,7 +61,7 @@ describe('SqliteEngine settings handler', () => {
         // Inject corrupt JSON directly via raw db access
         engine._dbFor(handle);
         const db = engine._dbs.get(handle);
-        db.prepare(`INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)`).run(handle, 'not json', Date.now());
+        db.prepare('INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)').run(handle, 'not json', Date.now());
         const got = await engine.withTransaction(handle, async (tx) =>
             tx.getResource({ kind: 'settings', handle }));
         expect(got).toBeNull();

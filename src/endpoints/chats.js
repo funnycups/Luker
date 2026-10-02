@@ -7,7 +7,6 @@ import { randomUUID } from 'node:crypto';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import _ from 'lodash';
 
 import validateAvatarUrlMiddleware from '../middleware/validateFileName.js';
@@ -1340,27 +1339,6 @@ function normalizeChatStateNamespace(namespace) {
 }
 
 /**
- * Resolves a file path constrained to a base directory.
- * @param {string} baseDirectory Base directory path.
- * @param {string} requestedFileName Requested file name (possibly unsafe).
- * @returns {string} Safe resolved file path or empty string.
- */
-function resolvePathInsideDirectory(baseDirectory, requestedFileName) {
-    const base = path.resolve(String(baseDirectory || ''));
-    const safeName = sanitize(path.basename(String(requestedFileName || '').trim()));
-    if (!base || !safeName) {
-        return '';
-    }
-
-    const resolved = path.resolve(base, safeName);
-    const baseWithSep = base.endsWith(path.sep) ? base : `${base}${path.sep}`;
-    if (resolved !== base && !resolved.startsWith(baseWithSep)) {
-        return '';
-    }
-    return resolved;
-}
-
-/**
  * Gets chat state sidecar path for a chat jsonl file path and namespace.
  * @param {string} chatFilePath Chat jsonl file path.
  * @param {string} namespace State namespace.
@@ -2116,49 +2094,6 @@ export async function patchChatMetadataInFile({ filePath, operations = [], integ
         total_messages: Math.max(chatData.length - 1, 0),
         created,
         integrity: nextIntegrity,
-    };
-}
-
-/**
- * Reads chat file delta by message index.
- * @param {string} chatFilePath Full path to chat file.
- * @param {number} fromIndex Zero-based message index excluding header.
- * @param {number} limit Number of messages to return, <=0 means no limit.
- * @returns {{chat: object[], chat_metadata: object, from_index: number, next_index: number, total_messages: number, has_more: boolean}}
- */
-function getChatDataDelta(chatFilePath, fromIndex = 0, limit = 0) {
-    const chatData = getChatData(chatFilePath);
-    // getChatData may return { new_chat: true } or { corrupted: true } — coerce to array
-    if (!Array.isArray(chatData) || chatData.length === 0) {
-        return {
-            chat: [],
-            chat_metadata: {},
-            from_index: 0,
-            next_index: 0,
-            total_messages: 0,
-            has_more: false,
-        };
-    }
-
-    const safeLimit = Number(limit) || 0;
-    const header = chatData[0];
-    const messages = chatData.slice(1);
-    const numericFromIndex = Number(fromIndex) || 0;
-    const normalizedFromIndex = numericFromIndex < 0
-        ? Math.max(messages.length + numericFromIndex, 0)
-        : numericFromIndex;
-    const safeFromIndex = Math.min(Math.max(0, normalizedFromIndex), messages.length);
-    const sliced = safeLimit > 0
-        ? messages.slice(safeFromIndex, safeFromIndex + safeLimit)
-        : messages.slice(safeFromIndex);
-
-    return {
-        chat: sliced,
-        chat_metadata: header?.chat_metadata ?? {},
-        from_index: safeFromIndex,
-        next_index: safeFromIndex + sliced.length,
-        total_messages: messages.length,
-        has_more: (safeFromIndex + sliced.length) < messages.length,
     };
 }
 
@@ -3704,8 +3639,7 @@ router.post('/group/split', async (request, response) => {
         // no-op. Partial writes that made it onto disk above still need to
         // appear in the group definition.
         if (partialWrites.length > 0) {
-            try { await appendChatNamesToGroup(handle, id, partialWrites); }
-            catch (e) { console.error('POST /group/split appendChatNamesToGroup', e); }
+            try { await appendChatNamesToGroup(handle, id, partialWrites); } catch (e) { console.error('POST /group/split appendChatNamesToGroup', e); }
         }
         return response.send({ ok: true, new_chats: newChats });
     } catch (err) {

@@ -12,7 +12,6 @@
 //   - getRenderedVarOpsRows: read .var-ops-panel__row from DOM
 //   - addVarOpRow / deleteVarOpRow / saveVarOpsPanel
 
-import { expect } from '@playwright/test';
 import { openExtensionsDrawer, openInlineDrawer } from './page.js';
 
 async function openMgSettingsPanel(page) {

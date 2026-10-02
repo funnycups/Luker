@@ -64,7 +64,7 @@ ruleTester.run('no-raw-fs-in-endpoint', rule, {
         },
         // request.user.directories without fs.* — OK (e.g. read-only path inspection).
         {
-            code: `function h(request) { return request.user.directories.chats; }`,
+            code: 'function h(request) { return request.user.directories.chats; }',
             filename: endpointPath('src/endpoints/path-only.js'),
         },
         // Outer reads request.user.directories.* but the fs.* call lives in a

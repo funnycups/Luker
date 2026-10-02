@@ -44,7 +44,7 @@ function configureBackend({ dataRoot, source, model, secretKey, value }) {
     // The secret is read from data-root/default-user/secrets.json.
     const secretsPath = resolve(dataRoot, 'default-user', 'secrets.json');
     let secrets = {};
-    try { secrets = JSON.parse(readFileSync(secretsPath, 'utf8')); } catch {}
+    try { secrets = JSON.parse(readFileSync(secretsPath, 'utf8')); } catch { /* ignore */ }
     secrets[secretKey] = value;
     writeFileSync(secretsPath, JSON.stringify(secrets, null, 4));
 }

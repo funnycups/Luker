@@ -11,7 +11,6 @@
 // before sendIterPrompt() so the studio renders a pending proposal card
 // with an Approve button.
 
-import { expect } from '@playwright/test';
 import { openExtensionsDrawer, openInlineDrawer } from './page.js';
 
 const VARIANT_MAP = {

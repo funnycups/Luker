@@ -39,17 +39,17 @@ export async function dispatchChutes(ctx) {
         const bodyParams = {};
 
         if (Array.isArray(body.tools) && body.tools.length > 0) {
-            bodyParams['tools'] = body.tools;
-            bodyParams['tool_choice'] = body.tool_choice;
+            bodyParams.tools = body.tools;
+            bodyParams.tool_choice = body.tool_choice;
         }
 
         if (body.logprobs > 0) {
-            bodyParams['top_logprobs'] = body.logprobs;
-            bodyParams['logprobs'] = true;
+            bodyParams.top_logprobs = body.logprobs;
+            bodyParams.logprobs = true;
         }
 
         if (body.json_schema) {
-            bodyParams['response_format'] = {
+            bodyParams.response_format = {
                 type: 'json_schema',
                 json_schema: {
                     name: body.json_schema.name,

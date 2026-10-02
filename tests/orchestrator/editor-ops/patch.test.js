@@ -1,10 +1,9 @@
-import { describe, expect, test, jest } from '@jest/globals';
+import { describe, expect, test } from '@jest/globals';
 import { createMessageEditorHandle } from '../../../public/scripts/message-takeover.js';
 import { applyPatch, EditorOpsError } from '../../../public/scripts/extensions/orchestrator/editor-ops.js';
 
 function setup(initialText = '') {
     const chat = [{ mes: initialText, extra: { reasoning: '' }, is_user: false }];
-    const emit = jest.fn(async () => {});
     const handle = createMessageEditorHandle({
         generationType: 'normal',
         originalText: initialText,

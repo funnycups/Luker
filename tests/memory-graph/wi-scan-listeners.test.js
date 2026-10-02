@@ -35,7 +35,7 @@
  * `main-module-stack.js`, so the registrations themselves never run.
  */
 
-import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeAll, beforeEach } from '@jest/globals';
 import './_mocks/main-module-stack.js';
 
 let handleWiAfterScan;

@@ -929,7 +929,7 @@ async function restoreUserBackupArchive(uploadPath, directories, selection, mode
 const RESTORE_STREAM_MIME = 'application/x-ndjson';
 
 function wantsRestoreProgressStream(request) {
-    const accept = String(request.headers['accept'] || '');
+    const accept = String(request.headers.accept || '');
     return accept.includes(RESTORE_STREAM_MIME);
 }
 
@@ -1320,7 +1320,7 @@ function readEngineMetaFromZip(zipPath) {
                     if (settled) return;
                     if (streamErr) {
                         settled = true;
-                        try { zipfile.close(); } catch {}
+                        try { zipfile.close(); } catch { /* ignore */ }
                         return reject(streamErr);
                     }
                     const chunks = [];
@@ -1328,13 +1328,13 @@ function readEngineMetaFromZip(zipPath) {
                     readStream.on('error', (e) => {
                         if (settled) return;
                         settled = true;
-                        try { zipfile.close(); } catch {}
+                        try { zipfile.close(); } catch { /* ignore */ }
                         reject(e);
                     });
                     readStream.on('end', () => {
                         if (settled) return;
                         settled = true;
-                        try { zipfile.close(); } catch {}
+                        try { zipfile.close(); } catch { /* ignore */ }
                         try {
                             resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
                         } catch (parseErr) {

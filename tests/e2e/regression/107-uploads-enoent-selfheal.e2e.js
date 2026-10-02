@@ -52,7 +52,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
     await tearDownServer(server);
     if (tmpDir) {
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 });
 
@@ -75,7 +75,7 @@ test.describe('#107 — character import survives _uploads/ wipe', () => {
                 const orig = window.toastr?.error;
                 if (typeof orig === 'function' && !window.toastr.__e2e107Wrapped) {
                     window.toastr.error = function (msg, ...rest) {
-                        try { window.__e2e107RecordToastError(String(msg || '')); } catch {}
+                        try { window.__e2e107RecordToastError(String(msg || '')); } catch { /* ignore */ }
                         return orig.apply(this, [msg, ...rest]);
                     };
                     window.toastr.__e2e107Wrapped = true;

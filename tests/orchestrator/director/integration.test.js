@@ -9,7 +9,6 @@ import {
 
 function makeHandle() {
     const chat = [{ mes: '', extra: { reasoning: '' }, is_user: false }];
-    const emit = jest.fn(async () => {});
     const handle = createMessageEditorHandle({ generationType: 'normal', flushIntervalMs: 0 });
     // Test-mode chat mirror: in production the kernel (script.js takeover
     // branch) installs this listener. Here we install it directly so the
@@ -1092,7 +1091,7 @@ describe('director integration — scripted main agent', () => {
         }
     });
 
-    test("fork-on-dispatch — sub-agent's parent snapshot prefix is stable across its internal loop", async () => {
+    test('fork-on-dispatch — sub-agent\'s parent snapshot prefix is stable across its internal loop', async () => {
         // Sub-agent takes 3 internal rounds before converging. Across
         // those rounds, the BASE prefix of taskMessages (system + chat
         // + task) must be byte-identical — the snapshot taken at

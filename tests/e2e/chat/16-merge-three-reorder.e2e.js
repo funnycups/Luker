@@ -112,7 +112,7 @@ test.describe('#16 — merge dialog drag-handle reorders sources', () => {
         });
         const mergedPath = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder, `${mergedName}.jsonl`);
         const lines = readFileSync(mergedPath, 'utf-8').trim().split('\n');
-        expect(lines.length, `expected 1 header + 9 messages; got ${lines.length}`).toBe(10);
+        expect(lines, `expected 1 header + 9 messages; got ${lines.length}`).toHaveLength(10);
         const bodyMessages = lines.slice(1).map(l => JSON.parse(l).mes);
         expect(bodyMessages[1]).toContain('msg C');
         expect(bodyMessages[2]).toContain('rC');

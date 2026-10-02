@@ -58,7 +58,7 @@ const SHORTHAND_OPS = /** @type {const} */ (['||=', '??=', '++', '--', '+=', '-=
  * macro lexer so shapes the engine accepts as a shorthand are recognized
  * here too. Anchored — full-string match.
  */
-const SHORTHAND_IDENT_RE = /^[a-zA-Z](?:[\w\-]*[\w])?$/;
+const SHORTHAND_IDENT_RE = /^[a-zA-Z](?:[\w-]*[\w])?$/;
 
 /**
  * Scans text for the next side-effect macro starting at or after `cursor`.

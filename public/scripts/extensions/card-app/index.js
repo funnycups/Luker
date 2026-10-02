@@ -13,7 +13,6 @@ const getRequestHeaders = __ctx.getRequestHeaders;
 const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
 const registerCardBindingSlot = __ctx.registerCardBindingSlot;
-const getCharacterState = __ctx.getCharacterState;
 const updateCharacterState = __ctx.updateCharacterState;
 const addLocaleData = __ctx.addLocaleData;
 const translate = __ctx.translate;
@@ -45,7 +44,6 @@ addLocaleData('zh-tw', {
 
 // State
 let isCardAppActive = false;
-let currentCardApp = null;
 let currentCtx = null;
 
 /**
@@ -108,7 +106,7 @@ async function activateCardApp() {
         const module = await loadEntryModule(charId, entry);
 
         if (typeof module.init !== 'function') {
-            throw new Error(`CardApp entry module does not export an init() function`);
+            throw new Error('CardApp entry module does not export an init() function');
         }
 
         await module.init(ctx);
@@ -152,7 +150,6 @@ async function activateCardApp() {
     activateRendererBridge(ctx);
 
     isCardAppActive = true;
-    currentCardApp = { charId, config };
 }
 
 /**
@@ -359,7 +356,6 @@ async function deactivateCardApp() {
     destroyContainer();
 
     isCardAppActive = false;
-    currentCardApp = null;
 }
 
 /**

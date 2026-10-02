@@ -81,7 +81,7 @@ test.describe('#21 — split then merge back yields byte-equal message body', ()
         const chatsDir = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder);
         const sourcePath = resolve(chatsDir, `${sourceChatId}.jsonl`);
         const sourceLines = readFileSync(sourcePath, 'utf-8').trim().split('\n');
-        expect(sourceLines.length, `expected 1 header + 7 messages; got ${sourceLines.length}`).toBe(8);
+        expect(sourceLines, `expected 1 header + 7 messages; got ${sourceLines.length}`).toHaveLength(8);
         const sourceBody = sourceLines.slice(1).map(l => JSON.parse(l));
 
         // Split into three parts. The split dialog initial-point default
@@ -113,10 +113,10 @@ test.describe('#21 — split then merge back yields byte-equal message body', ()
         // after index 0).
         const mergedPath = resolve(chatsDir, `${mergedName}.jsonl`);
         const mergedLines = readFileSync(mergedPath, 'utf-8').trim().split('\n');
-        expect(mergedLines.length, `expected 1 header + ${sourceBody.length} messages; got ${mergedLines.length}`)
-            .toBe(1 + sourceBody.length);
+        expect(mergedLines, `expected 1 header + ${sourceBody.length} messages; got ${mergedLines.length}`)
+            .toHaveLength(1 + sourceBody.length);
         const mergedBody = mergedLines.slice(1).map(l => JSON.parse(l));
-        expect(mergedBody.length).toBe(sourceBody.length);
+        expect(mergedBody).toHaveLength(sourceBody.length);
         for (let i = 0; i < sourceBody.length; i++) {
             expect(mergedBody[i]).toEqual(sourceBody[i]);
         }

@@ -75,7 +75,7 @@ describePg('PgEngine schema bootstrap', () => {
 
     test('_storage_meta.schema_version reads "1" after initSchema', async () => {
         const r = await harness.engine._pool.query(
-            `SELECT value FROM _storage_meta WHERE "key" = 'schema_version'`,
+            'SELECT value FROM _storage_meta WHERE "key" = \'schema_version\'',
         );
         expect(r.rows.length).toBe(1);
         expect(r.rows[0].value).toBe('1');
@@ -86,7 +86,7 @@ describePg('PgEngine schema bootstrap', () => {
         await expect(initSchema(harness.engine._pool)).resolves.toBeUndefined();
         // And the version row stays at 1 (not duplicated, not bumped).
         const r = await harness.engine._pool.query(
-            `SELECT value FROM _storage_meta WHERE "key" = 'schema_version'`,
+            'SELECT value FROM _storage_meta WHERE "key" = \'schema_version\'',
         );
         expect(r.rows.length).toBe(1);
         expect(r.rows[0].value).toBe('1');

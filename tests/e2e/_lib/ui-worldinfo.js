@@ -6,8 +6,6 @@
 // bulk-edit popup via the bulk-edit button + apply, export/delete via
 // the dedicated icons.
 
-import { expect } from '@playwright/test';
-
 /**
  * Open the WI panel drawer (#WIDrawerIcon). Idempotent.
  */

@@ -78,8 +78,7 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     if (request && typeof request.once === 'function') {
         request.once('close', () => {
             for (const handler of onCloseHandlers) {
-                try { handler(); }
-                catch (err) { console.warn('[Dispatch] onRequestClose handler threw:', err); }
+                try { handler(); } catch (err) { console.warn('[Dispatch] onRequestClose handler threw:', err); }
             }
         });
     }
@@ -222,8 +221,7 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                     if (bytes && typeof bytes === 'string') {
                         text = bytes;
                     } else if (bytes && (bytes instanceof Uint8Array || Buffer.isBuffer(bytes))) {
-                        try { text = Buffer.from(bytes).toString('utf8'); }
-                        catch { text = ''; }
+                        try { text = Buffer.from(bytes).toString('utf8'); } catch { text = ''; }
                     }
                     if (!text) return;
                     const isStream = Boolean(request.body?.stream || request.body?.streaming);
@@ -374,10 +372,8 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             // try/catch: any one throwing must not prevent the others (a
             // failInspection throw was previously swallowing the
             // failGenerationJob call above the fix).
-            try { ctx.emit.error(err); }
-            catch (e) { console.warn('[Runner] emit.error threw:', e); }
-            try { failGenerationJob(job, err?.message || String(err)); }
-            catch (e) { console.warn('[Runner] failGenerationJob threw:', e); }
+            try { ctx.emit.error(err); } catch (e) { console.warn('[Runner] emit.error threw:', e); }
+            try { failGenerationJob(job, err?.message || String(err)); } catch (e) { console.warn('[Runner] failGenerationJob threw:', e); }
             try {
                 const entry = findEntry(request);
                 if (entry && entry.type === 'chat') {

@@ -56,7 +56,7 @@ test.beforeAll(async () => {
                 // configurations hit "redirect count exceeded" forever.)
                 const res = await fetch(`http://127.0.0.1:${p}/`, { method: 'GET', redirect: 'manual' });
                 if (res.status === 401 || res.status === 302 || res.status === 200) return;
-            } catch {}
+            } catch { /* ignore */ }
             await new Promise(r => setTimeout(r, 250));
         }
         throw new Error(`server on port ${p} did not become ready`);
@@ -88,10 +88,10 @@ test.beforeAll(async () => {
         try {
             child.kill('SIGTERM');
             await new Promise((resolve) => {
-                const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} ; resolve(); }, 3000);
+                const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ }  resolve(); }, 3000);
                 child.once('exit', () => { clearTimeout(t); resolve(); });
             });
-        } catch {}
+        } catch { /* ignore */ }
         child = null;
     };
 });
@@ -224,7 +224,7 @@ test.describe('#47 — basicAuth + CSRF full flow', () => {
         expect(result.ok, `saveSettings should succeed (no CSRF reject); got error: ${result.error || ''}`).toBe(true);
 
         await page.waitForTimeout(500);
-        expect(toastErrors.length, `expected no CSRF toast errors; saw ${toastErrors.join(' | ')}`).toBe(0);
+        expect(toastErrors, `expected no CSRF toast errors; saw ${toastErrors.join(' | ')}`).toHaveLength(0);
 
         await ctx.close();
     });

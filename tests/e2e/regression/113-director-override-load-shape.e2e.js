@@ -118,9 +118,9 @@ test.describe('#113 — director-mode character override survives reload', () =>
         // Verify the override toggle appears on the director board.
         const overrideToggleAfterSave = page.locator('#luker_orch_director_override_toggle');
         await overrideToggleAfterSave.waitFor({ state: 'visible', timeout: 10_000 });
-        expect(await page.locator('#luker_orch_director_override_enabled').isChecked(),
+        await expect(page.locator('#luker_orch_director_override_enabled'),
             'override should be enabled after save',
-        ).toBe(true);
+        ).toBeChecked();
 
         // RELOAD — the load-bearing leg.
         await reloadAndAwait(page, server.baseURL);
@@ -129,9 +129,9 @@ test.describe('#113 — director-mode character override survives reload', () =>
 
         const overrideToggleAfterReload = page.locator('#luker_orch_director_override_toggle');
         await overrideToggleAfterReload.waitFor({ state: 'visible', timeout: 15_000 });
-        expect(await page.locator('#luker_orch_director_override_enabled').isChecked(),
+        await expect(page.locator('#luker_orch_director_override_enabled'),
             'character override toggle must still be on after reload',
-        ).toBe(true);
+        ).toBeChecked();
 
         popup = await openOrchEditor(page);
         const sysPromptAfter = popup.locator('[data-orch-director-field="mainAgent.systemPrompt"]').first();

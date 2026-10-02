@@ -17,7 +17,6 @@ import {
     extension_settings,
     getContext,
     renderExtensionTemplateAsync,
-    openThirdPartyExtensionMenu,
 } from '../../extensions.js';
 import { collapseNewlines, registerDebugFunction } from '../../power-user.js';
 import { getDataBankAttachments, getDataBankAttachmentsForSource, getFileAttachment } from '../../chats.js';

@@ -57,7 +57,7 @@ test.describe('#96 — Caption: upload → auto-caption → chat bubble', () => 
         let lastCaptionPayload = null;
         await page.route(/\/api\/extra\/caption$/, async (route) => {
             captionCalls += 1;
-            try { lastCaptionPayload = JSON.parse(route.request().postData() || '{}'); } catch {}
+            try { lastCaptionPayload = JSON.parse(route.request().postData() || '{}'); } catch { /* ignore */ }
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',

@@ -137,14 +137,14 @@ test.describe('#120 — orchestrator Runtime-limits auto-save', () => {
         // would be back after the persisted-then-hydrated round trip.
         // Read via .inputValue() — works through the `hidden` attribute so
         // we don't need to switch tabs again post-reload.
-        const mainAgentPromptAfterReload = await page
+        const mainAgentPromptAfterReload = page
             .locator('[data-orch-director-field="mainAgent.systemPrompt"]')
             .first()
-            .inputValue();
-        expect(mainAgentPromptAfterReload,
+            ;
+        await expect(mainAgentPromptAfterReload,
             'draft-only mainAgent edits must NOT be flushed by the runtime-limits auto-save; ' +
             'if the marker reappears the auto-save is flushing the whole editor draft, not a narrow patch',
-        ).not.toBe(MAIN_AGENT_DRAFT_MARKER);
+        ).not.toHaveValue(MAIN_AGENT_DRAFT_MARKER);
         expect(mainAgentPromptAfterReload,
             'mainAgent.systemPrompt must revert to the pre-draft persisted value on reload; ' +
             'a mismatch means either the draft leaked (see previous assertion) or the persisted value drifted',

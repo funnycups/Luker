@@ -15,8 +15,6 @@
  *     hasChanges=false so the studio topbar button can suppress itself
  */
 
-import { jest } from '@jest/globals';
-
 // Under test — pure ESM module, no ST context deps
 const { buildReplaceDiffModel, renderReplaceDiffOverview } = await import(
     '../../public/scripts/extensions/character-editor-assistant/replace-diff-overview.js'

@@ -556,7 +556,7 @@ test.describe('MacroEngine', () => {
 
             const testWarnings = warnings.filter(w => w.includes('Macro "test-list-bounds"') && w.includes('unnamed arguments'));
             // We expect one warning for each invalid invocation (too few and too many list args)
-            expect(testWarnings.length).toBe(2);
+            expect(testWarnings).toHaveLength(2);
         });
 
         test('should resolve nested macros in arguments, even though the outer macro has wrong number of arguments', async ({ page }) => {
@@ -760,7 +760,7 @@ test.describe('MacroEngine', () => {
             });
 
             const parts = output.split('###');
-            expect(parts.length).toBe(2);
+            expect(parts).toHaveLength(2);
 
             // Extract seeds from both results
             const seed1 = parts[0].match(/seed:([^|]+)/)?.[1];
@@ -798,7 +798,7 @@ test.describe('MacroEngine', () => {
             });
 
             const parts = output.split('###');
-            expect(parts.length).toBe(2);
+            expect(parts).toHaveLength(2);
 
             const seed1 = parts[0].match(/seed:([^|]+)/)?.[1];
             const seed2 = parts[1].match(/seed:([^|]+)/)?.[1];
@@ -825,7 +825,7 @@ test.describe('MacroEngine', () => {
             });
 
             const parts = output.split('###');
-            expect(parts.length).toBe(2);
+            expect(parts).toHaveLength(2);
 
             const seed1 = parts[0].match(/seed:([^|]+)/)?.[1];
             const seed2 = parts[1].match(/seed:([^|]+)/)?.[1];
@@ -878,7 +878,7 @@ test.describe('MacroEngine', () => {
             });
 
             const parts = output.split('###');
-            expect(parts.length).toBe(2);
+            expect(parts).toHaveLength(2);
 
             const seed1 = parts[0].match(/seed:([^|]+)/)?.[1];
             const seed2 = parts[1].match(/seed:([^|]+)/)?.[1];

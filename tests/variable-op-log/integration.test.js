@@ -126,7 +126,6 @@ describe('integration: full chat lifecycle', () => {
     test('user message side-effect macros are also extracted', () => {
         const state = {};
         const msg = userMsg('Setting flag now {{setvar::flag::true}}');
-        const chat = [msg];
         extractFromMessage(msg, state, envWith(state));
 
         expect(msg.mes).toBe('Setting flag now ');

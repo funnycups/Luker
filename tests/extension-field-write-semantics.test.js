@@ -118,8 +118,8 @@ describe('updateCharacterData rejection of extensions.* paths', () => {
             if (key === 'extensions' || key.startsWith('extensions.')) {
                 throw new Error(
                     `updateCharacterData: refuses to write '${key}' — use ` +
-                    `writeExtensionField/writeExtensionFieldBulk for extension data ` +
-                    `(per-extension replace semantics).`,
+                    'writeExtensionField/writeExtensionFieldBulk for extension data ' +
+                    '(per-extension replace semantics).',
                 );
             }
         }

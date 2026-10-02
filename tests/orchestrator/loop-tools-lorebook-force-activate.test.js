@@ -33,7 +33,6 @@ import { describe, test, expect } from '@jest/globals';
 
 import { execLorebookForceActivate } from '../../public/scripts/extensions/orchestrator/loop-tools/lorebook-force-activate.js';
 import { getEnabledToolSchemas, getBuiltinToolRegistry } from '../../public/scripts/extensions/orchestrator/loop-tools.js';
-import { ToolError } from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
 
 // World Info position enum values (mirror world_info_position from world-info.js).
 const POS_BEFORE = 0;

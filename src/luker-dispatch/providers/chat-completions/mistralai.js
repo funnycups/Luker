@@ -68,12 +68,12 @@ export async function dispatchMistralAI(ctx) {
         };
 
         if (Array.isArray(body.tools) && body.tools.length > 0) {
-            requestBody['tools'] = body.tools;
-            requestBody['tool_choice'] = body.tool_choice;
+            requestBody.tools = body.tools;
+            requestBody.tool_choice = body.tool_choice;
         }
 
         if (body.json_schema) {
-            requestBody['response_format'] = {
+            requestBody.response_format = {
                 type: 'json_schema',
                 json_schema: {
                     name: body.json_schema.name,

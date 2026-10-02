@@ -124,7 +124,7 @@ test.describe('#15 — merge two chats via Past Chats Merge UI', () => {
         // Merged file body has all 10 bubbles in order: A's 5 then B's 5.
         const mergedPath = resolve(chatsDir, `${mergedName}.jsonl`);
         const lines = readFileSync(mergedPath, 'utf-8').trim().split('\n');
-        expect(lines.length, `expected 1 header + 10 messages; got ${lines.length} lines`).toBe(11);
+        expect(lines, `expected 1 header + 10 messages; got ${lines.length} lines`).toHaveLength(11);
         const bodyMessages = lines.slice(1).map(l => JSON.parse(l).mes);
         expect(bodyMessages[1]).toContain('Turn A1');
         expect(bodyMessages[2]).toContain('Reply A1');

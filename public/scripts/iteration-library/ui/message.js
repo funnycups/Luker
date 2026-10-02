@@ -134,9 +134,6 @@ export function renderMessageCard(message, opts = {}) {
         ? `<div class="luker_lib_message_readonly_hint">${escapeHtml(i18n('AI read the indicated data and is waiting to act on the result next round.'))}</div>`
         : '';
 
-    const applied = Boolean(message.appliedAt) && !message.rolledBackAt;
-    const rolledBack = Boolean(message.rolledBackAt);
-
     // Apply / Rollback / Rolled-back row. Popups wire renderApplyControls
     // from iteration-library/ui/apply.js — that helper handles all three
     // states (pending edits → Apply+Reject; applied → status + Rollback
@@ -164,13 +161,6 @@ export function renderMessageCard(message, opts = {}) {
         ${applyControlsHtml}
         ${regenHtml}
     </div>`;
-}
-
-function formatTime(ts) {
-    try {
-        const d = new Date(Number(ts) || Date.now());
-        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    } catch { return ''; }
 }
 
 function escapeHtml(s) {

@@ -58,7 +58,7 @@ describe('mdLiteral', () => {
 
     test('handles realistic error-message shapes that previously broke', () => {
         // Backend JSON error with quoted field name.
-        const msg = "Invalid value for 'system_prompt': must not be empty";
+        const msg = 'Invalid value for \'system_prompt\': must not be empty';
         expect(mdLiteral(msg)).toBe(`\`${msg}\``);
         // Path with underscores.
         expect(mdLiteral('/var/data/users/default_user/chats/Some_Card_Name.jsonl'))

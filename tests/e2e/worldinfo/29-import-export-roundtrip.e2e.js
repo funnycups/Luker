@@ -18,7 +18,7 @@
 // real toolbar icons (no raw fetch, no internal helper imports).
 
 import { test, expect } from '@playwright/test';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook } from '../_lib/fixtures.js';

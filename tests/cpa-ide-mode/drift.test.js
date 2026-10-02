@@ -19,7 +19,6 @@ function makeEngine() {
 describe('CPA IDE-mode — external drift handling', () => {
     test('drift on unrelated path: apply succeeds, untouched fields preserved', () => {
         const engine = makeEngine();
-        const beforeApply = { name: 'old', external: 'untouched' };
         // External code modifies `external` between AI propose and user apply
         const liveAfterExternalEdit = { name: 'old', external: 'CHANGED BY USER' };
 

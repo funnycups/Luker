@@ -17,12 +17,14 @@ import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } f
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/browser-storage-inspector');
 
 let server;
+
 test.beforeAll(async () => {
     server = await startServer({
         batchKey: 'browser-storage-inspector',
         scenarioId: 'enumerate',
     });
 });
+
 test.afterAll(async () => { await tearDownServer(server); });
 
 test.describe('Browser Storage Inspector · enumerate and drill', () => {
@@ -67,7 +69,7 @@ test.describe('Browser Storage Inspector · enumerate and drill', () => {
         }
 
         // Every localStorage row has a delete button (canDelete = true)
-        expect(await inspector.locator('.storageInspectorEntry .storageInspectorEntryDeleteButton').count()).toBe(3);
+        await expect(inspector.locator('.storageInspectorEntry .storageInspectorEntryDeleteButton')).toHaveCount(3);
 
         // Back to L1 via breadcrumb
         await inspector.locator('.storageInspectorBreadcrumbCrumb').first().click();
@@ -88,16 +90,16 @@ test.describe('Browser Storage Inspector · enumerate and drill', () => {
         await expect(inspector.locator('.storageInspectorEntry[data-key="worldbooks"]')).toBeVisible();
 
         // Store rows are non-drillable (no chevron), but have delete button
-        expect(await inspector.locator('.storageInspectorEntry[data-key="characters"] .storageInspectorEntryChevron').count()).toBe(0);
-        expect(await inspector.locator('.storageInspectorEntry[data-key="characters"] .storageInspectorEntryDeleteButton').count()).toBe(1);
+        await expect(inspector.locator('.storageInspectorEntry[data-key="characters"] .storageInspectorEntryChevron')).toHaveCount(0);
+        await expect(inspector.locator('.storageInspectorEntry[data-key="characters"] .storageInspectorEntryDeleteButton')).toHaveCount(1);
 
         // Back to L1 and verify Storage Quota is a non-drillable leaf.
         await inspector.locator('.storageInspectorBreadcrumbCrumb').first().click();
         await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached' });
         const quotaRow = inspector.locator('.storageInspectorEntry[data-key="quota"]');
         // No chevron (canDrill=false) and no delete button (canDelete=false)
-        expect(await quotaRow.locator('.storageInspectorEntryChevron').count()).toBe(0);
-        expect(await quotaRow.locator('.storageInspectorEntryDeleteButton').count()).toBe(0);
+        await expect(quotaRow.locator('.storageInspectorEntryChevron')).toHaveCount(0);
+        await expect(quotaRow.locator('.storageInspectorEntryDeleteButton')).toHaveCount(0);
         // Row is not marked drillable
         expect(await quotaRow.evaluate(el => el.classList.contains('storageInspectorEntryDrillable'))).toBe(false);
 

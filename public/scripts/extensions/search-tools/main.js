@@ -2159,20 +2159,6 @@ function getManagedEntriesSnapshot() {
     return Array.isArray(latestManagedEntries) ? latestManagedEntries.slice() : [];
 }
 
-function getLatestSearchAgentEntry(context) {
-    const chatKey = getChatKey(context);
-    if (!latestSearchAgentSnapshot || typeof latestSearchAgentSnapshot !== 'object') {
-        return null;
-    }
-    if (String(latestSearchAgentSnapshot.chatKey || '') !== String(chatKey || '')) {
-        return null;
-    }
-    return {
-        anchorPlayableFloor: normalizeAnchorPlayableFloor(latestSearchAgentSnapshot.anchorPlayableFloor),
-        managedEntryCount: normalizeStoredManagedEntries(latestManagedEntries).length,
-    };
-}
-
 function buildManagedEntryCatalog(entries = []) {
     const normalized = Array.isArray(entries) ? entries : [];
     if (normalized.length === 0) {

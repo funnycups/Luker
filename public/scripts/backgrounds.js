@@ -129,7 +129,6 @@ let lazyLoadObserver = null;
  * @type {Array<{filename: string, isAnimated: boolean}>}
  */
 let cachedSystemBackgrounds = [];
-let backgroundsLoaded = false;
 let backgroundsLoadPromise = null;
 let backgroundDrawerObserver = null;
 
@@ -827,7 +826,6 @@ async function refreshBackgrounds() {
 
             renderSystemBackgrounds(images);
             highlightSelectedBackground();
-            backgroundsLoaded = true;
         }
     })();
 

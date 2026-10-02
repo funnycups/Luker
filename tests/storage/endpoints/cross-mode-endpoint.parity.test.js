@@ -30,7 +30,6 @@ import {
     getChatRepo,
     getSettingsRepo,
     getWorldInfoRepo,
-    getStorageEngine,
 } from '../../../src/storage/index.js';
 import { ENGINE_DUMP_ENTRY, ENGINE_META_ENTRY } from '../../../src/storage/engine-backup-entries.js';
 import { SqliteEngine } from '../../../src/storage/engines/sqlite-engine.js';

@@ -19,8 +19,6 @@
 // called emit.end, and (b) `persisted`/`status` reflect state AFTER
 // completeGenerationJobFromText fired.
 
-import { jest } from '@jest/globals';
-
 function fakeRequest({ requestId, body = {}, handle = 'trailer-alice' } = {}) {
     return {
         headers: requestId ? { 'x-luker-request-id': requestId } : {},

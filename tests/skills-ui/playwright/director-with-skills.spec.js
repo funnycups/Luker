@@ -255,7 +255,6 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
             const sections = Array.isArray(round.sections) ? round.sections : [];
             for (const sec of sections) {
                 if (sec.kind !== 'tool_call') continue;
-                const name = String(sec?.meta?.args ? (sec.title.replace(/^Tool: /, '')) : '');
                 // The title is "Tool: <name>"; meta.args is the raw args
                 // object. We compare by title since the runner builds it
                 // from the live tool name.

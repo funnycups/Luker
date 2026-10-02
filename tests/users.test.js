@@ -1,4 +1,3 @@
-/* global globalThis */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from '@jest/globals';
 import path from 'node:path';
 import fs from 'node:fs';

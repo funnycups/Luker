@@ -125,7 +125,7 @@ test.describe('#45 — card-bound preset and same-named local global preset coex
         // labels but distinct values.
         const bothPresent = await page.evaluate((name) => {
             const cardOpt = document.querySelector(
-                `#settings_preset_openai optgroup[data-luker-card-bound="1"] option[data-luker-char-bound="1"]`,
+                '#settings_preset_openai optgroup[data-luker-card-bound="1"] option[data-luker-char-bound="1"]',
             );
             const cardMatches = cardOpt && cardOpt.textContent === name;
             const localOpts = Array.from(document.querySelectorAll('#settings_preset_openai > option'))

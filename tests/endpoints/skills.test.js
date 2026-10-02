@@ -28,8 +28,8 @@ describe('POST /api/skills/rename-scope', () => {
             scope: { kind: 'orch-preset', mode, name },
             payload: { files: [{
                 path: 'SKILL.md', encoding: 'utf8',
-                content: `---\nname: ` + skillName + `\ndescription: x\n---\n`,
-            }]},
+                content: '---\nname: ' + skillName + '\ndescription: x\n---\n',
+            }] },
         });
     }
 

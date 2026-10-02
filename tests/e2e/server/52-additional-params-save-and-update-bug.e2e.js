@@ -35,7 +35,7 @@ import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, openExtensionsDrawer, closeAnyOpenTopSettingsDrawer } from '../_lib/page.js';
+import { awaitMainUI, closeAnyOpenTopSettingsDrawer } from '../_lib/page.js';
 
 let server, mockA, mockB;
 

@@ -140,10 +140,10 @@ test.describe('#61 — 从 dialog 触发 rename', () => {
         expect(cardPresets.defaultPresetName).toBe(NEW_NAME);
 
         // (b) dialog 内旧名行已消失。
-        const rowStillOld = await page.locator(
+        const rowStillOld = page.locator(
             `#luker_manage_bound_presets_dialog .luker-mbp-row[data-preset-name="${OLD_NAME}"]`,
-        ).count();
-        expect(rowStillOld).toBe(0);
+        );
+        await expect(rowStillOld).toHaveCount(0);
 
         // (c) ghost optgroup 重建后 option textContent === 新名。
         const ghostText = await page.evaluate(() => {

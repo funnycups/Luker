@@ -198,7 +198,7 @@ describe('director-tools — sub-agent message assembly', () => {
         expect(msgs.some(m => m.role === 'user' && String(m.content || '').includes('<runtime_state>'))).toBe(false);
     });
 
-    test("runtime_state carries '## Open Notes' block when notes exist", async () => {
+    test('runtime_state carries \'## Open Notes\' block when notes exist', async () => {
         const captured = [];
         const generateTask = jest.fn(async ({ taskMessages }) => {
             captured.push(taskMessages.slice());

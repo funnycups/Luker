@@ -40,7 +40,7 @@ async function deleteMessageViaUI(page, mesid) {
         const t = setTimeout(() => reject(new Error('delete timeout')), 20_000);
         const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, (id) => {
             clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_DELETED, off); } catch {}
+            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_DELETED, off); } catch { /* ignore */ }
             resolve(id);
         });
     }));
@@ -114,7 +114,7 @@ test.describe('#7 — delete-from-here truncate', () => {
 
         // DOM-side: only greeting + turn 1 remain.
         const renderedAfter = await getRenderedChatTexts(page);
-        expect(renderedAfter.length).toBe(truncateStart);
+        expect(renderedAfter).toHaveLength(truncateStart);
         expect(renderedAfter.some(t => /Turn 1 user/.test(t))).toBe(true);
         expect(renderedAfter.some(t => /Reply A/.test(t))).toBe(true);
         for (const tag of ['Turn 2 user', 'Turn 3 user', 'Turn 4 user', 'Reply B', 'Reply C', 'Reply D']) {
@@ -128,14 +128,14 @@ test.describe('#7 — delete-from-here truncate', () => {
 
         // Post-restart: same DOM state.
         const renderedRestored = await getRenderedChatTexts(page);
-        expect(renderedRestored.length, `expected only greeting + turn 1 to remain; got ${JSON.stringify(renderedRestored.map(t => t?.slice(0, 40)))}`)
-            .toBe(truncateStart);
+        expect(renderedRestored, `expected only greeting + turn 1 to remain; got ${JSON.stringify(renderedRestored.map(t => t?.slice(0, 40)))}`)
+            .toHaveLength(truncateStart);
         expect(renderedRestored.some(t => /Turn 1 user/.test(t))).toBe(true);
         expect(renderedRestored.some(t => /Reply A/.test(t))).toBe(true);
 
         // Secondary ctx.chat structural check.
         const after = await getChatSnapshot(page);
-        expect(after.length).toBe(truncateStart);
+        expect(after).toHaveLength(truncateStart);
         for (const tag of ['Turn 2 user', 'Turn 3 user', 'Turn 4 user', 'Reply B', 'Reply C', 'Reply D']) {
             expect(after.messages.some(m => (m.mes || '').includes(tag)), `${tag} should be gone from ctx.chat`).toBe(false);
         }

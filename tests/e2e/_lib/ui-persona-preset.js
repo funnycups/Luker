@@ -11,8 +11,7 @@
 //   - savePresetAs: open menu → "Save preset" → fill popup → confirm
 //   - exportSelectedPreset / importPreset: real button + setInputFiles
 
-import { expect } from '@playwright/test';
-import { acceptTopmostPopup, fillTopmostPopupAndAccept } from './page.js';
+import { fillTopmostPopupAndAccept } from './page.js';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Persona

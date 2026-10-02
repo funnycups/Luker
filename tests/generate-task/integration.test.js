@@ -377,7 +377,7 @@ describe('generateTaskStream — error propagation', () => {
 
         let streamErr = null;
         try {
-            for await (const _ of stream) { /* drain */ }
+            for await (const _ of stream) { void _; /* drain */ }
         } catch (e) { streamErr = e; }
 
         let resultErr = null;

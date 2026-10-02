@@ -60,7 +60,7 @@ export async function dispatchAzureOpenAI(ctx) {
 
         // Structured Output translation.
         if (body.json_schema) {
-            apiRequestBody['response_format'] = {
+            apiRequestBody.response_format = {
                 type: 'json_schema',
                 json_schema: {
                     name: body.json_schema.name,
@@ -77,7 +77,7 @@ export async function dispatchAzureOpenAI(ctx) {
         }
 
         // Reasoning effort gating.
-        apiRequestBody['reasoning_effort'] = OPENAI_REASONING_EFFORT_MODELS.includes(body.model)
+        apiRequestBody.reasoning_effort = OPENAI_REASONING_EFFORT_MODELS.includes(body.model)
             ? OPENAI_FIXED_REASONING_EFFORT[body.model] ?? OPENAI_REASONING_EFFORT_MAP[body.reasoning_effort] ?? body.reasoning_effort
             : undefined;
 

@@ -16,9 +16,11 @@ import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } f
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/browser-storage-inspector');
 
 let server;
+
 test.beforeAll(async () => {
     server = await startServer({ batchKey: 'browser-storage-inspector', scenarioId: 'delete-ls' });
 });
+
 test.afterAll(async () => { await tearDownServer(server); });
 
 test.describe('Browser Storage Inspector · delete localStorage key', () => {

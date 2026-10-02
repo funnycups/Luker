@@ -133,7 +133,7 @@ test.describe('#15 — Import PNG character card via UI file picker', () => {
         // #character_name_pole is hidden in edit mode but the value is
         // still set on the input element. .inputValue() reads it
         // regardless of visibility.
-        expect(await page.locator('#character_name_pole').inputValue()).toBe(NAME);
+        await expect(page.locator('#character_name_pole')).toHaveValue(NAME);
         expect(await page.locator('#description_textarea').inputValue()).toContain('eastern light');
         expect(await page.locator('#firstmessage_textarea').inputValue()).toContain('Close the hatch');
 

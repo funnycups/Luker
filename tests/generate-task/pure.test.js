@@ -62,7 +62,7 @@ describe('resolveProfile', () => {
 describe('resolveWorldInfo', () => {
     const mockWi = { worldInfoBeforeEntries: [{ id: 'wi1' }] };
 
-    test("source='none' returns empty object without calling resolver", async () => {
+    test('source=\'none\' returns empty object without calling resolver', async () => {
         let called = false;
         const result = await resolveWorldInfo({
             worldInfoSource: 'none',
@@ -72,7 +72,7 @@ describe('resolveWorldInfo', () => {
         expect(result).toEqual({});
     });
 
-    test("source='task' passes taskMessages with fallbackToCurrentChat=false", async () => {
+    test('source=\'task\' passes taskMessages with fallbackToCurrentChat=false', async () => {
         let captured = null;
         const result = await resolveWorldInfo({
             worldInfoSource: 'task',
@@ -85,7 +85,7 @@ describe('resolveWorldInfo', () => {
         expect(result).toBe(mockWi);
     });
 
-    test("source='chat' passes empty messages with fallbackToCurrentChat=true", async () => {
+    test('source=\'chat\' passes empty messages with fallbackToCurrentChat=true', async () => {
         let captured = null;
         await resolveWorldInfo({
             worldInfoSource: 'chat',
@@ -95,7 +95,7 @@ describe('resolveWorldInfo', () => {
         expect(captured.opts.fallbackToCurrentChat).toBe(true);
     });
 
-    test("source='custom' uses customWorldInfoMessages", async () => {
+    test('source=\'custom\' uses customWorldInfoMessages', async () => {
         let captured = null;
         await resolveWorldInfo({
             worldInfoSource: 'custom',
@@ -106,7 +106,7 @@ describe('resolveWorldInfo', () => {
         expect(captured.opts.fallbackToCurrentChat).toBe(false);
     });
 
-    test("source='custom' without customWorldInfoMessages throws invalid_input", async () => {
+    test('source=\'custom\' without customWorldInfoMessages throws invalid_input', async () => {
         await expect(resolveWorldInfo({
             worldInfoSource: 'custom',
             customWorldInfoMessages: null,
@@ -199,7 +199,7 @@ describe('renderForApi', () => {
         { role: 'user', content: 'hi' },
     ];
 
-    test("openai → returns messages unchanged", () => {
+    test('openai → returns messages unchanged', () => {
         const out = renderForApi('openai', messages, { rawPromptBuilder: () => 'should-not-be-called' });
         expect(out).toBe(messages);
     });
@@ -255,7 +255,7 @@ describe('generateTask — input validation', () => {
         })).rejects.toMatchObject({ name: 'GenerateTaskError', code: 'invalid_input' });
     });
 
-    test("worldInfoSource='custom' without customWorldInfoMessages throws invalid_input", async () => {
+    test('worldInfoSource=\'custom\' without customWorldInfoMessages throws invalid_input', async () => {
         await expect(generateTask({
             taskMessages: [{ role: 'user', content: 'x' }],
             worldInfoSource: 'custom',

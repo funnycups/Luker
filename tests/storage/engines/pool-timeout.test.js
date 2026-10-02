@@ -52,7 +52,7 @@ describeMysql('MysqlEngine pool acquire timeout', () => {
         }
     }, 15000);
 
-    test('respects acquireTimeoutMs when pool is exhausted', async () => {
+    test('respects acquireTimeoutMs when pool is exhausted (mysql)', async () => {
         // poolSize=1 so the second concurrent acquire queues; acquireTimeoutMs=200
         // short-circuits the queue. retries=0 so the timeout failure surfaces
         // immediately instead of three retries x ~200ms each.
@@ -123,7 +123,7 @@ describePg('PgEngine pool acquire timeout', () => {
         }
     }, 15000);
 
-    test('respects acquireTimeoutMs when pool is exhausted', async () => {
+    test('respects acquireTimeoutMs when pool is exhausted (postgres)', async () => {
         const engine = new PgEngine({
             url: dbUrl,
             poolSize: 1,

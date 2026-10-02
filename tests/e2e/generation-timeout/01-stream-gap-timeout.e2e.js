@@ -77,7 +77,7 @@ test('streaming chunk gap beyond the profile timeout aborts generation and cance
 
     // 上游只收到一次调用（流已开始 → 超时属于 post-head，不触发重试）。
     const chatCalls = mock.requests.filter(r => (r.url || '').includes('/chat/completions'));
-    expect(chatCalls.length).toBe(1);
+    expect(chatCalls).toHaveLength(1);
 
     // 无幽灵回复：静默之后的词不可能出现在任何 assistant 消息里。
     const snapshot = await getChatSnapshot(page);

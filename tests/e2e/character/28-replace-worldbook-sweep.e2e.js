@@ -517,7 +517,7 @@ test.describe('#28 — post-replace world-book sweep', () => {
             //      the verbatim entry content the seed used to dump.
             const messagesRoot = studio.locator('[data-cea-editor-messages]');
             const systemBubbles = messagesRoot.locator('.luker_lib_message_system');
-            expect(await systemBubbles.count()).toBe(0);
+            await expect(systemBubbles).toHaveCount(0);
 
             const openDiffBtn = studio.locator('[data-cea-editor-action="open-replace-diff"]').first();
             await expect(openDiffBtn).toBeVisible();

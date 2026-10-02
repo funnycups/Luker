@@ -20,8 +20,8 @@ describeMysql('MysqlEngine schema bootstrap', () => {
 
     test('all expected tables exist (9 storage + _storage_meta)', async () => {
         const [rows] = await harness.engine._pool.query(
-            "SELECT TABLE_NAME FROM information_schema.TABLES " +
-            "WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME",
+            'SELECT TABLE_NAME FROM information_schema.TABLES ' +
+            'WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME',
         );
         const names = rows.map(r => r.TABLE_NAME);
         expect(names).toEqual(expect.arrayContaining([
@@ -36,9 +36,9 @@ describeMysql('MysqlEngine schema bootstrap', () => {
 
     test('chats.integrity is a STORED GENERATED column on JSON_UNQUOTE(JSON_EXTRACT(...))', async () => {
         const [rows] = await harness.engine._pool.query(
-            "SELECT COLUMN_NAME, GENERATION_EXPRESSION, EXTRA, DATA_TYPE " +
-            "FROM information_schema.COLUMNS " +
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chats' AND COLUMN_NAME = 'integrity'",
+            'SELECT COLUMN_NAME, GENERATION_EXPRESSION, EXTRA, DATA_TYPE ' +
+            'FROM information_schema.COLUMNS ' +
+            'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = \'chats\' AND COLUMN_NAME = \'integrity\'',
         );
         expect(rows.length).toBe(1);
         const col = rows[0];
@@ -71,7 +71,7 @@ describeMysql('MysqlEngine schema bootstrap', () => {
 
     test('_storage_meta.schema_version reads "1" after initSchema', async () => {
         const [rows] = await harness.engine._pool.query(
-            "SELECT value FROM _storage_meta WHERE `key` = 'schema_version'",
+            'SELECT value FROM _storage_meta WHERE `key` = \'schema_version\'',
         );
         expect(rows.length).toBe(1);
         expect(rows[0].value).toBe('1');
@@ -82,7 +82,7 @@ describeMysql('MysqlEngine schema bootstrap', () => {
         await expect(initSchema(harness.engine._pool)).resolves.toBeUndefined();
         // And the version row stays at 1 (not duplicated, not bumped).
         const [rows] = await harness.engine._pool.query(
-            "SELECT value FROM _storage_meta WHERE `key` = 'schema_version'",
+            'SELECT value FROM _storage_meta WHERE `key` = \'schema_version\'',
         );
         expect(rows.length).toBe(1);
         expect(rows[0].value).toBe('1');

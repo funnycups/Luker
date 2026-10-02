@@ -97,7 +97,7 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
             await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
             const userText = 'Trigger the non-stream persistence path.';
-            const { replyId, text: replyText } = await sendMessageAndAwaitReply(page, userText);
+            const { text: replyText } = await sendMessageAndAwaitReply(page, userText);
             expect(replyText, `rendered reply must include scripted body; got: ${JSON.stringify(replyText)}`).toContain('Persisted reply from mock.');
 
             const chatPath = await resolveChatPath(page, server.dataRoot);
@@ -121,7 +121,7 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
             // The `mes` field must equal the scripted reply exactly.
             // No htmlEscape, no truncation, no trailing whitespace, no
             // leading `data:` SSE prefix leakage.
-            expect(asstLine.mes, `persisted mes must equal scripted reply verbatim`).toBe(NONSTREAM_REPLY);
+            expect(asstLine.mes, 'persisted mes must equal scripted reply verbatim').toBe(NONSTREAM_REPLY);
             expect(asstLine.is_user, 'assistant turn must have is_user=false').toBe(false);
 
             // Timestamp sanity — send_date should parse and be within a
@@ -129,8 +129,8 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
             // clock skew) and ends now + a small buffer.
             const sendDateMs = Date.parse(asstLine.send_date);
             expect(Number.isFinite(sendDateMs), `send_date must parse; got ${JSON.stringify(asstLine.send_date)}`).toBe(true);
-            expect(sendDateMs, `send_date must be within a plausible window`).toBeGreaterThan(t0 - 60_000);
-            expect(sendDateMs, `send_date must not be in the future`).toBeLessThan(Date.now() + 60_000);
+            expect(sendDateMs, 'send_date must be within a plausible window').toBeGreaterThan(t0 - 60_000);
+            expect(sendDateMs, 'send_date must not be in the future').toBeLessThan(Date.now() + 60_000);
         });
     });
 
@@ -165,7 +165,7 @@ test.describe('generation-basic: persist-to-disk contract (non-stream + stream)'
             await selectCharacterByName(page, 'Seraphina');
             await page.waitForFunction(() => document.querySelectorAll('#chat .mes').length >= 1, { timeout: 10_000 }).catch(() => {});
 
-            const { replyId, text: replyText } = await sendMessageAndAwaitReply(page, 'Trigger the streaming persistence path.');
+            const { text: replyText } = await sendMessageAndAwaitReply(page, 'Trigger the streaming persistence path.');
             expect(replyText).toContain('This is chunk one.');
 
             const chatPath = await resolveChatPath(page, server.dataRoot);

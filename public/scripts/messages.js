@@ -99,7 +99,7 @@ export async function addMessages(messages, options = {}) {
  * @returns {Promise<void>}
  */
 export async function updateMessages(updates, options = {}) {
-    const { rerender = true, silent = false } = options;
+    const { rerender = true } = options;
     const isBatch = Array.isArray(updates);
     const updateList = isBatch ? updates : [updates];
 
@@ -190,9 +190,9 @@ export async function deleteMessages(index, options = {}) {
     // so we can compute sequence metadata for events after splice
     const snapshotByIndex = new Map();
     for (const idx of indices) {
-    if (idx >= 0 && idx < chat.length && chat[idx]) {
-    snapshotByIndex.set(idx, chat[idx]);
-    }
+        if (idx >= 0 && idx < chat.length && chat[idx]) {
+            snapshotByIndex.set(idx, chat[idx]);
+        }
     }
 
     // Also snapshot the full chat length for sequence computation
@@ -207,49 +207,49 @@ export async function deleteMessages(index, options = {}) {
     const minId = getFirstDisplayedMessageId();
 
     for (const idx of indices) {
-    if (!snapshotByIndex.has(idx)) {
-    console.warn(`[messages] deleteMessages: invalid index ${idx}, skipping`);
-    continue;
-    }
+        if (!snapshotByIndex.has(idx)) {
+            console.warn(`[messages] deleteMessages: invalid index ${idx}, skipping`);
+            continue;
+        }
 
-    deletedMessages.push(snapshotByIndex.get(idx));
+        deletedMessages.push(snapshotByIndex.get(idx));
 
-    // Remove DOM element
-    const messageElement = chatElement.find(`.mes[mesid="${idx}"]`);
-    if (messageElement.length > 0) {
-    messageElement.remove();
-    }
+        // Remove DOM element
+        const messageElement = chatElement.find(`.mes[mesid="${idx}"]`);
+        if (messageElement.length > 0) {
+            messageElement.remove();
+        }
 
-    // Splice from chat array
-    chat.splice(idx, 1);
+        // Splice from chat array
+        chat.splice(idx, 1);
 
-    chat_metadata.tainted = true;
+        chat_metadata.tainted = true;
 
-    // Clean up itemized prompts
-    deleteItemizedPromptForMessage(idx);
+        // Clean up itemized prompts
+        deleteItemizedPromptForMessage(idx);
 
-    // Build RFC 6902 remove operation
-    operations.push({
-    op: 'remove',
-    path: `/${idx}`,
-    });
+        // Build RFC 6902 remove operation
+        operations.push({
+            op: 'remove',
+            path: `/${idx}`,
+        });
     }
 
     // Update mesid attributes on remaining elements
     if (deletedMessages.length > 0) {
-    const smallestIndex = indices[indices.length - 1];
-    const startIndex = [0, minId].includes(smallestIndex) ? smallestIndex : null;
-    updateViewMessageIds(startIndex);
+        const smallestIndex = indices[indices.length - 1];
+        const startIndex = [0, minId].includes(smallestIndex) ? smallestIndex : null;
+        updateViewMessageIds(startIndex);
     }
 
     // Persist all removals in one call
     if (operations.length > 0) {
-    const patched = await patchChatMessages(operations);
-    if (!patched) {
-    // chat[] already mutated above; recover immediately. A 1s debounce
-    // leaves a window for follow-up writes to race a stale BE.
-    await saveChatConditional();
-    }
+        const patched = await patchChatMessages(operations);
+        if (!patched) {
+            // chat[] already mutated above; recover immediately. A 1s debounce
+            // leaves a window for follow-up writes to race a stale BE.
+            await saveChatConditional();
+        }
     }
 
     refreshSwipeButtons();
@@ -257,54 +257,54 @@ export async function deleteMessages(index, options = {}) {
     // Emit events with proper sequence metadata
     if (!silent && deletedMessages.length > 0) {
     // Get valid deleted indices in ascending order
-    const ascendingIndices = [...snapshotByIndex.keys()].sort((a, b) => a - b);
-    const minIdx = ascendingIndices[0];
-    const maxIdx = ascendingIndices[ascendingIndices.length - 1];
+        const ascendingIndices = [...snapshotByIndex.keys()].sort((a, b) => a - b);
+        const minIdx = ascendingIndices[0];
+        const maxIdx = ascendingIndices[ascendingIndices.length - 1];
 
-    let playableSeqBefore = 0;
-    let assistantSeqBefore = 0;
-    let deletedPlayableCount = 0;
-    let deletedAssistantCount = 0;
-    const deletedSet = new Set(ascendingIndices);
+        let playableSeqBefore = 0;
+        let assistantSeqBefore = 0;
+        let deletedPlayableCount = 0;
+        let deletedAssistantCount = 0;
+        const deletedSet = new Set(ascendingIndices);
 
-    for (let i = 0; i <= maxIdx && i < originalChatLength; i++) {
-    const msg = originalChat[i];
-    if (!msg) continue;
-    const isPlayable = !msg.is_system;
-    const isAssistant = !msg.is_user && !msg.is_system;
+        for (let i = 0; i <= maxIdx && i < originalChatLength; i++) {
+            const msg = originalChat[i];
+            if (!msg) continue;
+            const isPlayable = !msg.is_system;
+            const isAssistant = !msg.is_user && !msg.is_system;
 
-    if (deletedSet.has(i)) {
-    if (isPlayable) deletedPlayableCount++;
-    if (isAssistant) deletedAssistantCount++;
-    } else if (i < minIdx) {
-    if (isPlayable) playableSeqBefore++;
-    if (isAssistant) assistantSeqBefore++;
-    }
-    }
+            if (deletedSet.has(i)) {
+                if (isPlayable) deletedPlayableCount++;
+                if (isAssistant) deletedAssistantCount++;
+            } else if (i < minIdx) {
+                if (isPlayable) playableSeqBefore++;
+                if (isAssistant) assistantSeqBefore++;
+            }
+        }
 
-    const deletedPlayableSeqFrom = deletedPlayableCount > 0 ? (playableSeqBefore + 1) : null;
-    const deletedPlayableSeqTo = deletedPlayableSeqFrom !== null ? (deletedPlayableSeqFrom + deletedPlayableCount - 1) : null;
-    const deletedAssistantSeqFrom = deletedAssistantCount > 0 ? (assistantSeqBefore + 1) : null;
-    const deletedAssistantSeqTo = deletedAssistantSeqFrom !== null ? (deletedAssistantSeqFrom + deletedAssistantCount - 1) : null;
+        const deletedPlayableSeqFrom = deletedPlayableCount > 0 ? (playableSeqBefore + 1) : null;
+        const deletedPlayableSeqTo = deletedPlayableSeqFrom !== null ? (deletedPlayableSeqFrom + deletedPlayableCount - 1) : null;
+        const deletedAssistantSeqFrom = deletedAssistantCount > 0 ? (assistantSeqBefore + 1) : null;
+        const deletedAssistantSeqTo = deletedAssistantSeqFrom !== null ? (deletedAssistantSeqFrom + deletedAssistantCount - 1) : null;
 
-    await settleMessageDeleted(chat.length);
-    await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
-    kind: 'delete',
-    deletedPlayableSeqFrom,
-    deletedPlayableSeqTo,
-    deletedAssistantSeqFrom,
-    deletedAssistantSeqTo,
-    });
+        await settleMessageDeleted(chat.length);
+        await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
+            kind: 'delete',
+            deletedPlayableSeqFrom,
+            deletedPlayableSeqTo,
+            deletedAssistantSeqFrom,
+            deletedAssistantSeqTo,
+        });
     }
 
     // Restore original order (ascending) for the return value
     if (isBatch) {
-    deletedMessages.reverse();
-    return deletedMessages;
+        deletedMessages.reverse();
+        return deletedMessages;
     }
 
     return deletedMessages[0];
-   }
+}
 
 /**
  * Returns a shallow readonly proxy of the message at the given index.

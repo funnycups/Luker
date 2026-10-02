@@ -336,9 +336,9 @@ describe('accumulateChunkTextIntoJob', () => {
     test('SSE Claude: event lines are ignored, data lines feed the extractor', () => {
         const job = makeJob('claude');
         const sse =
-            `event: content_block_delta\n` +
+            'event: content_block_delta\n' +
             `data: ${JSON.stringify({ delta: { text: 'foo' } })}\n\n` +
-            `event: content_block_delta\n` +
+            'event: content_block_delta\n' +
             `data: ${JSON.stringify({ delta: { text: 'bar' } })}\n\n`;
         accumulateChunkTextIntoJob(job, enc(sse));
         expect(job.text).toBe('foobar');
@@ -375,7 +375,7 @@ describe('accumulateChunkTextIntoJob', () => {
         const job = makeJob('openai');
         const sse =
             `data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })}\n\n` +
-            `data: [DONE]\n\n`;
+            'data: [DONE]\n\n';
         accumulateChunkTextIntoJob(job, enc(sse));
         expect(job.text).toBe('hi');
     });

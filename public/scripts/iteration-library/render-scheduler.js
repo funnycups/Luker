@@ -69,8 +69,7 @@ export function createRenderScheduler({ handler, frameRequester, onError } = {})
             await handler();
         } catch (err) {
             if (typeof onError === 'function') {
-                try { onError(err instanceof Error ? err : new Error(String(err))); }
-                catch { /* onError must not wedge the scheduler either */ }
+                try { onError(err instanceof Error ? err : new Error(String(err))); } catch { /* onError must not wedge the scheduler either */ }
             }
         } finally {
             running = false;

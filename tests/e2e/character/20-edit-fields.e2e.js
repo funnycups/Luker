@@ -17,7 +17,7 @@ import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '
 import { disableTagImportPopup, dismissAnyPopup, openCharacterEditPanel, clickCharacterCard, writeEmbeddedCharacter } from './_helpers.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 
-let server, mock, avatar;
+let server, mock;
 
 const ASH_NAME = 'Ash the Cartographer';
 const NEW_DESC = 'Updated: Ash now carries a second brass spyglass calibrated to the shifting reef. Her sleeves are still ink-stained.';
@@ -30,7 +30,7 @@ test.beforeAll(async () => {
     disableTagImportPopup({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
-    avatar = writeEmbeddedCharacter({ dataRoot: server.dataRoot });
+    writeEmbeddedCharacter({ dataRoot: server.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -63,7 +63,7 @@ test.describe('#20 — Edit existing character fields via UI', () => {
             const t = setTimeout(() => reject(new Error('character edit timeout')), 30_000);
             const off = ctx.eventSource.on(ctx.eventTypes.CHARACTER_EDITED, () => {
                 clearTimeout(t);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.CHARACTER_EDITED, off); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.CHARACTER_EDITED, off); } catch { /* ignore */ }
                 resolve(true);
             });
         }));
@@ -80,7 +80,7 @@ test.describe('#20 — Edit existing character fields via UI', () => {
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
 
-        expect(await page.locator('#description_textarea').inputValue()).toBe(NEW_DESC);
-        expect(await page.locator('#firstmessage_textarea').inputValue()).toBe(NEW_FIRST_MES);
+        await expect(page.locator('#description_textarea')).toHaveValue(NEW_DESC);
+        await expect(page.locator('#firstmessage_textarea')).toHaveValue(NEW_FIRST_MES);
     });
 });

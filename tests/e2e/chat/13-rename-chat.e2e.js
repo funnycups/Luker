@@ -93,7 +93,7 @@ test.describe('#13 — rename chat via Manage Chat Files UI', () => {
         const filesAfter = readdirSync(chatsDir).filter(f => f.endsWith('.jsonl'));
         expect(filesAfter, `disk rename should produce new filename; got ${JSON.stringify(filesAfter)}`)
             .toContain(`${newName}.jsonl`);
-        expect(filesAfter, `original filename should be gone after rename`)
+        expect(filesAfter, 'original filename should be gone after rename')
             .not.toContain(`${originalChatId}.jsonl`);
 
         // Recent-chats index should reflect the new name. This is a

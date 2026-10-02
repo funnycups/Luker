@@ -190,8 +190,8 @@ test.describe('#105-ui — UI sibling: two BrowserContexts log in via real form 
             const ctx = window.Luker.getContext();
             return (ctx.characters || []).map(c => c?.name).filter(Boolean).sort();
         });
-        expect(aNames, `user A character list via ctx.characters`).toContain('AshA');
-        expect(aNames, `user A should NOT see user B's character`).not.toContain('AshB');
+        expect(aNames, 'user A character list via ctx.characters').toContain('AshA');
+        expect(aNames, 'user A should NOT see user B\'s character').not.toContain('AshB');
         await ctxA.close();
 
         // ── Browser context B: log in via real form, verify isolation. ──
@@ -205,7 +205,7 @@ test.describe('#105-ui — UI sibling: two BrowserContexts log in via real form 
             return (ctx.characters || []).map(c => c?.name).filter(Boolean).sort();
         });
         expect(bNames).toContain('AshB');
-        expect(bNames, `user B should NOT see user A's character`).not.toContain('AshA');
+        expect(bNames, 'user B should NOT see user A\'s character').not.toContain('AshA');
         await ctxB.close();
     });
 });

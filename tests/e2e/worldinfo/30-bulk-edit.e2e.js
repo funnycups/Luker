@@ -112,7 +112,7 @@ test.describe('#30 — WI bulk edit via the real toolbar', () => {
 
         // Pre-condition: the book has 5 entries with mixed depths.
         const original = readBookFromDisk(server.dataRoot, BOOK_NAME);
-        expect(Object.keys(original.entries).length).toBe(5);
+        expect(Object.keys(original.entries)).toHaveLength(5);
         const originalDepths = Object.values(original.entries).map(e => e.depth).sort((a, b) => a - b);
         expect(originalDepths).toEqual([0, 0, 4, 4, 4]);
 
@@ -189,7 +189,7 @@ test.describe('#30 — WI bulk edit via the real toolbar', () => {
         await awaitMainUI(page, server.baseURL);
 
         const reloaded = readBookFromDisk(server.dataRoot, BOOK_NAME);
-        expect(Object.keys(reloaded.entries).length).toBe(5);
+        expect(Object.keys(reloaded.entries)).toHaveLength(5);
         for (const entry of Object.values(reloaded.entries)) {
             expect(entry.depth).toBe(9);
         }

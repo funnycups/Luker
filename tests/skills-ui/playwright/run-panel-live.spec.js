@@ -174,10 +174,10 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         //   that flagged every fresh round/section as "user-pinned",
         //   silently disabling auto-fold on terminal status.
         //   We didn't click anything in this test, so 0 open is expected.
-        const openRoundCount = await panel.locator('.round > details[open]').count();
-        expect(openRoundCount, 'no completed round <details> should remain open after a committed run').toBe(0);
-        const openSectionCount = await panel.locator('.section > details[open]').count();
-        expect(openSectionCount, 'no completed section <details> should remain open after a committed run').toBe(0);
+        const openRoundCount = panel.locator('.round > details[open]');
+        await expect(openRoundCount, 'no completed round <details> should remain open after a committed run').toHaveCount(0);
+        const openSectionCount = panel.locator('.section > details[open]');
+        await expect(openSectionCount, 'no completed section <details> should remain open after a committed run').toHaveCount(0);
 
         // ── 9. Chat bubble byte-equality with finalText ───────────────
         // The last assistant bubble's visible text must equal the
@@ -193,8 +193,8 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         // ── 10. No `### [main-N]` reasoning heading leakage ───────────
         // The legacy reasoning-fold appended these inside the message.
         // The store-based panel keeps reasoning in its own section.
-        const reasoningLeakCount = await lastBubble.locator('text=/### \\[main-/').count();
-        expect(reasoningLeakCount, 'no `### [main-N]` reasoning-fold heading in the chat bubble (panel owns reasoning)').toBe(0);
+        const reasoningLeakCount = lastBubble.locator('text=/### \\[main-/');
+        await expect(reasoningLeakCount, 'no `### [main-N]` reasoning-fold heading in the chat bubble (panel owns reasoning)').toHaveCount(0);
 
         // ── 11. Screenshot 3: a tool call expanded if any was emitted ─
         const toolCalls = panel.locator('.section[data-kind="tool_call"]');
@@ -415,8 +415,8 @@ async function ensureCharacterLoaded(page) {
             await ctx.executeSlashCommandsWithOptions(`/char ${first.name}`);
             await new Promise(r => setTimeout(r, 500));
         } catch {
-            const tile = document.querySelector(`#rm_print_characters_block [chid][bogus_folder='false']`)
-                || document.querySelector(`#rm_print_characters_block [chid]`);
+            const tile = document.querySelector('#rm_print_characters_block [chid][bogus_folder=\'false\']')
+                || document.querySelector('#rm_print_characters_block [chid]');
             if (tile && typeof tile.click === 'function') {
                 tile.click();
                 await new Promise(r => setTimeout(r, 250));

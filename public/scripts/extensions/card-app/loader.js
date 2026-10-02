@@ -2,7 +2,6 @@
  * CardApp Loader - handles CSS scoping, JS loading, container management.
  */
 
-const MODULE_NAME = 'card-app';
 const CONTAINER_ID = 'card-app-container';
 const SCOPED_STYLE_ID = 'card-app-scoped-style';
 const CONTAINER_SELECTOR = `#${CONTAINER_ID}`;

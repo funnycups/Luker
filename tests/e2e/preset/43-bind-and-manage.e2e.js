@@ -306,8 +306,8 @@ test.describe('#43 — Bind (add + set-default) and Manage Bound Presets dialog'
         // No confirm popup — the handler bails after an info toast.
         // Give the handler a moment to run.
         await page.waitForTimeout(500);
-        const popupCount = await page.locator('dialog.popup[open]').count();
-        expect(popupCount).toBe(0);
+        const popupCount = page.locator('dialog.popup[open]');
+        await expect(popupCount).toHaveCount(0);
     });
 
     test('Manage dialog: lists slots, marks default, set-default, overwrite-from-current, update-from-local, delete, add-from-local', async ({ page }) => {

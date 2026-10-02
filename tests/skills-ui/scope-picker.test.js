@@ -319,7 +319,7 @@ describe('pickTargetScope — interactive', () => {
         ctx.Popup = class extends original {
             constructor(...a) { super(...a); popupInstance = this; }
         };
-        const p = pickTargetScope(ctx, (s) => s, 'Move x', { kind: 'preset', name: '' });
+        pickTargetScope(ctx, (s) => s, 'Move x', { kind: 'preset', name: '' });
         const presetRadio = popupInstance.dlg.querySelector('input[value="preset"]');
         presetRadio.checked = true;
         const ok = popupInstance.opts.onClosing({ result: ctx.POPUP_RESULT.AFFIRMATIVE, dlg: popupInstance.dlg });

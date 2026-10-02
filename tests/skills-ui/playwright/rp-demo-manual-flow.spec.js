@@ -323,7 +323,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         // mount to avoid colliding with per-agent chip blocks above/below.
         // CSS attr selector wraps value in single quotes because the value
         // itself (JSON-formatted) contains double quotes.
-        const modeChipSelector = `.popup [data-luker-skill-chips-mount][data-luker-chip-target*='"level":"mode"'][data-luker-chip-target*='"mode":"director"']`;
+        const modeChipSelector = '.popup [data-luker-skill-chips-mount][data-luker-chip-target*=\'"level":"mode"\'][data-luker-chip-target*=\'"mode":"director"\']';
         const modeChipMount = page.locator(modeChipSelector).first();
         await modeChipMount.waitFor({ state: 'visible', timeout: 10000 });
         // Wait for the chips inventory hydration — the mount starts with

@@ -415,8 +415,8 @@ function openEngineDumpStream(zipPath) {
                     }
                     // Keep the zipfile alive until the consumer drains the
                     // stream; close it on stream end / error.
-                    readStream.on('end', () => { try { zipfile.close(); } catch {} });
-                    readStream.on('error', () => { try { zipfile.close(); } catch {} });
+                    readStream.on('end', () => { try { zipfile.close(); } catch { /* ignore */ } });
+                    readStream.on('error', () => { try { zipfile.close(); } catch { /* ignore */ } });
                     resolve(readStream);
                 });
             });

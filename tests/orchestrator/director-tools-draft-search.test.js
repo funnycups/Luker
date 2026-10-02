@@ -4,7 +4,6 @@ import {
     executeDraftSearchTool,
     buildSubAgentToolSchemas,
     buildMainAgentToolSchemas,
-    GET_DRAFT_TOOL,
 } from '../../public/scripts/extensions/orchestrator/director-tools.js';
 
 function makeHandle(text) {

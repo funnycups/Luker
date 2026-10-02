@@ -185,7 +185,7 @@ test('generation-basic: iframe-scoped fetch to /generate is proxied through ws-d
     // Mock LLM saw exactly one upstream chat call from the iframe (no
     // double-dispatch, no short-circuit).
     const chatCalls = mock.requests.filter(r => (r.url || '').includes('/chat/completions'));
-    expect(chatCalls.length, `mock LLM should have received 1 iframe-triggered chat call; got ${chatCalls.length}`).toBe(1);
+    expect(chatCalls, `mock LLM should have received 1 iframe-triggered chat call; got ${chatCalls.length}`).toHaveLength(1);
 
     // The /generate HTTP call we care about must be in the observed list
     // (the awaitMainUI may fire probes too — we only require ours landed).

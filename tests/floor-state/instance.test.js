@@ -6,7 +6,7 @@
  * chat array, then assert how the instance reacts to chat events.
  */
 
-import { describe, test, expect, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
 
 import {
     createFloorStateWithDeps,
@@ -270,7 +270,7 @@ describe('createFloorStateWithDeps — basic operations', () => {
 
     test('update ignores reducer returning non-object', async () => {
         const chatRef = { value: [msg(0)] };
-        const { store, deps } = makeDeps(chatRef);
+        const { deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
         expect((await fs.update(() => null)).ok).toBe(true);
@@ -428,7 +428,7 @@ describe('event reactions', () => {
     test('MESSAGE_SWIPED replays log under the active swipe', async () => {
         // Floor 0 with swipe 0; record a commit on swipe 0.
         const chatRef = { value: [msg(0)] };
-        const { store, eventSource, deps } = makeDeps(chatRef);
+        const { eventSource, deps } = makeDeps(chatRef);
         const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
 
         await fs.patch([{ op: 'add', path: '/from0', value: true }]);

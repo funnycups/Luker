@@ -110,7 +110,7 @@ async function runSlashViaSendButton(page, pipeline, { expectsReply = false, tim
             const t = setTimeout(() => reject(new Error('reply timeout')), to);
             const off = ctx.eventSource.on(ctx.eventTypes.GENERATION_ENDED, () => {
                 clearTimeout(t);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.GENERATION_ENDED, off); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.GENERATION_ENDED, off); } catch { /* ignore */ }
                 resolve(true);
             });
         }), timeoutMs);
@@ -188,7 +188,7 @@ test.describe('#97 — Slash commands regression (real send-textarea + send-butt
         const before = await chatSnapshot(page);
         await runSlashViaSendButton(page, '/send The lantern wick is fraying again.');
         const after = await chatSnapshot(page);
-        expect(after.length).toBe(before.length + 1);
+        expect(after).toHaveLength(before.length + 1);
         const tail = after.messages[after.length - 1];
         expect(tail.isUser).toBe(true);
         expect(tail.mes).toContain('lantern wick is fraying');
@@ -280,7 +280,7 @@ test.describe('#97 — Slash commands regression (real send-textarea + send-butt
         const cutTargetId = before.length - 1;
         await runSlashViaSendButton(page, `/cut ${cutTargetId}`);
         const after = await chatSnapshot(page);
-        expect(after.length).toBe(before.length - 1);
+        expect(after).toHaveLength(before.length - 1);
         const tail = after.messages[after.length - 1];
         expect(tail.mes).not.toContain('sentinel-cut-target');
     });
@@ -297,7 +297,7 @@ test.describe('#97 — Slash commands regression (real send-textarea + send-butt
         const beforeText = before.messages[before.length - 1].mes;
         await continueViaUI(page);
         const after = await chatSnapshot(page);
-        expect(after.length).toBe(before.length);
+        expect(after).toHaveLength(before.length);
         expect(after.messages[after.length - 1].mes.length).toBeGreaterThanOrEqual(beforeText.length);
     });
 
@@ -309,7 +309,7 @@ test.describe('#97 — Slash commands regression (real send-textarea + send-butt
         const before = await chatSnapshot(page);
         await regenerateViaUI(page);
         const after = await chatSnapshot(page);
-        expect(after.length).toBe(before.length);
+        expect(after).toHaveLength(before.length);
         const tail = after.messages[after.length - 1];
         expect(tail.isUser).toBe(false);
         expect(typeof tail.mes).toBe('string');

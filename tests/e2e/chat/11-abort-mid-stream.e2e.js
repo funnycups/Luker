@@ -69,7 +69,7 @@ test.describe('#11 — abort mid-stream', () => {
             const t = setTimeout(() => resolve('timeout'), 6000);
             const handler = () => {
                 clearTimeout(t);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.GENERATION_STOPPED, handler); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.GENERATION_STOPPED, handler); } catch { /* ignore */ }
                 resolve('stopped');
             };
             ctx.eventSource.on(ctx.eventTypes.GENERATION_STOPPED, handler);

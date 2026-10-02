@@ -27,7 +27,6 @@
  */
 process.env.SILLYTAVERN_ENABLEUSERACCOUNTS = 'true';
 
-/* global globalThis */
 import { describe, test, expect, beforeAll, beforeEach, afterAll } from '@jest/globals';
 import path from 'node:path';
 import fs from 'node:fs';

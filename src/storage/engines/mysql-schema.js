@@ -69,7 +69,7 @@ export async function initSchema(pool) {
             // be empty on a virgin database — return 0 in that case so the
             // runner applies 0001-initial.sql.
             const [rows] = await pool.query(
-                "SELECT value FROM _storage_meta WHERE `key` = 'schema_version'",
+                'SELECT value FROM _storage_meta WHERE `key` = \'schema_version\'',
             );
             return rows.length === 0 ? 0 : Number(rows[0].value);
         },

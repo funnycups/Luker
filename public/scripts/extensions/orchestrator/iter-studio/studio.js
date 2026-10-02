@@ -83,7 +83,6 @@ import {
     applyEdits,
     bindIterWorkspaceResizer,
     createRenderScheduler,
-    inverseEdit,
     render as ITER_RENDER,
     runner as ITER_RUNNER,
     tools as ITER_TOOLS,
@@ -1034,7 +1033,6 @@ export async function openOrchestratorIterationStudio(deps) {
         buildAiIterationToolSet,
         buildAiIterationSystemPrompt,
         executeAiIterationToolCalls,
-        resolveOrchestrationRuntimeWorldInfo,
         applyAiIterationSessionToGlobal,
         applyAiIterationSessionToCharacter,
         ORCH_EXECUTION_MODES,
@@ -2072,23 +2070,6 @@ export async function openOrchestratorIterationStudio(deps) {
     // stamp, Regenerate button). Click delegation accepts msgId from either
     // `data-orch-it-msg-id` (outer) or `data-luker-lib-msg-id` (inner).
     // ──────────────────────────────────────────────────────────────────
-    /**
-     * Resolve the apply scope label for the current context. Reused by both
-     * the pending block button and the per-message "✓ Applied to ..." chip
-     * so they stay in sync.
-     */
-    function getApplyScopeLabel() {
-        const scope = getIterationDefaultScope(context);
-        if (scope === 'character') {
-            const avatar = String(context?.characters?.[context?.characterId]?.avatar || '').trim();
-            const display = typeof getCharacterDisplayNameByAvatar === 'function'
-                ? (getCharacterDisplayNameByAvatar(context, avatar) || '')
-                : '';
-            return display || avatar || t('current character');
-        }
-        return t('global');
-    }
-
     /**
      * Resolve the apply scope label that should be persisted on the
      * applied message. Distinct from the live UI label because the

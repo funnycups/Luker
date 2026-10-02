@@ -350,7 +350,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
             const all = await ctx.skills.list({ scope: 'all' });
             return (all || []).filter(s => s.name === name).map(s => ({ name: s.name, scope: s.scope }));
         }, { name: SKILL_NAME, scopeName: presetMeta.name });
-        expect(apiSeen.length, 'skills.list should surface exactly one row for the created skill').toBe(1);
+        expect(apiSeen, 'skills.list should surface exactly one row for the created skill').toHaveLength(1);
         expect(apiSeen[0].scope?.kind, 'skills.list scope kind should match disk scope').toBe('preset');
         expect(apiSeen[0].scope?.name, 'skills.list scope name should match disk scope').toBe(presetMeta.name);
 

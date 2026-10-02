@@ -24,8 +24,7 @@ function escapeHtml(s) {
 
 function formatPreviewValue(v) {
     if (typeof v === 'string') return v;
-    try { return JSON.stringify(v, null, 2); }
-    catch { return String(v); }
+    try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
 function renderDefaultConflict(entry, index) {

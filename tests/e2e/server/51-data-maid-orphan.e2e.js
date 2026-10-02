@@ -8,7 +8,7 @@
 // of the user's data untouched.
 
 import { test, expect } from '@playwright/test';
-import { existsSync, readdirSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';

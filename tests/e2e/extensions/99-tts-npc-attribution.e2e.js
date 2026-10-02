@@ -71,6 +71,7 @@ test.afterAll(async () => {
 
 test.describe('#99 — TTS NPC attribution end-to-end', () => {
     test.describe.configure({ timeout: 240_000 });
+
     test('inline play click on NPC quote → parse → cache → NPC voiceMapKey playback', async ({ page }) => {
         test.setTimeout(240_000);
         await awaitMainUI(page, server.baseURL);
@@ -238,7 +239,7 @@ test.describe('#99 — TTS NPC attribution end-to-end', () => {
         // play button per <q> in the reply (two quotes → two buttons).
         const buttons = page.locator(`.mes[mesid="${lastMesId}"] .mes_text q .tts_q_play`);
         await buttons.first().waitFor({ state: 'visible', timeout: 15_000 });
-        expect(await buttons.count()).toBe(2);
+        await expect(buttons).toHaveCount(2);
 
         // Settle the background parse BEFORE pushing the tool call. The
         // parse's generateTask request is the only chat-completions

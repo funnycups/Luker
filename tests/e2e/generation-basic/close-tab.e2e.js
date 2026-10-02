@@ -191,7 +191,7 @@ test('generation-basic: closing the tab mid-stream leaves the job running; a fre
             // Bound the wait: 20 chunks × chunkDelayMs + generous slack.
             const budgetMs = expectedChunks * chunkDelayMs + 15_000;
             const timer = setTimeout(() => {
-                try { ws.close(); } catch {}
+                try { ws.close(); } catch { /* ignore */ }
                 resolve({ error: 'timeout', received, seqCount, ended });
             }, budgetMs);
             ws.onopen = () => {
@@ -210,15 +210,15 @@ test('generation-basic: closing the tab mid-stream leaves the job running; a fre
                     try {
                         const decoded = atob(msg.data);
                         received += decoded;
-                    } catch {}
+                    } catch { /* ignore */ }
                 } else if (msg.type === 'end') {
                     ended = true;
                     clearTimeout(timer);
-                    try { ws.close(); } catch {}
+                    try { ws.close(); } catch { /* ignore */ }
                     resolve({ received, seqCount, ended });
                 } else if (msg.type === 'error') {
                     clearTimeout(timer);
-                    try { ws.close(); } catch {}
+                    try { ws.close(); } catch { /* ignore */ }
                     resolve({ error: msg.code || 'ws-error', message: msg.message, received, seqCount, ended });
                 }
             };
@@ -247,7 +247,7 @@ test('generation-basic: closing the tab mid-stream leaves the job running; a fre
     const postJob = await pageB.evaluate(async ({ requestId }) => {
         const scriptMod = await import('/script.js');
         const headers = scriptMod.getRequestHeaders();
-        const resp = await fetch(`/api/backends/chat-completions/jobs/status`, {
+        const resp = await fetch('/api/backends/chat-completions/jobs/status', {
             method: 'POST',
             credentials: 'same-origin',
             headers,

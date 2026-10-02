@@ -64,7 +64,7 @@ test.afterAll(async () => {
  */
 async function readSwipesCounter(page) {
     const text = await page.locator('#chat .last_mes .swipes-counter').first().innerText().catch(() => '');
-    return text.replace(/[​]/g, '');
+    return text.replace(/[\u200b]/g, '');
 }
 
 /**
@@ -107,7 +107,7 @@ async function swipeRightToVariant(page, targetCounter, marker, { timeoutMs = 30
             const counter = document.querySelector('#chat .last_mes .swipes-counter');
             const mes = document.querySelector('#chat .last_mes .mes_text');
             if (!counter || !mes) return false;
-            const counterText = (counter.innerText || '').replace(/[​]/g, '');
+            const counterText = (counter.innerText || '').replace(/[\u200b]/g, '');
             return counterText === targetCounter && (mes.innerText || '').includes(marker);
         },
         { targetCounter, marker },
@@ -139,7 +139,7 @@ test.describe('#3 — multi-swipe persistence', () => {
         await page.waitForFunction(() => {
             const counter = document.querySelector('#chat .last_mes .swipes-counter');
             const mes = document.querySelector('#chat .last_mes .mes_text');
-            const counterText = counter ? (counter.innerText || '').replace(/[​]/g, '') : '';
+            const counterText = counter ? (counter.innerText || '').replace(/[\u200b]/g, '') : '';
             return counterText === '2/3' && (mes?.innerText || '').includes('Second variant');
         }, { timeout: 15_000 });
 
@@ -160,7 +160,7 @@ test.describe('#3 — multi-swipe persistence', () => {
         const before = await getChatSnapshot(page);
         const lastBefore = before.messages[before.messages.length - 1];
         expect(lastBefore.swipes).toBeTruthy();
-        expect(lastBefore.swipes.length).toBe(3);
+        expect(lastBefore.swipes).toHaveLength(3);
         expect(lastBefore.swipe_id).toBe(1);
         expect(lastBefore.swipes[0]).toContain('First variant');
         expect(lastBefore.swipes[1]).toContain('Second variant');
@@ -183,7 +183,7 @@ test.describe('#3 — multi-swipe persistence', () => {
         const after = await getChatSnapshot(page);
         const lastAfter = after.messages[after.messages.length - 1];
         expect(lastAfter.swipes).toBeTruthy();
-        expect(lastAfter.swipes.length, 'swipes count should survive restart').toBe(3);
+        expect(lastAfter.swipes, 'swipes count should survive restart').toHaveLength(3);
         expect(lastAfter.swipe_id, 'selected swipe index should survive restart').toBe(1);
         expect(lastAfter.swipes[0]).toContain('First variant');
         expect(lastAfter.swipes[1]).toContain('Second variant');

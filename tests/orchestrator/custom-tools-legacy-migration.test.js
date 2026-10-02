@@ -3,7 +3,6 @@ import {
     sanitizeAgentToolFlags,
     sanitizeLoopProfile,
 } from '../../public/scripts/extensions/orchestrator/persistence.js';
-import { getEnabledToolSchemas } from '../../public/scripts/extensions/orchestrator/loop-tools.js';
 
 describe('legacy memory namespace migration', () => {
     test('tools.memory.<verb> migrates to tools.custom.memory_<verb> (default-all-on mode)', () => {

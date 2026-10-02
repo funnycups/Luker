@@ -91,7 +91,7 @@ test.describe('#17 — Import charx character card via UI file picker', () => {
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
 
-        expect(await page.locator('#character_name_pole').inputValue()).toBe(NAME);
+        await expect(page.locator('#character_name_pole')).toHaveValue(NAME);
         expect(await page.locator('#description_textarea').inputValue()).toContain('reedmaster');
         expect(await page.locator('#firstmessage_textarea').inputValue()).toContain('reeds are about to tell me');
 

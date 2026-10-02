@@ -311,13 +311,13 @@ test.describe('Orchestrator: critic regex-search flow', () => {
         // those exact phrases — the brief also instructs the main agent
         // to keep those phrases verbatim in the draft.
         const driverPrompt = [
-            `请按 director 流程完整跑一轮。Brief 给两条硬要求：`,
-            `(1) 必须把这段当作 draft 的关键段落原文写入：`,
-            `--- draft 起 ---`,
+            '请按 director 流程完整跑一轮。Brief 给两条硬要求：',
+            '(1) 必须把这段当作 draft 的关键段落原文写入：',
+            '--- draft 起 ---',
             `${DRAFT_BODY}`,
-            `--- draft 止 ---`,
+            '--- draft 止 ---',
             `(2) 出 draft 后 dispatch voice_critic 与 continuity_critic 在 parallel 中复核这段 draft。Brief 内告知 continuity_critic：roster 仅有 ${ESTABLISHED_NAME}（${KNOWN_AGE}岁），任何其他角色 / 地名都需要核对 chat 是否提及。`,
-            `请同时使用 draft_search / chat_search 等 regex 工具完成扫描。`,
+            '请同时使用 draft_search / chat_search 等 regex 工具完成扫描。',
         ].join('\n');
 
         await page.evaluate(async (prompt) => {
@@ -580,8 +580,8 @@ async function ensureCharacterLoaded(page) {
             await new Promise(r => setTimeout(r, 500));
         } catch {
             // Fallback to DOM tile click if the slash command path isn't wired.
-            const tile = document.querySelector(`#rm_print_characters_block [chid][bogus_folder='false']`)
-                || document.querySelector(`#rm_print_characters_block [chid]`);
+            const tile = document.querySelector('#rm_print_characters_block [chid][bogus_folder=\'false\']')
+                || document.querySelector('#rm_print_characters_block [chid]');
             if (tile && typeof tile.click === 'function') {
                 tile.click();
                 await new Promise(r => setTimeout(r, 250));

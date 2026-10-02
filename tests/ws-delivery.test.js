@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import http from 'node:http';
 import WebSocket from 'ws';
 import { createDeliveryServer } from '../src/ws-delivery.js';

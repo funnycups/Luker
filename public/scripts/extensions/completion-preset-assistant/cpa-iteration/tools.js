@@ -166,42 +166,42 @@ export const EDITABLE_TOOL_NAMES = new Set([
 ]);
 
 export const TOOL_DISPLAY = Object.freeze({
-    preset_set_field:                '✏️ Set field',
-    preset_str_replace:              '🔄 Replace text',
-    preset_str_insert:               '➕ Insert text',
-    preset_str_delete:               '➖ Delete text',
-    preset_str_replace_in_prompt:    '🔄 Replace text in prompt',
-    preset_str_insert_in_prompt:     '➕ Insert text in prompt',
-    preset_str_delete_in_prompt:     '➖ Delete text in prompt',
-    preset_list_insert:              '➕ Insert into list',
-    preset_list_remove:              '➖ Remove from list',
-    preset_list_move:                '🔀 Move in list',
-    preset_upsert_prompt_entry:      '🆕 Upsert prompt entry',
-    preset_remove_prompt_entry:      '🗑️ Remove prompt entry',
+    preset_set_field: '✏️ Set field',
+    preset_str_replace: '🔄 Replace text',
+    preset_str_insert: '➕ Insert text',
+    preset_str_delete: '➖ Delete text',
+    preset_str_replace_in_prompt: '🔄 Replace text in prompt',
+    preset_str_insert_in_prompt: '➕ Insert text in prompt',
+    preset_str_delete_in_prompt: '➖ Delete text in prompt',
+    preset_list_insert: '➕ Insert into list',
+    preset_list_remove: '➖ Remove from list',
+    preset_list_move: '🔀 Move in list',
+    preset_upsert_prompt_entry: '🆕 Upsert prompt entry',
+    preset_remove_prompt_entry: '🗑️ Remove prompt entry',
     preset_upsert_prompt_order_item: '↕️ Place in prompt order',
     preset_remove_prompt_order_item: '🗑️ Remove from prompt order',
-    preset_copy_from_reference:      '📋 Copy from reference',
-    preset_read_live_fields:         '📖 Read fields',
-    preset_read_reference_fields:    '📖 Read reference fields',
-    preset_diff_reference:           '🔍 Diff reference',
-    preset_simulate:                 '🧪 Simulate prompt',
-    preset_clone_to_new:             '📋 Clone to new preset',
+    preset_copy_from_reference: '📋 Copy from reference',
+    preset_read_live_fields: '📖 Read fields',
+    preset_read_reference_fields: '📖 Read reference fields',
+    preset_diff_reference: '🔍 Diff reference',
+    preset_simulate: '🧪 Simulate prompt',
+    preset_clone_to_new: '📋 Clone to new preset',
     // Skill toolset (orchestrator-optimize mode). Legacy string-shape labels
     // for the buildToolCatalog "every tool has a display label" contract;
     // the rich icon+label+summarize entries the studio actually renders live
     // in tool-display.js#CPA_TOOL_DISPLAY.
-    skill_list_visible:              '📚 List skills',
-    skill_inspect:                   '🔎 Inspect skill',
-    skill_read_content:              '📖 Read skill file',
-    skill_search_content:            '🔍 Search skill',
-    skill_create:                    '🆕 Create skill',
-    skill_update_content:            '✏️ Overwrite skill file',
-    skill_edit_content:              '🩹 Patch skill file',
-    skill_update_frontmatter:        '🏷️ Update skill frontmatter',
-    skill_rename:                    '🔤 Rename skill',
-    skill_change_scope:              '📦 Move skill scope',
-    skill_delete:                    '🗑️ Delete skill',
-    skill_extract_from_text:         '✂️ Extract skill from text',
+    skill_list_visible: '📚 List skills',
+    skill_inspect: '🔎 Inspect skill',
+    skill_read_content: '📖 Read skill file',
+    skill_search_content: '🔍 Search skill',
+    skill_create: '🆕 Create skill',
+    skill_update_content: '✏️ Overwrite skill file',
+    skill_edit_content: '🩹 Patch skill file',
+    skill_update_frontmatter: '🏷️ Update skill frontmatter',
+    skill_rename: '🔤 Rename skill',
+    skill_change_scope: '📦 Move skill scope',
+    skill_delete: '🗑️ Delete skill',
+    skill_extract_from_text: '✂️ Extract skill from text',
 });
 
 /**
@@ -235,8 +235,7 @@ export function isCpaReadTool(name) {
 }
 
 function parseArgs(call) {
-    try { return JSON.parse(call?.function?.arguments ?? '{}'); }
-    catch { return null; }
+    try { return JSON.parse(call?.function?.arguments ?? '{}'); } catch { return null; }
 }
 
 function isPlainObject(v) {
@@ -1010,8 +1009,7 @@ export async function runCpaReadTool(call, ctx = {}) {
                 const listener = (eventData) => {
                     const chat = Array.isArray(eventData) ? eventData : eventData?.chat;
                     if (!Array.isArray(chat)) return;
-                    try { capturedPromptArray = structuredClone(chat); }
-                    catch { capturedPromptArray = chat; }
+                    try { capturedPromptArray = structuredClone(chat); } catch { capturedPromptArray = chat; }
                 };
                 const registerLast = src && typeof src.makeLast === 'function'
                     ? src.makeLast.bind(src)
@@ -1290,8 +1288,7 @@ export async function normalizeToolCallToEdit(call, ctx) {
         const value = (() => {
             if (Object.hasOwn(args, 'value')) return args.value;
             if (typeof args.value_json === 'string') {
-                try { return JSON.parse(args.value_json); }
-                catch { throw new Error(`Invalid JSON for ${args.path}: ${args.value_json}`); }
+                try { return JSON.parse(args.value_json); } catch { throw new Error(`Invalid JSON for ${args.path}: ${args.value_json}`); }
             }
             return undefined;
         })();

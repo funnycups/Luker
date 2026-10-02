@@ -26,4 +26,3 @@ export function createProposalBus(opts) {
     return createBus(opts);
 }
 
-

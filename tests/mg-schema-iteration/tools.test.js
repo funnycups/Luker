@@ -1,11 +1,11 @@
 // tests/mg-schema-iteration/tools.test.js
 import { describe, test, expect, beforeAll } from '@jest/globals';
 
-let TOOL_DEFS, TOOL_DISPLAY, normalizeToolCallToEdit, applyToolCallToSandbox, SESSIONS_BUCKET_KEY;
+let TOOL_DEFS, TOOL_DISPLAY, normalizeToolCallToEdit, SESSIONS_BUCKET_KEY;
 
 beforeAll(async () => {
     const mod = await import('../../public/scripts/extensions/memory-graph/schema-iteration/tools.js');
-    ({ TOOL_DEFS, TOOL_DISPLAY, normalizeToolCallToEdit, applyToolCallToSandbox, SESSIONS_BUCKET_KEY } = mod);
+    ({ TOOL_DEFS, TOOL_DISPLAY, normalizeToolCallToEdit, SESSIONS_BUCKET_KEY } = mod);
 });
 
 const identity = (s) => s;

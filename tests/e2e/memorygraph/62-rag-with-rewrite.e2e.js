@@ -264,7 +264,7 @@ test.describe('#62 — RAG recall with query rewrite hits the LLM and embeds the
         expect(ragStep, `expected a rag_recall trace step, got ${JSON.stringify(trace)}`).toBeTruthy();
         expect(
             ragStep.meta?.rewriteApplied,
-            `expected rewriteApplied=true; full meta=${JSON.stringify(ragStep.meta)} requests=${JSON.stringify(newRequests.map(r => ({u: r.url, hasRewriteTool: /rewrite_recall_query/.test(JSON.stringify(r.body || {}))})))}`,
+            `expected rewriteApplied=true; full meta=${JSON.stringify(ragStep.meta)} requests=${JSON.stringify(newRequests.map(r => ({ u: r.url, hasRewriteTool: /rewrite_recall_query/.test(JSON.stringify(r.body || {})) })))}`,
         ).toBe(true);
         expect(ragStep.meta?.rewrittenQuery).toBe(REWRITE_TARGET);
         const seededIds = new Set(['n_1', 'n_2', 'n_3', 'n_4']);

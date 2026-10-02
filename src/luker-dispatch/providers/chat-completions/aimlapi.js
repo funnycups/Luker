@@ -40,25 +40,25 @@ export async function dispatchAimlapi(ctx) {
         const bodyParams = {};
 
         if (body.logprobs > 0) {
-            bodyParams['top_logprobs'] = body.logprobs;
-            bodyParams['logprobs'] = true;
+            bodyParams.top_logprobs = body.logprobs;
+            bodyParams.logprobs = true;
         }
 
         if (Array.isArray(body.tools) && body.tools.length > 0) {
-            bodyParams['tools'] = body.tools;
-            bodyParams['tool_choice'] = body.tool_choice;
+            bodyParams.tools = body.tools;
+            bodyParams.tool_choice = body.tool_choice;
         }
 
         if (Array.isArray(body.stop) && body.stop.length > 0) {
-            bodyParams['stop'] = body.stop;
+            bodyParams.stop = body.stop;
         }
 
         if (body.reasoning_effort) {
-            bodyParams['reasoning_effort'] = body.reasoning_effort;
+            bodyParams.reasoning_effort = body.reasoning_effort;
         }
 
         if (body.json_schema) {
-            bodyParams['response_format'] = {
+            bodyParams.response_format = {
                 type: 'json_schema',
                 json_schema: {
                     name: body.json_schema.name,

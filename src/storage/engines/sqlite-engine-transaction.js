@@ -69,7 +69,7 @@ export function registerChatHandler(tx) {
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT(handle, char_dir, name, is_group, group_id) DO UPDATE SET
                                 doc = excluded.doc, updated_at = excluded.updated_at`),
-        del: db.prepare(`DELETE FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?`),
+        del: db.prepare('DELETE FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?'),
         listByUpdated: db.prepare(`SELECT char_dir, name, is_group, group_id, updated_at, created_at
                                    FROM chats WHERE handle=? ORDER BY updated_at DESC`),
         listByName: db.prepare(`SELECT char_dir, name, is_group, group_id, updated_at, created_at

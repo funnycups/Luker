@@ -50,7 +50,6 @@ test.describe('#45 — _uploads/ directory self-heals after deletion', () => {
         // character — we just need the multer disk store to write a file to
         // _uploads. The fix is in middleware, so even a failing import body
         // exercises the destination resolver.
-        const seedPng = resolve(server.dataRoot.split('/').slice(0, -1).join('/') || '/', 'default-Seraphina-fallback');
         // Actually: use the bundled real PNG so the import path is more robust.
         const PNG_PATH = resolve(process.cwd(), '../default/content/default_Seraphina.png');
         const pngBuf = (() => {

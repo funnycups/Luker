@@ -59,7 +59,6 @@ const Popup = __ctx.Popup;
 const POPUP_TYPE = __ctx.POPUP_TYPE;
 import {
     applyEdits,
-    inverseEdit,
     bindIterWorkspaceResizer,
     createRenderScheduler,
     render as ITER_RENDER,
@@ -73,14 +72,13 @@ import { profileEdit } from '../../../iteration-library/proposal-bus/kinds/profi
 import { registerTarget } from '../../../iteration-library/storage/target-registry.js';
 import { mdLiteral } from '../../../iteration-library/markdown-escape.js';
 import {
-    TOOL_DEFS,
     buildToolCatalog,
     normalizeToolCallToEdit,
     CONTROL_TOOL_NAMES,
     isMgSchemaControlCall,
 } from './tools.js';
 import { MG_SCHEMA_TOOL_DISPLAY } from './tool-display.js';
-import { buildSystemPrompt, DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
+import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './system-prompt.js';
 import { createMgSchemaSessionStore, makeMessageId, normalizeMessageShape } from './session-store.js';
 import { migrateMgSchemaSessionsV2ToSidecar } from './session-migration-v2-to-sidecar.js';
 import { dispatchMgSchemaReadFields } from './read-fields-dispatcher.js';
@@ -1198,17 +1196,6 @@ export async function openSchemaIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     function createBlankSchemaShell() {
         return [];
-    }
-
-    // ──────────────────────────────────────────────────────────────────
-    // Reset-to-global clone. Reads `settings.nodeTypeSchema` directly
-    // (the global schema, bypassing the per-character override) and
-    // runs it through the normalizer so the working profile has the same
-    // shape it would have if the user had no override at all.
-    // ──────────────────────────────────────────────────────────────────
-    function loadGlobalSchemaForReset() {
-        const raw = Array.isArray(settings?.nodeTypeSchema) ? settings.nodeTypeSchema : [];
-        return normalizeNodeTypeSchema(structuredClone(raw));
     }
 
     // ──────────────────────────────────────────────────────────────────

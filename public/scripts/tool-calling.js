@@ -566,8 +566,7 @@ export class ToolManager {
                     // append on top.
                     const seed = parsed.content_block.input;
                     if (seed && typeof seed === 'object' && Object.keys(seed).length > 0) {
-                        try { targetToolCall.function.arguments = JSON.stringify(seed); }
-                        catch (_) { targetToolCall.function.arguments = ''; }
+                        try { targetToolCall.function.arguments = JSON.stringify(seed); } catch (_) { targetToolCall.function.arguments = ''; }
                     } else {
                         targetToolCall.function.arguments = '';
                     }

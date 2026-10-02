@@ -794,7 +794,7 @@ describe('director schema fields', () => {
         const byId = new Map(def.subAgents.map(a => [a.id, a]));
 
         // Sanity: every default sub-agent should have an override (not null).
-        for (const [id, agent] of byId) {
+        for (const agent of byId.values()) {
             expect(agent.tools).not.toBeNull();
             expect(typeof agent.tools).toBe('object');
         }

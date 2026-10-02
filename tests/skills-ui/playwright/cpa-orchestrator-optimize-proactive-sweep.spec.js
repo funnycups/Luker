@@ -373,7 +373,7 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
 
             if (matches.length === 0 && !sweptButFoundNothing) {
                 throw new Error(
-                    `Proactive sweep produced neither an extraction nor an explicit "scanned, found nothing" line within 8 minutes.\n`
+                    'Proactive sweep produced neither an extraction nor an explicit "scanned, found nothing" line within 8 minutes.\n'
                     + `AI's last assistant message:\n${(lastAssistantText || '(unavailable)').slice(0, 1200)}`,
                 );
             }

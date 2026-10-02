@@ -80,8 +80,8 @@ test.describe('#22 — Duplicate character via UI — no cross-pollution', () =>
         expect(dupAvatar, 'duplicate produced a new avatar').toBeTruthy();
         await dismissAnyPopup(page);
 
-        const afterCount = await page.locator('#rm_print_characters_block .character_select').count();
-        expect(afterCount).toBe(beforeCount + 1);
+        const afterCount = page.locator('#rm_print_characters_block .character_select');
+        await expect(afterCount).toHaveCount(beforeCount + 1);
 
         // Both files exist on disk.
         const onDisk = listCharacters({ dataRoot: server.dataRoot });
@@ -101,7 +101,7 @@ test.describe('#22 — Duplicate character via UI — no cross-pollution', () =>
             const t = setTimeout(() => reject(new Error('character edit timeout')), 30_000);
             const off = ctx.eventSource.on(ctx.eventTypes.CHARACTER_EDITED, () => {
                 clearTimeout(t);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.CHARACTER_EDITED, off); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.CHARACTER_EDITED, off); } catch { /* ignore */ }
                 resolve(true);
             });
         }));
@@ -110,16 +110,16 @@ test.describe('#22 — Duplicate character via UI — no cross-pollution', () =>
         await editedPromise;
 
         // Re-read Ash's description from UI — should be MODIFIED_DESC.
-        expect(await page.locator('#description_textarea').inputValue()).toBe(MODIFIED_DESC);
+        await expect(page.locator('#description_textarea')).toHaveValue(MODIFIED_DESC);
 
         // Click into the duplicate — its description should still be
         // the original Ash text.
         await clickCharacterCard(page, { avatar: dupAvatar });
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
-        const dupDesc = await page.locator('#description_textarea').inputValue();
+        const dupDesc = page.locator('#description_textarea');
         expect(dupDesc).toContain('wiry coastal cartographer'); // original
-        expect(dupDesc).not.toBe(MODIFIED_DESC);
+        await expect(dupDesc).not.toHaveValue(MODIFIED_DESC);
 
         // ── Persistence ─────────────────────────────────────────────────
         await server.restart();
@@ -128,7 +128,7 @@ test.describe('#22 — Duplicate character via UI — no cross-pollution', () =>
         await clickCharacterCard(page, { avatar });
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
-        expect(await page.locator('#description_textarea').inputValue()).toBe(MODIFIED_DESC);
+        await expect(page.locator('#description_textarea')).toHaveValue(MODIFIED_DESC);
 
         await clickCharacterCard(page, { avatar: dupAvatar });
         await dismissAnyPopup(page);

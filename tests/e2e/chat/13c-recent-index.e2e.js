@@ -33,7 +33,6 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    closeRightNavDrawer,
 } from '../_lib/page.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
 

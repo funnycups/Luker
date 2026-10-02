@@ -85,7 +85,7 @@ test.describe('#118 — opening a recent chat must not mint a second chat file',
         await sendMessageAndAwaitReply(page, 'The cliff path is steady tonight. I came earlier than I meant to.');
 
         const ashChatsAfterTurn = listCharChats(server.dataRoot, ASH_AVATAR);
-        expect(ashChatsAfterTurn.length).toBe(1);
+        expect(ashChatsAfterTurn).toHaveLength(1);
         const realChatFile = ashChatsAfterTurn[0];
         const realChatName = realChatFile.replace(/\.jsonl$/, '');
 

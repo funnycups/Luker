@@ -27,8 +27,8 @@ describe('buildPerRunCustomToolRegistry', () => {
         const profile = {
             customTools: [
                 { name: 'w', description: 'd', parameters: {}, mode: 'write',
-                  body: 'throw new Error("nope");',
-                  simulateBody: 'return { ok: true, simulated: true, value: args.v };' },
+                    body: 'throw new Error("nope");',
+                    simulateBody: 'return { ok: true, simulated: true, value: args.v };' },
             ],
         };
         const reg = buildPerRunCustomToolRegistry(profile, null);

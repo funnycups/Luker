@@ -48,7 +48,7 @@ test('a profile without request-timeout never times out on its own; manual stop 
 
     // 静默 5s（远超一个"如果将错就错"的超时窗口）后仍在生成，且没有 abort。
     await page.waitForTimeout(5_000);
-    expect(abortRequests.length, 'disabled timeout must not abort').toBe(0);
+    expect(abortRequests, 'disabled timeout must not abort').toHaveLength(0);
     const stopVisible = await page.evaluate(() => {
         const stop = document.querySelector('#mes_stop');
         return !!stop && getComputedStyle(stop).display !== 'none';

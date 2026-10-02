@@ -45,8 +45,8 @@ describe('loop runtime Layer-3 dispatch', () => {
         };
         const profile = makeProfile([
             { name: 'my_tool', description: 'd', parameters: {}, mode: 'read',
-              body: 'globalThis.__test_exec_called = true; return { value: args.v * 2 };',
-              simulateBody: '' },
+                body: 'globalThis.__test_exec_called = true; return { value: args.v * 2 };',
+                simulateBody: '' },
         ]);
         delete globalThis.__test_exec_called;
         await runLoopOrchestration({}, {}, profile, { sendLlm });
@@ -68,7 +68,7 @@ describe('loop runtime Layer-3 dispatch', () => {
         };
         const profile = makeProfile([
             { name: 'dup_tool', description: 'd', parameters: {}, mode: 'read',
-              body: 'globalThis.__test_layer3_called = true; return { from: "layer3" };', simulateBody: '' },
+                body: 'globalThis.__test_layer3_called = true; return { from: "layer3" };', simulateBody: '' },
         ]);
         delete globalThis.__test_layer3_called;
         await runLoopOrchestration({}, {}, profile, { sendLlm });

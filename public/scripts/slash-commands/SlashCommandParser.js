@@ -527,7 +527,7 @@ export class SlashCommandParser {
             if (childClosure !== null) return null;
             const { buildMacroAutoCompleteResult, findUnclosedScopes } = await loadMacroAutoCompleteHelpers();
             // Check if cursor is inside a macro
-            const macroEntry = this.macroIndex.findLast(it=>it.start <= index && it.end >= index);
+            const macroEntry = this.macroIndex.findLast(it => it.start <= index && it.end >= index);
             if (macroEntry) {
                 // Build macro info object for shared function
                 const macroContent = text.slice(macroEntry.start + 2, macroEntry.end - (text.slice(macroEntry.end - 2, macroEntry.end) === '}}' ? 2 : 0));

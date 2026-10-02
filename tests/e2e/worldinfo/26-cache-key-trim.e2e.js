@@ -236,7 +236,7 @@ test.describe('#26 — WorldInfo cache key trim regression', () => {
         await selectBookByTrimmedLabel(page, BOOK_DISPLAY_NAME);
 
         const entries = await readEditorEntries(page);
-        expect(entries.length, 'entries survive restart with the trimmed cache key').toBe(2);
+        expect(entries, 'entries survive restart with the trimmed cache key').toHaveLength(2);
         const comments = entries.map(e => e.comment).sort();
         expect(comments).toEqual([
             'trailing-cache-regression-entry-1',

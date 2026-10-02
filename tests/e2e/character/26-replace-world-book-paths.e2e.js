@@ -101,7 +101,7 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
     test.afterAll(async () => {
         await mock?.stop();
         if (tmpDir && existsSync(tmpDir)) {
-            try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+            try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
         }
     });
 
@@ -255,7 +255,7 @@ test.describe('#26 — post-replace world-book paths actually work', () => {
             // Second replace (same file)
             await clickReplaceWithFile(page, briallenPath);
             const popup2 = await waitForCeaReplaceLorebookPopup(page);
-            expect(await popup2.isVisible()).toBe(true);
+            await expect(popup2).toBeVisible();
             await popup2.locator('.popup-button-cancel').first().click();
             await popup2.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
         } finally {

@@ -209,6 +209,7 @@ async function bindPersonaToCurrentCharacter(page, personaName) {
 
 test.describe('#100 — persona auto-switches with character + bindings persist', () => {
     test.describe.configure({ timeout: 300_000 });
+
     test('bind A->Char1, B->Char2 via real UI; switching character flips persona; survives restart', async ({ page }) => {
         test.setTimeout(300_000);
         await awaitMainUI(page, server.baseURL);

@@ -17,7 +17,6 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import archiver from 'archiver';
@@ -58,17 +57,17 @@ function writeConfigYaml(cwd, storageMode) {
     fs.mkdirSync(dataRoot, { recursive: true });
     const config = [
         `dataRoot: ${JSON.stringify(dataRoot)}`,
-        `storage:`,
+        'storage:',
         `    mode: ${storageMode}`,
-        `enableUserAccounts: false`,
-        `whitelist: false`,
-        `whitelistDockerHosts: false`,
-        `port: 0`,
-        `listen: false`,
-        `protocol:`,
-        `    ipv4: true`,
-        `    ipv6: false`,
-        `disableCsrfProtection: true`,
+        'enableUserAccounts: false',
+        'whitelist: false',
+        'whitelistDockerHosts: false',
+        'port: 0',
+        'listen: false',
+        'protocol:',
+        '    ipv4: true',
+        '    ipv6: false',
+        'disableCsrfProtection: true',
     ].join('\n') + '\n';
     fs.writeFileSync(path.join(cwd, 'config.yaml'), config);
     return dataRoot;

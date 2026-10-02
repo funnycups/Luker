@@ -61,5 +61,5 @@ test('main text-completion streaming gap beyond the profile timeout aborts gener
     }, { timeout: 15_000 });
 
     const textgenCalls = mock.requests.filter(r => (r.url || '').endsWith('/completions') && !(r.url || '').includes('/chat/completions'));
-    expect(textgenCalls.length).toBe(1);
+    expect(textgenCalls).toHaveLength(1);
 });

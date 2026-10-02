@@ -20,7 +20,7 @@
  *     sourceFloorIndex: sourceIndex } via markPluginFloorMessage.
  */
 
-import { describe, test, expect, beforeAll, afterAll, jest } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 
 const applyRegexCalls = [];
 

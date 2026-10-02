@@ -73,7 +73,7 @@ test.describe('#92 — Quick Reply triggers slash command via real button click'
             const t = setTimeout(() => reject(new Error('reply timeout')), 60_000);
             const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_RECEIVED, (id) => {
                 clearTimeout(t);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_RECEIVED, off); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_RECEIVED, off); } catch { /* ignore */ }
                 resolve(id);
             });
         }));

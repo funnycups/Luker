@@ -166,9 +166,7 @@ describe('dispatchKobold', () => {
         // branched on `error?.status === 403` in the catch, so it never
         // fired. The fix moves the check to the resolved-Response branch;
         // rejections must terminate immediately without retry.
-        let calls = 0;
         const fetchMock = jest.fn(async () => {
-            calls++;
             const err = new Error('busy');
             // @ts-ignore — mimic a hypothetical status-carrying rejection
             err.status = 403;

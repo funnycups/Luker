@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -33,8 +32,8 @@ describe('migrateToV3', () => {
             id: 's1', messages: [{
                 id: 'm1', role: 'assistant',
                 edits: [{ op: 'set', path: '', oldValue: { entries: {} },
-                          newValue: { entries: { 1: { content: 'x' } } },
-                          target: 'lorebook:My Book' }],
+                    newValue: { entries: { 1: { content: 'x' } } },
+                    target: 'lorebook:My Book' }],
             }],
         };
         const migrated = migrateToV3(old, { defaultTargetForKind: () => null });
@@ -82,7 +81,7 @@ describe('migrateToV3', () => {
                 edits: [
                     { op: 'set', path: '', oldValue: { name: 'A' }, newValue: { name: 'B' }, target: 'character' },
                     { op: 'set', path: '', oldValue: { entries: {} }, newValue: { entries: { 1: {} } },
-                      target: 'lorebook:My Book' },
+                        target: 'lorebook:My Book' },
                 ],
             }],
         };

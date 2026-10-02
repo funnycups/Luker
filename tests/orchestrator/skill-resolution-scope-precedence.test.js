@@ -17,7 +17,7 @@
 // resolver — the resolver caches the inventory for ~5s, so each test
 // also invalidates the cache first.
 
-import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
+import { describe, test, expect, beforeAll, beforeEach } from '@jest/globals';
 
 let currentSkillsList = async () => [];
 

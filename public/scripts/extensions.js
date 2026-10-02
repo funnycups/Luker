@@ -1,7 +1,6 @@
 import { Popper } from '../lib.js';
 
 import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, EXTENSIONS_CLIENT_VERSION, buildObjectPatchOperationsAsync, buildObjectPatchOperations, cloneJsonValue } from '../script.js';
-import { showLoader } from './loader.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup } from './popup.js';
 import { renderTemplate, renderTemplateAsync } from './templates.js';
 import { delay, deleteValueByPath, equalsIgnoreCaseAndAccents, escapeHtml, isSubsetOf, sanitizeSelector, setValueByPath, versionCompare } from './utils.js';
@@ -85,11 +84,6 @@ let extensionBootstrapPromise = null;
  * @type {Record<string, object>}
  */
 let manifests = {};
-
-/**
- * Default URL for the Extras API.
- */
-const defaultUrl = 'http://localhost:5100';
 
 /**
  * Checks if the extension is officially supported by its URL pattern.

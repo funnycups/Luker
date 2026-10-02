@@ -64,7 +64,7 @@ async function swipeRightToVariant(page, targetCounter, marker, { timeoutMs = 30
             const counter = document.querySelector('#chat .last_mes .swipes-counter');
             const mes = document.querySelector('#chat .last_mes .mes_text');
             if (!counter || !mes) return false;
-            const counterText = (counter.innerText || '').replace(/[​]/g, '');
+            const counterText = (counter.innerText || '').replace(/[\u200b]/g, '');
             return counterText === targetCounter && (mes.innerText || '').includes(marker);
         },
         { targetCounter, marker },
@@ -90,8 +90,8 @@ test.describe('#9 — Regenerate from the options dropdown', () => {
         expect(text, `regenerated message should be Variant C; got=${text?.slice(0, 120)}`).toContain('Variant C');
 
         // Chat length unchanged — regenerate replaces in place.
-        const afterCount = await page.locator('#chat .mes').count();
-        expect(afterCount, `chat length should be unchanged by Regenerate`).toBe(beforeCount);
+        const afterCount = page.locator('#chat .mes');
+        await expect(afterCount, 'chat length should be unchanged by Regenerate').toHaveCount(beforeCount);
 
         // DOM-side: last bubble body is Variant C.
         const lastBody = await page.locator('#chat .last_mes .mes_text').innerText();

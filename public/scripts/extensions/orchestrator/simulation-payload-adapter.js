@@ -77,8 +77,7 @@ function turnsFromConversation(messages, eventsByCallId) {
                 for (let j = i + 1; j < messages.length; j += 1) {
                     const cand = messages[j];
                     if (cand?.role === 'tool' && cand?.tool_call_id === callId) {
-                        try { result = JSON.parse(cand.content); }
-                        catch { result = cand.content; }
+                        try { result = JSON.parse(cand.content); } catch { result = cand.content; }
                         break;
                     }
                     if (cand?.role === 'assistant') break;
@@ -324,8 +323,7 @@ function sectionsToToolCalls(sections) {
         // bookkeeping; the body carries the actual payload the AI saw.
         let resultValue = null;
         if (result) {
-            try { resultValue = JSON.parse(result.body); }
-            catch { resultValue = result.body || null; }
+            try { resultValue = JSON.parse(result.body); } catch { resultValue = result.body || null; }
         }
         // Strip the `Tool: ` prefix the runtime adds for display.
         const name = String(call.title || '').replace(/^Tool:\s*/, '') || '?';

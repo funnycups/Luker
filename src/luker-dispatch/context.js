@@ -94,8 +94,7 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
         if (event.kind === 'end' || event.kind === 'error') {
             terminal = true;
         }
-        try { onEmit(event); }
-        catch (error) { console.warn('[Dispatch] onEmit threw', error); }
+        try { onEmit(event); } catch (error) { console.warn('[Dispatch] onEmit threw', error); }
     }    return {
         body: request.body,
         user: {
@@ -244,8 +243,7 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
                     const causeStr = typeof cause === 'string'
                         ? cause
                         : (cause?.message ? String(cause.message) : (() => {
-                            try { return JSON.stringify(cause); }
-                            catch { return String(cause); }
+                            try { return JSON.stringify(cause); } catch { return String(cause); }
                         })());
                     if (causeStr) full = `${message}: ${causeStr}`;
                 }
@@ -268,8 +266,7 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
             // and does NOT reopen the terminal flag: the next `emit.end` /
             // `emit.error` after a trailer is still a no-op.
             trailer(bytes) {
-                try { onEmit({ kind: 'chunk', data: bytes }); }
-                catch (error) { console.warn('[Dispatch] onEmit threw (trailer)', error); }
+                try { onEmit({ kind: 'chunk', data: bytes }); } catch (error) { console.warn('[Dispatch] onEmit threw (trailer)', error); }
             },
         },
     };

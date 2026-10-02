@@ -12,8 +12,7 @@ export function withRound(store, runId, roundSpec, fn) {
         store.setRoundStatus({ runId, roundId, status: 'done' });
         return out;
     } catch (err) {
-        try { store.setRoundStatus({ runId, roundId, status: 'failed' }); }
-        catch (_) { /* store may be cleared; swallow */ }
+        try { store.setRoundStatus({ runId, roundId, status: 'failed' }); } catch (_) { /* store may be cleared; swallow */ }
         throw err;
     }
 }
@@ -26,8 +25,7 @@ export async function withStreamingSection(store, runId, roundId, sectionSpec, a
         store.setSectionStatus({ runId, roundId, sectionId, status: 'done' });
         return out;
     } catch (err) {
-        try { store.setSectionStatus({ runId, roundId, sectionId, status: 'failed' }); }
-        catch (_) { /* store may be cleared; swallow */ }
+        try { store.setSectionStatus({ runId, roundId, sectionId, status: 'failed' }); } catch (_) { /* store may be cleared; swallow */ }
         throw err;
     }
 }

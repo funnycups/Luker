@@ -371,20 +371,6 @@ describe('SlashCommandParser hot-path rewrites — testNamedArgument parity', ()
 // instead we simulate the per-char loop pattern that drove the cost: a
 // single "scan to whitespace" pass over the argument.
 
-function simulateScanToWhitespace_orig(text) {
-    // Mimic the original parseValue inner loop: for each char position,
-    // check testSymbolStrict(/\s/). The cost we want to expose lives
-    // entirely inside testSymbol; the rest of the per-char work is a
-    // constant factor.
-    let i = 0;
-    while (i < text.length) {
-        const r = origTestSymbolStrict(s(text, i, false), /\s/, 0);
-        if (r.matched === true) break;
-        i++;
-    }
-    return i;
-}
-
 function simulateScanToWhitespace_new(text) {
     let i = 0;
     while (i < text.length) {

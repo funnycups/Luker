@@ -3,10 +3,6 @@
 // Implementation source: Toolify: Empower any LLM with function calling capabilities. (https://github.com/funnycups/Toolify)
 
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
-import {
-    TOOL_PROTOCOL_STYLE,
-    validateParsedToolCalls,
-} from '../function-call-runtime.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
 import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
@@ -35,7 +31,6 @@ import { floorRecordToTaskMessage, readPluginFloors } from '../../lib/plugin-flo
 const __ctx = Luker.getContext();
 const generateQuietPrompt = __ctx.generateQuietPrompt;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
-const DOMPurify = __ctx.lib.DOMPurify;
 const lodash = __ctx.lib.lodash;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
@@ -43,7 +38,6 @@ const getCharacterState = __ctx.getCharacterState;
 const updateCharacterState = __ctx.updateCharacterState;
 const addLocaleData = __ctx.addLocaleData;
 const translate = __ctx.translate;
-const POPUP_TYPE = __ctx.POPUP_TYPE;
 const newWorldInfoEntryTemplate = __ctx.worldInfoEntry.template;
 const setWorldInfoButtonClass = __ctx.worldInfoEntry.setButtonClass;
 const updateWorldInfoList = __ctx.updateWorldInfoList;
@@ -93,8 +87,6 @@ const defaultSettings = {
     cardAppStudioSystemPrompt: DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT,
 };
 const CHARACTER_EDITOR_SESSION_NAMESPACE = 'character_editor_assistant_sessions';
-const CHARACTER_EDITOR_SESSION_VERSION = 1;
-const CHARACTER_EDITOR_SESSION_LIMIT = 24;
 
 const stateCache = new Map();
 const lorebookSnapshotCache = new Map();
@@ -465,9 +457,9 @@ function registerLocaleData() {
         'Failed to save CardApp Studio session (disk write failed).': '保存 CardApp Studio 会话失败（磁盘写入失败）。',
         'Failed to save CardApp Studio session.': '保存 CardApp Studio 会话失败。',
         'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已恢复为独立界面。已清空过渡迭代版的会话——磁盘上的文件保持不变。',
- });
- addLocaleData('zh-tw', {
- 'Character Editor Assistant': '角色卡編輯助手',
+    });
+    addLocaleData('zh-tw', {
+        'Character Editor Assistant': '角色卡編輯助手',
         'Open Editor': '開啟編輯器',
         'Character Editor': '角色編輯器',
         'Regenerate aborted': '重新產生已中止',
@@ -777,7 +769,7 @@ function registerLocaleData() {
         'Failed to save CardApp Studio session (disk write failed).': '儲存 CardApp Studio 會話失敗（磁碟寫入失敗）。',
         'Failed to save CardApp Studio session.': '儲存 CardApp Studio 會話失敗。',
         'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已還原為獨立介面。已清空過渡迭代版的會話——磁碟上的檔案保持不變。',
- });
+    });
 }
 
 function clone(value) {
@@ -870,14 +862,6 @@ function getSettings() {
 
 function getConnectionProfiles() {
     return getChatCompletionConnectionProfiles();
-}
-
-function getLorebookSyncRequestPresetOptions() {
-    const settings = getSettings();
-    return {
-        llmPresetName: String(settings.requestLlmPresetName || '').trim(),
-        apiPresetName: String(settings.requestApiPresetName || '').trim(),
-    };
 }
 
 function rewriteDepthWorldInfoToAfterWithNotes(payload = {}) {
@@ -1112,111 +1096,6 @@ async function clearHistoryRecords(context, { avatar = '' } = {}) {
     return true;
 }
 
-function makeCharacterEditorSessionId(prefix = 'cea_session') {
-    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function normalizeCharacterEditorSessionMessage(rawMessage) {
-    const role = String(rawMessage?.role || 'assistant').trim().toLowerCase();
-    const message = {
-        id: String(rawMessage?.id || '').trim() || makeConversationMessageId(),
-        role: role === 'user' ? 'user' : 'assistant',
-        content: String(rawMessage?.content || ''),
-        auto: Boolean(rawMessage?.auto),
-        at: Number(rawMessage?.at || Date.now()),
-    };
-    if (message.role !== 'assistant') {
-        return message;
-    }
-
-    const toolCalls = normalizePersistentToolCalls(rawMessage);
-    const toolResults = normalizePersistentToolResults(rawMessage, toolCalls);
-    if (toolCalls.length > 0) {
-        message.tool_calls = toolCalls;
-    }
-    if (toolResults.length > 0) {
-        message.tool_results = toolResults;
-    }
-    if (rawMessage?.toolSummary) {
-        message.toolSummary = String(rawMessage.toolSummary || '');
-    }
-    if (rawMessage?.toolState) {
-        message.toolState = String(rawMessage.toolState || '');
-    }
-    if (Array.isArray(rawMessage?.operations)) {
-        message.operations = rawMessage.operations
-            .filter(item => item && typeof item === 'object')
-            .map(item => ({
-                kind: String(item?.kind || '').trim(),
-                args: item?.args && typeof item.args === 'object' ? clone(item.args) : {},
-            }));
-    }
-    if (Array.isArray(rawMessage?.diffPreviews)) {
-        message.diffPreviews = clone(rawMessage.diffPreviews);
-    }
-    if (Array.isArray(rawMessage?.executionResults)) {
-        message.executionResults = clone(rawMessage.executionResults);
-    }
-    return message;
-}
-
-function normalizeCharacterEditorSession(rawSession) {
-    const session = {
-        id: String(rawSession?.id || '').trim() || makeCharacterEditorSessionId(),
-        avatar: String(rawSession?.avatar || '').trim(),
-        createdAt: Number(rawSession?.createdAt || Date.now()),
-        updatedAt: Number(rawSession?.updatedAt || rawSession?.createdAt || Date.now()),
-        messages: (Array.isArray(rawSession?.messages) ? rawSession.messages : []).map(item => normalizeCharacterEditorSessionMessage(item)),
-        rejectedOperationKeys: [],
-        pendingApproval: null,
-    };
-    const rejectedKeys = rebuildCharacterEditorRejectedOperationKeys(session.messages, new Set());
-    session.rejectedOperationKeys = Array.from(rejectedKeys.values());
-    const pendingMessage = [...session.messages].reverse().find(item => String(item?.toolState || '').trim().toLowerCase() === 'pending');
-    session.pendingApproval = pendingMessage
-        ? {
-            messageId: String(pendingMessage?.id || '').trim(),
-            operations: Array.isArray(pendingMessage?.operations) ? clone(pendingMessage.operations) : [],
-            diffPreviews: Array.isArray(pendingMessage?.diffPreviews) ? clone(pendingMessage.diffPreviews) : [],
-            toolCalls: normalizePersistentToolCalls(pendingMessage),
-        }
-        : null;
-    return session;
-}
-
-function createEmptyCharacterEditorSessionStore() {
-    return {
-        version: CHARACTER_EDITOR_SESSION_VERSION,
-        sessions: [],
-    };
-}
-
-function normalizeCharacterEditorSessionStore(rawStore) {
-    const sessions = (Array.isArray(rawStore?.sessions) ? rawStore.sessions : [])
-        .map(item => normalizeCharacterEditorSession(item))
-        .sort((left, right) => Number(left.updatedAt || 0) - Number(right.updatedAt || 0));
-    return {
-        version: CHARACTER_EDITOR_SESSION_VERSION,
-        sessions: sessions.slice(-CHARACTER_EDITOR_SESSION_LIMIT),
-    };
-}
-
-async function loadCharacterEditorSessionStore(context, avatar) {
-    const result = await getCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE);
-    // Read failures fall back to an empty store so the popup still opens.
-    // Hard failures are logged so devs can chase persistence issues without
-    // the UI swallowing them silently.
-    if (!result?.ok) {
-        if (result?.reason) {
-            // eslint-disable-next-line no-console
-            console.warn(`[character-editor-assistant] session-store read failed: ${result.reason} ${result.hint || ''}`);
-        }
-        return normalizeCharacterEditorSessionStore(createEmptyCharacterEditorSessionStore());
-    }
-    const raw = result.state;
-    return normalizeCharacterEditorSessionStore(raw || createEmptyCharacterEditorSessionStore());
-}
-
 /**
  * Read the raw legacy CEA editor session bundle for an avatar. Returns the
  * underlying `sessions[]` array exactly as it was persisted on the character
@@ -1304,49 +1183,6 @@ export async function readLegacyCharIterPopupSessions(context, avatar) {
     }
 }
 
-async function persistCharacterEditorSessionStore(context, avatar, store) {
-    const next = normalizeCharacterEditorSessionStore(store);
-    // See setOperationStateSidecar — caller already produced the full bundle;
-    // updateCharacterState's diff cuts the wire payload to just what changed.
-    //
-    // Session writes are user-initiated (send / save / load / delete in the
-    // chat popup), so throw on hard failure with a reason-aware message and
-    // let the caller toast.
-    const result = await updateCharacterState(avatar, CHARACTER_EDITOR_SESSION_NAMESPACE, () => next);
-    if (!result?.ok) {
-        const message = formatCharacterStateWriteError(result?.reason);
-        // eslint-disable-next-line no-console
-        console.warn(`[character-editor-assistant] session-store write failed: ${result?.reason} ${result?.hint || ''}`);
-        throw new Error(message);
-    }
-}
-
-function upsertCharacterEditorSession(store, session) {
-    const normalizedStore = normalizeCharacterEditorSessionStore(store);
-    const normalizedSession = normalizeCharacterEditorSession(session);
-    const nextSessions = normalizedStore.sessions.filter(item => String(item?.id || '') !== String(normalizedSession.id || ''));
-    nextSessions.push(normalizedSession);
-    nextSessions.sort((left, right) => Number(left.updatedAt || 0) - Number(right.updatedAt || 0));
-    normalizedStore.sessions = nextSessions.slice(-CHARACTER_EDITOR_SESSION_LIMIT);
-    return normalizedStore;
-}
-
-function deleteCharacterEditorSession(store, sessionId) {
-    const normalizedStore = normalizeCharacterEditorSessionStore(store);
-    const targetId = String(sessionId || '').trim();
-    normalizedStore.sessions = normalizedStore.sessions.filter(item => String(item?.id || '') !== targetId);
-    return normalizedStore;
-}
-
-function findCharacterEditorSession(store, sessionId) {
-    const targetId = String(sessionId || '').trim();
-    if (!targetId) {
-        return null;
-    }
-    return (Array.isArray(store?.sessions) ? store.sessions : [])
-        .find(item => String(item?.id || '') === targetId) || null;
-}
-
 function summarizeCharacterEditorSession(session, fallback = '') {
     const firstUserMessage = (Array.isArray(session?.messages) ? session.messages : [])
         .find(item => String(item?.role || '').trim().toLowerCase() === 'user');
@@ -1354,71 +1190,6 @@ function summarizeCharacterEditorSession(session, fallback = '') {
     return summary.length > 72
         ? `${summary.slice(0, 72).trim()}...`
         : summary;
-}
-
-async function saveCharacterEditorConversationSession(context, session, { avatar = '', setCurrent = true } = {}) {
-    const store = await loadCharacterEditorSessionStore(context, avatar);
-    const saved = normalizeCharacterEditorSession({
-        ...session,
-        avatar,
-        updatedAt: Date.now(),
-    });
-    const nextStore = upsertCharacterEditorSession(store, saved);
-    if (!setCurrent) {
-        const existing = findCharacterEditorSession(store, saved.id);
-        if (!existing) {
-            nextStore.sessions = nextStore.sessions
-                .filter(item => String(item?.id || '') !== String(saved.id || ''))
-                .concat(saved)
-                .sort((left, right) => Number(left?.updatedAt || 0) - Number(right?.updatedAt || 0))
-                .slice(-CHARACTER_EDITOR_SESSION_LIMIT);
-        }
-    }
-    await persistCharacterEditorSessionStore(context, avatar, nextStore);
-    return findCharacterEditorSession(nextStore, saved.id) || saved;
-}
-
-async function setCurrentCharacterEditorConversationSessionId(context, sessionId, { avatar = '' } = {}) {
-    const id = String(sessionId || '').trim();
-    const store = await loadCharacterEditorSessionStore(context, avatar);
-    const session = findCharacterEditorSession(store, id);
-    if (!session) {
-        return null;
-    }
-    return await saveCharacterEditorConversationSession(context, {
-        ...session,
-        updatedAt: Date.now(),
-    }, { avatar, setCurrent: true });
-}
-
-async function deleteCharacterEditorConversationSession(context, sessionId, { avatar = '' } = {}) {
-    const id = String(sessionId || '').trim();
-    if (!id) {
-        return null;
-    }
-    const store = await loadCharacterEditorSessionStore(context, avatar);
-    const existing = findCharacterEditorSession(store, id);
-    if (!existing) {
-        return null;
-    }
-    let nextStore = deleteCharacterEditorSession(store, id);
-    let nextCurrent = nextStore.sessions.length > 0
-        ? nextStore.sessions[nextStore.sessions.length - 1]
-        : null;
-    if (!nextCurrent) {
-        nextCurrent = normalizeCharacterEditorSession({
-            id: makeCharacterEditorSessionId(),
-            avatar,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            messages: [],
-            pendingApproval: null,
-            rejectedOperationKeys: [],
-        });
-        nextStore = upsertCharacterEditorSession(nextStore, nextCurrent);
-    }
-    await persistCharacterEditorSessionStore(context, avatar, nextStore);
-    return nextCurrent;
 }
 
 function nextStateId(state, prefix = 'op') {
@@ -1700,7 +1471,7 @@ export async function commitLorebookOperations(bookName, liveBook, edits, opts =
     );
     if (renameEdit) {
         throw new Error(
-            `Renaming lorebooks via cea_set_lorebook_metadata is not supported. `
+            'Renaming lorebooks via cea_set_lorebook_metadata is not supported. '
             + `Use the world-info panel to rename "${safeName}" → "${String(renameEdit.newValue).trim()}".`,
         );
     }
@@ -1880,31 +1651,6 @@ function normalizeLorebookEntryForSync(entry, uid) {
     };
 }
 
-function areLorebookEntriesEqualForSync(a, b) {
-    return JSON.stringify(normalizeLorebookEntryForSync(a, a?.uid ?? 0)) === JSON.stringify(normalizeLorebookEntryForSync(b, b?.uid ?? 0));
-}
-
-function buildLorebookEntryUpsertArgs(bookName, uid, entry) {
-    const normalized = normalizeLorebookEntryForSync(entry, uid);
-    return {
-        book_name: String(bookName || '').trim(),
-        entry_uid: Number(normalized.uid),
-        key_csv: normalized.key.join(', '),
-        secondary_key_csv: normalized.keysecondary.join(', '),
-        comment: normalized.comment,
-        content: normalized.content,
-        selective_logic: Number(normalized.selectiveLogic),
-        order: Number(normalized.order),
-        position: Number(normalized.position),
-        depth: Number(normalized.depth),
-        disable: Boolean(normalized.disable),
-        constant: Boolean(normalized.constant),
-        exclude_recursion: Boolean(normalized.excludeRecursion),
-        prevent_recursion: Boolean(normalized.preventRecursion),
-        delay_until_recursion: Number(normalized.delayUntilRecursion),
-    };
-}
-
 async function captureCharacterLorebookSnapshot(context, character) {
     const target = character && typeof character === 'object' ? character : null;
     const avatar = String(target?.avatar || '').trim();
@@ -1926,10 +1672,6 @@ async function captureCharacterLorebookSnapshot(context, character) {
         entries,
         capturedAt: Date.now(),
     };
-}
-
-function compactEntryForModel(entry, uid) {
-    return normalizeLorebookEntryForSync(entry, uid);
 }
 
 function getCharacterEditorSelectiveLogicLabel(value) {
@@ -2039,33 +1781,6 @@ function summarizeCharacterEditorLorebookListEntry(entry, uid) {
         uid: normalized.uid,
         name,
         enabled: normalized.enabled,
-    };
-}
-
-function buildCharacterEditorLorebookStats(entries = {}) {
-    const uids = Array.from(collectLorebookEntryUids(entries).values()).sort((a, b) => a - b);
-    let enabledEntryCount = 0;
-    let constantEntryCount = 0;
-    let secondaryKeyEntryCount = 0;
-    for (const uid of uids) {
-        const entry = getLorebookEntryByUid(entries, uid);
-        const normalized = normalizeCharacterEditorLorebookToolEntry(entry, uid);
-        if (normalized.enabled) {
-            enabledEntryCount += 1;
-        }
-        if (normalized.constant) {
-            constantEntryCount += 1;
-        }
-        if (normalized.keysecondary.length > 0) {
-            secondaryKeyEntryCount += 1;
-        }
-    }
-    return {
-        entry_count: uids.length,
-        max_entry_uid: uids.length > 0 ? uids[uids.length - 1] : -1,
-        enabled_entry_count: enabledEntryCount,
-        constant_entry_count: constantEntryCount,
-        secondary_key_entry_count: secondaryKeyEntryCount,
     };
 }
 
@@ -2763,8 +2478,7 @@ function createCharacterEditorSimulateToolApi(context) {
                 const listener = (eventData) => {
                     const chat = Array.isArray(eventData) ? eventData : eventData?.chat;
                     if (!Array.isArray(chat)) return;
-                    try { capturedPromptArray = structuredClone(chat); }
-                    catch { capturedPromptArray = chat; }
+                    try { capturedPromptArray = structuredClone(chat); } catch { capturedPromptArray = chat; }
                 };
                 const registerLast = src && typeof src.makeLast === 'function'
                     ? src.makeLast.bind(src)
@@ -2991,22 +2705,6 @@ function createCharacterEditorBoundPresetToolApi(context, { avatar = '' } = {}) 
     };
 }
 
-function renderLorebookSyncAnalysisMarkdown(markdownText) {
-    const source = String(markdownText || '').trim();
-    if (!source) {
-        return `<div class="cea_sync_analysis_empty">${escapeHtml(i18n('No analysis output.'))}</div>`;
-    }
-    try {
-        const converter = __ctx.markdownConverter;
-        const html = converter?.makeHtml
-            ? converter.makeHtml(source)
-            : `<pre>${escapeHtml(source)}</pre>`;
-        return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
-    } catch {
-        return `<pre>${escapeHtml(source)}</pre>`;
-    }
-}
-
 function getLorebookEntryByUid(entries, uid) {
     if (!entries || typeof entries !== 'object') {
         return null;
@@ -3021,38 +2719,6 @@ function getLorebookEntryByUid(entries, uid) {
     return null;
 }
 
-function isAbortSignalLike(value) {
-    return Boolean(value && typeof value === 'object' && 'aborted' in value);
-}
-
-function isAbortError(error, abortSignal = null) {
-    if (isAbortSignalLike(abortSignal) && abortSignal.aborted) {
-        return true;
-    }
-    const name = String(error?.name || '').toLowerCase();
-    if (name === 'aborterror') {
-        return true;
-    }
-    const message = String(error?.message || error || '').toLowerCase();
-    return message.includes('aborted') || message.includes('abort');
-}
-
-function createAbortError(message = 'Operation aborted.') {
-    try {
-        return new DOMException(String(message || 'Operation aborted.'), 'AbortError');
-    } catch {
-        const error = new Error(String(message || 'Operation aborted.'));
-        error.name = 'AbortError';
-        return error;
-    }
-}
-
-function throwIfAborted(abortSignal, message = 'Operation aborted.') {
-    if (isAbortSignalLike(abortSignal) && abortSignal.aborted) {
-        throw createAbortError(message);
-    }
-}
-
 function collectLorebookEntryUids(entries) {
     const output = new Set();
     for (const [rawUid, entry] of Object.entries(entries && typeof entries === 'object' ? entries : {})) {
@@ -3062,94 +2728,6 @@ function collectLorebookEntryUids(entries) {
         }
     }
     return output;
-}
-
-function buildLorebookDraftDiffPreview(operation, targetBook, beforeEntry, afterEntry) {
-    const kind = String(operation?.kind || '');
-    const args = operation?.args && typeof operation.args === 'object' ? operation.args : {};
-    const entryUid = asFiniteInteger(args.entry_uid, null);
-    const beforeNormalized = beforeEntry ? normalizeLorebookEntryForSync(beforeEntry, entryUid) : null;
-    const afterNormalized = afterEntry ? normalizeLorebookEntryForSync(afterEntry, entryUid) : null;
-    if (kind === 'lorebook_upsert_entry' && beforeNormalized && afterNormalized && areLorebookEntriesEqualForSync(beforeNormalized, afterNormalized)) {
-        return null;
-    }
-    if (kind === 'lorebook_delete_entry' && !beforeNormalized) {
-        return null;
-    }
-    const preview = {
-        title: buildOperationSummary(operation),
-        fields: [],
-        meta: [
-            {
-                label: i18n('Target lorebook'),
-                value: String(targetBook || i18n('(missing lorebook)')),
-            },
-            {
-                label: i18n('Entry UID'),
-                value: Number.isInteger(entryUid) ? String(entryUid) : '?',
-            },
-        ],
-        rawArgs: clone(args || {}),
-    };
-
-    // Field specs are diff-driven (compare normalized before vs after) rather
-    // than args-driven. The AI tool schema permits passing the entry as a
-    // nested `{ entry: {...} }` object instead of flat keys; the old
-    // touched-args path missed every field in that case and fell through to a
-    // useless full-JSON diff. Comparing the normalized snapshot pair sidesteps
-    // that — we render exactly the fields that actually changed regardless of
-    // how the AI shaped its call.
-    const FIELD_SPECS = [
-        { label: 'comment', key: 'comment' },
-        { label: 'content', key: 'content' },
-        { label: 'keywords', key: 'key' },
-        { label: 'secondary keywords', key: 'keysecondary' },
-        { label: 'selective logic', key: 'selectiveLogic' },
-        { label: 'order', key: 'order' },
-        { label: 'position', key: 'position' },
-        { label: 'depth', key: 'depth' },
-        { label: 'probability', key: 'probability' },
-        { label: 'enabled', key: 'enabled' },
-        { label: 'constant', key: 'constant' },
-        { label: 'vectorized', key: 'vectorized' },
-        { label: 'excludeRecursion', key: 'excludeRecursion' },
-        { label: 'preventRecursion', key: 'preventRecursion' },
-        { label: 'group', key: 'group' },
-        { label: 'role', key: 'role' },
-    ];
-
-    if (kind === 'lorebook_delete_entry') {
-        // Pre-deletion snapshot of the key user-facing fields, force-rendered
-        // (before may be the same as the synthetic "(deleted)" if the field
-        // was empty) so the user sees what's about to disappear.
-        const summaryKeys = ['comment', 'content', 'key', 'keysecondary'];
-        for (const key of summaryKeys) {
-            const spec = FIELD_SPECS.find((s) => s.key === key);
-            if (!spec) continue;
-            const beforeValue = getEntryPreviewValue(beforeNormalized, spec.key);
-            pushDiffField(preview.fields, spec.label, beforeValue, i18n('(deleted)'), { force: true });
-        }
-        return preview;
-    }
-
-    for (const spec of FIELD_SPECS) {
-        const beforeValue = beforeNormalized ? getEntryPreviewValue(beforeNormalized, spec.key) : '';
-        const afterValue = afterNormalized ? getEntryPreviewValue(afterNormalized, spec.key) : '';
-        // Force-render every populated field on a brand-new entry so the user
-        // can review what they're about to add (no `before` to diff against).
-        const forceForNewEntry = !beforeNormalized && afterValue !== '' && afterValue != null
-            && !(Array.isArray(afterValue) && afterValue.length === 0);
-        pushDiffField(preview.fields, spec.label, beforeValue, afterValue, { force: forceForNewEntry });
-    }
-
-    if (preview.fields.length === 0) {
-        // Both sides materially identical except for ordering / whitespace —
-        // surface a one-line "no effective change" hint instead of dumping the
-        // entry JSON. Caller-side filtering usually catches this case via
-        // areLorebookEntriesEqualForSync above, so we rarely land here.
-        pushDiffField(preview.fields, 'entry', i18n('(no effective change)'), i18n('(no effective change)'), { force: true });
-    }
-    return preview;
 }
 
 function cacheLorebookSnapshot(snapshot) {
@@ -3361,24 +2939,6 @@ const {
     sanitizeDiffPlaceholderValue,
 });
 
-function splitCharacterEditorToolCalls(rawCalls, helperToolApis = []) {
-    const editCalls = [];
-    const helperCalls = [];
-    const apis = Array.isArray(helperToolApis) ? helperToolApis : [];
-    for (const call of Array.isArray(rawCalls) ? rawCalls : []) {
-        const name = String(call?.name || '').trim();
-        if (!name) {
-            continue;
-        }
-        if (apis.some(api => typeof api?.isToolName === 'function' && api.isToolName(name))) {
-            helperCalls.push(call);
-            continue;
-        }
-        editCalls.push(call);
-    }
-    return { editCalls, helperCalls };
-}
-
 function getCharacterEditorSearchApi() {
     const api = globalThis?.Luker?.searchTools;
     if (!api || typeof api !== 'object') {
@@ -3476,185 +3036,9 @@ export async function buildUnifiedCharacterEditorLiveSnapshot(context, avatar = 
     return { character, lorebooks };
 }
 
-function makeRuntimeToolCallId() {
-    return `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function makeConversationMessageId(prefix = 'cea_msg') {
-    return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function createPersistentToolCallPayload(name, args = {}, id = '') {
-    const toolName = String(name || '').trim();
-    if (!toolName) {
-        return null;
-    }
-    const safeArgs = args && typeof args === 'object' ? clone(args) : {};
-    return {
-        id: String(id || '').trim() || makeRuntimeToolCallId(),
-        type: 'function',
-        function: {
-            name: toolName,
-            arguments: JSON.stringify(safeArgs),
-        },
-    };
-}
-
-function normalizePersistentToolCalls(message) {
-    const output = [];
-    for (const call of Array.isArray(message?.tool_calls) ? message.tool_calls : []) {
-        const payload = createPersistentToolCallPayload(
-            call?.function?.name,
-            (() => {
-                if (call?.function?.arguments && typeof call.function.arguments === 'string') {
-                    try {
-                        const parsed = JSON.parse(call.function.arguments);
-                        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-                    } catch {
-                        return {};
-                    }
-                }
-                if (call?.function?.arguments && typeof call.function.arguments === 'object') {
-                    return call.function.arguments;
-                }
-                return {};
-            })(),
-            call?.id,
-        );
-        if (payload) {
-            output.push(payload);
-        }
-    }
-    return output;
-}
-
-function normalizePersistentToolResults(message, toolCalls = []) {
-    const toolCallIds = new Set(toolCalls.map(call => String(call?.id || '').trim()).filter(Boolean));
-    return (Array.isArray(message?.tool_results) ? message.tool_results : [])
-        .map((item) => ({
-            tool_call_id: String(item?.tool_call_id || '').trim(),
-            content: String(item?.content ?? ''),
-        }))
-        .filter(item => item.tool_call_id && toolCallIds.has(item.tool_call_id));
-}
-
 const CHARACTER_EDITOR_ROOT_TEXT_FIELDS = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example'];
 const CHARACTER_EDITOR_DATA_TEXT_FIELDS = ['system_prompt', 'post_history_instructions', 'creator_notes'];
 const CHARACTER_EDITOR_DATA_ARRAY_FIELDS = ['alternate_greetings'];
-
-function normalizeCharacterEditorOperationsFromCalls(rawCalls) {
-    const output = [];
-    for (const call of Array.isArray(rawCalls) ? rawCalls : []) {
-        const name = String(call?.name || '').trim();
-        const args = call?.args && typeof call.args === 'object' ? call.args : {};
-        if (name === TOOL_NAMES.UPDATE_FIELDS) {
-            const normalizedArgs = {};
-            for (const key of [...CHARACTER_EDITOR_ROOT_TEXT_FIELDS, ...CHARACTER_EDITOR_DATA_TEXT_FIELDS]) {
-                if (Object.hasOwn(args, key)) {
-                    normalizedArgs[key] = String(args[key] ?? '');
-                }
-            }
-            for (const key of CHARACTER_EDITOR_DATA_ARRAY_FIELDS) {
-                if (!Object.hasOwn(args, key)) {
-                    continue;
-                }
-                const value = Array.isArray(args[key]) ? args[key] : [args[key]];
-                normalizedArgs[key] = value.map(item => String(item ?? ''));
-            }
-            if (Object.keys(normalizedArgs).length > 0) {
-                output.push({ kind: 'character_fields', args: normalizedArgs });
-            }
-            continue;
-        }
-        if (name === TOOL_NAMES.SET_PRIMARY_BOOK) {
-            const normalizedArgs = {};
-            if (Object.hasOwn(args, 'book_name')) {
-                normalizedArgs.book_name = String(args.book_name ?? '');
-            }
-            if (Object.hasOwn(args, 'create_if_missing')) {
-                normalizedArgs.create_if_missing = Boolean(args.create_if_missing);
-            }
-            output.push({ kind: 'set_primary_lorebook', args: normalizedArgs });
-            continue;
-        }
-        if (name === TOOL_NAMES.UPSERT_ENTRY) {
-            const uid = asFiniteInteger(args.entry_uid, null);
-            if (!Number.isInteger(uid) || uid < 0) {
-                continue;
-            }
-            const bookName = String(args.book_name || '').trim();
-            if (!bookName) {
-                continue;
-            }
-            const normalizedArgs = { entry_uid: uid, book_name: bookName };
-            let hasPayload = false;
-            const passThrough = ['key_csv', 'secondary_key_csv', 'comment', 'content'];
-            for (const key of passThrough) {
-                if (Object.hasOwn(args, key)) {
-                    normalizedArgs[key] = String(args[key] ?? '');
-                    hasPayload = true;
-                }
-            }
-            const intFields = ['selective_logic', 'order', 'position', 'depth', 'delay_until_recursion'];
-            for (const key of intFields) {
-                if (!Object.hasOwn(args, key)) {
-                    continue;
-                }
-                const value = asFiniteInteger(args[key], null);
-                if (value !== null) {
-                    normalizedArgs[key] = value;
-                    hasPayload = true;
-                }
-            }
-            const boolFields = ['create_if_missing', 'enabled', 'disable', 'constant', 'exclude_recursion', 'prevent_recursion'];
-            for (const key of boolFields) {
-                if (Object.hasOwn(args, key)) {
-                    normalizedArgs[key] = Boolean(args[key]);
-                    if (key !== 'create_if_missing') {
-                        hasPayload = true;
-                    }
-                }
-            }
-            if (!hasPayload) {
-                continue;
-            }
-            output.push({ kind: 'lorebook_upsert_entry', args: normalizedArgs });
-            continue;
-        }
-        if (name === TOOL_NAMES.DELETE_ENTRY) {
-            const uid = asFiniteInteger(args.entry_uid, null);
-            if (!Number.isInteger(uid) || uid < 0) {
-                continue;
-            }
-            const bookName = String(args.book_name || '').trim();
-            if (!bookName) {
-                continue;
-            }
-            output.push({ kind: 'lorebook_delete_entry', args: { entry_uid: uid, book_name: bookName } });
-        }
-    }
-    return output;
-}
-
-function buildCharacterEditorOperationKey(operation) {
-    const kind = String(operation?.kind || '').trim();
-    if (!kind) {
-        return '';
-    }
-    if (kind === 'lorebook_upsert_entry' || kind === 'lorebook_delete_entry') {
-        const uid = asFiniteInteger(operation?.args?.entry_uid, null);
-        const bookName = String(operation?.args?.book_name || '').trim();
-        return `${kind}:${bookName}:${Number.isInteger(uid) ? uid : '?'}`;
-    }
-    if (kind === 'set_primary_lorebook') {
-        return `${kind}:${String(operation?.args?.book_name || '').trim()}`;
-    }
-    if (kind === 'character_fields') {
-        const keys = Object.keys(operation?.args || {}).sort().join(',');
-        return `${kind}:${keys}`;
-    }
-    return `${kind}:${JSON.stringify(operation?.args || {})}`;
-}
 
 const CHARACTER_DIFF_TOP_FIELDS = Object.freeze(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions']);
 const CHARACTER_DIFF_DATA_FIELDS = Object.freeze(['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions']);
@@ -4019,7 +3403,6 @@ async function openCharacterEditorPopup(context = getContext(), opts = {}) {
 const {
     ensureUi,
     refreshUiState,
-    renderCharacterEditorConversationHistoryItems,
 } = createCharacterEditorUi({
     MODULE_NAME,
     STYLE_ID,
@@ -4205,63 +3588,6 @@ function sanitizeDiffPlaceholderValue(value) {
         '未設定',
     ]);
     return notSetTokens.has(normalized) ? '' : text;
-}
-
-function normalizeDiffValue(value, emptyLabel = '') {
-    const emptyText = emptyLabel ? i18n(emptyLabel) : '';
-    if (value === null || value === undefined) {
-        return emptyText;
-    }
-    if (Array.isArray(value)) {
-        const text = value
-            .map(item => sanitizeDiffPlaceholderValue(item).trim())
-            .filter(Boolean)
-            .join(', ');
-        return text || emptyText;
-    }
-    if (typeof value === 'boolean') {
-        return value ? 'true' : 'false';
-    }
-    const text = sanitizeDiffPlaceholderValue(value);
-    if (!text.trim()) {
-        return emptyText;
-    }
-    return text;
-}
-
-function clipDiffText(value, maxLength = 1200) {
-    const text = String(value ?? '');
-    if (text.length <= maxLength) {
-        return text;
-    }
-    return `${text.slice(0, maxLength)}\n...`;
-}
-
-function pushDiffField(fields, label, before, after, { force = false } = {}) {
-    const beforeText = clipDiffText(normalizeDiffValue(before));
-    const afterText = clipDiffText(normalizeDiffValue(after));
-    if (!force && beforeText === afterText) {
-        return;
-    }
-    fields.push({
-        label: String(label || 'field'),
-        before: beforeText,
-        after: afterText,
-    });
-}
-
-function getEntryPreviewValue(entry, key) {
-    const source = entry && typeof entry === 'object' ? entry : {};
-    if (key === 'key') {
-        return Array.isArray(source.key) ? source.key : [];
-    }
-    if (key === 'keysecondary') {
-        return Array.isArray(source.keysecondary) ? source.keysecondary : [];
-    }
-    if (key === 'enabled') {
-        return !source.disable;
-    }
-    return source[key];
 }
 
 async function applyLorebookUpsertOperation(context, record, operation) {
@@ -4508,78 +3834,6 @@ async function rollbackJournalEntry(context, journalEntry, { avatar = '' } = {})
     }
 
     throw new Error(`Rollback is not supported for kind: ${kind}`);
-}
-
-async function rollbackJournalEntryWithLog(context, journalId, { avatar = '', source = 'manual' } = {}) {
-    const resolvedAvatar = String(avatar || '').trim();
-    const settings = getSettings();
-    const state = await loadOperationState(context, { force: true, avatar: resolvedAvatar });
-    const { entry } = getJournalById(state, journalId);
-    if (!entry) {
-        throw new Error('Journal entry not found.');
-    }
-    if (String(entry.kind || '') === 'rollback') {
-        throw new Error('Rollback is not supported for rollback records.');
-    }
-    const summary = await rollbackJournalEntry(context, entry, { avatar: resolvedAvatar });
-    const rollbackLog = {
-        id: nextStateId(state, 'tx'),
-        operationId: entry.operationId,
-        kind: 'rollback',
-        source: String(source || 'manual'),
-        summary,
-        data: {
-            targetJournalId: entry.id,
-        },
-        createdAt: Date.now(),
-    };
-    appendJournal(state, rollbackLog, settings);
-    state.updatedAt = Date.now();
-    await persistOperationState(context, state, { avatar: resolvedAvatar });
-    return {
-        summary,
-        rollbackJournalId: rollbackLog.id,
-    };
-}
-
-function rebuildCharacterEditorRejectedOperationKeys(messages, targetSet) {
-    const set = targetSet instanceof Set ? targetSet : new Set();
-    set.clear();
-    for (const item of Array.isArray(messages) ? messages : []) {
-        if (String(item?.role || '').trim().toLowerCase() !== 'assistant') {
-            continue;
-        }
-        if (String(item?.toolState || '').trim().toLowerCase() !== 'rejected') {
-            continue;
-        }
-        for (const operation of Array.isArray(item?.operations) ? item.operations : []) {
-            const key = buildCharacterEditorOperationKey(operation);
-            if (key) {
-                set.add(key);
-            }
-        }
-    }
-    return set;
-}
-
-async function rollbackCharacterEditorConversationMessages(context, messages, { avatar = '' } = {}) {
-    const rollbacks = [];
-    const removedMessages = Array.isArray(messages) ? messages.slice() : [];
-    for (const message of removedMessages.reverse()) {
-        const executionResults = Array.isArray(message?.executionResults) ? message.executionResults.slice() : [];
-        for (const result of executionResults.reverse()) {
-            const journalId = String(result?.journalId || result?.journal_id || '').trim();
-            if (!result?.ok || !journalId || result?.rolledBackAt) {
-                continue;
-            }
-            await rollbackJournalEntryWithLog(context, journalId, {
-                avatar,
-                source: 'message_refresh',
-            });
-            rollbacks.push(journalId);
-        }
-    }
-    return rollbacks;
 }
 
 function renderJournalItems(state) {
@@ -4955,8 +4209,7 @@ function buildPostReplaceMergeAction() {
                             }
                         }
                         if (materializedBookName && typeof __ctx?.deleteWorldBook === 'function') {
-                            try { await __ctx.deleteWorldBook(materializedBookName); }
-                            catch (delErr) { console.warn(`[${MODULE_NAME}] merge rollback: deleteWorldBook failed`, delErr); }
+                            try { await __ctx.deleteWorldBook(materializedBookName); } catch (delErr) { console.warn(`[${MODULE_NAME}] merge rollback: deleteWorldBook failed`, delErr); }
                         }
                         notifySuccess(i18nFormat('Cancelled — restored previous world book: ${0}', previousBookName || '(none)'));
                     } catch (err) {

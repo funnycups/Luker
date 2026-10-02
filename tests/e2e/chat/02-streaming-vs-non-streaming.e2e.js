@@ -43,8 +43,10 @@ async function startSlowStreamMock({ chunkDelayMs = 80 } = {}) {
         }
         if (req.url.endsWith('/chat/completions') || req.url.endsWith('/v1/chat/completions')) {
             // Read body (we don't need it) so the request closes.
-            let body = '';
-            for await (const chunk of req) body += chunk;
+            await new Promise((resolve) => {
+                req.on('end', resolve);
+                req.resume();
+            });
             res.writeHead(200, {
                 'content-type': 'text/event-stream',
                 'cache-control': 'no-cache',
@@ -101,7 +103,7 @@ async function captureGrowthCurve(page, { samplePeriodMs = 80, maxSamples = 120 
             }, samplePeriodMs);
             const eventName = ctx.eventTypes.GENERATION_ENDED;
             const off = ctx.eventSource.on(eventName, () => {
-                try { ctx.eventSource.removeListener(eventName, off); } catch {}
+                try { ctx.eventSource.removeListener(eventName, off); } catch { /* ignore */ }
                 setTimeout(() => {
                     if (done) return;
                     const lastMesText = document.querySelector('#chat .last_mes .mes_text');
@@ -150,8 +152,8 @@ test.describe('#2 — streaming vs non-streaming bubble growth', () => {
                 `streaming should yield 2+ distinct partial lengths; samples=${JSON.stringify(samples.map(s => s.len))}`)
                 .toBeGreaterThanOrEqual(2);
             for (let i = 1; i < samples.length; i++) {
-                expect(samples[i].len, `growth not monotonic at i=${i}: ${samples[i-1].len} -> ${samples[i].len}`)
-                    .toBeGreaterThanOrEqual(samples[i-1].len);
+                expect(samples[i].len, `growth not monotonic at i=${i}: ${samples[i - 1].len} -> ${samples[i].len}`)
+                    .toBeGreaterThanOrEqual(samples[i - 1].len);
             }
         } finally {
             await tearDownServer(server);

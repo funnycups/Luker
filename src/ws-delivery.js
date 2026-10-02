@@ -102,8 +102,7 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
             console.warn('[ws-delivery] upgrade socket error:', err?.code || err?.message || err);
         });
         let userInfo;
-        try { userInfo = verifyTicket(extractTicket(req)); }
-        catch (err) {
+        try { userInfo = verifyTicket(extractTicket(req)); } catch (err) {
             socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
             socket.destroy();
             return;
@@ -137,8 +136,7 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
         });
         ws.on('message', (raw) => {
             let msg;
-            try { msg = JSON.parse(String(raw)); }
-            catch { return; }
+            try { msg = JSON.parse(String(raw)); } catch { return; }
             if (!msg || typeof msg !== 'object') return;
 
             // App-level heartbeat: client echoes back our ping. Bump lastPongAt
@@ -152,8 +150,7 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
                 const requestId = String(msg.request_id || '');
                 if (!requestId) return;
                 let job;
-                try { job = getTaskByRequestId(requestId, ws.userHandle); }
-                catch (err) {
+                try { job = getTaskByRequestId(requestId, ws.userHandle); } catch (err) {
                     console.warn(`[ws-delivery] subscribe forbidden user=${ws.userHandle} request_id=${requestId}`);
                     sendJson(ws, { type: 'error', request_id: requestId, code: 'forbidden', message: 'access denied' });
                     return;
@@ -203,7 +200,7 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
         ws.on('close', (code, reason) => {
             console.info(`[ws-delivery] closed user=${ws.userHandle} code=${code} reason="${String(reason || '')}" subs=${ws.subscriptions.size}`);
             for (const [requestId, unsub] of ws.subscriptions.entries()) {
-                try { unsub(); } catch {}
+                try { unsub(); } catch { /* ignore */ }
                 // Only release the active-subscriptions slot if we still own
                 // it — a newer socket may have already evicted us above.
                 const key = activeSubsKey(ws.userHandle, requestId);

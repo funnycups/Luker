@@ -98,9 +98,9 @@ test.describe('#19 — same source added twice keeps both slices', () => {
         });
         const mergedPath = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder, `${mergedName}.jsonl`);
         const lines = readFileSync(mergedPath, 'utf-8').trim().split('\n');
-        expect(lines.length, `expected 1 header + 4 messages; got ${lines.length}`).toBe(5);
+        expect(lines, `expected 1 header + 4 messages; got ${lines.length}`).toHaveLength(5);
         const bodyMesgs = lines.slice(1).map(l => JSON.parse(l).mes);
-        expect(bodyMesgs.length).toBe(4);
+        expect(bodyMesgs).toHaveLength(4);
         expect(bodyMesgs[0]).toBe('m0');
         expect(bodyMesgs[1]).toBe('r0');
         expect(bodyMesgs[2]).toBe('m2');

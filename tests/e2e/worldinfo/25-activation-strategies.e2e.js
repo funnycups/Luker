@@ -204,8 +204,8 @@ test.describe('#25 — Activation strategies all inject correctly', () => {
         // the hood. We then close the drawer so the chat composer is
         // unobstructed for the send turns below.
         await openBookInEditor(page, 'activation-strategies-book');
-        const editorEntryCount = await page.locator('#world_popup_entries_list .world_entry').count();
-        expect(editorEntryCount, 'expected the editor to render all 5 strategy entries on open').toBe(5);
+        const editorEntryCount = page.locator('#world_popup_entries_list .world_entry');
+        await expect(editorEntryCount, 'expected the editor to render all 5 strategy entries on open').toHaveCount(5);
 
         // Helper: send a turn and return the body of the resulting chat-completion request.
         async function sendAndCaptureBody(text) {

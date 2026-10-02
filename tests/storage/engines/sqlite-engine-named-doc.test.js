@@ -37,8 +37,8 @@ describe('SqliteEngine named-doc handler', () => {
             tx.putResource(ndKey('quickReplies', 'Dark'), { doc: { v: 2 } });
         });
         const db = engine._dbs.get(handle);
-        const themes = db.prepare(`SELECT doc FROM named_docs WHERE handle=? AND bucket='themes' AND name='Dark'`).get(handle);
-        const qr = db.prepare(`SELECT doc FROM named_docs WHERE handle=? AND bucket='quickReplies' AND name='Dark'`).get(handle);
+        const themes = db.prepare('SELECT doc FROM named_docs WHERE handle=? AND bucket=\'themes\' AND name=\'Dark\'').get(handle);
+        const qr = db.prepare('SELECT doc FROM named_docs WHERE handle=? AND bucket=\'quickReplies\' AND name=\'Dark\'').get(handle);
         expect(JSON.parse(themes.doc)).toEqual({ v: 1 });
         expect(JSON.parse(qr.doc)).toEqual({ v: 2 });
     });
@@ -49,7 +49,7 @@ describe('SqliteEngine named-doc handler', () => {
             tx.putResource(ndKey('movingUI', 'X'), { doc: { v: 2 } });
         });
         const db = engine._dbs.get(handle);
-        const row = db.prepare(`SELECT doc FROM named_docs WHERE bucket='movingUI' AND name='X'`).get();
+        const row = db.prepare('SELECT doc FROM named_docs WHERE bucket=\'movingUI\' AND name=\'X\'').get();
         expect(JSON.parse(row.doc)).toEqual({ v: 2 });
     });
 
@@ -65,7 +65,7 @@ describe('SqliteEngine named-doc handler', () => {
         expect(present).toBe(true);
 
         const db = engine._dbs.get(handle);
-        const row = db.prepare(`SELECT doc FROM named_docs WHERE bucket='themes' AND name='X'`).get();
+        const row = db.prepare('SELECT doc FROM named_docs WHERE bucket=\'themes\' AND name=\'X\'').get();
         expect(row).toBeUndefined();
     });
 

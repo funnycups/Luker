@@ -64,6 +64,7 @@ module.exports = {
                 toastr: 'readonly',
                 Luker: 'readonly',
                 SillyTavern: 'readonly',
+                Profiler: 'readonly',
             },
         },
         {
@@ -97,10 +98,11 @@ module.exports = {
         '**/*.min.js',
         'public/scripts/extensions/quick-reply/lib/**',
         'public/scripts/extensions/tts/lib/**',
+        'public/scripts/vendor/**',
     ],
     rules: {
         'jsdoc/no-undefined-types': ['warn', { disableReporting: true, markVariablesAsUsed: true }],
-        'no-unused-vars': ['error', { args: 'none' }],
+        'no-unused-vars': ['error', { args: 'none', varsIgnorePattern: '^_' }],
         'no-control-regex': 'off',
         'no-constant-condition': ['error', { checkLoops: false }],
         'require-yield': 'off',

@@ -144,9 +144,9 @@ test.describe('#71 — Critic regex search: extended director-driven branches', 
         const ORIGINAL_PHRASE = '三个破浪点';
         const REPLACEMENT_PHRASE = '北方的三道暗流';
         const ORIGINAL_DRAFT =
-            `*她把图卷在膝上摊开，指尖轻按其中一处。*\n\n`
+            '*她把图卷在膝上摊开，指尖轻按其中一处。*\n\n'
             + `「今夜${ORIGINAL_PHRASE}都在那里。`
-            + `若你愿意，我们可以等到月落再下灯。」`;
+            + '若你愿意，我们可以等到月落再下灯。」';
         const CRITIC_VERDICT = `VOTE: edit. Replace "${ORIGINAL_PHRASE}" with "${REPLACEMENT_PHRASE}".`;
 
         await awaitMainUI(page, server.baseURL);

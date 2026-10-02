@@ -231,6 +231,7 @@ test.describe('#47 — orchestrator iter-studio inspect_bound_preset', () => {
 
         await closeIterStudio(page);
     });
+
     test('validation error branch: action=get without name surfaces error envelope on tool_result', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await enableOrchestrator(page);

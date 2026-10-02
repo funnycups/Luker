@@ -18,7 +18,6 @@
  */
 process.env.SILLYTAVERN_ENABLEUSERACCOUNTS = 'true';
 
-/* global globalThis */
 import { describe, test, expect, beforeAll, beforeEach, afterAll, afterEach } from '@jest/globals';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -152,7 +151,7 @@ describe('handle-mismatch gate', () => {
             expect(sanitizeHandleForPeerId('a b c')).toBe('a_b_c');
             expect(sanitizeHandleForPeerId('a@b')).toBe('a_b');
             expect(sanitizeHandleForPeerId('a#b$c%d')).toBe('a_b_c_d');
-            expect(sanitizeHandleForPeerId("alice's")).toBe('alice_s');
+            expect(sanitizeHandleForPeerId('alice\'s')).toBe('alice_s');
         });
 
         test('falls back to "peer" on empty or nullish input', () => {

@@ -44,6 +44,7 @@ test.afterAll(async () => {
 
 test.describe('#94 — TTS pipeline reaches playback via real .mes_narrate click', () => {
     test.describe.configure({ timeout: 240_000 });
+
     test('clicking .mes_narrate on assistant reply fires the TTS pipeline (real provider.generateTts call)', async ({ page }) => {
         test.setTimeout(240_000);
         await awaitMainUI(page, server.baseURL);

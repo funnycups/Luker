@@ -1,4 +1,3 @@
-/* global globalThis */
 // Regression: onboarding "Import Global Extensions ZIP" must overwrite a
 // pre-existing read-only file inside the target extension folder.
 //

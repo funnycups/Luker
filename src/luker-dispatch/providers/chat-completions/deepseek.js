@@ -61,13 +61,13 @@ export async function dispatchDeepSeek(ctx) {
         const headers = {};
 
         if (body.logprobs > 0) {
-            bodyParams['top_logprobs'] = body.logprobs;
-            bodyParams['logprobs'] = true;
+            bodyParams.top_logprobs = body.logprobs;
+            bodyParams.logprobs = true;
         }
 
         if (Array.isArray(body.tools) && body.tools.length > 0) {
-            bodyParams['tools'] = body.tools;
-            bodyParams['tool_choice'] = body.tool_choice;
+            bodyParams.tools = body.tools;
+            bodyParams.tool_choice = body.tool_choice;
 
             // DeepSeek doesn't permit empty required arrays.
             bodyParams.tools.forEach(tool => {
@@ -101,12 +101,12 @@ export async function dispatchDeepSeek(ctx) {
         ensureDeepSeekReasoningContent(processedMessages);
 
         if (body.reasoning_effort) {
-            bodyParams['reasoning_effort'] = body.reasoning_effort;
-            bodyParams['thinking'] = { type: 'enabled' };
+            bodyParams.reasoning_effort = body.reasoning_effort;
+            bodyParams.thinking = { type: 'enabled' };
             // DeepSeek thinking mode rejects `tool_choice` (returns 400). Strip it here
             // so the frontend patch is not the only line of defense; `tools` stays and
             // the service falls back to auto behavior. Forced-function callers rely on retry.
-            delete bodyParams['tool_choice'];
+            delete bodyParams.tool_choice;
         }
 
         const requestBody = {

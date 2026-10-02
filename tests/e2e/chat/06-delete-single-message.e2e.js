@@ -55,7 +55,7 @@ async function deleteMessageRealUI(page, mesid) {
         const t = setTimeout(() => reject(new Error('delete timeout')), 20_000);
         const off = ctx.eventSource.on(ctx.eventTypes.MESSAGE_DELETED, (id) => {
             clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_DELETED, off); } catch {}
+            try { ctx.eventSource.removeListener(ctx.eventTypes.MESSAGE_DELETED, off); } catch { /* ignore */ }
             resolve(id);
         });
     }));
@@ -102,7 +102,7 @@ test.describe('#6 — delete single message via pencil', () => {
 
         // DOM-side: Reply 2 is gone, Reply 1 and 3 are still rendered.
         const renderedAfterDelete = await getRenderedChatTexts(page);
-        expect(renderedAfterDelete.length).toBe(lenBefore - 1);
+        expect(renderedAfterDelete).toHaveLength(lenBefore - 1);
         expect(renderedAfterDelete.some(t => /Reply 2/.test(t))).toBe(false);
         expect(renderedAfterDelete.some(t => /Reply 1/.test(t))).toBe(true);
         expect(renderedAfterDelete.some(t => /Reply 3/.test(t))).toBe(true);
@@ -116,14 +116,14 @@ test.describe('#6 — delete single message via pencil', () => {
 
         // Post-restart: same DOM state.
         const renderedRestored = await getRenderedChatTexts(page);
-        expect(renderedRestored.length).toBe(lenBefore - 1);
+        expect(renderedRestored).toHaveLength(lenBefore - 1);
         expect(renderedRestored.some(t => /Reply 2/.test(t))).toBe(false);
         expect(renderedRestored.some(t => /Reply 1/.test(t))).toBe(true);
         expect(renderedRestored.some(t => /Reply 3/.test(t))).toBe(true);
 
         // Secondary ctx.chat structural check.
         const after = await getChatSnapshot(page);
-        expect(after.length).toBe(lenBefore - 1);
+        expect(after).toHaveLength(lenBefore - 1);
         expect(after.messages.some(m => !m.is_user && /Reply 2/.test(m.mes || ''))).toBe(false);
         expect(after.messages.some(m => !m.is_user && /Reply 1/.test(m.mes || ''))).toBe(true);
         expect(after.messages.some(m => !m.is_user && /Reply 3/.test(m.mes || ''))).toBe(true);

@@ -95,7 +95,6 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
         console.error(err);
         response.sendStatus(500);
     }
-
 });
 
 router.post('/rename', async function (request, response) {

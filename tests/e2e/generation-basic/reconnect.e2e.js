@@ -50,7 +50,7 @@ test('generation-basic: ws-delivery replays every chunk across a mid-stream offl
         const OrigWS = window.WebSocket;
         window.WebSocket = function PatchedWebSocket(...args) {
             const s = new OrigWS(...args);
-            try { window.__lukerObservedSockets.push(s); } catch {}
+            try { window.__lukerObservedSockets.push(s); } catch { /* ignore */ }
             return s;
         };
         Object.setPrototypeOf(window.WebSocket, OrigWS);
@@ -84,7 +84,7 @@ test('generation-basic: ws-delivery replays every chunk across a mid-stream offl
         const t = setTimeout(() => reject(new Error('generation timeout')), to);
         const off = ctx.eventSource.on(ctx.eventTypes.GENERATION_ENDED, (chatLength) => {
             clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.GENERATION_ENDED, off); } catch {}
+            try { ctx.eventSource.removeListener(ctx.eventTypes.GENERATION_ENDED, off); } catch { /* ignore */ }
             resolve(Math.max(0, Number(chatLength) - 1));
         });
     }), 60_000);
@@ -122,7 +122,7 @@ test('generation-basic: ws-delivery replays every chunk across a mid-stream offl
         // globals. In practice the hook is installed at test start (see
         // the `addInitScript` below) so this branch is a no-op.
         (window.__lukerObservedSockets || []).forEach(s => {
-            try { s.close(); } catch {}
+            try { s.close(); } catch { /* ignore */ }
         });
     });
     await page.waitForTimeout(OFFLINE_MS);

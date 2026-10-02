@@ -112,14 +112,14 @@ test.describe('#18 — merge dialog per-segment trim slices each source', () => 
         });
         const mergedPath = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder, `${mergedName}.jsonl`);
         const lines = readFileSync(mergedPath, 'utf-8').trim().split('\n');
-        expect(lines.length, `expected 1 header + 15 messages; got ${lines.length}`).toBe(16);
+        expect(lines, `expected 1 header + 15 messages; got ${lines.length}`).toHaveLength(16);
         const bodyMesgs = lines.slice(1).map(l => JSON.parse(l).mes);
 
         // A's full body lives at indices 0..8: greeting then 4 user/reply
         // pairs. The greeting text is whatever the Seraphina card ships
         // with; we don't assert it byte-for-byte (that's the card's
         // contract, not this test's) but the user/reply pattern is ours.
-        expect(bodyMesgs.length).toBe(15);
+        expect(bodyMesgs).toHaveLength(15);
         expect(bodyMesgs[1]).toBe('A msg 0');
         expect(bodyMesgs[2]).toBe('r0');
         expect(bodyMesgs[3]).toBe('A msg 1');

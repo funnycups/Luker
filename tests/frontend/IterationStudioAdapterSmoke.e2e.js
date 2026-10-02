@@ -208,7 +208,6 @@ test.describe('UI-driven iter-studio adapter smoke', () => {
         ];
 
         let exercised = 0;
-        let skipped = 0;
         const results = [];
 
         for (const adapter of adapters) {
@@ -216,7 +215,6 @@ test.describe('UI-driven iter-studio adapter smoke', () => {
                 if (adapter.skipReason) {
                     test.info().annotations.push({ type: 'skip', description: `[${adapter.name}] ${adapter.skipReason}` });
                     results.push({ name: adapter.name, status: 'skipped', reason: adapter.skipReason });
-                    skipped += 1;
                     return;
                 }
                 try {
@@ -224,14 +222,12 @@ test.describe('UI-driven iter-studio adapter smoke', () => {
                 } catch (e) {
                     test.info().annotations.push({ type: 'skip', description: `[${adapter.name}] drawer #${adapter.drawerHostId} unreachable: ${e?.message}` });
                     results.push({ name: adapter.name, status: 'skipped', reason: `drawer unreachable: ${e?.message}` });
-                    skipped += 1;
                     return;
                 }
                 const outcome = await openAdapterAndSmoke(page, adapter);
                 if (outcome.skipped) {
                     test.info().annotations.push({ type: 'skip', description: `[${adapter.name}] ${outcome.reason}` });
                     results.push({ name: adapter.name, status: 'skipped', reason: outcome.reason });
-                    skipped += 1;
                 } else {
                     results.push({ name: adapter.name, status: 'passed' });
                     exercised += 1;

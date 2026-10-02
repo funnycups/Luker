@@ -14,8 +14,6 @@
 
 import { test, expect } from '@playwright/test';
 import http from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, markOnboarded } from '../_lib/fixtures.js';
@@ -30,7 +28,7 @@ async function startTextgenMock() {
         let body = '';
         for await (const c of req) body += c;
         let parsed = {};
-        try { parsed = JSON.parse(body || '{}'); } catch {}
+        try { parsed = JSON.parse(body || '{}'); } catch { /* ignore */ }
         requests.push({ url: req.url, method: req.method, body: parsed });
 
         if (req.url === '/v1/models' || req.url === '/models') {
@@ -66,7 +64,7 @@ async function startKoboldMock() {
         let body = '';
         for await (const c of req) body += c;
         let parsed = {};
-        try { parsed = JSON.parse(body || '{}'); } catch {}
+        try { parsed = JSON.parse(body || '{}'); } catch { /* ignore */ }
         requests.push({ url: req.url, method: req.method, body: parsed });
 
         if (req.url === '/api/v1/model' || req.url === '/v1/model') {
@@ -247,7 +245,7 @@ test.describe('#41 — four backend sources reachable', () => {
         // body shape: { jobs: [...] } — list may be empty if the just-finished
         // job already cleared, but the endpoint must respond with valid JSON.
         let parsed;
-        try { parsed = JSON.parse(active.body); } catch {}
+        try { parsed = JSON.parse(active.body); } catch { /* ignore */ }
         expect(parsed, `jobs/active should return JSON; got status=${active.status} body=${active.body?.slice(0,200)}`).toBeTruthy();
         expect(Array.isArray(parsed.jobs)).toBe(true);
     });

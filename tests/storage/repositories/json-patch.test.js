@@ -24,13 +24,13 @@ describe('applyJsonPatch', () => {
         expect(applyJsonPatch({ xs: [10, 20, 30] }, [{ op: 'remove', path: '/xs/1' }]))
             .toEqual({ xs: [10, 30] });
     });
-    test('test op succeeds when value matches', () => {
+    test('op succeeds when value matches', () => {
         expect(applyJsonPatch({ a: 1 }, [
             { op: 'test', path: '/a', value: 1 },
             { op: 'replace', path: '/a', value: 2 },
         ])).toEqual({ a: 2 });
     });
-    test('test op throws when value mismatches', () => {
+    test('op throws when value mismatches', () => {
         expect(() => applyJsonPatch({ a: 1 }, [{ op: 'test', path: '/a', value: 99 }]))
             .toThrow(/json patch test failed/);
     });
@@ -70,7 +70,7 @@ describe('applyJsonPatch', () => {
         expect(input).toEqual({ a: { b: 1 } });
     });
 
-    test('test failure throws PatchTestFailedError', () => {
+    test('failure throws PatchTestFailedError', () => {
         expect(() => applyJsonPatch({ a: 1 }, [{ op: 'test', path: '/a', value: 99 }]))
             .toThrow(PatchTestFailedError);
     });

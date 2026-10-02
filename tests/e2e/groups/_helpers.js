@@ -273,8 +273,8 @@ export async function clickDisableMemberInUI(page, groupId, memberName) {
     await openGroupEditPanel(page);
     // Members render with `.ch_name` showing the display name; the
     // disable button only renders visibly while the row is NOT disabled.
-    const row = page.locator(`#rm_group_members .group_member:not(.disabled)`, {
-        has: page.locator(`.ch_name`, { hasText: memberName }),
+    const row = page.locator('#rm_group_members .group_member:not(.disabled)', {
+        has: page.locator('.ch_name', { hasText: memberName }),
     }).first();
     await row.waitFor({ state: 'visible', timeout: 10_000 });
     const disableBtn = row.locator('[data-action="disable"]').first();
@@ -297,8 +297,8 @@ export async function clickDisableMemberInUI(page, groupId, memberName) {
         return disabled.some(a => typeof a === 'string' && a.includes(avatarHint));
     }, { gid: groupId, avatarHint: '' }, { timeout: 5000 }).catch(() => {});
     // Final wait: confirm the row picked up `.disabled` class (CSS toggle).
-    await page.locator(`#rm_group_members .group_member.disabled`, {
-        has: page.locator(`.ch_name`, { hasText: memberName }),
+    await page.locator('#rm_group_members .group_member.disabled', {
+        has: page.locator('.ch_name', { hasText: memberName }),
     }).first().waitFor({ state: 'visible', timeout: 5000 });
 }
 
@@ -311,14 +311,14 @@ export async function clickDisableMemberInUI(page, groupId, memberName) {
  */
 export async function clickEnableMemberInUI(page, groupId, memberName) {
     await openGroupEditPanel(page);
-    const row = page.locator(`#rm_group_members .group_member.disabled`, {
-        has: page.locator(`.ch_name`, { hasText: memberName }),
+    const row = page.locator('#rm_group_members .group_member.disabled', {
+        has: page.locator('.ch_name', { hasText: memberName }),
     }).first();
     await row.waitFor({ state: 'visible', timeout: 10_000 });
     const enableBtn = row.locator('[data-action="enable"]').first();
     await enableBtn.evaluate(el => el.click());
-    await page.locator(`#rm_group_members .group_member:not(.disabled)`, {
-        has: page.locator(`.ch_name`, { hasText: memberName }),
+    await page.locator('#rm_group_members .group_member:not(.disabled)', {
+        has: page.locator('.ch_name', { hasText: memberName }),
     }).first().waitFor({ state: 'visible', timeout: 5000 });
 }
 
@@ -341,7 +341,7 @@ export async function sendUserAndAwaitGroupTurn(page, text, { timeoutMs = 120_00
         const t = setTimeout(() => reject(new Error('group wrapper timeout')), to);
         const handler = (payload) => {
             clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.GROUP_WRAPPER_FINISHED, handler); } catch {}
+            try { ctx.eventSource.removeListener(ctx.eventTypes.GROUP_WRAPPER_FINISHED, handler); } catch { /* ignore */ }
             resolve(payload);
         };
         ctx.eventSource.on(ctx.eventTypes.GROUP_WRAPPER_FINISHED, handler);

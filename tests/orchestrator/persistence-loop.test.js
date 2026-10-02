@@ -121,7 +121,7 @@ describe('sanitizeLoopProfile defaults', () => {
 });
 
 describe('sanitizeLoopProfile mode coercion', () => {
-    test("forces mode to 'loop' even when input declares a different mode", () => {
+    test('forces mode to \'loop\' even when input declares a different mode', () => {
         expect(sanitizeLoopProfile({ mode: 'spec' }).mode).toBe('loop');
         expect(sanitizeLoopProfile({ mode: 'agenda' }).mode).toBe('loop');
         expect(sanitizeLoopProfile({ mode: '' }).mode).toBe('loop');

@@ -34,13 +34,13 @@ describe('CPA — skill-prompt format', () => {
     test('formatCpaSkillsAugmentation surfaces preset scope hint when presetName is present', () => {
         const block = formatCpaSkillsAugmentation([], { presetName: 'Atlas' });
         expect(block).toContain('Atlas');
-        expect(block).toContain("kind: 'preset'");
+        expect(block).toContain('kind: \'preset\'');
     });
 
     test('formatCpaSkillsAugmentation falls back to generic scope wording when hint is missing', () => {
         const block = formatCpaSkillsAugmentation([], {});
         // Generic wording uses placeholder tokens, not a specific preset name.
-        expect(block).toContain("kind: 'preset'");
+        expect(block).toContain('kind: \'preset\'');
         expect(block).toContain('name');
         expect(block).not.toContain('Atlas');
     });

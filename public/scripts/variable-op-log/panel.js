@@ -16,7 +16,7 @@
  * own modal stack — keeps styling consistent and key handling correct.
  */
 
-import { chat, chat_metadata, eventSource, event_types, saveChatConditional } from '../../script.js';
+import { chat, eventSource, event_types, saveChatConditional } from '../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../popup.js';
 import { t, translate } from '../i18n.js';
 import { rebuildVariablesFromChat } from './index.js';

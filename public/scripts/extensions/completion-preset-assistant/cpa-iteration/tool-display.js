@@ -34,41 +34,41 @@ function fmt(i18n, template, ...values) {
 }
 
 export const CPA_TOOL_DISPLAY = {
-    preset_set_field:                    { icon: '✏️', label: 'Set preset field',         type: 'edit',  summarize: (a) => a?.path || '' },
-    preset_str_replace:                  { icon: '🔄', label: 'Replace field text',       type: 'edit',  summarize: (a) => `${a?.path || ''}${a?.replaceAll ? ' (all)' : ''}` },
-    preset_str_insert:                   { icon: '➕', label: 'Insert into field',        type: 'edit',  summarize: (a) => a?.path || '' },
-    preset_str_delete:                   { icon: '🗑️', label: 'Delete inside field',      type: 'edit',  summarize: (a) => a?.path || '' },
-    preset_str_replace_in_prompt:        { icon: '🔄', label: 'Replace text in prompt',   type: 'edit',  summarize: (a) => `${a?.identifier || ''}${a?.replaceAll ? ' (all)' : ''}` },
-    preset_str_insert_in_prompt:         { icon: '➕', label: 'Insert text in prompt',    type: 'edit',  summarize: (a) => a?.identifier || '' },
-    preset_str_delete_in_prompt:         { icon: '🗑️', label: 'Delete text in prompt',    type: 'edit',  summarize: (a) => a?.identifier || '' },
-    preset_list_insert:                  { icon: '📋', label: 'List insert',              type: 'edit',  summarize: (a) => `${a?.path || ''} @ ${a?.anchor?.after != null ? 'after ' + a.anchor.after : (a?.anchor?.before != null ? 'before ' + a.anchor.before : '?')}` },
-    preset_list_remove:                  { icon: '📋', label: 'List remove',              type: 'edit',  summarize: (a) => `${a?.path || ''} @ ${a?.index != null ? a.index : '?'}` },
-    preset_list_move:                    { icon: '📋', label: 'List move',                type: 'edit',  summarize: (a) => `${a?.path || ''}: ${a?.from_index != null ? a.from_index : '?'} → ${a?.to_index != null ? a.to_index : '?'}` },
-    preset_upsert_prompt_entry:          { icon: '✏️', label: 'Set prompt entry',         type: 'edit',  summarize: (a) => a?.identifier || '' },
-    preset_upsert_prompt_order_item:     { icon: '📋', label: 'Adjust prompt order',      type: 'edit',  summarize: (a) => a?.identifier || '' },
-    preset_remove_prompt_entry:          { icon: '🗑️', label: 'Remove prompt entry',      type: 'edit',  summarize: (a) => a?.identifier || '' },
-    preset_remove_prompt_order_item:     { icon: '🗑️', label: 'Remove prompt order item', type: 'edit',  summarize: (a) => a?.identifier || '' },
-    preset_copy_from_reference:          { icon: '📥', label: 'Copy from reference',      type: 'edit',  summarize: (a) => a?.path || '' },
+    preset_set_field: { icon: '✏️', label: 'Set preset field',         type: 'edit',  summarize: (a) => a?.path || '' },
+    preset_str_replace: { icon: '🔄', label: 'Replace field text',       type: 'edit',  summarize: (a) => `${a?.path || ''}${a?.replaceAll ? ' (all)' : ''}` },
+    preset_str_insert: { icon: '➕', label: 'Insert into field',        type: 'edit',  summarize: (a) => a?.path || '' },
+    preset_str_delete: { icon: '🗑️', label: 'Delete inside field',      type: 'edit',  summarize: (a) => a?.path || '' },
+    preset_str_replace_in_prompt: { icon: '🔄', label: 'Replace text in prompt',   type: 'edit',  summarize: (a) => `${a?.identifier || ''}${a?.replaceAll ? ' (all)' : ''}` },
+    preset_str_insert_in_prompt: { icon: '➕', label: 'Insert text in prompt',    type: 'edit',  summarize: (a) => a?.identifier || '' },
+    preset_str_delete_in_prompt: { icon: '🗑️', label: 'Delete text in prompt',    type: 'edit',  summarize: (a) => a?.identifier || '' },
+    preset_list_insert: { icon: '📋', label: 'List insert',              type: 'edit',  summarize: (a) => `${a?.path || ''} @ ${a?.anchor?.after != null ? 'after ' + a.anchor.after : (a?.anchor?.before != null ? 'before ' + a.anchor.before : '?')}` },
+    preset_list_remove: { icon: '📋', label: 'List remove',              type: 'edit',  summarize: (a) => `${a?.path || ''} @ ${a?.index != null ? a.index : '?'}` },
+    preset_list_move: { icon: '📋', label: 'List move',                type: 'edit',  summarize: (a) => `${a?.path || ''}: ${a?.from_index != null ? a.from_index : '?'} → ${a?.to_index != null ? a.to_index : '?'}` },
+    preset_upsert_prompt_entry: { icon: '✏️', label: 'Set prompt entry',         type: 'edit',  summarize: (a) => a?.identifier || '' },
+    preset_upsert_prompt_order_item: { icon: '📋', label: 'Adjust prompt order',      type: 'edit',  summarize: (a) => a?.identifier || '' },
+    preset_remove_prompt_entry: { icon: '🗑️', label: 'Remove prompt entry',      type: 'edit',  summarize: (a) => a?.identifier || '' },
+    preset_remove_prompt_order_item: { icon: '🗑️', label: 'Remove prompt order item', type: 'edit',  summarize: (a) => a?.identifier || '' },
+    preset_copy_from_reference: { icon: '📥', label: 'Copy from reference',      type: 'edit',  summarize: (a) => a?.path || '' },
 
-    preset_read_live_fields:             { icon: '📖', label: 'Read preset fields',       type: 'read',
+    preset_read_live_fields: { icon: '📖', label: 'Read preset fields',       type: 'read',
         summarize: (a, r, i18n) => r?.error != null
             ? `❌ ${String(r.error).slice(0, 40)}`
             : (r
                 ? fmt(i18n, 'Returned ${0} values', Object.keys(r || {}).length)
                 : fmt(i18n, '${0} paths', (a?.paths || []).length)) },
-    preset_read_reference_fields:        { icon: '📖', label: 'Read reference fields',    type: 'read',
+    preset_read_reference_fields: { icon: '📖', label: 'Read reference fields',    type: 'read',
         summarize: (a, r, i18n) => r?.error != null
             ? `❌ ${String(r.error).slice(0, 40)}`
             : (r
                 ? fmt(i18n, 'Returned ${0} values', Object.keys(r || {}).length)
                 : fmt(i18n, '${0} paths', (a?.paths || []).length)) },
-    preset_diff_reference:               { icon: '🔍', label: 'Diff against reference',   type: 'read',
+    preset_diff_reference: { icon: '🔍', label: 'Diff against reference',   type: 'read',
         summarize: (a, r, i18n) => r?.error != null
             ? `❌ ${String(r.error).slice(0, 40)}`
             : (r?.differing_paths != null
                 ? fmt(i18n, '${0} fields differ', r.differing_paths.length || 0)
                 : '') },
-    preset_simulate:                     { icon: '🧪', label: 'Simulate prompt assembly', type: 'read',
+    preset_simulate: { icon: '🧪', label: 'Simulate prompt assembly', type: 'read',
         summarize: (a, r, i18n) => r?.error != null
             ? `❌ ${String(r.error).slice(0, 40)}`
             : (r?.assembled_length != null

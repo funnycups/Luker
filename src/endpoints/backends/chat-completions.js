@@ -72,7 +72,6 @@ const API_DEEPSEEK = 'https://api.deepseek.com/beta';
 const API_XAI = 'https://api.x.ai/v1';
 const API_AIMLAPI = 'https://api.aimlapi.com/v1';
 const API_MOONSHOT = 'https://api.moonshot.ai/v1';
-const API_FIREWORKS = 'https://api.fireworks.ai/inference/v1';
 const API_COMETAPI = 'https://api.cometapi.com/v1';
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_SILICONFLOW_CN = 'https://api.siliconflow.cn/v1';
@@ -701,14 +700,14 @@ router.post('/status', async function (request, statusResponse) {
                     headers: {
                         'anthropic-version': '2023-06-01',
                         ...(apiKey ? { 'x-api-key': apiKey } : {}),
-                       ...headers,
+                        ...headers,
                     },
                 });
 
                 if (response.ok) {
                     /** @type {any} */
                     const data = await response.json();
-                   const models = (Array.isArray(data?.data) ? data.data : [])
+                    const models = (Array.isArray(data?.data) ? data.data : [])
                         .map(model => ({ id: String(model?.id || '').trim() }))
                         .filter(model => model.id.length > 0);
 
@@ -756,7 +755,7 @@ router.post('/status', async function (request, statusResponse) {
 
                 console.error('Error fetching Vertex AI models:', error);
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
-           }
+            }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MAKERSUITE) {
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
             apiUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || API_MAKERSUITE);

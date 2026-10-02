@@ -151,8 +151,7 @@ export async function dispatchCohere(ctx) {
             // extractUsageFromCohere addition (tool_plan reasoning tokens,
             // citations, cache metrics) has the source-of-truth data
             // available without touching this call site again.
-            try { ctx.inspection.complete(normalized, rawJson); }
-            catch { /* inspection best-effort */ }
+            try { ctx.inspection.complete(normalized, rawJson); } catch { /* inspection best-effort */ }
         }
     } catch (err) {
         try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }

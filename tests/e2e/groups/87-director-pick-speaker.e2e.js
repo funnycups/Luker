@@ -79,7 +79,7 @@ async function directorPicksSpeaker(page, { userText, memberName, timeoutMs = 12
         const t = setTimeout(() => reject(new Error('group wrapper timeout')), to);
         const handler = (payload) => {
             clearTimeout(t);
-            try { ctx.eventSource.removeListener(ctx.eventTypes.GROUP_WRAPPER_FINISHED, handler); } catch {}
+            try { ctx.eventSource.removeListener(ctx.eventTypes.GROUP_WRAPPER_FINISHED, handler); } catch { /* ignore */ }
             resolve(payload);
         };
         ctx.eventSource.on(ctx.eventTypes.GROUP_WRAPPER_FINISHED, handler);
@@ -139,13 +139,13 @@ test.describe('#87 — Director mode picks a single group speaker per turn', () 
         });
         const t1Users = t1.messages.filter(m => m.is_user && !m.is_system);
         const t1Assts = t1.messages.filter(m => !m.is_user && !m.is_system);
-        expect(t1Users.length, 'director turn 1 should append exactly one user message').toBe(1);
-        expect(t1Assts.length, 'director turn 1 must produce exactly one assistant message (force_chid isolates the chosen member)').toBe(1);
+        expect(t1Users, 'director turn 1 should append exactly one user message').toHaveLength(1);
+        expect(t1Assts, 'director turn 1 must produce exactly one assistant message (force_chid isolates the chosen member)').toHaveLength(1);
         expect(t1Assts[0].name, 'turn 1 speaker must be Ash (member 1) as nominated by /trigger').toBe(member1.name);
         expect(t1Assts[0].mes, 'turn 1 body must be the first scripted reply verbatim').toBe(REPLIES[0]);
 
         const t1Reqs = chatCompletionRequestsSince(mock.requests, reqsAtStart);
-        expect(t1Reqs.length, 'turn 1 should make exactly one chat-completion request').toBe(1);
+        expect(t1Reqs, 'turn 1 should make exactly one chat-completion request').toHaveLength(1);
         const t1Flat = JSON.stringify(t1Reqs[0]?.body?.messages ?? []);
         expect(t1Flat, 'turn 1 prompt must reference Ash\'s description').toContain(member1.description);
         // SWAP mode: the other members' descriptions must NOT leak.
@@ -164,13 +164,13 @@ test.describe('#87 — Director mode picks a single group speaker per turn', () 
         });
         const t2Users = t2.messages.filter(m => m.is_user && !m.is_system);
         const t2Assts = t2.messages.filter(m => !m.is_user && !m.is_system);
-        expect(t2Users.length, 'director turn 2 should append exactly one user message').toBe(1);
-        expect(t2Assts.length, 'director turn 2 must produce exactly one assistant message').toBe(1);
+        expect(t2Users, 'director turn 2 should append exactly one user message').toHaveLength(1);
+        expect(t2Assts, 'director turn 2 must produce exactly one assistant message').toHaveLength(1);
         expect(t2Assts[0].name, 'turn 2 speaker must be Kestrel (member 3) as nominated by /trigger').toBe(member3.name);
         expect(t2Assts[0].mes, 'turn 2 body must be the second scripted reply verbatim').toBe(REPLIES[1]);
 
         const t2Reqs = chatCompletionRequestsSince(mock.requests, reqsAfterT1);
-        expect(t2Reqs.length, 'turn 2 should make exactly one chat-completion request').toBe(1);
+        expect(t2Reqs, 'turn 2 should make exactly one chat-completion request').toHaveLength(1);
         const t2Flat = JSON.stringify(t2Reqs[0]?.body?.messages ?? []);
         expect(t2Flat, 'turn 2 prompt must reference Kestrel\'s description').toContain(member3.description);
         // Ash (member 1) and Rhonin (member 2) must NOT leak into Kestrel's prompt.
@@ -205,7 +205,7 @@ test.describe('#87 — Director mode picks a single group speaker per turn', () 
         const diskAssts = onDisk.messages.filter(m => !m.is_user && !m.is_system);
         const m1Drafted = diskAssts.filter(m => m.name === member1.name && m.mes === REPLIES[0]);
         const m3Drafted = diskAssts.filter(m => m.name === member3.name && m.mes === REPLIES[1]);
-        expect(m1Drafted.length, 'Ash\'s director-driven reply must be persisted to the group chat jsonl').toBe(1);
-        expect(m3Drafted.length, 'Kestrel\'s director-driven reply must be persisted to the group chat jsonl').toBe(1);
+        expect(m1Drafted, 'Ash\'s director-driven reply must be persisted to the group chat jsonl').toHaveLength(1);
+        expect(m3Drafted, 'Kestrel\'s director-driven reply must be persisted to the group chat jsonl').toHaveLength(1);
     });
 });

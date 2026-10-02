@@ -9,9 +9,11 @@ import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } f
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/browser-storage-inspector');
 
 let server;
+
 test.beforeAll(async () => {
     server = await startServer({ batchKey: 'browser-storage-inspector', scenarioId: 'mobile' });
 });
+
 test.afterAll(async () => { await tearDownServer(server); });
 
 test.describe('Browser Storage Inspector · mobile + cancel', () => {
@@ -28,8 +30,8 @@ test.describe('Browser Storage Inspector · mobile + cancel', () => {
 
         // Storage Inspector CSS collapses `.storageInspectorEntryDots` at
         // <=720px viewport — hidden dots per mobile CSS rule.
-        const dotsVisible = await inspector.locator('.storageInspectorEntry .storageInspectorEntryDots').first().isVisible();
-        expect(dotsVisible).toBe(false);
+        const dotsVisible = inspector.locator('.storageInspectorEntry .storageInspectorEntryDots').first();
+        await expect(dotsVisible).toBeHidden();
 
         await inspector.screenshot({ path: resolve(SCREENSHOT_DIR, '04-mobile.png') });
 

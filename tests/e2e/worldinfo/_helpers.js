@@ -209,7 +209,7 @@ export async function startWorldInfoServer({ specBaseName, scenarioId = 'default
         try {
             child.kill('SIGTERM');
             await new Promise((resolve) => {
-                const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} ; resolve(); }, 3000);
+                const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ }  resolve(); }, 3000);
                 child.once('exit', () => { clearTimeout(t); resolve(); });
             });
         } catch { /* already gone */ }
@@ -235,8 +235,8 @@ export async function tearDownWorldInfoServer(handle, { removeData = true } = {}
     if (!handle) return;
     await handle.stop();
     if (removeData && handle.dataRoot && handle.dataRoot.startsWith(SCRATCH_ROOT_ABS)) {
-        try { rmSync(handle.dataRoot, { recursive: true, force: true }); } catch {}
+        try { rmSync(handle.dataRoot, { recursive: true, force: true }); } catch { /* ignore */ }
         // Best-effort: remove the per-spec config.yaml beside the dataRoot.
-        try { rmSync(`${handle.dataRoot}-config.yaml`, { force: true }); } catch {}
+        try { rmSync(`${handle.dataRoot}-config.yaml`, { force: true }); } catch { /* ignore */ }
     }
 }

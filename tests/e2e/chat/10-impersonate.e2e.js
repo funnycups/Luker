@@ -47,8 +47,8 @@ test.describe('#10 — Impersonate populates the user textarea', () => {
         const textareaValue = await impersonateViaUI(page);
 
         // DOM-side: chat bubble count unchanged.
-        const afterCount = await page.locator('#chat .mes').count();
-        expect(afterCount, 'Impersonate should NOT add a new chat message').toBe(beforeCount);
+        const afterCount = page.locator('#chat .mes');
+        await expect(afterCount, 'Impersonate should NOT add a new chat message').toHaveCount(beforeCount);
 
         // Mock must have been hit.
         const newReqs = mock.requests.slice(beforeRequests);

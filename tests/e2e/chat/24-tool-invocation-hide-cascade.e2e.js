@@ -100,7 +100,7 @@ test.describe('tool-invocation hide cascade', () => {
         // Register one tool the model can call.
         await page.evaluate(() => {
             const ctx = window.Luker.getContext();
-            try { ctx.unregisterFunctionTool('sound_lead'); } catch {}
+            try { ctx.unregisterFunctionTool('sound_lead'); } catch { /* ignore */ }
             ctx.registerFunctionTool({
                 name: 'sound_lead',
                 displayName: 'Sound the lead',

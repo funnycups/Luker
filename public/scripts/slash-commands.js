@@ -62,7 +62,6 @@ import {
     system_avatar,
     system_message_types,
     this_chid,
-    updateMessageElement,
     updateSwipeCounter,
 } from '../script.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';

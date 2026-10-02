@@ -174,7 +174,7 @@ export class SlashCommandClosure {
         if (power_user.experimental_macro_engine) {
             return this.substituteWithMacroEngine(text, scope, macroList);
         }
-        const macros = macroList.map(it=>escapeMacro(it)).join('|');
+        const macros = macroList.map(it => escapeMacro(it)).join('|');
         const re = new RegExp(`(?<pipe>{{pipe}})|(?:{{var::(?<var>[^\\s]+?)(?:::(?<varIndex>(?!}}).+))?}})|(?:{{(?<macro>${macros})}})`);
         let done = '';
         let remaining = text;

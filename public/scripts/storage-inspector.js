@@ -10,22 +10,22 @@ import { t, translate } from './i18n.js';
  */
 const CATEGORY_META = {
     // V1 · 服务端 10 类
-    chats:      { icon: 'comment',            colorVar: '--storage-cat-chats'      },
+    chats: { icon: 'comment',            colorVar: '--storage-cat-chats'      },
     characters: { icon: 'user',                colorVar: '--storage-cat-characters' },
-    worlds:     { icon: 'book',                colorVar: '--storage-cat-worlds'     },
-    images:     { icon: 'image',               colorVar: '--storage-cat-images'     },
-    attachments:{ icon: 'paperclip',           colorVar: '--storage-cat-attach'     },
-    presets:    { icon: 'sliders',             colorVar: '--storage-cat-presets'    },
+    worlds: { icon: 'book',                colorVar: '--storage-cat-worlds'     },
+    images: { icon: 'image',               colorVar: '--storage-cat-images'     },
+    attachments: { icon: 'paperclip',           colorVar: '--storage-cat-attach'     },
+    presets: { icon: 'sliders',             colorVar: '--storage-cat-presets'    },
     extensions: { icon: 'puzzle-piece',        colorVar: '--storage-cat-ext'        },
-    vectors:    { icon: 'brain',               colorVar: '--storage-cat-vectors'    },
-    backups:    { icon: 'clock-rotate-left',   colorVar: '--storage-cat-backups'    },
-    other:      { icon: 'box',                 colorVar: '--storage-cat-other'      },
+    vectors: { icon: 'brain',               colorVar: '--storage-cat-vectors'    },
+    backups: { icon: 'clock-rotate-left',   colorVar: '--storage-cat-backups'    },
+    other: { icon: 'box',                 colorVar: '--storage-cat-other'      },
     // V2 · 浏览器侧 5 类
-    localStorage:   { icon: 'hard-drive',  colorVar: '--storage-cat-localstorage'   },
+    localStorage: { icon: 'hard-drive',  colorVar: '--storage-cat-localstorage'   },
     sessionStorage: { icon: 'clock',       colorVar: '--storage-cat-sessionstorage' },
-    indexeddb:      { icon: 'database',    colorVar: '--storage-cat-indexeddb'      },
-    cachestorage:   { icon: 'layer-group', colorVar: '--storage-cat-cachestorage'   },
-    quota:          { icon: 'chart-pie',   colorVar: '--storage-cat-quota'          },
+    indexeddb: { icon: 'database',    colorVar: '--storage-cat-indexeddb'      },
+    cachestorage: { icon: 'layer-group', colorVar: '--storage-cat-cachestorage'   },
+    quota: { icon: 'chart-pie',   colorVar: '--storage-cat-quota'          },
 };
 
 /**

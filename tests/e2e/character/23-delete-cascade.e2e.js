@@ -117,7 +117,7 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
         // The media preview dialog opens after the confirm popup; both
         // planted assets are pre-selected, confirm them.
         await page.locator('.mediaDeletionConfirm').click();
-        await expect(page.locator('.mediaDeletionDialog')).not.toBeVisible();
+        await expect(page.locator('.mediaDeletionDialog')).toBeHidden();
         // The shared helper handles the checkbox + OK click. Wait for
         // CHARACTER_DELETED to propagate.
         await page.waitForFunction((wantAvatar) => {
@@ -165,6 +165,6 @@ test.describe('#23 — Delete character via UI — embedded skill cascade + WI b
         // WI book is preserved on disk — only the binding is gone.
         expect(existsSync(bookPath), 'bound WI book is preserved after delete').toBe(true);
         const bookAfter = JSON.parse(readFileSync(bookPath, 'utf8'));
-        expect(Object.keys(bookAfter.entries).length).toBe(Object.keys(bookBefore.entries).length);
+        expect(Object.keys(bookAfter.entries)).toHaveLength(Object.keys(bookBefore.entries).length);
     });
 });

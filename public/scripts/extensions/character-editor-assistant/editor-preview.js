@@ -162,7 +162,7 @@ function renderEntryCard(t, tFormat, entry, { isPending = false, missingRefOp = 
     const keysHtml = renderKeyChips(keys);
 
     const ringStyle = (isPending || missingRefOp)
-        ? `border-color:color-mix(in srgb, var(--SmartThemeQuoteColor, #5b8def) 72%, var(--SmartThemeBorderColor, rgba(130,130,130,.3)));box-shadow:0 0 0 1px color-mix(in srgb, var(--SmartThemeQuoteColor, #5b8def) 24%, transparent);`
+        ? 'border-color:color-mix(in srgb, var(--SmartThemeQuoteColor, #5b8def) 72%, var(--SmartThemeBorderColor, rgba(130,130,130,.3)));box-shadow:0 0 0 1px color-mix(in srgb, var(--SmartThemeQuoteColor, #5b8def) 24%, transparent);'
         : '';
     const disabledStyle = entry?.disable ? 'opacity:0.55;' : '';
     const cardStyle = `display:flex;flex-direction:column;gap:4px;padding:6px 10px;border:1px solid var(--SmartThemeBorderColor, rgba(130,130,130,.3));border-radius:10px;background:transparent;transition:border-color 180ms, box-shadow 180ms;${ringStyle}${disabledStyle}`;

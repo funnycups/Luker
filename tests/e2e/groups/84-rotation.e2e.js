@@ -27,7 +27,7 @@ import {
     readGroupChatOnDisk,
 } from './_helpers.js';
 
-let server, mock, trio, groupId, chatId;
+let server, mock, trio, chatId;
 
 const REPLIES = [
     '*Ash flicks one knuckle along the chart toward the gull rocks.* "The third bell\'s breaker came in flat, which means the slow swallow is shaping under it. We watch — we do not move the lantern."',
@@ -69,7 +69,6 @@ test.describe('#84 — Group rotation across 3 members', () => {
             activation_strategy: 1, // LIST → deterministic rotation in member order
             generation_mode: 0,     // SWAP → each member generates against its own prompt
         });
-        groupId = group.id;
         chatId = group.chat_id;
         expect(group.id, 'group id should be set').toBeTruthy();
         expect(group.members, 'group members should equal the three seeded avatars').toEqual(trio.map(c => c.avatar));
@@ -83,8 +82,8 @@ test.describe('#84 — Group rotation across 3 members', () => {
         // The slice should contain: 1 user + 3 assistant messages.
         const userMsgs = turn.messages.filter(m => m.is_user && !m.is_system);
         const asstMsgs = turn.messages.filter(m => !m.is_user && !m.is_system);
-        expect(userMsgs.length, 'exactly one user message should have been appended').toBe(1);
-        expect(asstMsgs.length, 'rotation should produce one assistant message per group member').toBe(trio.length);
+        expect(userMsgs, 'exactly one user message should have been appended').toHaveLength(1);
+        expect(asstMsgs, 'rotation should produce one assistant message per group member').toHaveLength(trio.length);
 
         // The assistant messages should appear in member-list order
         // (the LIST activation strategy guarantees this).
@@ -100,7 +99,7 @@ test.describe('#84 — Group rotation across 3 members', () => {
         // Each member's turn should hit the mock LLM with that member's
         // system prompt / description embedded in the message stream.
         const turnReqs = chatCompletionRequestsSince(mock.requests, reqBefore);
-        expect(turnReqs.length, 'expected one chat-completion request per drafted member').toBe(trio.length);
+        expect(turnReqs, 'expected one chat-completion request per drafted member').toHaveLength(trio.length);
 
         for (let i = 0; i < trio.length; i++) {
             const character = trio[i];
@@ -129,8 +128,8 @@ test.describe('#84 — Group rotation across 3 members', () => {
         const turnSlice = onDisk.messages.slice(firstUserIdx);
         const diskUsers = turnSlice.filter(m => m.is_user);
         const diskAssts = turnSlice.filter(m => !m.is_user && !m.is_system);
-        expect(diskUsers.length, 'one persisted user message in the turn slice').toBe(1);
-        expect(diskAssts.length, 'three persisted assistant messages, one per member').toBe(3);
+        expect(diskUsers, 'one persisted user message in the turn slice').toHaveLength(1);
+        expect(diskAssts, 'three persisted assistant messages, one per member').toHaveLength(3);
         expect(diskAssts.map(m => m.name), 'persisted assistant order matches member-list order')
             .toEqual(trio.map(c => c.name));
     });

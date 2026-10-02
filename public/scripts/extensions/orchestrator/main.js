@@ -118,9 +118,7 @@ const clearLatestOrchestrationRuntimeTrace = () => {};
 const createOrchestrationRuntimeTrace = () => ({ director: null, finalMessage: '', finalReasoning: '' });
 const finalizeOrchestrationRuntimeTrace = () => {};
 const getLatestOrchestrationRuntimeTrace = () => null;
-const recordOrchestrationRuntimeEvent = () => {};
 const truncateOrchestrationRuntimePreview = (s) => String(s || '');
-const attachOrchestrationRuntimeDirectorState = () => {};
 const renderLastOrchestrationResultHtml = () => '';
 import {
     canReuseLatestOrchestrationSnapshot,
@@ -204,11 +202,8 @@ import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
 import { reviewIncomingCustomTools } from './character-import-tools-review.js';
 import {
     CUSTOM_TOOL_ITER_STUDIO_TOOL_DEFS,
-    CUSTOM_TOOL_ITER_STUDIO_TOOL_NAMES,
     isCustomToolIterStudioTool,
     executeCustomToolIterStudioCall,
-    commitApprovedCustomToolProposal,
-    resanitizeProfileCustomTools,
 } from './custom-tool-iter-studio.js';
 import {
     collectCustomToolsFromCardExtension,

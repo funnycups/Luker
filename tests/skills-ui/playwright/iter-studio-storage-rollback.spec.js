@@ -182,7 +182,7 @@ test.describe('iter-studio settings.json → sidecar migration', () => {
         // character — but mounting the main UI is still required so
         // extension_settings.memory_graph is initialized.
 
-        const seed = await page.evaluate(async () => {
+        await page.evaluate(async () => {
             const ctx = window.SillyTavern.getContext();
             const root = ctx.extensionSettings.memory_graph = ctx.extensionSettings.memory_graph || {};
             delete root.__schemaIterV2ToSidecarMigratedAt;

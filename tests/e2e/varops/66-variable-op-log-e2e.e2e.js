@@ -94,7 +94,7 @@ test.describe('#66 — variable-op-log e2e (roster across turns; delete; persist
 
             await openVarOpsPanel(page, replyId);
             const rows = await getRenderedVarOpsRows(page);
-            expect(rows.length, `turn ${i + 1} panel shows one row`).toBe(1);
+            expect(rows, `turn ${i + 1} panel shows one row`).toHaveLength(1);
             expect(rows[0]).toEqual(expectedOps[i]);
             await page.locator('.popup:visible .popup-button-cancel').last().click().catch(() => {});
             await page.locator('.var-ops-panel').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});

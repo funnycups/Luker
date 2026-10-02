@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeEach } from '@jest/globals';
 
 // public/lib.js is redirected to tests/util/lib-stub.js via jest config's
 // moduleNameMapper — that supplies the real showdown + DOMPurify so this

@@ -59,7 +59,7 @@ test('generation-basic: plugin stream call replays every chunk across a mid-stre
         const OrigWS = window.WebSocket;
         window.WebSocket = function PatchedWebSocket(...args) {
             const s = new OrigWS(...args);
-            try { window.__lukerObservedSockets.push(s); } catch {}
+            try { window.__lukerObservedSockets.push(s); } catch { /* ignore */ }
             return s;
         };
         Object.setPrototypeOf(window.WebSocket, OrigWS);
@@ -141,7 +141,7 @@ test('generation-basic: plugin stream call replays every chunk across a mid-stre
     await context.setOffline(true);
     await page.evaluate(() => {
         (window.__lukerObservedSockets || []).forEach(s => {
-            try { s.close(); } catch {}
+            try { s.close(); } catch { /* ignore */ }
         });
     });
     await page.waitForTimeout(OFFLINE_MS);

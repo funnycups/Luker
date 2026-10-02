@@ -364,7 +364,7 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
         if (!args.replaceAll && occurrences !== 1) {
             throw new Error(`${name}: multiple_matches — oldString occurs ${occurrences} times in card field "${field}". Widen oldString with surrounding context until it matches exactly once, or pass replaceAll: true.`);
         }
-        const expectedCount = Boolean(args.replaceAll) ? Math.max(1, occurrences) : 1;
+        const expectedCount = args.replaceAll ? Math.max(1, occurrences) : 1;
         return [{
             op: 'str_replace',
             path: `card.${field}`,

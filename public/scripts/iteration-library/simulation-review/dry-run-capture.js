@@ -5,7 +5,7 @@
 // and captures the named event's payload via a one-shot listener
 // registered last so it fires after any extension mutations.
 
-import { Generate, eventSource, event_types } from '../../../script.js';
+import { Generate, eventSource } from '../../../script.js';
 
 /**
  * Runs a dryRun Generate to drive the prompt-build pipeline (including
@@ -28,8 +28,7 @@ export async function captureDryRunPayload(context, eventName, opts = {}) {
 
     let captured = null;
     const listener = (payload) => {
-        try { captured = structuredClone(payload); }
-        catch { captured = payload; }
+        try { captured = structuredClone(payload); } catch { captured = payload; }
     };
     const registerLast = typeof src.makeLast === 'function'
         ? src.makeLast.bind(src)

@@ -156,7 +156,7 @@ registerTool('chat_search', execChatSearch, {
                 },
                 flags: {
                     type: 'string',
-                    description: "RegExp flags. 'gm' by default (global + multiline). Add 'i' for case-insensitive. 'g' is auto-injected if you omit it.",
+                    description: 'RegExp flags. \'gm\' by default (global + multiline). Add \'i\' for case-insensitive. \'g\' is auto-injected if you omit it.',
                     default: 'gm',
                 },
             },
@@ -182,7 +182,7 @@ registerTool('lorebook_search', execLorebookSearch, {
                 },
                 flags: {
                     type: 'string',
-                    description: "RegExp flags. 'gm' by default. 'g' is auto-injected if you omit it.",
+                    description: 'RegExp flags. \'gm\' by default. \'g\' is auto-injected if you omit it.',
                     default: 'gm',
                 },
                 book: {

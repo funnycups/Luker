@@ -164,8 +164,8 @@ test.describe('#89 — group chats merge in chosen order', () => {
         // introduce on the group path.
         const aDisk = readGroupChatOnDisk(server.dataRoot, chatAId);
         const bDisk = readGroupChatOnDisk(server.dataRoot, chatBId);
-        expect(aDisk.messages.length, `disk A should have ${aLen} messages`).toBe(aLen);
-        expect(bDisk.messages.length, `disk B should have ${bLen} messages`).toBe(bLen);
+        expect(aDisk.messages, `disk A should have ${aLen} messages`).toHaveLength(aLen);
+        expect(bDisk.messages, `disk B should have ${bLen} messages`).toHaveLength(bLen);
 
         // Listen for CHAT_MERGED instead of CHAT_CHANGED — the merge
         // module always emits CHAT_MERGED right after the server write
@@ -177,7 +177,7 @@ test.describe('#89 — group chats merge in chosen order', () => {
             const ctx = window.Luker.getContext();
             window.__mergedSignal = { resolved: false, payload: null };
             const handler = (data) => {
-                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_MERGED, handler); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_MERGED, handler); } catch { /* ignore */ }
                 window.__mergedSignal.resolved = true;
                 window.__mergedSignal.payload = data || null;
             };
@@ -220,9 +220,9 @@ test.describe('#89 — group chats merge in chosen order', () => {
         const mergedRaw = readFileSync(resolve(groupChatsDir, `${mergedName}.jsonl`), 'utf-8');
         const mergedLines = mergedRaw.trim().split('\n');
         expect(
-            mergedLines.length,
+            mergedLines,
             `expected 1 header + ${aLen + bLen} messages; got ${mergedLines.length}`,
-        ).toBe(1 + aLen + bLen);
+        ).toHaveLength(1 + aLen + bLen);
         const mergedBody = mergedLines.slice(1).map(l => JSON.parse(l));
 
         // A's whole slice lives at [0..aLen); B's whole slice at [aLen..end).

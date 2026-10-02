@@ -342,10 +342,10 @@ async function dryRunBody({ body, args, ctxFactory }) {
     }
     const logs = [];
     const sandboxConsole = {
-        log:   (...a) => { logs.push({ level: 'log', message: a.map(stringifyArg).join(' ') }); },
-        warn:  (...a) => { logs.push({ level: 'warn', message: a.map(stringifyArg).join(' ') }); },
+        log: (...a) => { logs.push({ level: 'log', message: a.map(stringifyArg).join(' ') }); },
+        warn: (...a) => { logs.push({ level: 'warn', message: a.map(stringifyArg).join(' ') }); },
         error: (...a) => { logs.push({ level: 'error', message: a.map(stringifyArg).join(' ') }); },
-        info:  (...a) => { logs.push({ level: 'info', message: a.map(stringifyArg).join(' ') }); },
+        info: (...a) => { logs.push({ level: 'info', message: a.map(stringifyArg).join(' ') }); },
         debug: (...a) => { logs.push({ level: 'debug', message: a.map(stringifyArg).join(' ') }); },
     };
     const ctxSnapshot = ctxFactory({ console: sandboxConsole });

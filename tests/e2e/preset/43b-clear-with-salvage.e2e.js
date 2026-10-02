@@ -174,10 +174,6 @@ async function clickBulkDiscard(dialog) {
     await dialog.locator('.luker-cbp-bulk-discard').click();
 }
 
-async function clickBulkSaveAll(dialog) {
-    await dialog.locator('.luker-cbp-bulk-save').click();
-}
-
 /** Seed the card with three slots with given names, default = second slot. */
 async function seedThreeSlots(dataRoot, avatarFile, nameA = SLOT_A, nameB = SLOT_B, nameC = SLOT_C) {
     const { resolve } = await import('node:path');

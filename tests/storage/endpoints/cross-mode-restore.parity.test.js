@@ -33,7 +33,6 @@ import {
     getPresetRepo,
     getGroupRepo,
     getStatsRepo,
-    getStorageEngine,
 } from '../../../src/storage/index.js';
 import { ENGINE_DUMP_ENTRY, ENGINE_META_ENTRY } from '../../../src/storage/engine-backup-entries.js';
 import { FsEngine } from '../../../src/storage/engines/fs-engine.js';
@@ -193,7 +192,7 @@ async function buildSourceArtifact(srcKind, handle) {
         await root.end();
         srcEngine = new MysqlEngine({ url: `${rootUrl}/${dbName}` });
         dbCleanup = async () => {
-            try { await srcEngine.close(); } catch {}
+            try { await srcEngine.close(); } catch { /* ignore */ }
             const c = await mysql.default.createConnection(rootUrl);
             try { await c.query(`DROP DATABASE IF EXISTS \`${dbName}\``); } finally { await c.end(); }
         };
@@ -208,7 +207,7 @@ async function buildSourceArtifact(srcKind, handle) {
         const url = `${baseUrl}?options=-csearch_path%3D${encodeURIComponent(schemaName)}`;
         srcEngine = new PgEngine({ url });
         dbCleanup = async () => {
-            try { await srcEngine.close(); } catch {}
+            try { await srcEngine.close(); } catch { /* ignore */ }
             const c = new pg.default.Client({ connectionString: baseUrl });
             await c.connect();
             try { await c.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`); } finally { await c.end(); }
@@ -220,7 +219,7 @@ async function buildSourceArtifact(srcKind, handle) {
     await buildSourceZip({ srcKind, srcEngine, srcDir, handle, zipPath });
 
     if (srcKind === 'sqlite') {
-        try { srcEngine.close(); } catch {}
+        try { srcEngine.close(); } catch { /* ignore */ }
     } else if (srcKind === 'mysql' || srcKind === 'postgres') {
         await dbCleanup();
     }
@@ -229,21 +228,6 @@ async function buildSourceArtifact(srcKind, handle) {
         zipBytes: fs.readFileSync(zipPath),
         cleanup: () => fs.rmSync(dataRoot, { recursive: true, force: true }),
     };
-}
-
-// Resolve a scratch URL for the active mysql/pg harness so the cross-mode
-// restore can ingest a mysql/pg-source ZIP. We point at the same DB instance
-// the harness is using (different handle namespace inside the same DB).
-function scratchUrlForHarness(harness, srcKind) {
-    if (srcKind === 'mysql') {
-        const rootUrl = process.env.LUKER_TEST_MYSQL_ROOT_URL || 'mysql://root:root@127.0.0.1:53306';
-        return `${rootUrl}/${harness.dbName || 'luker_test'}`;
-    }
-    if (srcKind === 'postgres') {
-        const baseUrl = process.env.LUKER_TEST_POSTGRES_URL || 'postgresql://luker:postgres@127.0.0.1:55432/luker_test';
-        return `${baseUrl}?options=-csearch_path%3D${encodeURIComponent(harness.schemaName || 'public')}`;
-    }
-    return null;
 }
 
 // ---------------------------------------------------------------------------

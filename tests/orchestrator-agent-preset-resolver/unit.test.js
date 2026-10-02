@@ -171,7 +171,6 @@ describe('resolveCardFirstPresetName', () => {
         // `resolveAgentApiPresetName` calls this helper with the agent
         // config's explicit name; the card body must win.
         const cardBody = { name: 'RuntimeX', temperature: 0.1, __source: 'card' };
-        const globalBody = { name: 'RuntimeX', temperature: 0.9, __source: 'global' };
         // Production `resolveCharacterBoundPresetByName` does card-first-
         // then-global; mock that ordering here to keep the contract
         // 1:1 with prod (stubs match production shape).

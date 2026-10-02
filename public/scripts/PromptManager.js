@@ -1619,25 +1619,25 @@ class PromptManager {
             }
         }
 
- // Update badge in name meta (create container if absent, e.g. system-role prompts)
- let nameMeta = li.querySelector('.prompt-manager-name-meta');
- const existingBadge = li.querySelector('.prompt-manager-plugin-extra-badge');
- if (isExtra && !existingBadge) {
- if (!nameMeta) {
- nameMeta = document.createElement('span');
- nameMeta.className = 'prompt-manager-name-meta';
- li.querySelector('.prompt-manager-name-body')?.appendChild(nameMeta);
- }
- const badge = document.createElement('small');
- badge.className = 'prompt-manager-plugin-extra-badge';
- badge.title = 'Excluded from plugin request assembly';
- badge.textContent = 'extra';
- nameMeta.prepend(badge);
- } else if (!isExtra && existingBadge) {
- existingBadge.remove();
- // Clean up empty meta container
- if (nameMeta && !nameMeta.children.length) nameMeta.remove();
- }
+        // Update badge in name meta (create container if absent, e.g. system-role prompts)
+        let nameMeta = li.querySelector('.prompt-manager-name-meta');
+        const existingBadge = li.querySelector('.prompt-manager-plugin-extra-badge');
+        if (isExtra && !existingBadge) {
+            if (!nameMeta) {
+                nameMeta = document.createElement('span');
+                nameMeta.className = 'prompt-manager-name-meta';
+                li.querySelector('.prompt-manager-name-body')?.appendChild(nameMeta);
+            }
+            const badge = document.createElement('small');
+            badge.className = 'prompt-manager-plugin-extra-badge';
+            badge.title = 'Excluded from plugin request assembly';
+            badge.textContent = 'extra';
+            nameMeta.prepend(badge);
+        } else if (!isExtra && existingBadge) {
+            existingBadge.remove();
+            // Clean up empty meta container
+            if (nameMeta && !nameMeta.children.length) nameMeta.remove();
+        }
 
         return true;
     }
@@ -3671,17 +3671,17 @@ class PromptManager {
      * @returns {string}
      */
     buildGroupHeaderHtml(group) {
-            const tokenSum = this.getGroupTokenCount(group.id);
-            const displayTokens = tokenSum || '-';
-            const expandedClass = group.collapsed ? '' : 'expanded';
-            const depth = this.getGroupDepth(group.id);
-            const indentPx = depth * 24;
-            const entries = group.identifiers.map(id => this.getPromptOrderEntry(this.activeCharacter, id)).filter(Boolean);
-            const allEnabled = entries.length > 0 && entries.every(e => e.enabled);
-            const toggleAllClass = allEnabled ? 'fa-toggle-on all-enabled' : 'fa-toggle-off';
-            const parentIdAttr = group.parentId ? ` data-pm-parent-id="${escapeHtml(group.parentId)}"` : '';
+        const tokenSum = this.getGroupTokenCount(group.id);
+        const displayTokens = tokenSum || '-';
+        const expandedClass = group.collapsed ? '' : 'expanded';
+        const depth = this.getGroupDepth(group.id);
+        const indentPx = depth * 24;
+        const entries = group.identifiers.map(id => this.getPromptOrderEntry(this.activeCharacter, id)).filter(Boolean);
+        const allEnabled = entries.length > 0 && entries.every(e => e.enabled);
+        const toggleAllClass = allEnabled ? 'fa-toggle-on all-enabled' : 'fa-toggle-off';
+        const parentIdAttr = group.parentId ? ` data-pm-parent-id="${escapeHtml(group.parentId)}"` : '';
 
-            return `
+        return `
             <li class="prompt-manager-group ${expandedClass}" data-pm-group-id="${escapeHtml(group.id)}"${parentIdAttr} data-depth="${depth}" style="margin-left:${indentPx}px">
         <span class="prompt-manager-group-toggle fa-solid fa-chevron-right"></span>
         <span class="prompt-manager-group-info">
@@ -3778,91 +3778,91 @@ class PromptManager {
         const renderedGroupIds = new Set();
         const isSearching = Boolean(searchQuery);
 
-         // Render hierarchically: for each top-level group, render its header, its prompts,
-         // then recursively its child groups — interleaved by prompt order.
-         const renderGroupAndChildren = (groupId) => {
-             const group = groups.find(g => g.id === groupId);
-             if (!group || renderedGroupIds.has(groupId)) return;
-             renderedGroupIds.add(groupId);
+        // Render hierarchically: for each top-level group, render its header, its prompts,
+        // then recursively its child groups — interleaved by prompt order.
+        const renderGroupAndChildren = (groupId) => {
+            const group = groups.find(g => g.id === groupId);
+            if (!group || renderedGroupIds.has(groupId)) return;
+            renderedGroupIds.add(groupId);
 
-             // Render group header
-             const groupHiddenClass = (!isSearching && this._isAncestorCollapsed(groupId)) ? ' prompt-manager-group-hidden' : '';
-             const groupHtml = this.buildGroupHeaderHtml(group);
-             // Inject hidden class into the group header if needed
-             listItemHtml += groupHiddenClass
-                 ? groupHtml.replace('prompt-manager-group ', `prompt-manager-group${groupHiddenClass} `)
-                 : groupHtml;
-             // Collect all descendant identifiers (including from child groups)
-             const descendantIds = new Set();
-             const collectDescendants = (g) => {
-                 for (const id of g.identifiers) descendantIds.add(id);
-                 const children = this.getGroupChildren(g.id);
-                 for (const child of children) collectDescendants(child);
-             };
-             collectDescendants(group);
+            // Render group header
+            const groupHiddenClass = (!isSearching && this._isAncestorCollapsed(groupId)) ? ' prompt-manager-group-hidden' : '';
+            const groupHtml = this.buildGroupHeaderHtml(group);
+            // Inject hidden class into the group header if needed
+            listItemHtml += groupHiddenClass
+                ? groupHtml.replace('prompt-manager-group ', `prompt-manager-group${groupHiddenClass} `)
+                : groupHtml;
+            // Collect all descendant identifiers (including from child groups)
+            const descendantIds = new Set();
+            const collectDescendants = (g) => {
+                for (const id of g.identifiers) descendantIds.add(id);
+                const children = this.getGroupChildren(g.id);
+                for (const child of children) collectDescendants(child);
+            };
+            collectDescendants(group);
 
-             // Map each identifier to the child group that directly owns it (if any)
-             const childGroups = this.getGroupChildren(groupId);
-             const idToChildGroup = new Map();
-             for (const child of childGroups) {
-                 for (const id of child.identifiers) {
-                     idToChildGroup.set(id, child);
-                 }
-             }
+            // Map each identifier to the child group that directly owns it (if any)
+            const childGroups = this.getGroupChildren(groupId);
+            const idToChildGroup = new Map();
+            for (const child of childGroups) {
+                for (const id of child.identifiers) {
+                    idToChildGroup.set(id, child);
+                }
+            }
 
-             // Build set of direct prompts in this group
-             const directIds = new Set(group.identifiers);
+            // Build set of direct prompts in this group
+            const directIds = new Set(group.identifiers);
 
-             const renderPromptItem = (prompt) => {
-                 const isHidden = !isSearching && this._isGroupOrAncestorCollapsed(groupId);
-                 const depth = this.getGroupDepth(groupId);
-                 const childClass = 'prompt-manager-group-child';
-                 const hiddenClass = isHidden ? 'prompt-manager-group-child-hidden' : '';
-                 const groupIdAttr = `data-pm-group-id="${escapeHtml(groupId)}"`;
-                 const depthAttr = `data-depth="${depth}"`;
-                  const indentStyle = `style="margin-left:${depth * 24 + 12}px"`;
+            const renderPromptItem = (prompt) => {
+                const isHidden = !isSearching && this._isGroupOrAncestorCollapsed(groupId);
+                const depth = this.getGroupDepth(groupId);
+                const childClass = 'prompt-manager-group-child';
+                const hiddenClass = isHidden ? 'prompt-manager-group-child-hidden' : '';
+                const groupIdAttr = `data-pm-group-id="${escapeHtml(groupId)}"`;
+                const depthAttr = `data-depth="${depth}"`;
+                const indentStyle = `style="margin-left:${depth * 24 + 12}px"`;
 
-                 const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
-                 const html = this.buildPromptItemHtml(prompt, listEntry);
+                const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
+                const html = this.buildPromptItemHtml(prompt, listEntry);
 
-                 const extraClasses = `${childClass} ${hiddenClass}`.trim();
-                 listItemHtml += html.replace(
-                     /^(\s*<li\s+class=")/,
-                     `$1${extraClasses} `,
-                 ).replace(
-                     /^(\s*<li\s)/,
-                     `$1${groupIdAttr} ${depthAttr} ${indentStyle} `,
-                 );
-             };
+                const extraClasses = `${childClass} ${hiddenClass}`.trim();
+                listItemHtml += html.replace(
+                    /^(\s*<li\s+class=")/,
+                    `$1${extraClasses} `,
+                ).replace(
+                    /^(\s*<li\s)/,
+                    `$1${groupIdAttr} ${depthAttr} ${indentStyle} `,
+                );
+            };
 
-             // Render direct prompts and child groups interleaved by visible order
-             const renderedChildIds = new Set();
-             for (const prompt of visiblePrompts) {
-                 const id = prompt.identifier;
-                 if (!descendantIds.has(id)) continue;
+            // Render direct prompts and child groups interleaved by visible order
+            const renderedChildIds = new Set();
+            for (const prompt of visiblePrompts) {
+                const id = prompt.identifier;
+                if (!descendantIds.has(id)) continue;
 
-                 const childGroup = idToChildGroup.get(id);
-                 if (childGroup && !renderedChildIds.has(childGroup.id)) {
-                     renderGroupAndChildren(childGroup.id);
-                     renderedChildIds.add(childGroup.id);
-                 } else if (!childGroup && directIds.has(id)) {
-                     renderPromptItem(prompt);
-                 }
-             }
+                const childGroup = idToChildGroup.get(id);
+                if (childGroup && !renderedChildIds.has(childGroup.id)) {
+                    renderGroupAndChildren(childGroup.id);
+                    renderedChildIds.add(childGroup.id);
+                } else if (!childGroup && directIds.has(id)) {
+                    renderPromptItem(prompt);
+                }
+            }
 
-             // Emit a group-end sentinel <li>. This makes group span
-             // walking deterministic during drag-and-drop: the update
-             // handler walks the DOM and treats this marker as
-             // "current group closes here", so a prompt dropped between
-             // the group header and this marker becomes a member and a
-             // prompt dropped after it does not. Without a sentinel,
-             // the walker would either have to guess (class-based)
-             // — which breaks for newly-dropped items — or absorb every
-             // sibling until the next group header (which is wrong for
-             // the ungrouped tail).
-             const endHiddenClass = (!isSearching && this._isGroupOrAncestorCollapsed(groupId)) ? ' prompt-manager-group-end-hidden' : '';
-             listItemHtml += `<li class="prompt-manager-group-end${endHiddenClass}" data-pm-group-end="${escapeHtml(groupId)}" aria-hidden="true"></li>`;
-         };
+            // Emit a group-end sentinel <li>. This makes group span
+            // walking deterministic during drag-and-drop: the update
+            // handler walks the DOM and treats this marker as
+            // "current group closes here", so a prompt dropped between
+            // the group header and this marker becomes a member and a
+            // prompt dropped after it does not. Without a sentinel,
+            // the walker would either have to guess (class-based)
+            // — which breaks for newly-dropped items — or absorb every
+            // sibling until the next group header (which is wrong for
+            // the ungrouped tail).
+            const endHiddenClass = (!isSearching && this._isGroupOrAncestorCollapsed(groupId)) ? ' prompt-manager-group-end-hidden' : '';
+            listItemHtml += `<li class="prompt-manager-group-end${endHiddenClass}" data-pm-group-end="${escapeHtml(groupId)}" aria-hidden="true"></li>`;
+        };
 
         if (isSearching) {
             // In search mode, render all prompts flat (no group headers)
@@ -3929,33 +3929,32 @@ class PromptManager {
      * @returns {string} HTML string
      */
     renderGroupEditModeList(searchQuery, searchClauses) {
-            const { prefix } = this.configuration;
-            const groups = this.getPromptGroups();
-            const groupColorMap = new Map();
-            groups.forEach((g, i) => groupColorMap.set(g.id, i % 8));
+        const { prefix } = this.configuration;
+        const groups = this.getPromptGroups();
+        const groupColorMap = new Map();
+        groups.forEach((g, i) => groupColorMap.set(g.id, i % 8));
 
-            const visiblePrompts = this.getPromptsForCharacter(this.activeCharacter)
-                .filter(prompt => {
-                    if (!prompt) return false;
-                    if (!searchQuery) return true;
-                    return this.matchesPromptSearchFields(this.getPromptSearchFields(prompt), searchClauses);
-                });
+        const visiblePrompts = this.getPromptsForCharacter(this.activeCharacter)
+            .filter(prompt => {
+                if (!prompt) return false;
+                if (!searchQuery) return true;
+                return this.matchesPromptSearchFields(this.getPromptSearchFields(prompt), searchClauses);
+            });
 
-            let html = '';
+        let html = '';
 
-            // Render group labels hierarchically
-            let currentGroupId = null;
-            const renderedGroupLabels = new Set();
+        // Render group labels hierarchically
+        const renderedGroupLabels = new Set();
 
-            const renderGroupLabel = (groupId) => {
-                if (renderedGroupLabels.has(groupId)) return;
-                renderedGroupLabels.add(groupId);
-                const group = groups.find(g => g.id === groupId);
-                if (!group) return;
-                const colorIdx = groupColorMap.get(groupId) ?? 0;
-                const depth = this.getGroupDepth(groupId);
-                const indentPx = depth * 24;
-                html += `
+        const renderGroupLabel = (groupId) => {
+            if (renderedGroupLabels.has(groupId)) return;
+            renderedGroupLabels.add(groupId);
+            const group = groups.find(g => g.id === groupId);
+            if (!group) return;
+            const colorIdx = groupColorMap.get(groupId) ?? 0;
+            const depth = this.getGroupDepth(groupId);
+            const indentPx = depth * 24;
+            html += `
                 <li class="prompt-manager-group-edit-label" data-pm-group-id="${escapeHtml(groupId)}" data-depth="${depth}" style="margin-left:${indentPx}px">
                     <span class="prompt-manager-group-edit-toggle fa-solid fa-chevron-right"></span>
                     <span class="prompt-manager-group-indicator" data-group-color="${colorIdx}"></span>
@@ -3969,51 +3968,51 @@ class PromptManager {
         </span>
     </li>
     `;
-            };
+        };
 
-            // Interleaved rendering: group labels appear at the position of their
-            // first member in the original prompt order, preserving the user's ordering.
-            const renderedGroupAncestors = (groupId) => {
-                const chain = [];
-                let cur = groups.find(g => g.id === groupId);
-                while (cur && cur.parentId) {
-                    const parent = groups.find(g => g.id === cur.parentId);
-                    if (parent && !renderedGroupLabels.has(parent.id)) {
-                        chain.unshift(parent.id);
-                    }
-                    cur = parent;
+        // Interleaved rendering: group labels appear at the position of their
+        // first member in the original prompt order, preserving the user's ordering.
+        const renderedGroupAncestors = (groupId) => {
+            const chain = [];
+            let cur = groups.find(g => g.id === groupId);
+            while (cur && cur.parentId) {
+                const parent = groups.find(g => g.id === cur.parentId);
+                if (parent && !renderedGroupLabels.has(parent.id)) {
+                    chain.unshift(parent.id);
                 }
-                for (const id of chain) {
-                    renderGroupLabel(id);
-                }
-            };
+                cur = parent;
+            }
+            for (const id of chain) {
+                renderGroupLabel(id);
+            }
+        };
 
-            for (const prompt of visiblePrompts) {
-                if (!prompt) continue;
+        for (const prompt of visiblePrompts) {
+            if (!prompt) continue;
 
-                const group = this.getGroupForPrompt(prompt.identifier);
-                const groupId = group?.id ?? null;
+            const group = this.getGroupForPrompt(prompt.identifier);
+            const groupId = group?.id ?? null;
 
-                // Render group label at the position of its first member
-                if (group && !renderedGroupLabels.has(group.id)) {
-                    renderedGroupAncestors(group.id);
-                    renderGroupLabel(group.id);
-                }
+            // Render group label at the position of its first member
+            if (group && !renderedGroupLabels.has(group.id)) {
+                renderedGroupAncestors(group.id);
+                renderGroupLabel(group.id);
+            }
 
-                const isSelected = this._groupEditSelection?.has(prompt.identifier) ?? false;
-                const selectedClass = isSelected ? 'selected' : '';
-                const colorIdx = groupId ? groupColorMap.get(groupId) : null;
-                const depth = groupId ? this.getGroupDepth(groupId) : 0;
-                const indentPx = depth * 24;
-                const indicatorHtml = colorIdx !== null
-                    ? `<span class="prompt-manager-group-indicator" data-group-color="${colorIdx}"></span>`
-                    : '';
+            const isSelected = this._groupEditSelection?.has(prompt.identifier) ?? false;
+            const selectedClass = isSelected ? 'selected' : '';
+            const colorIdx = groupId ? groupColorMap.get(groupId) : null;
+            const depth = groupId ? this.getGroupDepth(groupId) : 0;
+            const indentPx = depth * 24;
+            const indicatorHtml = colorIdx !== null
+                ? `<span class="prompt-manager-group-indicator" data-group-color="${colorIdx}"></span>`
+                : '';
 
-                const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
-                const enabledClass = listEntry?.enabled ? '' : `${prefix}prompt_manager_prompt_disabled`;
-                const encodedName = escapeHtml(prompt.name);
+            const listEntry = this.getPromptOrderEntry(this.activeCharacter, prompt.identifier);
+            const enabledClass = listEntry?.enabled ? '' : `${prefix}prompt_manager_prompt_disabled`;
+            const encodedName = escapeHtml(prompt.name);
 
-                html += `
+            html += `
                 <li class="${prefix}prompt_manager_prompt prompt-manager-group-editing ${enabledClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}" data-pm-group-id="${escapeHtml(groupId ?? '')}" data-depth="${depth}" style="margin-left:${indentPx}px">
                     ${indicatorHtml}
         <span class="prompt-manager-group-select fa-solid ${isSelected ? 'fa-square-check' : 'fa-square'} ${selectedClass}" data-pm-identifier="${escapeHtml(prompt.identifier)}"></span>
@@ -4022,10 +4021,10 @@ class PromptManager {
         </span>
     </li>
     `;
-            }
-
-            return html;
         }
+
+        return html;
+    }
 
     /**
      * Set up event delegation on the prompt list element.
@@ -4102,25 +4101,25 @@ class PromptManager {
                 if (!groupId) return;
 
                 // Rename
-                            const renameAction = target.closest('.prompt-manager-group-rename');
-                            if (renameAction) {
-                                this.handleGroupRename(groupId);
-                                return;
-                            }
+                const renameAction = target.closest('.prompt-manager-group-rename');
+                if (renameAction) {
+                    this.handleGroupRename(groupId);
+                    return;
+                }
 
-                            // Create sub-group
-                            const subGroupAction = target.closest('.prompt-manager-group-subgroup');
-                            if (subGroupAction) {
-                                const name = prompt(t`Enter sub-group name:`);
-                                if (name && name.trim()) {
-                                    this.createPromptGroup(name.trim(), [], groupId);
-                                    this.renderPromptManagerListItems();
-                                    this.saveServiceSettings();
-                                }
-                                return;
-                            }
+                // Create sub-group
+                const subGroupAction = target.closest('.prompt-manager-group-subgroup');
+                if (subGroupAction) {
+                    const name = prompt(t`Enter sub-group name:`);
+                    if (name && name.trim()) {
+                        this.createPromptGroup(name.trim(), [], groupId);
+                        this.renderPromptManagerListItems();
+                        this.saveServiceSettings();
+                    }
+                    return;
+                }
 
-                            // Ungroup
+                // Ungroup
                 const ungroupAction = target.closest('.prompt-manager-group-ungroup');
                 if (ungroupAction) {
                     this.removePromptGroup(groupId);
@@ -4429,111 +4428,111 @@ class PromptManager {
         toastr.success(t`Group "${result}" created.`);
         this.exitGroupEditMode();
         this.saveServiceSettings();
-        }
+    }
 
-        /**
+    /**
          * Batch toggle enabled/disabled for all selected prompts.
          * If any selected prompt is disabled → enable all; otherwise → disable all.
          */
-        handleBatchToggle() {
-            if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
+    handleBatchToggle() {
+        if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
 
-            const identifiers = [...this._groupEditSelection];
-            const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
+        const identifiers = [...this._groupEditSelection];
+        const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
 
-            // Determine target state: if any is disabled, enable all; otherwise disable all
-            const hasDisabled = identifiers.some(id => {
-                const entry = promptOrder.find(e => e.identifier === id);
-                return entry && !entry.enabled;
-            });
-            const targetEnabled = hasDisabled;
+        // Determine target state: if any is disabled, enable all; otherwise disable all
+        const hasDisabled = identifiers.some(id => {
+            const entry = promptOrder.find(e => e.identifier === id);
+            return entry && !entry.enabled;
+        });
+        const targetEnabled = hasDisabled;
 
-            let changedCount = 0;
-            for (const promptID of identifiers) {
-                const promptOrderEntry = promptOrder.find(e => e.identifier === promptID);
-                if (!promptOrderEntry || promptOrderEntry.enabled === targetEnabled) continue;
+        let changedCount = 0;
+        for (const promptID of identifiers) {
+            const promptOrderEntry = promptOrder.find(e => e.identifier === promptID);
+            if (!promptOrderEntry || promptOrderEntry.enabled === targetEnabled) continue;
 
-                const wasEnabled = Boolean(promptOrderEntry.enabled);
-                promptOrderEntry.enabled = targetEnabled;
-                this.enqueueToggleUndo(promptID, wasEnabled, targetEnabled);
-                if (!this.updateToggleInPlace(promptID, targetEnabled)) {
-                    this.render();
-                }
-                changedCount++;
+            const wasEnabled = Boolean(promptOrderEntry.enabled);
+            promptOrderEntry.enabled = targetEnabled;
+            this.enqueueToggleUndo(promptID, wasEnabled, targetEnabled);
+            if (!this.updateToggleInPlace(promptID, targetEnabled)) {
+                this.render();
             }
-
-            if (changedCount > 0) {
-                this.updateHeaderTotalEstimate();
-                this.updateTokenDisplayDebounced();
-                this.saveServiceSettings();
-                this.updateGroupEditUI();
-            }
+            changedCount++;
         }
 
-        /**
+        if (changedCount > 0) {
+            this.updateHeaderTotalEstimate();
+            this.updateTokenDisplayDebounced();
+            this.saveServiceSettings();
+            this.updateGroupEditUI();
+        }
+    }
+
+    /**
          * Batch toggle plugin_extra for all selected prompts.
          * If any selected prompt is not extra → mark all extra; otherwise → unmark all.
          */
-        handleBatchExtra() {
-            if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
+    handleBatchExtra() {
+        if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
 
-            const identifiers = [...this._groupEditSelection];
+        const identifiers = [...this._groupEditSelection];
 
-            // Determine target state: if any is not extra, mark all; otherwise unmark all
-            const hasNonExtra = identifiers.some(id => !this.isPromptPluginExtra(id));
-            const targetExtra = hasNonExtra;
+        // Determine target state: if any is not extra, mark all; otherwise unmark all
+        const hasNonExtra = identifiers.some(id => !this.isPromptPluginExtra(id));
+        const targetExtra = hasNonExtra;
 
-            let changedCount = 0;
-            for (const promptID of identifiers) {
-                const current = this.isPromptPluginExtra(promptID);
-                if (current === targetExtra) continue;
+        let changedCount = 0;
+        for (const promptID of identifiers) {
+            const current = this.isPromptPluginExtra(promptID);
+            if (current === targetExtra) continue;
 
-                this.setPromptPluginExtra(promptID, targetExtra);
-                if (!this.updatePluginExtraInPlace(promptID, targetExtra)) {
-                    this.render();
-                }
-                changedCount++;
+            this.setPromptPluginExtra(promptID, targetExtra);
+            if (!this.updatePluginExtraInPlace(promptID, targetExtra)) {
+                this.render();
             }
-
-            if (changedCount > 0) {
-                this.saveServiceSettings();
-                this.updateGroupEditUI();
-            }
+            changedCount++;
         }
 
-        /**
+        if (changedCount > 0) {
+            this.saveServiceSettings();
+            this.updateGroupEditUI();
+        }
+    }
+
+    /**
          * Batch remove (detach) all selected prompts from the order list.
          */
-        handleBatchRemove() {
-            if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
-            if (null === this.activeCharacter) return;
+    handleBatchRemove() {
+        if (!this._groupEditSelection || this._groupEditSelection.size === 0) return;
+        if (null === this.activeCharacter) return;
 
-            const identifiers = [...this._groupEditSelection];
-            let removedCount = 0;
+        const identifiers = [...this._groupEditSelection];
+        let removedCount = 0;
 
-            for (const promptID of identifiers) {
-                const prompt = this.getPromptById(promptID);
-                if (!prompt) continue;
+        for (const promptID of identifiers) {
+            const prompt = this.getPromptById(promptID);
+            if (!prompt) continue;
 
-                const detached = this.detachPrompt(prompt, this.activeCharacter);
-                if (!detached) continue;
+            const detached = this.detachPrompt(prompt, this.activeCharacter);
+            if (!detached) continue;
 
-                this.enqueueDetachUndo(promptID, detached.entry, detached.index);
-                if (!this.removePromptItemInPlace(promptID)) {
-                    this.render();
-                }
-                removedCount++;
+            this.enqueueDetachUndo(promptID, detached.entry, detached.index);
+            if (!this.removePromptItemInPlace(promptID)) {
+                this.render();
             }
-
-            if (removedCount > 0) {
-                this._groupEditSelection.clear();
-                this.updateTokenDisplayDebounced();
-                this.saveServiceSettings();
-                this.updateGroupEditUI();
-            }
+            removedCount++;
         }
 
-        /**
+        if (removedCount > 0) {
+            this._groupEditSelection.clear();
+            this.updateTokenDisplayDebounced();
+            this.saveServiceSettings();
+            this.updateGroupEditUI();
+        }
+    }
+
+    /**
         * Handle renaming a group.
      * @param {string} groupId
      */

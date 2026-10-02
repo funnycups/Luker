@@ -32,7 +32,6 @@ import {
     execLorebookGet,
 } from '../../public/scripts/extensions/orchestrator/loop-tools/lorebook.js';
 import { execLorebookForceActivate } from '../../public/scripts/extensions/orchestrator/loop-tools/lorebook-force-activate.js';
-import { ToolError } from '../../public/scripts/extensions/orchestrator/loop-runtime.js';
 
 const ENTRIES = [
     { world: 'private_notes', uid: 1, key: ['k1'], comment: 'entry_a', content: 'PRIVATE1', position: 0 },

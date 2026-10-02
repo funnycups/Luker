@@ -25,7 +25,7 @@ import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, writeEmbedd
 import { awaitMainUI, reloadAndAwait, closeRightNavDrawer } from '../_lib/page.js';
 import { openWorldInfoDrawer, selectWorldBook, getRenderedWorldEntries } from '../_lib/ui-worldinfo.js';
 
-let server, mock, avatar, bookName;
+let server, mock, bookName;
 
 const ASH_NAME = 'Ash the Cartographer';
 const REPLACEMENT_ENTRIES = [
@@ -57,7 +57,7 @@ test.beforeAll(async () => {
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bookName = writeWorldBook({ dataRoot: server.dataRoot, name: 'bryn-headland-replace', entries: BRYN_ENTRIES });
-    avatar = writeEmbeddedCharacter({
+    writeEmbeddedCharacter({
         dataRoot: server.dataRoot,
         overrides: { extensions: { world: bookName } },
     });
@@ -79,7 +79,7 @@ test.describe('#24 — CardApp.replaceWorldBookEntries (Luker-only dynamic world
         // Baseline on disk: BRYN_ENTRIES (2 entries).
         const bookPath = resolve(server.dataRoot, 'default-user', 'worlds', `${bookName}.json`);
         const baseline = JSON.parse(readFileSync(bookPath, 'utf8'));
-        expect(Object.keys(baseline.entries).length).toBe(2);
+        expect(Object.keys(baseline.entries)).toHaveLength(2);
         const baselineComments = Object.values(baseline.entries).map(e => e.comment).sort();
         expect(baselineComments).toEqual(expect.arrayContaining(['reef-conditions', 'drifters']));
 
@@ -120,7 +120,7 @@ test.describe('#24 — CardApp.replaceWorldBookEntries (Luker-only dynamic world
         // ── On-disk: original entries gone, replacement entries present.
         const afterReplace = JSON.parse(readFileSync(bookPath, 'utf8'));
         const afterComments = Object.values(afterReplace.entries).map(e => e.comment).sort();
-        expect(afterComments.length).toBe(3);
+        expect(afterComments).toHaveLength(3);
         expect(afterComments).toEqual(expect.arrayContaining([
             'replaced/eastern-light',
             'replaced/skiff-alpha',

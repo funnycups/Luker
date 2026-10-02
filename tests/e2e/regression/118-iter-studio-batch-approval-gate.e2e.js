@@ -361,9 +361,9 @@ test.describe('#118 — iter-studio batch approval gate (orchestrator custom-too
                 return false;
             }
         });
-        expect(committedToolResults.length,
+        expect(committedToolResults,
             'the follow-up round must contain three role:\'tool\' messages with status:\'committed\' — a smaller count means the drain fired before the bulk-approve loop finished',
-        ).toBe(3);
+        ).toHaveLength(3);
 
         // Also assert every bulk tool made it to disk.
         const stagedNames = await page.evaluate(() => {

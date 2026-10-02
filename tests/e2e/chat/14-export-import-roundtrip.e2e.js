@@ -190,7 +190,7 @@ test.describe('#14 — export/import roundtrip', () => {
         await page.waitForTimeout(1500);
         const filesAfterImport = readdirSync(iyanaChatsDir).filter(f => f.endsWith('.jsonl'));
         const newFiles = filesAfterImport.filter(f => !filesBeforeImport.includes(f));
-        expect(newFiles.length, `expected exactly one new .jsonl in iyana chats after import; got ${JSON.stringify({ before: filesBeforeImport, after: filesAfterImport })}`).toBe(1);
+        expect(newFiles, `expected exactly one new .jsonl in iyana chats after import; got ${JSON.stringify({ before: filesBeforeImport, after: filesAfterImport })}`).toHaveLength(1);
         const importedFileJsonl = newFiles[0];
         const importedFile = importedFileJsonl.replace(/\.jsonl$/, '');
 

@@ -27,6 +27,7 @@ describe.each(CONTRACT_HARNESSES)('GroupRepo on $name', ({ make }) => {
         // survives FS↔DB migration. Strip it before comparing user fields.
         expect(typeof got.date_added).toBe('number');
         const { date_added: _da, ...gotRest } = got;
+        void _da;
         expect(gotRest).toEqual(doc);
     });
 
@@ -58,9 +59,11 @@ describe.each(CONTRACT_HARNESSES)('GroupRepo on $name', ({ make }) => {
         const got = await repo.get(h.handle, '12345');
         expect(typeof got.date_added).toBe('number');
         const { date_added: _da, ...gotRest } = got;
+        void _da;
         expect(gotRest).toEqual({ id: '12345' });
         const got2 = await repo.get(h.handle, 12345);
         const { date_added: _da2, ...got2Rest } = got2;
+        void _da2;
         expect(got2Rest).toEqual({ id: '12345' });
     });
 

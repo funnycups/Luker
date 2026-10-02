@@ -17,7 +17,7 @@
 //   7) non-streaming: ctx.emit.chunk(bytes of upstream JSON) + ctx.emit.end
 //   8) try/catch around 3-7: ctx.inspection.fail + ctx.emit.error
 
-import { SECRET_KEYS, readSecret } from '../../../endpoints/secrets.js';
+import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { normalizeClaudeResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import {
@@ -193,7 +193,7 @@ export async function dispatchClaude(ctx) {
             : [];
 
         if (enableSystemPromptCache && functionTools.length) {
-            functionTools[functionTools.length - 1]['cache_control'] = { type: 'ephemeral', ttl: cacheTTL };
+            functionTools[functionTools.length - 1].cache_control = { type: 'ephemeral', ttl: cacheTTL };
         }
 
         // See legacy sendClaudeRequest comment: attach cache_control to first-user
@@ -389,8 +389,7 @@ export async function dispatchClaude(ctx) {
             // Calling ctx.inspection.complete here marks the entry as
             // 'success' so the runner's status-guard skips the fallback
             // path (entry.status === 'running' check in runner.js:300).
-            try { ctx.inspection.complete(oai, anthropicJson); }
-            catch { /* inspection best-effort */ }
+            try { ctx.inspection.complete(oai, anthropicJson); } catch { /* inspection best-effort */ }
         }
     } catch (err) {
         // AbortError, network error, or any body-construction throw.

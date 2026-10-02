@@ -62,7 +62,7 @@ function findOrCreateDepthBucket(payload, depth, role) {
     const wantRole = Number.isFinite(Number(role)) ? Number(role) : 0;
     let bucket = payload.worldInfoDepth.find(b =>
         Math.max(0, Math.floor(Number(b?.depth) || 0)) === wantDepth
-        && Number(b?.role ?? 0) === wantRole
+        && Number(b?.role ?? 0) === wantRole,
     );
     if (!bucket) {
         bucket = { depth: wantDepth, role: wantRole, entries: [] };

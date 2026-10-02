@@ -1,14 +1,12 @@
-import { describe, expect, test, jest } from '@jest/globals';
+import { describe, expect, test } from '@jest/globals';
 import { createMessageEditorHandle } from '../../../public/scripts/message-takeover.js';
 import {
     appendText, appendReasoning,
     insertAt, replaceRange, deleteRange,
-    EditorOpsError,
 } from '../../../public/scripts/extensions/orchestrator/editor-ops.js';
 
 function setup(initialText = '', initialReasoning = '') {
     const chat = [{ mes: initialText, extra: { reasoning: initialReasoning }, is_user: false }];
-    const emit = jest.fn(async () => {});
     const handle = createMessageEditorHandle({
         generationType: 'normal',
         originalText: initialText,
@@ -19,7 +17,7 @@ function setup(initialText = '', initialReasoning = '') {
         chat[0].mes = text;
         chat[0].extra.reasoning = reasoning;
     });
-    return { chat, emit, handle };
+    return { chat, handle };
 }
 
 describe('appendText / appendReasoning', () => {

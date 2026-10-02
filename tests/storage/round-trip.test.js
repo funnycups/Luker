@@ -35,7 +35,9 @@ import { stripChatEngineMeta } from '../../src/storage/migration/equality.js';
 // Round-trip needs both engines simultaneously, so we use the per-engine
 // factories directly. We keep the import of `CONTRACT_HARNESSES` to fail loud
 // if the harness module's export shape ever drifts.
-expect(CONTRACT_HARNESSES.length).toBeGreaterThanOrEqual(2);
+if (CONTRACT_HARNESSES.length < 2) {
+    throw new Error('CONTRACT_HARNESSES export shape drifted: expected at least 2 harnesses');
+}
 const makeFs = makeTempFsEngineHarness;
 const makeSqlite = makeTempSqliteEngineHarness;
 

@@ -182,7 +182,6 @@ test.describe('#79 — Loop mode lorebookFilter blocks context injection and lor
         // either binding didn't land, fail fast with a specific message
         // so downstream WI assertions aren't debugged as filter regressions.
         const worldInfoSanity = await page.evaluate(async ({ privateBook, publicBook }) => {
-            const worldInfoMod = await import('/scripts/world-info.js');
             const ctx = Luker.getContext();
             const character = ctx.characters?.[ctx.characterId];
             const primary = character?.data?.extensions?.world || '';
@@ -267,7 +266,7 @@ test.describe('#79 — Loop mode lorebookFilter blocks context injection and lor
         const observed = {
             mainAgentBodies: [],       // loop-agent request bodies
             toolMessageContents: [],   // string content of every tool msg
-                                        // the loop agent saw in a subsequent turn
+            // the loop agent saw in a subsequent turn
         };
         // Snapshot the pre-turn request cursor so the post-turn scan
         // only walks THIS turn's traffic — the beforeAll bootstrap may

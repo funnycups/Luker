@@ -329,5 +329,5 @@ export const SCRIPT_EXPORT_NAMES = Object.freeze([
   "updateViewMessageIds",
   "uploadWithProgress",
   "user_avatar",
-  "waitForChatSwitchAvailability"
+  "waitForChatSwitchAvailability",
 ]);

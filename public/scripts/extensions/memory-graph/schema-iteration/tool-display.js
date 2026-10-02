@@ -14,8 +14,8 @@
  */
 
 export const MG_SCHEMA_TOOL_DISPLAY = {
-    mg_schema_set_node_type:      { icon: '✏️', label: 'Set node type',       type: 'edit', summarize: (a) => a?.node_type?.id || '' },
-    mg_schema_remove_node_type:   { icon: '🗑️', label: 'Remove node type',    type: 'edit', summarize: (a) => a?.id || '' },
+    mg_schema_set_node_type: { icon: '✏️', label: 'Set node type',       type: 'edit', summarize: (a) => a?.node_type?.id || '' },
+    mg_schema_remove_node_type: { icon: '🗑️', label: 'Remove node type',    type: 'edit', summarize: (a) => a?.id || '' },
     mg_schema_reorder_node_types: { icon: '🔀', label: 'Reorder node types',  type: 'edit', summarize: (a) => `${(a?.ids || []).length}` },
 
     mg_schema_read_fields: {
@@ -30,6 +30,6 @@ export const MG_SCHEMA_TOOL_DISPLAY = {
         },
     },
 
-    luker_mg_schema_reset_live_to_blank:   { icon: '♻️', label: 'Reset schema to blank',     type: 'control' },
-    luker_mg_schema_reset_live_to_global:  { icon: '⬇️', label: 'Reset schema to global',    type: 'control' },
+    luker_mg_schema_reset_live_to_blank: { icon: '♻️', label: 'Reset schema to blank',     type: 'control' },
+    luker_mg_schema_reset_live_to_global: { icon: '⬇️', label: 'Reset schema to global',    type: 'control' },
 };

@@ -115,7 +115,7 @@ test.describe('#23 — merge two chats after migrating storage to sqlite', () =>
         const messageBubbles = page.locator('#chat .mes');
         await expect(messageBubbles).toHaveCount(10);
         const messages = await page.locator('#chat .mes .mes_text').allInnerTexts();
-        expect(messages.length).toBe(10);
+        expect(messages).toHaveLength(10);
         expect(messages[1]).toContain('Turn A1');
         expect(messages[2]).toContain('Reply A1');
         expect(messages[3]).toContain('Turn A2');

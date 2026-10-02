@@ -60,7 +60,7 @@ test('non-streaming wait beyond the profile timeout aborts before any head frame
 
     // max-retries 未配置（0）→ 单次上游调用，不重试。
     const chatCalls = mock.requests.filter(r => (r.url || '').includes('/chat/completions'));
-    expect(chatCalls.length).toBe(1);
+    expect(chatCalls).toHaveLength(1);
 
     // 生成已解绑。
     await page.waitForFunction(() => {

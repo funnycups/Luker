@@ -28,10 +28,10 @@ import { createListRemoveOp }  from './ops/list-remove.js';
 import { createListMoveOp }    from './ops/list-move.js';
 
 const deps = {
-    get:       lodash.get,
-    set:       lodash.set,
-    unset:     lodash.unset,
-    isEqual:   lodash.isEqual,
+    get: lodash.get,
+    set: lodash.set,
+    unset: lodash.unset,
+    isEqual: lodash.isEqual,
     cloneDeep: lodash.cloneDeep,
 };
 

@@ -1,4 +1,4 @@
-import { describe, test, expect, jest, beforeEach } from '@jest/globals';
+import { describe, test, expect, beforeEach } from '@jest/globals';
 import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';
 import { registerTarget, clearRegistry } from '/scripts/iteration-library/storage/target-registry.js';
 

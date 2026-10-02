@@ -149,8 +149,8 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         // messages we saw in memory (plus the initial first_mes greetings).
         const diskUsersBefore = diskBefore.messages.filter(m => m.is_user && !m.is_system);
         const diskAsstsBefore = diskBefore.messages.filter(m => !m.is_user && !m.is_system);
-        expect(diskUsersBefore.length, 'persisted user-message count should match in-memory before restart').toBe(userCountBefore);
-        expect(diskAsstsBefore.length, 'persisted assistant-message count should match in-memory before restart').toBe(15 + /* one greeting per member */ trio.length);
+        expect(diskUsersBefore, 'persisted user-message count should match in-memory before restart').toHaveLength(userCountBefore);
+        expect(diskAsstsBefore, 'persisted assistant-message count should match in-memory before restart').toHaveLength(15 + /* one greeting per member */ trio.length);
 
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
@@ -180,7 +180,7 @@ test.describe('#88 — group chat persistence + branch + export', () => {
             };
         });
         expect(inMemoryAfter.chatId, 'post-restart group chat id should match the pre-restart chat').toBe(chatId);
-        expect(inMemoryAfter.length, 'post-restart chat length must match pre-restart chat length').toBe(inMemoryBefore.length);
+        expect(inMemoryAfter, 'post-restart chat length must match pre-restart chat length').toHaveLength(inMemoryBefore.length);
         // Byte-for-byte equivalence on every message.
         for (let i = 0; i < inMemoryBefore.length; i++) {
             const before = inMemoryBefore.messages[i];
@@ -217,7 +217,7 @@ test.describe('#88 — group chat persistence + branch + export', () => {
             const ctx = window.Luker.getContext();
             window.__branchSignal = { resolved: false, payload: null };
             const handler = (data) => {
-                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_BRANCH_CREATED, handler); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_BRANCH_CREATED, handler); } catch { /* ignore */ }
                 window.__branchSignal.resolved = true;
                 window.__branchSignal.payload = data ?? 'event';
             };
@@ -257,9 +257,9 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         expect(branchSnap.metadata?.main_chat, 'branch chat_metadata.main_chat must point back at the source chat').toBe(chatId);
         // Branch is prefix up to and including branchAt: length = branchAt + 1.
         expect(
-            branchSnap.length,
+            branchSnap,
             `branch should hold prefix [0..${branchAt}]; got msgs=${JSON.stringify(branchSnap.messages.map(m => m.mes?.slice(0, 30)))}`,
-        ).toBe(branchAt + 1);
+        ).toHaveLength(branchAt + 1);
         // The branch-anchor message must be present byte-for-byte.
         expect(branchSnap.messages[branchAt].mes, 'branch anchor body must equal the source anchor body').toBe(branchAtMes);
 
@@ -275,14 +275,14 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         const groupChatsAfter = readdirSync(
             resolve(server.dataRoot, 'default-user', 'group chats'),
         ).filter(f => f.endsWith('.jsonl'));
-        expect(groupChatsAfter.length, 'a branch must produce a brand-new group chat jsonl on disk').toBe(groupChatsBefore.length + 1);
+        expect(groupChatsAfter, 'a branch must produce a brand-new group chat jsonl on disk').toHaveLength(groupChatsBefore.length + 1);
         expect(groupChatsAfter, 'the original group chat jsonl must survive branch creation').toContain(`${chatId}.jsonl`);
 
         const sourceDiskAfterBranch = readGroupChatOnDisk(server.dataRoot, chatId);
         expect(
-            sourceDiskAfterBranch.messages.length,
+            sourceDiskAfterBranch.messages,
             'source group chat must NOT be truncated by the branch operation',
-        ).toBe(diskBefore.messages.length);
+        ).toHaveLength(diskBefore.messages.length);
 
         // ============================================================
         // Section 3: Export → Import roundtrip via the real past-chats UI.
@@ -342,9 +342,9 @@ test.describe('#88 — group chat persistence + branch + export', () => {
         // header must equal the source message count.
         const importedDisk = readGroupChatOnDisk(server.dataRoot, importedChatId);
         expect(
-            importedDisk.messages.length,
+            importedDisk.messages,
             'imported jsonl message count must equal the source jsonl message count',
-        ).toBe(diskBefore.messages.length);
+        ).toHaveLength(diskBefore.messages.length);
         // Member names of the assistant turns must be the same set as
         // the source — the import does not re-resolve speakers (the
         // jsonl carries them).

@@ -52,8 +52,8 @@ test.describe('#8 — Continue extends last message', () => {
 
         // DOM-side primary assertion: chat length unchanged, last message
         // body grew and contains both fragments.
-        const afterCount = await page.locator('#chat .mes').count();
-        expect(afterCount, `chat length should NOT grow on Continue; before=${beforeCount}, after=${afterCount}`).toBe(beforeCount);
+        const afterCount = page.locator('#chat .mes');
+        await expect(afterCount, `chat length should NOT grow on Continue; before=${beforeCount}, after=${afterCount}`).toHaveCount(beforeCount);
         const afterRendered = await page.locator(`.mes[mesid="${replyId}"] .mes_text`).innerText();
         expect(afterRendered.length, 'last assistant message should grow on Continue').toBeGreaterThan(beforeRendered.length);
         expect(afterRendered).toContain('path bends');

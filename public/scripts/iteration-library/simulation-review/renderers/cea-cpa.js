@@ -23,9 +23,7 @@ export function render(payload, i18n) {
         messages.forEach((m) => {
             const role = (m.role || '').toLowerCase();
             let niceRole, idx;
-            if (role === 'user') { niceRole = 'User'; idx = ++userIdx; }
-            else if (role === 'assistant') { niceRole = 'Assistant'; idx = ++assistIdx; }
-            else { niceRole = 'System'; idx = ++sysIdx; }
+            if (role === 'user') { niceRole = 'User'; idx = ++userIdx; } else if (role === 'assistant') { niceRole = 'Assistant'; idx = ++assistIdx; } else { niceRole = 'System'; idx = ++sysIdx; }
             const label = `${niceRole} #${idx}`;
             const path = `Assembled Prompt → ${niceRole} #${idx}`;
             const sec = appendShared.subsection(ap, label, path, { collapsedByDefault: true });

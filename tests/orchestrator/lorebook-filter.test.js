@@ -177,27 +177,27 @@ describe('applyLorebookFilterPatchArgs', () => {
     });
     test('missing pattern arg → invalid_args', () => {
         expect(() =>
-            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, {}, { dimension: 'book' })
+            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, {}, { dimension: 'book' }),
         ).toThrow(/invalid_args/);
     });
     test('non-string pattern → invalid_args', () => {
         expect(() =>
-            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, { pattern: 42 }, { dimension: 'book' })
+            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, { pattern: 42 }, { dimension: 'book' }),
         ).toThrow(/invalid_args/);
     });
     test('invalid regex line → invalid_args with line number', () => {
         expect(() =>
-            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, { pattern: '^ok$\n[bad(regex' }, { dimension: 'book' })
+            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, { pattern: '^ok$\n[bad(regex' }, { dimension: 'book' }),
         ).toThrow(/invalid_args.*line 2/);
     });
     test('unchanged pattern → noop', () => {
         expect(() =>
-            applyLorebookFilterPatchArgs({ bookPattern: '^same$', entryPattern: '' }, { pattern: '^same$' }, { dimension: 'book' })
+            applyLorebookFilterPatchArgs({ bookPattern: '^same$', entryPattern: '' }, { pattern: '^same$' }, { dimension: 'book' }),
         ).toThrow(/noop/);
     });
     test('unknown dimension → invalid_args', () => {
         expect(() =>
-            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, { pattern: 'x' }, { dimension: 'weird' })
+            applyLorebookFilterPatchArgs({ bookPattern: '', entryPattern: '' }, { pattern: 'x' }, { dimension: 'weird' }),
         ).toThrow(/invalid_args/);
     });
 });

@@ -233,7 +233,7 @@ test.describe('#67 — crawl extraction mode explores before extracting', () => 
         // may merge messages, so search the whole body; JSON.stringify
         // escapes the inner quotes as \\\"). )
         const totals = extractionBodies.map(b => {
-            const m = /semantic_node_total\\?\"?\s*:\s*(\d+)/.exec(JSON.stringify(b.messages));
+            const m = /semantic_node_total\\?"?\s*:\s*(\d+)/.exec(JSON.stringify(b.messages));
             return m ? Number(m[1]) : null;
         }).filter(v => v !== null);
         expect(totals.length, 'semantic_node_total must appear in extraction payloads').toBeGreaterThanOrEqual(1);

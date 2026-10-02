@@ -42,5 +42,5 @@ export const GROUP_CHATS_EXPORT_NAMES = Object.freeze([
   "saveGroupChat",
   "select_group_chats",
   "selected_group",
-  "unshallowGroupMembers"
+  "unshallowGroupMembers",
 ]);

@@ -41,6 +41,7 @@ test.afterAll(async () => {
 
 test.describe('TTS voice map popup with TTS disabled', () => {
     test.describe.configure({ timeout: 240_000 });
+
     test('Manage voices lists participants and keeps added names with TTS off', async ({ page }) => {
         test.setTimeout(240_000);
         await awaitMainUI(page, server.baseURL);

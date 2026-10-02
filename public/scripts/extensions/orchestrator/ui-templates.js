@@ -1068,7 +1068,6 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
         ORCH_EXECUTION_MODE_DIRECTOR,
         ORCH_EXECUTION_MODE_LOOP,
         ORCH_EXECUTION_MODE_SINGLE,
-        ORCH_EXECUTION_MODE_SPEC,
         escapeHtml,
         getCharacterDisplayNameByAvatar,
         getCurrentAvatar,
@@ -1092,7 +1091,6 @@ export function buildOrchestrationEditorPopupPanelHtml(deps, context, settings) 
     // active-mode) triple, not on which workspace renders.
     syncCharacterEditorWithActiveAvatar(context);
     const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    const hasActiveCharacter = Boolean(activeAvatar);
     const scope = getDisplayedScope(context, settings);
     const isCharacterScope = scope === 'character';
     const currentMode = settings && getExecutionMode ? getExecutionMode(settings) : '';
@@ -1195,7 +1193,6 @@ export function injectWorkspaceIntoTabHost(root, mode, deps, context, settings, 
         getDisplayedScope,
         getEditorByScope,
         getLoopEditorByScope,
-        getPopupEditingLabel,
         getProfileTitleForScope,
         hasCharacterAgendaPresetLibrary,
         hasCharacterDirectorPresetLibrary,
@@ -1425,7 +1422,6 @@ function buildGeneralTabHtml(deps, idPrefix = '') {
         i18n,
         world_info_position,
         getExecutionMode,
-        getContext,
     } = deps;
     const s = baseId => scopeId(baseId, idPrefix);
 

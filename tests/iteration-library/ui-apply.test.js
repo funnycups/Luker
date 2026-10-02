@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import { renderApplyControls } from '../../public/scripts/iteration-library/ui/apply.js';
 
 const ident = (s, ...args) => args.reduce((acc, v, i) => acc.replace(new RegExp('\\$\\{' + i + '\\}', 'g'), v), s);

@@ -223,7 +223,7 @@ export function migrateLegacyCardOverrideForMode(context, avatar, mode) {
             // The agenda/loop/director sub-payload carried its own
             // `enabled` and `updatedAt` fields; strip those, keep the
             // profile body.
-            const { enabled, updatedAt, ...rest } = sub;
+            const { enabled, updatedAt: _updatedAt, ...rest } = sub;
             legacyPayload = rest;
             legacyEnabled = typeof enabled === 'boolean' ? enabled : null;
         }

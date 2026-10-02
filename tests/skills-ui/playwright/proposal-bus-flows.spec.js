@@ -113,14 +113,6 @@ async function installSeed(page, { name }) {
     }, { name, body: buildSeed(name) });
 }
 
-async function readSkillBody(page, { name }) {
-    return await page.evaluate(async ({ name }) => {
-        const ctx = window.SillyTavern.getContext();
-        const raw = await ctx.skills.readFile({ scope: { kind: 'global' }, name, path: 'SKILL.md' });
-        return raw?.content || raw || '';
-    }, { name });
-}
-
 async function cleanup(page, { name }) {
     await page.evaluate(async ({ name }) => {
         const ctx = window.SillyTavern.getContext();

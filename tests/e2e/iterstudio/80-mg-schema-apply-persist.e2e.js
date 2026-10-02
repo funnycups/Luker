@@ -12,8 +12,6 @@
 //   6. Restart, reload, re-open popup → new id still present in DOM.
 
 import { test, expect } from '@playwright/test';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';

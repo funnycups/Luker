@@ -88,7 +88,7 @@ test.describe('#48 — private-request-filter blocks outgoing fetches to disallo
         // We are testing that an authenticated request does not blow up.
         if (minted.status === 200) {
             let parsed = null;
-            try { parsed = JSON.parse(minted.body); } catch {}
+            try { parsed = JSON.parse(minted.body); } catch { /* ignore */ }
             expect(parsed, `/api/ws-ticket returned non-JSON: ${minted.body}`).toBeTruthy();
             expect(typeof parsed.ticket || typeof parsed.token, 'expected a ticket or token field').toBeTruthy();
         } else {

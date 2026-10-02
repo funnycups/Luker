@@ -13,7 +13,7 @@
 //   4. The chat.jsonl on disk contains the user + assistant turns.
 
 import { test, expect } from '@playwright/test';
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';

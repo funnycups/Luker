@@ -209,7 +209,7 @@ function renderMacro(inner, originalLiteral, env) {
  * match. Mirrors `MACRO_VARIABLE_SHORTHAND_PATTERN` from the main lexer —
  * each segment must start with a letter and end with a word char.
  */
-const SHORTHAND_READ_RE = /^([.$])([a-zA-Z](?:[\w\-]*[\w])?(?:\.[a-zA-Z](?:[\w\-]*[\w])?)*)$/;
+const SHORTHAND_READ_RE = /^([.$])([a-zA-Z](?:[\w-]*[\w])?(?:\.[a-zA-Z](?:[\w-]*[\w])?)*)$/;
 
 /**
  * Tests whether `inner` (already trimmed) is a pure variable-shorthand read

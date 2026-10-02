@@ -133,8 +133,8 @@ test.describe('#106 — announcements broadcast and dismiss flow', () => {
 
         // Give announcements init a chance to run (it's fire-and-forget).
         await page.waitForTimeout(2_000);
-        const stillGone = await page.locator('#announcement-banner').count();
-        expect(stillGone, 'dismissed announcement banner should NOT reappear after reload').toBe(0);
+        const stillGone = page.locator('#announcement-banner');
+        await expect(stillGone, 'dismissed announcement banner should NOT reappear after reload').toHaveCount(0);
 
         // Also confirm via the data layer: the announcement is in alice's
         // readIds and the bell badge (if rendered) is empty.

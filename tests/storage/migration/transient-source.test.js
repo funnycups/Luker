@@ -17,13 +17,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import archiver from 'archiver';
-import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 import { materializeTransientSource } from '../../../src/storage/migration/transient-source.js';
 import { CrossModeScratchConnectionError } from '../../../src/storage/migration/cross-mode-errors.js';
 import { ENGINE_DUMP_ENTRY, ENGINE_META_ENTRY, SCRATCH_HANDLE_PREFIX } from '../../../src/storage/engine-backup-entries.js';
-import { FsEngine } from '../../../src/storage/engines/fs-engine.js';
 import { SqliteEngine } from '../../../src/storage/engines/sqlite-engine.js';
 import { ChatRepo } from '../../../src/storage/repositories/chat-repo.js';
 import { SettingsRepo } from '../../../src/storage/repositories/settings-repo.js';

@@ -26,7 +26,7 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -261,8 +261,8 @@ export async function ensureCharacterLoaded(page) {
             await ctx.executeSlashCommandsWithOptions(`/char ${first.name}`);
             await new Promise(r => setTimeout(r, 500));
         } catch {
-            const tile = document.querySelector(`#rm_print_characters_block [chid][bogus_folder='false']`)
-                || document.querySelector(`#rm_print_characters_block [chid]`);
+            const tile = document.querySelector('#rm_print_characters_block [chid][bogus_folder=\'false\']')
+                || document.querySelector('#rm_print_characters_block [chid]');
             if (tile && typeof tile.click === 'function') {
                 tile.click();
                 await new Promise(r => setTimeout(r, 250));

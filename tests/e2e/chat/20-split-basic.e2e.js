@@ -88,7 +88,7 @@ test.describe('#20 — split one chat into three via the per-message split icon'
         const chatsDir = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder);
         const sourcePath = resolve(chatsDir, `${sourceChatId}.jsonl`);
         const sourceLinesBefore = readFileSync(sourcePath, 'utf-8').trim().split('\n');
-        expect(sourceLinesBefore.length, `expected 1 header + 7 messages; got ${sourceLinesBefore.length}`).toBe(8);
+        expect(sourceLinesBefore, `expected 1 header + 7 messages; got ${sourceLinesBefore.length}`).toHaveLength(8);
         const sourceBodyBefore = sourceLinesBefore.slice(1).map(l => JSON.parse(l));
 
         // Open the split dialog from mesid=2 (the first scripted reply).
@@ -116,7 +116,7 @@ test.describe('#20 — split one chat into three via the per-message split icon'
         // in the header) to what we read before the split. We compare the
         // body JSON only — the header's create_date is unrelated to split.
         const sourceLinesAfter = readFileSync(sourcePath, 'utf-8').trim().split('\n');
-        expect(sourceLinesAfter.length).toBe(8);
+        expect(sourceLinesAfter).toHaveLength(8);
         const sourceBodyAfter = sourceLinesAfter.slice(1).map(l => JSON.parse(l));
         for (let i = 0; i < sourceBodyBefore.length; i++) {
             expect(sourceBodyAfter[i]).toEqual(sourceBodyBefore[i]);
@@ -135,11 +135,11 @@ test.describe('#20 — split one chat into three via the per-message split icon'
             const partPath = resolve(chatsDir, `${name}.jsonl`);
             const lines = readFileSync(partPath, 'utf-8').trim().split('\n');
             const expectedCount = range[1] - range[0];
-            expect(lines.length, `${name}: expected 1 header + ${expectedCount} messages; got ${lines.length}`)
-                .toBe(1 + expectedCount);
+            expect(lines, `${name}: expected 1 header + ${expectedCount} messages; got ${lines.length}`)
+                .toHaveLength(1 + expectedCount);
             const partBody = lines.slice(1).map(l => JSON.parse(l));
             const sourceSlice = sourceBodyBefore.slice(range[0], range[1]);
-            expect(partBody.length).toBe(sourceSlice.length);
+            expect(partBody).toHaveLength(sourceSlice.length);
             for (let i = 0; i < sourceSlice.length; i++) {
                 expect(partBody[i]).toEqual(sourceSlice[i]);
             }

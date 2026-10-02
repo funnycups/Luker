@@ -184,7 +184,7 @@ test.describe('#46 — multi-user data isolation (real login form)', () => {
             return list.map(c => c?.name).filter(Boolean).sort();
         });
         expect(aliceList).toContain('AshA');
-        expect(aliceList, `alice should NOT see bob's AshB`).not.toContain('AshB');
+        expect(aliceList, 'alice should NOT see bob\'s AshB').not.toContain('AshB');
         await aliceCtx.close();
 
         // ── BOB: real-form login, separate browser context. ──

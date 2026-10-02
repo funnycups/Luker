@@ -237,7 +237,7 @@ test.describe('#29 — replace flow failure resilience', () => {
 
             // The input must be empty now; a browser fires no change event
             // when the same file is re-selected into a non-empty input.
-            expect(await page.locator('#character_replace_file').inputValue()).toBe('');
+            await expect(page.locator('#character_replace_file')).toHaveValue('');
 
             // Re-select the exact same file through the same input — the
             // real retry gesture. setInputFiles with an unchanged value

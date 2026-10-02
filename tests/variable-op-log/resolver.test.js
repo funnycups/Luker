@@ -1,4 +1,4 @@
-import { describe, test, expect, jest } from '@jest/globals';
+import { describe, test, expect } from '@jest/globals';
 import { resolveDisplayMacros } from '../../public/scripts/variable-op-log/resolver.js';
 
 describe('resolver: resolveDisplayMacros', () => {

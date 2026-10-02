@@ -57,8 +57,8 @@ export async function dispatchMinimax(ctx) {
         const bodyParams = {};
 
         if (Array.isArray(body.tools) && body.tools.length > 0) {
-            bodyParams['tools'] = body.tools;
-            bodyParams['tool_choice'] = body.tool_choice;
+            bodyParams.tools = body.tools;
+            bodyParams.tool_choice = body.tool_choice;
         }
 
         const requestBody = {

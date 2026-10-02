@@ -316,7 +316,7 @@ describe('director-mode iteration: luker_orch_simulate is wired through', () => 
         // shared continue/finalize handlers; verify the dispatch shape
         // matches what loop/agenda/spec already do.
         const directorExecBlock = mainSrc.match(
-            /async\s+function\s+executeDirectorIterationToolCalls[\s\S]+?\n}/
+            /async\s+function\s+executeDirectorIterationToolCalls[\s\S]+?\n}/,
         );
         expect(directorExecBlock).not.toBeNull();
         expect(directorExecBlock[0]).toMatch(/name\s*===\s*['"]luker_orch_simulate['"]/);
@@ -328,7 +328,7 @@ describe('director-mode iteration: luker_orch_simulate is wired through', () => 
         // when isDirectorIterationSession(session) is true. The simulate
         // entry must sit alongside the other luker_orch_set_director_* tools.
         const directorCatalogBlock = mainSrc.match(
-            /isDirectorIterationSession\(session\)\)\s*\{\s*return\s*\[[\s\S]+?\];\s*\}/
+            /isDirectorIterationSession\(session\)\)\s*\{\s*return\s*\[[\s\S]+?\];\s*\}/,
         );
         expect(directorCatalogBlock).not.toBeNull();
         expect(directorCatalogBlock[0]).toMatch(/name:\s*['"]luker_orch_simulate['"]/);
@@ -340,7 +340,7 @@ describe('director-mode iteration: luker_orch_simulate is wired through', () => 
         // <simulation_chain> / <annotations> / <status submitted="..."/>
         // so it can act on user annotations after a simulate call.
         const directorPromptBlock = mainSrc.match(
-            /DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK\s*=\s*\[[\s\S]+?\]\.join\('\\n'\);/
+            /DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK\s*=\s*\[[\s\S]+?\]\.join\('\\n'\);/,
         );
         expect(directorPromptBlock).not.toBeNull();
         expect(directorPromptBlock[0]).toMatch(/luker_orch_simulate/);

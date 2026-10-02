@@ -92,9 +92,9 @@ test.describe('#119 — orchestrator popup General tab hydrates from live settin
         // Assertion 1: request-system-prompt hydrated from settings.
         const popupPrompt = popup.locator('#orch-popup-luker_orch_request_system_prompt');
         await popupPrompt.waitFor({ state: 'visible', timeout: 5000 });
-        expect(await popupPrompt.inputValue(),
+        await expect(popupPrompt,
             'popup request-system-prompt must hydrate from settings.requestSystemPrompt',
-        ).toBe(REQUEST_PROMPT_MARKER);
+        ).toHaveValue(REQUEST_PROMPT_MARKER);
 
         // Assertion 2: API preset dropdown populated (at least the empty-option row).
         const apiPresetSelect = popup.locator('#orch-popup-luker_orch_request_api_preset');

@@ -144,7 +144,7 @@ function ensureStylesheetInjected() {
     }
 }
 
-const HTML_ENTITY_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const HTML_ENTITY_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' };
 function escapeAttr(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => HTML_ENTITY_MAP[c]);
 }
@@ -434,7 +434,6 @@ async function processRoundOutcome({
     helperApis,
     i18n,
 }) {
-    const { t, tf } = i18n;
     const { hadAnyToolCall } = roundFlags;
 
     // Split the round's non-control calls by read-vs-edit. Calls with an
@@ -1735,15 +1734,13 @@ export async function openUnifiedCharacterEditorPopup(context, opts = {}) {
     // to simulate "user applied at least one edit" without having to
     // drive the whole popup UI. Production callers never pass this.
     if (typeof opts?._testOnly_onRollbackEnvelopeReady === 'function') {
-        try { opts._testOnly_onRollbackEnvelopeReady(rollbackEnvelope); }
-        catch { /* swallow — test-only */ }
+        try { opts._testOnly_onRollbackEnvelopeReady(rollbackEnvelope); } catch { /* swallow — test-only */ }
     }
     try {
         await _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnvelope);
     } finally {
         if (!rollbackEnvelope.hasEverApplied && typeof opts?.postReplaceRollback === 'function') {
-            try { await opts.postReplaceRollback(); }
-            catch (err) { console.warn(`[${MODULE}] postReplaceRollback failed`, err); }
+            try { await opts.postReplaceRollback(); } catch (err) { console.warn(`[${MODULE}] postReplaceRollback failed`, err); }
         }
     }
 }
@@ -2638,8 +2635,8 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
             <div style="display:flex;align-items:center;gap:8px;">
                 <span style="font-weight:700;font-size:14px;">${escapeAttr(name)}</span>
                 ${pendingCharEdits.length > 0
-                    ? `<span style="font-size:11px;padding:1px 6px;border-radius:4px;background:color-mix(in srgb, var(--SmartThemeQuoteColor, #ffb74d) 22%, transparent);color:var(--SmartThemeQuoteColor, #ffb74d);">${escapeAttr(tx('${0} pending edit(s)').replace('${0}', String(pendingCharEdits.length)))}</span>`
-                    : ''}
+        ? `<span style="font-size:11px;padding:1px 6px;border-radius:4px;background:color-mix(in srgb, var(--SmartThemeQuoteColor, #ffb74d) 22%, transparent);color:var(--SmartThemeQuoteColor, #ffb74d);">${escapeAttr(tx('${0} pending edit(s)').replace('${0}', String(pendingCharEdits.length)))}</span>`
+        : ''}
             </div>
             ${fieldsHtml || `<div style="margin-top:6px;font-size:12px;opacity:0.6;">${escapeAttr(tx('All card fields empty.'))}</div>`}
         </div>`;
@@ -2935,124 +2932,6 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
         }
     }
 
-    async function maybeAutoApply() {
-        if (!state.session?.surfaceState?.autoApply) return false;
-        if (!Array.isArray(state.pendingEdits) || state.pendingEdits.length === 0) return false;
-        try {
-            await applyPendingEdits(state, {
-                persistSession,
-                render,
-                i18n: { t, tf },
-                context,
-                settings,
-                avatar,
-            });
-            // No synthetic user message push — auto-apply outcomes flow
-            // through the same tool_call/tool_result round-trip channel
-            // as review-mode approvals: bus.setAutoApprove fires a
-            // `committed` outcome, drainBusOutcomes updates the pending
-            // envelope in place. See applyOutcomesToToolResults above.
-            return true;
-        } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[${MODULE}] auto-apply failed`, err);
-            return false;
-        }
-    }
-
-    /**
-     * Fire the next AI round after the user reviewed a paused batch
-     * (clicked Apply or Discard). The loop in `runIterationTurn` exits
-     * the moment it sees pendingEdits, so without this resumer the AI
-     * never sees the outcome. Post-refactor, the outcome signal rides
-     * on in-place tool_result updates (drainBusOutcomes /
-     * applyOutcomesToToolResults) — no synthetic user prose is pushed.
-     * On the DISCARD path we also flip the discarded tool_results to
-     * `rejected` so the next round's replay reflects the user's decision.
-     */
-    async function continueAfterReviewDecision({ action, count }) {
-        if (state.isBusy) return;
-        void count; // count is no longer surfaced in prose; kept in signature for caller-shape stability.
-
-        if (action !== 'apply') {
-            // Discard: bulk-reject every still-pending edit tool_result
-            // in the latest assistant turn(s) that contributed to the
-            // just-discarded batch. Without this, the model would see
-            // dangling `proposal_pending` envelopes on its next round
-            // and re-issue the same edits.
-            const rejectedPayload = buildEditToolResultPayload('rejected');
-            const msgs = state.session?.messages || [];
-            for (let i = msgs.length - 1; i >= 0; i--) {
-                const m = msgs[i];
-                if (!m || m.role !== 'assistant') continue;
-                if (m.appliedAt || m.rolledBackAt) break;
-                const results = Array.isArray(m.toolResults) ? m.toolResults : null;
-                if (!results) continue;
-                let touched = false;
-                for (let j = 0; j < results.length; j++) {
-                    const r = results[j];
-                    const content = r?.content;
-                    if (content && typeof content === 'object' && content.status === 'proposal_pending') {
-                        results[j] = {
-                            tool_call_id: String(r?.tool_call_id || ''),
-                            content: rejectedPayload,
-                            status: 'fail',
-                        };
-                        touched = true;
-                    }
-                }
-                if (!touched && !(Array.isArray(m.edits) && m.edits.length > 0)) break;
-            }
-        }
-
-        state.isBusy = true;
-        const ac = new AbortController();
-        state.abortController = ac;
-        await persistSession();
-        await render();
-
-        try {
-            await runIterationTurn(state, {
-                userText: '',
-                context,
-                settings,
-                helperApis,
-                abortSignal: ac.signal,
-                hasSearchTools,
-                i18n: { t, tf },
-                onTurnUpdate: async () => {
-                    await persistSession();
-                    await render();
-                },
-            });
-        } catch (err) {
-            if (!isAbortError(err, ac.signal)) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] continueAfterReviewDecision`, err);
-                state.session.messages.push({
-                    id: makeMessageId(),
-                    role: 'system',
-                    content: tf('Error: ${0}', mdLiteral(err?.message || err)),
-                    at: Date.now(),
-                });
-            }
-        } finally {
-            state.isBusy = false;
-            state.aborting = false;
-            state.abortController = null;
-            await persistSession();
-            try {
-                bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
-                await mirrorPendingEditsToBus();
-            } catch (err) {
-                // eslint-disable-next-line no-console
-                console.warn(`[${MODULE}] mirrorPendingEditsToBus failed (regenerate)`, err);
-            }
-            bumpChatBadge();
-            await render();
-        }
-    }
-
     if ($root && $root.length > 0) {
         $root.on('click.ceaEditor', '[data-cea-editor-action="send"]', async (e) => {
             e.preventDefault();
@@ -3267,8 +3146,7 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
             state.session = createNewSession(avatar);
             state.pendingEdits = [];
             state.__suspendBusOnChange = true;
-            try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); }
-            finally { state.__suspendBusOnChange = false; }
+            try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); } finally { state.__suspendBusOnChange = false; }
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
             await persistSession();
             await render();
@@ -3291,8 +3169,7 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
             state.session = createNewSession(avatar);
             state.pendingEdits = [];
             state.__suspendBusOnChange = true;
-            try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); }
-            finally { state.__suspendBusOnChange = false; }
+            try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); } finally { state.__suspendBusOnChange = false; }
             bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
             await persistSession();
             await render();
@@ -3316,8 +3193,7 @@ async function _openUnifiedCharacterEditorPopupInner(context, opts, rollbackEnve
                 state.session = createNewSession(avatar);
                 state.pendingEdits = [];
                 state.__suspendBusOnChange = true;
-                try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); }
-                finally { state.__suspendBusOnChange = false; }
+                try { bus.hydrate({ version: 3, entries: [], outcomeQueue: [] }); } finally { state.__suspendBusOnChange = false; }
                 bus.setAutoApprove(Boolean(state.session.surfaceState?.autoApply));
                 await persistSession();
             }
@@ -3460,7 +3336,7 @@ function buildPopupHtml({
     showReplaceDiffButton,
     replaceDiffButtonLabel,
 }) {
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
     const replaceDiffBtnHtml = showReplaceDiffButton
         ? `<button type="button" class="menu_button menu_button_small cea_editor_topbar_action" data-cea-editor-action="open-replace-diff" title="${esc(replaceDiffButtonLabel || 'View full replace diff')}">
                 <i class="fa-solid fa-code-compare" aria-hidden="true"></i>

@@ -67,13 +67,13 @@ export function renderToolCallChip(call, opts = {}) {
 
     const lines = [
         `<div class="luker_lib_toolcall luker_lib_toolcall_${escapeHtmlAttr(type)}">`,
-        `<div class="luker_lib_toolcall_summary">`,
+        '<div class="luker_lib_toolcall_summary">',
         ...summaryParts,
-        `</div>`,
+        '</div>',
     ];
     if (detailsHtml) lines.push(detailsHtml);
     if (resultHtml) lines.push(resultHtml);
-    lines.push(`</div>`);
+    lines.push('</div>');
     return lines.join('\n');
 }
 
@@ -108,12 +108,12 @@ function renderFieldRows(obj) {
     for (const k of keys) {
         const v = obj[k];
         const valueHtml = renderArgValue(v);
-        rowLines.push(`<div class="luker_lib_toolcall_arg_row">`);
+        rowLines.push('<div class="luker_lib_toolcall_arg_row">');
         rowLines.push(`<label class="luker_lib_toolcall_arg_key">${escapeHtml(k)}</label>`);
-        rowLines.push(`<div class="luker_lib_toolcall_arg_value">`);
+        rowLines.push('<div class="luker_lib_toolcall_arg_value">');
         rowLines.push(valueHtml);
-        rowLines.push(`</div>`);
-        rowLines.push(`</div>`);
+        rowLines.push('</div>');
+        rowLines.push('</div>');
     }
     return rowLines.join('\n');
 }
@@ -213,11 +213,11 @@ function tryRenderArgsDiff(name, args, i18n) {
     });
 
     return [
-        `<details class="luker_lib_toolcall_details">`,
+        '<details class="luker_lib_toolcall_details">',
         `<summary>${escapeHtml(i18n('Arguments'))}</summary>`,
         metaHtml,
         diffBlock,
-        `</details>`,
+        '</details>',
     ].join('\n');
 }
 
@@ -228,12 +228,12 @@ function renderArgsDetails(name, args, i18n) {
     const rows = renderFieldRows(args);
     if (!rows) return '';
     return [
-        `<details class="luker_lib_toolcall_details">`,
+        '<details class="luker_lib_toolcall_details">',
         `<summary>${escapeHtml(i18n('Arguments'))}</summary>`,
-        `<div class="luker_lib_toolcall_arg_rows">`,
+        '<div class="luker_lib_toolcall_arg_rows">',
         rows,
-        `</div>`,
-        `</details>`,
+        '</div>',
+        '</details>',
     ].join('\n');
 }
 
@@ -290,10 +290,10 @@ function renderResultDetails(result, i18n) {
     return [
         `<details class="luker_lib_toolcall_result"${open ? ' open' : ''}>`,
         `<summary>${escapeHtml(i18n('Result'))}</summary>`,
-        `<div class="luker_lib_toolcall_result_body">`,
+        '<div class="luker_lib_toolcall_result_body">',
         bodyHtml,
-        `</div>`,
-        `</details>`,
+        '</div>',
+        '</details>',
     ].join('\n');
 }
 

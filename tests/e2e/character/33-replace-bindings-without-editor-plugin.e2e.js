@@ -160,7 +160,7 @@ test.describe('#33 — binding preservation without the editor plugin', () => {
             // No world-book popup (CEA is disabled) and no binding dialog
             // (the silent path) may appear.
             await page.waitForTimeout(2500);
-            expect(await page.locator('dialog.popup[open]').count()).toBe(0);
+            await expect(page.locator('dialog.popup[open]')).toHaveCount(0);
 
             // The replace + preservation chain is async; wait for the
             // preserved preset to land on disk before the final read.

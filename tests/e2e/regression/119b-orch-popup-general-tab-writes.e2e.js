@@ -101,15 +101,15 @@ test.describe('#119b — orchestrator popup General-tab writes propagate to sett
         // Verify DRAWER textareas have the marker values.
         const drawerPrompt = page.locator('#luker_orch_request_system_prompt');
         await drawerPrompt.waitFor({ state: 'visible', timeout: 10_000 });
-        expect(await drawerPrompt.inputValue(),
+        await expect(drawerPrompt,
             'drawer request-system-prompt must reflect popup edit; ' +
             'if the popup-side write handler did not fire, settings.requestSystemPrompt keeps its prior value',
-        ).toBe(PROMPT_MARKER_A);
+        ).toHaveValue(PROMPT_MARKER_A);
 
         const drawerIterSpec = page.locator('#luker_orch_iter_mode_prompt_spec');
-        expect(await drawerIterSpec.inputValue(),
+        await expect(drawerIterSpec,
             'drawer iter-mode-prompt-spec must reflect popup edit; ' +
             'if the popup-side write handler did not fire, settings.iterModePromptSpec keeps its prior value',
-        ).toBe(PROMPT_MARKER_B);
+        ).toHaveValue(PROMPT_MARKER_B);
     });
 });

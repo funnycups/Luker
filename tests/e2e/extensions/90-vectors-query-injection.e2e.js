@@ -247,9 +247,6 @@ vectorsDescribe('#90 — vectors vectorize+query+inject (real ollama embedder)',
         });
         expect(syncResult.reason, 'sync attempt should have completed').toBe('synced');
 
-        // Confirm the vectra store on disk actually has hashes — that is
-        // the public proof that real embedding happened end-to-end.
-        const chatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId());
         const beforeQueryRequests = mock.requests.length;
 
         // ── Send the query turn. The vectors interceptor runs first.

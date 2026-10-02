@@ -18,8 +18,6 @@
 //      {mode:'character', avatar} only when the DOM ref is character AND
 //      the name matches; otherwise {mode:'global'}.
 
-import { jest } from '@jest/globals';
-
 const {
     readSelectedPresetRef,
     decideSavePresetDispatch,

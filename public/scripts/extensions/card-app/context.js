@@ -6,10 +6,8 @@ import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../regex/engi
 
 const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
-const event_types = __ctx.eventTypes;
 const chat = __ctx.chat;
 const characters = __ctx.characters;
-const getRequestHeaders = __ctx.getRequestHeaders;
 const openCharacterChat = __ctx.openCharacterChat;
 const doNewChat = __ctx.doNewChat;
 const closeCurrentChat = __ctx.closeCurrentChat;

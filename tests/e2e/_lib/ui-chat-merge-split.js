@@ -113,7 +113,7 @@ export async function submitMergeDialog(page, dialog, targetName, { awaitNavigat
             const timer = setTimeout(() => reject(new Error('chat_changed timeout')), to);
             const off = ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, (id) => {
                 clearTimeout(timer);
-                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_CHANGED, off); } catch {}
+                try { ctx.eventSource.removeListener(ctx.eventTypes.CHAT_CHANGED, off); } catch { /* ignore */ }
                 resolve(id);
             });
         }), timeoutMs);

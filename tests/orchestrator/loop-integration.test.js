@@ -622,9 +622,9 @@ describe('loop mode end-to-end: abort path (Task 15e)', () => {
                     chat: { read_range: false, search: false },
                     lorebook: { search: false, get: false },
                     memory: {
-                    list_candidates: false, edge_summary: false, node_brief: false,
-                    expand_seeds: false, rank: false, schema: false,
-                },
+                        list_candidates: false, edge_summary: false, node_brief: false,
+                        expand_seeds: false, rank: false, schema: false,
+                    },
                     finalize: true,
                 },
             }), { sendLlm }),

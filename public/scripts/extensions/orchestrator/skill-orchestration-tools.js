@@ -123,7 +123,7 @@ export function registerSkillOrchestrationTools() {
                 },
                 flags: {
                     type: 'string',
-                    description: "RegExp flags. 'gm' by default. 'g' is auto-injected if you omit it.",
+                    description: 'RegExp flags. \'gm\' by default. \'g\' is auto-injected if you omit it.',
                     default: 'gm',
                 },
                 path: { type: 'string', description: 'Optional file path within the skill. All files are scanned if omitted.' },

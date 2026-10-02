@@ -65,7 +65,7 @@ test.describe('#99 — persona switch propagates to user name and prompt', () =>
         // Sanity: the seeded persona shows up in the persona panel.
         await openPersonaPanel(page);
         const cardCount = await page.locator(`#user_avatar_block .avatar-container[data-avatar-id="${PERSONA_AVATAR_ID}"]`).count();
-        expect(cardCount, `pre-seeded persona avatar card should be present in the panel`).toBeGreaterThan(0);
+        expect(cardCount, 'pre-seeded persona avatar card should be present in the panel').toBeGreaterThan(0);
 
         // Real click: select the persona card by its display name.
         // selectPersonaByName clicks the visible .avatar-container — same path

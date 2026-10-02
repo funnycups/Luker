@@ -6,13 +6,10 @@ import fetch from 'node-fetch';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import urlJoin from 'url-join';
-import mime from 'mime-types';
 
-import { delay, getBasicAuthHeader, isValidUrl, tryParse } from '../util.js';
+import { delay, getBasicAuthHeader, isValidUrl } from '../util.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { AIMLAPI_HEADERS } from '../constants.js';
-import { startImageInspection, completeImageInspection, failImageInspection, abortInspection, extractImageMeta, attachInspectionEndpoint } from '../request-inspector.js';
 import { runLukerDispatch } from '../luker-dispatch/runner.js';
 import { dispatchSdWebui } from '../luker-dispatch/providers/sd/webui.js';
 import { dispatchSdComfy } from '../luker-dispatch/providers/sd/comfy.js';
@@ -501,7 +498,6 @@ comfy.post('/delete-workflow', async (request, response) => {
 });
 
 comfy.post('/rename-workflow', getFileNameValidationFunction('old_name'), getFileNameValidationFunction('new_name'), async (request, response) => {
-
     try {
         const oldName = sanitize(String(request.body.old_name));
         const newName = sanitize(String(request.body.new_name));

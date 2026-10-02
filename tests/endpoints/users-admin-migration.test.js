@@ -1,4 +1,3 @@
-/* global globalThis */
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';

@@ -72,20 +72,20 @@ export async function dispatchElectronHub(ctx) {
         const { cacheTTL, enableSystemPromptCache, cachingAtDepth } = resolveClaudeCacheConfig(body);
 
         if (body.enable_web_search) {
-            bodyParams['web_search'] = true;
+            bodyParams.web_search = true;
         }
 
         if (Array.isArray(body.tools) && body.tools.length > 0) {
-            bodyParams['tools'] = body.tools;
-            bodyParams['tool_choice'] = body.tool_choice;
+            bodyParams.tools = body.tools;
+            bodyParams.tool_choice = body.tool_choice;
         }
 
         if (body.reasoning_effort) {
-            bodyParams['reasoning_effort'] = body.reasoning_effort;
+            bodyParams.reasoning_effort = body.reasoning_effort;
         }
 
         if (body.json_schema) {
-            bodyParams['response_format'] = {
+            bodyParams.response_format = {
                 type: 'json_schema',
                 json_schema: {
                     name: body.json_schema.name,

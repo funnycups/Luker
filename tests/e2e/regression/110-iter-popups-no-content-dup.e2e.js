@@ -142,11 +142,11 @@ test.describe('#110 — re-opening iter-studio does not duplicate session-histor
             timeout: 10_000,
         }).toBeGreaterThanOrEqual(firstOpenCount);
 
-        const secondOpenCount = await popup2.locator('.orch_it_history_item').count();
+        const secondOpenCount = popup2.locator('.orch_it_history_item');
 
-        expect(secondOpenCount,
+        await expect(secondOpenCount,
             `re-opening the iter-studio must not duplicate history items; first=${firstOpenCount} second=${secondOpenCount}`,
-        ).toBe(firstOpenCount);
+        ).toHaveCount(firstOpenCount);
 
         const idCounts = await popup2.locator('.orch_it_history_item').evaluateAll((items) => {
             const counts = new Map();

@@ -23,7 +23,6 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
 
 let server, mock;

@@ -84,7 +84,7 @@ test.describe('#16 — Import JSON character card via UI file picker', () => {
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
 
-        expect(await page.locator('#character_name_pole').inputValue()).toBe(NAME);
+        await expect(page.locator('#character_name_pole')).toHaveValue(NAME);
         expect(await page.locator('#description_textarea').inputValue()).toContain('plank between the village');
         expect(await page.locator('#firstmessage_textarea').inputValue()).toContain('Plank 47');
         expect(await page.locator('#personality_textarea').inputValue()).toContain('methodical');

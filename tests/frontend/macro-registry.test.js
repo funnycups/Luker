@@ -198,7 +198,7 @@ test.describe('MacroRegistry', () => {
                 options: {},
             });
             expect(result.registered).not.toBeNull();
-            expect(result.errors.length).toBe(0);
+            expect(result.errors).toHaveLength(0);
         });
 
         test('should accept valid identifier with hyphens', async ({ page }) => {
@@ -207,7 +207,7 @@ test.describe('MacroRegistry', () => {
                 options: {},
             });
             expect(result.registered).not.toBeNull();
-            expect(result.errors.length).toBe(0);
+            expect(result.errors).toHaveLength(0);
         });
 
         test('should accept valid identifier with underscores', async ({ page }) => {
@@ -216,7 +216,7 @@ test.describe('MacroRegistry', () => {
                 options: {},
             });
             expect(result.registered).not.toBeNull();
-            expect(result.errors.length).toBe(0);
+            expect(result.errors).toHaveLength(0);
         });
 
         test('should accept valid identifier with digits after first char', async ({ page }) => {
@@ -225,7 +225,7 @@ test.describe('MacroRegistry', () => {
                 options: {},
             });
             expect(result.registered).not.toBeNull();
-            expect(result.errors.length).toBe(0);
+            expect(result.errors).toHaveLength(0);
         });
 
         test('should reject identifier starting with digit', async ({ page }) => {
@@ -276,7 +276,7 @@ test.describe('MacroRegistry', () => {
                 },
             });
             expect(result.registered).not.toBeNull();
-            expect(result.errors.length).toBe(0);
+            expect(result.errors).toHaveLength(0);
         });
 
         test('should reject invalid alias identifier', async ({ page }) => {

@@ -137,7 +137,7 @@ test.describe('#124 — orchestrator preset rename → skill scope rename', () =
         const renameInput = renamePopup.locator('.popup-input').last();
         await renameInput.waitFor({ state: 'visible', timeout: 5000 });
         // Sanity: the pre-filled value should be the old name.
-        expect(await renameInput.inputValue()).toBe('RP124-Old');
+        await expect(renameInput).toHaveValue('RP124-Old');
         await renameInput.fill('RP124-New');
         await renamePopup.locator('.popup-button-ok').first().click();
         await renamePopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});

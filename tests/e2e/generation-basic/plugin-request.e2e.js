@@ -165,5 +165,5 @@ test('generation-basic: plugin ChatCompletionService.sendRequest — non-stream 
     // plugin request. If the ws-delivery proxy short-circuited, we'd see
     // zero. If it double-dispatched, we'd see four.
     const chatCalls = mock.requests.filter(r => (r.url || '').includes('/chat/completions'));
-    expect(chatCalls.length, `mock LLM should have received 2 plugin-triggered chat calls; got ${chatCalls.length}: ${JSON.stringify(chatCalls.map(c => c.url))}`).toBe(2);
+    expect(chatCalls, `mock LLM should have received 2 plugin-triggered chat calls; got ${chatCalls.length}: ${JSON.stringify(chatCalls.map(c => c.url))}`).toHaveLength(2);
 });

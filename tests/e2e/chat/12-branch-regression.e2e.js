@@ -73,7 +73,7 @@ test.describe('#12 — branch-from-message regression', () => {
         });
         const chatsDir = resolve(server.dataRoot, 'default-user', 'chats', avatarFolder);
         const filesBefore = readdirSync(chatsDir).filter(f => f.endsWith('.jsonl'));
-        expect(filesBefore.length).toBe(1);
+        expect(filesBefore).toHaveLength(1);
 
         // Locate "Reply 2" via DOM and branch from its mesid.
         const branchAt = renderedBefore.findIndex(t => /Reply 2/.test(t || ''));
@@ -91,7 +91,7 @@ test.describe('#12 — branch-from-message regression', () => {
         // DOM-side: the branch chat is loaded and contains exactly the
         // prefix bubbles (greeting + first 2 turns).
         const renderedInBranch = await getRenderedChatTexts(page);
-        expect(renderedInBranch.length, `branch chat should have prefix up to and including msg ${branchAt}`).toBe(branchAt + 1);
+        expect(renderedInBranch, `branch chat should have prefix up to and including msg ${branchAt}`).toHaveLength(branchAt + 1);
         expect(renderedInBranch.some(t => /Reply 1/.test(t))).toBe(true);
         expect(renderedInBranch.some(t => /Reply 2/.test(t))).toBe(true);
         expect(renderedInBranch.some(t => /Reply 3/.test(t))).toBe(false);
@@ -100,13 +100,13 @@ test.describe('#12 — branch-from-message regression', () => {
         const inBranch = await getChatSnapshot(page);
         const branchChatId = inBranch.chatId;
         expect(branchChatId).not.toBe(originalChatId);
-        expect(inBranch.length).toBe(branchAt + 1);
+        expect(inBranch).toHaveLength(branchAt + 1);
         // Confirm branch metadata main_chat points back at original.
         expect(inBranch.metadata?.main_chat).toBe(originalChatId);
 
         // Two chat files on disk now.
         const filesAfter = readdirSync(chatsDir).filter(f => f.endsWith('.jsonl'));
-        expect(filesAfter.length, `expected 2 chat files (original + branch); got ${JSON.stringify(filesAfter)}`).toBe(2);
+        expect(filesAfter, `expected 2 chat files (original + branch); got ${JSON.stringify(filesAfter)}`).toHaveLength(2);
 
         // Original chat file untouched: same number of lines as before branch.
         const origPath = resolve(chatsDir, `${originalChatId}.jsonl`);
@@ -139,12 +139,12 @@ test.describe('#12 — branch-from-message regression', () => {
         }, { id: originalChatId, len: originalLen }, { timeout: 10_000 });
 
         const renderedAfter = await getRenderedChatTexts(page);
-        expect(renderedAfter.length, `original chat must retain all 4 turns post-restart`).toBe(originalLen);
+        expect(renderedAfter, 'original chat must retain all 4 turns post-restart').toHaveLength(originalLen);
         expect(renderedAfter.some(t => /Reply 3/.test(t))).toBe(true);
         expect(renderedAfter.some(t => /Reply 4/.test(t))).toBe(true);
 
         const after = await getChatSnapshot(page);
-        expect(after.length).toBe(originalLen);
+        expect(after).toHaveLength(originalLen);
         expect(after.messages.some(m => /Reply 3/.test(m.mes || ''))).toBe(true);
         expect(after.messages.some(m => /Reply 4/.test(m.mes || ''))).toBe(true);
     });

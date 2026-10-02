@@ -154,9 +154,9 @@ test.describe('#19 — Create blank character via UI form', () => {
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
 
-        expect(await page.locator('#character_name_pole').inputValue()).toBe(NAME);
-        expect(await page.locator('#description_textarea').inputValue()).toBe(DESCRIPTION);
-        expect(await page.locator('#firstmessage_textarea').inputValue()).toBe(FIRST_MES);
+        await expect(page.locator('#character_name_pole')).toHaveValue(NAME);
+        await expect(page.locator('#description_textarea')).toHaveValue(DESCRIPTION);
+        await expect(page.locator('#firstmessage_textarea')).toHaveValue(FIRST_MES);
 
         // Personality / scenario / system_prompt live in the advanced
         // popup; open + expand inline-drawers to inspect.
@@ -170,9 +170,9 @@ test.describe('#19 — Create blank character via UI form', () => {
                 }
             });
         });
-        expect(await page.locator('#personality_textarea').inputValue()).toBe(PERSONALITY);
-        expect(await page.locator('#scenario_pole').inputValue()).toBe(SCENARIO);
-        expect(await page.locator('#system_prompt_textarea').inputValue()).toBe(SYSTEM_PROMPT);
+        await expect(page.locator('#personality_textarea')).toHaveValue(PERSONALITY);
+        await expect(page.locator('#scenario_pole')).toHaveValue(SCENARIO);
+        await expect(page.locator('#system_prompt_textarea')).toHaveValue(SYSTEM_PROMPT);
         await page.evaluate(() => { document.querySelector('#advanced_div')?.click(); });
         await page.locator('#personality_textarea').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
 
@@ -191,8 +191,8 @@ test.describe('#19 — Create blank character via UI form', () => {
         await clickCharacterCard(page, NAME);
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
-        expect(await page.locator('#description_textarea').inputValue()).toBe(DESCRIPTION);
-        expect(await page.locator('#firstmessage_textarea').inputValue()).toBe(FIRST_MES);
+        await expect(page.locator('#description_textarea')).toHaveValue(DESCRIPTION);
+        await expect(page.locator('#firstmessage_textarea')).toHaveValue(FIRST_MES);
         await page.locator('#advanced_div').click();
         await page.locator('#personality_textarea').waitFor({ state: 'visible', timeout: 5000 });
         await page.evaluate(() => {
@@ -203,6 +203,6 @@ test.describe('#19 — Create blank character via UI form', () => {
                 }
             });
         });
-        expect(await page.locator('#system_prompt_textarea').inputValue()).toBe(SYSTEM_PROMPT);
+        await expect(page.locator('#system_prompt_textarea')).toHaveValue(SYSTEM_PROMPT);
     });
 });

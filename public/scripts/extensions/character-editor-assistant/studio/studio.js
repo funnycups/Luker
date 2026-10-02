@@ -16,7 +16,6 @@ const getContext = Luker.getContext;
 const getExtensionApi = __ctx.getExtensionApi;
 const getCharacterState = __ctx.getCharacterState;
 const updateCharacterState = __ctx.updateCharacterState;
-const deleteCharacterState = __ctx.deleteCharacterState;
 import { sendAIMessage, TOOL_NAMES } from './ai-chat.js';
 
 // Markdown converter for AI messages
@@ -307,81 +306,65 @@ function generateSessionId() {
     return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-async function clearSession() {
-    const avatar = getCurrentAvatar();
-    if (!avatar) return;
-    try {
-        const result = await deleteCharacterState(avatar, SESSION_NAMESPACE);
-        if (!result?.ok) {
-            console.warn(`[${MODULE_NAME}] clearSession failed: ${result?.reason} ${result?.hint || ''}`);
-            if (typeof toastr !== 'undefined') {
-                toastr.error(formatSaveSessionsError(result?.reason, result?.hint));
-            }
-        }
-    } catch (err) {
-        console.warn(`[${MODULE_NAME}] Failed to clear session from sidecar:`, err);
-    }
-}
-
 // ==================== File API ====================
 
 async function fetchFileList(charId) {
- const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/files`, {
- headers: getRequestHeaders(),
- cache: 'no-cache',
- });
- if (!response.ok) throw new Error(`Failed to list files: ${response.status}`);
- const data = await response.json();
- return data.files || [];
+    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/files`, {
+        headers: getRequestHeaders(),
+        cache: 'no-cache',
+    });
+    if (!response.ok) throw new Error(`Failed to list files: ${response.status}`);
+    const data = await response.json();
+    return data.files || [];
 }
 
 async function fetchFileContent(charId, filePath) {
- const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
- headers: getRequestHeaders(),
- cache: 'no-cache',
- });
- if (!response.ok) throw new Error(`Failed to read file: ${response.status}`);
- return await response.text();
+    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
+        headers: getRequestHeaders(),
+        cache: 'no-cache',
+    });
+    if (!response.ok) throw new Error(`Failed to read file: ${response.status}`);
+    return await response.text();
 }
 
 async function saveFileContent(charId, filePath, content) {
- const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
- method: 'PUT',
- headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
- body: JSON.stringify({ content }),
- });
- if (!response.ok) throw new Error(`Failed to save file: ${response.status}`);
- return await response.json();
+    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
+        method: 'PUT',
+        headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+    });
+    if (!response.ok) throw new Error(`Failed to save file: ${response.status}`);
+    return await response.json();
 }
 
 async function deleteFile(charId, filePath) {
- const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
- method: 'DELETE',
- headers: getRequestHeaders(),
- });
- if (!response.ok) throw new Error(`Failed to delete file: ${response.status}`);
- return await response.json();
+    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/${encodeURIComponent(filePath)}`, {
+        method: 'DELETE',
+        headers: getRequestHeaders(),
+    });
+    if (!response.ok) throw new Error(`Failed to delete file: ${response.status}`);
+    return await response.json();
 }
 
 async function renameFile(charId, fromPath, toPath) {
- const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/rename`, {
- method: 'POST',
- headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
- body: JSON.stringify({ from: fromPath, to: toPath }),
- });
- if (!response.ok) throw new Error(`Failed to rename file: ${response.status}`);
- return await response.json();
+    const response = await fetch(`/api/card-app/${encodeURIComponent(charId)}/rename`, {
+        method: 'POST',
+        headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: fromPath, to: toPath }),
+    });
+    if (!response.ok) throw new Error(`Failed to rename file: ${response.status}`);
+    return await response.json();
 }
 
 // ==================== Skeleton Init ====================
 
 async function ensureSkeletonFiles(charId) {
- const files = await fetchFileList(charId);
- if (files.length === 0) {
- await saveFileContent(charId, 'index.js', `/**\n * CardApp entry point.\n * @param {object} ctx - The CardApp context object\n */\nexport function init(ctx) {\n ctx.container.innerHTML = '<div style="padding:20px;">Hello from CardApp!</div>';\n}\n`);
- await saveFileContent(charId, 'style.css', '/* CardApp styles */\n');
- console.log(`[${MODULE_NAME}] Created skeleton files for ${charId}`);
- }
+    const files = await fetchFileList(charId);
+    if (files.length === 0) {
+        await saveFileContent(charId, 'index.js', '/**\n * CardApp entry point.\n * @param {object} ctx - The CardApp context object\n */\nexport function init(ctx) {\n ctx.container.innerHTML = \'<div style="padding:20px;">Hello from CardApp!</div>\';\n}\n');
+        await saveFileContent(charId, 'style.css', '/* CardApp styles */\n');
+        console.log(`[${MODULE_NAME}] Created skeleton files for ${charId}`);
+    }
 }
 
 // ==================== CodeMirror 6 ====================
@@ -598,28 +581,28 @@ function destroyCMEditor() {
 // ==================== UI ====================
 
 function escapeHtml(str) {
- const div = document.createElement('div');
- div.textContent = str;
- return div.innerHTML;
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
 }
 
 function getFileIcon(filePath) {
- const ext = filePath.split('.').pop()?.toLowerCase();
- const icons = {
- js: 'fa-brands fa-js',
- css: 'fa-brands fa-css3-alt',
- html: 'fa-brands fa-html5',
- json: 'fa-solid fa-brackets-curly',
- md: 'fa-solid fa-file-lines',
- png: 'fa-solid fa-image',
- jpg: 'fa-solid fa-image',
- svg: 'fa-solid fa-image',
- };
- return icons[ext] || 'fa-solid fa-file';
+    const ext = filePath.split('.').pop()?.toLowerCase();
+    const icons = {
+        js: 'fa-brands fa-js',
+        css: 'fa-brands fa-css3-alt',
+        html: 'fa-brands fa-html5',
+        json: 'fa-solid fa-brackets-curly',
+        md: 'fa-solid fa-file-lines',
+        png: 'fa-solid fa-image',
+        jpg: 'fa-solid fa-image',
+        svg: 'fa-solid fa-image',
+    };
+    return icons[ext] || 'fa-solid fa-file';
 }
 
 function buildLeftPanelHtml() {
- return `
+    return `
 <div id="${STUDIO_PANEL_LEFT_ID}" class="card-app-studio-panel left">
  <div class="card-app-studio-panel-header">
     <span class="card-app-studio-title">🤖 ${escapeHtml(t('AI Assistant'))}</span>
@@ -655,7 +638,7 @@ function buildLeftPanelHtml() {
 }
 
 function buildRightPanelHtml() {
- return `
+    return `
 <div id="${STUDIO_PANEL_RIGHT_ID}" class="card-app-studio-panel right">
  <div class="card-app-studio-panel-header">
     <span class="card-app-studio-title">📝 ${escapeHtml(t('Code Editor'))}</span>
@@ -729,10 +712,10 @@ function setMobileActiveTab(which) {
 }
 
 function renderFileList(container) {
- const files = fileList.filter(f => f.type === 'file');
- container.innerHTML = files.length === 0
+    const files = fileList.filter(f => f.type === 'file');
+    container.innerHTML = files.length === 0
         ? `<div class="card-app-studio-empty">${escapeHtml(t('No files yet'))}</div>`
- : files.map(f => `
+        : files.map(f => `
  <div class="card-app-studio-file-item${currentFile === f.path ? ' active' : ''}" data-studio-file="${escapeHtml(f.path)}">
  <i class="${getFileIcon(f.path)}"></i>
  <span class="card-app-studio-file-name">${escapeHtml(f.path)}</span>
@@ -825,58 +808,58 @@ async function handleRollback(hash) {
 }
 
 async function openFile(filePath) {
- if (!currentCharId) return;
+    if (!currentCharId) return;
 
- try {
- const content = await fetchFileContent(currentCharId, filePath);
- setCMContent(content, filePath);
- currentFile = filePath;
+    try {
+        const content = await fetchFileContent(currentCharId, filePath);
+        setCMContent(content, filePath);
+        currentFile = filePath;
 
- // Update file list highlight
- const fileListEl = document.querySelector('[data-studio-file-list]');
- if (fileListEl) renderFileList(fileListEl);
+        // Update file list highlight
+        const fileListEl = document.querySelector('[data-studio-file-list]');
+        if (fileListEl) renderFileList(fileListEl);
 
- // Update tab display
- const tabsEl = document.querySelector('[data-studio-tabs]');
- if (tabsEl) {
- tabsEl.innerHTML = `<div class="card-app-studio-tab active">${escapeHtml(filePath)}</div>`;
- }
- } catch (err) {
- console.error(`[${MODULE_NAME}] Failed to open file:`, err);
- setCMContent(`// Error loading ${filePath}: ${err.message}`, filePath);
- }
+        // Update tab display
+        const tabsEl = document.querySelector('[data-studio-tabs]');
+        if (tabsEl) {
+            tabsEl.innerHTML = `<div class="card-app-studio-tab active">${escapeHtml(filePath)}</div>`;
+        }
+    } catch (err) {
+        console.error(`[${MODULE_NAME}] Failed to open file:`, err);
+        setCMContent(`// Error loading ${filePath}: ${err.message}`, filePath);
+    }
 }
 
 async function handleSaveCurrentFile() {
- if (!currentFile || !currentCharId) return;
+    if (!currentFile || !currentCharId) return;
 
- try {
- await saveFileContent(currentCharId, currentFile, getCMContent());
+    try {
+        await saveFileContent(currentCharId, currentFile, getCMContent());
         toastr.success(tFormat('Saved ${0}', currentFile));
- await reloadCardApp();
- } catch (err) {
- console.error(`[${MODULE_NAME}] Failed to save file:`, err);
+        await reloadCardApp();
+    } catch (err) {
+        console.error(`[${MODULE_NAME}] Failed to save file:`, err);
         toastr.error(tFormat('Failed to save: ${0}', err.message));
- }
+    }
 }
 
 async function handleNewFile() {
     const name = prompt(t('New file name (e.g. utils.js):'));
- if (!name || !currentCharId) return;
+    if (!name || !currentCharId) return;
 
- const safeName = name.trim();
- if (!safeName) return;
+    const safeName = name.trim();
+    if (!safeName) return;
 
- try {
- await saveFileContent(currentCharId, safeName, '');
- fileList = await fetchFileList(currentCharId);
- const fileListEl = document.querySelector('[data-studio-file-list]');
- if (fileListEl) renderFileList(fileListEl);
- await openFile(safeName);
+    try {
+        await saveFileContent(currentCharId, safeName, '');
+        fileList = await fetchFileList(currentCharId);
+        const fileListEl = document.querySelector('[data-studio-file-list]');
+        if (fileListEl) renderFileList(fileListEl);
+        await openFile(safeName);
         toastr.success(tFormat('Created ${0}', safeName));
- } catch (err) {
+    } catch (err) {
         toastr.error(tFormat('Failed to create file: ${0}', err.message));
- }
+    }
 }
 
 // ==================== Studio Lifecycle ====================
@@ -932,126 +915,126 @@ async function wipeSp2EraSessionsIfNeeded(avatar) {
 }
 
 export async function openCardAppStudio(charId) {
- if (isStudioOpen) {
+    if (isStudioOpen) {
         toastr.warning(t('CardApp Studio is already open.'));
- return;
- }
+        return;
+    }
 
- currentCharId = charId;
- // Cache the full avatar string for sidecar session storage
- const context = getContext();
- const character = context.characters?.[context.characterId];
- currentAvatar = String(character?.avatar || '').trim();
- isStudioOpen = true;
+    currentCharId = charId;
+    // Cache the full avatar string for sidecar session storage
+    const context = getContext();
+    const character = context.characters?.[context.characterId];
+    currentAvatar = String(character?.avatar || '').trim();
+    isStudioOpen = true;
 
- // One-shot wipe of brief-era session bucket.
- await wipeSp2EraSessionsIfNeeded(currentAvatar);
+    // One-shot wipe of brief-era session bucket.
+    await wipeSp2EraSessionsIfNeeded(currentAvatar);
 
- // Ensure skeleton files exist
- await ensureSkeletonFiles(charId);
+    // Ensure skeleton files exist
+    await ensureSkeletonFiles(charId);
 
- // Load file list
- fileList = await fetchFileList(charId);
+    // Load file list
+    fileList = await fetchFileList(charId);
 
- // Inject CSS
- if (!document.getElementById('card-app-studio-style')) {
- const link = document.createElement('link');
- link.id = 'card-app-studio-style';
- link.rel = 'stylesheet';
- link.href = '/scripts/extensions/character-editor-assistant/studio/studio.css';
- document.head.appendChild(link);
- }
+    // Inject CSS
+    if (!document.getElementById('card-app-studio-style')) {
+        const link = document.createElement('link');
+        link.id = 'card-app-studio-style';
+        link.rel = 'stylesheet';
+        link.href = '/scripts/extensions/character-editor-assistant/studio/studio.css';
+        document.head.appendChild(link);
+    }
 
- // Create panels
- const leftPanel = document.createElement('div');
- leftPanel.innerHTML = buildLeftPanelHtml();
- document.body.appendChild(leftPanel.firstElementChild);
+    // Create panels
+    const leftPanel = document.createElement('div');
+    leftPanel.innerHTML = buildLeftPanelHtml();
+    document.body.appendChild(leftPanel.firstElementChild);
 
- const rightPanel = document.createElement('div');
- rightPanel.innerHTML = buildRightPanelHtml();
- document.body.appendChild(rightPanel.firstElementChild);
+    const rightPanel = document.createElement('div');
+    rightPanel.innerHTML = buildRightPanelHtml();
+    document.body.appendChild(rightPanel.firstElementChild);
 
- // Mobile tab bar (CSS @media decides whether it's visible)
- const mobileTabs = document.createElement('div');
- mobileTabs.innerHTML = buildMobileTabsHtml();
- document.body.appendChild(mobileTabs.firstElementChild);
+    // Mobile tab bar (CSS @media decides whether it's visible)
+    const mobileTabs = document.createElement('div');
+    mobileTabs.innerHTML = buildMobileTabsHtml();
+    document.body.appendChild(mobileTabs.firstElementChild);
 
- // Sync auto-apply checkbox from persisted settings
- const autoApplyEl = document.querySelector('[data-studio-toggle="auto-apply"]');
- if (autoApplyEl) autoApplyEl.checked = isAutoApplyEnabled();
+    // Sync auto-apply checkbox from persisted settings
+    const autoApplyEl = document.querySelector('[data-studio-toggle="auto-apply"]');
+    if (autoApplyEl) autoApplyEl.checked = isAutoApplyEnabled();
 
- // Add body class for margin adjustment
- document.body.classList.add('card-app-studio-active');
+    // Add body class for margin adjustment
+    document.body.classList.add('card-app-studio-active');
 
- // Render file list
- const fileListEl = document.querySelector('[data-studio-file-list]');
- if (fileListEl) renderFileList(fileListEl);
+    // Render file list
+    const fileListEl = document.querySelector('[data-studio-file-list]');
+    if (fileListEl) renderFileList(fileListEl);
 
- // Initialize CodeMirror 6 editor
- const codeContainer = document.querySelector('[data-studio-code]');
- if (codeContainer) {
-     await createCMEditor(codeContainer, '', '');
- }
+    // Initialize CodeMirror 6 editor
+    const codeContainer = document.querySelector('[data-studio-code]');
+    if (codeContainer) {
+        await createCMEditor(codeContainer, '', '');
+    }
 
- // Open first file
- const firstFile = fileList.find(f => f.type === 'file');
- if (firstFile) {
- await openFile(firstFile.path);
- }
+    // Open first file
+    const firstFile = fileList.find(f => f.type === 'file');
+    if (firstFile) {
+        await openFile(firstFile.path);
+    }
 
- // Load or create session
- const sessions = await loadAllSessions();
- if (sessions.length > 0) {
-     // Load most recent session
-     sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-     currentSessionId = sessions[0].id;
-     conversationMessages = sessions[0].messages || [];
- } else {
-     // Create new session
-     currentSessionId = generateSessionId();
-     conversationMessages = [];
- }
+    // Load or create session
+    const sessions = await loadAllSessions();
+    if (sessions.length > 0) {
+        // Load most recent session
+        sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        currentSessionId = sessions[0].id;
+        conversationMessages = sessions[0].messages || [];
+    } else {
+        // Create new session
+        currentSessionId = generateSessionId();
+        conversationMessages = [];
+    }
 
- // Render persisted messages in chat
- const chatEl = document.querySelector('[data-studio-chat]');
- if (chatEl && conversationMessages.length > 0) {
-     for (const msg of conversationMessages) {
-         if (msg.role === 'user') {
-             renderChatMessage('user', msg.content);
-         } else if (msg.role === 'assistant' && msg.content) {
-             renderChatMessage('assistant', msg.content);
-         }
-     }
- }
+    // Render persisted messages in chat
+    const chatEl = document.querySelector('[data-studio-chat]');
+    if (chatEl && conversationMessages.length > 0) {
+        for (const msg of conversationMessages) {
+            if (msg.role === 'user') {
+                renderChatMessage('user', msg.content);
+            } else if (msg.role === 'assistant' && msg.content) {
+                renderChatMessage('assistant', msg.content);
+            }
+        }
+    }
 
- // Load history
- renderHistory();
+    // Load history
+    renderHistory();
 
- // Bind events
- bindStudioEvents();
+    // Bind events
+    bindStudioEvents();
 
- console.log(`[${MODULE_NAME}] Studio opened for ${charId}`);
+    console.log(`[${MODULE_NAME}] Studio opened for ${charId}`);
 }
 
 export async function closeCardAppStudio() {
- if (!isStudioOpen) return;
+    if (!isStudioOpen) return;
 
- // Destroy CM6 editor
- destroyCMEditor();
+    // Destroy CM6 editor
+    destroyCMEditor();
 
- // Remove panels
- document.getElementById(STUDIO_PANEL_LEFT_ID)?.remove();
- document.getElementById(STUDIO_PANEL_RIGHT_ID)?.remove();
- document.getElementById(STUDIO_MOBILE_TABS_ID)?.remove();
+    // Remove panels
+    document.getElementById(STUDIO_PANEL_LEFT_ID)?.remove();
+    document.getElementById(STUDIO_PANEL_RIGHT_ID)?.remove();
+    document.getElementById(STUDIO_MOBILE_TABS_ID)?.remove();
 
- // Remove body classes
- document.body.classList.remove(
-     'card-app-studio-active',
-     'card-app-studio-mobile-tab-right',
-     'card-app-studio-mobile-tab-preview',
- );
+    // Remove body classes
+    document.body.classList.remove(
+        'card-app-studio-active',
+        'card-app-studio-mobile-tab-right',
+        'card-app-studio-mobile-tab-preview',
+    );
 
- mobileActiveTab = 'left';
+    mobileActiveTab = 'left';
 
     // Save conversation before clearing state
     if (currentSessionId && conversationMessages.length > 0) {
@@ -1077,31 +1060,31 @@ export async function closeCardAppStudio() {
 }
 
 function bindStudioEvents() {
- // Delegated click handler for both panels
- document.addEventListener('click', handleStudioClick);
+    // Delegated click handler for both panels
+    document.addEventListener('click', handleStudioClick);
 
- // Keyboard shortcuts
- document.addEventListener('keydown', handleStudioKeydown);
+    // Keyboard shortcuts
+    document.addEventListener('keydown', handleStudioKeydown);
 
- // Auto-apply toggle (persist to extension_settings)
- const autoApplyEl = document.querySelector('[data-studio-toggle="auto-apply"]');
- if (autoApplyEl) {
-     autoApplyEl.addEventListener('change', (e) => {
-         setAutoApplyEnabled(Boolean(e.target.checked));
-     });
- }
+    // Auto-apply toggle (persist to extension_settings)
+    const autoApplyEl = document.querySelector('[data-studio-toggle="auto-apply"]');
+    if (autoApplyEl) {
+        autoApplyEl.addEventListener('change', (e) => {
+            setAutoApplyEnabled(Boolean(e.target.checked));
+        });
+    }
 
- // File list click
- const fileListEl = document.querySelector('[data-studio-file-list]');
- if (fileListEl) {
- fileListEl.addEventListener('click', async (e) => {
- const fileItem = e.target.closest('[data-studio-file]');
- if (fileItem) {
- const filePath = fileItem.dataset.studioFile;
- if (filePath) await openFile(filePath);
- }
- });
- }
+    // File list click
+    const fileListEl = document.querySelector('[data-studio-file-list]');
+    if (fileListEl) {
+        fileListEl.addEventListener('click', async (e) => {
+            const fileItem = e.target.closest('[data-studio-file]');
+            if (fileItem) {
+                const filePath = fileItem.dataset.studioFile;
+                if (filePath) await openFile(filePath);
+            }
+        });
+    }
 }
 
 // ==================== AI Chat UI ====================
@@ -1354,17 +1337,17 @@ function syncComposerState() {
 async function renderSessionList() {
     const listEl = document.querySelector('[data-studio-sessions-list]');
     if (!listEl) return;
-    
+
     const sessions = await loadAllSessions();
-    
+
     if (sessions.length === 0) {
         listEl.innerHTML = `<div class="card-app-studio-empty">${escapeHtml(t('No sessions yet'))}</div>`;
         return;
     }
-    
+
     // Sort by updatedAt descending
     sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    
+
     listEl.innerHTML = sessions.map(session => {
         const isCurrent = session.id === currentSessionId;
         const timeAgo = formatTimeAgo(new Date(session.updatedAt).toISOString());
@@ -1389,10 +1372,10 @@ async function renderSessionList() {
 function toggleSessionsPanel() {
     const panel = document.querySelector('[data-studio-sessions]');
     if (!panel) return;
-    
+
     const isVisible = panel.style.display !== 'none';
     panel.style.display = isVisible ? 'none' : 'flex';
-    
+
     if (!isVisible) {
         renderSessionList();
     }
@@ -1407,18 +1390,18 @@ async function createNewSession() {
         const summary = generateSessionSummary(conversationMessages);
         await saveCurrentSession(currentSessionId, conversationMessages, summary);
     }
-    
+
     // Create new session
     currentSessionId = generateSessionId();
     conversationMessages = [];
-    
+
     // Clear chat UI
     const chatEl = document.querySelector('[data-studio-chat]');
     if (chatEl) chatEl.innerHTML = '';
-    
+
     // Update session list
     await renderSessionList();
-    
+
     toastr.info(t('New session created'));
 }
 
@@ -1433,12 +1416,12 @@ async function loadSessionById(sessionId) {
             const summary = generateSessionSummary(conversationMessages);
             await saveCurrentSession(currentSessionId, conversationMessages, summary);
         }
-        
+
         // Load new session
         const messages = await loadSession(sessionId);
         currentSessionId = sessionId;
         conversationMessages = messages;
-        
+
         // Clear and re-render chat
         const chatEl = document.querySelector('[data-studio-chat]');
         if (chatEl) {
@@ -1451,10 +1434,10 @@ async function loadSessionById(sessionId) {
                 }
             }
         }
-        
+
         // Update session list
         await renderSessionList();
-        
+
         toastr.success(t('Session loaded'));
     } catch (err) {
         toastr.error(tFormat('Load failed: ${0}', err.message));
@@ -1467,10 +1450,10 @@ async function loadSessionById(sessionId) {
  */
 async function deleteSessionById(sessionId) {
     if (!confirm(t('Delete this session?'))) return;
-    
+
     try {
         await deleteSession(sessionId);
-        
+
         // If deleting current session, create a new one
         if (sessionId === currentSessionId) {
             currentSessionId = generateSessionId();
@@ -1478,7 +1461,7 @@ async function deleteSessionById(sessionId) {
             const chatEl = document.querySelector('[data-studio-chat]');
             if (chatEl) chatEl.innerHTML = '';
         }
-        
+
         await renderSessionList();
         toastr.success(t('Session deleted'));
     } catch (err) {
@@ -1530,8 +1513,7 @@ async function handleAISend() {
                     } else {
                         detail = `${scope}: ${toolResult?.scripts?.length || 0}`;
                     }
-                }
-                else if (name === TOOL_NAMES.REGEX_CREATE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.scriptName || '(unnamed)'}`;
+                } else if (name === TOOL_NAMES.REGEX_CREATE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.scriptName || '(unnamed)'}`;
                 else if (name === TOOL_NAMES.REGEX_UPDATE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.id || '?'}`;
                 else if (name === TOOL_NAMES.REGEX_DELETE_SCRIPT) detail = `${args?.scope || '?'} / ${args?.id || '?'}`;
                 renderChatMessage('tool', '', { name, detail, ok: toolResult.ok });

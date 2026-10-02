@@ -39,7 +39,7 @@ import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writeWorldBook, BRYN_ENTRIES } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, writeEmbeddedCharacter } from './_helpers.js';
-import { awaitMainUI, reloadAndAwait, closeRightNavDrawer } from '../_lib/page.js';
+import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import { write as writePngCard } from '../../../src/character-card-parser.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
@@ -154,6 +154,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
         }
     });
+
     test('IMPORT path: clicking "Import the new card\'s embedded world book" creates the new world file, binds it as primary, and the old book stays on disk untouched', async ({ page }) => {
         const server = await startServer({ batchKey: 'character', scenarioId: 'replace-popup-import' });
         try {
@@ -162,7 +163,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
             const ashBook = writeWorldBook({ dataRoot: server.dataRoot, name: ASH_BOOK, entries: BRYN_ENTRIES });
-            const ashAvatar = writeEmbeddedCharacter({
+            writeEmbeddedCharacter({
                 dataRoot: server.dataRoot,
                 avatarFile: 'ash-import-branch.png',
                 overrides: { extensions: { world: ashBook } },
@@ -174,8 +175,8 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await openCharacterEditPanel(page);
 
             // Sanity: Ash is bound to the bryn book.
-            const beforeBinding = await page.locator('#character_world').inputValue();
-            expect(beforeBinding).toBe(ashBook);
+            const beforeBinding = page.locator('#character_world');
+            await expect(beforeBinding).toHaveValue(ashBook);
 
             // Drive the replace gesture.
             await openReplaceWithFile(page, briallenPngPath);
@@ -265,7 +266,7 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await clickCharacterCard(page, ASH_NAME);
             await dismissAnyPopup(page);
             await openCharacterEditPanel(page);
-            expect(await page.locator('#character_world').inputValue()).toBe(ashBook);
+            await expect(page.locator('#character_world')).toHaveValue(ashBook);
 
             await openReplaceWithFile(page, briallenPngPath);
             const popup = await waitForReplaceChoicePopup(page);

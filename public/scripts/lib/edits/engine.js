@@ -71,8 +71,8 @@ export function createEngine(deps) {
     return {
         applyEdits,
         inverseEdit,
-        registerOp:        registry.registerOp,
-        getRegisteredOp:   registry.getRegisteredOp,
+        registerOp: registry.registerOp,
+        getRegisteredOp: registry.getRegisteredOp,
         listRegisteredOps: registry.listRegisteredOps,
     };
 }

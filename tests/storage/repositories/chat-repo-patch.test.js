@@ -26,7 +26,7 @@ describe.each(CONTRACT_HARNESSES)('ChatRepo on $name — patch', ({ make }) => {
     });
 
     test('patch with wrong integrity throws ConflictError without applying', async () => {
-        const int1 = await setup([{ mes: 'old' }]);
+        await setup([{ mes: 'old' }]);
         await expect(
             repo.patch(h.handle, 'A', 'c', [{ op: 'replace', path: '/body/0/mes', value: 'new' }], 'WRONG'),
         ).rejects.toThrow(ConflictError);

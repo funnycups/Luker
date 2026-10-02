@@ -152,7 +152,7 @@ export async function restoreFromSnapshot({ handle, userRoot, backupPath, engine
             const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
             if (meta.engineKind !== engine.kind) {
                 throw new Error(
-                    `restoreFromSnapshot: engineKind mismatch `
+                    'restoreFromSnapshot: engineKind mismatch '
                     + `(snapshot=${meta.engineKind}, current=${engine.kind})`,
                 );
             }

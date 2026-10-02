@@ -12,7 +12,6 @@ import {
 
 function setupHandle({ initialText = '', generationType = 'normal' } = {}) {
     const chat = [{ mes: initialText, extra: { reasoning: '' }, is_user: false }];
-    const emit = jest.fn(async () => {});
     const handle = createMessageEditorHandle({ generationType, originalText: initialText, flushIntervalMs: 0 });
     handle.setOnUpdate((text, reasoning) => {
         chat[0].mes = text;
@@ -566,9 +565,7 @@ describe('subagent dispatcher', () => {
     test('cancel: aborts an in-flight sub-agent and pushes a cancelled notification', async () => {
         // Sub-agent that waits long enough to give us a chance to cancel.
         // We yield to the microtask queue and check the signal each round.
-        let rounds = 0;
         const fakeGenerate = jest.fn(async (opts) => {
-            rounds++;
             // Honour the abort signal — simulate a generation that
             // notices abort mid-flight.
             await new Promise((resolve, reject) => {

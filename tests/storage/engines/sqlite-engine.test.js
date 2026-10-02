@@ -65,7 +65,7 @@ describe('SqliteEngine scaffolding', () => {
     test('all expected tables exist', () => {
         engine._dbFor(handle);
         const tables = engine._dbs.get(handle).prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+            'SELECT name FROM sqlite_master WHERE type=\'table\' ORDER BY name',
         ).all().map(r => r.name);
         expect(tables).toEqual(expect.arrayContaining([
             'chats', 'chat_states', 'settings', 'presets', 'preset_states',

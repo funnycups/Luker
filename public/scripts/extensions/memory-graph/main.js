@@ -35,10 +35,6 @@ import {
 export { DEFAULT_PER_TYPE_INSTRUCTIONS, computeActiveExtractionTypes, assembleExtractionSystemPrompt, buildPerTypeRulesBlock };
 import {
     configure as configureCharacterOverrides,
-    getCurrentAvatar,
-    getCharacterSchemaOverrideByAvatar,
-    getCharacterAdvancedOverrideByAvatar,
-    getEffectiveAdvancedSettings,
     getEffectiveSettings,
     getEffectiveNodeTypeSchema,
     getSchemaScopeInfo,
@@ -50,7 +46,6 @@ import {
 } from './character-overrides.js';
 import { registerMemoryGraphCardBindingSlot } from './card-binding-slot.js';
 import {
-    sanitizeMemoryGraphFileNamePart,
     getMemoryGraphExportFileName,
     getImportedStoreBindingFloor,
     clearImportedStoreTransientState,
@@ -63,7 +58,6 @@ import { openSchemaIterationStudio } from './schema-iteration/studio.js';
 import { DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT } from './schema-iteration/system-prompt.js';
 import { openGraphIterationStudio } from './graph-iteration/studio.js';
 import {
-    EVENT_SUMMARY_RULES_BODY,
     DEFAULT_EXTRACT_SYSTEM_PROMPT,
     DEFAULT_EVENT_COMPRESS_INSTRUCTION,
     DEFAULT_CRAWL_SYSTEM_PROMPT,
@@ -114,19 +108,15 @@ const SYMMETRIC_RELATIONS = new Set([
 import {
     getFloorStateInstance,
     resetFloorStateInstance,
-    getFloorFromAssistantSeq,
     loadMetaFields,
     persistMetaFields,
     migrateLegacyMemoryGraphState,
     constants as floorStateAdapterConstants,
     createEmptyStore,
-    createEmptyPersistedMemoryState,
     normalizeStoreForRuntime,
     normalizePersistedMemoryState,
-    applyLoggedNodeSnapshot,
     applyMemoryLogEntryToStore,
     buildRuntimeStoreFromPersistedState,
-    buildMemoryLogOpsFromStore,
     graphPayloadFromStore,
     metaFieldsFromStore,
     buildRuntimeStoreFromGraphPayloadAndMeta,
@@ -153,7 +143,6 @@ import {
 import {
     cloneRollbackNodeSnapshot,
     cloneRollbackEdgeSnapshot,
-    getRollbackEdgeKey,
     addEdge,
     removeEdge,
     dropNode,
@@ -167,7 +156,6 @@ const MODULE_NAME = 'memory_graph';
 const CHAT_STATE_NAMESPACE = MODULE_NAME;
 const META_NAMESPACE = floorStateAdapterConstants.META_NAMESPACE;
 const META_SCHEMA_VERSION = floorStateAdapterConstants.SCHEMA_VERSION;
-const PERSISTED_STORE_VERSION = floorStateAdapterConstants.PERSISTED_STORE_VERSION;
 const UI_BLOCK_ID = 'memory_graph_settings';
 const STYLE_ID = 'memory_graph_style';
 const SHARED_LOREBOOK_NAME = '__MEMORY_GRAPH__';
@@ -175,8 +163,6 @@ const RUNTIME_LOREBOOK_COMMENT_PREFIX = 'MEMORY_GRAPH_RUNTIME';
 const PERSISTENT_LOREBOOK_COMMENT_PREFIX = 'MEMORY_GRAPH_PERSISTENT';
 const RECALL_ALLOWED_GENERATION_TYPES = new Set(['normal', 'continue', 'regenerate', 'swipe', 'impersonate']);
 const RECALL_REUSE_GENERATION_TYPES = new Set(['continue', 'regenerate', 'swipe']);
-const CHARACTER_SCHEMA_OVERRIDE_KEY = 'schemaOverride';
-const CHARACTER_ADVANCED_OVERRIDE_KEY = 'advancedOverride';
 const MEMORY_GRAPH_SEARCH_ALL_TYPE = '__all__';
 const MEMORY_GRAPH_SEARCH_RESULT_PREVIEW_LIMIT = 10;
 const GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID = `${MODULE_NAME}_generation_visible_history`;
@@ -336,14 +322,6 @@ const defaultNodeTypeSchema = [
 
 export { DEFAULT_EXTRACT_SYSTEM_PROMPT };
 
-const EVENT_SUMMARY_TIME_EXTRACT_PROMPT_LINES = [
-    'Event summary time hard rule: every event row must put an explicit full in-world date/time or date span at the start of summary, formatted as "时间：<time>；<summary>".',
-    'Event summary time completeness rule: use complete year/month/day-style precision when the world supports it; for non-real-world settings, use that world\'s full calendar/date notation instead of modern placeholders.',
-    'Event summary time inference rule: when dialogue/context does not state a concrete time, infer or invent one plausible full in-world timestamp/span from chronology, world info, and continuity. This constructive inference is allowed only for the summary time prefix, and it must stay consistent with known facts.',
-    'Event summary time placeholder ban: never use placeholders or vague substitutes such as x年x月x日, X年X月X日, 某年某月某日, 未知时间, 待定时间.',
-    'Event summary prefix rule: after the time prefix, continue with concise causal summary text.',
-];
-
 const DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT = [
     'You are a memory recall planner focused on relevance, continuity, and efficiency.',
     'You must output exactly one short <thought>...</thought> before tool call to explain your plan.',
@@ -435,17 +413,6 @@ const CANONICAL_EXTRACT_RELATION_TYPES = [
     'mentor_of', 'sworn_to', 'debt_owed_to', 'deceiving',
 ];
 const CANONICAL_EXTRACT_RELATION_TYPES_TEXT = CANONICAL_EXTRACT_RELATION_TYPES.join(', ');
-const EXTRACT_PROMPT_EDGE_TYPE_LINES = [
-    `Relation vocabulary hard rule: only use these canonical relation types for semantic links: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.`,
-    'Thought relation review rule: in section [3] (link plan), explicitly inspect graph_data edges and reuse existing canonical relation labels when the meaning matches. Do not invent a new synonym, translation, or near-duplicate relation label.',
-    'Relation normalization rule: involved_in vs mentions for event-end edges: use involved_in only when the entity/character is ON SCENE with dialogue/action/perception/being-acted-on; use mentions when the entity is discussed/referenced/implicated but NOT on scene (e.g. two characters talk about an absent third).',
-    'Relation normalization rule: occurred_at — use when an event takes place at a location.',
-    'Relation normalization rule: advances vs updates for event→thread edges: use advances when the event PROGRESSES the thread toward its resolution condition (including status flips to resolved/abandoned); use updates when the same event materially CHANGED thread.note text in this batch. Both can apply simultaneously (write both edges). Neither applies → write no edge; do not default to advances for tangential threads.',
-    'Relation normalization rule: related is a narrow catch-all — allowed ONLY for character↔character weak ties (below allied/hostile/family/partner/sworn/mentor/debt/deceiving) and location↔location proximity/containment. NEVER use related for character→location (write to character_sheet.identity instead), event-end, or thread-end.',
-    'Relation normalization rule: symmetric relations (partner_of, family_of, allied_with, hostile_to) — write ONE edge per pair with direction=bidirectional; do not write two edges (A→B and B→A) for the same relationship. System canonicalizes storage and diffuses symmetrically.',
-    'Forbidden relation drift: do not mix Chinese and English variants or near-synonyms for the same meaning. Forbidden examples include 参与者 / 涉及主角 / participant / main_character when involved_in fits, and 发生地 / 发生在 / 发生地点 / 发生于 / occurred_at / happened_at / location / located_at / happened_in / occurs_at for the same event-location meaning.',
-    'Internal edge prohibition: do not create contains or semantic_contains via extraction tools; hierarchy edges are managed by the graph system, not by semantic extraction.',
-];
 
 
 const defaultSettings = {
@@ -534,7 +501,6 @@ let activeRecallRunToken = 0;
 let nextActiveRecallRequestId = 0;
 const activeRecallRequestStates = new Map();
 let cytoscapeLoadPromise = null;
-let lastKnownChatKey = '';
 let latestRecallSnapshot = null;
 let generationVisibleHistoryRegexProvider = null;
 
@@ -660,7 +626,7 @@ export function normalizeNodeTypeSchema(schema) {
     const normalized = list
         .filter(item => item && typeof item === 'object')
         .map((item, index) => {
-            const rawId = String(item.id || `custom_${index + 1}`).trim().toLowerCase().replace(/[^a-z0-9_\-]/g, '_');
+            const rawId = String(item.id || `custom_${index + 1}`).trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
             const defaultRequired = rawId === 'event' ? ['summary'] : [];
             const requiredColumns = Array.isArray(item.requiredColumns)
                 ? item.requiredColumns.map(x => String(x || '').trim()).filter(Boolean)
@@ -1156,13 +1122,9 @@ export function getChatKey(context, explicitTarget = null) {
         return 'invalid_target';
     }
     if (target.is_group) {
-        const key = `group:${target.id}`;
-        lastKnownChatKey = key;
-        return key;
+        return `group:${target.id}`;
     }
-    const key = `char:${target.avatar_url}:${target.file_name}`;
-    lastKnownChatKey = key;
-    return key;
+    return `char:${target.avatar_url}:${target.file_name}`;
 }
 
 function normalizeExplicitChatStateTarget(target) {
@@ -1223,11 +1185,11 @@ async function promptMemoryGraphImportMode(context, store) {
         <div class="flex-container flexFlowColumn gap8">
             <div>${escapeHtml(i18n('Choose how to attach the imported memory graph to assistant floors.'))}</div>
             <div>${escapeHtml(i18nFormat(
-                'Imported nodes: ${0} | Edges: ${1} | Exported floor: ${2}',
-                Object.keys(normalized.nodes || {}).length,
-                Array.isArray(normalized.edges) ? normalized.edges.length : 0,
-                exportedFloor,
-            ))}</div>
+        'Imported nodes: ${0} | Edges: ${1} | Exported floor: ${2}',
+        Object.keys(normalized.nodes || {}).length,
+        Array.isArray(normalized.edges) ? normalized.edges.length : 0,
+        exportedFloor,
+    ))}</div>
             <div>${escapeHtml(i18nFormat('Current chat latest assistant floor: ${0}', latestAssistantFloor))}</div>
             <div class="opacity70p">${escapeHtml(i18n('Restore keeps exported floor numbers for same-chat recovery. Bind modes rewrite all imported nodes to the selected floor.'))}</div>
         </div>
@@ -2511,7 +2473,7 @@ function getAssistantChatMessages(sourceOrContext) {
 function computeChatSourceStateFromMessages(messages) {
     const source = getAssistantChatMessages(messages);
     let count = 0;
-    for (const message of source) {
+    for (let i = 0; i < source.length; i += 1) {
         count += 1;
     }
     return {
@@ -4378,16 +4340,6 @@ function buildJsonXmlSection(tag, value) {
     ].join('\n');
 }
 
-function buildRawXmlTag(tag, value, indent = '    ') {
-    const safeTag = String(tag || '').trim() || 'value';
-    const body = String(value ?? '');
-    return [
-        `${indent}<${safeTag}>`,
-        `${indent}  ${body}`,
-        `${indent}</${safeTag}>`,
-    ].join('\n');
-}
-
 function buildExtractInputHead() {
     return [
         '<extract_input>',
@@ -4599,37 +4551,37 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
             visibleNodeIds: graphNodeIds,
             excludeInternal: false,
         }).map(edge => ({
-        from: String(edge?.from || ''),
-        to: String(edge?.to || ''),
-        type: normalizeText(edge?.type || 'related') || 'related',
+            from: String(edge?.from || ''),
+            to: String(edge?.to || ''),
+            type: normalizeText(edge?.type || 'related') || 'related',
             weight: Math.max(1, Number(edge?.weight || 1)),
         }));
     const semanticNodeTotal = crawlGraph
         ? Number(crawlGraph.semantic_node_total || graphNodes.length)
         : listNodesByLevel(store, LEVEL.SEMANTIC)
-        .filter(node => !node?.archived)
-        .filter(node => !isRecallDiagnosticNode(node))
-        .filter((node) => {
-            if (extractionMaxSeq === null) {
-                return true;
-            }
-            const seq = Number(node?.seqTo ?? NaN);
-            return !Number.isFinite(seq) || seq <= extractionMaxSeq;
-        })
-        .length;
+            .filter(node => !node?.archived)
+            .filter(node => !isRecallDiagnosticNode(node))
+            .filter((node) => {
+                if (extractionMaxSeq === null) {
+                    return true;
+                }
+                const seq = Number(node?.seqTo ?? NaN);
+                return !Number.isFinite(seq) || seq <= extractionMaxSeq;
+            })
+            .length;
     const graphDataPayload = {
-            initialized: graphNodes.length > 0,
-            editable_type_ids: Array.from(editableTypeSet.values()),
-            projection_policy: crawlGraph?.projection_policy || {
-                hierarchical_types: 'top_level_rollups_only',
-                non_hierarchical_types: 'full',
-            },
-            graph_scope: crawlGraph?.graph_scope || 'visible',
-            semantic_node_total: semanticNodeTotal,
-            visible_node_count: graphNodes.length,
-            nodes: graphNodes,
-            edges: graphEdges,
-        };
+        initialized: graphNodes.length > 0,
+        editable_type_ids: Array.from(editableTypeSet.values()),
+        projection_policy: crawlGraph?.projection_policy || {
+            hierarchical_types: 'top_level_rollups_only',
+            non_hierarchical_types: 'full',
+        },
+        graph_scope: crawlGraph?.graph_scope || 'visible',
+        semantic_node_total: semanticNodeTotal,
+        visible_node_count: graphNodes.length,
+        nodes: graphNodes,
+        edges: graphEdges,
+    };
     const baseExtractSystemPrompt = String(settings.extractSystemPrompt || '').trim() || DEFAULT_EXTRACT_SYSTEM_PROMPT;
     const cadenceSeq = Number.isFinite(Number(extractionMaxSeq)) ? Number(extractionMaxSeq) : 0;
     const activeTypes = computeActiveExtractionTypes(schema, cadenceSeq);
@@ -4729,130 +4681,130 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
             retryReason = 'Tool calls are missing or incomplete.';
             continue;
         }
-            const names = calls.map(call => String(call?.name || '').trim()).filter(Boolean);
-            const doneCount = names.filter(name => name === 'luker_rpg_extract_done').length;
-            if (doneCount < 1) {
+        const names = calls.map(call => String(call?.name || '').trim()).filter(Boolean);
+        const doneCount = names.filter(name => name === 'luker_rpg_extract_done').length;
+        if (doneCount < 1) {
+            continue;
+        }
+        if (names[names.length - 1] !== 'luker_rpg_extract_done') {
+            retryReason = 'luker_rpg_extract_done must be the last call.';
+            continue;
+        }
+        const typeCalls = calls.filter(call => specByToolName.has(String(call?.name || '')));
+        const ops = [];
+        const calledTypes = new Set();
+        let invalid = false;
+        for (const call of typeCalls) {
+            const toolName = String(call?.name || '');
+            const specEntry = specByToolName.get(toolName);
+            if (!specEntry) {
                 continue;
             }
-            if (names[names.length - 1] !== 'luker_rpg_extract_done') {
-                retryReason = 'luker_rpg_extract_done must be the last call.';
-                continue;
-            }
-            const typeCalls = calls.filter(call => specByToolName.has(String(call?.name || '')));
-            const ops = [];
-            const calledTypes = new Set();
-            let invalid = false;
-            for (const call of typeCalls) {
-                const toolName = String(call?.name || '');
-                const specEntry = specByToolName.get(toolName);
-                if (!specEntry) {
-                    continue;
-                }
-                const spec = { ...specEntry };
-                if (spec.op === 'delete') {
-                    const deletion = buildDeleteFromDynamicToolCall(call, spec);
-                    if (!deletion.payload) {
-                        invalid = true;
-                        retryReason = `Delete call invalid for "${spec.id}": ${deletion.invalidReason}`;
-                        break;
-                    }
-                    const mappedNodeId = String(deletion.payload.nodeId || '').trim();
-                    const targetNode = editableNodes.get(mappedNodeId);
-                    if (!targetNode) {
-                        invalid = true;
-                        retryReason = `Unknown node_id "${mappedNodeId}". Use only ids from graph_data.nodes (editable nodes only).`;
-                        break;
-                    }
-                    if (String(targetNode?.type || '').trim().toLowerCase() !== String(spec.id || '').trim().toLowerCase()) {
-                        invalid = true;
-                        retryReason = `node_id "${mappedNodeId}" type mismatch: expected "${spec.id}".`;
-                        break;
-                    }
-                    ops.push(deletion.payload);
-                    continue;
-                }
-                if (spec.op === 'link_upsert') {
-                    const linkOp = buildLinkUpsertFromToolCall(call);
-                    if (!linkOp.payload) {
-                        invalid = true;
-                        retryReason = `Link call invalid: ${linkOp.invalidReason}`;
-                        break;
-                    }
-                    ops.push(linkOp.payload);
-                    continue;
-                }
-                if (spec.op === 'link_delete') {
-                    const linkOp = buildLinkDeleteFromToolCall(call);
-                    if (!linkOp.payload) {
-                        invalid = true;
-                        retryReason = `Link delete call invalid: ${linkOp.invalidReason}`;
-                        break;
-                    }
-                    ops.push(linkOp.payload);
-                    continue;
-                }
-                if (spec.op === 'edit') {
-                    const editOp = buildEditFromDynamicToolCall(call, spec);
-                    if (!editOp.payload) {
-                        invalid = true;
-                        retryReason = `Edit call invalid for "${spec.id}": ${editOp.invalidReason}`;
-                        break;
-                    }
-                    const mappedNodeId = String(editOp.payload.nodeId || '').trim();
-                    const targetNode = editableNodes.get(mappedNodeId);
-                    if (!targetNode) {
-                        invalid = true;
-                        retryReason = `Unknown node_id "${mappedNodeId}". Use only ids from graph_data.nodes (editable nodes only).`;
-                        break;
-                    }
-                    if (String(targetNode?.type || '').trim().toLowerCase() !== String(spec.id || '').trim().toLowerCase()) {
-                        invalid = true;
-                        retryReason = `node_id "${mappedNodeId}" type mismatch: expected "${spec.id}".`;
-                        break;
-                    }
-                    calledTypes.add(String(spec.id || '').trim().toLowerCase());
-                    ops.push(editOp.payload);
-                    continue;
-                }
-                const mapped = buildCreateFromDynamicToolCall(call, spec);
-                if (mapped.missingRequired.length > 0) {
+            const spec = { ...specEntry };
+            if (spec.op === 'delete') {
+                const deletion = buildDeleteFromDynamicToolCall(call, spec);
+                if (!deletion.payload) {
                     invalid = true;
-                    retryReason = `Type "${spec.id}" missing required columns: ${mapped.missingRequired.join(', ')}.`;
+                    retryReason = `Delete call invalid for "${spec.id}": ${deletion.invalidReason}`;
                     break;
                 }
-                const safeTypeId = String(spec.id || '').trim().toLowerCase();
-                if (safeTypeId === 'event') {
-                    if (!mapped.payload?.hasLinksProp) {
-                        invalid = true;
-                        retryReason = 'Event create must include links. Use links: [] with no_link_reason if no relation is grounded.';
-                        break;
-                    }
-                    const eventLinkCount = Array.isArray(mapped.payload?.links) ? mapped.payload.links.length : 0;
-                    const eventNoLinkReason = normalizeText(mapped.payload?.noLinkReason || '');
-                    if (eventLinkCount === 0 && !eventNoLinkReason) {
-                        invalid = true;
-                        retryReason = 'Event create has empty links. Provide no_link_reason when no links are grounded.';
-                        break;
-                    }
+                const mappedNodeId = String(deletion.payload.nodeId || '').trim();
+                const targetNode = editableNodes.get(mappedNodeId);
+                if (!targetNode) {
+                    invalid = true;
+                    retryReason = `Unknown node_id "${mappedNodeId}". Use only ids from graph_data.nodes (editable nodes only).`;
+                    break;
                 }
-                if (mapped.payload) {
-                    calledTypes.add(safeTypeId);
-                    ops.push({
-                        op: 'create',
-                        ...mapped.payload,
-                    });
+                if (String(targetNode?.type || '').trim().toLowerCase() !== String(spec.id || '').trim().toLowerCase()) {
+                    invalid = true;
+                    retryReason = `node_id "${mappedNodeId}" type mismatch: expected "${spec.id}".`;
+                    break;
                 }
-            }
-            if (invalid) {
+                ops.push(deletion.payload);
                 continue;
             }
-            const missingForceTypes = [...forceUpdateTypes].filter(typeId => !calledTypes.has(typeId));
-            if (missingForceTypes.length > 0) {
-                retryReason = `Missing force-update type tool calls: ${missingForceTypes.join(', ')}.`;
+            if (spec.op === 'link_upsert') {
+                const linkOp = buildLinkUpsertFromToolCall(call);
+                if (!linkOp.payload) {
+                    invalid = true;
+                    retryReason = `Link call invalid: ${linkOp.invalidReason}`;
+                    break;
+                }
+                ops.push(linkOp.payload);
                 continue;
             }
-            validatedOps = ops;
-            return validatedOps;
+            if (spec.op === 'link_delete') {
+                const linkOp = buildLinkDeleteFromToolCall(call);
+                if (!linkOp.payload) {
+                    invalid = true;
+                    retryReason = `Link delete call invalid: ${linkOp.invalidReason}`;
+                    break;
+                }
+                ops.push(linkOp.payload);
+                continue;
+            }
+            if (spec.op === 'edit') {
+                const editOp = buildEditFromDynamicToolCall(call, spec);
+                if (!editOp.payload) {
+                    invalid = true;
+                    retryReason = `Edit call invalid for "${spec.id}": ${editOp.invalidReason}`;
+                    break;
+                }
+                const mappedNodeId = String(editOp.payload.nodeId || '').trim();
+                const targetNode = editableNodes.get(mappedNodeId);
+                if (!targetNode) {
+                    invalid = true;
+                    retryReason = `Unknown node_id "${mappedNodeId}". Use only ids from graph_data.nodes (editable nodes only).`;
+                    break;
+                }
+                if (String(targetNode?.type || '').trim().toLowerCase() !== String(spec.id || '').trim().toLowerCase()) {
+                    invalid = true;
+                    retryReason = `node_id "${mappedNodeId}" type mismatch: expected "${spec.id}".`;
+                    break;
+                }
+                calledTypes.add(String(spec.id || '').trim().toLowerCase());
+                ops.push(editOp.payload);
+                continue;
+            }
+            const mapped = buildCreateFromDynamicToolCall(call, spec);
+            if (mapped.missingRequired.length > 0) {
+                invalid = true;
+                retryReason = `Type "${spec.id}" missing required columns: ${mapped.missingRequired.join(', ')}.`;
+                break;
+            }
+            const safeTypeId = String(spec.id || '').trim().toLowerCase();
+            if (safeTypeId === 'event') {
+                if (!mapped.payload?.hasLinksProp) {
+                    invalid = true;
+                    retryReason = 'Event create must include links. Use links: [] with no_link_reason if no relation is grounded.';
+                    break;
+                }
+                const eventLinkCount = Array.isArray(mapped.payload?.links) ? mapped.payload.links.length : 0;
+                const eventNoLinkReason = normalizeText(mapped.payload?.noLinkReason || '');
+                if (eventLinkCount === 0 && !eventNoLinkReason) {
+                    invalid = true;
+                    retryReason = 'Event create has empty links. Provide no_link_reason when no links are grounded.';
+                    break;
+                }
+            }
+            if (mapped.payload) {
+                calledTypes.add(safeTypeId);
+                ops.push({
+                    op: 'create',
+                    ...mapped.payload,
+                });
+            }
+        }
+        if (invalid) {
+            continue;
+        }
+        const missingForceTypes = [...forceUpdateTypes].filter(typeId => !calledTypes.has(typeId));
+        if (missingForceTypes.length > 0) {
+            retryReason = `Missing force-update type tool calls: ${missingForceTypes.join(', ')}.`;
+            continue;
+        }
+        validatedOps = ops;
+        return validatedOps;
     }
     const failureReason = normalizeText(retryReason || String(lastRetryableError?.message || '')) || 'No valid extraction tool calls after retries.';
     throw new Error(failureReason);
@@ -5215,7 +5167,7 @@ function normalizeCompressionRuleToken(raw) {
 }
 
 function parseCompressionRuleValues(rawValues) {
-    const source = String(rawValues || '').trim().replace(/^[\[(\{]\s*|\s*[\])\}]$/g, '');
+    const source = String(rawValues || '').trim().replace(/^[[({]\s*|\s*[\])}]$/g, '');
     return source
         .split(/[|,]/g)
         .map(item => normalizeCompressionRuleToken(item))
@@ -6165,7 +6117,7 @@ export function applyExtractionOpsImpl(store, operations, {
                 if (!targetNode.fields || typeof targetNode.fields !== 'object' || Array.isArray(targetNode.fields)) {
                     targetNode.fields = {};
                 }
-                if (Boolean(item?.hasTitlePatch)) {
+                if (item?.hasTitlePatch) {
                     const patchedTitle = normalizeText(item?.title || '');
                     if (patchedTitle) {
                         targetNode.title = patchedTitle;
@@ -8507,24 +8459,6 @@ function buildPlayableFramesFromContext(context) {
     return frames;
 }
 
-function rebaseStoreToChatBaseline(store, context) {
-    if (!store || typeof store !== 'object') {
-        return;
-    }
-    const baselineSeq = Math.max(0, Math.floor(Number(buildPlayableFramesFromContext(context).length || 0)));
-    for (const node of Object.values(store.nodes || {})) {
-        if (!node || typeof node !== 'object') {
-            continue;
-        }
-        node.seqTo = baselineSeq;
-    }
-    store.appliedSeqTo = baselineSeq;
-    store.loggedSeqTo = baselineSeq;
-    store.seqCounter = baselineSeq;
-    store.lastRecallTrace = [];
-    store.lastRecallProjection = null;
-}
-
 function computeExtractionWindow(context, store, startSeq = null, settings = null) {
     const effectiveSettings = settings || getEffectiveSettings(context, getSettings());
     const frames = buildPlayableFramesFromContext(context);
@@ -9836,23 +9770,6 @@ function getLastRecallProjection(store) {
         : null;
 }
 
-function getLastRecallCorePacketText(store) {
-    const projection = getLastRecallProjection(store);
-    if (!projection) {
-        return '';
-    }
-    const corePacket = normalizeMultilineText(projection?.blocks?.corePacket || '');
-    const focusPacket = normalizeMultilineText(projection?.blocks?.focusPacket || '');
-    const sections = [];
-    if (corePacket) {
-        sections.push(`[CORE_PACKET]\n${corePacket}`);
-    }
-    if (focusPacket) {
-        sections.push(`[FOCUS_PACKET]\n${focusPacket}`);
-    }
-    return sections.join('\n\n');
-}
-
 function parseMarkdownTableToHtml(mdTable) {
     const lines = String(mdTable || '').split('\n').filter(l => l.trim());
     if (lines.length < 2) {
@@ -10264,7 +10181,7 @@ async function ensureCytoscapeLoaded() {
             if (window.cytoscape) {
                 resolve(window.cytoscape);
             } else {
-                reject(new Error(`Cytoscape script loaded but did not expose window.cytoscape (page may have a CommonJS/AMD shim that intercepted the UMD wrapper)`));
+                reject(new Error('Cytoscape script loaded but did not expose window.cytoscape (page may have a CommonJS/AMD shim that intercepted the UMD wrapper)'));
             }
         };
         script.onerror = () => {
@@ -12025,7 +11942,6 @@ function showRuntimeInfoToast(message, { stopLabel = '', onStop = null, kind = '
     if (typeof toastr === 'undefined') {
         return;
     }
-    const activeRef = kind === 'recall' ? 'activeRecallToast' : 'activeExtractionToast';
     if (kind === 'recall') {
         if (activeRecallToast) { toastr.clear(activeRecallToast); activeRecallToast = null; }
     } else {
@@ -13985,7 +13901,7 @@ function refreshPrimaryKeyOptionsForCard(card) {
 }
 
 function renderNodeTypeSchemaCard(spec, index) {
-        const mode = String(spec?.compression?.mode || 'none');
+    const mode = String(spec?.compression?.mode || 'none');
     const threshold = Number(spec?.compression?.threshold || 6);
     const fanIn = Number(spec?.compression?.fanIn || 3);
     const maxDepth = Number(spec?.compression?.maxDepth || 6);
@@ -14137,7 +14053,7 @@ function readSchemaCard(card) {
             .get()
             .filter(Boolean),
         compression: {
-            mode: Boolean(root.find('[data-field="compression.enabled"]').prop('checked')) ? 'hierarchical' : 'none',
+            mode: root.find('[data-field="compression.enabled"]').prop('checked') ? 'hierarchical' : 'none',
             threshold: Math.max(2, Number(root.find('[data-field="compression.threshold"]').val()) || 6),
             fanIn: Math.max(2, Number(root.find('[data-field="compression.fanIn"]').val()) || 3),
             maxDepth: Math.max(1, Number(root.find('[data-field="compression.maxDepth"]').val()) || 6),
@@ -14723,10 +14639,10 @@ async function openManualCompressionPopup(context, settings) {
     } finally {
         if (activeExtractionAbortController === compressionAbortController) {
             activeExtractionAbortController = null;
-            }
-            clearRuntimeInfoToast('extraction');
         }
-        }
+        clearRuntimeInfoToast('extraction');
+    }
+}
 
 async function openVectorRecomputePopup(context, settings) {
     await ensureMemoryStoreLoaded(context);
@@ -15452,13 +15368,13 @@ function bindUi() {
             }
             console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
             notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
-            } finally {
-                if (activeExtractionAbortController === rebuildAbortController) {
-                    activeExtractionAbortController = null;
-                }
-                clearRuntimeInfoToast('extraction');
+        } finally {
+            if (activeExtractionAbortController === rebuildAbortController) {
+                activeExtractionAbortController = null;
             }
-            });
+            clearRuntimeInfoToast('extraction');
+        }
+    });
 
     root.find('#luker_rpg_memory_rebuild_recent').off('click').on('click', async function () {
         await ensureMemoryStoreLoaded(context);
@@ -15581,13 +15497,13 @@ function bindUi() {
             }
             console.warn(`[${MODULE_NAME}] Recent rebuild failed`, error);
             notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild_recent', String(error?.message || error)));
-            } finally {
-                if (activeExtractionAbortController === rebuildAbortController) {
-                    activeExtractionAbortController = null;
-                }
-                clearRuntimeInfoToast('extraction');
+        } finally {
+            if (activeExtractionAbortController === rebuildAbortController) {
+                activeExtractionAbortController = null;
             }
-            });
+            clearRuntimeInfoToast('extraction');
+        }
+    });
 
     root.find('#luker_rpg_memory_manual_compress').off('click').on('click', async function () {
         await openManualCompressionPopup(context, getEffectiveSettings(context, settings));

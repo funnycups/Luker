@@ -71,7 +71,7 @@ export async function initSchema(pool) {
         migrationsDir: MIGRATIONS_DIR,
         readVersion: async () => {
             const r = await pool.query(
-                `SELECT value FROM _storage_meta WHERE "key" = 'schema_version'`,
+                'SELECT value FROM _storage_meta WHERE "key" = \'schema_version\'',
             );
             return r.rows.length === 0 ? 0 : Number(r.rows[0].value);
         },

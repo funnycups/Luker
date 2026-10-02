@@ -26,7 +26,7 @@ async function commit(dir, branch, files, parent) {
     }
     for (const p of Object.keys(files)) {
         if (files[p] === null) {
-            try { await git.remove({ fs, dir, filepath: p }); } catch {}
+            try { await git.remove({ fs, dir, filepath: p }); } catch { /* ignore */ }
         } else {
             await git.add({ fs, dir, filepath: p });
         }
