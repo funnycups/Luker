@@ -91,7 +91,7 @@ export function getChatCompletionConnectionProfileByName(name = '') {
     return getChatCompletionConnectionProfiles().find(profile => profile.name === target) || null;
 }
 
-function resolveChatSourceFromApiAlias(value, fallbackSource = '') {
+export function resolveChatSourceFromApiAlias(value, fallbackSource = '') {
     const normalized = String(value || '').trim().toLowerCase();
     if (!normalized) {
         return String(fallbackSource || '').trim();

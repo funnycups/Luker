@@ -15,7 +15,7 @@ import { SlashCommandScope } from '../../slash-commands/SlashCommandScope.js';
 import { collapseSpaces, getUniqueName, isFalseBoolean, isTrueBoolean, uuidv4, waitUntilCondition } from '../../utils.js';
 import { t } from '../../i18n.js';
 import { getSecretLabelById, SECRET_KEYS, writeSecret } from '../../secrets.js';
-import { applyProxyProfileEntry, chat_completion_sources, getCurrentProxyProfileEntry, oai_settings, whenChatCompletionModelListReady } from '../../openai.js';
+import { applyProxyProfileEntry, chat_completion_sources, getCurrentProxyProfileEntry, oai_settings, proxies, whenChatCompletionModelListReady } from '../../openai.js';
 import { initActionableSingleSelect } from '../../select2-actionable-single.js';
 import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
@@ -24,6 +24,7 @@ import { formatReasoning } from '/scripts/reasoning.js';
 import { clampMaxRetries, formatRetryStatusWhitelist, parseRetryStatusWhitelist } from './max-retries.js';
 import { clampRequestTimeout } from './request-timeout.js';
 import { clampAutoContinueMaxAttempts } from './auto-continue-truncated.js';
+import { resolveChatSourceFromApiAlias } from './profile-resolver.js';
 import {
     createEmbeddingProfileStub,
     deleteEmbeddingProfile,
@@ -1109,43 +1110,64 @@ async function migrateProxyToBaseUrl() {
     if (Array.isArray(settings.profiles)) {
         for (const profile of settings.profiles) {
             try {
-                const profileMode = String(profile?.mode || '').toLowerCase();
+                const profileMode = resolveProfileMode(profile);
                 if (profileMode !== 'cc') {
                     continue;
                 }
 
                 const proxyUrl = String(profile['proxy-url'] || '').trim();
                 const proxyPassword = String(profile['proxy-password'] || '');
+                const proxyPreset = proxies.find((preset) => preset.name === profile.proxy);
+                // Mirror the wire consumers exactly: profile-resolver and
+                // ConnectionManagerRequestService use the live preset whenever
+                // the profile names one (even when its fields are empty) and
+                // only fall back to the profile snapshot otherwise. The
+                // migration must persist the credential the profile actually
+                // sent, not a snapshot the wire never used.
+                const effectiveProxyUrl = proxyPreset ? String(proxyPreset.url || '').trim() : proxyUrl;
+                const effectiveProxyPassword = proxyPreset ? String(proxyPreset.password || '') : proxyPassword;
 
-                if (!proxyUrl && !proxyPassword) {
+                if (!effectiveProxyUrl && !effectiveProxyPassword) {
                     continue;
                 }
 
-                if (proxyUrl && !profile['base-url']) {
-                    profile['base-url'] = proxyUrl;
+                if (effectiveProxyUrl && !profile['base-url']) {
+                    profile['base-url'] = effectiveProxyUrl;
                 }
 
-                if (proxyPassword) {
+                if (effectiveProxyPassword) {
+                    const chatSource = resolveChatSourceFromApiAlias(profile.api);
                     const sourceKey = Object.entries(chat_completion_sources)
-                        .find(([, value]) => value === profile.source)?.[0];
+                        .find(([, value]) => value === chatSource)?.[0];
                     const secretKey = sourceKey ? SECRET_KEYS[sourceKey] : null;
 
-                    if (secretKey) {
-                        const label = `${profile.name || 'Profile'} proxy key`;
-                        try {
-                            const newSecretId = await writeSecret(secretKey, proxyPassword, label, { allowEmpty: false });
-                            if (newSecretId) {
-                                if (!profile['secret-id']) {
-                                    profile['secret-id'] = newSecretId;
-                                } else {
-                                    profile._luker_migration_conflict = true;
-                                }
-                            }
-                        } catch (err) {
-                            console.warn('[base-url migration] failed to write secret for profile', profile?.name, err);
-                            continue;
-                        }
+                    if (!secretKey) {
+                        // Unresolvable API alias — keep the legacy fields so the
+                        // proxy credential is not silently dropped.
+                        continue;
                     }
+
+                    const label = `${profile.name || 'Profile'} proxy key`;
+                    let newSecretId = null;
+                    try {
+                        newSecretId = await writeSecret(secretKey, effectiveProxyPassword, label, { allowEmpty: false });
+                    } catch (err) {
+                        console.warn('[base-url migration] failed to write secret for profile', profile?.name, err);
+                        continue;
+                    }
+                    if (!newSecretId) {
+                        // writeSecret returned null without throwing (server
+                        // error). Keep the legacy fields rather than deleting
+                        // the only copy of the credential.
+                        continue;
+                    }
+                    if (profile['secret-id'] && profile['secret-id'] !== newSecretId) {
+                        profile._luker_migration_conflict = true;
+                    }
+                    // The proxy password is the credential the profile
+                    // actually used before migration; point the profile at
+                    // it instead of any stale secret selection.
+                    profile['secret-id'] = newSecretId;
                 }
 
                 delete profile.proxy;
@@ -1199,6 +1221,11 @@ export async function init() {
 
     // Luker: fully decouple connection profiles from chat-completion presets and regex presets.
     // Legacy profiles might still carry stale fields or invalid mode metadata.
+    // The proxy→base-url migration must run BEFORE normalization: for cc
+    // profiles `proxy-password` is a foreign-mode field (embed/rerank) and
+    // normalization would delete it before the migration could preserve it.
+    await migrateProxyToBaseUrl();
+
     let migrated = false;
     if (Array.isArray(extension_settings.connectionManager.profiles)) {
         for (const profile of extension_settings.connectionManager.profiles) {
@@ -1208,8 +1235,6 @@ export async function init() {
     if (migrated) {
         saveSettingsDebounced();
     }
-
-    await migrateProxyToBaseUrl();
     const container = document.getElementById('rm_api_block');
     const settings = await renderExtensionTemplateAsync(MODULE_NAME, 'settings');
     container.insertAdjacentHTML('afterbegin', settings);

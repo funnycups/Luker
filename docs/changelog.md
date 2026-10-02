@@ -8,6 +8,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed the Inspector showing the stored provider key instead of the key that actually went on the wire when a plugin overrode the auth header through custom include headers.
 
+### Connections & Models
+
+- Fixed the deprecated proxy preset migration losing the profile proxy password and leaving migrated profiles to authenticate with the active provider key.
+
 ### Fixes
 
 - Fixed empty-input Send not continuing the last message when "Press Send to continue" is enabled.
