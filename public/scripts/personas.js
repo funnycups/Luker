@@ -685,6 +685,15 @@ function isGlobalPersonaAvatar(avatarId) {
 }
 
 function hasActiveChatForPersonaTracking() {
+    // A chat that failed to load (corrupted file, network error) leaves
+    // character.chat / group.chat_id set while chat_metadata is empty. That
+    // is not a loaded chat: writing the tracked persona would trip the
+    // chat-write integrity guard and raise a spurious "Chat save aborted"
+    // alert right after the load-failure alert. Wait for a successful load.
+    if (!chat_metadata?.integrity) {
+        return false;
+    }
+
     if (selected_group) {
         const groupId = String(selected_group || '').trim();
         const group = groups.find(x => String(x?.id || '') === groupId);
@@ -2815,7 +2824,7 @@ async function loadPersonaForCurrentChat({ doRender = false } = {}) {
             toastr.success(message, t`Persona Auto Selected`, { escapeHtml: false });
             shouldNotifyTrackedPersonaMismatch = false;
         }
-    } else if (chatPersona && power_user.persona_auto_lock && !chat_metadata.persona && !isPersonaDedicatedToCurrentCharacter(chatPersona, activeCharacterAvatar)) {
+    } else if (chatPersona && power_user.persona_auto_lock && !chat_metadata.persona && hasActiveChatForPersonaTracking() && !isPersonaDedicatedToCurrentCharacter(chatPersona, activeCharacterAvatar)) {
         // Even if it's the same persona, we still might need to auto-lock to chat if that's enabled
         await lockPersona('chat');
     }
