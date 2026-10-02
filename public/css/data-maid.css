@@ -118,6 +118,8 @@
     padding: 5px;
     width: 100%;
     border-bottom: 1px solid var(--SmartThemeBorderColor);
+    content-visibility: auto;
+    contain-intrinsic-size: auto 44px;
 }
 
 .dataMaidItem:last-child {

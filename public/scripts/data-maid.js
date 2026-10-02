@@ -191,6 +191,9 @@ class DataMaidDialog {
 
     /**
      * Renders a single Data Maid category into a DOM element.
+     * Item rows are built on first expansion: a report can hold thousands
+     * of rows, and rendering them while the category stays collapsed
+     * freezes the dialog.
      * @param {string} prop Property name for the category
      * @param {string} name Name of the category
      * @param {string} description Description of the category
@@ -203,40 +206,118 @@ class DataMaidDialog {
             return null;
         }
 
+        const sortedItems = items.sort((a, b) => b.mtime - a.mtime);
         const viewModel = {
             name: name,
             description: description,
-            totalSize: humanFileSize(items.reduce((sum, item) => sum + item.size, 0)),
-            totalItems: items.length,
-            items: items.sort((a, b) => b.mtime - a.mtime).map(item => ({
-                ...item,
-                size: humanFileSize(item.size),
-                date: timestampToMoment(item.mtime).format('L LT'),
-            })),
+            totalSize: humanFileSize(sortedItems.reduce((sum, item) => sum + item.size, 0)),
+            totalItems: sortedItems.length,
+            items: [],
         };
 
         const template = await renderTemplateAsync('dataMaidCategory', viewModel);
         const categoryElement = document.createElement('div');
         categoryElement.innerHTML = template;
-        categoryElement.querySelectorAll('.dataMaidItemView').forEach(button => {
-            button.addEventListener('click', async () => {
-                const item = button.closest('.dataMaidItem');
-                const hash = item?.getAttribute('data-hash');
-                const itemName = items.find(i => i.hash === hash)?.name;
-                if (hash) {
-                    await this.view(prop, hash, itemName);
+
+        const contentElement = categoryElement.querySelector('.dataMaidCategoryContent');
+        let itemsBuilt = false;
+        let itemsBuildPromise = null;
+
+        const buildItems = async () => {
+            if (itemsBuilt) {
+                return;
+            }
+            if (!itemsBuildPromise) {
+                itemsBuildPromise = (async () => {
+                    const itemsTemplate = await renderTemplateAsync('dataMaidCategory', {
+                        ...viewModel,
+                        items: sortedItems.map(item => ({
+                            ...item,
+                            size: humanFileSize(item.size),
+                            date: timestampToMoment(item.mtime).format('L LT'),
+                        })),
+                    });
+                    if (!itemsTemplate) {
+                        return;
+                    }
+                    const staging = document.createElement('div');
+                    staging.innerHTML = itemsTemplate;
+                    const renderedContainer = staging.querySelector('.flex-container');
+                    if (!renderedContainer) {
+                        return;
+                    }
+                    contentElement.querySelector('.flex-container').replaceChildren(...renderedContainer.childNodes);
+                    itemsBuilt = true;
+                })();
+            }
+            try {
+                await itemsBuildPromise;
+            } finally {
+                if (!itemsBuilt) {
+                    itemsBuildPromise = null;
                 }
-            });
-        });
-        categoryElement.querySelectorAll('.dataMaidItemDownload').forEach(button => {
-            button.addEventListener('click', async () => {
-                const item = button.closest('.dataMaidItem');
-                const hash = item?.getAttribute('data-hash');
-                if (hash) {
-                    await this.download(items, hash);
+            }
+        };
+
+        // Build the rows before the drawer opens so slideToggle measures the
+        // full height; the re-dispatched click falls through to the global
+        // inline-drawer handler once the rows exist.
+        const toggle = categoryElement.querySelector('.inline-drawer-toggle');
+        let buildStarted = false;
+        let bypassToggleIntercept = false;
+        toggle.addEventListener('click', async (event) => {
+            if (bypassToggleIntercept) {
+                bypassToggleIntercept = false;
+                return;
+            }
+            if (itemsBuilt || event.target.closest('.dataMaidDeleteAll')) {
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            if (buildStarted) {
+                return;
+            }
+            buildStarted = true;
+            try {
+                await buildItems();
+            } catch (error) {
+                console.error('Error rendering Data Maid category items:', error);
+            } finally {
+                if (!itemsBuilt) {
+                    buildStarted = false;
                 }
-            });
+                bypassToggleIntercept = true;
+                toggle.click();
+            }
+        }, true);
+
+        categoryElement.addEventListener('click', async (event) => {
+            const item = event.target.closest('.dataMaidItem');
+            const hash = item?.getAttribute('data-hash');
+            if (!hash) {
+                return;
+            }
+            if (event.target.closest('.dataMaidItemView')) {
+                await this.view(prop, hash, sortedItems.find(i => i.hash === hash)?.name);
+            } else if (event.target.closest('.dataMaidItemDownload')) {
+                await this.download(sortedItems, hash);
+            } else if (event.target.closest('.dataMaidItemDelete')) {
+                const confirm = await Popup.show.confirm(t`Are you sure?`, t`This will permanently delete the file. THIS CANNOT BE UNDONE!`);
+                if (!confirm) {
+                    return;
+                }
+                if (await this.delete([hash])) {
+                    item.remove();
+                    sortedItems.splice(sortedItems.findIndex(i => i.hash === hash), 1);
+                    if (sortedItems.length === 0) {
+                        categoryElement.remove();
+                        this.displayEmptyPlaceholder();
+                    }
+                }
+            }
         });
+
         categoryElement.querySelectorAll('.dataMaidDeleteAll').forEach(button => {
             button.addEventListener('click', async (event) => {
                 event.stopPropagation();
@@ -245,31 +326,11 @@ class DataMaidDialog {
                     return;
                 }
 
-                const hashes = items.map(item => item.hash).filter(hash => hash);
+                const hashes = sortedItems.map(item => item.hash).filter(hash => hash);
                 await this.delete(hashes);
 
                 categoryElement.remove();
                 this.displayEmptyPlaceholder();
-            });
-        });
-        categoryElement.querySelectorAll('.dataMaidItemDelete').forEach(button => {
-            button.addEventListener('click', async () => {
-                const item = button.closest('.dataMaidItem');
-                const hash = item?.getAttribute('data-hash');
-                if (hash) {
-                    const confirm = await Popup.show.confirm(t`Are you sure?`, t`This will permanently delete the file. THIS CANNOT BE UNDONE!`);
-                    if (!confirm) {
-                        return;
-                    }
-                    if (await this.delete([hash])) {
-                        item.remove();
-                        items.splice(items.findIndex(i => i.hash === hash), 1);
-                        if (items.length === 0) {
-                            categoryElement.remove();
-                            this.displayEmptyPlaceholder();
-                        }
-                    }
-                }
             });
         });
         return categoryElement;
