@@ -11,6 +11,8 @@ import { writeEmbeddedCharacter } from '../character/_helpers.js';
 let server, mock;
 
 const ASH_NAME = 'Ash the Cartographer';
+const REPO_ROOT = resolve(import.meta.dirname, '../../..');
+const LARGE_PNG = resolve(REPO_ROOT, 'default/content/backgrounds/landscape beach day.png');
 
 function appendImageToLastMessage(chatPath, imageUrl) {
     const lines = readFileSync(chatPath, 'utf8').split('\n').filter(Boolean);
@@ -55,7 +57,7 @@ test('chat delete offers preview with cancel, skip, and confirmed deletion', asy
     await expect.poll(() => existsSync(chatPath), { timeout: 15_000 }).toBe(true);
     await expect.poll(() => readFileSync(chatPath, 'utf8').includes('Log tonight'), { timeout: 15_000 }).toBe(true);
     mkdirSync(resolve(server.dataRoot, 'default-user', 'user', 'images', ASH_NAME), { recursive: true });
-    writeFileSync(imagePath, Buffer.alloc(2_048));
+    writeFileSync(imagePath, readFileSync(LARGE_PNG));
     appendImageToLastMessage(chatPath, imageUrl);
 
     // Cancel: dialog opens, chat + image stay.
@@ -65,6 +67,19 @@ test('chat delete offers preview with cancel, skip, and confirmed deletion', asy
     await row.locator('.deleteChat').click();
     await acceptTopmostPopup(page);
     await expect(page.locator('.mediaDeletionDialog')).toBeVisible();
+
+    // The thumbnail preview must fit the viewport, mirroring the built-in viewer.
+    await page.locator('.mediaDeletionThumb').first().click();
+    const previewImg = page.locator('.popup:visible .popup-content > img').last();
+    await previewImg.waitFor({ state: 'visible', timeout: 15_000 });
+    const previewFits = await previewImg.evaluate((img) => {
+        const rect = img.getBoundingClientRect();
+        return rect.width <= window.innerWidth && rect.height <= window.innerHeight;
+    });
+    expect(previewFits).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.popup:visible .popup-content > img')).toHaveCount(0);
+
     await page.locator('.mediaDeletionCancel').click();
     await expect(page.locator('.mediaDeletionDialog')).toBeHidden();
     expect(existsSync(chatPath)).toBe(true);

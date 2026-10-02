@@ -44,6 +44,12 @@
     flex-shrink: 0;
 }
 
+.mediaDeletionPreview {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
 .mediaDeletionItemName {
     flex: 1;
     overflow: hidden;

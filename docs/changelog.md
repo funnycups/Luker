@@ -12,6 +12,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed the deprecated proxy preset migration losing the profile proxy password and leaving migrated profiles to authenticate with the active provider key.
 
+### Storage & Sync
+
+- Fixed the media deletion preview overflowing the screen.
+
 ### Fixes
 
 - Fixed empty-input Send not continuing the last message when "Press Send to continue" is enabled.

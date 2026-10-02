@@ -85,7 +85,8 @@ function wireSelectionControls(dialog, confirmLabel) {
             const preview = document.createElement('img');
             preview.src = thumbnail.getAttribute('src') ?? '';
             preview.alt = '';
-            void callGenericPopup(preview, POPUP_TYPE.DISPLAY, '', { wide: true });
+            preview.classList.add('mediaDeletionPreview');
+            void callGenericPopup(preview, POPUP_TYPE.DISPLAY, '', { large: true, wide: true });
         });
     });
     updateSelectedCount(dialog, confirmLabel);
