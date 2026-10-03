@@ -13,7 +13,7 @@ You don't have to type a SKILL.md by hand. Most users start one of these ways:
 | **Have the LLM write it** | [AI Iteration Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) | Just tell the Studio what you want in a sentence; it drafts the SKILL.md, installs it, optionally attaches it to an agent. Recommended starting point. |
 | **Write it by hand** | [Skill management panel → Create new](/features/skills/management#tab-1-installed) | You already know exactly which sections you want and want full control over wording. |
 
-![Inline skill editor with file tree + body pane](/_screenshots/skills/rp-demo-8.5-editor-body-pasted.png)
+![Inline skill editor with file tree + body pane](/images/skills/rp-demo-8.5-editor-body-pasted.png)
 
 See the [recipe](/recipes/rp-skills-walkthrough) for an end-to-end walkthrough.
 

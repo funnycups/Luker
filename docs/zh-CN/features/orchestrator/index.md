@@ -41,19 +41,19 @@
 
 运行一开始，**运行面板**就会从聊天区右侧滑入（窄屏上从底部升起）。面板实时更新：轮次是一张可折叠的卡片，展开后就能看到模型当时怎么想、调用了哪些工具、工具返回了什么。
 
-![编排器开始运行时的面板](/_screenshots/run-panel/01-panel-initial.png)
+![编排器开始运行时的面板](/images/run-panel/01-panel-initial.png)
 
 模型流式输出时，面板在原地实时更新——不闪屏、也不会打乱聊天区：
 
-![流式过程：思考、文本与工具分节实时填充](/_screenshots/run-panel/02-panel-streaming.png)
+![流式过程：思考、文本与工具分节实时填充](/images/run-panel/02-panel-streaming.png)
 
 展开任意工具调用，能看到它的入参和返回：
 
-![工具调用展开——参数与结果](/_screenshots/run-panel/03-panel-tool-expanded.png)
+![工具调用展开——参数与结果](/images/run-panel/03-panel-tool-expanded.png)
 
 窄屏下面板变成底部抽屉，可以上拉展开或下滑关闭：
 
-![窄屏下的运行面板（抽屉布局）](/_screenshots/run-panel/05-panel-drawer.png)
+![窄屏下的运行面板（抽屉布局）](/images/run-panel/05-panel-drawer.png)
 
 面板仅保存在内存中。切换聊天或刷新页面会清空；聊天记录里只保留最终回复，且逐字保留——不会被过程信息撑大。还可以执行以下操作：
 

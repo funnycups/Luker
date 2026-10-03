@@ -18,7 +18,7 @@
  * Prerequisites:
  *   - Luker dev server running.
  *
- * Screenshots: docs/public/_screenshots/skills/card-bound-cleanup-*.png.
+ * Screenshots: docs/public/images/skills/card-bound-cleanup-*.png.
  *
  * No LLM.
  */

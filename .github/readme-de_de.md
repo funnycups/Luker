@@ -55,7 +55,7 @@ Ein frei konfigurierbares Agententeam läuft zuerst und übergibt an das schreib
 
 Wiederverwendbare Wissenspakete, die ein Agent bei Bedarf liest: Schreibregeln, Tonfall-Konventionen, Anti-Klischee-Checklisten. Das Format ist mit Claude Skills von Anthropic kompatibel. Das Standard-Director-Profil des Orchestrators bringt mitgelieferte Skills mit, und Skills lassen sich zusammen mit einer Charakterkarte oder einem Preset verteilen.
 
-<img alt="Skill-Manager mit installierten und mitgelieferten Skills" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/_screenshots/skills/manager-installed-tab.png" width="720">
+<img alt="Skill-Manager mit installierten und mitgelieferten Skills" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/skills/manager-installed-tab.png" width="720">
 
 → [Skills-Dokumentation](https://luker.cups.moe/features/skills/)
 
@@ -99,7 +99,7 @@ Koppel zwei Luker-Instanzen im selben Netzwerk. Chats, Karten, Weltinfos und Ein
 
 Teile einen langen Chat an beliebiger Stelle oder führe Chats zusammen; der Verzweigungsverlauf bleibt konsistent. Nützlich, wenn eine Szene ausgeufert ist und du die interessanten Teile abzweigen willst, ohne den Rest zu verlieren.
 
-<img alt="Chats zusammenführen und aufteilen" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/chat-merge-split/07-split-dialog-three-segments.png" width="720">
+<img alt="Chats zusammenführen und aufteilen" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/chat-merge-split/07-split-dialog-three-segments.png" width="720">
 
 → [Chat-Verwaltung](https://luker.cups.moe/basics/chat-management)
 
@@ -107,7 +107,7 @@ Teile einen langen Chat an beliebiger Stelle oder führe Chats zusammen; der Ver
 
 Wenn TTS aktiviert ist, können zitierte Zeilen einer Antwort mit der Stimme des jeweiligen Sprechers abgespielt werden. Ein Hintergrund-Durchgang ermittelt die Sprecherzuordnung — NPCs, die er entdeckt, erscheinen automatisch in der Stimmenzuordnung, und Namen, die du vorab hinzufügst, werden schon beim ersten Abspielen erkannt.
 
-<img alt="Abspiel-Buttons für einzelne Zitate in einer Chat-Nachricht" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
+<img alt="Abspiel-Buttons für einzelne Zitate in einer Chat-Nachricht" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
 
 → [TTS — NPC-Dialogen die passende Stimme zuordnen](https://luker.cups.moe/features/tts-npc-attribution)
 

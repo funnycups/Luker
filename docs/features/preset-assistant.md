@@ -67,7 +67,7 @@ After deriving an `-orchestrator` preset, the assistant offers a **Bundle skills
 
 In Agent orchestration mode the assistant doesn't just rewrite process-coercion entries — it also **sweeps the preset for reusable writing or output-format rules** that would be more useful as skills (so the orchestrator's sub-agents can read them, not just the main agent). It surfaces what it finds as additional extraction proposals in the same round, independently approvable.
 
-![CPA popup with Editing mode set to "Adapt for orchestrator"](/_screenshots/skills/cpa-orch-04-orchestrator-mode-selected.png)
+![CPA popup with Editing mode set to "Adapt for orchestrator"](/images/skills/cpa-orch-04-orchestrator-mode-selected.png)
 
 Just kick off an adapt request as you would normally:
 
@@ -81,7 +81,7 @@ Alongside the usual coercion/format rewrites, the assistant proposes per-candida
 
 Extractions land as diff cards under the existing per-edit Approve / Reject review — you can take some, leave others, or reject them all and the rest of the adapt still applies.
 
-![CPA round showing the Create skill tool chip after the AI commits the skill](/_screenshots/skills/cpa-orch-07-after-llm-round.png)
+![CPA round showing the Create skill tool chip after the AI commits the skill](/images/skills/cpa-orch-07-after-llm-round.png)
 
 When the sweep is suppressed:
 

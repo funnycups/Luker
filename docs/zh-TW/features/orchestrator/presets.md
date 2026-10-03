@@ -15,7 +15,7 @@ spec 預設和 director 預設在結構上沒有任何共通的欄位，所以�
 
 預設欄位於每種模式編輯面板的頂部：
 
-![預設欄 —— director 模式](/_screenshots/orchestrator-presets/01-director-default.png)
+![預設欄 —— director 模式](/images/orchestrator-presets/01-director-default.png)
 
 它提供了一組標準操作：
 

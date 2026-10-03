@@ -12,7 +12,7 @@ Skills 是給 agent 用的知識包。導演派發某個 sub-agent（`intent_sco
 
 開啟編排器面板裡的 AI 迭代工作台。
 
-![AI 迭代工作台剛開啟](/_screenshots/skills/iter-studio-02-iter-studio-opened.png)
+![AI 迭代工作台剛開啟](/images/skills/iter-studio-02-iter-studio-opened.png)
 
 在輸入框裡說一句你想要的，自然語言：
 
@@ -20,7 +20,7 @@ Skills 是給 agent 用的知識包。導演派發某個 sub-agent（`intent_sco
 
 點**傳送**。工作台起草 SKILL.md、安裝好，順便（因為你交代了）掛到所有 agent 均能看到的位置。動作均顯示成綠色 ✅ 標記，引數和結果均能展開看：
 
-![工作台跑完安裝](/_screenshots/skills/iter-studio-05-after-llm-round.png)
+![工作台跑完安裝](/images/skills/iter-studio-05-after-llm-round.png)
 
 下次你在聊天裡發任何一條 RP 訊息觸發導演時，相關的 sub-agent（這裡是 `voice_critic`）就能在它的可見清單裡看到這條新規則，審稿時按需拉來用。
 
@@ -34,7 +34,7 @@ Skills 是給 agent 用的知識包。導演派發某個 sub-agent（`intent_sco
 
 在編排器面板點**管理 Skills**，再點**新建**。填好名字、描述、作用域，流程會自動落一份模板 SKILL.md 並開啟內嵌編輯器：
 
-![內嵌 Skill 編輯器 — 檔案樹 + 正文區](/_screenshots/skills/rp-demo-8.5-editor-body-pasted.png)
+![內嵌 Skill 編輯器 — 檔案樹 + 正文區](/images/skills/rp-demo-8.5-editor-body-pasted.png)
 
 把模板正文換成你想要的。要找格式參考，隨便開啟一條自帶 skill 看就行——它們用雙語段落、`✗` / `✓` 例子對照，結尾用一個 Self-check 段。儲存之後回到導演編輯器，把新 skill 加進它的 Skill 列表。
 

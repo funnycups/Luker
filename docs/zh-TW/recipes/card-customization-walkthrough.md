@@ -14,23 +14,23 @@
 
 匯入角色卡並選中後，從「擴展 → 多智能體編排」打開面板，點擊 **打開編排編輯器**。
 
-![編排編輯器打開後](/_screenshots/recipes-card-customization/01-editor-opened.png)
+![編排編輯器打開後](/images/recipes-card-customization/01-editor-opened.png)
 
 頂部第一欄標明當前角色卡、所用的執行模式，以及當前編輯的是「全域」還是「角色卡覆蓋」配置。本次工作目標是**角色卡覆蓋**——所有改動只作用於這張卡，不會污染其它卡。
 
 右上角點擊 **打開 AI 迭代工作台**。
 
-![工作台剛打開](/_screenshots/recipes-card-customization/02-studio-fresh.png)
+![工作台剛打開](/images/recipes-card-customization/02-studio-fresh.png)
 
 工作台左側為對話區，右側即時呈現當前編排的流水線（主代理與全部子代理）。我們在輸入框寫下一句話：
 
 > 請給本角色卡定制一個專屬編排，把全域的預設配置改成更貼合這張卡的版本。
 
-![輸入框裡寫好定制請求](/_screenshots/recipes-card-customization/03-prompt-typed.png)
+![輸入框裡寫好定制請求](/images/recipes-card-customization/03-prompt-typed.png)
 
 點擊 **發送**。工作台讀取角色卡內容與世界書、列出當前可見的 Skills，隨後開始改寫主代理提示詞、新增對這張卡有意義的子代理、調整可見 Skills 集。改動會彈出一張變更審閱卡片，綠色為新增、紅色為刪除；審閱一眼後點擊 **應用到角色卡覆蓋** 即落地。
 
-![一次變更審閱卡](/_screenshots/recipes-card-customization/04-review-card.png)
+![一次變更審閱卡](/images/recipes-card-customization/04-review-card.png)
 
 如果需要細看，可在卡片內展開「逐行差異」；如果不想讀程式碼，卡片頂部一句話即指明改了哪個欄位。
 
@@ -40,7 +40,7 @@
 
 數輪迭代後，工作台會用一段話總結改動內容與改動貼合這張卡的理由。
 
-![工作台跑完，AI 總結](/_screenshots/recipes-card-customization/05-customize-summary.png)
+![工作台跑完，AI 總結](/images/recipes-card-customization/05-customize-summary.png)
 
 至此，這張角色卡獲得專屬編排，下次給它發送訊息時即採用這套配置。
 
@@ -68,13 +68,13 @@
 
 工作台調用模擬工具，跑完一輪完整的主代理與所有子代理。Director 模式跑全套需要幾分鐘，請耐心等待。模擬結束後彈出 **模擬回顧** 視窗：
 
-![模擬回顧彈窗：主代理輸出與各子代理追蹤](/_screenshots/recipes-card-customization/06-sim-baseline.png)
+![模擬回顧彈窗：主代理輸出與各子代理追蹤](/images/recipes-card-customization/06-sim-baseline.png)
 
 模擬回顧視窗預設即把各段落展開，向下翻就能看到主代理最終回覆全文。我們瀏覽這段文本，挑出「AI 味兒」較重的短語。
 
 點擊 **批註模式**——切到開啟後，**在產出文字裡用滑鼠選中**任意一段，所選區域自動呈黃色高亮，旁側出現批註輸入框。在批註框內簡述不滿意之處即可（一兩個字通常足夠）。
 
-![本輪模擬標註了一處量詞計數八股](/_screenshots/recipes-card-customization/07-sim-baseline-annotated.png)
+![本輪模擬標註了一處量詞計數八股](/images/recipes-card-customization/07-sim-baseline-annotated.png)
 
 本輪基線中我們示範性地選了一處：
 
@@ -84,7 +84,7 @@
 
 標註完成後點擊視窗底部 **提交並繼續**。工作台將這條批註視作「症狀」回饋給 AI——AI 看到的不是孤立的不滿意短語，而是帶上下文位置的問題清單，可據此反推根因。常見情況下，根因不在某個子代理寫得不夠細，而在於一條共性規律尚未被任何提示詞承接。
 
-![工作台根據批註做根因診斷](/_screenshots/recipes-card-customization/08-improvement-thread.png)
+![工作台根據批註做根因診斷](/images/recipes-card-customization/08-improvement-thread.png)
 
 本次迭代中，工作台把這條批註歸入「量詞計數八股」一類——把活的體感、動作、時間、身體拆解為「數字 + 量詞」的可計數刻度。它沒有立刻動手，而是先與使用者確認：該規則是絕對禁律，還是需要保留例外？在使用者明確「無例外」後，工作台讀取 `voice_critic` 子代理實際載入的 SKILL（即 `voice-critic-method-zh`，而不是名字最相近的另一個），將規則補進 voice_critic 在執行時真正會讀到的位置，並將原句作為反例釘入其中，附以「獨立禁律、字面命中即記案、與上下文是否溫暖/詩化/物理寫實/口語自然無關」的明文。如此下一輪模擬時，voice_critic 才會真正掃到此類違例。
 
@@ -98,7 +98,7 @@
 
 新彈出的回顧視窗中，先前被標註的幾條八股短語應明顯變少甚至消失。
 
-![改進後的模擬回顧](/_screenshots/recipes-card-customization/09-sim-after.png)
+![改進後的模擬回顧](/images/recipes-card-customization/09-sim-after.png)
 
 把兩次回顧並排比較，差異肉眼可見——基線那一段反覆出現的「光閃 → 數次數」敘述節奏（「一下，兩下，停一會兒，再三下」、「閃了三下」、「連閃了五下」），到改進版基本退場。改進後這一輪的終稿裡，量詞計數（一下 / 一節 / 一刻 / 一檔 / 幾下 等）總命中僅餘 5 次，且均不再出現在節奏拍點上，而是落到「半度」、「一根管子」這種描述指代用法。如仍有殘餘，重複「標註—模擬」循環即可；兩到三輪通常已經足夠。
 
@@ -112,7 +112,7 @@
 
 > 這張角色卡的輸出格式有要求，回覆結尾必須有 `<overall>` 和 `<UpdateVariable>` 兩個標籤——別讓它漏掉。
 
-![向工作台描述格式要求](/_screenshots/recipes-card-customization/11-tool-prompt.png)
+![向工作台描述格式要求](/images/recipes-card-customization/11-tool-prompt.png)
 
 工作台會自行判定如何落實——這是一個能由程式碼精確判定的格式檢查問題（字面比對），適合透過 **自訂工具** 解決；而被檢查與被提醒補全的執行者本就是創作正文的主代理，所以工具應當掛在主代理上、由主代理在收尾時調用。基於這一判斷，工作台會自動完成一組配套改動：
 
@@ -125,17 +125,17 @@
 
 改動仍走 ProposalBus 上的審閱卡，綠色為新增、紅色為刪除。**由於自訂工具會在你的瀏覽器中執行 JavaScript，審閱卡上帶一條安全警示橫幅**——展開「View body」核對工具體的行為，確認是唯讀掃描、無副作用之後再點同意。看不懂的卡就拒掉。
 
-![新工具的程式碼審閱與安全確認](/_screenshots/recipes-card-customization/12-tool-review.png)
+![新工具的程式碼審閱與安全確認](/images/recipes-card-customization/12-tool-review.png)
 
 套用變更後，回到主代理那欄查看 **自訂工具** 列表，新工具已在其中並預設勾選啟用。
 
-![工具已掛上](/_screenshots/recipes-card-customization/13-tool-installed.png)
+![工具已掛上](/images/recipes-card-customization/13-tool-installed.png)
 
 讓工作台再跑一次模擬，確認主代理確實按規則調用了工具：
 
 > 再跑一次模擬驗證。
 
-![模擬追蹤裡出現 validate_output_skeleton 這一行調用](/_screenshots/recipes-card-customization/14-tool-invoked.png)
+![模擬追蹤裡出現 validate_output_skeleton 這一行調用](/images/recipes-card-customization/14-tool-invoked.png)
 
 追蹤中可見 `validate_output_skeleton` 這一行——主代理在草稿寫到尾部之後調用該工具一次，工具返回檢查結果，主代理據此判斷是否需要補全標籤。
 

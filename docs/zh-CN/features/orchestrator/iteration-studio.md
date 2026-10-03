@@ -111,7 +111,7 @@ AI 返回一段简短计划与一份方案，展示它打算改什么。具体�
 
 审批之后，skill 会立即写入磁盘并可用。如果同时要求了挂载（"让所有 agent 看到"、"给 voice_critic 看"），它会一并挂好；否则之后也可以自己在 [Skill 列表](/zh-CN/features/orchestrator/skills) 里添加。
 
-![工作台跑完安装](/_screenshots/skills/iter-studio-05-after-llm-round.png)
+![工作台跑完安装](/images/skills/iter-studio-05-after-llm-round.png)
 
 详见 [《用 skills 调教 RP 输出》](/zh-CN/recipes/rp-skills-walkthrough)。
 

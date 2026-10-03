@@ -41,19 +41,19 @@
 
 運行一開始，**運行面板**就會從聊天區右側滑入（窄屏上從底部升起）。面板即時更新：輪次是一張可折疊的卡片，展開後就能看到模型當時怎麼想、呼叫了哪些工具、工具回傳了什麼。
 
-![編排器開始運行時的面板](/_screenshots/run-panel/01-panel-initial.png)
+![編排器開始運行時的面板](/images/run-panel/01-panel-initial.png)
 
 模型流式輸出時，面板在原地即時更新——不閃屏、也不會打亂聊天區：
 
-![流式過程：思考、文字與工具分節即時填充](/_screenshots/run-panel/02-panel-streaming.png)
+![流式過程：思考、文字與工具分節即時填充](/images/run-panel/02-panel-streaming.png)
 
 展開任意工具呼叫，能看到它的傳入參數和回傳：
 
-![工具呼叫展開——參數與結果](/_screenshots/run-panel/03-panel-tool-expanded.png)
+![工具呼叫展開——參數與結果](/images/run-panel/03-panel-tool-expanded.png)
 
 窄屏下面板變成底部抽屜，可以上拉展開或下滑關閉：
 
-![窄屏下的運行面板（抽屜佈局）](/_screenshots/run-panel/05-panel-drawer.png)
+![窄屏下的運行面板（抽屜佈局）](/images/run-panel/05-panel-drawer.png)
 
 面板僅儲存在記憶體中。切換聊天或重新整理頁面會清空；聊天記錄裡只保留最終回覆，且逐字保留——不會被過程資訊撐大。還可以執行以下操作：
 

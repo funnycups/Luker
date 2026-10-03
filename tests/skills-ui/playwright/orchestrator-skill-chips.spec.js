@@ -12,7 +12,7 @@
  *     skills, proving the available-skills feed reaches the component.
  *
  * Each step captures a screenshot under
- * docs/public/_screenshots/skills/chips-*.png.
+ * docs/public/images/skills/chips-*.png.
  *
  * No persistence / save-roundtrip is exercised — companion suites cover
  * full profile-save round-trips with deeper test fixtures. We restrict to

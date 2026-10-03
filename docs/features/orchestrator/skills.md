@@ -10,7 +10,7 @@ For what a skill actually is and how to write one, see [the Skills overview](/fe
 
 **Attach it yourself.** Open the director editor in the orchestrator panel and scroll down to the skill list section. Each agent has its own list, plus a shared list at the top that every agent inherits from. Pick a skill from the dropdown, click **Add**, save.
 
-![Director editor — skill list section, with a freshly-added skill](/_screenshots/skills/rp-demo-11-director-chip-added.png)
+![Director editor — skill list section, with a freshly-added skill](/images/skills/rp-demo-11-director-chip-added.png)
 
 If you're unsure which list to use, the Studio is the easier path — just describe what you want and let it decide.
 

@@ -55,7 +55,7 @@ Luker построен на базе [SillyTavern](https://github.com/SillyTaver
 
 Переиспользуемые наборы знаний, которые агент читает по мере необходимости: правила письма, речевые конвенции, чек-листы против штампов. Формат совместим с Anthropic Claude Skills. Профиль Director, используемый оркестратором по умолчанию, поставляется со встроенными навыками, а ещё навыки можно передавать вместе с карточкой персонажа или пресетом.
 
-<img alt="Менеджер навыков с установленными и встроенными навыками" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/_screenshots/skills/manager-installed-tab.png" width="720">
+<img alt="Менеджер навыков с установленными и встроенными навыками" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/skills/manager-installed-tab.png" width="720">
 
 → [Документация Skills](https://luker.cups.moe/features/skills/)
 
@@ -99,7 +99,7 @@ Luker построен на базе [SillyTavern](https://github.com/SillyTaver
 
 Разделите длинный чат в любой реплике или объедините чаты — история ветвлений остаётся согласованной. Пригодится, когда сцена вышла из-под контроля и хочется ответвить интересные фрагменты, не потеряв всё остальное.
 
-<img alt="Объединение и разделение чатов" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/chat-merge-split/07-split-dialog-three-segments.png" width="720">
+<img alt="Объединение и разделение чатов" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/chat-merge-split/07-split-dialog-three-segments.png" width="720">
 
 → [Управление чатами](https://luker.cups.moe/basics/chat-management)
 
@@ -107,7 +107,7 @@ Luker построен на базе [SillyTavern](https://github.com/SillyTaver
 
 Когда TTS включён, реплики в кавычках могут звучать голосом своего персонажа. Фоновый проход определяет, кому принадлежит реплика: обнаруженные NPC автоматически попадают в карту голосов, а имена, добавленные заранее, распознаются уже при первом воспроизведении.
 
-<img alt="Кнопки воспроизведения у реплик в сообщении чата" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
+<img alt="Кнопки воспроизведения у реплик в сообщении чата" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
 
 → [Атрибуция реплик NPC в TTS](https://luker.cups.moe/features/tts-npc-attribution)
 

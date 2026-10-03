@@ -15,7 +15,7 @@ A spec preset and a director preset have nothing in common structurally, so they
 
 The preset bar sits at the top of each mode's editor panel:
 
-![Preset bar — director mode](/_screenshots/orchestrator-presets/01-director-default.png)
+![Preset bar — director mode](/images/orchestrator-presets/01-director-default.png)
 
 It exposes the standard set of operations:
 

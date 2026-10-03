@@ -43,7 +43,7 @@
  *   - Two retries.
  *   - 120s timeout.
  *
- * Screenshots: docs/public/_screenshots/skills/skill-edit-content-diff-*.png.
+ * Screenshots: docs/public/images/skills/skill-edit-content-diff-*.png.
  */
 
 import { test, expect } from '@playwright/test';

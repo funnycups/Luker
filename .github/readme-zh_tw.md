@@ -55,7 +55,7 @@ Luker 基於 [SillyTavern](https://github.com/SillyTavern/SillyTavern) 深度重
 
 agent 按需讀取的可重用知識包：寫作規則、口吻約定、反八股清單。格式相容 Anthropic Claude Skills。編排器預設的 Director profile 自帶內建技能，技能也可以隨角色卡或預設一起分發。
 
-<img alt="技能管理器：已安裝與內建技能" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/_screenshots/skills/manager-installed-tab.png" width="720">
+<img alt="技能管理器：已安裝與內建技能" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/skills/manager-installed-tab.png" width="720">
 
 → [技能文件](https://luker.cups.moe/zh-TW/features/skills/)
 
@@ -99,7 +99,7 @@ Luker 的後端**內嵌於** Android 應用執行。安裝 APK 並打開，即�
 
 任意位置拆分長聊天，或將聊天合併；分支歷史保持一致。適用於劇情失控、希望保留精彩片段並拆分另開分支的場景。
 
-<img alt="聊天合併與拆分" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/chat-merge-split/07-split-dialog-three-segments.png" width="720">
+<img alt="聊天合併與拆分" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/chat-merge-split/07-split-dialog-three-segments.png" width="720">
 
 → [聊天管理](https://luker.cups.moe/zh-TW/basics/chat-management)
 
@@ -107,7 +107,7 @@ Luker 的後端**內嵌於** Android 應用執行。安裝 APK 並打開，即�
 
 開啟 TTS 之後，回覆裡的引號台詞均可以用說話者自己的聲音唸出來。後台會有一個 AI 環節判斷台詞歸屬——它發現的 NPC 會自動出現在語音映射裡；你事先手動加進去的名字，從首次播放起就能被辨識。
 
-<img alt="訊息中台詞旁的播放按鈕" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
+<img alt="訊息中台詞旁的播放按鈕" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
 
 → [TTS NPC 對白歸屬](https://luker.cups.moe/zh-TW/features/tts-npc-attribution)
 

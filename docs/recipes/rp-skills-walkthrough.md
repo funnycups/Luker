@@ -12,7 +12,7 @@ When the bundled set doesn't cover a discipline you care about, you add your own
 
 Open the AI Iteration Studio from the orchestrator panel.
 
-![Studio just opened, composer ready](/_screenshots/skills/iter-studio-02-iter-studio-opened.png)
+![Studio just opened, composer ready](/images/skills/iter-studio-02-iter-studio-opened.png)
 
 Type what you want in the composer — a plain sentence:
 
@@ -20,7 +20,7 @@ Type what you want in the composer — a plain sentence:
 
 Hit **Send**. The Studio drafts the SKILL.md, installs it, and (because you mentioned it) attaches it where every agent will see it. Actions show up as green ✅ chips you can expand:
 
-![Studio after the install round](/_screenshots/skills/iter-studio-05-after-llm-round.png)
+![Studio after the install round](/images/skills/iter-studio-05-after-llm-round.png)
 
 The next time you send any RP message, the relevant sub-agents (in this case `voice_critic`) see the new rule in their visible list and consult it during the run.
 
@@ -34,7 +34,7 @@ Useful when you already know which sections you want, prefer typing the Markdown
 
 In the orchestrator panel click **Manage skills…**, then **Create new**. Fill in name / description / scope and the flow lays down a template SKILL.md and opens the inline editor:
 
-![Inline skill editor — file tree + body pane](/_screenshots/skills/rp-demo-8.5-editor-body-pasted.png)
+![Inline skill editor — file tree + body pane](/images/skills/rp-demo-8.5-editor-body-pasted.png)
 
 Replace the template body with what you want. For shape, open any bundled skill as a reference — they use bilingual sections, `✗` / `✓` example contrasts, and a Self-check block at the end. Save, then go back to the director editor and add the new skill to its visible list.
 

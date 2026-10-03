@@ -44,7 +44,7 @@
  *   - 120s per-test timeout: real LLM round-trips on Anthropic / OpenAI
  *     vary from 5s to 60s depending on provider + reasoning budget.
  *
- * Screenshots: docs/public/_screenshots/skills/director-with-skills-*.png.
+ * Screenshots: docs/public/images/skills/director-with-skills-*.png.
  *
  * Failure-mode policy:
  *   - If assertion (2) fails repeatedly, that's a real bug in the catalog

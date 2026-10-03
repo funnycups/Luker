@@ -44,7 +44,7 @@
  *   - Restore preset body to pre-test snapshot (in finally).
  *   - Delete any skill created from our sentinel block.
  *
- * Screenshots: docs/public/_screenshots/skills/cpa-orch-proactive-NN-*.png.
+ * Screenshots: docs/public/images/skills/cpa-orch-proactive-NN-*.png.
  */
 
 import { test, expect } from '@playwright/test';

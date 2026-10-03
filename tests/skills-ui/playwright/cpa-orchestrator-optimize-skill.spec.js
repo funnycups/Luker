@@ -39,7 +39,7 @@
  *     or paraphrased output means the "verbatim, do not reword" discipline
  *     did not reach the model.
  *
- * Screenshots: docs/public/_screenshots/skills/cpa-orch-NN-*.png.
+ * Screenshots: docs/public/images/skills/cpa-orch-NN-*.png.
  */
 
 import { test, expect } from '@playwright/test';

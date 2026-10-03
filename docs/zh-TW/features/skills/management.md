@@ -14,7 +14,7 @@ Skill 管理頂部有 tab：
 - **瀏覽出廠** —— `default/skills/global/` 自帶的 Skill，每行顯示你本地副本是匹配、有差異，還是沒裝。
 - **匯入** —— 從檔案、URL，或角色卡 / 預設裡抽出 Skill 的入口。
 
-![Skill 管理子面板，已安裝 tab](/_screenshots/skills/manager-installed-tab.png)
+![Skill 管理子面板，已安裝 tab](/images/skills/manager-installed-tab.png)
 
 ## 已安裝 tab
 
@@ -50,7 +50,7 @@ Skill 管理頂部有 tab：
 | **已安裝（你的版本有差異）** | 本地副本存在，但雜湊與出廠版本不匹配 —— 你（或某次迭代工作台會話）改過它。 |
 | **未安裝** | 本地沒有副本。點擊**安裝**把它落到 `global`。 |
 
-![瀏覽出廠，混合狀態](/_screenshots/skills/manager-bundled-tab.png)
+![瀏覽出廠，混合狀態](/images/skills/manager-bundled-tab.png)
 
 tab 頂部的**全量匯入出廠**按鈕，是對每個「未安裝」或「有差異」行點**安裝**的便捷等價 —— 它會用出廠版本**覆蓋**所有出廠 Skill。
 
@@ -82,7 +82,7 @@ URL 匯入器有意做窄 —— 它只抓一份 Markdown 檔案。再複雜（�
 
 匯入帶 `embedded_skills_source` 欄位的角色卡（PNG）或預設（JSON）時，Luker 會自動彈出預覽對話框：
 
-![嵌入匯入預覽：衝突處理](/_screenshots/skills/skill-conflict-replace-dialog.png)
+![嵌入匯入預覽：衝突處理](/images/skills/skill-conflict-replace-dialog.png)
 
 對話框逐項列出每個嵌入的 Skill 及其衝突狀態。對每個衝突，你可選**跳過**（保留本地版本）或**替換**（用嵌入裡的版本）。內容相同的項（`相同`）會靜默跳過；新條目（`新`）直接安裝。
 
@@ -92,7 +92,7 @@ URL 匯入器有意做窄 —— 它只抓一份 Markdown 檔案。再複雜（�
 
 點擊 Skill 行的**編輯**會打開彈窗內編輯器：
 
-![內嵌 Skill 編輯器](/_screenshots/skills/skill-editor.png)
+![內嵌 Skill 編輯器](/images/skills/skill-editor.png)
 
 - 左欄：檔案樹（SKILL.md + 任何子檔案）。點擊切換。
 - 右欄：Markdown 編輯器，frontmatter 區段有 YAML 感知高亮。

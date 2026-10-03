@@ -13,7 +13,7 @@
 | **讓 LLM 替你寫** | [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio#用工作台編寫-skill) | 在工作台裡用一句話告訴它你想要什麼；它起草 SKILL.md、安裝好，順便（如果你交代了）掛到對應位置。推薦先用這條。 |
 | **自己手寫** | [Skill 管理面板 → 新建](/zh-TW/features/skills/management#tab-1-installed-已安裝) | 你已經清楚知道想要哪些段落、想自己定措辭、想完全控制文字。 |
 
-![內嵌 Skill 編輯器 — 檔案樹 + 正文區](/_screenshots/skills/rp-demo-8.5-editor-body-pasted.png)
+![內嵌 Skill 編輯器 — 檔案樹 + 正文區](/images/skills/rp-demo-8.5-editor-body-pasted.png)
 
 詳見 [《用 skills 調教 RP 輸出》](/zh-TW/recipes/rp-skills-walkthrough)。
 

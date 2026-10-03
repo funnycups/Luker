@@ -26,7 +26,7 @@
  *   - data dir has at least one selectable character card.
  *   When either is missing the test skips with a precise reason.
  *
- * Screenshots land in docs/public/_screenshots/run-panel/ —
+ * Screenshots land in docs/public/images/run-panel/ —
  * documentation-grade captures for the run-panel docs page.
  */
 
@@ -38,7 +38,7 @@ import { awaitMainUI, takeDocScreenshot } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const RUN_PANEL_SCREENSHOTS = path.join(REPO_ROOT, 'docs', 'public', '_screenshots', 'run-panel');
+const RUN_PANEL_SCREENSHOTS = path.join(REPO_ROOT, 'docs', 'public', 'images', 'run-panel');
 
 // RP-immersive prompt. Per `feedback_docs_conventions`: doc-grade specs
 // use scene-grounded, character-immersive content, NOT "say hi" / "test

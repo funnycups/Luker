@@ -12,10 +12,10 @@ import { mkdirSync } from 'node:fs';
 import { openOptionsAndClick } from './page.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const SCREENSHOTS_DIR = path.resolve(__dirname, '../../../docs/public/screenshots/chat-merge-split');
+export const SCREENSHOTS_DIR = path.resolve(__dirname, '../../../docs/public/images/chat-merge-split');
 
 /**
- * Take a step screenshot under docs/public/screenshots/chat-merge-split/.
+ * Take a step screenshot under docs/public/images/chat-merge-split/.
  *
  * DEFAULT: no-op. The chat merge/split e2e specs are regression tests,
  * not a docs screenshot generator. Writing into docs/ on every
@@ -28,7 +28,7 @@ export const SCREENSHOTS_DIR = path.resolve(__dirname, '../../../docs/public/scr
  * To rebuild the doc screenshots deliberately, opt-in:
  *   LUKER_UPDATE_DOC_SCREENSHOTS=1 npx playwright test e2e/chat/{15,16,18,19,20}*.e2e.js
  *
- * The current in-tree images under docs/public/screenshots/chat-merge-split/
+ * The current in-tree images under docs/public/images/chat-merge-split/
  * remain the canonical set and are committed to git.
  */
 export async function takeStepScreenshot(page, slug) {

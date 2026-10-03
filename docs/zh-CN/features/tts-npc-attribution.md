@@ -8,11 +8,11 @@
 
 1. 先打开 **扩展** → **TTS** 抽屉，选择一个 TTS 服务商并启用 —— 归属解析依赖 TTS 处于启用状态。
 
-   ![TTS 设置面板](/screenshots/tts-npc-attribution/01-settings.png)
+   ![TTS 设置面板](/images/tts-npc-attribution/01-settings.png)
 
 2. 向下滚动到正则设置下方的区块，勾选 **NPC 对白归属**。
 
-   ![NPC 对白归属设置区块](/screenshots/tts-npc-attribution/02-settings-npc-block.png)
+   ![NPC 对白归属设置区块](/images/tts-npc-attribution/02-settings-npc-block.png)
 
 3. 选择解析所用的连接和预设：
 
@@ -24,7 +24,7 @@
 
 消息里每句引号对白的末尾会出现一个小喇叭图标。点击后只播放这一句，用归属到的说话人的声音。
 
-![消息中的引号播放按钮](/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png)
+![消息中的引号播放按钮](/images/tts-npc-attribution/03-inline-buttons-zoom.png)
 
 - 点击播放的是原始引号内容。全局朗读筛选（跳过代码块、仅朗读引号等）作用于整条消息的朗读，不影响这些单句点击。
 - 对旧消息点击时如果解析还没完成，按钮会显示加载动画，等结果到位后播放。解析失败时，这句会用作者的声音播放。
@@ -34,14 +34,14 @@
 
 所有说话人的语音均在 TTS 面板 **语音映射** 区的 **管理语音** 按钮里。按钮会打开一个弹窗，列出所有说话人 —— 聊天参与者（角色卡主角、群聊成员、你）加上所有已配置的 NPC，每个名字一行，带语音下拉，NPC 行还带 NPC 标签。
 
-![语音映射弹窗与 NPC 行](/screenshots/tts-npc-attribution/04-voice-map.png)
+![语音映射弹窗与 NPC 行](/images/tts-npc-attribution/04-voice-map.png)
 
 NPC 名字有两种加入方式：
 
 1. **自动发现。** 归属解析在引号对白里认出新说话人时，名字自动加入语音映射，默认跟随默认语音。打开 **管理语音** 给它指定语音，跨聊天记忆。
 2. **提前手动添加。** 在 **管理语音** 弹窗顶部的输入框输入 NPC 名字并点击 **添加**。提前配置的名字会作为候选说话人交给归属解析 AI，该 NPC 的台词从第一次播放起就能被识别（并配上声音）—— 无需等待发现。
 
-![在语音映射弹窗中添加说话人名字](/screenshots/tts-npc-attribution/05-voice-map-add.png)
+![在语音映射弹窗中添加说话人名字](/images/tts-npc-attribution/05-voice-map-add.png)
 
 NPC 行（带标签、非聊天参与者的行）可以用行尾的 ✕ 按钮移除。改动在弹窗点击 **完成** 关闭时生效。
 

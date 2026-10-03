@@ -10,7 +10,7 @@ skill 本身是什么、SKILL.md 长什么样、怎么写——见 [Skills 概�
 
 **自己挂。** 打开编排器面板里的导演编辑器，往下滚到 Skill 列表那一节。每个 agent 自己有一份列表，顶上还有一份所有 agent 共享的列表。从下拉里选一个 skill，点**添加**，保存。
 
-![导演编辑器 — Skill 列表，刚添加的一条 skill](/_screenshots/skills/rp-demo-11-director-chip-added.png)
+![导演编辑器 — Skill 列表，刚添加的一条 skill](/images/skills/rp-demo-11-director-chip-added.png)
 
 不确定挂在哪一份里？让工作台来更省心——你描述一下需求，剩下的让它决定。
 

@@ -229,7 +229,7 @@ spec 模式的审查节点（review nodes）的目录注入是有意跳过的 �
 
 在编排器面板里，每个 agent 的设置卡显示一行 **Skill**：
 
-![带 + 继承标记的 Skill chip](/_screenshots/skills/rp-demo-11-director-chip-added.png)
+![带 + 继承标记的 Skill chip](/images/skills/rp-demo-11-director-chip-added.png)
 
 - **`+`** chip —— 显式的「继承模式默认值」标记（`visible` 以 `"+"` 开头时出现）。
 - 每个具名 Skill 一个 chip。点击移除；点击 **添加……** 从已安装的库存中选择。

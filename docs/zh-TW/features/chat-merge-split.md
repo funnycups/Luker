@@ -6,32 +6,32 @@
 
 1. 開啟 **過往聊天**（當前角色或群組的聊天清單彈窗），點擊彈窗頂部的合併圖示。
 
-   ![兩個待合併的聊天](/screenshots/chat-merge-split/01-two-chats-ready.png)
+   ![兩個待合併的聊天](/images/chat-merge-split/01-two-chats-ready.png)
 
 2. 點擊 **+ 新增聊天** 選擇來源聊天。可以新增任意多個，同一個聊天也可以重複新增。
 
-   ![合併對話框含兩個來源](/screenshots/chat-merge-split/02-merge-dialog-two-sources.png)
+   ![合併對話框含兩個來源](/images/chat-merge-split/02-merge-dialog-two-sources.png)
 
 3. **拖動每行左側的 ⋮⋮ 把手** 重新排序。可將任一行拖到任意位置。
 
-   ![合併對話框含三個來源](/screenshots/chat-merge-split/04-merge-dialog-three-sources.png)
+   ![合併對話框含三個來源](/images/chat-merge-split/04-merge-dialog-three-sources.png)
 
-   ![拖拽重排後的效果](/screenshots/chat-merge-split/05-merge-dialog-after-drag.png)
+   ![拖拽重排後的效果](/images/chat-merge-split/05-merge-dialog-after-drag.png)
 
 4. **設定 `起始` / `結束` 數字** 來只包含來源的一部分。彩色條顯示當前包含的訊息範圍。點擊 **全選** 把某一行恢復為完整聊天。
 
-   ![已裁剪的段](/screenshots/chat-merge-split/06-merge-dialog-trimmed.png)
+   ![已裁剪的段](/images/chat-merge-split/06-merge-dialog-trimmed.png)
 
 5. 在頂部輸入 **目標名稱**，點擊 **合併**。新聊天會自動開啟。
 
-   ![新合併的聊天](/screenshots/chat-merge-split/03-merged-chat-opened.png)
+   ![新合併的聊天](/images/chat-merge-split/03-merged-chat-opened.png)
 
 ## 拆分聊天
 
 1. 找到你想要拆分的位置那條訊息，點擊該訊息按鈕列裡的 ✂ **拆分聊天** 圖示。
 2. 彈窗會以這條訊息的索引為初始切點。點擊 **+ 新增切點** 增加更多切點；在數字輸入框裡微調位置。
 
-   ![三段拆分對話框](/screenshots/chat-merge-split/07-split-dialog-three-segments.png)
+   ![三段拆分對話框](/images/chat-merge-split/07-split-dialog-three-segments.png)
 
 3. 按需要重新命名每段，然後點擊 **拆分**。新聊天會出現在聊天清單裡，來源聊天保持不變。
 
@@ -39,9 +39,9 @@
 
 群組聊天的合併方式完全一致。從群組開啟過往聊天，按上面的合併流程操作即可。
 
-![待合併的群組聊天](/screenshots/chat-merge-split/20-group-two-chats-ready.png)
+![待合併的群組聊天](/images/chat-merge-split/20-group-two-chats-ready.png)
 
-![群組合併對話框](/screenshots/chat-merge-split/21-group-merge-dialog-two-sources.png)
+![群組合併對話框](/images/chat-merge-split/21-group-merge-dialog-two-sources.png)
 
 合併後的群組聊天會自動註冊到群組裡，因此會出現在該群組的過往聊天清單中，可以像任何其他群組聊天一樣開啟。
 

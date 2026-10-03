@@ -27,7 +27,7 @@
  *   - An active character loaded — without one, the source-scope can't be
  *     populated and the spec soft-skips.
  *
- * Screenshots: docs/public/_screenshots/skills/character-export-*.png.
+ * Screenshots: docs/public/images/skills/character-export-*.png.
  *
  * No LLM. Pure pack/extract roundtrip + UI-state assertions.
  */

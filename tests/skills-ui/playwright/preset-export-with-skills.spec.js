@@ -22,7 +22,7 @@
  * Prerequisites:
  *   - Luker dev server running.
  *
- * Screenshots: docs/public/_screenshots/skills/preset-export-*.png.
+ * Screenshots: docs/public/images/skills/preset-export-*.png.
  *
  * No LLM.
  */

@@ -55,7 +55,7 @@ A configurable team of agents runs first and hands off to the writer LLM: distil
 
 Reusable knowledge packs an agent reads on demand: writing rules, voice conventions, anti-cliché checklists. The format is compatible with Anthropic's Claude Skills. The orchestrator's default Director profile ships with bundled skills, and skills can be distributed with a character card or a preset.
 
-<img alt="Skill manager with installed and bundled skills" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/_screenshots/skills/manager-installed-tab.png" width="720">
+<img alt="Skill manager with installed and bundled skills" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/skills/manager-installed-tab.png" width="720">
 
 → [Skills documentation](https://luker.cups.moe/features/skills/)
 
@@ -99,7 +99,7 @@ Pair two Luker instances on the same network. Chats, cards, world info, and sett
 
 Split a long chat at any turn or merge chats; branch history stays consistent. Useful when a scene got out of hand and you want to fork off the interesting parts without losing the rest.
 
-<img alt="Chat merge & split" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/chat-merge-split/07-split-dialog-three-segments.png" width="720">
+<img alt="Chat merge & split" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/chat-merge-split/07-split-dialog-three-segments.png" width="720">
 
 → [Chat management](https://luker.cups.moe/basics/chat-management)
 
@@ -107,7 +107,7 @@ Split a long chat at any turn or merge chats; branch history stays consistent. U
 
 With TTS enabled, quoted lines in a reply can play with their own speaker's voice. A background pass works out who says which quote — NPCs it discovers appear in the voice map automatically, and names you add in advance are recognized from the first playback.
 
-<img alt="Per-quote play buttons in a chat message" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
+<img alt="Per-quote play buttons in a chat message" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
 
 → [TTS NPC dialogue attribution](https://luker.cups.moe/features/tts-npc-attribution)
 

@@ -15,7 +15,7 @@ spec 预设和 director 预设在结构上没有任何共通的字段，所以�
 
 预设栏位于每种模式编辑面板的顶部：
 
-![预设栏 —— director 模式](/_screenshots/orchestrator-presets/01-director-default.png)
+![预设栏 —— director 模式](/images/orchestrator-presets/01-director-default.png)
 
 它提供了一组标准操作：
 

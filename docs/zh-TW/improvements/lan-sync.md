@@ -15,19 +15,19 @@ Luker 提供了兩種在裝置間搬運資料的方式：
 
 1. 在第一台裝置（稱為 A）上，開啟**設定 → 區域網路同步 → 配對新裝置**。給對端裝置取一個標籤，勾選要同步的類別，點擊**產生配對連結**。
 
-   ![配對新裝置表單，已勾選類別](/_screenshots/lan-sync/02-pair-new-form-filled.png)
+   ![配對新裝置表單，已勾選類別](/images/lan-sync/02-pair-new-form-filled.png)
 
 2. A 顯示一個 URL，有效期為 10 分鐘。
 
-   ![已產生的配對連結](/_screenshots/lan-sync/03-pair-link-generated.png)
+   ![已產生的配對連結](/images/lan-sync/03-pair-link-generated.png)
 
 3. 在第二台裝置（B）上，開啟同一面板，選擇**與已有裝置配對**。貼上 URL，點擊**配對並同步**。若 A 啟用了 basic-auth，在選填的憑證欄位填入 A 的帳號密碼。
 
-   ![與已有裝置配對表單，連結已貼上](/_screenshots/lan-sync/04-pair-existing-pasted.png)
+   ![與已有裝置配對表單，連結已貼上](/images/lan-sync/04-pair-existing-pasted.png)
 
 4. B 下載 A 選擇共享的資料並寫入本地。當面板出現 **Synced with \<peer\>.** 橫幅時，配對完成。
 
-   ![配對成功的橫幅](/_screenshots/lan-sync/05-pair-success-banner.png)
+   ![配對成功的橫幅](/images/lan-sync/05-pair-success-banner.png)
 
 配對完成後，A 和 B 會記住彼此。之後的同步只需一次點擊。
 
@@ -35,13 +35,13 @@ Luker 提供了兩種在裝置間搬運資料的方式：
 
 在任一裝置上，開啟區域網路同步面板——已配對的裝置會出現在**我的裝置**下，每台均帶有**立即同步**、**撤銷上次同步**、**忘記**按鈕。點擊**立即同步**，兩端交換變更並協調一致。完成時橫幅顯示 **Sync complete.**。
 
-![已配對裝置列表與逐裝置操作](/_screenshots/lan-sync/06-my-devices-after-pair.png)
+![已配對裝置列表與逐裝置操作](/images/lan-sync/06-my-devices-after-pair.png)
 
 ## 解決衝突
 
 如果兩台裝置在兩次同步之間均修改了**同一個檔案**（例如：均重新命名了同一張角色卡），區域網路同步會停下並顯示衝突面板。每個衝突有兩張卡片：**本地版本**和**遠端版本**。每個衝突挑選一張卡片——沒有逐行合併。
 
-![衝突解決面板](/_screenshots/lan-sync/08-conflict-panel.png)
+![衝突解決面板](/images/lan-sync/08-conflict-panel.png)
 
 衝突始終是按檔案粒度處理的。在同一次同步中，給一個檔案選「本地」、給另一個檔案選「遠端」是完全可以的。
 

@@ -15,19 +15,19 @@ Luker 提供了两种在设备间搬运数据的方式：
 
 1. 在第一台设备（称为 A）上，打开**设置 → 局域网同步 → 配对新设备**。给对端设备起一个标签，勾选要同步的类别，点击**生成配对链接**。
 
-   ![配对新设备表单，已勾选类别](/_screenshots/lan-sync/02-pair-new-form-filled.png)
+   ![配对新设备表单，已勾选类别](/images/lan-sync/02-pair-new-form-filled.png)
 
 2. A 显示一个 URL，有效期为 10 分钟。
 
-   ![已生成的配对链接](/_screenshots/lan-sync/03-pair-link-generated.png)
+   ![已生成的配对链接](/images/lan-sync/03-pair-link-generated.png)
 
 3. 在第二台设备（B）上，打开同一面板，选择**与已有设备配对**。粘贴 URL，点击**配对并同步**。如果 A 启用了 basic-auth，在可选的凭据栏里填入 A 的账号密码。
 
-   ![与已有设备配对表单，链接已粘贴](/_screenshots/lan-sync/04-pair-existing-pasted.png)
+   ![与已有设备配对表单，链接已粘贴](/images/lan-sync/04-pair-existing-pasted.png)
 
 4. B 下载 A 选择共享的数据并写入本地。当面板出现 **Synced with \<peer\>.** 横幅时，配对完成。
 
-   ![配对成功的横幅](/_screenshots/lan-sync/05-pair-success-banner.png)
+   ![配对成功的横幅](/images/lan-sync/05-pair-success-banner.png)
 
 配对完成后，A 和 B 会记住彼此。之后的同步只需一次点击。
 
@@ -35,13 +35,13 @@ Luker 提供了两种在设备间搬运数据的方式：
 
 在任一设备上，打开局域网同步面板——已配对的设备会出现在**我的设备**下，每台均带有**立即同步**、**撤销上次同步**、**忘记**按钮。点击**立即同步**，两端交换变更并协调一致。完成时横幅显示 **Sync complete.**。
 
-![已配对设备列表与逐设备操作](/_screenshots/lan-sync/06-my-devices-after-pair.png)
+![已配对设备列表与逐设备操作](/images/lan-sync/06-my-devices-after-pair.png)
 
 ## 解决冲突
 
 如果两台设备在两次同步之间均修改了**同一个文件**（例如：均重命名了同一张角色卡），局域网同步会停下并显示冲突面板。每个冲突有两张卡片：**本地版本**和**远端版本**。每个冲突挑选一张卡片——没有逐行合并。
 
-![冲突解决面板](/_screenshots/lan-sync/08-conflict-panel.png)
+![冲突解决面板](/images/lan-sync/08-conflict-panel.png)
 
 冲突始终是按文件粒度处理的。在同一次同步中，给一个文件选"本地"、给另一个文件选"远端"是完全可以的。
 

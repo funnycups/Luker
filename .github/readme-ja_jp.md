@@ -55,7 +55,7 @@ Luker は [SillyTavern](https://github.com/SillyTavern/SillyTavern) をベース
 
 エージェントが必要なときに読み込む、再利用可能な知識パックです。執筆ルール、口調の取り決め、決まり文句を避けるためのチェックリストなど。フォーマットは Anthropic の Claude Skills と互換性があります。オーケストレーターのデフォルト Director プロファイルにはスキルが同梱されており、スキルはキャラクターカードやプリセットに添えて配布することもできます。
 
-<img alt="インストール済みスキルと同梱スキルを表示したスキルマネージャー" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/_screenshots/skills/manager-installed-tab.png" width="720">
+<img alt="インストール済みスキルと同梱スキルを表示したスキルマネージャー" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/skills/manager-installed-tab.png" width="720">
 
 → [Skills のドキュメント](https://luker.cups.moe/features/skills/)
 
@@ -99,7 +99,7 @@ Luker のバックエンドは Android アプリの*中*で動きます。APK �
 
 長いチャットを任意のターンで分割したり、チャットを結合したりできます。分岐履歴は一貫したまま保たれます。場面が収拾つかなくなって、残りを失わずに面白い部分だけを分岐させたいときに便利です。
 
-<img alt="チャットの結合と分割" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/chat-merge-split/07-split-dialog-three-segments.png" width="720">
+<img alt="チャットの結合と分割" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/chat-merge-split/07-split-dialog-three-segments.png" width="720">
 
 → [チャット管理](https://luker.cups.moe/basics/chat-management)
 
@@ -107,7 +107,7 @@ Luker のバックエンドは Android アプリの*中*で動きます。APK �
 
 TTS を有効にすると、返信内の引用されたセリフをそれぞれの話者の声で再生できます。バックグラウンド処理がセリフの話者を割り出します — 検出された NPC はボイスマップに自動で追加され、あらかじめ登録しておいた名前は最初の再生から認識されます。
 
-<img alt="チャットメッセージ内のセリフの再生ボタン" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
+<img alt="チャットメッセージ内のセリフの再生ボタン" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
 
 → [TTS による NPC セリフの話者割り当て](https://luker.cups.moe/features/tts-npc-attribution)
 

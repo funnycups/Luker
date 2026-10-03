@@ -41,19 +41,19 @@ Send a message in the chat — no other settings are needed. Before the main mod
 
 As soon as a run starts, the **Run Panel** slides in beside the chat (or rises from the bottom on narrow screens). It updates in real time: rounds are collapsible cards; expand one to see what the model thought, which tools it called, and what they returned.
 
-![The Run Panel as a director run begins](/_screenshots/run-panel/01-panel-initial.png)
+![The Run Panel as a director run begins](/images/run-panel/01-panel-initial.png)
 
 As the model streams output, the panel updates in place — no flicker, no chat reflow:
 
-![Streaming progress: reasoning, text, and tool sections fill in real time](/_screenshots/run-panel/02-panel-streaming.png)
+![Streaming progress: reasoning, text, and tool sections fill in real time](/images/run-panel/02-panel-streaming.png)
 
 Expand any tool call to see its inputs and outputs:
 
-![A tool call expanded — arguments and results](/_screenshots/run-panel/03-panel-tool-expanded.png)
+![A tool call expanded — arguments and results](/images/run-panel/03-panel-tool-expanded.png)
 
 On narrow screens, the panel becomes a bottom drawer you can drag up or dismiss:
 
-![Run Panel on a phone-sized viewport](/_screenshots/run-panel/05-panel-drawer.png)
+![Run Panel on a phone-sized viewport](/images/run-panel/05-panel-drawer.png)
 
 The panel is kept in memory only. Switching chats or refreshing clears it; the chat thread keeps only the final reply, preserved verbatim. The following actions are also available:
 

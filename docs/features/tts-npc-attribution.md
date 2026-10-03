@@ -8,11 +8,11 @@ Both English and CJK quotes count as dialogue (`"…"`, `“…”`, `「…」`
 
 1. Open **Extensions** → **TTS** drawer, pick a TTS provider and enable it first — attribution depends on TTS being enabled.
 
-   ![TTS settings panel](/screenshots/tts-npc-attribution/01-settings.png)
+   ![TTS settings panel](/images/tts-npc-attribution/01-settings.png)
 
 2. Scroll to the block below the regex settings and check **NPC dialogue attribution**.
 
-   ![NPC attribution settings block](/screenshots/tts-npc-attribution/02-settings-npc-block.png)
+   ![NPC attribution settings block](/images/tts-npc-attribution/02-settings-npc-block.png)
 
 3. Pick the connection and preset the AI pass should use:
 
@@ -24,7 +24,7 @@ Both English and CJK quotes count as dialogue (`"…"`, `“…”`, `「…」`
 
 Every quoted line in a message gets a small speaker icon at its end. Click it to play just that line, spoken with the attributed speaker's voice.
 
-![Quote play buttons in a message](/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png)
+![Quote play buttons in a message](/images/tts-npc-attribution/03-inline-buttons-zoom.png)
 
 - Clicking a button plays the raw quoted line. The global narration filters (skip codeblocks, only narrate quotes, and so on) apply to whole-message narration, not to these per-line clicks.
 - If the attribution pass has not finished for an old message, the button shows a spinner until the result arrives, then plays. If the pass fails, the line plays with the author's voice.
@@ -34,14 +34,14 @@ Every quoted line in a message gets a small speaker icon at its end. Click it to
 
 All speaker voices live behind the **Manage voices** button in the **Voice map** section of the TTS panel. The button opens a popup listing every speaker — chat participants (the card character, group members, you) plus every configured NPC — one row per name, each with a voice dropdown and an NPC tag where applicable.
 
-![Voice map popup with an NPC row](/screenshots/tts-npc-attribution/04-voice-map.png)
+![Voice map popup with an NPC row](/images/tts-npc-attribution/04-voice-map.png)
 
 NPC names can be added two ways:
 
 1. **Automatically.** When the attribution pass discovers a new speaker in quoted dialogue, its name is added to the voice map following the Default Voice. Open **Manage voices** to give it a voice; the assignment is remembered across chats.
 2. **Manually, in advance.** In the **Manage voices** popup, type the NPC's name into the input at the top and click **Add**. Pre-configured names are handed to the attribution AI as candidate speakers, so lines from that NPC are recognized (and voiced) from the very first playback — no discovery pass needed.
 
-![Adding a speaker name in the voice map popup](/screenshots/tts-npc-attribution/05-voice-map-add.png)
+![Adding a speaker name in the voice map popup](/images/tts-npc-attribution/05-voice-map-add.png)
 
 NPC rows (tagged rows that are not chat participants) can be removed with the ✕ button at the end of the row. Changes apply when the popup closes with **Done**.
 

@@ -67,7 +67,7 @@
 
 在 Agent 编排预设模式下，助手不只做 process-coercion 改写——它还会**主动扫一遍预设**，把那些更适合给编排器下所有 sub-agent 共享的文风、输出格式、写作纪律规则识别出来，跟其他改动一起作为提案丢给你审批；条目均可独立批/拒。
 
-![CPA 弹窗，编辑模式选为 "Adapt for orchestrator"](/_screenshots/skills/cpa-orch-04-orchestrator-mode-selected.png)
+![CPA 弹窗，编辑模式选为 "Adapt for orchestrator"](/images/skills/cpa-orch-04-orchestrator-mode-selected.png)
 
 跟平时一样发起编排适配请求就行：
 
@@ -81,7 +81,7 @@
 
 抽取以独立 diff 卡的形式走原有的逐条审批流程 —— 你可以挑几条接、其他拒掉、或者全部拒掉而其余适配照常生效。
 
-![CPA 一轮跑完，可以看到 Create skill 工具 chip 落地](/_screenshots/skills/cpa-orch-07-after-llm-round.png)
+![CPA 一轮跑完，可以看到 Create skill 工具 chip 落地](/images/skills/cpa-orch-07-after-llm-round.png)
 
 什么时候不会扫：
 

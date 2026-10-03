@@ -31,7 +31,7 @@
  *     or missing YAML frontmatter, that's a failure of either the prompt
  *     or the model — surface it.
  *
- * Screenshots: docs/public/_screenshots/skills/iter-studio-NN-*.png.
+ * Screenshots: docs/public/images/skills/iter-studio-NN-*.png.
  */
 
 import { test, expect } from '@playwright/test';

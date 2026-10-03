@@ -13,9 +13,9 @@
  *     no server responds, Playwright surfaces a connection error
  *     immediately rather than masking the failure. The smoke spec must
  *     never silently pass when the server is unreachable.
- *   - All screenshots are saved under `docs/public/_screenshots/skills/`
+ *   - All screenshots are saved under `docs/public/images/skills/`
  *     (created on demand) so docs can reference them by stable
- *     paths (`/_screenshots/skills/<name>.png`). The `public/`
+ *     paths (`/images/skills/<name>.png`). The `public/`
  *     subdirectory is Vitepress's static-asset root, so the same files
  *     also resolve under `npm run docs:dev` and the production build.
  *     Use `screenshotPath(scenario, step)` to generate filenames.
@@ -31,26 +31,24 @@ import { expect } from '@playwright/test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Resolve the repo's docs/public/_screenshots/skills/ directory once.
+// Resolve the repo's docs/public/images/skills/ directory once.
 // The path is rooted relative to this file so the screenshots land in a
 // stable location regardless of where `playwright test` is launched
 // from. Playwright runs tests with cwd = the playwright.config.js
 // directory by default, but we want absolute paths to be unambiguous
 // across worktree boundaries (Luker tests live in `tests/`, the docs
-// folder is at repo root). We write under `docs/public/_screenshots/`
-// (not bare `docs/_screenshots/`) so Vitepress's static-asset pipeline
-// serves them at /_screenshots/... — both `npm run dev` and the
-// production build pick them up automatically. The convention matches
-// how `images/...` references work elsewhere in the doc tree.
+// folder is at repo root). We write under `docs/public/images/` so
+// Vitepress's static-asset pipeline serves them at /images/... — both
+// `npm run dev` and the production build pick them up automatically.
 //
 // __dirname is .../tests/skills-ui/playwright; go up three to repo root.
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-export const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'docs', 'public', '_screenshots', 'skills');
+export const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'docs', 'public', 'images', 'skills');
 
 /**
- * Compose a stable screenshot path under docs/public/_screenshots/skills/.
+ * Compose a stable screenshot path under docs/public/images/skills/.
  * Example: screenshotPath('manager', 'initial-view') →
- *   <repo>/docs/public/_screenshots/skills/manager-initial-view.png
+ *   <repo>/docs/public/images/skills/manager-initial-view.png
  *
  * @param {string} scenario - prefix for grouping (e.g. 'manager', 'chips', 'import')
  * @param {string} step - sub-identifier for the screenshot

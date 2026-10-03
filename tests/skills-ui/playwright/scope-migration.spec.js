@@ -18,7 +18,7 @@
  *   - A character is loaded (any character — we use its avatar for the
  *     character-scope move). Without one, the test soft-skips.
  *
- * Screenshots land under docs/public/_screenshots/skills/scope-migration-*.png.
+ * Screenshots land under docs/public/images/skills/scope-migration-*.png.
  *
  * The spec never invokes any LLM; pure UI + API state-machine assertions.
  */

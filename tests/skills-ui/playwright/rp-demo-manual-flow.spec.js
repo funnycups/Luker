@@ -11,7 +11,7 @@
  * in-memory run state). The skill author is `/tmp/gentle-companion-voice-zh.md`,
  * authored verbatim from real RP-discipline content (not synthetic markers).
  *
- * Screenshots land under docs/public/_screenshots/skills/rp-demo-NN-*.png
+ * Screenshots land under docs/public/images/skills/rp-demo-NN-*.png
  * (NN = 01..13) — these are documentation-grade captures, not
  * failure-only artifacts.
  */

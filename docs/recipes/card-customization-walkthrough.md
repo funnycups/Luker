@@ -14,23 +14,23 @@ The example uses a community card with strict output-format requirements and a b
 
 After importing and selecting the card, open **Extensions → Orchestrator** and click **Open Orchestration Editor**.
 
-![Editor open](/_screenshots/recipes-card-customization/01-editor-opened.png)
+![Editor open](/images/recipes-card-customization/01-editor-opened.png)
 
 The top bar indicates which card is active, which execution mode is in use, and whether the current edit target is the **global** profile or the **character override**. The objective here is the character override — changes affect only this card and leave others untouched.
 
 Top right, click **Open AI Iteration Studio**.
 
-![Studio just opened](/_screenshots/recipes-card-customization/02-studio-fresh.png)
+![Studio just opened](/images/recipes-card-customization/02-studio-fresh.png)
 
 The Studio splits into a conversation pane on the left and a live preview of the current pipeline on the right (main agent plus all sub-agents). We type one sentence in the composer:
 
 > Build a dedicated orchestration for this card. Replace the global defaults wherever the card needs something different.
 
-![Prompt typed in composer](/_screenshots/recipes-card-customization/03-prompt-typed.png)
+![Prompt typed in composer](/images/recipes-card-customization/03-prompt-typed.png)
 
 Click **Send**. The Studio reads the card and the lorebook, enumerates the currently visible skills, then begins rewriting the main agent's system prompt, adding sub-agents that make sense for this card, and adjusting the visible-skill set. Changes surface as review cards — green is additions, red is removals. A quick review followed by **Apply to character override** commits the change.
 
-![A single change review card](/_screenshots/recipes-card-customization/04-review-card.png)
+![A single change review card](/images/recipes-card-customization/04-review-card.png)
 
 For a closer look, expand the line-diff inside the card; for those who would rather not read code, the one-line headline at the top names the field that changed.
 
@@ -40,7 +40,7 @@ To avoid confirming every diff manually, tick **Auto-apply changes** under the c
 
 After a few iteration rounds, the Studio produces a plain-language summary describing what changed and why the changes fit this card.
 
-![Studio summary at the end](/_screenshots/recipes-card-customization/05-customize-summary.png)
+![Studio summary at the end](/images/recipes-card-customization/05-customize-summary.png)
 
 At this point the card has a dedicated orchestration, and the next message we send to it uses this configuration.
 
@@ -68,13 +68,13 @@ Back in the Studio composer:
 
 The Studio invokes the simulation tool and runs one complete round of the main agent plus every sub-agent. In Director mode the full sweep takes a few minutes. When it finishes, a **Simulation Review** popup opens:
 
-![Simulation review with main agent and sub-agent trace](/_screenshots/recipes-card-customization/06-sim-baseline.png)
+![Simulation review with main agent and sub-agent trace](/images/recipes-card-customization/06-sim-baseline.png)
 
 The simulation-review popup opens with every section already expanded. We scroll down to the main agent's final reply and read it through, picking out the phrases that read "AI-flavored".
 
 Click **Annotation mode** — once it flips on, **select any span of text with the mouse** inside the output. The selection turns yellow and a comment input appears alongside it. A word or two describing the dissatisfaction is enough.
 
-![One classifier-counting span annotated on the baseline](/_screenshots/recipes-card-customization/07-sim-baseline-annotated.png)
+![One classifier-counting span annotated on the baseline](/images/recipes-card-customization/07-sim-baseline-annotated.png)
 
 In this baseline run, we annotated one representative span:
 
@@ -84,7 +84,7 @@ In this baseline run, we annotated one representative span:
 
 Once done, click **Submit & continue**. The Studio passes the annotation to the AI as a **symptom** — what the AI receives is not an isolated complaint but a positioned issue from which it can trace the root cause. The root cause is usually not "some sub-agent prompt was too vague" but "no prompt has yet captured this regularity."
 
-![Studio's root-cause diagnosis](/_screenshots/recipes-card-customization/08-improvement-thread.png)
+![Studio's root-cause diagnosis](/images/recipes-card-customization/08-improvement-thread.png)
 
 In this iteration the Studio grouped the annotation under one umbrella — **classifier-counting cliché** (slicing lived sensation, motion, time, and body into countable "number + classifier" units). Rather than editing right away, it first confirmed with the user: is this rule absolute, or are exceptions warranted? Once the user confirmed "no exceptions", the Studio inspected which SKILL the `voice_critic` sub-agent actually loads at runtime (`voice-critic-method-zh` — not the most name-matchy alternative), wrote the rule into the very file voice_critic genuinely reads, pinned the offending phrase as a counter-example, and added an explicit "this is an independent ban; a literal match is a finding regardless of whether the context is warm, poetic, physically realistic, or colloquial." Only then will the next simulation's voice_critic actually surface these violations.
 
@@ -99,7 +99,7 @@ After the changes apply, we **run a second simulation**:
 
 When the new review popup opens, the previously annotated cliché phrases should be visibly thinned out, or absent.
 
-![Improved simulation](/_screenshots/recipes-card-customization/09-sim-after.png)
+![Improved simulation](/images/recipes-card-customization/09-sim-after.png)
 
 Comparing the two runs side-by-side, the difference is plain — the baseline's repeated "flash → count-occurrences" cadence ("one beat, two beats, a pause, then three more", "flashed three times", "flashed five times in a row") is largely gone from the improved run. In the improved final-message, total classifier-counting hits (一下 / 一节 / 一刻 / 一档 / 几下 etc.) drop to 5, and none of them sit on a rhythm beat — they fall on descriptive uses like "half a degree" or "one tube" instead. If anything still remains, repeat the "annotate — simulate" loop. Two or three rounds is normally enough.
 
@@ -113,7 +113,7 @@ For requirements like this, we do not need to write any code ourselves or hand-e
 
 > This card has a format requirement: every reply must end with an `<overall>` tag and an `<UpdateVariable>` tag — please don't let it miss them.
 
-![Describing the format requirement to the Studio](/_screenshots/recipes-card-customization/11-tool-prompt.png)
+![Describing the format requirement to the Studio](/images/recipes-card-customization/11-tool-prompt.png)
 
 The Studio decides how to fulfill the requirement on its own. This is a format check that code can verify exactly (literal string match), which makes it a fit for a **custom tool**. The party that needs to be checked, and reminded to amend, is the main agent that drafts the reply, so the tool belongs to the main agent and must be invoked at its finalization step. Based on that read, the Studio produces a coherent change set:
 
@@ -126,17 +126,17 @@ Decisions the user would otherwise have to spell out — which mechanism best fi
 
 Edits still go through a review card on the ProposalBus — green for additions, red for removals. **Because a custom tool runs JavaScript in your browser, the proposal card carries a safety banner** — expand "View body" to inspect the tool code, confirm that it is a read-only scan with no side effects, then approve. Reject any card whose body you can't read.
 
-![New tool's code review + security confirmation](/_screenshots/recipes-card-customization/12-tool-review.png)
+![New tool's code review + security confirmation](/images/recipes-card-customization/12-tool-review.png)
 
 After applying, scroll to the main agent's **Custom tools** panel — the new tool is there, with its checkbox ticked by default.
 
-![Tool now installed](/_screenshots/recipes-card-customization/13-tool-installed.png)
+![Tool now installed](/images/recipes-card-customization/13-tool-installed.png)
 
 We run one more simulation to confirm that the main agent actually calls it as instructed:
 
 > One more simulation to verify.
 
-![Simulation trace showing validate_output_skeleton being invoked](/_screenshots/recipes-card-customization/14-tool-invoked.png)
+![Simulation trace showing validate_output_skeleton being invoked](/images/recipes-card-customization/14-tool-invoked.png)
 
 The trace shows a `validate_output_skeleton` row — the main agent runs the tool right after writing to the draft tail, receives the verdict, and decides whether it needs to patch in any missing tag.
 

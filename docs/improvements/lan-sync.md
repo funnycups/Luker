@@ -15,19 +15,19 @@ Luker has two ways to move data between devices:
 
 1. On the first device (call it A), open **Settings → LAN Sync → Pair new device**. Give the OTHER device a label, pick the categories to sync, and click **Generate pairing link**.
 
-   ![Pair new device form with categories selected](/_screenshots/lan-sync/02-pair-new-form-filled.png)
+   ![Pair new device form with categories selected](/images/lan-sync/02-pair-new-form-filled.png)
 
 2. A shows a URL valid for 10 minutes.
 
-   ![Generated pairing link ready to share](/_screenshots/lan-sync/03-pair-link-generated.png)
+   ![Generated pairing link ready to share](/images/lan-sync/03-pair-link-generated.png)
 
 3. On the second device (B), open the same panel and choose **Pair with existing device**. Paste the URL and click **Pair and sync**. If A requires basic-auth, enter A's credentials in the optional fields.
 
-   ![Pair with existing device form with link pasted](/_screenshots/lan-sync/04-pair-existing-pasted.png)
+   ![Pair with existing device form with link pasted](/images/lan-sync/04-pair-existing-pasted.png)
 
 4. B downloads the data A chose to share and writes it locally. When the banner reads **Synced with \<peer\>.**, the pair is done.
 
-   ![Successful pair banner](/_screenshots/lan-sync/05-pair-success-banner.png)
+   ![Successful pair banner](/images/lan-sync/05-pair-success-banner.png)
 
 After pairing, A and B remember each other. Future syncs only take one click.
 
@@ -35,13 +35,13 @@ After pairing, A and B remember each other. Future syncs only take one click.
 
 On either device, open the LAN Sync panel — paired devices appear under **My devices** with **Sync now**, **Undo last sync**, and **Forget** for each. Click **Sync now**; the two sides exchange changes and reconcile. The banner reports **Sync complete.** when done.
 
-![Paired devices list with per-device actions](/_screenshots/lan-sync/06-my-devices-after-pair.png)
+![Paired devices list with per-device actions](/images/lan-sync/06-my-devices-after-pair.png)
 
 ## Resolving conflicts
 
 If both devices edited the **same file** between syncs (for example: both renamed the same character), LAN Sync stops and shows a conflict panel. Each conflict has two cards: **Local version** and **Remote version**. Pick one card per conflict — there's no line-by-line merging.
 
-![Conflict resolution panel](/_screenshots/lan-sync/08-conflict-panel.png)
+![Conflict resolution panel](/images/lan-sync/08-conflict-panel.png)
 
 Conflicts are always per-file. Picking "Local" for one file and "Remote" for another in the same sync is fine.
 

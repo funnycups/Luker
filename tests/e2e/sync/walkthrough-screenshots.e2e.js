@@ -1,6 +1,6 @@
 // LAN Sync walkthrough — drives every panel the user encounters during
 // the documented pair → sync → conflict → resolve flow, captures one
-// screenshot per step into docs/public/_screenshots/lan-sync/, and
+// screenshot per step into docs/public/images/lan-sync/, and
 // asserts the banner text reads the way the user docs claim.
 //
 // Outcome model:
@@ -40,7 +40,7 @@ import {
 // __dirname is .../tests/e2e/sync; three levels up to repo root.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'docs', 'public', '_screenshots', 'lan-sync');
+const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'docs', 'public', 'images', 'lan-sync');
 
 function screenshotPath(step) {
     const safe = String(step).replace(/[^A-Za-z0-9_-]+/g, '-');

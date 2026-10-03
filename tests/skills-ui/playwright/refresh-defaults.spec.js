@@ -24,7 +24,7 @@
  *     test populates it from scratch if missing (the same path the loader
  *     takes on fresh install), so a freshly-spun user dir is acceptable.
  *
- * Screenshots: docs/public/_screenshots/skills/refresh-defaults-*.png.
+ * Screenshots: docs/public/images/skills/refresh-defaults-*.png.
  *
  * No LLM. Purely deterministic state-machine assertions.
  */

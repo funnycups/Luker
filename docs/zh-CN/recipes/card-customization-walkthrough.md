@@ -14,23 +14,23 @@
 
 导入角色卡并选中后，从「扩展 → 多智能体编排」打开面板，点击 **打开编排编辑器**。
 
-![编排编辑器打开后](/_screenshots/recipes-card-customization/01-editor-opened.png)
+![编排编辑器打开后](/images/recipes-card-customization/01-editor-opened.png)
 
 顶部第一栏标明当前角色卡、所用的执行模式，以及当前编辑的是「全局」还是「角色卡覆盖」配置。本次工作目标是**角色卡覆盖**——所有改动只作用于这张卡，不会污染其它卡。
 
 右上角点击 **打开 AI 迭代工作台**。
 
-![工作台刚打开](/_screenshots/recipes-card-customization/02-studio-fresh.png)
+![工作台刚打开](/images/recipes-card-customization/02-studio-fresh.png)
 
 工作台左侧为对话区，右侧实时呈现当前编排的流水线（主代理与全部子代理）。我们在输入框写下一句话：
 
 > 请给本角色卡定制一个专属编排，把全局的默认配置改成更贴合这张卡的版本。
 
-![输入框里写好定制请求](/_screenshots/recipes-card-customization/03-prompt-typed.png)
+![输入框里写好定制请求](/images/recipes-card-customization/03-prompt-typed.png)
 
 点击 **发送**。工作台读取角色卡内容与世界书、列出当前可见的 Skills，随后开始改写主代理提示词、新增对这张卡有意义的子代理、调整可见 Skills 集。改动会弹出一张变更审阅卡片，绿色为新增、红色为删除；审阅一眼后点击 **应用到角色卡覆盖** 即落地。
 
-![一次变更审阅卡](/_screenshots/recipes-card-customization/04-review-card.png)
+![一次变更审阅卡](/images/recipes-card-customization/04-review-card.png)
 
 如果需要细看，可在卡片内展开「逐行差异」；如果不想读代码，卡片顶部一句话即指明改了哪个字段。
 
@@ -40,7 +40,7 @@
 
 数轮迭代后，工作台会用一段话总结改动内容与改动贴合这张卡的理由。
 
-![工作台跑完，AI 总结](/_screenshots/recipes-card-customization/05-customize-summary.png)
+![工作台跑完，AI 总结](/images/recipes-card-customization/05-customize-summary.png)
 
 至此，这张角色卡获得专属编排，下次给它发送消息时即采用这套配置。
 
@@ -68,13 +68,13 @@
 
 工作台调用模拟工具，跑完一轮完整的主代理与所有子代理。Director 模式跑全套需要几分钟，请耐心等待。模拟结束后弹出 **模拟回顾** 窗口：
 
-![模拟回顾弹窗：主代理输出与各子代理跟踪](/_screenshots/recipes-card-customization/06-sim-baseline.png)
+![模拟回顾弹窗：主代理输出与各子代理跟踪](/images/recipes-card-customization/06-sim-baseline.png)
 
 模拟回顾窗口默认即把各段落展开，向下翻就能看到主代理最终回复全文。我们浏览这段文本，挑出"AI 味儿"较重的短语。
 
 点击 **批注模式**——切到开启后，**在产出文本里用鼠标选中**任意一段，所选区域自动呈黄色高亮，旁侧出现批注输入框。在批注框内简述不满意之处即可（一两个词通常足够）。
 
-![本轮模拟标注了一处量词计数八股](/_screenshots/recipes-card-customization/07-sim-baseline-annotated.png)
+![本轮模拟标注了一处量词计数八股](/images/recipes-card-customization/07-sim-baseline-annotated.png)
 
 本轮基线中我们示范性地选了一处：
 
@@ -84,7 +84,7 @@
 
 标注完成后点击窗口底部 **提交并继续**。工作台将这条批注视作"症状"反馈给 AI——AI 看到的不是孤立的不满意短语，而是带上下文位置的问题清单，可借此反推根因。常见情况下，根因不在某个子代理写得不够细，而在于一条共性规律尚未被任何提示词承接。
 
-![工作台根据批注做根因诊断](/_screenshots/recipes-card-customization/08-improvement-thread.png)
+![工作台根据批注做根因诊断](/images/recipes-card-customization/08-improvement-thread.png)
 
 本次迭代中，工作台把这条批注归入"量词计数八股"一类——把活的体感、动作、时间、身体拆解为"数字 + 量词"的可计数刻度。它没有立刻动手，而是先与用户确认：该规则是绝对禁律，还是需要保留例外？在用户明确"无例外"后，工作台读取 `voice_critic` 子代理实际加载的 SKILL（即 `voice-critic-method-zh`，而不是名字最相近的另一个），将规则补进 voice_critic 在运行时真正会读到的位置，并将原句作为反例钉入其中，附以「独立禁律、字面命中即记案、与上下文是否温暖/诗化/物理写实/口语自然无关」的明文。如此下一轮模拟时，voice_critic 才会真正扫到此类违例。
 
@@ -98,7 +98,7 @@
 
 新弹出的回顾窗口中，先前被标注的几条八股短语应明显变少甚至消失。
 
-![改进后的模拟回顾](/_screenshots/recipes-card-customization/09-sim-after.png)
+![改进后的模拟回顾](/images/recipes-card-customization/09-sim-after.png)
 
 把两次回顾并排比较，差异肉眼可见——基线那一段反复出现的"光闪 → 数次数"叙述节奏（"一下，两下，停一会儿，再三下"、"闪了三下"、"连闪了五下"），到改进版基本退场。改进后这一轮的终稿里，量词计数（一下 / 一节 / 一刻 / 一档 / 几下 等）总命中仅余 5 次，且均不再出现在节奏拍点上，而是落到"半度"、"一根管子"这种描述指代用法。如仍有残余，重复"标注—模拟"循环即可；两到三轮通常已经足够。
 
@@ -112,7 +112,7 @@
 
 > 这张角色卡的输出格式有要求，回复结尾必须有 `<overall>` 和 `<UpdateVariable>` 两个标签——别让它漏掉。
 
-![向工作台描述格式要求](/_screenshots/recipes-card-customization/11-tool-prompt.png)
+![向工作台描述格式要求](/images/recipes-card-customization/11-tool-prompt.png)
 
 工作台会自行判定如何落实——这是一个能由代码精确判定的格式检查问题（字面匹配），适合通过 **自定义工具** 解决；而被检查与被提醒补全的执行者本就是创作正文的主代理，所以工具应当挂在主代理上、由主代理在收尾时调用。基于这一判断，工作台会自动完成一组配套改动：
 
@@ -125,17 +125,17 @@
 
 改动仍走 ProposalBus 上的审阅卡，绿色为新增、红色为删除。**由于自定义工具会在你的浏览器中执行 JavaScript，审阅卡上带一条安全警示横幅**——展开「View body」核对工具体的行为，确认是只读扫描、无副作用之后再点同意。看不懂的卡就拒掉。
 
-![新工具的代码审阅与安全确认](/_screenshots/recipes-card-customization/12-tool-review.png)
+![新工具的代码审阅与安全确认](/images/recipes-card-customization/12-tool-review.png)
 
 应用变更后，回到主代理那栏查看 **自定义工具** 列表，新工具已在其中并默认勾选启用。
 
-![工具已挂上](/_screenshots/recipes-card-customization/13-tool-installed.png)
+![工具已挂上](/images/recipes-card-customization/13-tool-installed.png)
 
 让工作台再跑一次模拟，确认主代理确实按规则调用了工具：
 
 > 再跑一次模拟验证。
 
-![模拟跟踪里出现 validate_output_skeleton 这一行调用](/_screenshots/recipes-card-customization/14-tool-invoked.png)
+![模拟跟踪里出现 validate_output_skeleton 这一行调用](/images/recipes-card-customization/14-tool-invoked.png)
 
 跟踪中可见 `validate_output_skeleton` 这一行——主代理在草稿写到尾部之后调用该工具一次，工具返回检查结果，主代理据此判断是否需要补全标签。
 

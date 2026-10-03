@@ -1,7 +1,7 @@
 // Doc screenshot capture: TTS voice-map management popup with an NPC row
 // + the manual Add entry. Boots a real server + mock LLM, registers the
 // same Stub TTS provider as the e2e suite, drives the REAL UI, and saves
-// screenshots to docs/public/screenshots/tts-npc-attribution/.
+// screenshots to docs/public/images/tts-npc-attribution/.
 //
 // The screenshot writes are gated behind LUKER_UPDATE_DOC_SCREENSHOTS;
 // on a plain regression run the UI is still driven and asserted, but
@@ -22,7 +22,7 @@ import { resolve } from 'node:path';
 
 let server;
 
-const DOC_SHOTS = resolve(import.meta.dirname, '../../../docs/public/screenshots/tts-npc-attribution');
+const DOC_SHOTS = resolve(import.meta.dirname, '../../../docs/public/images/tts-npc-attribution');
 
 test.beforeAll(async () => {
     server = await startServer({ batchKey: 'extensions', scenarioId: 'tts-doc-shots' });

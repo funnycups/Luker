@@ -55,7 +55,7 @@ Luker는 [SillyTavern](https://github.com/SillyTavern/SillyTavern)을 기반으�
 
 에이전트가 필요할 때 읽는 재사용 가능한 지식 팩입니다. 글쓰기 규칙, 말투 규칙, 클리셰 방지 체크리스트 같은 것들이 담깁니다. 형식은 Anthropic Claude Skills와 호환됩니다. Orchestrator의 기본 Director profile에는 번들 스킬이 들어 있으며, 스킬은 캐릭터 카드나 프리셋과 함께 배포할 수 있습니다.
 
-<img alt="설치된 스킬과 번들 스킬을 보여주는 스킬 관리자" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/_screenshots/skills/manager-installed-tab.png" width="720">
+<img alt="설치된 스킬과 번들 스킬을 보여주는 스킬 관리자" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/skills/manager-installed-tab.png" width="720">
 
 → [Skills 문서](https://luker.cups.moe/features/skills/)
 
@@ -99,7 +99,7 @@ Luker 백엔드는 Android 앱 *안에서* 실행됩니다. APK를 설치하고 
 
 긴 채팅을 원하는 턴에서 분할하거나 채팅을 병합할 수 있으며, 분기 히스토리도 일관되게 유지됩니다. 장면이 통제를 벗어나서, 나머지는 그대로 둔 채 재미있는 부분만 따로 분기해 내고 싶을 때 유용합니다.
 
-<img alt="채팅 병합과 분할" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/chat-merge-split/07-split-dialog-three-segments.png" width="720">
+<img alt="채팅 병합과 분할" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/chat-merge-split/07-split-dialog-three-segments.png" width="720">
 
 → [채팅 관리](https://luker.cups.moe/basics/chat-management)
 
@@ -107,7 +107,7 @@ Luker 백엔드는 Android 앱 *안에서* 실행됩니다. APK를 설치하고 
 
 TTS를 켜면 답변 속 따옴표로 묶인 대사를 그 화자의 목소리로 재생할 수 있습니다. 백그라운드에서 대사의 화자를 판별합니다 — 찾아낸 NPC는 음성 맵에 자동으로 추가되고, 미리 등록해 둔 이름은 첫 재생부터 인식됩니다.
 
-<img alt="채팅 메시지의 대사 재생 버튼" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/screenshots/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
+<img alt="채팅 메시지의 대사 재생 버튼" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/tts-npc-attribution/03-inline-buttons-zoom.png" width="678">
 
 → [TTS NPC 대사 화자 배정](https://luker.cups.moe/features/tts-npc-attribution)
 

@@ -11,7 +11,7 @@
  *     elsewhere).
  *
  * Each step captures a screenshot under
- * docs/public/_screenshots/skills/manager-*.png.
+ * docs/public/images/skills/manager-*.png.
  *
  * The spec does NOT exercise any LLM and never depends on an active
  * character / connection profile — these are pure UI-state assertions.

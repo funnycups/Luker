@@ -14,7 +14,7 @@ The skill manager has tabs along the top:
 - **Browse bundled** — the skills shipped under `default/skills/global/`, with each row showing whether your local copy matches, differs, or is missing.
 - **Import** — entry points for installing from a file, from a URL, or by extracting from a character card / preset.
 
-![Skill manager subpanel, Installed tab](/_screenshots/skills/manager-installed-tab.png)
+![Skill manager subpanel, Installed tab](/images/skills/manager-installed-tab.png)
 
 ## Installed tab
 
@@ -50,7 +50,7 @@ The bundled tab compares your local copy of each shipped skill against what ship
 | **installed (your version differs)** | A local copy exists but its hash doesn't match the bundled one — you (or an Iteration Studio session) edited it. |
 | **not installed** | No local copy. Click **Install** to materialize it into `global`. |
 
-![Browse bundled, mixed states](/_screenshots/skills/manager-bundled-tab.png)
+![Browse bundled, mixed states](/images/skills/manager-bundled-tab.png)
 
 The **Import all bundled** button at the top of the tab is the convenience equivalent of clicking **Install** on every "not installed" or "differs" row — it **overwrites** all bundled skills with the shipped versions.
 
@@ -82,7 +82,7 @@ The same action as **Import all bundled** in the Browse bundled tab. Listed here
 
 When you import a character card (PNG) or preset (JSON) that has an `embedded_skills_source` field, Luker shows a preview dialog automatically:
 
-![Embed import preview with a conflict](/_screenshots/skills/skill-conflict-replace-dialog.png)
+![Embed import preview with a conflict](/images/skills/skill-conflict-replace-dialog.png)
 
 The dialog lists every embedded skill with its conflict state. For each conflict, you choose **Skip** (keep your local version) or **Replace** (use the bundled version from the embed). Same-content (`same`) entries are skipped silently. New entries (`new`) install directly.
 
@@ -92,7 +92,7 @@ The embed payload is removed from the character card / preset on disk after extr
 
 Clicking **Edit** on a skill row opens an in-popup editor:
 
-![Inline skill editor](/_screenshots/skills/skill-editor.png)
+![Inline skill editor](/images/skills/skill-editor.png)
 
 - Left pane: file tree (SKILL.md + any sub-files). Click to switch.
 - Right pane: Markdown editor with YAML-aware frontmatter highlighting.
