@@ -57,6 +57,7 @@ import {
     ensureExtensionsDrawerOpen,
     ensureInlineDrawerOpen,
     activateConnectionProfile,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const REPO_ROOT = path.resolve('/Users/funnycups/worktree/luker-skills-foundation');
@@ -273,7 +274,7 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
             return /^C\.\s/m.test(txt) && /skill_create/.test(txt);
         });
         expect(resetTextHasCategoryC, 'after reset, the mode prompt should contain category C + skill_create — otherwise the dev server is serving stale JS').toBe(true);
-        await page.screenshot({ path: stepPath(1, 'mode-prompt-reset-to-new-default'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(1, 'mode-prompt-reset-to-new-default'), { fullPage: false });
 
         // ── Step 3: inject the extractable block. ────────────────────────
         const injection = await page.evaluate(async ({ injectBlock, presetName }) => {
@@ -299,7 +300,7 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
             };
         }, { injectBlock: INJECTED_BLOCK, presetName: presetMeta.name });
         expect(injection.mutatedContentLength).toBeGreaterThan(injection.originalContentLength);
-        await page.screenshot({ path: stepPath(2, 'injected-block-saved'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(2, 'injected-block-saved'), { fullPage: false });
 
         try {
             // ── Step 4: open CPA popup, fresh session, switch to mode. ──
@@ -328,7 +329,7 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
                 const sel = document.querySelector('dialog.popup:has(.cpa_it_popup) .cpa_it_mode_select');
                 return sel && sel.value === 'orchestrator-optimize';
             }, null, { timeout: 5000 });
-            await page.screenshot({ path: stepPath(3, 'mode-selected'), fullPage: false });
+            await takeDocScreenshot(page, stepPath(3, 'mode-selected'), { fullPage: false });
 
             // ── Step 5: vanilla adapt request (no mention of skills). ────
             const VANILLA_PROMPT = '请把这份预设改造成编排器主 Agent 用的预设。按你判断的优先级处理。';
@@ -338,11 +339,11 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
             }, VANILLA_PROMPT);
-            await page.screenshot({ path: stepPath(4, 'vanilla-prompt-typed'), fullPage: false });
+            await takeDocScreenshot(page, stepPath(4, 'vanilla-prompt-typed'), { fullPage: false });
 
             const sendBtn = cpaPopup.locator('[data-cpa-it-action="send"]').first();
             await sendBtn.dispatchEvent('click');
-            await page.screenshot({ path: stepPath(5, 'send-clicked'), fullPage: false });
+            await takeDocScreenshot(page, stepPath(5, 'send-clicked'), { fullPage: false });
 
             // ── Step 6: poll for either extraction OR explicit "found
             // nothing" — both prove the augmentation reached the model. ─
@@ -369,7 +370,7 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
                 }
                 await new Promise(r => setTimeout(r, 5000));
             }
-            await page.screenshot({ path: stepPath(6, 'after-llm-round'), fullPage: false });
+            await takeDocScreenshot(page, stepPath(6, 'after-llm-round'), { fullPage: false });
 
             if (matches.length === 0 && !sweptButFoundNothing) {
                 throw new Error(
@@ -393,7 +394,7 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
                     `[proactive sweep] AI swept and reported nothing extractable. Snippet:\n${lastAssistantText.slice(0, 600)}`,
                 );
             }
-            await page.screenshot({ path: stepPath(7, 'verified'), fullPage: false });
+            await takeDocScreenshot(page, stepPath(7, 'verified'), { fullPage: false });
         } finally {
             // Restore preset body.
             await page.evaluate(async ({ presetName, body }) => {

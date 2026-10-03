@@ -6,13 +6,15 @@
 // picker (aggregate row + alice + bob), clicks bob, and drills into
 // bob's Chats.
 //
-// Also captures screenshot 04-admin-picker.png of the picker + inspector.
+// Also captures screenshot 04-admin-picker.png of the picker + inspector,
+// gated behind LUKER_UPDATE_DOC_SCREENSHOTS (see _lib/doc-screenshots.js).
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, openAdminPanel, createUserViaAdminUI } from '../_lib/page.js';
 import { loginAs } from '../_lib/sync.js';
+import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedFixtureUser } from './_helpers.js';
 
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/storage-inspector');
@@ -79,8 +81,7 @@ test.describe('Storage Inspector · admin per-user view', () => {
         await expect(picker.locator('.storageInspectorAdminUserRow[data-target="bob"]')).toBeVisible();
 
         // Screenshot 04 — picker with aggregate + real users visible.
-        await page.screenshot({
-            path: resolve(SCREENSHOT_DIR, '04-admin-picker.png'),
+        await takeDocScreenshot(page, resolve(SCREENSHOT_DIR, '04-admin-picker.png'), {
             fullPage: false,
         });
 

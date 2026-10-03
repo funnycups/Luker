@@ -3,7 +3,11 @@
 // same Stub TTS provider as the e2e suite, drives the REAL UI, and saves
 // screenshots to docs/public/screenshots/tts-npc-attribution/.
 //
-// Run: cd tests && npx playwright test tts-voice-map-screens --project=e2e
+// The screenshot writes are gated behind LUKER_UPDATE_DOC_SCREENSHOTS;
+// on a plain regression run the UI is still driven and asserted, but
+// nothing is written into docs/.
+//
+// Run: cd tests && LUKER_UPDATE_DOC_SCREENSHOTS=1 npx playwright test tts-voice-map-screens --project=e2e
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -13,6 +17,7 @@ import {
     openExtensionsDrawer,
     openInlineDrawer,
 } from '../_lib/page.js';
+import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { resolve } from 'node:path';
 
 let server;
@@ -85,12 +90,12 @@ test('capture voice map doc screenshots', async ({ page }) => {
     await page.waitForTimeout(400);
 
     // First shot: the popup with the NPC row (tag + remove button).
-    await page.locator('.popup').screenshot({ path: resolve(DOC_SHOTS, '04-voice-map.png') });
+    await takeDocScreenshot(page.locator('.popup'), resolve(DOC_SHOTS, '04-voice-map.png'));
 
     // Second shot: a name typed into the popup's Add input.
     await popupInput.fill('Old Mare the baker');
     await page.waitForTimeout(200);
-    await page.locator('.popup').screenshot({ path: resolve(DOC_SHOTS, '05-voice-map-add.png') });
+    await takeDocScreenshot(page.locator('.popup'), resolve(DOC_SHOTS, '05-voice-map-add.png'));
 
     expect(await voiceMapBlock.locator('.tts_voicemap_npc_tag').count()).toBeGreaterThanOrEqual(1);
 

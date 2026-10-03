@@ -39,6 +39,7 @@ import {
     screenshotPath,
     awaitMainUI,
     ensureSkillsApiAvailable,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -134,10 +135,7 @@ test.describe('Skills: embed import dialog', () => {
         const row = dialog.locator(`tr:has(.luker_skill_import_name:has-text("${fixtureSkillName}"))`).first();
         await expect(row).toBeVisible();
 
-        await page.screenshot({
-            path: screenshotPath('import', 'dialog-shown'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('import', 'dialog-shown'), { fullPage: false });
 
         // ── 3. Click Install ─────────────────────────────────────────
         // The popup's affirmative button is labeled "Install" via the
@@ -186,10 +184,7 @@ test.describe('Skills: embed import dialog', () => {
         );
         expect(characterRow).toBeTruthy();
 
-        await page.screenshot({
-            path: screenshotPath('import', 'completed-character-scope'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('import', 'completed-character-scope'), { fullPage: false });
 
         // ── 6. Cleanup so subsequent runs are idempotent ─────────────
         await page.evaluate(async ({ scope, name }) => {

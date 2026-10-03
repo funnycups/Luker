@@ -24,6 +24,7 @@ import {
     awaitMainUI,
     ensureExtensionsDrawerOpen,
     ensureInlineDrawerOpen,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const SKILL_NAME = 'gentle-companion-voice-zh';
@@ -63,7 +64,7 @@ test.describe('Skills RP demo (manual user path)', () => {
     test('user installs RP skill, attaches to director, sends RP message; director consults skill mid-turn', async ({ page }) => {
         // ── Step 1: navigate + wait for main UI ─────────────────────────
         await awaitMainUI(page);
-        await page.screenshot({ path: stepPath(1, 'home'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(1, 'home'), { fullPage: false });
 
         // ── Step 2: open API Connections drawer, pick "claude", connect.
         // We drive the visible Connection Manager dropdown — same affordance
@@ -102,7 +103,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             const v = ctx?.onlineStatus ?? null;
             return Boolean(v) && String(v) !== 'no_connection';
         }, null, { timeout: 30000 });
-        await page.screenshot({ path: stepPath(2, 'api-claude-connected'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(2, 'api-claude-connected'), { fullPage: false });
 
         // ── Step 3: select Seraphina from the right-side character list.
         // Close the API drawer first so the character panel comes back into
@@ -151,7 +152,7 @@ test.describe('Skills RP demo (manual user path)', () => {
                 return h && h.classList.contains('closedDrawer');
             }, null, { timeout: 5000 });
         }
-        await page.screenshot({ path: stepPath(3, 'seraphina-loaded'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(3, 'seraphina-loaded'), { fullPage: false });
 
         // ── Step 4: open Extensions drawer → Orchestrator inline-drawer →
         //           click "Manage skills..."
@@ -170,7 +171,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             const rows = document.querySelectorAll('.popup .luker_skill_manager [data-skill-name]');
             return rows.length > 0;
         }, null, { timeout: 15000 });
-        await page.screenshot({ path: stepPath(4, 'skills-manager-baseline'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(4, 'skills-manager-baseline'), { fullPage: false });
 
         // ── Step 5: click "Create new" — the skill manager's import-file
         //   affordance accepts .zip/.json embed bundles only; the user-natural
@@ -205,7 +206,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
         }, SKILL_NAME);
-        await page.screenshot({ path: stepPath(5, 'create-name-entered'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(5, 'create-name-entered'), { fullPage: false });
         // Manager popup (or its backdrop) can intercept hit-test for the child
         // popup's OK button; dispatchEvent fires click directly on the button.
         await namePopupById.locator('div.popup-button-ok, button:has-text("Next")').first().dispatchEvent('click');
@@ -231,7 +232,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
         }, SKILL_DESC);
-        await page.screenshot({ path: stepPath(6, 'create-desc-entered'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(6, 'create-desc-entered'), { fullPage: false });
         await descPopupById.locator('div.popup-button-ok, button:has-text("Next")').first().dispatchEvent('click');
         await descPopupById.waitFor({ state: 'detached', timeout: 5000 });
 
@@ -246,7 +247,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         const globalRadio = scopePopupById.locator('input[name="luker_skill_scope_kind"][value="global"]');
         await globalRadio.waitFor({ state: 'visible', timeout: 5000 });
         await globalRadio.check({ force: true });
-        await page.screenshot({ path: stepPath(7, 'create-scope-global'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(7, 'create-scope-global'), { fullPage: false });
         await scopePopupById.locator('div.popup-button-ok, button:has-text("Install")').first().dispatchEvent('click');
         await scopePopupById.waitFor({ state: 'detached', timeout: 10000 });
 
@@ -261,7 +262,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             const rows = document.querySelectorAll('.popup .luker_skill_manager [data-skill-name]');
             return Array.from(rows).some(r => r.getAttribute('data-skill-name') === name);
         }, SKILL_NAME, { timeout: 10000 });
-        await page.screenshot({ path: stepPath(8, 'skill-row-created'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(8, 'skill-row-created'), { fullPage: false });
         // Probe: did the auto-open already produce an editor popup?
         // Use a short visibility check so we don't get stuck waiting.
         const autoEditor = page.locator('dialog.popup .luker_skill_editor');
@@ -287,7 +288,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
         }, realBody);
-        await page.screenshot({ path: stepPath(8.5, 'editor-body-pasted'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(8.5, 'editor-body-pasted'), { fullPage: false });
         // Save via the editor's Save button.
         const saveBtn = page.locator('dialog.popup:visible [data-editor-save]').first();
         await saveBtn.dispatchEvent('click');
@@ -302,7 +303,7 @@ test.describe('Skills RP demo (manual user path)', () => {
 
         // ── Step 9: close the manager popup so the orchestrator editor can
         //   open uncontested in step 10.
-        await page.screenshot({ path: stepPath(9, 'skill-installed-global'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(9, 'skill-installed-global'), { fullPage: false });
         const managerCloseBtn = page.locator('.popup:has(.luker_skill_manager) div.popup-button-ok').first();
         await managerCloseBtn.dispatchEvent('click');
         await page.locator('.popup .luker_skill_manager').waitFor({ state: 'hidden', timeout: 5000 });
@@ -332,7 +333,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             const m = document.querySelector(sel);
             return Boolean(m && m.querySelector('[data-skill-chip-add-select]'));
         }, modeChipSelector, { timeout: 15000 });
-        await page.screenshot({ path: stepPath(10, 'director-editor-before-chip-add'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(10, 'director-editor-before-chip-add'), { fullPage: false });
 
         // ── Step 11: add the new skill to the director mode-level visible
         //   list via the chip add control — select the name from the dropdown,
@@ -347,7 +348,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         // Wait for the chip with our name to appear in the chips block.
         const newChip = modeChipMount.locator(`[data-skill-chip-name="${SKILL_NAME}"]`).first();
         await newChip.waitFor({ state: 'visible', timeout: 5000 });
-        await page.screenshot({ path: stepPath(11, 'director-chip-added'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(11, 'director-chip-added'), { fullPage: false });
 
         // ── Close the orchestration editor popup (saves on close via the
         //   debounced settings persister).
@@ -367,7 +368,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             return String(ctx?.extensionSettings?.orchestrator?.executionMode || '');
         });
         expect(executionMode, 'orchestrator must be in director mode for the demo').toBe('director');
-        await page.screenshot({ path: stepPath(12, 'chat-ready'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(12, 'chat-ready'), { fullPage: false });
 
         // ── Clear the RunStateStore so the post-send assertion can't read
         //   STALE data from a prior run. There is no UI affordance for this
@@ -398,7 +399,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         } catch {
             await sendBtn.dispatchEvent('click');
         }
-        await page.screenshot({ path: stepPath(13, 'message-sent'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(13, 'message-sent'), { fullPage: false });
 
         // ── Step 14: wait for the director run to complete (5-8 minutes).
         //   Watch the RunStateStore status (read-only). Settled states are
@@ -420,7 +421,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             }
             return { status: 'timeout', state: null };
         });
-        await page.screenshot({ path: stepPath(14, 'director-completed'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(14, 'director-completed'), { fullPage: false });
 
         // ── Assertions on the RunStateStore. These are read-only inspections
         //   of server-side state the model cannot fabricate.
@@ -496,7 +497,7 @@ test.describe('Skills RP demo (manual user path)', () => {
         await teardownChipX.dispatchEvent('click');
         // Confirm the chip is gone.
         await modeChipMountTeardown.locator(`[data-skill-chip-name="${SKILL_NAME}"]`).first().waitFor({ state: 'hidden', timeout: 5000 });
-        await page.screenshot({ path: stepPath(15, 'teardown-chip-removed'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(15, 'teardown-chip-removed'), { fullPage: false });
         // Close the orch editor.
         await page.locator('.popup:has(.luker_orch_director_block) div.popup-button-ok').first().dispatchEvent('click');
         await page.locator('.popup .luker_orch_director_block').waitFor({ state: 'hidden', timeout: 5000 });
@@ -523,7 +524,7 @@ test.describe('Skills RP demo (manual user path)', () => {
             const rows = document.querySelectorAll('.popup .luker_skill_manager [data-skill-name]');
             return !Array.from(rows).some(r => r.getAttribute('data-skill-name') === name);
         }, SKILL_NAME, { timeout: 10000 });
-        await page.screenshot({ path: stepPath(16, 'teardown-skill-deleted'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(16, 'teardown-skill-deleted'), { fullPage: false });
         // Best-effort close: the manager popup may auto-detach after the last
         // row is removed; if so the locator resolves to nothing and we exit.
         const managerCloseLast = page.locator('.popup:has(.luker_skill_manager) div.popup-button-ok').first();

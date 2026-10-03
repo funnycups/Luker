@@ -49,6 +49,7 @@ import {
     SCREENSHOTS_DIR,
     awaitMainUI,
     ensureSkillsApiAvailable,
+    takeDocScreenshot,
 } from './helpers.js';
 
 // Pick a name that won't collide with bundled fixtures. The test cleans
@@ -81,7 +82,7 @@ test.describe('iter-studio skill proposal card — real-flow disk write through 
             });
         }, { name: SKILL_NAME, body: seedBody });
 
-        await page.screenshot({ path: stepPath('1-seed-installed'), fullPage: false });
+        await takeDocScreenshot(page, stepPath('1-seed-installed'), { fullPage: false });
 
         // ── 2. Call runSkillIterStudioTool via the iter-library tools
         //   namespace exactly as iter-studio's dispatcher does. The return
@@ -129,7 +130,7 @@ test.describe('iter-studio skill proposal card — real-flow disk write through 
         expect(proposalResult.afterSnippet, 'proposal after captures new content').toBe(true);
         expect(proposalResult.diskUnchanged, 'seed file on disk is untouched until Apply commits').toBe(true);
 
-        await page.screenshot({ path: stepPath('2-proposal-returned-disk-untouched'), fullPage: false });
+        await takeDocScreenshot(page, stepPath('2-proposal-returned-disk-untouched'), { fullPage: false });
 
         // ── 3. Commit the proposal through the same iter-library surface
         //   the bus uses at approve time. After this the file MUST contain
@@ -164,7 +165,7 @@ test.describe('iter-studio skill proposal card — real-flow disk write through 
         expect(commitResult.originalLineGone, 'original "Line A\\nLine B" sequence replaced').toBe(true);
         expect(commitResult.anchorsKept, 'unaltered anchor lines preserved').toBe(true);
 
-        await page.screenshot({ path: stepPath('3-after-commit-disk-updated'), fullPage: false });
+        await takeDocScreenshot(page, stepPath('3-after-commit-disk-updated'), { fullPage: false });
 
         // ── 4. Teardown: remove the seed skill.
         await page.evaluate(async ({ name }) => {

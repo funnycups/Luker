@@ -66,6 +66,7 @@ import {
     activateConnectionProfile,
     ensureDirectorProfileInitialized,
     ensureCharacterLoaded,
+    takeDocScreenshot,
 } from './helpers.js';
 
 // Marker tokens are deliberately bizarre — the model cannot hallucinate
@@ -175,10 +176,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
 
         // Screenshot the state before generation so docs can reference the
         // "pre-dispatch" condition.
-        await page.screenshot({
-            path: screenshotPath('director-with-skills', '1-pre-dispatch'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('director-with-skills', '1-pre-dispatch'), { fullPage: false });
 
         // ── 4. Trigger the director RP turn through context.generate. ──
         // The user's message deliberately mentions the marker phrase by
@@ -230,10 +228,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
         });
 
         // Screenshot whatever state we landed in.
-        await page.screenshot({
-            path: screenshotPath('director-with-skills', '2-post-dispatch'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('director-with-skills', '2-post-dispatch'), { fullPage: false });
 
         // ── 5. Assertions on the run-state store ────────────────────────
         // A 'timeout' status means the store never settled — usually
@@ -298,10 +293,7 @@ test.describe('Skills LLM: director main agent reads visible skill mid-turn', ()
         // tool_result ok=true) jointly prove the contract.
 
         // Final screenshot showing the chat after the turn settles.
-        await page.screenshot({
-            path: screenshotPath('director-with-skills', '3-completed'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('director-with-skills', '3-completed'), { fullPage: false });
 
         // ── 6. Teardown ────────────────────────────────────────────────
         // Restore the original visible list shape + remove the fixture

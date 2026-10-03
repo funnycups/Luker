@@ -29,6 +29,7 @@ import {
     ensureInlineDrawerOpen,
     ensureSkillsApiAvailable,
     openSkillManagerPanel,
+    takeDocScreenshot,
 } from './helpers.js';
 
 // eslint-disable-next-line no-unused-vars
@@ -52,10 +53,7 @@ test.describe('Skills: manager panel flow', () => {
         // Capture the orchestrator drawer with the "Manage skills..."
         // button visible — useful for docs to show how a user
         // reaches the panel.
-        await page.screenshot({
-            path: screenshotPath('manager', 'entry-button'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('manager', 'entry-button'), { fullPage: false });
 
         const popup = await openSkillManagerPanel(page);
 
@@ -86,10 +84,7 @@ test.describe('Skills: manager panel flow', () => {
             await expect(row).toBeVisible();
         }
 
-        await page.screenshot({
-            path: screenshotPath('manager', 'initial-view'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('manager', 'initial-view'), { fullPage: false });
 
         // ── 3. Switch to Browse bundled tab ──────────────────────────
         const bundledTab = popup.locator('[data-skill-tab="bundled"]').first();
@@ -108,10 +103,7 @@ test.describe('Skills: manager panel flow', () => {
         // but log the count for doc review.
         expect(bundledCount).toBeGreaterThanOrEqual(1);
 
-        await page.screenshot({
-            path: screenshotPath('manager', 'bundled-tab'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('manager', 'bundled-tab'), { fullPage: false });
 
         // ── 4. Import from URL... button shows the URL prompt ────────
         // Switch back to Installed (the toolbar lives there) and click
@@ -130,10 +122,7 @@ test.describe('Skills: manager panel flow', () => {
         const urlPopup = page.locator('.popup:has(textarea), .popup:has(input[type="text"])').last();
         await urlPopup.waitFor({ state: 'visible', timeout: 5_000 });
 
-        await page.screenshot({
-            path: screenshotPath('manager', 'import-url-dialog'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('manager', 'import-url-dialog'), { fullPage: false });
 
         // Cancel the URL prompt so the parent panel resumes.
         const cancelBtn = urlPopup.locator('.popup-button-cancel, [data-result="cancelled"], [data-result="0"]').first();

@@ -55,6 +55,7 @@ import {
     ensureSkillsApiAvailable,
     buildSyntheticEmbed,
     cleanupSkill,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const FIXTURE_SKILL_NAME = 'pw-llm-edit-content-fixture';
@@ -158,10 +159,7 @@ test.describe('Skills LLM: skill_edit_content changes one line; surrounding cont
         const studioPopup = page.locator('.popup:has(.orch_it_messages)').last();
         await studioPopup.waitFor({ state: 'visible', timeout: 10_000 });
 
-        await page.screenshot({
-            path: screenshotPath('skill-edit-content-diff', '1-popup-open'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('skill-edit-content-diff', '1-popup-open'), { fullPage: false });
 
         // ── 4. Send the edit instruction. ───────────────────────────────
         // The prompt asks for a SPECIFIC line change, names the skill, and
@@ -212,10 +210,7 @@ test.describe('Skills LLM: skill_edit_content changes one line; surrounding cont
         console.log(`[skill-edit-content-diff] settle result: ${JSON.stringify(settleResult)}`);
         expect(settleResult.settled, 'iter-studio turn reached a non-busy state').toBe(true);
 
-        await page.screenshot({
-            path: screenshotPath('skill-edit-content-diff', '2-after-turn'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('skill-edit-content-diff', '2-after-turn'), { fullPage: false });
 
         // ── 6. Verify outcomes. ─────────────────────────────────────────
         // (Outcome 3 first — easier to fail fast): the tool was called.
@@ -295,10 +290,7 @@ test.describe('Skills LLM: skill_edit_content changes one line; surrounding cont
         const editedTail = editedFile.slice(afterAnchorStartInEdited);
         expect(editedTail, 'everything from after-anchor onward is byte-identical').toBe(seedTail);
 
-        await page.screenshot({
-            path: screenshotPath('skill-edit-content-diff', '3-verified'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('skill-edit-content-diff', '3-verified'), { fullPage: false });
 
         // ── 7. Teardown ─────────────────────────────────────────────────
         await page.keyboard.press('Escape');

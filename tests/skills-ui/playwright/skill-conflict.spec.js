@@ -31,6 +31,7 @@ import {
     buildSyntheticEmbed,
     cleanupSkill,
     getActiveCharacterAvatar,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const FIXTURE_SKILL_NAME = 'pw-skill-conflict-fixture';
@@ -116,10 +117,7 @@ test.describe('Skills: conflict dialog Skip / Replace branches', () => {
             .not.toContain(INITIAL_BODY_ANCHOR);
 
         // Visual proof of post-replace state.
-        await page.screenshot({
-            path: screenshotPath('skill-conflict', '3-post-replace'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('skill-conflict', '3-post-replace'), { fullPage: false });
 
         // ── 5. Teardown ─────────────────────────────────────────────────
         await cleanupSkill(page, targetScope, FIXTURE_SKILL_NAME);
@@ -167,10 +165,7 @@ async function driveConflictDialog({ page, payload, targetScope, radioChoice, sc
 
     // Screenshot the dialog with the radio selected so docs can show both
     // branches.
-    await page.screenshot({
-        path: screenshotPath('skill-conflict', screenshotKey),
-        fullPage: false,
-    });
+    await takeDocScreenshot(page, screenshotPath('skill-conflict', screenshotKey), { fullPage: false });
 
     // Click Install — the affirmative button.
     const installBtn = dialog.locator('.popup-button-ok, [data-result="affirmative"]').first();

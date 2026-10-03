@@ -35,6 +35,7 @@ import {
     cleanupSkill,
     getActiveCharacterAvatar,
     ensureDirectorProfileInitialized,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const FIXTURE_SKILL_NAME = 'pw-scope-migration-skill';
@@ -105,10 +106,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
 
         // Visual proof: open the manager panel and snapshot the global row.
         const panel = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('scope-migration', '1-global'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('scope-migration', '1-global'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 
@@ -121,10 +119,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
         await assertSkillScope(page, FIXTURE_SKILL_NAME, 'preset');
 
         const panel2 = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('scope-migration', '2-preset'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('scope-migration', '2-preset'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel2.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 
@@ -137,10 +132,7 @@ test.describe('Skills: scope migration (global -> preset -> character)', () => {
         await assertSkillScope(page, FIXTURE_SKILL_NAME, 'character');
 
         const panel3 = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('scope-migration', '3-character'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('scope-migration', '3-character'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel3.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 

@@ -34,7 +34,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { awaitMainUI } from './helpers.js';
+import { awaitMainUI, takeDocScreenshot } from './helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -111,10 +111,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         const panel = page.locator('#luker-orch-run-panel');
         await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
         await clearToasts(page);
-        await page.screenshot({
-            path: path.join(RUN_PANEL_SCREENSHOTS, '01-panel-initial.png'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '01-panel-initial.png'), { fullPage: false });
 
         // ── 7. Panel streaming — wait for ANY section <pre> to be
         //   non-empty, then confirm the total streamed bytes grow on a
@@ -142,10 +139,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         const len2 = await totalPreBytes();
         expect(len2, 'total section <pre> length must not shrink between samples (would indicate a reset)').toBeGreaterThanOrEqual(len1);
         await clearToasts(page);
-        await page.screenshot({
-            path: path.join(RUN_PANEL_SCREENSHOTS, '02-panel-streaming.png'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '02-panel-streaming.png'), { fullPage: false });
 
         // ── 8. Wait for run to finish ─────────────────────────────────
         const finalState = await page.evaluate(async () => {
@@ -215,10 +209,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
             await firstTool.scrollIntoViewIfNeeded();
             await page.waitForTimeout(150);
             await clearToasts(page);
-            await page.screenshot({
-                path: path.join(RUN_PANEL_SCREENSHOTS, '03-panel-tool-expanded.png'),
-                fullPage: false,
-            });
+            await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '03-panel-tool-expanded.png'), { fullPage: false });
         } else {
             // eslint-disable-next-line no-console
             console.log('[run-panel-live] no tool_call sections in this run; skipping screenshot 03');
@@ -231,10 +222,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
         await panel.locator('.panel-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
         await page.waitForTimeout(150);
         await clearToasts(page);
-        await page.screenshot({
-            path: path.join(RUN_PANEL_SCREENSHOTS, '04-panel-final.png'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '04-panel-final.png'), { fullPage: false });
     });
 
     test('drawer layout on narrow viewport', async ({ browser }) => {
@@ -290,10 +278,7 @@ test.describe('Orchestrator Run Panel — live LLM', () => {
             // fullPage: false so the screenshot is anchored to the
             // viewport — fullPage: true would extend the capture past
             // the bottom-fixed drawer and leave it offscreen.
-            await page.screenshot({
-                path: path.join(RUN_PANEL_SCREENSHOTS, '05-panel-drawer.png'),
-                fullPage: false,
-            });
+            await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '05-panel-drawer.png'), { fullPage: false });
         } finally {
             await context.close();
         }

@@ -25,6 +25,7 @@
  */
 
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect } from '@playwright/test';
 
@@ -59,6 +60,32 @@ export function screenshotPath(scenario, step) {
     const safeScenario = String(scenario).replace(/[^A-Za-z0-9_-]+/g, '-');
     const safeStep = String(step).replace(/[^A-Za-z0-9_-]+/g, '-');
     return path.join(SCREENSHOTS_DIR, `${safeScenario}-${safeStep}.png`);
+}
+
+export const DOC_SCREENSHOTS_ENABLED = !!process.env.LUKER_UPDATE_DOC_SCREENSHOTS;
+
+/**
+ * Screenshot a Playwright Page or Locator into a docs path, when doc
+ * screenshot regeneration was explicitly requested.
+ *
+ * No-op (returns null) on a plain regression run — writing into docs/ on
+ * every run leaves the working tree dirty and lets a partial / failing
+ * run overwrite the committed images the docs reference. Parent
+ * directories are created on demand.
+ *
+ * To rebuild the docs images deliberately:
+ *   PW_INCLUDE_INTEGRATION=1 LUKER_UPDATE_DOC_SCREENSHOTS=1 npx playwright test --project=skills-ui
+ *
+ * @param {import('@playwright/test').Page | import('@playwright/test').Locator} target
+ * @param {string} filePath  absolute path under docs/public/
+ * @param {object} [options]  forwarded to target.screenshot()
+ * @returns {Promise<string|null>} the written path, or null when gated off
+ */
+export async function takeDocScreenshot(target, filePath, options = {}) {
+    if (!DOC_SCREENSHOTS_ENABLED) return null;
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await target.screenshot({ path: filePath, ...options });
+    return filePath;
 }
 
 /**

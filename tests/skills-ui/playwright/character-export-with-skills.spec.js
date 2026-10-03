@@ -43,6 +43,7 @@ import {
     buildSyntheticEmbed,
     cleanupSkill,
     getActiveCharacterAvatar,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const FIXTURE_SKILL_NAME = 'pw-character-export-skill';
@@ -86,10 +87,7 @@ test.describe('Skills: character export with embedded skills (round-trip)', () =
 
         // Screenshot 1: the manager panel showing the fixture row at character scope.
         const panel = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('character-export', '1-source-installed'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('character-export', '1-source-installed'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 
@@ -148,10 +146,7 @@ test.describe('Skills: character export with embedded skills (round-trip)', () =
         // row alongside the source. The panel groups by scope, so both
         // character rows surface in the character section.
         const panel2 = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('character-export', '2-reimported'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('character-export', '2-reimported'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel2.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 

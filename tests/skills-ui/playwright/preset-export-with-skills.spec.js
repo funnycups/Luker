@@ -37,6 +37,7 @@ import {
     openSkillManagerPanel,
     buildSyntheticEmbed,
     cleanupSkill,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const FIXTURE_SKILL_NAME = 'pw-preset-export-skill';
@@ -75,10 +76,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
 
         // Screenshot 1: manager panel showing the fixture in source preset scope.
         const panel = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('preset-export', '1-source-installed'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('preset-export', '1-source-installed'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 
@@ -163,10 +161,7 @@ test.describe('Skills: preset export with embedded skills (round-trip)', () => {
 
         // Screenshot 2: manager panel showing both preset rows.
         const panel2 = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('preset-export', '2-reimported'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('preset-export', '2-reimported'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel2.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 

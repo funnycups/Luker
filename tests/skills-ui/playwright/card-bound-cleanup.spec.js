@@ -33,6 +33,7 @@ import {
     openSkillManagerPanel,
     buildSyntheticEmbed,
     cleanupSkill,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const FIXTURE_OWN_SKILL = 'pw-card-bound-own-skill';
@@ -141,10 +142,7 @@ test.describe('Skills: card-bound preset materializes to character scope + clean
 
         // Screenshot 1: manager panel showing both rows under the character section.
         const panel = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('card-bound-cleanup', '1-character-scope-installed'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('card-bound-cleanup', '1-character-scope-installed'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 
@@ -172,10 +170,7 @@ test.describe('Skills: card-bound preset materializes to character scope + clean
         // Screenshot 2: manager panel post-cascade — character section empty
         // of fixture rows.
         const panel2 = await openSkillManagerPanel(page);
-        await page.screenshot({
-            path: screenshotPath('card-bound-cleanup', '2-cascade-cleaned'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('card-bound-cleanup', '2-cascade-cleaned'), { fullPage: false });
         await page.keyboard.press('Escape');
         await panel2.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 

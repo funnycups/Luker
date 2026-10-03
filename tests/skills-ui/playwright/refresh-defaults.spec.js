@@ -39,6 +39,7 @@ import {
     ensureInlineDrawerOpen,
     ensureSkillsApiAvailable,
     ensureDirectorProfileInitialized,
+    takeDocScreenshot,
 } from './helpers.js';
 
 // Mode-level baseline expected by the default profile.
@@ -112,10 +113,7 @@ test.describe('Skills: director-defaults refresh', () => {
         // the wipe took effect at the settings layer.
         await ensureExtensionsDrawerOpen(page);
         await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-        await page.screenshot({
-            path: screenshotPath('refresh-defaults', '1-wiped'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('refresh-defaults', '1-wiped'), { fullPage: false });
 
         // ── 3. Run the refresh. Import the director-defaults module from
         //      inside the page, build the canonical default profile, then
@@ -185,10 +183,7 @@ test.describe('Skills: director-defaults refresh', () => {
             expect(s.visible.length, `sub-agent ${s.id} has at least inherit + 1 skill`).toBeGreaterThanOrEqual(2);
         }
 
-        await page.screenshot({
-            path: screenshotPath('refresh-defaults', '2-refreshed'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('refresh-defaults', '2-refreshed'), { fullPage: false });
 
         // ── 5. Restore the original profile so the spec leaves no diff. ──
         await page.evaluate((original) => {

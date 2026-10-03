@@ -5,12 +5,16 @@
 // clicks a user row to trigger the redirect (endpoint returns
 // {redirect:{target,path}} for depth ≥ 3 aggregate paths, frontend re-
 // mounts on that user's per-target Inspector automatically).
+//
+// Doc screenshots 05/06 are gated behind LUKER_UPDATE_DOC_SCREENSHOTS
+// (see _lib/doc-screenshots.js).
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, openAdminPanel, createUserViaAdminUI } from '../_lib/page.js';
 import { loginAs } from '../_lib/sync.js';
+import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedFixtureUser } from './_helpers.js';
 
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/storage-inspector');
@@ -64,8 +68,7 @@ test.describe('Storage Inspector · admin aggregate view', () => {
         await expect(chatsRow).toBeVisible();
 
         // Screenshot 05 — aggregate L1 view.
-        await page.screenshot({
-            path: resolve(SCREENSHOT_DIR, '05-admin-aggregate.png'),
+        await takeDocScreenshot(page, resolve(SCREENSHOT_DIR, '05-admin-aggregate.png'), {
             fullPage: false,
         });
 
@@ -77,8 +80,7 @@ test.describe('Storage Inspector · admin aggregate view', () => {
         expect(await userRows.count()).toBeGreaterThanOrEqual(2);
 
         // Screenshot 06 — aggregate L2 chats with per-user rows.
-        await page.screenshot({
-            path: resolve(SCREENSHOT_DIR, '06-admin-aggregate-drilldown.png'),
+        await takeDocScreenshot(page, resolve(SCREENSHOT_DIR, '06-admin-aggregate-drilldown.png'), {
             fullPage: false,
         });
 

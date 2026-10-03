@@ -5,12 +5,14 @@
 //   - list refreshes to show only 2 rows
 //   - page.evaluate(() => localStorage.getItem(deleted)) returns null
 //   - remaining 2 keys still present.
-// Captures 03-delete-confirm.png with confirm popup open.
+// Captures 03-delete-confirm.png with confirm popup open, gated behind
+// LUKER_UPDATE_DOC_SCREENSHOTS (see _lib/doc-screenshots.js).
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
+import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } from './_helpers.js';
 
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/browser-storage-inspector');
@@ -48,7 +50,7 @@ test.describe('Browser Storage Inspector · delete localStorage key', () => {
         const confirmDialog = page.locator('dialog.popup[open]').last();
         await expect(confirmDialog).toContainText('luker-draft-x729');  // label interpolation
 
-        await inspector.screenshot({ path: resolve(SCREENSHOT_DIR, '03-delete-confirm.png') });
+        await takeDocScreenshot(inspector, resolve(SCREENSHOT_DIR, '03-delete-confirm.png'));
 
         // Click the OK / Delete button
         await confirmDialog.locator('.popup-button-ok').click();

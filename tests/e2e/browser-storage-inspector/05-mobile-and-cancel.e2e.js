@@ -1,9 +1,12 @@
 // Browser Storage Inspector · mobile viewport + confirm-cancel path.
+// The 04-mobile.png doc screenshot is gated behind
+// LUKER_UPDATE_DOC_SCREENSHOTS (see _lib/doc-screenshots.js).
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
+import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedBrowserFixture, wipeBrowserFixture, openBrowserStorageInspector } from './_helpers.js';
 
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/browser-storage-inspector');
@@ -33,7 +36,7 @@ test.describe('Browser Storage Inspector · mobile + cancel', () => {
         const dotsVisible = inspector.locator('.storageInspectorEntry .storageInspectorEntryDots').first();
         await expect(dotsVisible).toBeHidden();
 
-        await inspector.screenshot({ path: resolve(SCREENSHOT_DIR, '04-mobile.png') });
+        await takeDocScreenshot(inspector, resolve(SCREENSHOT_DIR, '04-mobile.png'));
 
         await wipeBrowserFixture(page);
     });

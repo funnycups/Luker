@@ -16,12 +16,14 @@
 // Also captures three doc screenshots on the way — 01-self-l1.png,
 // 02-self-chats-drilldown.png, 03-self-chat-file.png — that live under
 // docs/public/images/storage-inspector/ so the user-facing docs can
-// reference them without a separate capture pass.
+// reference them without a separate capture pass. The writes are gated
+// behind LUKER_UPDATE_DOC_SCREENSHOTS (see _lib/doc-screenshots.js).
 
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
+import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedFixtureUser } from './_helpers.js';
 
 const SCREENSHOT_DIR = resolve(import.meta.dirname, '../../../docs/public/images/storage-inspector');
@@ -78,8 +80,7 @@ test.describe('Storage Inspector · self drill-down', () => {
         await expect(inspector.locator('.storageInspectorEntry[data-key="chats"]')).toBeVisible();
 
         // Screenshot 01 — L1 view (stacked bar + entry list visible).
-        await page.screenshot({
-            path: resolve(SCREENSHOT_DIR, '01-self-l1.png'),
+        await takeDocScreenshot(page, resolve(SCREENSHOT_DIR, '01-self-l1.png'), {
             fullPage: false,
         });
 
@@ -91,8 +92,7 @@ test.describe('Storage Inspector · self drill-down', () => {
         await expect(inspector.locator('.storageInspectorEntry[data-key="default_Seraphina"]')).toBeVisible();
 
         // Screenshot 02 — L2 chats view showing per-character rows.
-        await page.screenshot({
-            path: resolve(SCREENSHOT_DIR, '02-self-chats-drilldown.png'),
+        await takeDocScreenshot(page, resolve(SCREENSHOT_DIR, '02-self-chats-drilldown.png'), {
             fullPage: false,
         });
 
@@ -112,8 +112,7 @@ test.describe('Storage Inspector · self drill-down', () => {
         expect(await inspector.locator('.storageInspectorEntry[data-kind="chat-sidecar"]').count()).toBeGreaterThanOrEqual(2);
 
         // Screenshot 03 — L4 chat file view (metadata + messages + sidecars).
-        await page.screenshot({
-            path: resolve(SCREENSHOT_DIR, '03-self-chat-file.png'),
+        await takeDocScreenshot(page, resolve(SCREENSHOT_DIR, '03-self-chat-file.png'), {
             fullPage: false,
         });
 

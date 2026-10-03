@@ -30,6 +30,7 @@ import {
     ensureExtensionsDrawerOpen,
     ensureInlineDrawerOpen,
     ensureSkillsApiAvailable,
+    takeDocScreenshot,
 } from './helpers.js';
 
 // eslint-disable-next-line no-unused-vars
@@ -87,10 +88,7 @@ test.describe('Skills: orchestrator skill chips', () => {
         } catch {
             // If the chips never hydrate, surface this so the smoke
             // suite catches the regression rather than silently passing.
-            await page.screenshot({
-                path: screenshotPath('chips', 'hydrate-failed'),
-                fullPage: false,
-            });
+            await takeDocScreenshot(page, screenshotPath('chips', 'hydrate-failed'), { fullPage: false });
             throw new Error('Skill chips did not hydrate inside the orchestration editor popup');
         }
 
@@ -107,10 +105,7 @@ test.describe('Skills: orchestrator skill chips', () => {
         console.log(`[smoke] mode-level chip count = ${modeChipCount}`);
         expect(modeChipCount).toBeGreaterThanOrEqual(1);
 
-        await page.screenshot({
-            path: screenshotPath('chips', 'mode-level'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('chips', 'mode-level'), { fullPage: false });
 
         // ── 4. Add dropdown shows available method skills ────────────
         // The "Add..." dropdown lives inside each chip block; the select
@@ -132,10 +127,7 @@ test.describe('Skills: orchestrator skill chips', () => {
             expect(optionValues.length).toBeGreaterThanOrEqual(0);
         }
 
-        await page.screenshot({
-            path: screenshotPath('chips', 'add-dropdown'),
-            fullPage: false,
-        });
+        await takeDocScreenshot(page, screenshotPath('chips', 'add-dropdown'), { fullPage: false });
 
         // ── 5. Sub-agent chip rows (best-effort) ─────────────────────
         // The director default profile ships sub-agents that surface
@@ -153,10 +145,7 @@ test.describe('Skills: orchestrator skill chips', () => {
             // the screenshot frames the row correctly.
             await subagentChipBlock.scrollIntoViewIfNeeded();
             await subagentChipBlock.locator('.luker_skill_chips').waitFor({ state: 'visible', timeout: 10_000 });
-            await page.screenshot({
-                path: screenshotPath('chips', 'sub-agent'),
-                fullPage: false,
-            });
+            await takeDocScreenshot(page, screenshotPath('chips', 'sub-agent'), { fullPage: false });
         } else {
             // eslint-disable-next-line no-console
             console.log('[smoke] no sub-agent chip block visible — skipping sub-agent screenshot');

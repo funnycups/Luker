@@ -46,6 +46,7 @@ import {
     ensureDirectorProfileInitialized,
     activateConnectionProfile,
     ensureCharacterLoaded,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const SKILL_NAME = 'slowburn-intimacy-zh';
@@ -119,7 +120,7 @@ test.describe('Skills iter-studio: LLM authors a real RP-discipline skill', () =
         const loadedAvatar = await ensureCharacterLoaded(page);
         expect(loadedAvatar, 'iter-studio spec needs a character loaded').toBeTruthy();
 
-        await page.screenshot({ path: stepPath(1, 'main-ui-ready'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(1, 'main-ui-ready'), { fullPage: false });
 
         // ── Step 2: open the Extensions drawer + Orchestrator settings,
         //   click "Open AI Iteration Studio" (visible only in director-mode
@@ -140,7 +141,7 @@ test.describe('Skills iter-studio: LLM authors a real RP-discipline skill', () =
             const d = document.querySelector('dialog.popup:has(.orch_it_popup)');
             return d && d.hasAttribute('open') && !d.hasAttribute('opening');
         }, null, { timeout: 5000 });
-        await page.screenshot({ path: stepPath(2, 'iter-studio-opened'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(2, 'iter-studio-opened'), { fullPage: false });
 
         // ── Step 3: type the prompt into the composer textarea and send. ─
         const composerInput = iterPopup.locator('textarea[data-orch-it-input]').first();
@@ -152,11 +153,11 @@ test.describe('Skills iter-studio: LLM authors a real RP-discipline skill', () =
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
         }, USER_PROMPT);
-        await page.screenshot({ path: stepPath(3, 'prompt-typed'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(3, 'prompt-typed'), { fullPage: false });
 
         const sendBtn = iterPopup.locator('button[data-orch-it-action="send"]').first();
         await sendBtn.dispatchEvent('click');
-        await page.screenshot({ path: stepPath(4, 'send-clicked'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(4, 'send-clicked'), { fullPage: false });
 
         // ── Step 4: wait for the LLM round to complete + skill_create to
         //   land on disk. We poll for the file's existence — the most direct
@@ -172,7 +173,7 @@ test.describe('Skills iter-studio: LLM authors a real RP-discipline skill', () =
                 await new Promise(r => setTimeout(r, 5000));
             }
         }
-        await page.screenshot({ path: stepPath(5, 'after-llm-round'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(5, 'after-llm-round'), { fullPage: false });
         expect(landed, `skill_create should have written ${SKILL_DISK_PATH} within 8 minutes`).toBe(true);
 
         // ── Step 5: read the on-disk file and assert it is well-formed. ─
@@ -196,7 +197,7 @@ test.describe('Skills iter-studio: LLM authors a real RP-discipline skill', () =
         }, SKILL_NAME);
         expect(apiSeen, 'skill should be visible in context.skills.list at global scope').toBe(true);
 
-        await page.screenshot({ path: stepPath(6, 'skill-on-disk-verified'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(6, 'skill-on-disk-verified'), { fullPage: false });
 
         // ── Step 7: close the iter-studio popup. ────────────────────────
         await iterPopup.locator('div.popup-button-ok, div.popup-button-close, .popup-button-cancel').first().dispatchEvent('click');

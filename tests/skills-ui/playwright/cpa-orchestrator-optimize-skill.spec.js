@@ -52,6 +52,7 @@ import {
     ensureExtensionsDrawerOpen,
     ensureInlineDrawerOpen,
     activateConnectionProfile,
+    takeDocScreenshot,
 } from './helpers.js';
 
 const SKILL_NAME = 'preset-style-anti-meta-zh';
@@ -233,12 +234,12 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
         // After potential switch, the preset name is guaranteed ASCII-safe.
         expect(SAFE_SEGMENT.test(presetMeta.name), `active preset name must be ASCII-safe for preset-scope skills to land; got: ${presetMeta.name}`).toBe(true);
 
-        await page.screenshot({ path: stepPath(1, 'main-ui-ready'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(1, 'main-ui-ready'), { fullPage: false });
 
         // ── Step 2: open the Extensions drawer + CPA settings panel. ──
         await ensureExtensionsDrawerOpen(page);
         await ensureInlineDrawerOpen(page, 'completion_preset_assistant_settings');
-        await page.screenshot({ path: stepPath(2, 'cpa-settings-open'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(2, 'cpa-settings-open'), { fullPage: false });
 
         // ── Step 3: click Open Assistant → CPA popup mounts. ──────────
         const openBtn = page.locator('#completion_preset_assistant_open').first();
@@ -251,7 +252,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
             const d = document.querySelector('dialog.popup:has(.cpa_it_popup)');
             return d && d.hasAttribute('open') && !d.hasAttribute('opening');
         }, null, { timeout: 5000 });
-        await page.screenshot({ path: stepPath(3, 'cpa-popup-opened'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(3, 'cpa-popup-opened'), { fullPage: false });
 
         // ── Step 3b: start a fresh session so any prior history for this
         // preset doesn't muddy the model's context (an old session may
@@ -283,7 +284,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
             const sel = document.querySelector('dialog.popup:has(.cpa_it_popup) .cpa_it_mode_select');
             return sel && sel.value === 'orchestrator-optimize';
         }, null, { timeout: 5000 });
-        await page.screenshot({ path: stepPath(4, 'orchestrator-mode-selected'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(4, 'orchestrator-mode-selected'), { fullPage: false });
 
         // ── Step 5: type the prompt + send. ─────────────────────────────
         const composer = cpaPopup.locator('textarea[data-cpa-it-input]').first();
@@ -295,11 +296,11 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
         }, USER_PROMPT);
-        await page.screenshot({ path: stepPath(5, 'prompt-typed'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(5, 'prompt-typed'), { fullPage: false });
 
         const sendBtn = cpaPopup.locator('[data-cpa-it-action="send"]').first();
         await sendBtn.dispatchEvent('click');
-        await page.screenshot({ path: stepPath(6, 'send-clicked'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(6, 'send-clicked'), { fullPage: false });
 
         // ── Step 6: wait for skill_create to write the file on disk. ───
         // We poll the filesystem because the runtime trace channel for CPA
@@ -314,7 +315,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
             if (found) break;
             await new Promise(r => setTimeout(r, 5000));
         }
-        await page.screenshot({ path: stepPath(7, 'after-llm-round'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(7, 'after-llm-round'), { fullPage: false });
         expect(found, `skill ${SKILL_NAME} should be on disk within 8 minutes`).toBeTruthy();
 
         // ── Step 7: verify scope landed at preset (regression guard). ──
@@ -354,7 +355,7 @@ test.describe('CPA orchestrator-optimize: skill toolset wiring', () => {
         expect(apiSeen[0].scope?.kind, 'skills.list scope kind should match disk scope').toBe('preset');
         expect(apiSeen[0].scope?.name, 'skills.list scope name should match disk scope').toBe(presetMeta.name);
 
-        await page.screenshot({ path: stepPath(8, 'skill-on-disk-verified'), fullPage: false });
+        await takeDocScreenshot(page, stepPath(8, 'skill-on-disk-verified'), { fullPage: false });
 
         // ── Step 10: close the popup. Best-effort — popup may auto-close
         // if the AI finished without leaving pending edits. ────────────
