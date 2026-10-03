@@ -1,14 +1,13 @@
-// Multi-user LAN Sync e2e — paired alice@A and alice@B with basic-auth
-// across the wire.
+// Multi-user LAN Sync e2e — paired alice@A and alice@B without any
+// basic-auth credentials.
 //
-// This is the load-bearing test that proves the multi-user workaround is
-// dead. With `enableUserAccounts: true` the responder's /session/offer
-// route demands a basic-auth header; the requester's
-// /pair/accept route persists the offered peerAuth so subsequent Sync
-// now calls don't need it supplied again. Both pieces have
-// dedicated in-process tests; this e2e drives the full UI loop and
-// confirms the pair, the live-data reconcile, and the stored-credential
-// affordance all land on a real browser pair.
+// This is the load-bearing test that proves the multi-user flow works.
+// With `enableUserAccounts: true` a cross-server `/session/offer` has no
+// session cookie; previously it demanded basic-auth credentials that
+// ordinary multi-user accounts never had. The pairing link now carries a
+// one-time pairing code; the first offer consumes it and returns a
+// durable peer secret that both sides store, so the pair and every later
+// "Sync now" authenticate without the user typing anything.
 //
 // Server-side bootstrap user is `default-user` (admin, no password) on
 // both servers; both admins then create `alice` with the same password
@@ -124,7 +123,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — multi-user pair and sync', () => {
-    test('alice@A pairs with alice@B over basic-auth, seeded world lands on B, stored creds drive a follow-up Sync now', async ({ browser }) => {
+    test('alice@A pairs with alice@B without credentials, seeded world lands on B, follow-up Sync now reuses the stored secret', async ({ browser }) => {
         test.setTimeout(180_000);
 
         const ctxA = await browser.newContext();
@@ -144,16 +143,17 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
             categories: ['worlds'],
         });
         expect(link).toMatch(/^luker-sync:.*peer=alice%40/);
+        // The link carries the one-time pairing code, not a durable
+        // credential.
+        expect(link).toMatch(/[?&]code=[a-f0-9]{64}/);
 
-        // B accepts WITH basic-auth credentials. Without this, A's
-        // /session/offer 401s in multi-user mode (the multi-user shim only allows
-        // a sync session when the caller passes valid Basic creds; it never
-        // grants anonymous cross-handle access).
+        // B accepts with NO credentials. The one-time code authenticates
+        // the outbound offer on this multi-user install where alice has
+        // no basic-auth password to type.
         await openLanSyncPanel(pageB);
         const acceptOutcome = await acceptPairingLink(pageB, link, {
             categories: ['worlds'],
             localLabel: 'A device',
-            peerAuth: { username: 'alice', password: ALICE_PASSWORD },
         });
 
         // Same dual outcome as spec 01: if alice's seed worlds dirs on A
@@ -168,9 +168,10 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
         }
 
         // The reconcile step writes A's seeded world into B's live data
-        // UNDER ALICE'S HANDLE — not default-user. If the multi-user shim
-        // had degenerated to "treat all callers as default-user", the
-        // file would land in B's `default-user/worlds/` instead.
+        // UNDER ALICE'S HANDLE — not default-user. If the multi-user
+        // resolution had degenerated to "treat all callers as
+        // default-user", the file would land in B's `default-user/worlds/`
+        // instead.
         const expectedPath = path.join(B.dataRoot, 'alice', 'worlds', `${SEED_WORLD}.json`);
         await expect.poll(
             () => fs.existsSync(expectedPath),
@@ -180,19 +181,19 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
         expect(onB.name).toBe(SEED_WORLD);
         expect(onB.entries['0'].comment).toBe('multi-user-pair-marker');
 
-        // Stored-credentials affordance: the peer row's "Clear
-        // credentials" button only renders when /peers reported
-        // hasStoredCredentials === true for this peer. The server side
-        // is pinned by in-process tests; here we prove the UI consumed it.
-        await pageB.locator('.lanSyncTabPeers').click();
-        const peerRow = pageB.locator('.lanSyncPeerRow', { hasText: 'A device' });
-        await expect(peerRow.locator('.lanSyncPeerClearAuthButton')).toBeVisible({ timeout: 5_000 });
+        // No basic-auth credentials were stored (none were supplied), but
+        // the durable pairing secret is on B's peer entry.
+        const bState = JSON.parse(fs.readFileSync(path.join(B.dataRoot, 'alice', '.sync', 'state.json'), 'utf8'));
+        const peerEntry = Object.values(bState.peers).find(p => p.label === 'A device');
+        expect(peerEntry).toBeTruthy();
+        expect(peerEntry.syncSecret).toMatch(/^[a-f0-9]{64}$/);
+        expect(peerEntry.peerAuth).toBeUndefined();
 
-        // Follow-up "Sync now" must succeed without re-prompting for
-        // credentials — proves the stored peerAuth blob is consulted on
-        // every /peers/:peerId/sync call. The outcome 'success' (or
-        // 'warning' if the responder ever ships another byte under
-        // alice/worlds after first pair; we accept both like spec 01).
+        // Follow-up "Sync now" must succeed without any credential
+        // prompt — the stored secret authenticates the offer. The outcome
+        // 'success' (or 'warning' if the responder ever ships another
+        // byte under alice/worlds after first pair; we accept both like
+        // spec 01).
         const syncAgain = await clickSyncNow(pageB, 'A device');
         expect(['success', 'warning']).toContain(syncAgain);
         if (syncAgain === 'warning') {

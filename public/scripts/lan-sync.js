@@ -49,12 +49,15 @@ const ENDPOINTS = {
 const PAIR_LINK_SCHEME = 'luker-sync';
 const PAIR_LINK_VERSION = 'v1';
 
-function buildPairLink({ peerBaseUrl, peerId, label, categories }) {
+function buildPairLink({ peerBaseUrl, peerId, label, categories, pairCode }) {
     const params = new URLSearchParams();
     params.set('base', peerBaseUrl);
     params.set('peer', peerId);
     params.set('label', label || '');
     params.set('cats', (categories || []).join(','));
+    if (pairCode) {
+        params.set('code', pairCode);
+    }
     return `${PAIR_LINK_SCHEME}://pair/${PAIR_LINK_VERSION}?${params.toString()}`;
 }
 
@@ -81,6 +84,7 @@ function parsePairLink(raw) {
         peerId: peer,
         label: params.get('label') || '',
         categories: (params.get('cats') || '').split(',').filter(Boolean),
+        pairCode: params.get('code') || '',
     };
 }
 
@@ -548,6 +552,7 @@ export async function openLanSyncPanel() {
                 peerId: body.peerId,
                 label: body.label,
                 categories: body.categories,
+                pairCode: body.pairCode,
             });
             template.find('.lanSyncGeneratedLink').val(link);
             template.find('.lanSyncPairNewResult').removeClass('displayNone');
@@ -584,6 +589,7 @@ export async function openLanSyncPanel() {
         template.find('.lanSyncAcceptBaseUrl').val(parsed.peerBaseUrl);
         template.find('.lanSyncAcceptPeerId').val(parsed.peerId);
         template.find('.lanSyncAcceptLabel').val(parsed.label || '');
+        template.find('.lanSyncAcceptPairCode').val(parsed.pairCode || '');
         if (parsed.categories.length) {
             // Pre-check exactly the categories the other device wants.
             template.find('.lanSyncAcceptCategoryGrid input[name="lanSyncCategory"]').each(function () {
@@ -600,6 +606,7 @@ export async function openLanSyncPanel() {
         const categories = collectSelectedCategoryIds(template.find('.lanSyncAcceptCategoryGrid'));
         const username = String(template.find('.lanSyncAcceptUsername').val() || '').trim();
         const password = String(template.find('.lanSyncAcceptPassword').val() || '');
+        const pairCode = String(template.find('.lanSyncAcceptPairCode').val() || '').trim();
 
         if (!peerBaseUrl || !remotePeerId) {
             toastr.warning(t`Paste the pairing link or fill in the base URL and peer ID.`, t`LAN Sync`);
@@ -615,6 +622,7 @@ export async function openLanSyncPanel() {
             remotePeerId,
             label,
             categories,
+            pairCode: pairCode || null,
             peerAuth: (username && password) ? { username, password } : null,
         });
         await refreshPeers(template, handlers);

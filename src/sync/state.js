@@ -5,6 +5,14 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { assertSafePeerId, getShadowPaths } from './shadow.js';
 
 /**
+ * Pairing codes and peer secrets are 32 random bytes rendered as 64
+ * lowercase hex chars (see `/pair/start` and `/session/offer` in
+ * `src/endpoints/sync.js`). Anything else is treated as "not supplied"
+ * by `recordPeer`.
+ */
+const SYNC_SECRET_PATTERN = /^[a-f0-9]{64}$/i;
+
+/**
  * Resolve the on-disk path of the per-user sync state file.
  *
  * Kept standalone (rather than delegating to `getShadowPaths` from
@@ -93,9 +101,17 @@ async function writeSyncState({ userRoot, state }) {
  * `writeSyncState` for the file-mode policy that keeps the credentials
  * owner-readable only.
  *
- * @param {{ userRoot: string, peerId: string, label: string, categories: string[], peerBaseUrl?: string, peerAuth?: { username?: string, password?: string } | null }} args
+ * `syncSecret` is the shared 64-hex pairing secret minted by
+ * `/pair/start` and carried through the pairing link. The device that
+ * issued the link stores it alongside the peer entry so its
+ * `/session/offer` can authenticate the accepting device's
+ * server-to-server call; the accepting device stores it so every later
+ * "Sync now" can present it. Only stored when it matches the 64-hex
+ * shape; omitted/malformed input preserves any existing value.
+ *
+ * @param {{ userRoot: string, peerId: string, label: string, categories: string[], peerBaseUrl?: string, peerAuth?: { username?: string, password?: string } | null, syncSecret?: string | null }} args
  */
-export async function recordPeer({ userRoot, peerId, label, categories, peerBaseUrl, peerAuth }) {
+export async function recordPeer({ userRoot, peerId, label, categories, peerBaseUrl, peerAuth, syncSecret }) {
     assertSafePeerId(peerId);
     const state = readSyncState({ userRoot });
     const previous = state.peers[peerId] ?? {};
@@ -103,6 +119,9 @@ export async function recordPeer({ userRoot, peerId, label, categories, peerBase
         && typeof peerAuth.username === 'string' && peerAuth.username.length
         && typeof peerAuth.password === 'string' && peerAuth.password.length)
         ? { username: peerAuth.username, password: peerAuth.password }
+        : undefined;
+    const nextSyncSecret = (typeof syncSecret === 'string' && SYNC_SECRET_PATTERN.test(syncSecret.trim()))
+        ? syncSecret.trim().toLowerCase()
         : undefined;
     state.peers[peerId] = {
         ...previous,
@@ -116,7 +135,38 @@ export async function recordPeer({ userRoot, peerId, label, categories, peerBase
         // Same carry-forward for credentials: omitted/incomplete input
         // leaves the existing `peerAuth` (if any) intact.
         ...(nextPeerAuth ? { peerAuth: nextPeerAuth } : {}),
+        // And for the pairing secret: `/pair/start` mints it, later
+        // `recordPeer` calls (relabel, sync completion) don't supply it
+        // and must not drop it.
+        ...(nextSyncSecret ? { syncSecret: nextSyncSecret } : {}),
     };
+    await writeSyncState({ userRoot, state });
+}
+
+/**
+ * Persist the durable pairing secret on an existing peer entry.
+ *
+ * Used by `/session/offer`'s pairing-code handshake: the first offer
+ * consumes the one-time code, mints the durable secret, and stores it
+ * here. Writing the secret alone (instead of routing through
+ * `recordPeer`) keeps the label and category selection the user chose at
+ * `/pair/start` intact — the offer body carries the CALLER's display
+ * name, which is not what this side calls the peer.
+ *
+ * No-op when the peer isn't registered: the offer route only calls this
+ * after `resolveUserFromPeerSecret` matched an existing entry, and a
+ * missing entry here means the registry was cleared concurrently.
+ *
+ * @param {{ userRoot: string, peerId: string, syncSecret: string }} args
+ */
+export async function recordPeerSecret({ userRoot, peerId, syncSecret }) {
+    assertSafePeerId(peerId);
+    if (typeof syncSecret !== 'string' || !SYNC_SECRET_PATTERN.test(syncSecret.trim())) {
+        throw new Error('recordPeerSecret requires a 64-hex syncSecret');
+    }
+    const state = readSyncState({ userRoot });
+    if (!state.peers[peerId]) return;
+    state.peers[peerId].syncSecret = syncSecret.trim().toLowerCase();
     await writeSyncState({ userRoot, state });
 }
 

@@ -15,10 +15,11 @@ import crypto from 'node:crypto';
 
 import express from 'express';
 import git from 'isomorphic-git';
+import storage from 'node-persist';
 
 import { readObjectForWire, writeObjectFromWireStream } from '../sync/objects.js';
 import { ensureShadowRepo, snapshotLiveToShadow, reconcileShadowToLive, assertSafePeerId } from '../sync/shadow.js';
-import { createSyncSession, closeSyncSession, consumeSyncSession } from '../sync/session.js';
+import { createSyncSession, closeSyncSession, consumeSyncSession, createPairingCode, consumePairingCode, PEER_SECRET_HEADER, PAIR_CODE_HEADER } from '../sync/session.js';
 import {
     runPull,
     syncQueueKey,
@@ -27,15 +28,20 @@ import {
 } from '../sync/orchestrator.js';
 import { materializeUserDataIntoWorkdir, dematerializeWorkdirIntoUserData, buildWorkdirDirectoriesView } from '../sync/materialize.js';
 import { markSyncInProgress, clearSyncInProgress } from '../sync/in-progress-gate.js';
-import { readSyncState, recordPeer, removePeerCompletely, clearPeerAuth } from '../sync/state.js';
+import { readSyncState, recordPeer, recordPeerSecret, removePeerCompletely, clearPeerAuth } from '../sync/state.js';
 import { SYNC_CATEGORIES } from '../sync/categories.js';
 import { getStorageEngine } from '../storage/index.js';
 import { getRequestBaseUrl } from '../express-common.js';
-import { ENABLE_ACCOUNTS, resolveUserFromBasicAuth } from '../users.js';
+import { ENABLE_ACCOUNTS, resolveUserFromBasicAuth, getAllUserHandles, getUserDirectories, toKey } from '../users.js';
 
 export const router = express.Router();
 
 const TOKEN_HEADER_PATTERN = /^Bearer\s+([a-f0-9]{64})$/i;
+
+/**
+ * Shared pairing secret shape: 32 random bytes rendered as 64 hex chars.
+ */
+const PEER_SECRET_PATTERN = /^[a-f0-9]{64}$/i;
 
 /**
  * 40-hex git object id. Lowercase canonical form; the matchers tolerate
@@ -383,15 +389,6 @@ router.post('/session/ref', requireSyncToken, express.json(), async (request, re
  * without going back through the per-handle directory cache.
  */
 router.post('/session/offer', express.json({ limit: '16kb' }), async (request, response) => {
-    let user = request.user;
-    if (!user?.profile?.handle && ENABLE_ACCOUNTS) {
-        user = await resolveUserFromBasicAuth(request);
-    }
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const handle = user.profile.handle;
     const peerId = String(request.body?.peerId || '').trim();
     const label = String(request.body?.label || '').trim();
     const categories = Array.isArray(request.body?.categories)
@@ -401,6 +398,31 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
     if (!peerId) {
         return response.status(400).json({ error: 'peerId required' });
     }
+
+    let user = request.user;
+    let issuedSecret;
+    if (!user?.profile?.handle && ENABLE_ACCOUNTS) {
+        // Cross-server callers carry no session cookie. Prefer the pairing
+        // credential (one-time code on the first offer, durable secret on
+        // later offers; works on multi-user installs without per-user
+        // basic auth), then fall back to basic-auth credentials for
+        // legacy pairings that stored them. Single-user installs never
+        // reach here: `setUserDataMiddleware` synthesizes the default
+        // user for every request.
+        const resolved = await resolveUserFromPeerSecret(request, peerId);
+        if (resolved) {
+            user = resolved;
+            issuedSecret = resolved.issuedSecret;
+        }
+    }
+    if (!user?.profile?.handle && ENABLE_ACCOUNTS) {
+        user = await resolveUserFromBasicAuth(request);
+    }
+    if (!user?.profile?.handle || !user?.directories?.root) {
+        return response.status(401).json({ error: 'Auth required' });
+    }
+
+    const handle = user.profile.handle;
 
     // Pairing requires the same sanitized handle on both
     // devices. The peerId encodes the issuing user's sanitized handle as
@@ -480,9 +502,24 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
         return response.status(500).json({ error: 'Snapshot failed' });
     }
 
+    // The pairing-code handshake: the first offer from the accepting
+    // device consumed a one-time code, so hand back the durable secret
+    // that replaces it. `recordPeerSecret` persists it here without
+    // touching the label/categories the user chose at `/pair/start`; the
+    // accepting device stores the same value on its own peer entry. Both
+    // sides present it on every later offer.
+    if (issuedSecret) {
+        try {
+            await recordPeerSecret({ userRoot: user.directories.root, peerId, syncSecret: issuedSecret });
+        } catch (e) {
+            console.error('[sync] offer secret persistence failed', e);
+            return response.status(500).json({ error: 'Failed to persist pairing secret' });
+        }
+    }
+
     const baseUrl = getRequestBaseUrl(request);
     const url = `${baseUrl}/api/sync/v1/session/manifest`;
-    response.json({ token, expiresAt, url, peerId, label });
+    response.json({ token, expiresAt, url, peerId, label, syncSecret: issuedSecret });
 });
 
 /**
@@ -667,6 +704,81 @@ function generatePeerId(handle) {
 }
 
 /**
+ * Constant-time comparison of two hex strings. Both sides are expected
+ * to be 64-hex pairing secrets; malformed input (odd length, non-hex)
+ * fails the length check before `timingSafeEqual` can throw.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function secretsMatch(a, b) {
+    const bufA = Buffer.from(String(a || ''), 'hex');
+    const bufB = Buffer.from(String(b || ''), 'hex');
+    if (bufA.length === 0 || bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Resolve the user a peer is offering to sync as, using the shared
+ * pairing secret instead of a session cookie or basic-auth credentials.
+ *
+ * Two credentials exist, both scoped to one (handle, peerId) registry
+ * entry:
+ *
+ *   - The one-time pairing code (`X-Sync-Pair-Code`), minted by
+ *     `/pair/start` and embedded in the pairing link. It is consumed on
+ *     the first successful offer, so a leaked link dies shortly after
+ *     pairing.
+ *   - The durable peer secret (`X-Sync-Peer-Secret`), minted by the
+ *     first offer and stored on both sides. Every later "Sync now"
+ *     presents it.
+ *
+ * This is NOT an auth bypass: a request only resolves when the peerId
+ * prefix matches an actual user's sanitized handle AND that user's
+ * registry holds a peer entry for the exact peerId AND the presented
+ * credential verifies against it. No entry, no credential, wrong
+ * credential → `null` and the route returns 401 as before.
+ *
+ * @param {import('express').Request} request
+ * @param {string} peerId
+ * @returns {Promise<{ profile: import('../users.js').User, directories: import('../users.js').UserDirectoryList, issuedSecret?: string } | null>}
+ */
+async function resolveUserFromPeerSecret(request, peerId) {
+    const pairCode = String(request.get(PAIR_CODE_HEADER) || '').trim().toLowerCase();
+    const presentedSecret = String(request.get(PEER_SECRET_HEADER) || '').trim().toLowerCase();
+    if (!peerId || (!pairCode && !PEER_SECRET_PATTERN.test(presentedSecret))) return null;
+    const peerIdPrefix = peerId.split('@')[0];
+    const handles = await getAllUserHandles();
+    for (const handle of handles) {
+        if (sanitizeHandleForPeerId(handle) !== peerIdPrefix) continue;
+        const directories = getUserDirectories(handle);
+        const state = readSyncState({ userRoot: directories.root });
+        const peer = state.peers[peerId];
+        if (!peer) continue;
+        let authenticated = false;
+        let issuedSecret;
+        if (pairCode) {
+            // First offer: trade the one-time code for a durable secret.
+            // The secret is returned to the caller and persisted here so
+            // the peer can present it on every later offer.
+            const consumed = consumePairingCode(pairCode, { handle, peerId });
+            if (consumed) {
+                issuedSecret = crypto.randomBytes(32).toString('hex');
+                authenticated = true;
+            }
+        } else if (peer.syncSecret && secretsMatch(peer.syncSecret, presentedSecret)) {
+            authenticated = true;
+        }
+        if (!authenticated) continue;
+        const profile = await storage.getItem(toKey(handle));
+        if (!profile?.enabled) continue;
+        return { profile, directories, issuedSecret };
+    }
+    return null;
+}
+
+/**
  * List paired peers for the authenticated user. Returns the registry shape
  * from `readSyncState` so the UI can render rows verbatim — label,
  * categories, pairedAt, lastSyncAt, lastSyncedOid — with one transform:
@@ -687,7 +799,7 @@ router.get('/peers', (request, response) => {
     const state = readSyncState({ userRoot: user.directories.root });
     const sanitized = {};
     for (const [peerId, peer] of Object.entries(state.peers)) {
-        const { peerAuth, ...rest } = peer;
+        const { peerAuth, syncSecret: _syncSecret, ...rest } = peer;
         sanitized[peerId] = {
             ...rest,
             hasStoredCredentials: Boolean(peerAuth && peerAuth.username && peerAuth.password),
@@ -866,8 +978,15 @@ router.post('/pair/start', express.json({ limit: '4kb' }), async (request, respo
         return response.status(500).json({ error: e.message });
     }
 
+    // Mint the one-time pairing code that travels in the link. It is
+    // consumed by the accepting device's first `/session/offer`, which
+    // returns the durable peer secret both sides then use. The code
+    // expires with the link, so a leaked screenshot cannot mint a
+    // session later.
+    const pairCode = createPairingCode({ handle: user.profile.handle, peerId });
+
     const peerBaseUrl = getRequestBaseUrl(request);
-    response.json({ peerId, label, peerBaseUrl, categories });
+    response.json({ peerId, label, peerBaseUrl, categories, pairCode });
 });
 
 /**
@@ -922,8 +1041,15 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
         : (peer.peerAuth ?? null);
     const resolutions = (body.resolutions && typeof body.resolutions === 'object') ? body.resolutions : undefined;
 
-    // Mint a fresh session token at the peer via /session/offer.
+    // Mint a fresh session token at the peer via /session/offer. Prefer
+    // the stored pairing secret (works on multi-user installs without
+    // basic-auth credentials); basic-auth credentials, when stored or
+    // supplied, ride along for peers whose basic-auth middleware gates
+    // `/session/offer` itself.
     const headers = { 'Content-Type': 'application/json' };
+    if (peer.syncSecret) {
+        headers[PEER_SECRET_HEADER] = peer.syncSecret;
+    }
     if (peerAuth?.username && peerAuth?.password) {
         const creds = Buffer.from(`${peerAuth.username}:${peerAuth.password}`, 'utf8').toString('base64');
         headers['Authorization'] = `Basic ${creds}`;
@@ -1038,6 +1164,11 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
     const label = String(body.label || '').trim() || 'Unnamed device';
     const categories = Array.isArray(body.categories) ? body.categories.map(String) : [];
     const peerAuth = body.peerAuth && typeof body.peerAuth === 'object' ? body.peerAuth : null;
+    // The one-time pairing code arrives through the pairing link. It is
+    // presented on the outbound `/session/offer`, which consumes it and
+    // returns the durable peer secret we persist below. Later
+    // "Sync now" calls read that stored secret instead.
+    const pairCode = String(body.pairCode || '').trim().toLowerCase();
     // `resolutions` lets a second `/pair/accept` call (after the first
     // surfaced conflicts) finalize the merge with the user's picks. The
     // orchestrator's `runPullBody` runs `applyResolutions` instead of
@@ -1078,8 +1209,21 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
         });
     }
 
-    // Step 1: ask the OTHER device to mint a session token for us.
+    // Step 1: ask the OTHER device to mint a session token for us. On the
+    // first accept the one-time pairing code from the link does the
+    // authenticating; the offer response returns the durable secret,
+    // which is stored below. A conflict-resolution round-trip (second
+    // accept for the same peer) has no live code left — it presents the
+    // stored secret instead. Basic-auth credentials, when the user
+    // supplied them, ride along for peers whose basic-auth middleware
+    // gates `/session/offer` itself.
+    const storedSecret = readSyncState({ userRoot: user.directories.root }).peers[remotePeerId]?.syncSecret;
     const headers = { 'Content-Type': 'application/json' };
+    if (pairCode && !storedSecret) {
+        headers[PAIR_CODE_HEADER] = pairCode;
+    } else if (storedSecret) {
+        headers[PEER_SECRET_HEADER] = storedSecret;
+    }
     if (peerAuth?.username && peerAuth?.password) {
         const creds = Buffer.from(`${peerAuth.username}:${peerAuth.password}`, 'utf8').toString('base64');
         headers['Authorization'] = `Basic ${creds}`;
@@ -1123,6 +1267,12 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
         return response.status(502).json({ error: 'Peer returned no token', stage: 'offer' });
     }
 
+    // The peer returned the durable secret that replaces the one-time
+    // code. Store it on the peer entry; every later "Sync now" presents
+    // it. `recordPeer` ignores malformed input, so a legacy peer that
+    // doesn't speak the handshake simply leaves the field unset.
+    const issuedSecret = String(offerResult?.syncSecret || '').trim().toLowerCase();
+
     // Step 2: register the OTHER device locally so it appears in /peers.
     try {
         await recordPeer({
@@ -1138,6 +1288,9 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
             // unset, and a re-pair without re-supplying credentials
             // keeps the previously-stored ones.
             peerAuth,
+            // Same reasoning for the pairing secret: it only lands on
+            // disk once the peer accepted it.
+            syncSecret: issuedSecret || null,
         });
     } catch (e) {
         console.error('[sync] pair/accept record failed', e);

@@ -22,6 +22,7 @@ import path from 'node:path';
 import {
     readSyncState,
     recordPeer,
+    recordPeerSecret,
     recordSyncCompletion,
     clearPeerAuth,
 } from '../../src/sync/state.js';
@@ -218,5 +219,79 @@ describe('peer credentials are persisted', () => {
 
         await clearPeerAuth({ userRoot, peerId: 'alice@phone' });
         expect(fs.statSync(statePath()).mode & 0o777).toBe(0o600);
+    });
+
+    test('recordPeer stores a 64-hex syncSecret and carries it forward', async () => {
+        const secret = 'a'.repeat(64);
+        await recordPeer({
+            userRoot,
+            peerId: 'alice@phone',
+            label: 'Phone',
+            categories: ['characters'],
+            syncSecret: secret,
+        });
+        expect(readSyncState({ userRoot }).peers['alice@phone'].syncSecret).toBe(secret);
+
+        // A later recordPeer (relabel / sync completion path) without a
+        // secret must not drop the stored one.
+        await recordPeer({
+            userRoot,
+            peerId: 'alice@phone',
+            label: 'Phone (renamed)',
+            categories: ['characters'],
+        });
+        expect(readSyncState({ userRoot }).peers['alice@phone'].syncSecret).toBe(secret);
+    });
+
+    test('recordPeer ignores malformed syncSecret values', async () => {
+        await recordPeer({
+            userRoot,
+            peerId: 'alice@phone',
+            label: 'Phone',
+            categories: ['characters'],
+            syncSecret: 'not-hex',
+        });
+        expect(readSyncState({ userRoot }).peers['alice@phone'].syncSecret).toBeUndefined();
+    });
+
+    test('recordPeerSecret stamps an existing peer and leaves other fields alone', async () => {
+        await recordPeer({
+            userRoot,
+            peerId: 'alice@phone',
+            label: 'Phone',
+            categories: ['characters'],
+            peerBaseUrl: 'http://10.0.0.5:8000',
+        });
+        const secret = 'b'.repeat(64);
+        await recordPeerSecret({ userRoot, peerId: 'alice@phone', syncSecret: secret });
+
+        const peer = readSyncState({ userRoot }).peers['alice@phone'];
+        expect(peer.syncSecret).toBe(secret);
+        expect(peer.label).toBe('Phone');
+        expect(peer.categories).toEqual(['characters']);
+        expect(peer.peerBaseUrl).toBe('http://10.0.0.5:8000');
+    });
+
+    test('recordPeerSecret is a no-op on an absent peer', async () => {
+        await expect(recordPeerSecret({
+            userRoot,
+            peerId: 'never-paired',
+            syncSecret: 'c'.repeat(64),
+        })).resolves.toBeUndefined();
+        expect(readSyncState({ userRoot }).peers).toEqual({});
+    });
+
+    test('recordPeerSecret rejects malformed secrets and unsafe peerIds', async () => {
+        await recordPeer({ userRoot, peerId: 'alice@phone', label: 'Phone', categories: [] });
+        await expect(recordPeerSecret({
+            userRoot,
+            peerId: 'alice@phone',
+            syncSecret: 'not-hex',
+        })).rejects.toThrow();
+        await expect(recordPeerSecret({
+            userRoot,
+            peerId: '..',
+            syncSecret: 'd'.repeat(64),
+        })).rejects.toThrow();
     });
 });

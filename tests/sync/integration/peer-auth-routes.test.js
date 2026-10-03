@@ -386,4 +386,109 @@ describe('persisted peer credentials — routes', () => {
             await fakeListener.close();
         }
     });
+
+    describe('pairing-code handshake across real HTTP', () => {
+        /**
+         * Mimic A's `/pair/start` server-side effects without the
+         * browser-only req.user gate: register the peer entry and mint
+         * the one-time code. A's app has no req.user stub, so this is
+         * the only way to drive the offer's pair-code branch through a
+         * real cross-server fetch.
+         */
+        async function seedAPairingCode(remotePeerId) {
+            const { recordPeer } = await import('../../../src/sync/state.js');
+            const { createPairingCode } = await import('../../../src/sync/session.js');
+            const dirs = getUserDirectories(HANDLE);
+            await recordPeer({
+                userRoot: dirs.root,
+                peerId: remotePeerId,
+                label: 'B device',
+                categories: ['characters'],
+            });
+            return createPairingCode({ handle: HANDLE, peerId: remotePeerId });
+        }
+
+        test('accept pairs without any basic-auth credentials via the one-time code', async () => {
+            const remotePeerId = `${HANDLE}@c0ffee01`;
+            const pairCode = await seedAPairingCode(remotePeerId);
+
+            const acceptRes = await request(bApp)
+                .post('/api/sync/v1/pair/accept')
+                .send({
+                    peerBaseUrl: aListener.baseUrl,
+                    remotePeerId,
+                    label: 'A',
+                    categories: ['characters'],
+                    pairCode,
+                    // no peerAuth at all — this is the multi-user install
+                    // case where the account has no basic-auth password.
+                });
+            expect(acceptRes.status).toBe(200);
+            expect(acceptRes.body.ok).toBe(true);
+
+            // B stored the durable secret returned by A's offer.
+            const bState = JSON.parse(fs.readFileSync(path.join(bRoot, '.sync', 'state.json'), 'utf8'));
+            expect(bState.peers[remotePeerId].syncSecret).toMatch(/^[a-f0-9]{64}$/);
+
+            // A stored the same secret on its side of the registry.
+            const aDirs = getUserDirectories(HANDLE);
+            const { readSyncState } = await import('../../../src/sync/state.js');
+            const aState = readSyncState({ userRoot: aDirs.root });
+            expect(aState.peers[remotePeerId].syncSecret).toBe(bState.peers[remotePeerId].syncSecret);
+        });
+
+        test('a second sync now works with the stored secret and no code or credentials', async () => {
+            const remotePeerId = `${HANDLE}@c0ffee02`;
+            const pairCode = await seedAPairingCode(remotePeerId);
+
+            const acceptRes = await request(bApp)
+                .post('/api/sync/v1/pair/accept')
+                .send({
+                    peerBaseUrl: aListener.baseUrl,
+                    remotePeerId,
+                    label: 'A',
+                    categories: ['characters'],
+                    pairCode,
+                });
+            expect(acceptRes.status).toBe(200);
+
+            const syncRes = await request(bApp)
+                .post(`/api/sync/v1/peers/${encodeURIComponent(remotePeerId)}/sync`)
+                .send({});
+            expect(syncRes.status).toBe(200);
+            expect(syncRes.body.ok).toBe(true);
+        });
+
+        test('a replayed pair code gets 401 from the peer', async () => {
+            const remotePeerId = `${HANDLE}@c0ffee03`;
+            const pairCode = await seedAPairingCode(remotePeerId);
+
+            const first = await request(bApp)
+                .post('/api/sync/v1/pair/accept')
+                .send({
+                    peerBaseUrl: aListener.baseUrl,
+                    remotePeerId,
+                    label: 'A',
+                    categories: ['characters'],
+                    pairCode,
+                });
+            expect(first.status).toBe(200);
+
+            // Second accept from a FRESH local registry (different data
+            // root) so B's stored secret can't paper over the replay.
+            const freshRoot = fs.mkdtempSync(path.join(TEST_DATA_ROOT, 'b-replay-'));
+            const freshApp = buildAppB(freshRoot);
+            const replay = await request(freshApp)
+                .post('/api/sync/v1/pair/accept')
+                .send({
+                    peerBaseUrl: aListener.baseUrl,
+                    remotePeerId,
+                    label: 'A',
+                    categories: ['characters'],
+                    pairCode,
+                });
+            expect(replay.status).toBe(401);
+            expect(replay.body.stage).toBe('offer');
+        });
+    });
 });

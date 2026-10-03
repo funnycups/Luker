@@ -112,6 +112,9 @@ describe('isBasicAuthExemptRequest', () => {
         // their normal credentials, then receives a bearer token to use on
         // the rest of the /session/* routes. If the bypass swallowed it,
         // any unauthenticated client on the LAN could mint tokens.
+        // The pairing-credential exemption only applies in multi-user
+        // mode and is pinned in http-multi-user-offer.test.js, which sets
+        // SILLYTAVERN_ENABLEUSERACCOUNTS before importing the module.
         expect(isBasicAuthExemptRequest({
             method: 'POST',
             path: '/api/sync/v1/session/offer',

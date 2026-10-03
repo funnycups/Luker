@@ -11,6 +11,35 @@ import { Cache } from '../util.js';
  */
 export const SYNC_SESSION_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Header carrying the shared pairing secret on cross-server
+ * `/session/offer` calls. The secret is minted by the peer's
+ * `/session/offer` during the pairing-code handshake, embedded in the
+ * offer response, and persisted on both sides' peer registry entries. It
+ * authenticates every later "Sync now" offer call; see
+ * `resolveUserFromPeerSecret` in `src/endpoints/sync.js`.
+ */
+export const PEER_SECRET_HEADER = 'X-Sync-Peer-Secret';
+
+/**
+ * Header carrying a one-time pairing code on the FIRST cross-server
+ * `/session/offer` call. The code is minted by `/pair/start`, embedded
+ * in the pairing link, and exchanged for a durable peer secret. It has
+ * the same 10-minute lifetime as the link itself, so a screenshot of the
+ * QR code stops working shortly after pairing.
+ */
+export const PAIR_CODE_HEADER = 'X-Sync-Pair-Code';
+
+/**
+ * Pairing codes live as long as the pairing link is documented to be
+ * valid. Unlike sync session tokens, they are single-use: the first
+ * successful `/session/offer` consumes the code and returns the durable
+ * secret the two sides use from then on.
+ */
+export const PAIR_CODE_TTL_MS = 10 * 60 * 1000;
+
+const PAIRING_CODES = new Cache(PAIR_CODE_TTL_MS);
+
 const SESSIONS = new Cache(SYNC_SESSION_TTL_MS);
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/i;
 
@@ -81,4 +110,48 @@ export function consumeSyncSession(token) {
 export function closeSyncSession(token) {
     const normalized = normalizeToken(token);
     if (normalized) SESSIONS.remove(normalized);
+}
+
+/**
+ * Mint a one-time pairing code bound to (handle, peerId).
+ *
+ * The code travels in the pairing link. The accepting device presents it
+ * on its FIRST `/session/offer`; the offer handler verifies it against
+ * this cache, then consumes it so a leaked link cannot be replayed. The
+ * durable per-peer secret that replaces it is minted by the offer
+ * handler itself and returned in the offer response.
+ *
+ * @param {{ handle: string, peerId: string }} payload
+ * @returns {string}
+ */
+export function createPairingCode(payload) {
+    if (!payload?.handle || !payload?.peerId) {
+        throw new Error('createPairingCode requires handle and peerId');
+    }
+    const code = crypto.randomBytes(32).toString('hex');
+    PAIRING_CODES.set(code, { ...payload, createdAt: Date.now() });
+    return code;
+}
+
+/**
+ * Verify and consume a one-time pairing code. Returns the bound payload
+ * on success; `null` for unknown, malformed, already-consumed, or
+ * handle/peerId-mismatched codes. Consumption is the replay gate — a
+ * second offer presenting the same code fails. The handle and peerId
+ * checks run BEFORE consumption so a probe with the right code but wrong
+ * binding cannot burn the code for its legitimate owner.
+ *
+ * @param {string} code
+ * @param {{ handle: string, peerId: string }} binding
+ * @returns {{ handle: string, peerId: string, createdAt: number } | null}
+ */
+export function consumePairingCode(code, binding) {
+    const normalized = normalizeToken(code);
+    if (!normalized) return null;
+    const payload = PAIRING_CODES.get(normalized);
+    if (!payload) return null;
+    if (!binding?.peerId || payload.peerId !== binding.peerId) return null;
+    if (!binding?.handle || payload.handle !== binding.handle) return null;
+    PAIRING_CODES.remove(normalized);
+    return payload;
 }

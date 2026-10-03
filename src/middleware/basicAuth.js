@@ -23,12 +23,17 @@ const LAN_MIGRATION_TRANSFER_PATH_PATTERN = new RegExp(`^${LAN_MIGRATION_PATH_PR
  * sibling `/api/sync/v1/health` route is intentionally excluded from this
  * pattern — it is a reachability probe and stays gated by basic auth.
  *
- * `/api/sync/v1/session/offer` is also excluded: it is the route that
- * ISSUES tokens, so it cannot itself be token-gated. The initiator hits
- * it from their own browser with the standard per-user credentials.
+ * `/api/sync/v1/session/offer` is excluded by default: it is the route
+ * that ISSUES tokens, so the browser-driven call goes through basic auth
+ * (or the session cookie) to populate `request.user`. A cross-server
+ * caller with no cookie can instead present the shared pairing secret in
+ * `X-Sync-Peer-Secret`; that request is let through the middleware
+ * because the route handler authenticates it against the peer registry
+ * itself (wrong or absent secret still yields 401).
  */
 const SYNC_SESSION_PATH_PATTERN = /^\/api\/sync\/v1\/session\//i;
 const SYNC_OFFER_PATH_PATTERN = /^\/api\/sync\/v1\/session\/offer\/?$/i;
+const SYNC_PEER_CREDENTIAL_HEADERS = ['x-sync-peer-secret', 'x-sync-pair-code'];
 
 const basicAuthLimiter = new RateLimiterMemory({
     points: BASIC_AUTH_ATTEMPTS > 0 ? BASIC_AUTH_ATTEMPTS : Number.MAX_SAFE_INTEGER,
@@ -51,12 +56,21 @@ export function isBasicAuthExemptRequest(request) {
     // (object upload, ref update, close). Other HTTP methods on sync
     // paths still fall through to the basic-auth gate below.
     //
-    // `/session/offer` is the one exception: it ISSUES tokens, so it
-    // cannot itself be token-gated and must go through basic auth so the
-    // standard user middleware can populate `request.user`.
+    // `/session/offer` is the exception: it ISSUES tokens. A browser call
+    // goes through basic auth so the standard user middleware can
+    // populate `request.user`; a cross-server call presenting the shared
+    // pairing secret is let through in multi-user mode because the route
+    // handler authenticates it against the peer registry (wrong or
+    // absent secret → 401 at the route, which also falls back to
+    // basic-auth resolution). In single-user mode there is no registry
+    // to verify against — the middleware would be the only gate — so the
+    // secret does NOT bypass it there; the pair form's basic-auth fields
+    // remain the path for a basic-auth-gated single-user peer.
     if (SYNC_SESSION_PATH_PATTERN.test(requestPath)) {
         if (SYNC_OFFER_PATH_PATTERN.test(requestPath)) {
-            return false;
+            if (!ENABLE_ACCOUNTS) return false;
+            const headers = request?.headers || {};
+            return SYNC_PEER_CREDENTIAL_HEADERS.some(name => Boolean(headers[name]));
         }
         return method === 'GET' || method === 'POST';
     }
