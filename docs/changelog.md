@@ -21,7 +21,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed empty-input Send not continuing the last message when "Press Send to continue" is enabled.
 - Fixed token count estimation erroring out when a tokenizer fails to load.
-- Fixed a spurious "Chat save aborted" alert when a chat fails to load.
+- Fixed a spurious "Chat save aborted" alert appearing when Luker opens.
 
 ## v2.8.0 (2026-10-01)
 

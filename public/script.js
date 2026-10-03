@@ -14066,9 +14066,15 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
     // saveChatInternal for full rationale). appendChatMessagesInternal returns
     // boolean; return false so the caller's saveChatConditional fallback also
     // trips the guard in saveChatInternal instead of full-saving an empty body.
+    // Without a resolvable save target there is nothing to overwrite, so drop
+    // the write silently instead of raising a data-loss alert.
     if (!chat_metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Append dropped: chat transition in progress.');
+            return false;
+        }
+        if (!resolveChatStateTarget()) {
+            console.debug('[ChatWrite] Append dropped: no active chat target.');
             return false;
         }
         console.error('[ChatWrite] Append refused: chat not fully loaded (integrity missing).');
@@ -14252,10 +14258,15 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
 
     // Data-loss guard: refuse to patch when chat is not fully loaded (see
     // saveChatInternal for full rationale). Same false-return semantics as
-    // appendChatMessagesInternal.
+    // appendChatMessagesInternal: a write with no resolvable save target has
+    // nothing to overwrite, so it is dropped silently.
     if (!chat_metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Patch dropped: chat transition in progress.');
+            return false;
+        }
+        if (!resolveChatStateTarget()) {
+            console.debug('[ChatWrite] Patch dropped: no active chat target.');
             return false;
         }
         console.error('[ChatWrite] Patch refused: chat not fully loaded (integrity missing).');
@@ -14497,10 +14508,15 @@ export async function waitForChatSwitchAvailability({ requireCompletedSave = fal
  */
 async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0, context = null) {
     // Data-loss guard: refuse to save when chat is not fully loaded (see
-    // saveChatInternal for full rationale).
+    // saveChatInternal for full rationale). A write with no resolvable save
+    // target has nothing to overwrite, so it is dropped silently.
     if (!chat_metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Metadata save dropped: chat transition in progress.');
+            return false;
+        }
+        if (!context?.target && !resolveChatStateTarget()) {
+            console.debug('[ChatWrite] Metadata save dropped: no active chat target.');
             return false;
         }
         console.error('[ChatWrite] Metadata save refused: chat not fully loaded (integrity missing).');
@@ -14648,6 +14664,17 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
     if (!chat_metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Save dropped: chat transition in progress.');
+            return;
+        }
+        // Without a resolvable save target there is nothing to overwrite, so
+        // drop the write silently instead of raising a data-loss alert. An
+        // explicit chatName or caller-supplied context still counts as a
+        // target (bookmark/branch writes, internal fallbacks).
+        const hasExplicitTarget = typeof arguments?.[0] === 'string'
+            || Boolean(arguments?.[0]?.chatName)
+            || Boolean(arguments?.[0]?._context?.target);
+        if (!hasExplicitTarget && !resolveChatStateTarget()) {
+            console.debug('[ChatWrite] Save dropped: no active chat target.');
             return;
         }
         console.error('[ChatWrite] Save refused: chat not fully loaded (integrity missing).');

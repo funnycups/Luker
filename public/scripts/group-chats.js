@@ -673,9 +673,17 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     // empty. Writing now ships an empty body to /api/chats/group/save whose
     // null-integrity path skips the integrity check and overwrites server
     // data. See saveChatInternal (script.js) for the full rationale.
+    // Without a resolvable group chat target there is nothing to overwrite,
+    // so the write is dropped silently instead of raising a data-loss alert.
     if (!chat_metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Group save dropped: chat transition in progress.');
+            return;
+        }
+        const resolvedGroupId = String(context?.groupId || groupId || '').trim();
+        const group = groups.find(x => String(x?.id || '') === resolvedGroupId);
+        if (!group || !group.chat_id) {
+            console.debug('[ChatWrite] Group save dropped: no active group chat target.');
             return;
         }
         console.error('[ChatWrite] Group save refused: chat not fully loaded (integrity missing).');
