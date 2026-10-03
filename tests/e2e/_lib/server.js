@@ -20,7 +20,13 @@ import { reservePort } from './ports.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 const SEED_DATA = resolve(REPO_ROOT, 'data');
-const SEED_CONFIG = resolve(REPO_ROOT, 'config.yaml');
+// Seed from the committed default config, NOT the repo-root config.yaml.
+// The root file is gitignored and each developer's copy carries personal
+// overrides (enableUserAccounts, hostWhitelist hosts, listen, ...), so
+// seeding from it made spec behavior depend on whose machine ran them.
+// `default/config.yaml` is the tracked reference every install starts
+// from; specs that need a non-default value pass it via `extraConfig`.
+const SEED_CONFIG = resolve(REPO_ROOT, 'default/config.yaml');
 const SCRATCH_ROOT = resolve(REPO_ROOT, 'tests/.e2e-scratch');
 
 const READY_TIMEOUT_MS = 60_000;
