@@ -4,6 +4,10 @@
 
 ## 未发布
 
+### 搜索工具
+
+- 新增 Tavily、Exa、Serper、SerpApi、Z.AI 搜索提供方，并将所有提供方统一经由 `/api/search/query` 端点调用，恢复上游原始 HTML 的 `/api/search/searxng` 端点。
+
 ### 请求检查器
 
 - 修复了插件通过自定义附加标头覆盖鉴权标头时，显示已存 provider 密钥而非实际发出密钥的问题。

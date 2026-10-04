@@ -86,8 +86,13 @@ The top toggles map to the modes above ("Expose tools to main model" = Tool Mode
 | **DuckDuckGo** | Default search engine, no API key required | Works out of the box |
 | **SearXNG** | Self-hosted meta search engine, privacy-friendly | Requires self-hosted instance URL |
 | **Brave Search** | Search API provided by Brave | Requires API key |
+| **Tavily** | LLM-oriented search API | Requires API key |
+| **Exa** | Neural / semantic search API | Requires API key |
+| **Serper** | Google results via serper.dev | Requires API key |
+| **SerpApi** | Google results via SerpApi | Requires API key |
+| **Z.AI** | Z.AI web search | Requires API key |
 
-The search engine is selected via the `provider` configuration option, with each engine's independent configuration stored in `providerSettings`. You can also configure the safe search level via `safeSearch`.
+The search engine is selected via the `provider` configuration option, with each engine's independent configuration stored in `providerSettings`. Safe search is available for DuckDuckGo, SearXNG, Brave Search, Tavily, Exa, and SerpApi via the `safeSearch` option; Serper and Z.AI do not expose safe search.
 
 ## World Info Entry Management
 
@@ -167,7 +172,7 @@ The search plugin monitors message deletion and editing events, automatically ma
 |---------|-------------|
 | Enable Search Tools | Enable Tool Mode, allowing the model to autonomously call search during conversation |
 | Enable Pre-request Agent | Enable Pre-request Agent Mode, automatically searching before generation |
-| Search Engine | Select search engine (DuckDuckGo / SearXNG / Brave Search) |
+| Search Engine | Select search engine (DuckDuckGo / SearXNG / Brave Search / Tavily / Exa / Serper / SerpApi / Z.AI) |
 | Search Result Count | Number of results returned by a search |
 | Page Extract Characters | Maximum text length extracted when visiting web pages |
 | Safe Search | Safety filtering level for search results |

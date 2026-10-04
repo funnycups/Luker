@@ -86,8 +86,13 @@ AGENT: "預請求 Agent 模式" {
 | **DuckDuckGo** | 預設搜尋引擎，無需 API 金鑰 | 開箱即用 |
 | **SearXNG** | 自架的元搜尋引擎，隱私友好 | 需要提供自架實例的 URL |
 | **Brave Search** | Brave 提供的搜尋 API | 需要 API 金鑰 |
+| **Tavily** | 面向 LLM 的搜尋 API | 需要 API 金鑰 |
+| **Exa** | 神經 / 語意搜尋 API | 需要 API 金鑰 |
+| **Serper** | 透過 serper.dev 取得 Google 結果 | 需要 API 金鑰 |
+| **SerpApi** | 透過 SerpApi 取得 Google 結果 | 需要 API 金鑰 |
+| **Z.AI** | Z.AI 網頁搜尋 | 需要 API 金鑰 |
 
-搜尋引擎透過 `provider` 設定項選擇，各引擎的獨立設定儲存在 `providerSettings` 中。你還可以透過 `safeSearch` 設定安全搜尋級別。
+搜尋引擎透過 `provider` 設定項選擇，各引擎的獨立設定儲存在 `providerSettings` 中。安全搜尋適用於 DuckDuckGo、SearXNG、Brave Search、Tavily、Exa 和 SerpApi，可透過 `safeSearch` 設定；Serper 與 Z.AI 不提供安全搜尋。
 
 ## 世界書條目管理
 
@@ -167,7 +172,7 @@ if (api) {
 |--------|------|
 | 啟用搜尋工具 | 開啟工具模式，讓模型在對話中自主呼叫搜尋 |
 | 啟用預請求 Agent | 開啟預請求 Agent 模式，生成前自動搜尋 |
-| 搜尋引擎 | 選擇搜尋引擎（DuckDuckGo / SearXNG / Brave Search） |
+| 搜尋引擎 | 選擇搜尋引擎（DuckDuckGo / SearXNG / Brave Search / Tavily / Exa / Serper / SerpApi / Z.AI） |
 | 搜尋結果數量 | 單次搜尋回傳的結果筆數 |
 | 頁面擷取字元數 | 存取網頁時擷取的最大文字長度 |
 | 安全搜尋 | 搜尋結果的安全過濾級別 |

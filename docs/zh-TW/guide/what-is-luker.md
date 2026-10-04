@@ -56,7 +56,7 @@ Luker 內建了多個面向角色扮演場景的專業工具——記憶圖、�
 
 ### 搜尋外掛（Search Tools）
 
-為 AI 提供聯網搜尋能力，支援 DuckDuckGo、SearXNG、Brave Search 等搜尋引擎後端。既可以作為創作 LLM 的可呼叫工具，也可以作為預請求 Agent 在生成前自動搜尋並將結果寫入世界書。
+為 AI 提供聯網搜尋能力，使用搜尋外掛中設定的 provider。既可以作為創作 LLM 的可呼叫工具，也可以作為預請求 Agent 在生成前自動搜尋並將結果寫入世界書。
 
 → [搜尋外掛詳細文件](/zh-TW/features/search-tools)
 

@@ -56,7 +56,7 @@ An AI assistant for chat completion presets. It reads the current preset's real 
 
 ### Search Tools
 
-Provides web search capabilities for AI, supporting search engine backends like DuckDuckGo, SearXNG, and Brave Search. It works as a callable tool for the creative LLM, or as a pre-request agent that automatically searches before generation and writes results into world info.
+Provides web search capabilities for AI through the provider configured in the Search Tools plugin. It works as a callable tool for the creative LLM, or as a pre-request agent that automatically searches before generation and writes results into world info.
 
 → [Search Tools Documentation](/features/search-tools)
 

@@ -110,7 +110,7 @@ TEXT.T_EXEC -> INJECT
 
 ## 內建工具
 
-搜尋外掛註冊了全域工具：網頁搜尋（支援 DuckDuckGo、SearXNG、Brave Search 等搜尋引擎）和網頁存取。其他模組（編輯助手、編排器、預設助手）在各自的獨立上下文中使用工具呼叫機制，不透過全域工具註冊表。
+搜尋外掛註冊了全域工具：網頁搜尋（支援 DuckDuckGo、SearXNG、Brave Search、Tavily、Exa、Serper、SerpApi 和 Z.AI）和網頁存取。其他模組（編輯助手、編排器、預設助手）在各自的獨立上下文中使用工具呼叫機制，不透過全域工具註冊表。
 
 ::: info 擴充工具
 第三方擴充可以透過 `context.registerFunctionTool()` 註冊自訂工具（由核心的 `ToolManager` 提供）。工具定義遵循統一的 schema 格式，註冊後自動適配原生模式和純文字模式。詳見[擴充 API — 工具註冊](/zh-TW/development/extension-api/generation#工具註冊)文件。

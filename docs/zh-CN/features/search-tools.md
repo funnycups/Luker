@@ -86,8 +86,13 @@ AGENT: "预请求 Agent 模式" {
 | **DuckDuckGo** | 默认搜索引擎，无需 API 密钥 | 开箱即用 |
 | **SearXNG** | 自托管的元搜索引擎，隐私友好 | 需要提供自托管实例的 URL |
 | **Brave Search** | Brave 提供的搜索 API | 需要 API 密钥 |
+| **Tavily** | 面向 LLM 的搜索 API | 需要 API 密钥 |
+| **Exa** | 神经 / 语义搜索 API | 需要 API 密钥 |
+| **Serper** | 通过 serper.dev 获取 Google 结果 | 需要 API 密钥 |
+| **SerpApi** | 通过 SerpApi 获取 Google 结果 | 需要 API 密钥 |
+| **Z.AI** | Z.AI 网页搜索 | 需要 API 密钥 |
 
-搜索引擎通过 `provider` 配置项选择，各引擎的独立配置存储在 `providerSettings` 中。你还可以通过 `safeSearch` 配置安全搜索级别。
+搜索引擎通过 `provider` 配置项选择，各引擎的独立配置存储在 `providerSettings` 中。安全搜索适用于 DuckDuckGo、SearXNG、Brave Search、Tavily、Exa 和 SerpApi，可通过 `safeSearch` 配置；Serper 与 Z.AI 不提供安全搜索。
 
 ## 世界书条目管理
 
@@ -167,7 +172,7 @@ if (api) {
 |--------|------|
 | 启用搜索工具 | 开启工具模式，让模型在对话中自主调用搜索 |
 | 启用预请求 Agent | 开启预请求 Agent 模式，生成前自动搜索 |
-| 搜索引擎 | 选择搜索引擎（DuckDuckGo / SearXNG / Brave Search） |
+| 搜索引擎 | 选择搜索引擎（DuckDuckGo / SearXNG / Brave Search / Tavily / Exa / Serper / SerpApi / Z.AI） |
 | 搜索结果数量 | 单次搜索返回的结果条数 |
 | 页面提取字符数 | 访问网页时提取的最大文本长度 |
 | 安全搜索 | 搜索结果的安全过滤级别 |

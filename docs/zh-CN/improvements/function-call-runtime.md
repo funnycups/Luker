@@ -110,7 +110,7 @@ TEXT.T_EXEC -> INJECT
 
 ## 内置工具
 
-搜索插件注册了全局工具：网页搜索（支持 DuckDuckGo、SearXNG、Brave Search 等搜索引擎）和网页访问。其他模块（编辑助手、编排器、预设助手）在各自的独立上下文中使用工具调用机制，不通过全局工具注册表。
+搜索插件注册了全局工具：网页搜索（支持 DuckDuckGo、SearXNG、Brave Search、Tavily、Exa、Serper、SerpApi 和 Z.AI）和网页访问。其他模块（编辑助手、编排器、预设助手）在各自的独立上下文中使用工具调用机制，不通过全局工具注册表。
 
 ::: info 扩展工具
 第三方扩展可以通过 `context.registerFunctionTool()` 注册自定义工具（由核心的 `ToolManager` 提供）。工具定义遵循统一的 schema 格式，注册后自动适配原生模式和纯文本模式。详见[扩展 API — 工具注册](/zh-CN/development/extension-api/generation#工具注册)文档。

@@ -110,7 +110,7 @@ This works in coordination with the [Preset Decoupling](/improvements/preset-dec
 
 ## Built-in Tools
 
-The search plugin registers global tools: web search (supporting DuckDuckGo, SearXNG, Brave Search, and other search engines) and web access. Other modules (Editing Assistant, Orchestrator, Preset Assistant) use the tool calling mechanism in their own independent contexts, not through the global tool registry.
+The search plugin registers global tools: web search (supporting DuckDuckGo, SearXNG, Brave Search, Tavily, Exa, Serper, SerpApi, and Z.AI) and web access. Other modules (Editing Assistant, Orchestrator, Preset Assistant) use the tool calling mechanism in their own independent contexts, not through the global tool registry.
 
 ::: info Extension Tools
 Third-party extensions can register custom tools via `context.registerFunctionTool()` (provided by the `ToolManager` in the core). Tool definitions follow a unified schema format and automatically adapt to both native mode and plain-text mode after registration. See the [Extension API — Tool Registration](/development/extension-api/generation#tool-registration) documentation for details.

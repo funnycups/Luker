@@ -28,7 +28,7 @@ features:
     details: 通过对话修改角色卡和世界书。改动以 diff 形式供你逐条批准；带 CardApp 的角色卡直接进入完整的工作台。
   - icon: 🔍
     title: 搜索插件
-    details: 角色可以在对话中途联网搜索。DuckDuckGo、SearXNG、Brave 任选——既可以作为模型自行调用的工具，也可以作为预请求 agent，在生成前自动搜索并将结果写入世界书。
+    details: 角色可以在对话中途联网搜索，使用搜索插件中配置的 provider——既可以作为模型自行调用的工具，也可以作为预请求 agent，在生成前自动搜索并将结果写入世界书。
   - icon: 📱
     title: Android 应用
     details: 后端完全运行在应用内，一部手机同时充当服务端和界面。安装 APK 即可使用——不需要 Termux、不需要手动配置 Node、不需要端口转发。

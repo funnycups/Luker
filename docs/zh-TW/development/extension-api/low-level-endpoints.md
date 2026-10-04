@@ -45,12 +45,23 @@
 | POST | `/api/worldinfo/save` | 儲存世界書（patch-first） |
 | POST | `/api/worldinfo/get` | 取得世界書 |
 
-## 搜尋/存取
+## 搜尋
 
 | 方法 | 路徑 | 說明 |
 |------|------|------|
-| POST | `/api/plugins/search/search` | 執行搜尋 |
-| POST | `/api/plugins/search/visit` | 存取 URL 並提取內容 |
+| POST | `/api/search/query` | 統一搜尋。外掛推薦使用此路徑。 |
+| POST | `/api/search/serpapi` | 上游：SerpApi（原始供應商 JSON） |
+| POST | `/api/search/searxng` | 上游：SearXNG（原始 HTML） |
+| POST | `/api/search/tavily` | 上游：Tavily（原始供應商 JSON） |
+| POST | `/api/search/koboldcpp` | 上游：KoboldCpp（原始供應商 JSON） |
+| POST | `/api/search/serper` | 上游：Serper（原始供應商 JSON） |
+| POST | `/api/search/zai` | 上游：Z.AI（原始供應商 JSON） |
+| POST | `/api/search/ddg` | 抓取 DuckDuckGo |
+| POST | `/api/search/brave` | Brave Search |
+| POST | `/api/search/visit` | 存取 URL 並提取內容 |
+| POST | `/api/search/transcript` | YouTube 字幕 |
+
+`/api/search/query` 接收 `{ provider, query, max_results, safe_search, time_range, region, options }` 並回傳 `{ provider, query, result_count, results: [{ title, url, snippet }] }`。供應商：`ddg`、`searxng`、`brave`、`tavily`、`exa`、`serper`、`serpapi`、`zai`。`/api/search/query`、`/api/search/ddg` 和 `/api/search/brave` 回傳上述統一結構。`Upstream` 路由回傳原始供應商回應。
 
 ## Patch 操作格式
 

@@ -139,7 +139,7 @@ The default Director configuration claims extraction / recall / compression for 
 
 ## Step 5 — Pick a search engine
 
-Open the **Search Tools** panel in the Extensions drawer. **Search provider** defaults to `DuckDuckGo (no login)` — keep the default. For a more refined setup, switch to `SearXNG (custom instance)` (fill in your self-hosted URL) or `Brave Search (API key)`.
+Open the **Search Tools** panel in the Extensions drawer. **Search provider** defaults to `DuckDuckGo (no login)` — keep the default. To use a different engine, pick another provider from the dropdown, such as the self-hosted `SearXNG (custom instance)` or an API-key provider.
 
 ![Search engine picker](/images/recipes/agent-onboarding/step-05-search-provider.png)
 

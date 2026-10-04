@@ -139,7 +139,7 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图 
 
 ## Step 5 — 选一个搜索引擎
 
-打开扩展抽屉的**搜索工具**面板，**搜索提供方**默认是 `DuckDuckGo（无需登录）`——保持默认即可。如需更精细的检索，可切换为 `SearXNG（自定义实例）`（填写自托管的 URL）或 `Brave Search（API Key）`。
+打开扩展抽屉的**搜索工具**面板，**搜索提供方**默认是 `DuckDuckGo（无需登录）`——保持默认即可。如需更换引擎，从下拉中选择其他提供方，例如自托管的 `SearXNG（自定义实例）` 或任一需要 API Key 的提供方。
 
 ![搜索引擎选择](/images/recipes/agent-onboarding/step-05-search-provider.png)
 

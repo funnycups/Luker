@@ -28,7 +28,7 @@ features:
     details: Edit character cards and world info through conversation with an AI. Changes arrive as diffs you approve item by item; cards with a CardApp open in the full Studio.
   - icon: 🔍
     title: Search Tools
-    details: Characters can look things up mid-conversation. DuckDuckGo, SearXNG, or Brave — as a tool the model calls when it needs one, or as a pre-request agent that writes findings into world info.
+    details: Characters can look things up mid-conversation through the provider configured in the Search Tools plugin — as a tool the model calls when it needs one, or as a pre-request agent that writes findings into world info.
   - icon: 📱
     title: Android App
     details: The entire backend runs inside the app, so a single phone serves both server and UI. Install the APK — no Termux, no manual Node setup, no port forwarding.

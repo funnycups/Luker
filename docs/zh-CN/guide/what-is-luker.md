@@ -56,7 +56,7 @@ Luker 内置了多个面向角色扮演场景的专业工具——记忆图、�
 
 ### 搜索插件（Search Tools）
 
-为 AI 提供联网搜索能力，支持 DuckDuckGo、SearXNG、Brave Search 等搜索引擎后端。既可以作为创作 LLM 的可调用工具，也可以作为预请求 Agent 在生成前自动搜索并将结果写入世界书。
+为 AI 提供联网搜索能力，使用搜索插件中配置的 provider。既可以作为创作 LLM 的可调用工具，也可以作为预请求 Agent 在生成前自动搜索并将结果写入世界书。
 
 → [搜索插件详细文档](/zh-CN/features/search-tools)
 

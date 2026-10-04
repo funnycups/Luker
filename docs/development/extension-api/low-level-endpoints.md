@@ -45,12 +45,23 @@ Plugins can also read and write World Info entries through the context API; the 
 | POST | `/api/worldinfo/save` | Save World Info (patch-first) |
 | POST | `/api/worldinfo/get` | Get World Info |
 
-## Search / Visit
+## Search
 
 | Method | Path | Description |
 |------|------|------|
-| POST | `/api/plugins/search/search` | Execute search |
-| POST | `/api/plugins/search/visit` | Visit a URL and extract content |
+| POST | `/api/search/query` | Unified search. Recommended path for plugins. |
+| POST | `/api/search/serpapi` | Upstream: SerpApi (raw provider JSON) |
+| POST | `/api/search/searxng` | Upstream: SearXNG (raw HTML) |
+| POST | `/api/search/tavily` | Upstream: Tavily (raw provider JSON) |
+| POST | `/api/search/koboldcpp` | Upstream: KoboldCpp (raw provider JSON) |
+| POST | `/api/search/serper` | Upstream: Serper (raw provider JSON) |
+| POST | `/api/search/zai` | Upstream: Z.AI (raw provider JSON) |
+| POST | `/api/search/ddg` | DuckDuckGo scrape |
+| POST | `/api/search/brave` | Brave Search |
+| POST | `/api/search/visit` | Visit a URL and extract content |
+| POST | `/api/search/transcript` | YouTube transcript |
+
+`/api/search/query` takes `{ provider, query, max_results, safe_search, time_range, region, options }` and returns `{ provider, query, result_count, results: [{ title, url, snippet }] }`. Providers: `ddg`, `searxng`, `brave`, `tavily`, `exa`, `serper`, `serpapi`, `zai`. `/api/search/query`, `/api/search/ddg`, and `/api/search/brave` return the unified shape above. The `Upstream` routes return raw provider responses.
 
 ## Patch Operation Format
 

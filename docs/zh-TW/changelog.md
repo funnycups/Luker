@@ -4,6 +4,10 @@
 
 ## 未發布
 
+### 搜尋工具
+
+- 新增 Tavily、Exa、Serper、SerpApi、Z.AI 搜尋提供者，並將所有提供者統一經由 `/api/search/query` 端點呼叫，恢復上游原始 HTML 的 `/api/search/searxng` 端點。
+
 ### 請求檢查器
 
 - 修復了外掛透過自訂附加標頭覆寫驗證標頭時，顯示已存 provider 金鑰而非實際發出金鑰的問題。
