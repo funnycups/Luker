@@ -118,23 +118,64 @@ export async function ensureShadowRepo({ userRoot, peerId }) {
  *     oids: identical → no commit, differing → one real commit. See
  *     `commitIfTreeChanged` for the full rationale.
  *
+ * SQL engines leave disk-backed categories (characters, avatars, …) on the
+ * live filesystem even though their SQL-backed categories (worlds, chats, …)
+ * live in the workdir. Callers there pass `liveRoot: workdir` for the SQL
+ * subset and hand the disk-backed subset over via `additionalSources` so one
+ * snapshot unions both trees into the same commit.
+ *
  * @param {{
  *   userRoot: string,
  *   peerId: string,
  *   directories: import('../users.js').UserDirectoryList,
  *   enabledCategoryIds: string[],
  *   liveRoot?: string,
+ *   additionalSources?: Array<{
+ *     directories: import('../users.js').UserDirectoryList,
+ *     liveRoot?: string,
+ *     enabledCategoryIds: string[],
+ *   }>,
  * }} args
  * @returns {Promise<{ committed: boolean, oid: string | null }>}
  */
-export async function snapshotLiveToShadow({ userRoot, peerId, directories, enabledCategoryIds, liveRoot = directories.root }) {
+export async function snapshotLiveToShadow({
+    userRoot,
+    peerId,
+    directories,
+    enabledCategoryIds,
+    liveRoot = directories.root,
+    additionalSources = [],
+}) {
     const paths = await ensureShadowRepo({ userRoot, peerId });
-
-    const enabled = new Set(enabledCategoryIds);
-    const targets = SYNC_CATEGORIES.filter(category => enabled.has(category.id));
 
     // desired: relative POSIX path within the shadow workdir -> absolute source on disk.
     const desired = new Map();
+    await collectDesiredFromSource(desired, directories, enabledCategoryIds, liveRoot);
+    for (const source of additionalSources) {
+        await collectDesiredFromSource(
+            desired,
+            source.directories,
+            source.enabledCategoryIds,
+            source.liveRoot ?? source.directories.root,
+        );
+    }
+
+    await syncWorkdirToDesired(paths.workdir, desired);
+    return commitIfTreeChanged(paths.workdir, paths.gitDir);
+}
+
+/**
+ * Walk the resolved paths of `enabledCategoryIds` under `directories` and add
+ * every regular file to `desired`, keyed by its path relative to `liveRoot`.
+ *
+ * @param {Map<string, string>} desired
+ * @param {import('../users.js').UserDirectoryList} directories
+ * @param {string[]} enabledCategoryIds
+ * @param {string} liveRoot
+ */
+async function collectDesiredFromSource(desired, directories, enabledCategoryIds, liveRoot) {
+    const enabled = new Set(enabledCategoryIds);
+    const targets = SYNC_CATEGORIES.filter(category => enabled.has(category.id));
     for (const category of targets) {
         for (const resolved of resolveCategoryPaths(category, directories)) {
             if (!fs.existsSync(resolved.absolutePath)) continue;
@@ -146,9 +187,6 @@ export async function snapshotLiveToShadow({ userRoot, peerId, directories, enab
             }
         }
     }
-
-    await syncWorkdirToDesired(paths.workdir, desired);
-    return commitIfTreeChanged(paths.workdir, paths.gitDir);
 }
 
 /**

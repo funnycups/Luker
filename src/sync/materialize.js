@@ -65,12 +65,87 @@ const NAMED_DOC_BUCKET_BY_CATEGORY = Object.freeze({
 const PRESET_EXT = '.json';
 const CHAT_EXT = '.jsonl';
 
+// Category ids whose payload lives in the storage engine when
+// sqlite/mysql/postgres is active. Every other category stays on disk in all
+// engines. This set MUST stay in sync with the dispatch table in
+// `materializeUserDataIntoWorkdir` / `dematerializeWorkdirIntoUserData`:
+// `buildSnapshotPlan` partitions the user's selection by it, and a category
+// listed here but not materialized would be silently dropped from snapshots.
+const SQL_BACKED_CATEGORY_IDS = Object.freeze(new Set([
+    'settings',
+    'stats',
+    'worlds',
+    'chats',
+    ...Object.keys(PRESET_DIR_KEY_BY_CATEGORY),
+    ...Object.keys(NAMED_DOC_BUCKET_BY_CATEGORY),
+]));
+
+/**
+ * True when the category's data is stored inside the SQL engine in
+ * sqlite/mysql/postgres mode. Disk-backed categories stay on the live
+ * filesystem in every mode and must be snapshotted from there.
+ *
+ * @param {string} id
+ * @returns {boolean}
+ */
+export function isSqlBackedCategory(id) {
+    return SQL_BACKED_CATEGORY_IDS.has(id);
+}
+
 function toPosix(p) {
     return p.split(path.sep).join('/');
 }
 
 function relUnder(root, abs) {
     return toPosix(path.relative(root, abs));
+}
+
+/**
+ * Delete every regular file under `root` that is not in `keep`, pruning
+ * directories that end up empty. `root` may itself be a file path, in which
+ * case it is unlinked when absent from `keep`.
+ *
+ * The materializer calls this per SQL-backed category after projecting the
+ * engine state so a record deleted in the engine does not linger as a stale
+ * workdir file. Without the sweep the snapshot walker would read the workdir
+ * (which self-validates whatever is in it) and re-commit the deleted record,
+ * so the deletion would never reach the peer.
+ *
+ * @param {string} root absolute path to a workdir file or directory
+ * @param {Set<string>} keep absolute paths written this run
+ * @returns {number} files deleted
+ */
+function sweepWorkdirRoot(root, keep) {
+    if (!fs.existsSync(root)) return 0;
+    const stat = fs.statSync(root);
+    if (stat.isFile()) {
+        if (keep.has(root)) return 0;
+        fs.unlinkSync(root);
+        return 1;
+    }
+    if (!stat.isDirectory()) return 0;
+    let deleted = 0;
+    const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            // Same policy as the snapshot walkers: nested `.git` is never data.
+            if (entry.name === '.git') continue;
+            const abs = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                walk(abs);
+                if (fs.readdirSync(abs).length === 0) fs.rmdirSync(abs);
+            } else if (entry.isFile() && !keep.has(abs)) {
+                fs.unlinkSync(abs);
+                deleted++;
+            }
+        }
+    };
+    walk(root);
+    return deleted;
+}
+
+/** Absolute path of a directory entry under the workdir, anchored at the live root. */
+function workdirPathFor(workdir, directories, absOrDir) {
+    return path.join(workdir, relUnder(directories.root, absOrDir));
 }
 
 function writeJsonFile(absPath, value) {
@@ -134,21 +209,23 @@ function isUnsafeEntryName(entry) {
 
 // --- materializers (per category) -----------------------------------------
 
-async function materializeSettings({ tx, handle, directories, workdir }) {
+async function materializeSettings({ tx, handle, directories, workdir, written }) {
     const rec = await tx.getResource({ kind: 'settings', handle });
     if (rec == null) return { filesWritten: 0, bytes: 0 };
     const out = path.join(workdir, 'settings.json');
+    written.add(out);
     return { filesWritten: 1, bytes: writeJsonFile(out, rec) };
 }
 
-async function materializeStats({ tx, handle, directories, workdir }) {
+async function materializeStats({ tx, handle, directories, workdir, written }) {
     const rec = await tx.getResource({ kind: 'stats', handle });
     if (rec == null) return { filesWritten: 0, bytes: 0 };
     const out = path.join(workdir, 'stats.json');
+    written.add(out);
     return { filesWritten: 1, bytes: writeJsonFile(out, rec) };
 }
 
-async function materializeWorlds({ tx, handle, directories, workdir }) {
+async function materializeWorlds({ tx, handle, directories, workdir, written }) {
     let filesWritten = 0;
     let bytes = 0;
     const entries = await tx.listResources({ kind: 'world', handle });
@@ -159,13 +236,14 @@ async function materializeWorlds({ tx, handle, directories, workdir }) {
         if (doc == null) continue;
         const rel = relUnder(directories.root, path.join(directories.worlds, `${name}.json`));
         const abs = path.join(workdir, rel);
+        written.add(abs);
         bytes += writeJsonFile(abs, doc);
         filesWritten++;
     }
     return { filesWritten, bytes };
 }
 
-async function materializePreset({ tx, handle, directories, workdir, dirKey }) {
+async function materializePreset({ tx, handle, directories, workdir, written, dirKey }) {
     const apiId = PRESET_API_BY_DIR_KEY.get(dirKey);
     if (!apiId) throw new Error(`materialize: unknown preset dirKey ${dirKey}`);
     let filesWritten = 0;
@@ -182,7 +260,9 @@ async function materializePreset({ tx, handle, directories, workdir, dirKey }) {
         const doc = await tx.getResource(key);
         if (doc == null) continue;
         const rel = relUnder(directories.root, path.join(folder, `${name}${PRESET_EXT}`));
-        bytes += writeJsonFile(path.join(workdir, rel), doc);
+        const abs = path.join(workdir, rel);
+        written.add(abs);
+        bytes += writeJsonFile(abs, doc);
         filesWritten++;
         const namespaces = await tx.listPresetStateNamespaces(key);
         for (const ns of namespaces) {
@@ -192,14 +272,16 @@ async function materializePreset({ tx, handle, directories, workdir, dirKey }) {
                 directories.root,
                 path.join(folder, buildSidecarFilename(name, ns)),
             );
-            bytes += writeJsonFile(path.join(workdir, sidecarRel), stateDoc);
+            const sidecarAbs = path.join(workdir, sidecarRel);
+            written.add(sidecarAbs);
+            bytes += writeJsonFile(sidecarAbs, stateDoc);
             filesWritten++;
         }
     }
     return { filesWritten, bytes };
 }
 
-async function materializeNamedDoc({ tx, handle, directories, workdir, bucket }) {
+async function materializeNamedDoc({ tx, handle, directories, workdir, written, bucket }) {
     const dirKey = BUCKET_TO_DIR[bucket];
     if (!dirKey) throw new Error(`materialize: invalid named-doc bucket ${bucket}`);
     const folder = directories[dirKey];
@@ -215,13 +297,15 @@ async function materializeNamedDoc({ tx, handle, directories, workdir, bucket })
         const doc = await tx.getResource({ kind: 'named-doc', handle, bucket, name });
         if (doc == null) continue;
         const rel = relUnder(directories.root, path.join(folder, `${name}.json`));
-        bytes += writeJsonFile(path.join(workdir, rel), doc);
+        const abs = path.join(workdir, rel);
+        written.add(abs);
+        bytes += writeJsonFile(abs, doc);
         filesWritten++;
     }
     return { filesWritten, bytes };
 }
 
-async function materializeChats({ tx, handle, directories, workdir }) {
+async function materializeChats({ tx, handle, directories, workdir, written }) {
     let filesWritten = 0;
     let bytes = 0;
 
@@ -243,6 +327,7 @@ async function materializeChats({ tx, handle, directories, workdir }) {
             directories.root,
             path.join(directories.chats, k.charDir, `${k.name}${CHAT_EXT}`),
         ));
+        written.add(abs);
         bytes += writeChatJsonl(abs, header, chat.body);
         filesWritten++;
         const namespaces = await tx.listChatStateNamespaces(key);
@@ -253,6 +338,7 @@ async function materializeChats({ tx, handle, directories, workdir }) {
                 directories.root,
                 path.join(directories.chats, k.charDir, buildSidecarFilename(k.name, ns)),
             ));
+            written.add(sidecarAbs);
             bytes += writeJsonFile(sidecarAbs, stateDoc);
             filesWritten++;
         }
@@ -270,6 +356,7 @@ async function materializeChats({ tx, handle, directories, workdir }) {
             directories.root,
             path.join(directories.groups, `${groupId}.json`),
         ));
+        written.add(groupAbs);
         bytes += writeJsonFile(groupAbs, groupDoc);
         filesWritten++;
         if (!Array.isArray(groupDoc.chats)) continue;
@@ -291,6 +378,7 @@ async function materializeChats({ tx, handle, directories, workdir }) {
                 directories.root,
                 path.join(directories.groupChats, `${chatId}${CHAT_EXT}`),
             ));
+            written.add(abs);
             bytes += writeChatJsonl(abs, header, chat.body);
             filesWritten++;
             const namespaces = await tx.listChatStateNamespaces(key);
@@ -301,6 +389,7 @@ async function materializeChats({ tx, handle, directories, workdir }) {
                     directories.root,
                     path.join(directories.groupChats, buildSidecarFilename(chatId, ns)),
                 ));
+                written.add(sidecarAbs);
                 bytes += writeJsonFile(sidecarAbs, stateDoc);
                 filesWritten++;
             }
@@ -308,79 +397,6 @@ async function materializeChats({ tx, handle, directories, workdir }) {
     }
 
     return { filesWritten, bytes };
-}
-
-// --- enumerate (pure) ------------------------------------------------------
-
-/**
- * Set of POSIX paths (relative to `directories.root`) that the SQL-mode
- * materializer can write under the given enabled categories. Used by the
- * orchestrator's pre-write sweep to drop stale workdir entries before
- * re-materializing — anything inside one of these category roots that
- * isn't in the set after the latest run is a delete and should be unlinked
- * so the snapshot walker doesn't carry it forward.
- *
- * Pure (no I/O) for category roots themselves. For categories whose layout
- * is keyed off on-disk names (e.g. one file per chat), we walk the existing
- * live tree to enumerate the leaf names — this lets the caller pass the
- * pre-materialize workdir state and get back the set of paths a subsequent
- * materialize call WILL write.
- */
-export function enumerateMaterializedRelPaths({ directories, categories }) {
-    const out = new Set();
-    if (!directories || typeof directories.root !== 'string') {
-        throw new TypeError('enumerateMaterializedRelPaths: directories.root required');
-    }
-    const enabled = new Set(categories || []);
-    const addRel = (abs) => out.add(relUnder(directories.root, abs));
-    const addDirContents = (dir, suffix) => {
-        if (typeof dir !== 'string') return;
-        for (const entry of listDirSafe(dir)) {
-            if (isUnsafeEntryName(entry)) continue;
-            if (suffix && !entry.endsWith(suffix)) continue;
-            addRel(path.join(dir, entry));
-        }
-    };
-
-    if (enabled.has('settings')) addRel(path.join(directories.root, 'settings.json'));
-    if (enabled.has('stats')) addRel(path.join(directories.root, 'stats.json'));
-
-    if (enabled.has('worlds')) {
-        addDirContents(directories.worlds, '.json');
-    }
-
-    if (enabled.has('chats')) {
-        // per-character chats: chats/<charDir>/*
-        const chatsDir = directories.chats;
-        for (const charDir of listDirSafe(chatsDir)) {
-            if (isUnsafeEntryName(charDir)) continue;
-            const charPath = path.join(chatsDir, charDir);
-            try {
-                if (!fs.statSync(charPath).isDirectory()) continue;
-            } catch { continue; }
-            for (const entry of listDirSafe(charPath)) {
-                if (isUnsafeEntryName(entry)) continue;
-                addRel(path.join(charPath, entry));
-            }
-        }
-        addDirContents(directories.groups, '.json');
-        for (const entry of listDirSafe(directories.groupChats)) {
-            if (isUnsafeEntryName(entry)) continue;
-            addRel(path.join(directories.groupChats, entry));
-        }
-    }
-
-    for (const [catId, dirKey] of Object.entries(PRESET_DIR_KEY_BY_CATEGORY)) {
-        if (!enabled.has(catId)) continue;
-        addDirContents(directories[dirKey], '.json');
-    }
-
-    for (const [catId, bucket] of Object.entries(NAMED_DOC_BUCKET_BY_CATEGORY)) {
-        if (!enabled.has(catId)) continue;
-        addDirContents(directories[BUCKET_TO_DIR[bucket]], '.json');
-    }
-
-    return out;
 }
 
 // --- dematerialize ---------------------------------------------------------
@@ -699,6 +715,65 @@ export function buildWorkdirDirectoriesView(directories, workdir) {
 }
 
 /**
+ * Compute the arguments for one `snapshotLiveToShadow` call so the snapshot
+ * walker reads every enabled category from the place its bytes actually live.
+ *
+ * fs engine: the live tree IS the workdir shape, so the walker reads
+ * `directories` anchored at `directories.root` for all categories.
+ *
+ * SQL engines: the materializer projected only the SQL-backed categories
+ * (worlds, chats, presets, …) into the workdir; the disk-backed categories
+ * (characters, avatars, …) still live under the real user root. The plan
+ * therefore anchors the SQL-backed subset at the workdir via
+ * `buildWorkdirDirectoriesView` and hands the disk-backed subset over as an
+ * additional source the walker unions into the same commit. Anchoring both
+ * subsets at the workdir, or neither, is what previously dropped disk-backed
+ * categories from snapshots — and worse, made the reconcile deletion sweep
+ * treat their live files as absent from the desired set and wipe them.
+ *
+ * Pure — no I/O. `workdir` must already exist (materialize creates it).
+ *
+ * @param {object} opts
+ * @param {{ kind: string }} opts.engine
+ * @param {object} opts.directories — live UserDirectoryList
+ * @param {string[]} opts.categories — user's enabled category ids
+ * @param {string} opts.workdir — absolute path to the shadow workdir
+ * @returns {{
+ *   directories: object,
+ *   liveRoot: string,
+ *   enabledCategoryIds: string[],
+ *   additionalSources: Array<{directories: object, liveRoot: string, enabledCategoryIds: string[]}>,
+ * }}
+ */
+export function buildSnapshotPlan({ engine, directories, categories, workdir }) {
+    const enabled = Array.isArray(categories) ? categories : [];
+    if (engine.kind === 'fs') {
+        return {
+            directories,
+            liveRoot: directories.root,
+            enabledCategoryIds: enabled,
+            additionalSources: [],
+        };
+    }
+    const sqlBacked = enabled.filter(isSqlBackedCategory);
+    const diskBacked = enabled.filter(id => !isSqlBackedCategory(id));
+    const plan = {
+        directories: buildWorkdirDirectoriesView(directories, workdir),
+        liveRoot: workdir,
+        enabledCategoryIds: sqlBacked,
+        additionalSources: [],
+    };
+    if (diskBacked.length > 0) {
+        plan.additionalSources.push({
+            directories,
+            liveRoot: directories.root,
+            enabledCategoryIds: diskBacked,
+        });
+    }
+    return plan;
+}
+
+/**
  * Project the SQL engine's per-user payload into a workdir tree shaped like
  * the FS engine's live root. No-op for `engine.kind === 'fs'` because that
  * tree already exists on disk.
@@ -706,6 +781,11 @@ export function buildWorkdirDirectoriesView(directories, workdir) {
  * One transaction per category for the read path, so each category's
  * enumeration sees a consistent snapshot (BEGIN IMMEDIATE on sqlite;
  * REPEATABLE READ on mysql/postgres).
+ *
+ * After a category is projected, its workdir roots are swept: any file the
+ * engine no longer knows about is unlinked. The snapshot walker enumerates
+ * the workdir itself, so without the sweep a record deleted in the engine
+ * would stay in the desired set and never propagate to the peer.
  *
  * @param {object} opts
  * @param {string} opts.handle
@@ -733,37 +813,68 @@ export async function materializeUserDataIntoWorkdir({
 
     fs.mkdirSync(workdir, { recursive: true });
 
-    if (enabled.has('settings')) {
+    // `runCategory` scopes the written-path set to one category, so the sweep
+    // after it can only touch files under that category's roots. `sweepRoots`
+    // is the list of workdir paths the category can write under; anything
+    // there not written this run is stale. Roots that resolve outside the
+    // workdir are skipped — a misconfigured directory entry must never turn
+    // the sweep into a live-tree deletion.
+    const resolvedWorkdir = path.resolve(workdir);
+    const runCategory = async (materialize, sweepRoots) => {
+        const written = new Set();
         const r = await engine.withTransaction(handle, (tx) =>
-            materializeSettings({ tx, handle, directories, workdir }));
+            materialize(tx, written));
         accumulate(r);
+        for (const root of sweepRoots()) {
+            const resolved = path.resolve(root);
+            if (resolved !== resolvedWorkdir && !resolved.startsWith(resolvedWorkdir + path.sep)) {
+                continue;
+            }
+            sweepWorkdirRoot(root, written);
+        }
+    };
+
+    if (enabled.has('settings')) {
+        await runCategory(
+            (tx, written) => materializeSettings({ tx, handle, directories, workdir, written }),
+            () => [path.join(workdir, 'settings.json')],
+        );
     }
     if (enabled.has('stats')) {
-        const r = await engine.withTransaction(handle, (tx) =>
-            materializeStats({ tx, handle, directories, workdir }));
-        accumulate(r);
+        await runCategory(
+            (tx, written) => materializeStats({ tx, handle, directories, workdir, written }),
+            () => [path.join(workdir, 'stats.json')],
+        );
     }
     if (enabled.has('worlds')) {
-        const r = await engine.withTransaction(handle, (tx) =>
-            materializeWorlds({ tx, handle, directories, workdir }));
-        accumulate(r);
+        await runCategory(
+            (tx, written) => materializeWorlds({ tx, handle, directories, workdir, written }),
+            () => [workdirPathFor(workdir, directories, directories.worlds)],
+        );
     }
     if (enabled.has('chats')) {
-        const r = await engine.withTransaction(handle, (tx) =>
-            materializeChats({ tx, handle, directories, workdir }));
-        accumulate(r);
+        await runCategory(
+            (tx, written) => materializeChats({ tx, handle, directories, workdir, written }),
+            () => [
+                workdirPathFor(workdir, directories, directories.chats),
+                workdirPathFor(workdir, directories, directories.groups),
+                workdirPathFor(workdir, directories, directories.groupChats),
+            ],
+        );
     }
     for (const [catId, dirKey] of Object.entries(PRESET_DIR_KEY_BY_CATEGORY)) {
         if (!enabled.has(catId)) continue;
-        const r = await engine.withTransaction(handle, (tx) =>
-            materializePreset({ tx, handle, directories, workdir, dirKey }));
-        accumulate(r);
+        await runCategory(
+            (tx, written) => materializePreset({ tx, handle, directories, workdir, written, dirKey }),
+            () => [workdirPathFor(workdir, directories, directories[dirKey])],
+        );
     }
     for (const [catId, bucket] of Object.entries(NAMED_DOC_BUCKET_BY_CATEGORY)) {
         if (!enabled.has(catId)) continue;
-        const r = await engine.withTransaction(handle, (tx) =>
-            materializeNamedDoc({ tx, handle, directories, workdir, bucket }));
-        accumulate(r);
+        await runCategory(
+            (tx, written) => materializeNamedDoc({ tx, handle, directories, workdir, written, bucket }),
+            () => [workdirPathFor(workdir, directories, directories[BUCKET_TO_DIR[bucket]])],
+        );
     }
 
     return totals;

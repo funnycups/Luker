@@ -15,6 +15,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Storage & Sync
 
 - Fixed LAN Sync pairing failing with an authentication error on instances with user accounts enabled.
+- Fixed LAN Sync on SQLite, MySQL, and PostgreSQL storage ignoring file-backed categories such as characters, and deleting them when database-backed categories synced.
+- Fixed deletions of worlds, chats, and other database-backed records not reaching the other device on SQLite, MySQL, and PostgreSQL storage.
 - Fixed the media deletion preview overflowing the screen.
 - The Clean-Up dialog now renders a category's items only when it is expanded, so large scan results no longer stall the page.
 

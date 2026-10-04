@@ -26,7 +26,7 @@ import {
     queueOnKey,
     undoLastSync,
 } from '../sync/orchestrator.js';
-import { materializeUserDataIntoWorkdir, dematerializeWorkdirIntoUserData, buildWorkdirDirectoriesView } from '../sync/materialize.js';
+import { materializeUserDataIntoWorkdir, dematerializeWorkdirIntoUserData, buildSnapshotPlan } from '../sync/materialize.js';
 import { markSyncInProgress, clearSyncInProgress } from '../sync/in-progress-gate.js';
 import { readSyncState, recordPeer, recordPeerSecret, removePeerCompletely, clearPeerAuth } from '../sync/state.js';
 import { SYNC_CATEGORIES } from '../sync/categories.js';
@@ -468,16 +468,16 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
     // SQL-engine mode (spec §6.3): the engine holds the bulk of the
     // user's data, so the file walk has nothing meaningful to read out
     // of the live root. Project the per-user records into the shadow
-    // workdir first via the engine-agnostic materializer, then point
-    // the walk at the workdir instead of the live root. No-op when
-    // `engine.kind === 'fs'` — the live root already IS the on-disk
+    // workdir first via the engine-agnostic materializer, then snapshot
+    // via `buildSnapshotPlan`, which partitions the categories between
+    // the workdir (SQL-backed) and the live root (disk-backed). No-op
+    // when `engine.kind === 'fs'` — the live root already IS the on-disk
     // shape the walk expects.
     //
     // `snapshotLiveToShadow` is idempotent (commits only when the tree
     // actually differs), so a re-offer with no live edits is cheap.
     try {
-        let liveRoot = user.directories.root;
-        let snapshotDirs = user.directories;
+        let workdir;
         if (engine.kind !== 'fs') {
             const shadow = await ensureShadowRepo({ userRoot: user.directories.root, peerId });
             await materializeUserDataIntoWorkdir({
@@ -487,15 +487,15 @@ router.post('/session/offer', express.json({ limit: '16kb' }), async (request, r
                 workdir: shadow.workdir,
                 engine,
             });
-            snapshotDirs = buildWorkdirDirectoriesView(user.directories, shadow.workdir);
-            liveRoot = shadow.workdir;
+            workdir = shadow.workdir;
         }
+        const snapshotPlan = buildSnapshotPlan({
+            engine, directories: user.directories, categories, workdir,
+        });
         await snapshotLiveToShadow({
             userRoot: user.directories.root,
             peerId,
-            directories: snapshotDirs,
-            enabledCategoryIds: categories,
-            liveRoot,
+            ...snapshotPlan,
         });
     } catch (e) {
         console.error('[sync] offer snapshot failed', e);

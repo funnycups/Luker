@@ -34,8 +34,9 @@ import { buildSidecarFilename } from '../../src/storage/engines/sidecar-naming.j
 import {
     materializeUserDataIntoWorkdir,
     dematerializeWorkdirIntoUserData,
-    enumerateMaterializedRelPaths,
     buildWorkdirDirectoriesView,
+    buildSnapshotPlan,
+    isSqlBackedCategory,
 } from '../../src/sync/materialize.js';
 
 const SQL_OWNED_CATEGORIES = [
@@ -187,60 +188,72 @@ describe('materialize (fs engine — no-op)', () => {
     });
 });
 
-describe('enumerateMaterializedRelPaths (pure)', () => {
-    test('includes chats, worlds, settings, stats when enabled', async () => {
-        const h = await makeTempFsEngineHarness();
-        try {
-            const out = enumerateMaterializedRelPaths({
-                directories: h.dirs,
-                categories: ['chats', 'worlds', 'settings', 'stats'],
-            });
-            expect(out instanceof Set).toBe(true);
-            expect(out.has('settings.json')).toBe(true);
-            expect(out.has('stats.json')).toBe(true);
-            // chats are seeded lazily; the relpath set is structural — it
-            // exists for the chats DIRECTORY parents to be recognized. Even
-            // with no chats on disk yet, the directory paths under chats/
-            // shouldn't pollute the set.
-        } finally {
-            h.cleanup();
+describe('isSqlBackedCategory', () => {
+    test('covers the engine-backed categories and rejects disk-backed ones', () => {
+        for (const id of ['settings', 'stats', 'worlds', 'chats',
+            'openai-presets', 'novelai-presets', 'koboldai-presets', 'textgen-presets',
+            'instruct', 'context', 'sysprompt', 'reasoning',
+            'themes', 'movingUI', 'quickreplies']) {
+            expect(isSqlBackedCategory(id)).toBe(true);
+        }
+        for (const id of ['characters', 'avatars', 'assets', 'backgrounds',
+            'card-apps', 'skills', 'user-files', 'user-images', 'image-metadata',
+            'vectors', 'comfy-workflows', 'secrets', 'extensions']) {
+            expect(isSqlBackedCategory(id)).toBe(false);
         }
     });
+});
 
-    test('does NOT include character / avatar / asset paths (fs-engine-owned)', async () => {
-        const h = await makeTempFsEngineHarness();
-        try {
-            const out = enumerateMaterializedRelPaths({
-                directories: h.dirs,
-                categories: ['chats', 'worlds', 'characters', 'avatars', 'assets'],
-            });
-            const all = [...out];
-            for (const p of all) {
-                expect(p.startsWith('characters/')).toBe(false);
-                expect(p.startsWith('User Avatars/')).toBe(false);
-                expect(p.startsWith('assets/')).toBe(false);
-            }
-        } finally {
-            h.cleanup();
-        }
+describe('buildSnapshotPlan', () => {
+    const directories = {
+        root: '/data/user',
+        characters: '/data/user/characters',
+        chats: '/data/user/chats',
+        groups: '/data/user/groups',
+        groupChats: '/data/user/groupChats',
+        worlds: '/data/user/worlds',
+        avatars: '/data/user/User Avatars',
+    };
+
+    test('fs engine: walks the live root for every category, no extra sources', () => {
+        const plan = buildSnapshotPlan({
+            engine: { kind: 'fs' },
+            directories,
+            categories: ['characters', 'worlds', 'chats'],
+            workdir: '/data/user/.sync/peer/workdir',
+        });
+        expect(plan.directories).toBe(directories);
+        expect(plan.liveRoot).toBe('/data/user');
+        expect(plan.enabledCategoryIds).toEqual(['characters', 'worlds', 'chats']);
+        expect(plan.additionalSources).toEqual([]);
     });
 
-    test('returns POSIX-style separators only', async () => {
-        const h = await makeTempFsEngineHarness();
-        // Manually drop a chat on disk so enumerate has something to scan.
-        fs.mkdirSync(path.join(h.dirs.chats, 'Alice'), { recursive: true });
-        fs.writeFileSync(path.join(h.dirs.chats, 'Alice', 'c1.jsonl'), '{}\n');
-        try {
-            const out = enumerateMaterializedRelPaths({
-                directories: h.dirs,
-                categories: ['chats'],
-            });
-            for (const p of out) {
-                expect(p.includes('\\')).toBe(false);
-            }
-        } finally {
-            h.cleanup();
-        }
+    test('sql engine: partitions categories between workdir and live root', () => {
+        const plan = buildSnapshotPlan({
+            engine: { kind: 'sqlite' },
+            directories,
+            categories: ['characters', 'worlds', 'chats', 'avatars', 'settings'],
+            workdir: '/data/user/.sync/peer/workdir',
+        });
+        expect(plan.liveRoot).toBe('/data/user/.sync/peer/workdir');
+        expect(plan.directories.root).toBe('/data/user/.sync/peer/workdir');
+        expect(plan.directories.worlds).toBe('/data/user/.sync/peer/workdir/worlds');
+        expect(plan.enabledCategoryIds).toEqual(['worlds', 'chats', 'settings']);
+        expect(plan.additionalSources).toHaveLength(1);
+        const extra = plan.additionalSources[0];
+        expect(extra.directories).toBe(directories);
+        expect(extra.liveRoot).toBe('/data/user');
+        expect(extra.enabledCategoryIds).toEqual(['characters', 'avatars']);
+    });
+
+    test('sql engine: no additional source when every category is SQL-backed', () => {
+        const plan = buildSnapshotPlan({
+            engine: { kind: 'sqlite' },
+            directories,
+            categories: ['worlds', 'settings'],
+            workdir: '/data/user/.sync/peer/workdir',
+        });
+        expect(plan.additionalSources).toEqual([]);
     });
 });
 
@@ -378,14 +391,11 @@ describe('materialize (sqlite — exact file layout)', () => {
         }
     });
 
-    test('materialize does NOT sweep pre-existing workdir files (deletion is the orchestrator\'s job)', async () => {
-        // The materializer's job is to PROJECT engine state into the workdir; it
-        // does not own deletion of stray pre-existing files. The orchestrator
-        // computes the sweep set from `enumerateMaterializedRelPaths` and unlinks
-        // anything outside that set BEFORE calling materialize. Pinning the
-        // no-sweep behaviour here keeps a future change from accidentally
-        // shifting the contract (either direction) and silently breaking the
-        // orchestrator's two-step flow.
+    test('sweeps stale workdir files for enabled categories (deletion propagation)', async () => {
+        // The snapshot walker enumerates the workdir itself, so a record
+        // deleted in the engine must be removed from the workdir here or it
+        // would stay in the desired set and never reach the peer. The sweep
+        // is scoped to the enabled categories' roots only.
         const src = await makeTempSqliteEngineHarness();
         const workdir = mkTmpWorkdir();
         try {
@@ -401,8 +411,12 @@ describe('materialize (sqlite — exact file layout)', () => {
             const worldsAbs = path.join(workdir, worldsRel);
             fs.mkdirSync(worldsAbs, { recursive: true });
             const stalePath = path.join(worldsAbs, 'Stale.json');
-            const staleContent = JSON.stringify({ name: 'Stale', orphan: true });
-            fs.writeFileSync(stalePath, staleContent);
+            fs.writeFileSync(stalePath, JSON.stringify({ name: 'Stale', orphan: true }));
+
+            // A stale file OUTSIDE the enabled category must survive the sweep.
+            const outsidePath = path.join(workdir, 'characters', 'keep-me.png');
+            fs.mkdirSync(path.dirname(outsidePath), { recursive: true });
+            fs.writeFileSync(outsidePath, 'not-worlds');
 
             await materializeUserDataIntoWorkdir({
                 handle: src.handle,
@@ -416,9 +430,33 @@ describe('materialize (sqlite — exact file layout)', () => {
             const worldAPath = path.join(worldsAbs, 'WorldA.json');
             expect(fs.existsSync(worldAPath)).toBe(true);
             expect(readJson(worldAPath)).toEqual(worldDoc);
-            // Stale file is untouched — materializer does not sweep.
-            expect(fs.existsSync(stalePath)).toBe(true);
-            expect(fs.readFileSync(stalePath, 'utf-8')).toBe(staleContent);
+            // Stale file inside the category root is swept.
+            expect(fs.existsSync(stalePath)).toBe(false);
+            // Out-of-scope file is untouched.
+            expect(fs.existsSync(outsidePath)).toBe(true);
+        } finally {
+            src.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
+    test('sweeps a stale settings.json when the engine record is absent', async () => {
+        const src = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        try {
+            const stalePath = path.join(workdir, 'settings.json');
+            fs.mkdirSync(workdir, { recursive: true });
+            fs.writeFileSync(stalePath, JSON.stringify({ stale: true }));
+
+            await materializeUserDataIntoWorkdir({
+                handle: src.handle,
+                directories: src.dirs,
+                categories: ['settings'],
+                workdir,
+                engine: src.engine,
+            });
+
+            expect(fs.existsSync(stalePath)).toBe(false);
         } finally {
             src.cleanup();
             fs.rmSync(workdir, { recursive: true, force: true });

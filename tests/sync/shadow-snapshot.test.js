@@ -69,6 +69,71 @@ describe('snapshotLiveToShadow', () => {
         expect(fs.existsSync(path.join(paths.workdir, 'worlds/lore.json'))).toBe(false);
     });
 
+    test('unions additional sources into the same commit (SQL-mode disk-backed categories)', async () => {
+        // Simulate the SQL-engine split: the materialized SQL-backed subset
+        // lives in a staging tree passed as the main source, while
+        // disk-backed categories (characters) live under the real user root
+        // and arrive via `additionalSources`.
+        const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-sync-snap-staging-'));
+        try {
+            fs.mkdirSync(path.join(stagingRoot, 'worlds'), { recursive: true });
+            fs.writeFileSync(path.join(stagingRoot, 'worlds', 'lore.json'), '{"name":"Lore"}');
+            fs.writeFileSync(path.join(liveRoot, 'characters', 'char.png'), 'PNG');
+
+            const result = await snapshotLiveToShadow({
+                userRoot, peerId: 'p',
+                directories: fakeDirsAt(stagingRoot),
+                enabledCategoryIds: ['worlds'],
+                liveRoot: stagingRoot,
+                additionalSources: [{
+                    directories: fakeDirsAt(liveRoot),
+                    liveRoot,
+                    enabledCategoryIds: ['characters'],
+                }],
+            });
+
+            expect(result.committed).toBe(true);
+            const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
+            const headOid = await git.resolveRef({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: 'HEAD' });
+            const files = await git.listFiles({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: headOid });
+            expect(files.sort()).toEqual(['characters/char.png', 'worlds/lore.json']);
+        } finally {
+            fs.rmSync(stagingRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('additional-source files are pruned when they disappear from live', async () => {
+        const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-sync-snap-staging-'));
+        try {
+            fs.mkdirSync(path.join(stagingRoot, 'worlds'), { recursive: true });
+            fs.writeFileSync(path.join(stagingRoot, 'worlds', 'lore.json'), '{}');
+            fs.writeFileSync(path.join(liveRoot, 'characters', 'char.png'), 'PNG');
+
+            const makeArgs = () => ({
+                userRoot, peerId: 'p',
+                directories: fakeDirsAt(stagingRoot),
+                enabledCategoryIds: ['worlds'],
+                liveRoot: stagingRoot,
+                additionalSources: [{
+                    directories: fakeDirsAt(liveRoot),
+                    liveRoot,
+                    enabledCategoryIds: ['characters'],
+                }],
+            });
+
+            await snapshotLiveToShadow(makeArgs());
+            fs.unlinkSync(path.join(liveRoot, 'characters', 'char.png'));
+            const second = await snapshotLiveToShadow(makeArgs());
+
+            expect(second.committed).toBe(true);
+            const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
+            expect(fs.existsSync(path.join(paths.workdir, 'characters/char.png'))).toBe(false);
+            expect(fs.existsSync(path.join(paths.workdir, 'worlds/lore.json'))).toBe(true);
+        } finally {
+            fs.rmSync(stagingRoot, { recursive: true, force: true });
+        }
+    });
+
     test('deletes shadow files that disappeared from live', async () => {
         fs.writeFileSync(path.join(liveRoot, 'characters', 'will_delete.png'), 'a');
         await snapshotLiveToShadow({
