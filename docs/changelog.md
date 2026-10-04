@@ -28,6 +28,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Fixes
 
+- Fixed LAN Sync status messages and other translated strings showing in English on Chinese locales.
 - Fixed empty-input Send not continuing the last message when "Press Send to continue" is enabled.
 - Fixed token count estimation erroring out when a tokenizer fails to load.
 - Fixed a spurious "Chat save aborted" alert appearing when Luker opens.
