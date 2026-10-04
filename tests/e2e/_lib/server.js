@@ -48,6 +48,17 @@ function cloneDataDir(targetDir) {
     } catch {
         execSync(`cp -R "${SEED_DATA}" "${targetDir}"`, { stdio: 'ignore' });
     }
+    // Drop dev-time user accounts. `_storage/` is gitignored, so a
+    // developer's `data/` carries whatever accounts their running server
+    // created — including a password-protected `default-user`, which
+    // breaks every spec that bootstraps the passwordless admin. CI never
+    // sees the directory (the tracked seed has none), so removing it
+    // makes dev runs match CI. The server recreates `default-user` on
+    // boot when no users exist.
+    const storageDir = resolve(targetDir, '_storage');
+    if (existsSync(storageDir)) {
+        try { rmSync(storageDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
     // Drop any dev-time chat history under default-user/chats/ so specs
     // that load a character don't see leftover turns from the developer's
     // own runs (the integrity check rejects them anyway, but the noise
