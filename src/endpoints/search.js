@@ -28,6 +28,22 @@ const visitHeaders = {
     'Sec-Fetch-User': '?1',
 };
 
+class HttpError extends Error {
+    constructor(status, message) {
+        super(message);
+        this.status = status;
+    }
+}
+
+async function fetchProviderJson(url, init, label) {
+    const result = await fetch(url, init);
+    if (!result.ok) {
+        const text = await result.text().catch(() => '');
+        throw new HttpError(result.status >= 500 ? 502 : result.status, `${label} request failed: ${result.status} ${result.statusText}. ${text}`.trim());
+    }
+    return await result.json();
+}
+
 function normalizeWhitespace(text) {
     return String(text || '')
         .replace(/\s+/g, ' ')
@@ -308,6 +324,361 @@ function normalizeBraveApiResults(rawRows = [], maxResults = 8) {
     return results;
 }
 
+const TIME_RANGE_TBS = { day: 'qdr:d', week: 'qdr:w', month: 'qdr:m', year: 'qdr:y' };
+
+function normalizeApiResults(rawRows = [], accessors = {}, maxResults = 8) {
+    if (!Array.isArray(rawRows)) {
+        return [];
+    }
+
+    const pick = (row, accessor) => (typeof accessor === 'function' ? accessor(row) : row?.[accessor]);
+
+    const results = [];
+    const seenUrls = new Set();
+    for (const row of rawRows) {
+        if (results.length >= maxResults) {
+            break;
+        }
+
+        const title = normalizeWhitespace(pick(row, accessors.title) || '');
+        const url = normalizeWhitespace(pick(row, accessors.url) || '');
+        const snippet = normalizeWhitespace(pick(row, accessors.snippet) || '');
+        if (!title || !url || seenUrls.has(url)) {
+            continue;
+        }
+
+        let protocol = '';
+        try {
+            protocol = new URL(url).protocol;
+        } catch {
+            protocol = '';
+        }
+
+        if (protocol !== 'http:' && protocol !== 'https:') {
+            continue;
+        }
+
+        seenUrls.add(url);
+        results.push({ title, url, snippet });
+    }
+
+    return results;
+}
+
+function buildTavilyRequest({ query, maxResults, safeSearch, timeRange, options = {}, apiKey, raw = false }) {
+    const searchDepth = options.searchDepth || 'basic';
+    const body = {
+        query,
+        api_key: apiKey,
+        search_depth: searchDepth,
+        topic: options.topic || 'general',
+        include_answer: options.includeAnswer === 'off' ? false : (options.includeAnswer || false),
+        include_raw_content: false,
+        include_images: Boolean(options.includeImages),
+        include_image_descriptions: false,
+        include_domains: [],
+        exclude_domains: [],
+        max_results: maxResults,
+    };
+    if (timeRange) {
+        body.time_range = timeRange;
+    }
+    if (!raw && searchDepth !== 'fast' && searchDepth !== 'ultra-fast') {
+        body.safe_search = Boolean(safeSearch) && safeSearch !== 'off';
+    }
+    return {
+        url: 'https://api.tavily.com/search',
+        init: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        },
+    };
+}
+
+function normalizeTavilyResults(raw, maxResults = 8) {
+    return normalizeApiResults(raw?.results, { title: 'title', url: 'url', snippet: 'content' }, maxResults);
+}
+
+function buildExaRequest({ query, maxResults, safeSearch, region, options = {}, apiKey }) {
+    const body = {
+        query,
+        type: options.searchType || 'auto',
+        numResults: maxResults,
+    };
+    if (options.category) {
+        body.category = options.category;
+    }
+    const userLocation = region || options.region || '';
+    if (userLocation) {
+        body.userLocation = userLocation;
+    }
+    if (options.contents === 'highlights') {
+        body.contents = { highlights: true };
+    } else if (options.contents === 'text') {
+        body.contents = { text: true };
+    }
+    if (safeSearch && safeSearch !== 'off') {
+        body.moderation = true;
+    }
+    return {
+        url: 'https://api.exa.ai/search',
+        init: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+            body: JSON.stringify(body),
+        },
+    };
+}
+
+function normalizeExaResults(raw, maxResults = 8) {
+    return normalizeApiResults(raw?.results, {
+        title: 'title',
+        url: 'url',
+        snippet: (row) => (Array.isArray(row?.highlights) ? row.highlights.join(' ') : (row?.text || '')),
+    }, maxResults);
+}
+
+function buildSerperRequest({ query, maxResults, timeRange, region, options = {}, apiKey, raw = false, hasExplicitMaxResults = false }) {
+    const resultType = options.resultType || 'web';
+    const path = resultType === 'news' ? '/news' : (resultType === 'images' ? '/images' : '/search');
+    const body = { q: query };
+    if (!raw || hasExplicitMaxResults) {
+        body.num = maxResults;
+    }
+    const country = region || options.region || '';
+    if (country) {
+        body.gl = country;
+    }
+    if (options.language) {
+        body.hl = options.language;
+    }
+    if (TIME_RANGE_TBS[timeRange]) {
+        body.tbs = TIME_RANGE_TBS[timeRange];
+    }
+    return {
+        url: `https://google.serper.dev${path}`,
+        init: {
+            method: 'POST',
+            headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        },
+    };
+}
+
+function normalizeSerperResults(raw, maxResults = 8, resultType = 'web') {
+    const rows = resultType === 'news' ? raw?.news : raw?.organic;
+    return normalizeApiResults(rows, { title: 'title', url: 'link', snippet: 'snippet' }, maxResults);
+}
+
+function buildSerpapiRequest({ query, maxResults, safeSearch, timeRange, region, options = {}, apiKey, raw = false }) {
+    const url = new URL('https://serpapi.com/search.json');
+    url.searchParams.set('engine', 'google');
+    url.searchParams.set('q', query);
+    url.searchParams.set('api_key', apiKey);
+    if (options.resultType === 'news') {
+        url.searchParams.set('tbm', 'nws');
+    }
+    const country = region || options.region || '';
+    if (country) {
+        url.searchParams.set('gl', country);
+    }
+    if (options.language) {
+        url.searchParams.set('hl', options.language);
+    }
+    if (TIME_RANGE_TBS[timeRange]) {
+        url.searchParams.set('tbs', TIME_RANGE_TBS[timeRange]);
+    }
+    if (!raw && safeSearch && safeSearch !== 'off') {
+        url.searchParams.set('safe', 'active');
+    }
+    return { url: url.toString(), init: { method: 'GET' } };
+}
+
+function normalizeSerpapiResults(raw, maxResults = 8, resultType = 'web') {
+    const rows = resultType === 'news' ? raw?.news_results : raw?.organic_results;
+    return normalizeApiResults(rows, { title: 'title', url: 'link', snippet: 'snippet' }, maxResults);
+}
+
+function buildZaiRequest({ query, maxResults, options = {}, apiKey, raw = false, hasExplicitMaxResults = false }) {
+    const body = {
+        search_engine: 'search-prime',
+        search_query: query,
+    };
+    if (!raw || hasExplicitMaxResults) {
+        body.count = maxResults;
+    }
+    if (options.recency && options.recency !== 'noLimit') {
+        body.search_recency_filter = options.recency;
+    }
+    return {
+        url: 'https://api.z.ai/api/paas/v4/web_search',
+        init: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify(body),
+        },
+    };
+}
+
+function normalizeZaiResults(raw, maxResults = 8) {
+    return normalizeApiResults(raw?.search_result, { title: 'title', url: 'link', snippet: 'content' }, maxResults);
+}
+
+async function fetchDdgResults({ query, maxResults, safeSearch, timeRange, region }) {
+    const safeSearchMap = { off: '-2', moderate: '-1', strict: '1' };
+    const timeRangeMap = { day: 'd', week: 'w', month: 'm', year: 'y' };
+    const searchUrl = new URL('https://duckduckgo.com/html/');
+    searchUrl.searchParams.set('q', query);
+    searchUrl.searchParams.set('kp', safeSearchMap[safeSearch] || '-1');
+    if (region) {
+        searchUrl.searchParams.set('kl', region);
+    }
+    if (timeRangeMap[timeRange]) {
+        searchUrl.searchParams.set('df', timeRangeMap[timeRange]);
+    }
+    const result = await fetch(searchUrl, { headers: visitHeaders });
+    if (!result.ok) {
+        const text = await result.text().catch(() => '');
+        throw new HttpError(502, `DDG request failed: ${result.statusText} ${text}`.trim());
+    }
+    return parseDuckDuckGoHtml(await result.text(), maxResults);
+}
+
+async function fetchBraveResults({ query, maxResults, safeSearch, timeRange, apiKey }) {
+    const safeSearchMap = { off: 'off', moderate: 'moderate', strict: 'strict' };
+    const freshnessMap = { day: 'pd', week: 'pw', month: 'pm', year: 'py' };
+    const searchUrl = new URL('https://api.search.brave.com/res/v1/web/search');
+    searchUrl.searchParams.set('q', query);
+    searchUrl.searchParams.set('count', String(maxResults));
+    searchUrl.searchParams.set('safesearch', safeSearchMap[safeSearch] || 'moderate');
+    if (freshnessMap[timeRange]) {
+        searchUrl.searchParams.set('freshness', freshnessMap[timeRange]);
+    }
+    const raw = await fetchProviderJson(searchUrl, {
+        headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': apiKey },
+    }, 'Brave Search');
+    return normalizeBraveApiResults(raw?.web?.results, maxResults);
+}
+
+async function fetchSearxngResults({ query, maxResults, safeSearch, timeRange, options = {} }) {
+    const baseUrl = normalizeWhitespace(options.baseUrl || '');
+    if (!baseUrl) {
+        throw new HttpError(400, 'SearXNG instance URL is required.');
+    }
+    const safeSearchMap = { off: '0', moderate: '1', strict: '2' };
+    const timeRangeMap = { day: 'day', week: 'week', month: 'month', year: 'year' };
+    let normalizedBaseUrl = '';
+    try {
+        normalizedBaseUrl = new URL(baseUrl).toString();
+    } catch {
+        throw new HttpError(400, 'Invalid SearXNG instance URL.');
+    }
+    const buildUrl = ({ json = false } = {}) => {
+        const url = new URL('/search', normalizedBaseUrl);
+        url.searchParams.set('q', query);
+        if (safeSearchMap[safeSearch]) {
+            url.searchParams.set('safesearch', safeSearchMap[safeSearch]);
+        }
+        if (timeRangeMap[timeRange]) {
+            url.searchParams.set('time_range', timeRangeMap[timeRange]);
+        }
+        if (json) {
+            url.searchParams.set('format', 'json');
+        }
+        return url;
+    };
+    const jsonResult = await fetch(buildUrl({ json: true }), { headers: { ...visitHeaders, 'Accept': 'application/json' } });
+    if (jsonResult.ok && String(jsonResult.headers.get('content-type') || '').includes('application/json')) {
+        return normalizeSearxngApiResults((await jsonResult.json())?.results, maxResults);
+    }
+    const searchResult = await fetch(buildUrl(), { headers: visitHeaders });
+    if (!searchResult.ok) {
+        const text = await searchResult.text().catch(() => '');
+        throw new HttpError(502, `SearXNG request failed: ${searchResult.statusText} ${text}`.trim());
+    }
+    return parseSearxngHtml(await searchResult.text(), normalizedBaseUrl, maxResults);
+}
+
+const SEARCH_ADAPTERS = {
+    ddg: {
+        async execute(ctx) {
+            return { raw: null, results: await fetchDdgResults(ctx) };
+        },
+    },
+    searxng: {
+        async execute(ctx) {
+            return { raw: null, results: await fetchSearxngResults(ctx) };
+        },
+    },
+    brave: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.BRAVE_SEARCH);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Brave Search key found');
+            }
+            return { raw: null, results: await fetchBraveResults({ ...ctx, apiKey }) };
+        },
+    },
+    tavily: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.TAVILY);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Tavily key found');
+            }
+            const { url, init } = buildTavilyRequest({ ...ctx, apiKey });
+            const raw = await fetchProviderJson(url, init, 'Tavily');
+            return { raw, results: normalizeTavilyResults(raw, ctx.maxResults) };
+        },
+    },
+    exa: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.EXA);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Exa key found');
+            }
+            const { url, init } = buildExaRequest({ ...ctx, apiKey });
+            const raw = await fetchProviderJson(url, init, 'Exa');
+            return { raw, results: normalizeExaResults(raw, ctx.maxResults) };
+        },
+    },
+    serper: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.SERPER);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Serper key found');
+            }
+            const { url, init } = buildSerperRequest({ ...ctx, apiKey });
+            const raw = await fetchProviderJson(url, init, 'Serper');
+            return { raw, results: normalizeSerperResults(raw, ctx.maxResults, ctx.options?.resultType || 'web') };
+        },
+    },
+    serpapi: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.SERPAPI);
+            if (!apiKey) {
+                throw new HttpError(400, 'No SerpApi key found');
+            }
+            const { url, init } = buildSerpapiRequest({ ...ctx, apiKey });
+            const raw = await fetchProviderJson(url, init, 'SerpApi');
+            return { raw, results: normalizeSerpapiResults(raw, ctx.maxResults, ctx.options?.resultType || 'web') };
+        },
+    },
+    zai: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.ZAI);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Z.AI key found');
+            }
+            const { url, init } = buildZaiRequest({ ...ctx, apiKey });
+            const raw = await fetchProviderJson(url, init, 'Z.AI');
+            return { raw, results: normalizeZaiResults(raw, ctx.maxResults) };
+        },
+    },
+};
+
+export const SEARCH_PROVIDER_IDS = Object.keys(SEARCH_ADAPTERS);
+
 function summarizeVisitErrorBody(text, maxChars = 240) {
     const normalized = decodeHtmlFragment(text || '');
     if (!normalized) {
@@ -506,84 +877,73 @@ async function extractTranscript(videoPageBody, lang) {
     return transcriptText;
 }
 
+function clampMaxResults(value) {
+    return Math.max(1, Math.min(20, Math.floor(Number(value ?? 8) || 8))); // cap-ok: results feed the model's search-result context block; 20 rows keeps one search inside typical tool-output context limits
+}
+
+function buildSearchContext(request, { query, provider, raw = false }) {
+    const body = request.body || {};
+    return {
+        provider,
+        query,
+        maxResults: clampMaxResults(body.max_results ?? body.maxResults ?? 8),
+        safeSearch: String(body.safe_search ?? body.safeSearch ?? 'moderate').trim().toLowerCase(),
+        timeRange: String(body.time_range ?? body.timeRange ?? '').trim().toLowerCase(),
+        region: String(body.region || '').trim(),
+        options: body.options && typeof body.options === 'object' ? body.options : {},
+        directories: request.user?.directories,
+        raw,
+        hasExplicitMaxResults: body.max_results != null || body.maxResults != null,
+    };
+}
+
+router.post('/query', async (request, response) => {
+    try {
+        const provider = String(request.body.provider || '').trim().toLowerCase();
+        const adapter = SEARCH_ADAPTERS[provider];
+        if (!adapter) {
+            return response.status(400).send(`Unknown provider: ${provider}`);
+        }
+        const query = String(request.body.query || '').trim();
+        if (!query) {
+            return response.status(400).send('Query is required');
+        }
+        const ctx = buildSearchContext(request, { query, provider });
+        const { results } = await adapter.execute(ctx);
+        return response.json({
+            provider,
+            query,
+            result_count: results.length,
+            results,
+        });
+    } catch (error) {
+        console.error('Search query failed', error);
+        return response.status(error?.status || 500).send(error?.message || 'Search failed');
+    }
+});
+
 router.post('/serpapi', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.SERPAPI);
-
-        if (!key) {
-            console.error('No SerpApi key found');
+        const query = String(request.body.query || '').trim();
+        if (!query) {
             return response.sendStatus(400);
         }
-
-        const { query } = request.body;
-        const result = await fetch(`https://serpapi.com/search.json?q=${encodeURIComponent(query)}&api_key=${key}`);
-
-        console.debug('SerpApi query', query);
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.error('SerpApi request failed', result.statusText, text);
-            return response.status(500).send(text);
-        }
-
-        const data = await result.json();
-        console.debug('SerpApi response', data);
-        return response.json(data);
+        const ctx = buildSearchContext(request, { query, provider: 'serpapi', raw: true });
+        const { raw } = await SEARCH_ADAPTERS.serpapi.execute(ctx);
+        return response.json(raw);
     } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
+        return response.status(error?.status || 500).send(error?.message || '');
     }
 });
 
 router.post('/ddg', async (request, response) => {
     try {
         const query = String(request.body.query || '').trim();
-
         if (!query) {
-            console.error('Query is required for /ddg');
             return response.sendStatus(400);
         }
-
-        const maxResults = Math.max(1, Math.min(20, Math.floor(Number(request.body.max_results ?? request.body.maxResults ?? 8) || 8)));
-        const safeSearchRaw = String(request.body.safe_search ?? request.body.safeSearch ?? 'moderate').trim().toLowerCase();
-        const timeRangeRaw = String(request.body.time_range ?? request.body.timeRange ?? '').trim().toLowerCase();
-        const region = String(request.body.region || '').trim();
-        const safeSearchMap = {
-            off: '-2',
-            moderate: '-1',
-            strict: '1',
-        };
-        const timeRangeMap = {
-            day: 'd',
-            week: 'w',
-            month: 'm',
-            year: 'y',
-        };
-
-        const searchUrl = new URL('https://duckduckgo.com/html/');
-        searchUrl.searchParams.set('q', query);
-        searchUrl.searchParams.set('kp', safeSearchMap[safeSearchRaw] || '-1');
-        if (region) {
-            searchUrl.searchParams.set('kl', region);
-        }
-        if (timeRangeMap[timeRangeRaw]) {
-            searchUrl.searchParams.set('df', timeRangeMap[timeRangeRaw]);
-        }
-
-        console.debug('DDG query', query);
-        const result = await fetch(searchUrl, {
-            headers: visitHeaders,
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.error('DDG request failed', result.statusText, text);
-            return response.status(500).send(text);
-        }
-
-        const html = await result.text();
-        const results = parseDuckDuckGoHtml(html, maxResults);
-
+        const ctx = buildSearchContext(request, { query, provider: 'ddg' });
+        const { results } = await SEARCH_ADAPTERS.ddg.execute(ctx);
         return response.json({
             provider: 'ddg',
             query,
@@ -646,76 +1006,9 @@ router.post('/searxng', async (request, response) => {
             return response.sendStatus(400);
         }
 
-        const maxResults = Math.max(1, Math.min(20, Math.floor(Number(request.body.max_results ?? request.body.maxResults ?? 8) || 8)));
-        const safeSearchRaw = String(request.body.safe_search ?? request.body.safeSearch ?? 'moderate').trim().toLowerCase();
-        const timeRangeRaw = String(request.body.time_range ?? request.body.timeRange ?? '').trim().toLowerCase();
-        const language = String(request.body.language || '').trim();
-        const safeSearchMap = {
-            off: '0',
-            moderate: '1',
-            strict: '2',
-        };
-        const timeRangeMap = {
-            day: 'day',
-            week: 'week',
-            month: 'month',
-            year: 'year',
-        };
+        console.debug('SearXNG query', baseUrl, query);
 
-        let normalizedBaseUrl = '';
-        try {
-            normalizedBaseUrl = new URL(baseUrl).toString();
-        } catch {
-            console.error('Invalid baseUrl for /searxng', baseUrl);
-            return response.status(400).send('Invalid baseUrl');
-        }
-
-        console.debug('SearXNG query', normalizedBaseUrl, query);
-
-        const buildSearchUrl = ({ json = false } = {}) => {
-            const searchUrl = new URL('/search', normalizedBaseUrl);
-            searchUrl.searchParams.set('q', query);
-            if (preferences) {
-                searchUrl.searchParams.set('preferences', preferences);
-            }
-            if (categories) {
-                searchUrl.searchParams.set('categories', categories);
-            }
-            if (language) {
-                searchUrl.searchParams.set('language', language);
-            }
-            if (safeSearchMap[safeSearchRaw]) {
-                searchUrl.searchParams.set('safesearch', safeSearchMap[safeSearchRaw]);
-            }
-            if (timeRangeMap[timeRangeRaw]) {
-                searchUrl.searchParams.set('time_range', timeRangeMap[timeRangeRaw]);
-            }
-            if (json) {
-                searchUrl.searchParams.set('format', 'json');
-            }
-            return searchUrl;
-        };
-
-        const jsonSearchUrl = buildSearchUrl({ json: true });
-        const jsonResult = await fetch(jsonSearchUrl, {
-            headers: {
-                ...visitHeaders,
-                'Accept': 'application/json',
-            },
-        });
-
-        if (jsonResult.ok && String(jsonResult.headers.get('content-type') || '').includes('application/json')) {
-            const payload = await jsonResult.json();
-            const results = normalizeSearxngApiResults(payload?.results, maxResults);
-            return response.json({
-                provider: 'searxng',
-                query,
-                result_count: results.length,
-                results,
-            });
-        }
-
-        const mainPageUrl = new URL(normalizedBaseUrl);
+        const mainPageUrl = new URL(baseUrl);
         const mainPageRequest = await fetch(mainPageUrl, { headers: visitHeaders });
 
         if (!mainPageRequest.ok) {
@@ -727,12 +1020,22 @@ router.post('/searxng', async (request, response) => {
         const clientHref = mainPageText.match(/href="(\/client.+\.css)"/)?.[1];
 
         if (clientHref) {
-            const clientUrl = new URL(clientHref, normalizedBaseUrl);
+            const clientUrl = new URL(clientHref, baseUrl);
             await fetch(clientUrl, { headers: visitHeaders });
         }
 
-        const htmlSearchUrl = buildSearchUrl();
-        const searchResult = await fetch(htmlSearchUrl, { headers: visitHeaders });
+        const searchUrl = new URL('/search', baseUrl);
+        const searchParams = new URLSearchParams();
+        searchParams.append('q', query);
+        if (preferences) {
+            searchParams.append('preferences', preferences);
+        }
+        if (categories) {
+            searchParams.append('categories', categories);
+        }
+        searchUrl.search = searchParams.toString();
+
+        const searchResult = await fetch(searchUrl, { headers: visitHeaders });
 
         if (!searchResult.ok) {
             const text = await searchResult.text();
@@ -740,14 +1043,8 @@ router.post('/searxng', async (request, response) => {
             return response.sendStatus(500);
         }
 
-        const html = await searchResult.text();
-        const results = parseSearxngHtml(html, normalizedBaseUrl, maxResults);
-        return response.json({
-            provider: 'searxng',
-            query,
-            result_count: results.length,
-            results,
-        });
+        const data = await searchResult.text();
+        return response.send(data);
     } catch (error) {
         console.error('SearXNG request failed', error);
         return response.sendStatus(500);
@@ -756,50 +1053,17 @@ router.post('/searxng', async (request, response) => {
 
 router.post('/tavily', async (request, response) => {
     try {
-        const apiKey = readSecret(request.user.directories, SECRET_KEYS.TAVILY);
-
-        if (!apiKey) {
-            console.error('No Tavily key found');
+        const query = String(request.body.query || '').trim();
+        if (!query) {
             return response.sendStatus(400);
         }
-
-        const { query, include_images } = request.body;
-
-        const body = {
-            query: query,
-            api_key: apiKey,
-            search_depth: 'basic',
-            topic: 'general',
-            include_answer: true,
-            include_raw_content: false,
-            include_images: !!include_images,
-            include_image_descriptions: false,
-            include_domains: [],
-            max_results: 10,
-        };
-
-        const result = await fetch('https://api.tavily.com/search', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(body),
-        });
-
-        console.debug('Tavily query', query);
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.error('Tavily request failed', result.statusText, text);
-            return response.status(500).send(text);
-        }
-
-        const data = await result.json();
-        console.debug('Tavily response', data);
-        return response.json(data);
+        const ctx = buildSearchContext(request, { query, provider: 'tavily', raw: true });
+        ctx.options = { ...ctx.options, includeAnswer: true, includeImages: Boolean(request.body.include_images) };
+        ctx.maxResults = clampMaxResults(request.body.max_results ?? request.body.maxResults ?? 10);
+        const { raw } = await SEARCH_ADAPTERS.tavily.execute(ctx);
+        return response.json(raw);
     } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
+        return response.status(error?.status || 500).send(error?.message || '');
     }
 });
 
@@ -841,101 +1105,29 @@ router.post('/koboldcpp', async (request, response) => {
 
 router.post('/serper', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.SERPER);
-
-        if (!key) {
-            console.error('No Serper key found');
+        const query = String(request.body.query || '').trim();
+        if (!query) {
             return response.sendStatus(400);
         }
-
-        const { query, images } = request.body;
-
-        const url = images
-            ? 'https://google.serper.dev/images'
-            : 'https://google.serper.dev/search';
-
-        const result = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'X-API-KEY': key,
-                'Content-Type': 'application/json',
-            },
-            redirect: 'follow',
-            body: JSON.stringify({ q: query }),
-        });
-
-        console.debug('Serper query', query);
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.warn('Serper request failed', result.statusText, text);
-            return response.status(500).send(text);
+        const ctx = buildSearchContext(request, { query, provider: 'serper', raw: true });
+        if (request.body.images) {
+            ctx.options = { ...ctx.options, resultType: 'images' };
         }
-
-        const data = await result.json();
-        console.debug('Serper response', data);
-        return response.json(data);
+        const { raw } = await SEARCH_ADAPTERS.serper.execute(ctx);
+        return response.json(raw);
     } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
+        return response.status(error?.status || 500).send(error?.message || '');
     }
 });
 
 router.post('/brave', async (request, response) => {
     try {
-        const apiKey = readSecret(request.user.directories, SECRET_KEYS.BRAVE_SEARCH);
-
-        if (!apiKey) {
-            console.error('No Brave Search key found');
-            return response.status(400).send('No Brave Search key found');
-        }
-
         const query = String(request.body.query || '').trim();
         if (!query) {
-            console.error('Query is required for /brave');
             return response.sendStatus(400);
         }
-
-        const maxResults = Math.max(1, Math.min(20, Math.floor(Number(request.body.max_results ?? request.body.maxResults ?? 8) || 8)));
-        const safeSearchRaw = String(request.body.safe_search ?? request.body.safeSearch ?? 'moderate').trim().toLowerCase();
-        const timeRangeRaw = String(request.body.time_range ?? request.body.timeRange ?? '').trim().toLowerCase();
-        const safeSearchMap = {
-            off: 'off',
-            moderate: 'moderate',
-            strict: 'strict',
-        };
-        const freshnessMap = {
-            day: 'pd',
-            week: 'pw',
-            month: 'pm',
-            year: 'py',
-        };
-
-        const searchUrl = new URL('https://api.search.brave.com/res/v1/web/search');
-        searchUrl.searchParams.set('q', query);
-        searchUrl.searchParams.set('count', String(maxResults));
-        searchUrl.searchParams.set('safesearch', safeSearchMap[safeSearchRaw] || 'moderate');
-        if (freshnessMap[timeRangeRaw]) {
-            searchUrl.searchParams.set('freshness', freshnessMap[timeRangeRaw]);
-        }
-
-        console.debug('Brave Search query', query);
-        const result = await fetch(searchUrl, {
-            headers: {
-                'Accept': 'application/json',
-                'Accept-Encoding': 'gzip',
-                'X-Subscription-Token': apiKey,
-            },
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.error('Brave Search request failed', result.statusText, text);
-            return response.status(500).send(text);
-        }
-
-        const data = await result.json();
-        const results = normalizeBraveApiResults(data?.web?.results, maxResults);
+        const ctx = buildSearchContext(request, { query, provider: 'brave' });
+        const { results } = await SEARCH_ADAPTERS.brave.execute(ctx);
         return response.json({
             provider: 'brave',
             query,
@@ -943,54 +1135,21 @@ router.post('/brave', async (request, response) => {
             results,
         });
     } catch (error) {
-        console.error('Brave Search request failed', error);
-        return response.sendStatus(500);
+        return response.status(error?.status || 500).send(error?.message || '');
     }
 });
 
 router.post('/zai', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
-
-        if (!key) {
-            console.error('No Z.AI key found');
-            return response.sendStatus(400);
-        }
-
-        const { query } = request.body;
-
+        const query = String(request.body.query || '').trim();
         if (!query) {
-            console.error('No query provided for /zai');
             return response.sendStatus(400);
         }
-
-        console.debug('Z.AI web search query', query);
-
-        const result = await fetch('https://api.z.ai/api/paas/v4/web_search', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-            body: JSON.stringify({
-                // TODO: There's only one engine option for now
-                search_engine: 'search-prime',
-                search_query: query,
-            }),
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.error('Z.AI request failed', result.statusText, text);
-            return response.status(500).send(text);
-        }
-
-        const data = await result.json();
-        console.debug('Z.AI web search response', data);
-        return response.json(data);
+        const ctx = buildSearchContext(request, { query, provider: 'zai', raw: true });
+        const { raw } = await SEARCH_ADAPTERS.zai.execute(ctx);
+        return response.json(raw);
     } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
+        return response.status(error?.status || 500).send(error?.message || '');
     }
 });
 
@@ -1070,3 +1229,17 @@ router.post('/visit', async (request, response) => {
         return response.status(isTimeout ? 504 : 502).send(`Visit request failed: ${message}`);
     }
 });
+
+export {
+    normalizeApiResults,
+    buildTavilyRequest,
+    normalizeTavilyResults,
+    buildExaRequest,
+    normalizeExaResults,
+    buildSerperRequest,
+    normalizeSerperResults,
+    buildSerpapiRequest,
+    normalizeSerpapiResults,
+    buildZaiRequest,
+    normalizeZaiResults,
+};

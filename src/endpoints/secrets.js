@@ -57,6 +57,7 @@ export const SECRET_KEYS = {
     DEEPSEEK: 'api_key_deepseek',
     SERPER: 'api_key_serper',
     BRAVE_SEARCH: 'api_key_brave_search',
+    EXA: 'api_key_exa',
     AIMLAPI: 'api_key_aimlapi',
     XAI: 'api_key_xai',
     FIREWORKS: 'api_key_fireworks',
