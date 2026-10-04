@@ -351,11 +351,52 @@ router.post('/session/ref', requireSyncToken, express.json(), async (request, re
                         }
                     });
                 } catch (e) {
-                    // Reconcile failure shouldn't roll back the ref —
-                    // the puller's view of "push succeeded" is correct
-                    // (the shadow IS at newOid), and the user can
-                    // recover by pulling on this side. Log and proceed.
+                    // The reconcile rewrites THIS side's live tree. If it
+                    // fails after the ref was advanced, this side would
+                    // advertise a HEAD its live tree never materialized:
+                    // every later sync would see `localMain === peerHead`
+                    // and no-op, so the responder would silently stay stale
+                    // while the puller keeps reporting success. Roll the
+                    // ref back to its pre-push value so the next sync
+                    // retries, and fail the request so the puller's UI
+                    // shows the real error instead of "Synced".
+                    try {
+                        if (currentOid) {
+                            await git.writeRef({
+                                fs,
+                                dir: shadow.workdir,
+                                gitdir: shadow.gitDir,
+                                ref,
+                                value: currentOid,
+                                force: true,
+                            });
+                            // Put the workdir back too, so it matches the
+                            // rolled-back HEAD instead of the tree the
+                            // failed reconcile checked out.
+                            await git.checkout({
+                                fs,
+                                dir: shadow.workdir,
+                                gitdir: shadow.gitDir,
+                                ref: 'main',
+                                force: true,
+                            });
+                        } else {
+                            await git.deleteRef({
+                                fs,
+                                dir: shadow.workdir,
+                                gitdir: shadow.gitDir,
+                                ref,
+                            });
+                        }
+                    } catch (rollbackError) {
+                        console.error('[sync] responder reconcile rollback failed', rollbackError);
+                    }
                     console.error('[sync] responder reconcile failed', e);
+                    return response.status(500).json({
+                        error: 'The other device could not apply the synced changes.',
+                        code: 'RECONCILE_FAILED',
+                        detail: String(e?.message || e),
+                    });
                 }
             }
         }
@@ -1114,7 +1155,7 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
             return response.status(504).json({ error: e.message, stage: 'pull' });
         }
         console.error('[sync] sync-now pull failed', e);
-        response.status(500).json({ error: e.message, stage: 'pull' });
+        response.status(500).json({ error: e.message, code: e.code, stage: 'pull' });
     }
 });
 
@@ -1319,6 +1360,6 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
             return response.status(504).json({ error: e.message, stage: 'pull' });
         }
         console.error('[sync] pair/accept pull failed', e);
-        response.status(500).json({ error: e.message, stage: 'pull' });
+        response.status(500).json({ error: e.message, code: e.code, stage: 'pull' });
     }
 });

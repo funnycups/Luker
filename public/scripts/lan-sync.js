@@ -217,6 +217,43 @@ function clearStatusBanner(template) {
     banner.text('');
 }
 
+function syncErrorCodeMessage(code) {
+    switch (code) {
+        case 'RECONCILE_FAILED':
+            return t`The other device could not apply the synced changes.`;
+        default:
+            return null;
+    }
+}
+
+/**
+ * Report a sync failure to the user and to the logs.
+ *
+ * The browser console line lands in the frontend log buffer, which every
+ * user's debug-log export includes, so a failure that never reaches a
+ * banner still leaves a trace. The banner shows the reason inside the
+ * panel, and the toast makes failures the user has to act on visible even
+ * when the panel is not the active surface.
+ *
+ * `message` is the already-translated user-facing string; `code` maps to a
+ * translated message when one is known; `detail` is the raw server error
+ * (message or stack) that goes to the log only. The log always carries the
+ * raw detail — even when the toast shows a friendly message — so a retry
+ * plus a debug-log export still names the real cause.
+ */
+function reportSyncError(template, { stage, status, code, message, detail } = {}) {
+    const translated = code ? syncErrorCodeMessage(code) : null;
+    const shown = translated || String(message || '').trim() || `HTTP ${status || 0}`;
+    const rawDetail = String(detail || message || '').trim();
+    console.error(`[lan-sync] ${stage || 'sync'} failed`, {
+        status,
+        code,
+        detail: rawDetail || undefined,
+    });
+    showStatusBanner(template, 'error', shown);
+    toastr.error(shown, t`LAN Sync`);
+}
+
 function switchTab(template, tabName) {
     template.find('.lanSyncTabPanel').addClass('displayNone');
     template.find(`.lanSyncPanel${tabName}`).removeClass('displayNone');
@@ -331,15 +368,15 @@ async function runSyncNow(template, peerId, peer) {
             return;
         }
         if (res.status === 401 && body.stage === 'offer') {
-            showStatusBanner(template, 'error', t`Authentication to the other device failed. Forget and re-pair if its credentials changed.`);
+            reportSyncError(template, { stage: 'offer', status: 401, code: 'AUTH_FAILED', message: t`Authentication to the other device failed. Forget and re-pair if its credentials changed.`, detail: body.error });
             return;
         }
         if (res.status === 502 && body.stage === 'offer') {
-            showStatusBanner(template, 'error', t`Could not reach the other device.`);
+            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message: t`Could not reach the other device.`, detail: body.error });
             return;
         }
         if (!res.ok && res.status !== 409) {
-            showStatusBanner(template, 'error', body.error || `HTTP ${res.status}`);
+            reportSyncError(template, { stage: 'pull', status: res.status, code: body.code, message: body.detail || body.error });
             return;
         }
         // Conflict path: the server returns `{ ok: false, conflicts: [...] }`
@@ -362,7 +399,7 @@ async function runSyncNow(template, peerId, peer) {
                     template.find('.lanSyncConflictPanel').addClass('displayNone');
                     showStatusBanner(template, 'success', t`Sync complete.`);
                 } else {
-                    showStatusBanner(template, 'error', result.error || `HTTP ${res2.status}`);
+                    reportSyncError(template, { stage: 'resolve', status: res2.status, code: result.code, message: result.detail || result.error });
                 }
             });
             return;
@@ -372,7 +409,7 @@ async function runSyncNow(template, peerId, peer) {
             template.find('.lanSyncConflictPanel').addClass('displayNone');
         }
     } catch (e) {
-        showStatusBanner(template, 'error', String(e.message || e));
+        reportSyncError(template, { stage: 'sync', message: String(e.message || e), detail: e.stack || String(e.message || e) });
     }
 }
 
@@ -471,6 +508,7 @@ export async function openLanSyncPanel() {
                 toastr.success(t`Undo complete.`, t`LAN Sync`);
                 showStatusBanner(template, 'success', t`Reverted to the state before the last sync with ${peer.label || peerId}.`);
             } catch (e) {
+                console.error('[lan-sync] undo failed', { detail: String(e.message || e) });
                 toastr.error(String(e.message || e), t`Undo failed`);
             }
         },
@@ -493,6 +531,7 @@ export async function openLanSyncPanel() {
                 toastr.success(t`Forgotten.`, t`LAN Sync`);
                 await refreshPeers(template, handlers);
             } catch (e) {
+                console.error('[lan-sync] forget failed', { detail: String(e.message || e) });
                 toastr.error(String(e.message || e), t`Forget failed`);
             }
         },
@@ -515,6 +554,7 @@ export async function openLanSyncPanel() {
                 toastr.success(t`Credentials cleared.`, t`LAN Sync`);
                 await refreshPeers(template, handlers);
             } catch (e) {
+                console.error('[lan-sync] clear-auth failed', { detail: String(e.message || e) });
                 toastr.error(String(e.message || e), t`Failed to clear credentials for ${peer.label || peerId}.`);
             }
         },
@@ -701,20 +741,19 @@ async function runPairAccept(template, payload) {
         if (res.status === 412 && body.code === 'HANDLE_MISMATCH') {
             const got = String(body.gotHandle || '');
             const expected = String(body.expectedHandle || '');
-            showStatusBanner(template, 'error',
-                t`This pairing link is for ${got}, but you're logged in as ${expected}. Pair from the matching account, or use the same handle on both devices.`);
+            reportSyncError(template, { stage: 'offer', status: 412, code: 'HANDLE_MISMATCH', message: t`This pairing link is for ${got}, but you're logged in as ${expected}. Pair from the matching account, or use the same handle on both devices.` });
             return;
         }
         if (res.status === 401 && body.stage === 'offer') {
-            showStatusBanner(template, 'error', t`Authentication to the other device failed. Check your credentials.`);
+            reportSyncError(template, { stage: 'offer', status: 401, code: 'AUTH_FAILED', message: t`Authentication to the other device failed. Check your credentials.`, detail: body.error });
             return;
         }
         if (res.status === 502 && body.stage === 'offer') {
-            showStatusBanner(template, 'error', t`Could not reach the other device. Check the base URL and that the device is online.`);
+            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message: t`Could not reach the other device. Check the base URL and that the device is online.`, detail: body.error });
             return;
         }
         if (!res.ok && res.status !== 409) {
-            showStatusBanner(template, 'error', body.error || `HTTP ${res.status}`);
+            reportSyncError(template, { stage: 'pull', status: res.status, code: body.code, message: body.detail || body.error });
             return;
         }
 
@@ -730,7 +769,7 @@ async function runPairAccept(template, payload) {
             });
             const retryBody = await retry.json().catch(() => ({}));
             if (!retry.ok) {
-                showStatusBanner(template, 'error', retryBody.error || `HTTP ${retry.status}`);
+                reportSyncError(template, { stage: 'pull', status: retry.status, code: retryBody.code, message: retryBody.detail || retryBody.error });
                 return;
             }
             return handleSyncResult(template, payload, retryBody);
@@ -738,7 +777,7 @@ async function runPairAccept(template, payload) {
 
         return handleSyncResult(template, payload, body);
     } catch (e) {
-        showStatusBanner(template, 'error', String(e.message || e));
+        reportSyncError(template, { stage: 'sync', message: String(e.message || e), detail: e.stack || String(e.message || e) });
     }
 }
 
@@ -762,7 +801,7 @@ function handleSyncResult(template, payload, body) {
                 showStatusBanner(template, 'success', t`Sync complete.`);
                 notifyCredentialsStored(payload);
             } else {
-                showStatusBanner(template, 'error', result.error || `HTTP ${res.status}`);
+                reportSyncError(template, { stage: 'resolve', status: res.status, code: result.code, message: result.detail || result.error });
             }
         });
         return;

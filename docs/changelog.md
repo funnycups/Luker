@@ -19,6 +19,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed deletions of worlds, chats, and other database-backed records not reaching the other device on SQLite, MySQL, and PostgreSQL storage.
 - Fixed the media deletion preview overflowing the screen.
 - The Clean-Up dialog now renders a category's items only when it is expanded, so large scan results no longer stall the page.
+- Fixed LAN Sync reporting success when the other device failed to write the changes, which could leave both devices out of sync.
+- LAN Sync failures now appear as a toast and are written to the debug log.
 
 ### Immersive mode & mobile
 
