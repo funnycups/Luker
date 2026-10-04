@@ -1044,6 +1044,7 @@ export async function initRossMods() {
 
     if (sendTextareaCssAutofit) {
         let lastHeight = chatBlock.offsetHeight;
+        let lastTextareaHeight = sendTextArea.offsetHeight;
         const chatBlockResizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
                 if (entry.target !== chatBlock) {
@@ -1052,13 +1053,21 @@ export async function initRossMods() {
 
                 const threshold = 1;
                 const newHeight = chatBlock.offsetHeight;
+                const newTextareaHeight = sendTextArea.offsetHeight;
                 const deltaHeight = newHeight - lastHeight;
+                const textareaDeltaHeight = newTextareaHeight - lastTextareaHeight;
                 const isScrollAtBottom = Math.abs(chatBlock.scrollHeight - chatBlock.scrollTop - newHeight) <= threshold;
+                // Only a composer autofit moves #chat and the textarea in
+                // opposite directions by the same amount. A viewport resize
+                // (immersive mode, keyboard, rotation) changes #chat without
+                // touching the textarea, so it must leave the scroll alone.
+                const isTextareaAutofit = Math.abs(deltaHeight + textareaDeltaHeight) <= threshold;
 
-                if (!isScrollAtBottom && Math.abs(deltaHeight) > threshold) {
+                if (!isScrollAtBottom && isTextareaAutofit && Math.abs(deltaHeight) > threshold) {
                     chatBlock.scrollTop -= deltaHeight;
                 }
                 lastHeight = newHeight;
+                lastTextareaHeight = newTextareaHeight;
             }
         });
 
