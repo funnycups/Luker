@@ -4,7 +4,6 @@ export function createSearchToolsSettingsUi(deps) {
     const {
         DEFAULT_SETTINGS,
         MODULE_NAME,
-        SECRET_KEYS,
         STATUS_ID,
         STYLE_ID,
         UI_BLOCK_ID,
@@ -16,6 +15,7 @@ export function createSearchToolsSettingsUi(deps) {
         getConnectionProfileOptions,
         getContext,
         getOpenAIPresetOptions,
+        getProviderDefinition,
         getProviderSettings,
         getSettings,
         hasConfiguredSecret,
@@ -26,10 +26,10 @@ export function createSearchToolsSettingsUi(deps) {
         getManagedEntriesSnapshot,
         POPUP_TYPE,
         Popup,
+        normalizeFieldValue,
         normalizeLorebookPosition,
         normalizeLorebookRole,
         normalizeProvider,
-        normalizeSafeSearch,
         normalizeWhitespace,
         saveSettingsDebounced,
         syncSharedLorebookForCurrentChat,
@@ -60,54 +60,46 @@ export function createSearchToolsSettingsUi(deps) {
             .join('');
     }
 
-    function renderSafeSearchOptions(selectedValue = '') {
-        const selected = normalizeSafeSearch(selectedValue);
-        const options = [
-            ['off', 'Off'],
-            ['moderate', 'Moderate'],
-            ['strict', 'Strict'],
-        ];
-        return options
-            .map(([value, label]) => `<option value="${escapeHtml(value)}"${value === selected ? ' selected' : ''}>${escapeHtml(i18n(label))}</option>`)
-            .join('');
+    function renderProviderField(field, value) {
+        const id = `search_tools_field_${field.key}`;
+        const label = escapeHtml(i18n(field.label));
+        if (field.type === 'select') {
+            const options = field.options
+                .map(([optionValue, optionLabel]) => `<option value="${escapeHtml(optionValue)}"${optionValue === value ? ' selected' : ''}>${escapeHtml(i18n(optionLabel))}</option>`)
+                .join('');
+            return `<label for="${id}">${label}</label>
+        <select id="${id}" class="text_pole" data-provider-field="${escapeHtml(field.key)}" data-field-type="select">
+            ${options}
+        </select>`;
+        }
+        if (field.type === 'text') {
+            return `<label for="${id}">${label}</label>
+        <input id="${id}" class="text_pole" type="text" data-provider-field="${escapeHtml(field.key)}" data-field-type="text" placeholder="${escapeHtml(field.placeholder || '')}" value="${escapeHtml(value || '')}" />`;
+        }
+        if (field.type === 'number') {
+            return `<label for="${id}">${label}</label>
+        <input id="${id}" class="text_pole" type="number" min="${field.min ?? 0}" max="${field.max ?? 0}" data-provider-field="${escapeHtml(field.key)}" data-field-type="number" value="${escapeHtml(String(value ?? ''))}" />`;
+        }
+        return `<label class="checkbox_label"><input id="${id}" type="checkbox" data-provider-field="${escapeHtml(field.key)}" data-field-type="checkbox"${value ? ' checked' : ''} />${label}</label>`;
     }
 
     function buildProviderSettingsPanelHtml(settings = getSettings()) {
-        const providerId = normalizeProvider(settings.provider);
-        if (providerId === 'ddg') {
-            const providerSettings = getProviderSettings(settings, providerId);
-            return `
-        <label for="search_tools_ddg_safe_search">${escapeHtml(i18n('Default safe search'))}</label>
-        <select id="search_tools_ddg_safe_search" class="text_pole">
-            ${renderSafeSearchOptions(providerSettings.safeSearch)}
-        </select>`;
-        }
-        if (providerId === 'searxng') {
-            const providerSettings = getProviderSettings(settings, providerId);
-            return `
-        <label for="search_tools_searxng_base_url">${escapeHtml(i18n('SearXNG instance URL'))}</label>
-        <input id="search_tools_searxng_base_url" class="text_pole" type="text" placeholder="https://your-searxng.example" value="${escapeHtml(providerSettings.baseUrl || '')}" />
-        <label for="search_tools_searxng_safe_search">${escapeHtml(i18n('Default safe search'))}</label>
-        <select id="search_tools_searxng_safe_search" class="text_pole">
-            ${renderSafeSearchOptions(providerSettings.safeSearch)}
-        </select>`;
-        }
-        if (providerId === 'brave') {
-            const providerSettings = getProviderSettings(settings, providerId);
-            const hasApiKey = hasConfiguredSecret(SECRET_KEYS.BRAVE_SEARCH);
-            return `
-        <label>${escapeHtml(i18n('Brave API key'))}</label>
+        const definition = getProviderDefinition(normalizeProvider(settings.provider));
+        const config = getProviderSettings(settings, definition.id);
+        const parts = [];
+        if (definition.secretKey) {
+            const hasApiKey = hasConfiguredSecret(definition.secretKey);
+            parts.push(`
+        <label>${escapeHtml(i18n('API key'))}</label>
         <div class="flex-container alignitemscenter">
             <span class="text_muted">${escapeHtml(i18n(hasApiKey ? 'Configured' : 'Not configured'))}</span>
-            <div class="menu_button menu_button_small manage-api-keys" data-key="${escapeHtml(SECRET_KEYS.BRAVE_SEARCH)}">${escapeHtml(i18n('Manage API key'))}</div>
-        </div>
-        <label for="search_tools_brave_safe_search">${escapeHtml(i18n('Default safe search'))}</label>
-        <select id="search_tools_brave_safe_search" class="text_pole">
-            ${renderSafeSearchOptions(providerSettings.safeSearch)}
-        </select>`;
+            <div class="menu_button menu_button_small manage-api-keys" data-key="${escapeHtml(definition.secretKey)}">${escapeHtml(i18n('Manage API key'))}</div>
+        </div>`);
         }
-
-        return '';
+        for (const field of definition.fields) {
+            parts.push(renderProviderField(field, config[field.key]));
+        }
+        return parts.join('\n');
     }
 
     function refreshProviderSettingsUi(root, settings = getSettings()) {
@@ -612,22 +604,32 @@ export function createSearchToolsSettingsUi(deps) {
             jQuery(this).val(String(settings.defaultVisitMaxChars));
             saveSettingsDebounced();
         });
-        root.on('change.searchTools', '#search_tools_ddg_safe_search', function () {
-            settings.providers.ddg.safeSearch = normalizeSafeSearch(jQuery(this).val());
-            settings.safeSearch = settings.providers.ddg.safeSearch;
-            saveSettingsDebounced();
-        });
-        root.on('change.searchTools input.searchTools', '#search_tools_searxng_base_url', function () {
-            settings.providers.searxng.baseUrl = normalizeWhitespace(jQuery(this).val());
-            jQuery(this).val(settings.providers.searxng.baseUrl);
-            saveSettingsDebounced();
-        });
-        root.on('change.searchTools', '#search_tools_searxng_safe_search', function () {
-            settings.providers.searxng.safeSearch = normalizeSafeSearch(jQuery(this).val());
-            saveSettingsDebounced();
-        });
-        root.on('change.searchTools', '#search_tools_brave_safe_search', function () {
-            settings.providers.brave.safeSearch = normalizeSafeSearch(jQuery(this).val());
+        root.on('change.searchTools input.searchTools', '#search_tools_provider_settings [data-provider-field]', function () {
+            const element = jQuery(this);
+            const definition = getProviderDefinition(normalizeProvider(settings.provider));
+            const field = definition.fields.find(candidate => candidate.key === String(element.data('provider-field')));
+            if (!field) {
+                return;
+            }
+            const type = String(element.data('field-type'));
+            let value;
+            if (type === 'select') {
+                value = element.val();
+            } else if (type === 'number') {
+                value = element.val();
+            } else if (type === 'checkbox') {
+                value = Boolean(element.prop('checked'));
+            } else {
+                value = element.val();
+            }
+            const normalized = normalizeFieldValue(field, value);
+            settings.providers[definition.id][field.key] = normalized;
+            if (type === 'text') {
+                element.val(normalized);
+            }
+            if (type === 'number') {
+                element.val(String(normalized));
+            }
             saveSettingsDebounced();
         });
         root.on('change.searchTools', '#search_tools_agent_api_preset_name', function () {

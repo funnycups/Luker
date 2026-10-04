@@ -145,7 +145,7 @@ const SCHEMAS = [
         name: 'search_search',
         mode: 'read',
         exec: execSearchSearch,
-        description: 'Web search via the search-tools plugin (DuckDuckGo / SearXNG / Brave, depending on plugin settings). Use only when the user asks about current events, fresh facts, or external information not present in chat / lorebook / memory. Returns provider-shaped results (typically a list of {title, url, snippet}). Follow up with search_visit on a specific URL to read full readable text.',
+        description: 'Web search via the search-tools plugin, using the provider configured in its settings. Use only when the user asks about current events, fresh facts, or external information not present in chat / lorebook / memory. Returns provider-shaped results (typically a list of {title, url, snippet}). Follow up with search_visit on a specific URL to read full readable text.',
         parameters: {
             type: 'object',
             properties: {

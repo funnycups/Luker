@@ -22,6 +22,14 @@ import {
     pickLatestValidSnapshot,
 } from './persistence.js';
 import { registerSearchToolsOrchestrationTools } from './orchestrator-tools.js';
+import {
+    SEARCH_PROVIDERS,
+    getSearchProviderDefinition,
+    normalizeFieldValue,
+    normalizeProviderConfig,
+    normalizeProviderSettings,
+    normalizeSafeSearch,
+} from './providers.js';
 
 const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
@@ -317,6 +325,17 @@ const DEFAULT_AGENT_FINAL_STAGE_PROMPT = [
     `Always finish by calling ${TOOL_NAMES.AGENT_FINALIZE}.`,
 ].join('\n');
 
+function buildDefaultProviderSettings() {
+    const defaults = {};
+    for (const definition of SEARCH_PROVIDERS) {
+        defaults[definition.id] = {};
+        for (const field of definition.fields) {
+            defaults[definition.id][field.key] = field.default;
+        }
+    }
+    return Object.freeze(defaults);
+}
+
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: false,
     preRequestEnabled: false,
@@ -324,18 +343,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     defaultMaxResults: 8,
     defaultVisitMaxChars: 4000,
     safeSearch: 'moderate',
-    providers: Object.freeze({
-        ddg: Object.freeze({
-            safeSearch: 'moderate',
-        }),
-        searxng: Object.freeze({
-            baseUrl: '',
-            safeSearch: 'moderate',
-        }),
-        brave: Object.freeze({
-            safeSearch: 'moderate',
-        }),
-    }),
+    providers: buildDefaultProviderSettings(),
     agentApiPresetName: '',
     agentPresetName: '',
     includeWorldInfoWithPreset: true,
@@ -400,84 +408,25 @@ function clampInteger(value, min, max, fallback) {
 }
 
 function getAvailableSearchProviders() {
-    return [
-        {
-            id: 'ddg',
-            label: 'DuckDuckGo (no login)',
-        },
-        {
-            id: 'searxng',
-            label: 'SearXNG (custom instance)',
-        },
-        {
-            id: 'brave',
-            label: 'Brave Search (API key)',
-        },
-    ];
+    return SEARCH_PROVIDERS;
+}
+
+function getProviderDefinition(providerId) {
+    return getSearchProviderDefinition(providerId);
+}
+
+function getProviderSettings(settings = getSettings(), providerId = '') {
+    const id = normalizeProvider(providerId || settings?.provider);
+    const source = settings?.providers && typeof settings.providers === 'object' ? settings.providers : {};
+    return normalizeProviderConfig(id, source[id], settings?.safeSearch);
 }
 
 function getDefaultSearchProviderId() {
     return getAvailableSearchProviders()[0]?.id || 'ddg';
 }
 
-function getSearchProviderDefinition(value) {
-    const normalized = String(value || '').trim().toLowerCase();
-    return getAvailableSearchProviders().find(provider => provider.id === normalized) || getAvailableSearchProviders()[0];
-}
-
 function normalizeProvider(value) {
     return getSearchProviderDefinition(value)?.id || getDefaultSearchProviderId();
-}
-
-function normalizeSafeSearch(value) {
-    const normalized = String(value || '').trim().toLowerCase();
-    return ['off', 'moderate', 'strict'].includes(normalized) ? normalized : DEFAULT_SETTINGS.safeSearch;
-}
-
-function normalizeDdgProviderSettings(raw = {}, legacySafeSearch = DEFAULT_SETTINGS.safeSearch) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    return {
-        safeSearch: normalizeSafeSearch(source.safeSearch ?? legacySafeSearch),
-    };
-}
-
-function normalizeSearxngProviderSettings(raw = {}, legacySafeSearch = DEFAULT_SETTINGS.safeSearch) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    return {
-        baseUrl: normalizeWhitespace(source.baseUrl || ''),
-        safeSearch: normalizeSafeSearch(source.safeSearch ?? legacySafeSearch),
-    };
-}
-
-function normalizeBraveProviderSettings(raw = {}, legacySafeSearch = DEFAULT_SETTINGS.safeSearch) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    return {
-        safeSearch: normalizeSafeSearch(source.safeSearch ?? legacySafeSearch),
-    };
-}
-
-function normalizeProviderSettings(raw = {}, legacy = {}) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    return {
-        ddg: normalizeDdgProviderSettings(source.ddg, legacy.safeSearch),
-        searxng: normalizeSearxngProviderSettings(source.searxng, legacy.safeSearch),
-        brave: normalizeBraveProviderSettings(source.brave, legacy.safeSearch),
-    };
-}
-
-function getProviderSettings(settings = getSettings(), providerId = '') {
-    const normalizedProviderId = normalizeProvider(providerId || settings?.provider);
-    const source = settings?.providers && typeof settings.providers === 'object' ? settings.providers : {};
-    if (normalizedProviderId === 'ddg') {
-        return normalizeDdgProviderSettings(source.ddg, settings?.safeSearch);
-    }
-    if (normalizedProviderId === 'searxng') {
-        return normalizeSearxngProviderSettings(source.searxng, settings?.safeSearch);
-    }
-    if (normalizedProviderId === 'brave') {
-        return normalizeBraveProviderSettings(source.brave, settings?.safeSearch);
-    }
-    return {};
 }
 
 function hasConfiguredSecret(key) {
@@ -834,131 +783,44 @@ function normalizeSearchRows(rawRows = [], source = 'ddg') {
         .filter(item => item.title && item.url);
 }
 
-async function runDdgSearch({
+async function runSearchProvider(provider, {
     query,
     maxResults,
     safeSearch,
     timeRange,
     region,
+    config,
     abortSignal = null,
 }) {
-    const response = await fetch('/api/search/ddg', {
+    const normalizedProvider = normalizeProvider(provider);
+    const response = await fetch('/api/search/query', {
         method: 'POST',
         headers: getRequestHeaders(),
         signal: isAbortSignalLike(abortSignal) ? abortSignal : null,
         body: JSON.stringify({
+            provider: normalizedProvider,
             query,
             max_results: maxResults,
             safe_search: safeSearch,
             time_range: timeRange || '',
             region: region || '',
+            options: config || {},
         }),
     });
 
     if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`DDG search request failed (${response.status}): ${text || response.statusText}`);
+        throw new Error(`Search request failed (${response.status}): ${text || response.statusText}`);
     }
 
     const payload = await response.json();
-    const results = normalizeSearchRows(payload?.results || [], 'ddg');
+    const results = normalizeSearchRows(payload?.results || [], normalizedProvider);
     return {
-        provider: 'ddg',
+        provider: normalizedProvider,
         query: String(payload?.query || query || ''),
         result_count: Number(payload?.result_count || results.length),
         results,
     };
-}
-
-async function runSearxngSearch({
-    query,
-    maxResults,
-    safeSearch,
-    timeRange,
-    providerSettings,
-    abortSignal = null,
-}) {
-    const baseUrl = normalizeWhitespace(providerSettings?.baseUrl || '');
-    if (!baseUrl) {
-        throw new Error('SearXNG instance URL is required.');
-    }
-
-    const response = await fetch('/api/search/searxng', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        signal: isAbortSignalLike(abortSignal) ? abortSignal : null,
-        body: JSON.stringify({
-            baseUrl,
-            query,
-            max_results: maxResults,
-            safe_search: safeSearch,
-            time_range: timeRange || '',
-        }),
-    });
-
-    if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`SearXNG search request failed (${response.status}): ${text || response.statusText}`);
-    }
-
-    const payload = await response.json();
-    const results = normalizeSearchRows(payload?.results || [], 'searxng');
-    return {
-        provider: 'searxng',
-        query: String(payload?.query || query || ''),
-        result_count: Number(payload?.result_count || results.length),
-        results,
-    };
-}
-
-async function runBraveSearch({
-    query,
-    maxResults,
-    safeSearch,
-    timeRange,
-    abortSignal = null,
-}) {
-    const response = await fetch('/api/search/brave', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        signal: isAbortSignalLike(abortSignal) ? abortSignal : null,
-        body: JSON.stringify({
-            query,
-            max_results: maxResults,
-            safe_search: safeSearch,
-            time_range: timeRange || '',
-        }),
-    });
-
-    if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Brave search request failed (${response.status}): ${text || response.statusText}`);
-    }
-
-    const payload = await response.json();
-    const results = normalizeSearchRows(payload?.results || [], 'brave');
-    return {
-        provider: 'brave',
-        query: String(payload?.query || query || ''),
-        result_count: Number(payload?.result_count || results.length),
-        results,
-    };
-}
-
-async function runSearchProvider(provider, options) {
-    const normalizedProvider = normalizeProvider(provider);
-    if (normalizedProvider === 'ddg') {
-        return await runDdgSearch(options);
-    }
-    if (normalizedProvider === 'searxng') {
-        return await runSearxngSearch(options);
-    }
-    if (normalizedProvider === 'brave') {
-        return await runBraveSearch(options);
-    }
-
-    console.warn(`[${MODULE_NAME}] Unsupported provider '${provider}'. Falling back to ${getDefaultSearchProviderId()}.`);
-    return await runDdgSearch(options);
 }
 
 async function searchWeb(args = {}, { abortSignal = null } = {}) {
@@ -985,7 +847,7 @@ async function searchWeb(args = {}, { abortSignal = null } = {}) {
         safeSearch,
         timeRange,
         region,
-        providerSettings,
+        config: providerSettings,
         abortSignal,
     });
 }
@@ -2786,6 +2648,49 @@ function registerLocaleData() {
         'Failed to persist search agent snapshot (network error).': '保存搜索 Agent 快照失败（网络错误）。',
         'Failed to persist search agent snapshot (storage corrupted, reload chat).': '保存搜索 Agent 快照失败（存储已损坏，请重新加载聊天）。',
         'Failed to persist search agent snapshot (disk write failed).': '保存搜索 Agent 快照失败（磁盘写入失败）。',
+        'Tavily (API key)': 'Tavily（API Key）',
+        'Exa (API key)': 'Exa（API Key）',
+        'Serper (API key)': 'Serper（API Key）',
+        'SerpApi (API key)': 'SerpApi（API Key）',
+        'Z.AI (API key)': 'Z.AI（API Key）',
+        'API key': 'API Key',
+        'Search depth': '搜索深度',
+        'Topic': '主题',
+        'Include answer': '包含答案',
+        'Search type': '搜索类型',
+        'Category': '类别',
+        'Result contents': '结果内容',
+        'Result type': '结果类型',
+        'Region': '地区',
+        'Language': '语言',
+        'Recency': '时间范围',
+        'Basic': '基础',
+        'Advanced': '高级',
+        'Fast': '快速',
+        'Ultra fast': '极速',
+        'General': '通用',
+        'News': '新闻',
+        'Finance': '财经',
+        'Auto': '自动',
+        'Instant': '即时',
+        'Deep lite': '深度精简',
+        'Deep': '深度',
+        'Deep reasoning': '深度推理',
+        'Any': '任意',
+        'Company': '公司',
+        'Publication': '出版物',
+        'Personal site': '个人网站',
+        'Financial report': '财报',
+        'People': '人物',
+        'Highlights': '摘要',
+        'Full text': '全文',
+        'None': '无',
+        'Web': '网页',
+        'No limit': '不限',
+        'Past day': '过去一天',
+        'Past week': '过去一周',
+        'Past month': '过去一月',
+        'Past year': '过去一年',
     });
 
     addLocaleData('zh-tw', {
@@ -2863,6 +2768,49 @@ function registerLocaleData() {
         'Failed to persist search agent snapshot (network error).': '儲存搜尋 Agent 快照失敗（網路錯誤）。',
         'Failed to persist search agent snapshot (storage corrupted, reload chat).': '儲存搜尋 Agent 快照失敗（儲存已損毀，請重新載入聊天）。',
         'Failed to persist search agent snapshot (disk write failed).': '儲存搜尋 Agent 快照失敗（磁碟寫入失敗）。',
+        'Tavily (API key)': 'Tavily（API Key）',
+        'Exa (API key)': 'Exa（API Key）',
+        'Serper (API key)': 'Serper（API Key）',
+        'SerpApi (API key)': 'SerpApi（API Key）',
+        'Z.AI (API key)': 'Z.AI（API Key）',
+        'API key': 'API Key',
+        'Search depth': '搜尋深度',
+        'Topic': '主題',
+        'Include answer': '包含答案',
+        'Search type': '搜尋類型',
+        'Category': '類別',
+        'Result contents': '結果內容',
+        'Result type': '結果類型',
+        'Region': '地區',
+        'Language': '語言',
+        'Recency': '時間範圍',
+        'Basic': '基礎',
+        'Advanced': '進階',
+        'Fast': '快速',
+        'Ultra fast': '極速',
+        'General': '通用',
+        'News': '新聞',
+        'Finance': '財經',
+        'Auto': '自動',
+        'Instant': '即時',
+        'Deep lite': '深度精簡',
+        'Deep': '深度',
+        'Deep reasoning': '深度推理',
+        'Any': '任意',
+        'Company': '公司',
+        'Publication': '出版物',
+        'Personal site': '個人網站',
+        'Financial report': '財報',
+        'People': '人物',
+        'Highlights': '摘要',
+        'Full text': '全文',
+        'None': '無',
+        'Web': '網頁',
+        'No limit': '不限',
+        'Past day': '過去一天',
+        'Past week': '過去一週',
+        'Past month': '過去一月',
+        'Past year': '過去一年',
     });
 }
 
@@ -2887,6 +2835,7 @@ const {
     getConnectionProfileOptions: renderConnectionProfileOptions,
     getContext,
     getOpenAIPresetOptions: (context, selectedName) => renderOpenAIPresetOptions(context, selectedName),
+    getProviderDefinition,
     getProviderSettings,
     getSettings,
     hasConfiguredSecret,
@@ -2897,6 +2846,7 @@ const {
     getManagedEntriesSnapshot,
     POPUP_TYPE,
     Popup,
+    normalizeFieldValue,
     normalizeLorebookPosition,
     normalizeLorebookRole,
     normalizeProvider,
