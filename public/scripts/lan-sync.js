@@ -89,6 +89,43 @@ function parsePairLink(raw) {
 }
 
 /**
+ * True when a base URL points at this device's own loopback interface.
+ * A link carrying a loopback base can never be reached by another device,
+ * so the UI warns when the selected address is one of these.
+ * @param {string} url Base URL
+ * @returns {boolean} True for localhost / 127.0.0.1 / ::1
+ */
+function isLoopbackBaseUrl(url) {
+    try {
+        const hostname = new URL(String(url)).hostname.toLowerCase();
+        return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Rebuild the generated pairing link from the address the user selected in
+ * `.lanSyncBaseUrlSelect`, and show the loopback warning when that address
+ * is not reachable from another device.
+ * @param {JQuery} template Panel root
+ * @param {{ peerId: string, label: string, categories: string[], pairCode?: string }|null} state Pair-start payload
+ */
+function renderGeneratedPairLink(template, state) {
+    if (!state) return;
+    const base = String(template.find('.lanSyncBaseUrlSelect').val() || '').trim();
+    const link = buildPairLink({
+        peerBaseUrl: base,
+        peerId: state.peerId,
+        label: state.label,
+        categories: state.categories,
+        pairCode: state.pairCode,
+    });
+    template.find('.lanSyncGeneratedLink').val(link);
+    template.find('.lanSyncBaseUrlWarning').toggleClass('displayNone', !isLoopbackBaseUrl(base));
+}
+
+/**
  * Categories fetched once per panel open. Server-side `SYNC_CATEGORIES`
  * already speaks displayKey/descriptionKey i18n keys; we render directly
  * against them rather than maintaining a parallel UI registry.
@@ -419,6 +456,10 @@ async function runSyncNow(template, peerId, peer) {
 export async function openLanSyncPanel() {
     const template = $(await renderTemplateAsync('userLanSync'));
 
+    // Payload from the last `/pair/start`, kept so the address selector can
+    // rebuild the link without re-minting the one-time pairing code.
+    let pairNewState = null;
+
     // Availability check first — the route is kept as a stable forward-
     // compatible surface so the UI can branch on `available: false` if a
     // future blocker (read-only mount, missing git binary, etc.) needs to
@@ -587,20 +628,39 @@ export async function openLanSyncPanel() {
                 throw new Error(body.error || `HTTP ${res.status}`);
             }
             const body = await res.json();
-            const link = buildPairLink({
-                peerBaseUrl: body.peerBaseUrl,
+            pairNewState = {
                 peerId: body.peerId,
                 label: body.label,
                 categories: body.categories,
                 pairCode: body.pairCode,
-            });
-            template.find('.lanSyncGeneratedLink').val(link);
+            };
+            // Offer every address a peer could use: the request-derived
+            // origin first, then the reachable interface addresses the
+            // server detected. Default to a non-loopback one when present,
+            // so the shared link is usable without manual editing.
+            const bases = [];
+            for (const candidate of [body.peerBaseUrl, ...(Array.isArray(body.candidateBaseUrls) ? body.candidateBaseUrls : [])]) {
+                const base = String(candidate || '').trim();
+                if (base && !bases.includes(base)) bases.push(base);
+            }
+            const select = template.find('.lanSyncBaseUrlSelect');
+            select.empty();
+            for (const base of bases) {
+                const suffix = isLoopbackBaseUrl(base) ? ` ${t`(this device only)`}` : '';
+                select.append($('<option>').val(base).text(`${base}${suffix}`));
+            }
+            select.val(bases.find(base => !isLoopbackBaseUrl(base)) || bases[0] || '');
+            renderGeneratedPairLink(template, pairNewState);
             template.find('.lanSyncPairNewResult').removeClass('displayNone');
             template.find('.lanSyncPairNewForm').addClass('displayNone');
             await refreshPeers(template, handlers);
         } catch (e) {
             toastr.error(String(e.message || e), t`Failed to generate pairing link`);
         }
+    });
+
+    template.find('.lanSyncBaseUrlSelect').on('change', function () {
+        renderGeneratedPairLink(template, pairNewState);
     });
 
     template.find('.lanSyncCopyLinkButton').on('click', async function () {
@@ -615,6 +675,9 @@ export async function openLanSyncPanel() {
     });
 
     template.find('.lanSyncNewLinkButton').on('click', function () {
+        pairNewState = null;
+        template.find('.lanSyncBaseUrlSelect').empty();
+        template.find('.lanSyncBaseUrlWarning').addClass('displayNone');
         template.find('.lanSyncPairNewResult').addClass('displayNone');
         template.find('.lanSyncPairNewForm').removeClass('displayNone');
         template.find('.lanSyncGeneratedLink').val('');

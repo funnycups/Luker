@@ -17,7 +17,7 @@ Luker 提供了兩種在裝置間搬運資料的方式：
 
    ![配對新裝置表單，已勾選類別](/images/lan-sync/02-pair-new-form-filled.png)
 
-2. A 顯示一個 URL，有效期為 10 分鐘。
+2. A 顯示對端裝置將使用的位址和一個有效期為 10 分鐘的 URL。當本裝置透過 localhost 開啟時，位址會預設使用偵測到的區域網路位址，確保對端能夠存取；localhost 位址會標註為僅本機。若本裝置處於多個網路中，請改選對端可達的位址。
 
    ![已產生的配對連結](/images/lan-sync/03-pair-link-generated.png)
 

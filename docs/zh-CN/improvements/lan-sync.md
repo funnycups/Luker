@@ -17,7 +17,7 @@ Luker 提供了两种在设备间搬运数据的方式：
 
    ![配对新设备表单，已勾选类别](/images/lan-sync/02-pair-new-form-filled.png)
 
-2. A 显示一个 URL，有效期为 10 分钟。
+2. A 显示对端设备将使用的地址和一个有效期为 10 分钟的 URL。当本设备通过 localhost 打开时，地址会默认使用探测到的局域网地址，确保对端能够访问；localhost 地址会标注为仅本机。如果本设备处于多个网络中，请改选对端可达的地址。
 
    ![已生成的配对链接](/images/lan-sync/03-pair-link-generated.png)
 

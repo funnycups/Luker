@@ -301,12 +301,17 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
     const env = { ...process.env, ...extraEnv, NODE_ENV: 'production' };
 
     async function spawnOnce() {
+        // `extraConfig.listen` also drives the CLI flag because the CLI value
+        // wins over config.yaml. Specs that exercise LAN address detection
+        // pass `{ listen: true }` so the server binds its interfaces; the
+        // default stays loopback-only for every other spec.
+        const listenFlag = effectiveConfig.listen === true ? '--listen=true' : '--listen=false';
         const argv = [
             'server.js',
             `--port=${port}`,
             `--dataRoot=${dataRoot}`,
             '--browserLaunchEnabled=false',
-            '--listen=false',
+            listenFlag,
             '--whitelist=127.0.0.1',
             '--disableCsrf=false',
         ];

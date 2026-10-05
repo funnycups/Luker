@@ -32,6 +32,7 @@ import { readSyncState, recordPeer, recordPeerSecret, removePeerCompletely, clea
 import { SYNC_CATEGORIES } from '../sync/categories.js';
 import { getStorageEngine } from '../storage/index.js';
 import { getRequestBaseUrl } from '../express-common.js';
+import { buildLanBaseUrlCandidates } from '../util.js';
 import { ENABLE_ACCOUNTS, resolveUserFromBasicAuth, getAllUserHandles, getUserDirectories, toKey } from '../users.js';
 
 export const router = express.Router();
@@ -989,10 +990,11 @@ router.post('/peers/:peerId/label', express.json({ limit: '4kb' }), async (reque
  *
  * The returned `peerBaseUrl` is derived from the current request's host
  * header, so a user who pairs while on Wi-Fi gets a LAN URL, and one on
- * loopback gets `http://127.0.0.1:<port>` (mostly useful for tests). The
- * UI may overwrite this in the share-link before showing the QR — the
- * `lan-migration.js` flow has a precedent for prompting the user to confirm
- * the host when it looks like loopback.
+ * loopback gets `http://127.0.0.1:<port>` (mostly useful for tests).
+ * `candidateBaseUrls` carries the same origin with each reachable interface
+ * address substituted, so the UI can default the link to an address a peer
+ * can actually reach instead of the loopback one. Empty when this server is
+ * loopback-only.
  *
  * Returning the categories the user selected lets the OTHER device pre-fill
  * its accept form with the same selection — pairing implies shared scope.
@@ -1027,7 +1029,12 @@ router.post('/pair/start', express.json({ limit: '4kb' }), async (request, respo
     const pairCode = createPairingCode({ handle: user.profile.handle, peerId });
 
     const peerBaseUrl = getRequestBaseUrl(request);
-    response.json({ peerId, label, peerBaseUrl, categories, pairCode });
+    // The request host is the loopback address when the app was opened
+    // through it, which a peer cannot reach. When this server listens
+    // beyond loopback, hand the UI the reachable alternatives so it can
+    // default the link to one of them instead of the loopback address.
+    const candidateBaseUrls = buildLanBaseUrlCandidates(peerBaseUrl, globalThis.COMMAND_LINE_ARGS);
+    response.json({ peerId, label, peerBaseUrl, candidateBaseUrls, categories, pairCode });
 });
 
 /**

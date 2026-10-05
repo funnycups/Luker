@@ -36,6 +36,8 @@ import {
     getArrayBufferSlice,
     Cache,
     MemoryLimitedMap,
+    getLanAddressCandidates,
+    buildLanBaseUrlCandidates,
 } from '../src/util';
 
 describe('keyToEnv', () => {
@@ -814,5 +816,76 @@ describe('modelIdMatchesFamily', () => {
     test('coerces non-string input via String()', () => {
         expect(modelIdMatchesFamily(null, /^kimi-k3/)).toBe(false);
         expect(modelIdMatchesFamily(undefined, /^kimi-k3/)).toBe(false);
+    });
+});
+
+describe('getLanAddressCandidates', () => {
+    test('drops loopback, internal, and link-local addresses', () => {
+        const interfaces = {
+            lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
+            eth0: [{ address: '192.168.1.20', family: 'IPv4', internal: false }],
+            en0: [{ address: '169.254.10.5', family: 'IPv4', internal: false }],
+        };
+        expect(getLanAddressCandidates(interfaces)).toEqual([{ address: '192.168.1.20', iface: 'eth0' }]);
+    });
+
+    test('accepts numeric family and sorts private ranges ahead of public ones', () => {
+        const interfaces = {
+            rmnet0: [{ address: '10.5.6.7', family: 4, internal: false }],
+            wlan0: [{ address: '192.168.43.1', family: 4, internal: false }],
+            pub0: [{ address: '203.0.113.9', family: 4, internal: false }],
+        };
+        expect(getLanAddressCandidates(interfaces).map(candidate => candidate.address)).toEqual([
+            '10.5.6.7',
+            '192.168.43.1',
+            '203.0.113.9',
+        ]);
+    });
+
+    test('ignores IPv6 and empty interface slots', () => {
+        const interfaces = {
+            lo0: [{ address: '::1', family: 'IPv6', internal: true }],
+            wlan0: [{ address: 'fe80::1', family: 'IPv6', internal: false }],
+            down0: undefined,
+        };
+        expect(getLanAddressCandidates(interfaces)).toEqual([]);
+    });
+});
+
+describe('buildLanBaseUrlCandidates', () => {
+    const interfaces = {
+        wlan0: [{ address: '192.168.43.1', family: 'IPv4', internal: false }],
+        eth0: [{ address: '10.0.0.5', family: 'IPv4', internal: false }],
+    };
+
+    test('returns nothing when the server is loopback-only', () => {
+        expect(buildLanBaseUrlCandidates('http://127.0.0.1:8000', { listen: false }, interfaces)).toEqual([]);
+    });
+
+    test('substitutes each interface address onto the request origin', () => {
+        expect(buildLanBaseUrlCandidates('http://127.0.0.1:8000', { listen: true }, interfaces)).toEqual([
+            'http://10.0.0.5:8000',
+            'http://192.168.43.1:8000',
+        ]);
+    });
+
+    test('uses the pinned listen address when one is configured', () => {
+        expect(buildLanBaseUrlCandidates(
+            'http://127.0.0.1:8000',
+            { listen: true, listenAddressIPv4: '192.168.1.9' },
+            interfaces,
+        )).toEqual(['http://192.168.1.9:8000']);
+    });
+
+    test('enumerates interfaces when the listen address is a wildcard', () => {
+        expect(buildLanBaseUrlCandidates(
+            'http://127.0.0.1:8000',
+            { listen: true, listenAddressIPv4: '0.0.0.0' },
+            interfaces,
+        )).toHaveLength(2);
+    });
+
+    test('returns nothing for an unparsable primary URL', () => {
+        expect(buildLanBaseUrlCandidates('not a url', { listen: true }, interfaces)).toEqual([]);
     });
 });

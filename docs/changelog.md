@@ -25,6 +25,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - The Clean-Up dialog now renders a category's items only when it is expanded, so large scan results no longer stall the page.
 - Fixed LAN Sync reporting success when the other device failed to write the changes, which could leave both devices out of sync.
 - LAN Sync failures now appear as a toast and are written to the debug log.
+- LAN Sync pairing links now embed a detected LAN address instead of a localhost address, and the generating device can pick another address.
 
 ### Immersive mode & mobile
 

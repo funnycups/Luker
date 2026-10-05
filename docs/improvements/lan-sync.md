@@ -17,7 +17,7 @@ Luker has two ways to move data between devices:
 
    ![Pair new device form with categories selected](/images/lan-sync/02-pair-new-form-filled.png)
 
-2. A shows a URL valid for 10 minutes.
+2. A shows the address the other device will use and a URL valid for 10 minutes. When this device is opened through localhost, the address defaults to a detected LAN address so the other device can reach it; a localhost address is labeled as this device only. Pick a different address if the device is on several networks.
 
    ![Generated pairing link ready to share](/images/lan-sync/03-pair-link-generated.png)
 

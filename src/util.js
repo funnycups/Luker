@@ -1423,6 +1423,117 @@ export async function getHasIP() {
     return { hasIPv6Any, hasIPv4Any, hasIPv6Local, hasIPv4Local };
 }
 
+/**
+ * Checks whether a dotted-quad IPv4 address falls in an RFC 1918 private range.
+ * @param {string} address IPv4 address
+ * @returns {boolean} True for 10/8, 172.16/12, and 192.168/16
+ */
+function isPrivateIPv4(address) {
+    const parts = String(address).split('.').map(Number);
+    if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) {
+        return false;
+    }
+    if (parts[0] === 10) {
+        return true;
+    }
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
+        return true;
+    }
+    if (parts[0] === 192 && parts[1] === 168) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Checks whether a value is a concrete IPv4 address rather than a wildcard.
+ * @param {string} value Address candidate
+ * @returns {boolean} True for a specific dotted-quad address
+ */
+function isSpecificIPv4(value) {
+    const trimmed = String(value || '').trim();
+    if (trimmed === '' || trimmed === '0.0.0.0') {
+        return false;
+    }
+    return trimmed.split('.').length === 4
+        && trimmed.split('.').every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+/**
+ * Lists this host's non-loopback IPv4 addresses. Internal and link-local
+ * (`169.254.0.0/16`) entries are dropped; private-range addresses sort
+ * ahead of the rest so the common LAN case surfaces first.
+ * @param {ReturnType<import('node:os').networkInterfaces>} [interfaces] Interface map, injectable for tests
+ * @returns {Array<{ address: string, iface: string }>} Candidate addresses
+ */
+export function getLanAddressCandidates(interfaces = os.networkInterfaces()) {
+    const candidates = [];
+    for (const [iface, addrs] of Object.entries(interfaces ?? {})) {
+        if (!addrs) {
+            continue;
+        }
+        for (const info of addrs) {
+            const isIPv4 = info?.family === 'IPv4' || info?.family === 4;
+            if (!isIPv4 || info.internal) {
+                continue;
+            }
+            if (String(info.address).startsWith('169.254.')) {
+                continue;
+            }
+            candidates.push({ address: info.address, iface });
+        }
+    }
+    candidates.sort((a, b) => {
+        const privateDelta = Number(!isPrivateIPv4(a.address)) - Number(!isPrivateIPv4(b.address));
+        return privateDelta || a.iface.localeCompare(b.iface);
+    });
+    return candidates;
+}
+
+/**
+ * Builds the base URLs a LAN peer could use to reach this server.
+ *
+ * The pairing link derives its address from the request `Host` header, which
+ * is the loopback address whenever the app was opened through it (the mobile
+ * app does exactly that). When the server listens beyond loopback, this
+ * returns the request origin with each reachable interface address
+ * substituted, so the UI can offer the address a peer can actually reach.
+ *
+ * Returns an empty list when the server is loopback-only, because advertising
+ * a LAN address the server is not bound to would be wrong.
+ * @param {string} primaryBaseUrl Origin derived from the request
+ * @param {{ listen?: boolean, listenAddressIPv4?: string }} [cliArgs] Listen configuration
+ * @param {ReturnType<import('node:os').networkInterfaces>} [interfaces] Interface map, injectable for tests
+ * @returns {string[]} Candidate origins, most likely first
+ */
+export function buildLanBaseUrlCandidates(primaryBaseUrl, cliArgs = {}, interfaces = os.networkInterfaces()) {
+    if (!cliArgs?.listen) {
+        return [];
+    }
+    let primary;
+    try {
+        primary = new URL(String(primaryBaseUrl));
+    } catch {
+        return [];
+    }
+    const pinned = String(cliArgs.listenAddressIPv4 || '').trim();
+    const addresses = isSpecificIPv4(pinned)
+        ? [pinned]
+        : getLanAddressCandidates(interfaces).map(candidate => candidate.address);
+    const seen = new Set();
+    const candidates = [];
+    for (const address of addresses) {
+        const url = new URL(primary.toString());
+        url.hostname = address;
+        if (seen.has(url.origin)) {
+            continue;
+        }
+        seen.add(url.origin);
+        candidates.push(url.origin);
+    }
+    return candidates;
+}
+
 
 /**
  * Converts various JavaScript primitives to boolean values.
