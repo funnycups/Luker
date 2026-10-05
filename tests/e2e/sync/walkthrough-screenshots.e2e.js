@@ -79,6 +79,19 @@ async function shootPanel(page, step) {
     await page.screenshot({ path: screenshotPath(step), fullPage: false });
 }
 
+/**
+ * Capture a single element instead of the whole panel viewport. Used for
+ * steps whose subject is a sub-region that shares a viewport with the
+ * surrounding panel — a viewport shot of two such steps (the conflict
+ * banner and the conflict panel) would be byte-identical, because the
+ * panel fits on one screen. Waits for visibility; writes only on regen.
+ */
+async function shootElement(step, locator) {
+    await locator.waitFor({ state: 'visible', timeout: 5_000 });
+    if (!process.env.LUKER_UPDATE_DOC_SCREENSHOTS) return;
+    await locator.screenshot({ path: screenshotPath(step) });
+}
+
 let A, B;
 
 test.beforeAll(async () => {
@@ -91,6 +104,11 @@ test.beforeAll(async () => {
     A = await startServer({
         batchKey: 'sync',
         scenarioId: 'walkthrough-A',
+        // Bind A's interfaces so the generated link defaults to a LAN
+        // address and step 03 shows the address selector populated, the
+        // way a real pairing looks. `securityOverride` keeps the startup
+        // security check from exiting on this test-only non-localhost bind.
+        extraConfig: { listen: true, securityOverride: true },
     });
     B = await startServer({
         batchKey: 'sync',
@@ -218,7 +236,7 @@ test.describe('LAN Sync — walkthrough screenshots and banner UX', () => {
         const syncOutcome = await clickSyncNow(pageB, 'Laptop');
         expect(syncOutcome).toBe('warning');
         await expectBannerContains(pageB, /conflict/i);
-        await shootPanel(pageB, '07-conflict-banner');
+        await shootElement('07-conflict-banner', pageB.locator('.userLanSync .lanSyncStatusBanner').first());
 
         // --- Step 08: the conflict resolution panel itself. One row,
         // "worlds/Cascade Lore.json", kind = bothModified, two radio
@@ -228,7 +246,7 @@ test.describe('LAN Sync — walkthrough screenshots and banner UX', () => {
         await expect(conflictPanel).toBeVisible({ timeout: 5_000 });
         const kinds = await listConflictKinds(pageB);
         expect(kinds['worlds/Cascade Lore.json']).toBe('bothModified');
-        await shootPanel(pageB, '08-conflict-panel');
+        await shootElement('08-conflict-panel', conflictPanel);
 
         // --- Step 09: user picks Local (ours wins). Apply lands and the
         // banner returns to success with the doc-canonical "Sync complete."
