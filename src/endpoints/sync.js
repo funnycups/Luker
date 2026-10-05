@@ -58,6 +58,29 @@ function extractToken(request) {
     return match ? match[1].toLowerCase() : '';
 }
 
+/**
+ * Best-effort short label for a failed outbound fetch. `fetch` wraps the
+ * real socket error in `error.cause`; for a hostname resolving to several
+ * addresses it is an AggregateError whose `.errors` carry the per-address
+ * codes. Surfacing the code lets the UI tell a wrong address or port
+ * (`ECONNREFUSED`) apart from a firewall or route problem (`ETIMEDOUT`,
+ * `ENETUNREACH`) instead of the generic `fetch failed`.
+ * @param {unknown} error Error thrown by `fetch`
+ * @returns {string} Short cause label
+ */
+function describeFetchFailure(error) {
+    const cause = /** @type {{ code?: string, message?: string, errors?: Array<{ code?: string }> }} */ (/** @type {any} */ (error)?.cause);
+    const code = cause?.code
+        || (Array.isArray(cause?.errors) ? cause.errors.map(entry => entry?.code).find(Boolean) : '');
+    if (code) {
+        return String(code);
+    }
+    if (cause?.message) {
+        return String(cause.message);
+    }
+    return String(/** @type {any} */ (error)?.message || error || 'fetch failed');
+}
+
 function requireSyncToken(request, response, next) {
     const token = extractToken(request);
     if (!token) {
@@ -1133,7 +1156,7 @@ router.post('/peers/:peerId/sync', express.json({ limit: '4kb' }), async (reques
         offerResult = await offerResponse.json();
     } catch (e) {
         console.error('[sync] sync-now offer failed', e);
-        return response.status(502).json({ error: e.message, stage: 'offer' });
+        return response.status(502).json({ error: e.message, detail: describeFetchFailure(e), stage: 'offer' });
     }
 
     const offerToken = String(offerResult?.token || '');
@@ -1307,7 +1330,7 @@ router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, resp
         offerResult = await offerResponse.json();
     } catch (e) {
         console.error('[sync] pair/accept offer failed', e);
-        return response.status(502).json({ error: e.message, stage: 'offer' });
+        return response.status(502).json({ error: e.message, detail: describeFetchFailure(e), stage: 'offer' });
     }
 
     const offerToken = String(offerResult?.token || '');

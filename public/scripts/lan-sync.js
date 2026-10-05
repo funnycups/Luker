@@ -409,7 +409,11 @@ async function runSyncNow(template, peerId, peer) {
             return;
         }
         if (res.status === 502 && body.stage === 'offer') {
-            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message: t`Could not reach the other device.`, detail: body.error });
+            const cause = String(body.detail || '').trim();
+            const message = cause
+                ? t`Could not reach the other device (${cause}).`
+                : t`Could not reach the other device.`;
+            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message, detail: body.detail || body.error });
             return;
         }
         if (!res.ok && res.status !== 409) {
@@ -812,7 +816,11 @@ async function runPairAccept(template, payload) {
             return;
         }
         if (res.status === 502 && body.stage === 'offer') {
-            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message: t`Could not reach the other device. Check the base URL and that the device is online.`, detail: body.error });
+            const cause = String(body.detail || '').trim();
+            const message = cause
+                ? t`Could not reach the other device (${cause}). Check the base URL and that the device is online.`
+                : t`Could not reach the other device. Check the base URL and that the device is online.`;
+            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message, detail: body.detail || body.error });
             return;
         }
         if (!res.ok && res.status !== 409) {
