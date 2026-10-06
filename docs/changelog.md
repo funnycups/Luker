@@ -32,10 +32,6 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - LAN Sync pairing links now embed a detected LAN address instead of a localhost address, and the generating device can pick another address.
 - LAN Sync now reports the underlying network error when the other device is unreachable.
 
-### Immersive mode & mobile
-
-- Fixed exiting immersive mode scrolling the welcome screen down.
-
 ### HarmonyOS App
 
 - Added a native HarmonyOS app that bundles the full Luker server and interface and runs standalone on the device, built from source and signed with your Huawei developer account. See the [HarmonyOS guide](/guide/harmonyos).
