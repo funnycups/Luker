@@ -79,6 +79,7 @@ const zhCNSidebar = [
   { text: '公告', link: '/zh-CN/guide/announcements' },
   { text: 'Android App', link: '/zh-CN/guide/android' },
   { text: 'HarmonyOS App', link: '/zh-CN/guide/harmonyos' },
+  { text: '服务端插件', link: '/zh-CN/guide/server-plugins' },
   ],
   },
   {
@@ -235,6 +236,7 @@ const zhTWSidebar = [
       { text: '公告', link: '/zh-TW/guide/announcements' },
       { text: 'Android App', link: '/zh-TW/guide/android' },
       { text: 'HarmonyOS App', link: '/zh-TW/guide/harmonyos' },
+      { text: '伺服端外掛', link: '/zh-TW/guide/server-plugins' },
     ],
   },
   {
@@ -391,6 +393,7 @@ const enSidebar = [
       { text: 'Announcements', link: '/guide/announcements' },
       { text: 'Android App', link: '/guide/android' },
       { text: 'HarmonyOS App', link: '/guide/harmonyos' },
+      { text: 'Server Plugins', link: '/guide/server-plugins' },
     ],
   },
   {

@@ -4,6 +4,10 @@
 
 ## 未發布
 
+### 伺服端外掛
+
+- 新增按需安裝伺服端外掛的 npm 依賴，桌面端與 Android 端均支援，安裝或更新後會提示安裝缺少依賴，管理面板中依賴缺少的外掛列提供「安裝依賴」按鈕，並新增[伺服端外掛指南](/zh-TW/guide/server-plugins)。
+
 ### 搜尋工具
 
 - 新增 Tavily、Exa、Serper、SerpApi、Z.AI 搜尋提供者，並將所有提供者統一經由 `/api/search/query` 端點呼叫，恢復上游原始 HTML 的 `/api/search/searxng` 端點。

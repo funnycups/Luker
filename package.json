@@ -40,6 +40,7 @@
         "@jimp/wasm-png": "^1.6.0",
         "@jimp/wasm-webp": "^1.6.0",
         "@mozilla/readability": "^0.6.0",
+        "@npmcli/arborist": "9.9.2",
         "@popperjs/core": "^2.11.8",
         "@zeldafan0225/ai_horde": "^5.2.0",
         "adm-zip": "^0.5.17",

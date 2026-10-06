@@ -383,6 +383,10 @@ The frontend can use `response.ok` or `response.status` to determine whether the
 
 ## Plugin Installation and Updates
 
+### Installing from the Admin Panel
+
+Administrators can install a plugin from a Git URL in the Admin Panel. Luker clones the repository into the plugins directory, and after an install or update it offers to install any npm dependencies the plugin declares.
+
 ### Manual Installation
 
 Drop the plugin file (or directory) into the `plugins/` folder, then restart Luker.
@@ -393,16 +397,13 @@ If a plugin was cloned from a Git repo, Luker checks for updates on startup. The
 
 To enable auto-update, make sure the plugin directory is a Git repository and `enableServerPlugins` is `true` in `config.yaml`.
 
-### Installing npm Dependencies
+### npm Dependencies
 
-If your server plugin uses third-party npm packages, install them in the plugin directory:
+Luker installs a server plugin's declared npm dependencies on demand, on both desktop and Android, with no terminal required. After an install or update, Luker offers to install any missing dependencies. A plugin row in the Server Plugins tab shows an **Install dependencies** button only when the plugin declares dependencies that are not yet installed; once the dependencies are present, the row shows the installed state and hides the button.
 
-```bash
-cd plugins/my-plugin
-npm install
-```
+A plugin can also reference packages from Luker's root `node_modules` without reinstalling. Declare only the dependencies the plugin needs in its `package.json`.
 
-A plugin can also reference packages from Luker's root `node_modules` without reinstalling. Only install dependencies inside the plugin directory if Luker doesn't already provide them.
+For a manually placed plugin, install dependencies from its row in the Server Plugins tab, or run `npm install` inside the plugin directory on desktop.
 
 ## Worked Examples
 

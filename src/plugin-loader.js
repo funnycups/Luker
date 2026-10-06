@@ -51,7 +51,7 @@ export function deriveServerPluginFolderName(pluginUrl) {
  * @param {string} folderName
  * @returns {string}
  */
-function resolveServerPluginPath(pluginsPath, folderName) {
+export function resolveServerPluginPath(pluginsPath, folderName) {
     const root = path.resolve(pluginsPath);
     const target = path.resolve(path.join(root, folderName));
 

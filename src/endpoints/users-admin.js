@@ -52,6 +52,7 @@ import {
     removeServerPlugin,
     updateServerPlugin,
 } from '../plugin-loader.js';
+import { getPluginDependencyStatus, installPluginDependencies } from '../plugin-dependencies.js';
 import { SERVER_PLUGINS_DIRECTORY } from '../constants.js';
 import {
     getStorageEngine,
@@ -560,12 +561,16 @@ router.post('/plugins/list', requireAdminMiddleware, async (_request, response) 
     try {
         const plugins = await listInstalledServerPlugins(SERVER_PLUGINS_DIRECTORY);
         const enabled = !!getConfigValue('enableServerPlugins', false, 'boolean');
+        const withDependencies = plugins.map((plugin) => ({
+            ...plugin,
+            dependencyStatus: getPluginDependencyStatus(plugin.path),
+        }));
 
         return response.json({
             ok: true,
             enabled,
             pluginsPath: path.resolve(SERVER_PLUGINS_DIRECTORY),
-            plugins,
+            plugins: withDependencies,
         });
     } catch (error) {
         console.error('Server plugin list failed:', error);
@@ -581,6 +586,7 @@ router.post('/plugins/install', requireAdminMiddleware, async (request, response
         }
 
         const plugin = await installServerPlugin(SERVER_PLUGINS_DIRECTORY, repoUrl);
+        plugin.dependencyStatus = getPluginDependencyStatus(plugin.path);
         const enabled = !!getConfigValue('enableServerPlugins', false, 'boolean');
 
         return response.json({
@@ -605,6 +611,7 @@ router.post('/plugins/update', requireAdminMiddleware, async (request, response)
         }
 
         const plugin = await updateServerPlugin(SERVER_PLUGINS_DIRECTORY, directory);
+        plugin.dependencyStatus = getPluginDependencyStatus(plugin.path);
 
         return response.json({
             ok: true,
@@ -613,6 +620,32 @@ router.post('/plugins/update', requireAdminMiddleware, async (request, response)
         });
     } catch (error) {
         console.error('Server plugin update failed:', error);
+        const statusCode = Number(error?.statusCode);
+        const status = Number.isFinite(statusCode) && statusCode >= 400 ? statusCode : 500;
+        return response.status(status).json({ error: String(error?.message || error) });
+    }
+});
+
+router.post('/plugins/install-dependencies', requireAdminMiddleware, async (request, response) => {
+    try {
+        const directory = String(request.body?.directory || '').trim();
+        if (!directory) {
+            return response.status(400).json({ error: 'Missing plugin directory name' });
+        }
+
+        const result = await installPluginDependencies(SERVER_PLUGINS_DIRECTORY, directory);
+
+        return response.json({
+            ok: true,
+            manager: result.manager,
+            installed: result.installed,
+            plugin: {
+                directory: result.directory,
+                dependencyStatus: getPluginDependencyStatus(result.path),
+            },
+        });
+    } catch (error) {
+        console.error('Server plugin dependency install failed:', error);
         const statusCode = Number(error?.statusCode);
         const status = Number.isFinite(statusCode) && statusCode >= 400 ? statusCode : 500;
         return response.status(status).json({ error: String(error?.message || error) });

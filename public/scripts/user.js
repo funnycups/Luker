@@ -468,6 +468,31 @@ async function removeServerPluginFromAdmin(directory) {
 }
 
 /**
+ * Install npm dependencies for a server plugin.
+ * @param {string} directory
+ * @returns {Promise<{ok: boolean, installed: boolean, manager: string, plugin: any} | undefined>}
+ */
+async function installServerPluginDependenciesFromAdmin(directory) {
+    try {
+        const response = await fetch('/api/users/plugins/install-dependencies', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ directory }),
+        });
+
+        if (!response.ok) {
+            const data = await response.json().catch(() => null);
+            toastr.error(data?.error || t`Unknown error`, t`Failed to install dependencies`);
+            throw new Error('Failed to install server plugin dependencies');
+        }
+
+        return response.json();
+    } catch (error) {
+        console.error('Error installing server plugin dependencies:', error);
+    }
+}
+
+/**
  * Set per-user storage quota.
  * @param {string} handle User handle
  * @param {number|null} quotaBytes Quota bytes, null to clear override
@@ -2860,6 +2885,39 @@ async function openAdminPanel() {
             row.find('.serverPluginVersion').text(plugin.version ? `v${plugin.version}` : '');
             row.find('.serverPluginMeta').text(metaParts.join(' · ') || t`No package metadata`);
             row.find('.serverPluginRemote').text(plugin.remoteUrl || t`No git remote detected`);
+            const depStatus = plugin.dependencyStatus;
+            const installDepsButton = row.find('.serverPluginInstallDepsButton');
+            if (depStatus?.hasDependencies) {
+                if (depStatus.needsInstall) {
+                    row.find('.serverPluginDependencyStatus').text(`${t`Dependencies not installed:`} ${depStatus.missing.length}`);
+                    installDepsButton.show();
+                } else {
+                    row.find('.serverPluginDependencyStatus').text(t`Dependencies installed`);
+                    installDepsButton.hide();
+                }
+            } else {
+                row.find('.serverPluginDependencyStatus').hide();
+                installDepsButton.hide();
+            }
+
+            installDepsButton.on('click', async function () {
+                const button = $(this);
+                if (button.hasClass('disabled')) {
+                    return;
+                }
+
+                button.addClass('disabled');
+                try {
+                    const result = await installServerPluginDependenciesFromAdmin(plugin.directory);
+                    if (!result?.ok) {
+                        return;
+                    }
+                    toastr.success(t`Dependencies installed.`, t`Installed`);
+                    await renderServerPlugins();
+                } finally {
+                    button.removeClass('disabled');
+                }
+            });
             row.find('.serverPluginUpdateButton')
                 .toggleClass('disabled', !plugin.remoteUrl)
                 .prop('disabled', !plugin.remoteUrl)
@@ -2882,6 +2940,19 @@ async function openAdminPanel() {
                             toastr.info(t`Server plugin is already up to date.`, t`Up to date`);
                         } else {
                             toastr.success(t`Server plugin updated.`, t`Updated`);
+                        }
+
+                        if (result.plugin?.dependencyStatus?.needsInstall) {
+                            const confirmed = await callGenericPopup(
+                                t`This plugin declares dependencies that are not installed. Install them now?`,
+                                POPUP_TYPE.CONFIRM,
+                                '',
+                                { okButton: t`Install dependencies`, cancelButton: t`Cancel`, wide: false, large: false },
+                            );
+                            if (confirmed === POPUP_RESULT.AFFIRMATIVE) {
+                                toastr.info(t`Installing dependencies...`);
+                                await installServerPluginDependenciesFromAdmin(plugin.directory);
+                            }
                         }
 
                         if (result.restartRecommended) {
@@ -3422,6 +3493,18 @@ async function openAdminPanel() {
 
             repoUrlInput.val('');
             toastr.success(t`Server plugin installed to ${result.plugin?.directory || 'plugin directory'}.`, t`Installed`);
+            if (result.plugin?.dependencyStatus?.needsInstall) {
+                const confirmed = await callGenericPopup(
+                    t`This plugin declares dependencies that are not installed. Install them now?`,
+                    POPUP_TYPE.CONFIRM,
+                    '',
+                    { okButton: t`Install dependencies`, cancelButton: t`Cancel`, wide: false, large: false },
+                );
+                if (confirmed === POPUP_RESULT.AFFIRMATIVE) {
+                    toastr.info(t`Installing dependencies...`);
+                    await installServerPluginDependenciesFromAdmin(result.plugin.directory);
+                }
+            }
             toastr.info(t`Restart the backend to load newly installed server plugins.`, t`Restart required`);
             await renderServerPlugins();
         } finally {

@@ -4,6 +4,10 @@
 
 ## 未发布
 
+### 服务端插件
+
+- 新增按需安装服务端插件的 npm 依赖，桌面端与 Android 端均支持，安装或更新后会提示安装缺失依赖，管理员面板中依赖缺失的插件行提供「安装依赖」按钮，并新增[服务端插件指南](/zh-CN/guide/server-plugins)。
+
 ### 搜索工具
 
 - 新增 Tavily、Exa、Serper、SerpApi、Z.AI 搜索提供方，并将所有提供方统一经由 `/api/search/query` 端点调用，恢复上游原始 HTML 的 `/api/search/searxng` 端点。
