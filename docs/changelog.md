@@ -32,6 +32,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed exiting immersive mode scrolling the welcome screen down.
 
+### HarmonyOS App
+
+- Added a native HarmonyOS app that bundles the full Luker server and interface and runs standalone on the device, built from source and signed with your Huawei developer account. See the [HarmonyOS guide](/guide/harmonyos).
+
 ### Fixes
 
 - Fixed LAN Sync status messages and other translated strings showing in English on Chinese locales.

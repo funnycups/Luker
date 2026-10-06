@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "Luker for HarmonyOS" },
+    { "name": "EntryAbility_desc", "value": "Luker" },
+    { "name": "EntryAbility_label", "value": "Luker" }
+  ]
+}

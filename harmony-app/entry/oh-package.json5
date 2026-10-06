@@ -1,0 +1,10 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Luker HarmonyOS entry module",
+  "main": "",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "libnode_ctl": "file:./src/main/cpp/types/libnode_ctl"
+  }
+}

@@ -15,6 +15,7 @@
 [![License](https://img.shields.io/github/license/funnycups/Luker.svg?style=flat)](../LICENSE)
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
+[![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
 
 </div>
 
@@ -83,6 +84,14 @@ Luker 백엔드는 Android 앱 *안에서* 실행됩니다. APK를 설치하고 
 
 → [Android 앱 가이드](https://luker.cups.moe/guide/android)
 
+### Native HarmonyOS 앱 — 기기에서 실행되는 완전한 플랫폼
+
+Luker 백엔드는 HarmonyOS 앱 *안에서*도 실행됩니다. DevEco Studio로 소스에서 HAP를 빌드하고, 본인의 Huawei 개발자 계정으로 서명한 뒤 설치하면, 기기 한 대에서 완전한 서버와 UI가 실행됩니다 — 터미널 도구도, 수동 Node 설치도 필요 없습니다.
+
+![HarmonyOS 데모](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/harmonyos-demo.gif)
+
+→ [HarmonyOS 앱 가이드](https://luker.cups.moe/guide/harmonyos)
+
 ### Search Tools — 캐릭터도 웹 검색
 
 답변 작성 LLM에 실시간 웹 검색 도구(DuckDuckGo, SearXNG, Brave)를 달아 주거나, 답변이 시작되기 전에 검색 에이전트를 먼저 실행해 결과를 월드 인포에 기록하게 할 수 있습니다. 단순한 학습 데이터 조회가 아니라 실제 검색 엔진이 뒷받침합니다.
@@ -142,6 +151,7 @@ SillyTavern에서는 API 연결과 채팅 완성 프리셋이 함께 움직이�
 
 - **데스크톱(Node.js)** — `git clone https://github.com/funnycups/Luker.git && cd Luker && npm install && node server.js`. Node.js 24 이상이 필요합니다. → [시작하기](https://luker.cups.moe/guide/getting-started)
 - **Android APK** — [Releases](https://github.com/funnycups/Luker/releases) 페이지에서 최신 서명 APK를 내려받아 설치하세요. → [Android 앱 가이드](https://luker.cups.moe/guide/android)
+- **HarmonyOS HAP** — 소스에서 미서명 HAP를 빌드하고, 본인의 Huawei 개발자 계정으로 서명한 뒤 설치하세요. → [HarmonyOS 앱 가이드](https://luker.cups.moe/guide/harmonyos)
 - **Docker** — 저장소 루트에 있는 compose 파일로 `docker compose up`을 실행하세요. → [시작하기](https://luker.cups.moe/guide/getting-started)
 
 ## SillyTavern에서 오셨나요?

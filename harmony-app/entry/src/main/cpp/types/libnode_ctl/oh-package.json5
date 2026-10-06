@@ -1,0 +1,6 @@
+{
+  "name": "libnode_ctl",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "Luker node runtime control"
+}

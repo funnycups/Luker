@@ -15,6 +15,7 @@
 [![License](https://img.shields.io/github/license/funnycups/Luker.svg?style=flat)](../LICENSE)
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
+[![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
 
 </div>
 
@@ -83,6 +84,14 @@ Das Luker-Backend läuft *innerhalb* einer Android-App. Installiere die APK, öf
 
 → [Android-App-Anleitung](https://luker.cups.moe/guide/android)
 
+### Native HarmonyOS-App — die komplette Plattform auf deinem Gerät
+
+Das Luker-Backend läuft ebenfalls *innerhalb* einer HarmonyOS-App. Baue die HAP aus dem Quellcode mit DevEco Studio, signiere sie mit deinem eigenen Huawei-Entwicklerkonto und installiere sie — der komplette Server samt UI läuft auf einem einzigen Gerät, ohne Terminal-Tools und ohne manuelle Node-Installation.
+
+![HarmonyOS-Demo](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/harmonyos-demo.gif)
+
+→ [HarmonyOS-App-Anleitung](https://luker.cups.moe/guide/harmonyos)
+
 ### Search Tools — Charaktere können im Web suchen
 
 Gib dem schreibenden LLM ein Live-Websuchwerkzeug (DuckDuckGo, SearXNG, Brave) oder lass vor der Generierung einen Such-Agenten laufen, der die Ergebnisse in die Weltinfos schreibt, bevor die Antwort beginnt. Gestützt auf echte Suchmaschinen, nicht nur einen Blick in die Trainingsdaten.
@@ -142,6 +151,7 @@ Eine lange Reihe kleiner Annehmlichkeiten rundet das Ganze ab — Gruppen für P
 
 - **Desktop (Node.js)** — `git clone https://github.com/funnycups/Luker.git && cd Luker && npm install && node server.js`. Erfordert Node.js 24 oder neuer. → [Erste Schritte](https://luker.cups.moe/guide/getting-started)
 - **Android APK** — lade die neueste signierte APK von der [Releases](https://github.com/funnycups/Luker/releases)-Seite herunter und installiere sie. → [Android-App-Anleitung](https://luker.cups.moe/guide/android)
+- **HarmonyOS HAP** — baue die unsignierte HAP aus dem Quellcode, signiere sie mit deinem Huawei-Entwicklerkonto und installiere sie. → [HarmonyOS-App-Anleitung](https://luker.cups.moe/guide/harmonyos)
 - **Docker** — `docker compose up` mit der Compose-Datei im Repository-Stammverzeichnis. → [Erste Schritte](https://luker.cups.moe/guide/getting-started)
 
 ## Umstieg von SillyTavern?

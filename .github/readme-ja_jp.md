@@ -15,6 +15,7 @@
 [![License](https://img.shields.io/github/license/funnycups/Luker.svg?style=flat)](../LICENSE)
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
+[![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
 
 </div>
 
@@ -83,6 +84,14 @@ Luker のバックエンドは Android アプリの*中*で動きます。APK �
 
 → [Android アプリガイド](https://luker.cups.moe/guide/android)
 
+### ネイティブ HarmonyOS アプリ — プラットフォーム全体を端末に
+
+Luker のバックエンドは HarmonyOS アプリの*中*でも動きます。DevEco Studio でソースから HAP をビルドし、ご自身の Huawei 開発者アカウントで署名してインストールすれば、1 台の端末で完全なサーバーと UI が動作します。ターミナルツールも、手動での Node インストールも不要です。
+
+![HarmonyOS のデモ](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/harmonyos-demo.gif)
+
+→ [HarmonyOS アプリガイド](https://luker.cups.moe/guide/harmonyos)
+
 ### Search Tools — キャラクターが Web を検索できる
 
 書き手の LLM にリアルタイムの Web 検索ツール（DuckDuckGo、SearXNG、Brave）を持たせるか、生成前に検索エージェントを実行して、返信が始まる前に結果をワールド情報へ書き込ませることができます。本物の検索エンジンによる結果であり、学習データの記憶ではありません。
@@ -142,6 +151,7 @@ SillyTavern では API 接続とチャット補完プリセットが一体で動
 
 - **デスクトップ（Node.js）** — `git clone https://github.com/funnycups/Luker.git && cd Luker && npm install && node server.js`。Node.js 24 以降が必要です。→ [はじめに](https://luker.cups.moe/guide/getting-started)
 - **Android APK** — [Releases](https://github.com/funnycups/Luker/releases) ページから最新の署名済み APK を入手してインストールしてください。→ [Android アプリガイド](https://luker.cups.moe/guide/android)
+- **HarmonyOS HAP** — ソースから未署名 HAP をビルドし、ご自身の Huawei 開発者アカウントで署名してインストールしてください。→ [HarmonyOS アプリガイド](https://luker.cups.moe/guide/harmonyos)
 - **Docker** — リポジトリルートにある compose ファイルを使って `docker compose up`。→ [はじめに](https://luker.cups.moe/guide/getting-started)
 
 ## SillyTavern からの移行

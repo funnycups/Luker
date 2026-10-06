@@ -1,0 +1,12 @@
+{
+  "name": "luker-harmony",
+  "version": "1.0.0",
+  "description": "Luker for HarmonyOS",
+  "main": "",
+  "license": "AGPL-3.0-or-later",
+  "modelVersion": "5.0.0",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.21"
+  }
+}

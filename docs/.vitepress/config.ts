@@ -78,6 +78,7 @@ const zhCNSidebar = [
   { text: '鉴权与安全', link: '/zh-CN/guide/authentication' },
   { text: '公告', link: '/zh-CN/guide/announcements' },
   { text: 'Android App', link: '/zh-CN/guide/android' },
+  { text: 'HarmonyOS App', link: '/zh-CN/guide/harmonyos' },
   ],
   },
   {
@@ -233,6 +234,7 @@ const zhTWSidebar = [
       { text: '驗證與安全', link: '/zh-TW/guide/authentication' },
       { text: '公告', link: '/zh-TW/guide/announcements' },
       { text: 'Android App', link: '/zh-TW/guide/android' },
+      { text: 'HarmonyOS App', link: '/zh-TW/guide/harmonyos' },
     ],
   },
   {
@@ -388,6 +390,7 @@ const enSidebar = [
       { text: 'Authentication & Security', link: '/guide/authentication' },
       { text: 'Announcements', link: '/guide/announcements' },
       { text: 'Android App', link: '/guide/android' },
+      { text: 'HarmonyOS App', link: '/guide/harmonyos' },
     ],
   },
   {

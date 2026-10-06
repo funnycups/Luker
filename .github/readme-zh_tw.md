@@ -15,6 +15,7 @@
 [![License](https://img.shields.io/github/license/funnycups/Luker.svg?style=flat)](../LICENSE)
 [![Docs](https://img.shields.io/badge/docs-luker.cups.moe-orange?style=flat)](https://luker.cups.moe/zh-TW/)
 [![Android APK](https://img.shields.io/badge/download-Android%20APK-3ddc84?style=flat&logo=android&logoColor=white)](https://github.com/funnycups/Luker/releases)
+[![HarmonyOS HAP](https://img.shields.io/badge/build-HarmonyOS%20HAP-000000?style=flat)](https://luker.cups.moe/guide/harmonyos)
 
 </div>
 
@@ -83,6 +84,14 @@ Luker 的後端**內嵌於** Android 應用執行。安裝 APK 並打開，即�
 
 → [Android 應用指南](https://luker.cups.moe/zh-TW/guide/android)
 
+### 原生 HarmonyOS 應用 —— 把整個平台裝進裝置
+
+Luker 的後端同樣**內嵌於** HarmonyOS 應用執行。用 DevEco Studio 從原始碼建置 HAP，再用自己的華為開發者帳號簽名並安裝，即可在一部裝置上獲得完整的伺服器端與介面——無需終端工具、無需手動安裝 Node。
+
+![HarmonyOS 演示](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/harmonyos-demo.gif)
+
+→ [HarmonyOS 應用指南](https://luker.cups.moe/zh-TW/guide/harmonyos)
+
 ### 搜尋外掛 —— 角色也能聯網搜尋
 
 為寫作 LLM 提供一個即時聯網搜尋工具（DuckDuckGo、SearXNG、Brave），或者讓搜尋作為預請求 agent 在生成前自動執行，把結果寫入世界書。這些結果來自真正的搜尋引擎，而非訓練語料中的記憶。
@@ -142,6 +151,7 @@ SillyTavern 中 API 連線與聊天補全預設是聯動的，切換模型會連
 
 - **桌面（Node.js）** —— `git clone https://github.com/funnycups/Luker.git && cd Luker && npm install && node server.js`。需要 Node.js 24 或更新版本。→ [快速開始](https://luker.cups.moe/zh-TW/guide/getting-started)
 - **Android APK** —— 從 [Releases](https://github.com/funnycups/Luker/releases) 頁面下載最新簽名 APK，安裝即用。→ [Android 應用指南](https://luker.cups.moe/zh-TW/guide/android)
+- **HarmonyOS HAP** —— 從原始碼建置未簽名 HAP，用華為開發者帳號簽名後安裝。→ [HarmonyOS 應用指南](https://luker.cups.moe/zh-TW/guide/harmonyos)
 - **Docker** —— 用倉庫根目錄的 compose 檔案執行 `docker compose up`。→ [快速開始](https://luker.cups.moe/zh-TW/guide/getting-started)
 
 ## 從 SillyTavern 遷移過來？
