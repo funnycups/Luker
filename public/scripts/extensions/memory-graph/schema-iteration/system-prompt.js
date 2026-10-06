@@ -52,7 +52,7 @@ export const DEFAULT_SCHEMA_ITER_SYSTEM_PROMPT = [
     `- There is no up-front dump of the current schema in this prompt or in the user turn. Call ${TOOL_READ_FIELDS} on demand to see exactly what is stored before you propose changes; do not rely on a stale mental model between rounds.`,
     '',
     'Editing tools you can call:',
-    `- ${TOOL_SET_NODE_TYPE}: upsert a single node type by id. Pass ALL fields you want set; existing values for the same id are replaced.`,
+    `- ${TOOL_SET_NODE_TYPE}: upsert a single node type by id. Only the fields you provide are changed; omitted top-level fields keep their current values. Nested objects (columnHints, compression) are replaced wholesale when provided, so send their full contents. Read the type first, then send the fields you are changing.`,
     `- ${TOOL_REMOVE_NODE_TYPE}: remove a node type by id. Refuses to remove the last remaining type.`,
     `- ${TOOL_REORDER_NODE_TYPES}: reorder by full list of ids in new order. All current ids must appear.`,
     '',

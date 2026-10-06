@@ -19,7 +19,9 @@ import {
     buildToolCatalog,
     isMgSchemaControlCall,
     normalizeToolCallToEdit,
+    projectNodeTypeForRead,
 } from '../../public/scripts/extensions/memory-graph/schema-iteration/tools.js';
+import { validateParsedToolCalls } from '../../public/scripts/extensions/function-call-runtime.js';
 
 describe('MG schema — buildToolCatalog', () => {
     test('returns TOOL_DEFS plus the two reset control tools', () => {
@@ -102,6 +104,87 @@ describe('MG schema — isMgSchemaControlCall', () => {
         expect(isMgSchemaControlCall({})).toBe(false);
         expect(isMgSchemaControlCall(null)).toBe(false);
         expect(isMgSchemaControlCall(undefined)).toBe(false);
+    });
+});
+
+describe('MG schema — read ⊆ write surface', () => {
+    // The normalizer emits a superset of the editable surface
+    // (compression.rule, ragPerTypeK, recordsFloorRange). The read tool
+    // projects through the set tool's JSON schema so the AI can never read
+    // a field it cannot write back — the asymmetry that made a set_node_type
+    // call fail schema validation even though the model's XML parsed.
+    const normalizedNodeType = {
+        id: 'character_sheet',
+        label: 'Character Sheet',
+        tableName: 'character_table',
+        tableColumns: ['title'],
+        embeddingColumns: ['title'],
+        columnHints: { title: 'Canonical name only.' },
+        requiredColumns: ['title'],
+        primaryKeyColumns: ['title'],
+        forceUpdate: false,
+        editable: true,
+        level: 'semantic',
+        extractHint: 'hint',
+        extractionInstructions: 'instructions',
+        extractEveryN: 1,
+        keywords: ['character'],
+        alwaysInject: false,
+        latestOnly: true,
+        // Normalizer-only fields the set schema rejects:
+        ragPerTypeK: 3,
+        recordsFloorRange: false,
+        compression: {
+            mode: 'none',
+            threshold: 2,
+            fanIn: 2,
+            maxDepth: 1,
+            keepRecentLeaves: 1,
+            rule: 'status in resolved',
+            summarizeInstruction: '',
+        },
+    };
+
+    test('projected read output validates against the set tool schema', () => {
+        const projected = projectNodeTypeForRead(normalizedNodeType);
+        const err = validateParsedToolCalls(
+            [{ name: 'mg_schema_set_node_type', args: { node_type: projected } }],
+            buildToolCatalog(),
+        );
+        expect(err).toBeNull();
+        // The raw normalized object (with rule / ragPerTypeK) is exactly
+        // what used to fail validation.
+        const rawErr = validateParsedToolCalls(
+            [{ name: 'mg_schema_set_node_type', args: { node_type: normalizedNodeType } }],
+            buildToolCatalog(),
+        );
+        expect(rawErr).toMatch(/unexpected property/);
+    });
+
+    test('projection drops normalizer-only fields but keeps the writable surface', () => {
+        const projected = projectNodeTypeForRead(normalizedNodeType);
+        expect(projected.ragPerTypeK).toBeUndefined();
+        expect(projected.recordsFloorRange).toBeUndefined();
+        expect(projected.compression.rule).toBeUndefined();
+        expect(projected.compression.mode).toBe('none');
+        expect(projected.columnHints).toEqual({ title: 'Canonical name only.' });
+        expect(projected.id).toBe('character_sheet');
+    });
+
+    test('set_node_type preserves a non-writable compression.rule when editing compression', async () => {
+        const live = [{ id: 'x', compression: { mode: 'none', rule: 'keep me' } }];
+        const call = {
+            name: 'mg_schema_set_node_type',
+            args: { node_type: { id: 'x', compression: { mode: 'hierarchical' } } },
+        };
+        const edits = await normalizeToolCallToEdit(call, {
+            live,
+            normalizeNodeTypeSchema: (s) => s,
+        });
+        expect(edits.length).toBe(1);
+        const after = edits[0].newValue;
+        expect(after[0].compression.mode).toBe('hierarchical');
+        expect(after[0].compression.rule).toBe('keep me');
     });
 });
 

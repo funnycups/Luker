@@ -109,12 +109,50 @@ function nodeTypeSchemaParams() {
     };
 }
 
+/**
+ * Project a node-type value onto the writable surface defined by
+ * `nodeTypeSchemaParams()`. The read tool must never surface a field the
+ * set tool's JSON schema would reject, so `mg_schema_read_fields` runs the
+ * live schema through this projection before reading.
+ *
+ * Schema-driven: each nested object with a fixed `properties` shape is
+ * projected recursively, so any normalizer-only field is dropped
+ * automatically (today: `compression.rule`, `ragPerTypeK`,
+ * `recordsFloorRange`). This makes read ⊆ write by construction — the
+ * asymmetry that let the extractor read a field the setter rejected can no
+ * longer recur when the normalizer grows a new field.
+ */
+function projectValueThroughSchema(value, schema) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return value;
+    }
+    const properties = schema?.properties && typeof schema.properties === 'object'
+        ? schema.properties
+        : null;
+    if (!properties) {
+        // No fixed shape (e.g. columnHints uses additionalProperties) →
+        // fully writable, pass through untouched.
+        return value;
+    }
+    const out = {};
+    for (const key of Object.keys(properties)) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            out[key] = projectValueThroughSchema(value[key], properties[key]);
+        }
+    }
+    return out;
+}
+
+export function projectNodeTypeForRead(nodeType) {
+    return projectValueThroughSchema(nodeType, nodeTypeSchemaParams());
+}
+
 export const TOOL_DEFS = [
     {
         type: 'function',
         function: {
             name: TOOL_SET_NODE_TYPE,
-            description: 'Upsert a single node type into the schema by id. All provided fields replace the existing entry; omitted fields are not preserved unless they would default to a reasonable value via normalization.',
+            description: 'Upsert a single node type into the schema by id. Only the top-level fields you provide are changed; omitted top-level fields keep their current values. Nested objects (columnHints, compression) are replaced wholesale when provided, so send their full contents. Read the type first, then send the fields you are changing.',
             parameters: {
                 type: 'object',
                 properties: { node_type: nodeTypeSchemaParams() },
@@ -245,7 +283,20 @@ export function applyToolCallToSandbox(call, sandboxSession, ctx) {
         const existingIndex = list.findIndex(entry => String(entry?.id || '').trim() === id);
         const next = [...list];
         if (existingIndex >= 0) {
-            next[existingIndex] = { ...list[existingIndex], ...nodeType, id };
+            const merged = { ...list[existingIndex], ...nodeType, id };
+            // `compression.rule` is a runtime field outside the iter-studio
+            // surface (absent from nodeTypeSchemaParams), so the read tool
+            // never exposes it. A caller editing other compression fields
+            // would otherwise wipe it via the wholesale replace. Merge the
+            // compression sub-object to preserve non-writable sub-fields.
+            // columnHints stays replace-on-write: the AI must be able to
+            // drop a hint when it drops a column.
+            const existingCompression = list[existingIndex]?.compression;
+            if (nodeType.compression && typeof nodeType.compression === 'object'
+                && existingCompression && typeof existingCompression === 'object') {
+                merged.compression = { ...existingCompression, ...nodeType.compression };
+            }
+            next[existingIndex] = merged;
         } else {
             next.push({ ...nodeType, id });
         }

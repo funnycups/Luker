@@ -114,4 +114,56 @@ describe('dispatchMgSchemaReadFields — schema-array shape', () => {
             tableColumns: ['name', 'aliases', 'personality'],
         }));
     });
+
+    test('projects out fields the set tool cannot write (read ⊆ write)', async () => {
+        // Regression: the normalizer emits `compression.rule`,
+        // `ragPerTypeK`, and `recordsFloorRange`, but the set tool's JSON
+        // schema rejects them via additionalProperties:false. Surfacing
+        // them here made the AI copy an illegal field back into a
+        // set_node_type call and fail schema validation. The read tool must
+        // expose only the writable surface.
+        const schema = [{
+            id: 'character_sheet',
+            label: 'Character Sheet',
+            tableColumns: ['title'],
+            columnHints: { title: 'Canonical name only.' },
+            ragPerTypeK: 3,
+            recordsFloorRange: true,
+            compression: {
+                mode: 'none',
+                threshold: 2,
+                fanIn: 2,
+                maxDepth: 1,
+                keepRecentLeaves: 1,
+                rule: 'status in resolved',
+                summarizeInstruction: '',
+            },
+        }];
+        const out = await dispatchMgSchemaReadFields({
+            liveSchema: schema,
+            args: {
+                paths: [
+                    '[0]',
+                    '[0].compression',
+                    '[0].compression.rule',
+                    '[0].ragPerTypeK',
+                    '[0].recordsFloorRange',
+                ],
+            },
+        });
+        expect(out['[0].compression']).toEqual({
+            mode: 'none',
+            threshold: 2,
+            fanIn: 2,
+            maxDepth: 1,
+            keepRecentLeaves: 1,
+            summarizeInstruction: '',
+        });
+        expect(out['[0].compression.rule']).toBeNull();
+        expect(out['[0].ragPerTypeK']).toBeNull();
+        expect(out['[0].recordsFloorRange']).toBeNull();
+        // Fully-writable nested objects (additionalProperties, no fixed
+        // shape) pass through untouched.
+        expect(out['[0]'].columnHints).toEqual({ title: 'Canonical name only.' });
+    });
 });

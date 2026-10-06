@@ -14,15 +14,15 @@
  *   - `[N].tableColumns[K]`      →  Kth column name
  *   - `length`                   →  number of node types
  *
- * Sanitization boundary — CALL-OUT: MG schema currently has NO
- * per-mode sanitizer analogous to the orchestrator's `sanitizeLoopProfile`
- * / `sanitizeDirectorProfile` / etc. `state.live` is `normalizeNodeTypeSchema`'d
- * user-authored data — every field is meaningful and there is no
- * documented "scratch" / "debug" slot to strip. Consequently this
- * dispatcher passes the live schema through directly. If a future
- * change adds a debug slot to the schema shape, a caller-side
- * sanitizer must land before that slot ships (mirroring
- * orchestrator/iter-studio/read-fields-dispatcher.js's contract).
+ * Sanitization boundary — CALL-OUT: `state.live` is
+ * `normalizeNodeTypeSchema`'d user-authored data. The normalizer emits a
+ * superset of the editable surface (e.g. `compression.rule`, `ragPerTypeK`,
+ * `recordsFloorRange`), and the set tool's JSON schema rejects those via
+ * `additionalProperties: false`. Surfacing them here would hand the AI
+ * fields it cannot write back, so every entry is projected onto the set
+ * tool's writable surface (`projectNodeTypeForRead`) before reading. This
+ * keeps read ⊆ write by construction; a future normalizer field is dropped
+ * automatically unless it is also added to `nodeTypeSchemaParams()`.
  *
  * Tested directly in tests/mg-schema-iteration/read-fields.test.js so
  * this module (and its shared helper) can be pinned without dragging
@@ -30,6 +30,7 @@
  */
 
 import { readFieldsByPaths } from '../../../iteration-library/read-fields-helper.js';
+import { projectNodeTypeForRead } from './tools.js';
 
 /**
  * @param {object} params
@@ -46,5 +47,5 @@ import { readFieldsByPaths } from '../../../iteration-library/read-fields-helper
  */
 export async function dispatchMgSchemaReadFields({ liveSchema, args } = {}) {
     const root = Array.isArray(liveSchema) ? liveSchema : [];
-    return readFieldsByPaths(root, args?.paths);
+    return readFieldsByPaths(root.map(projectNodeTypeForRead), args?.paths);
 }
