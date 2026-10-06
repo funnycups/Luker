@@ -11,7 +11,7 @@
 // real ST contracts, used as test storage instead of touching disk.
 
 import { describe, test, expect, jest, beforeEach } from '@jest/globals';
-import { createOrchestratorIterationSessionStore } from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
+import { createOrchestratorIterationSessionStore, normalizeMessageShape } from '../../public/scripts/extensions/orchestrator/iter-studio/session-store.js';
 
 function makeSidecarCtx() {
     const sidecars = Object.create(null);
@@ -163,5 +163,29 @@ describe('Orchestrator — session store (character scope, sidecar-backed)', () 
         session.title = 'mutated locally';
         const loaded = await store.load('r');
         expect(loaded?.title).toBe('round');
+    });
+});
+
+describe('Orchestrator — normalizeMessageShape reasoning round-trip', () => {
+    test('preserves reasoning / reasoningBlocks / reasoningDetails', () => {
+        const n = normalizeMessageShape({
+            id: 'a', role: 'assistant', content: 'ok', at: 100,
+            reasoning: 'why',
+            reasoningBlocks: [{ type: 'thinking', thinking: 'why' }],
+            reasoningDetails: [{ type: 'reasoning.summary', summary: 'why' }],
+        }, 1);
+        expect(n.reasoning).toBe('why');
+        expect(n.reasoningBlocks).toEqual([{ type: 'thinking', thinking: 'why' }]);
+        expect(n.reasoningDetails).toEqual([{ type: 'reasoning.summary', summary: 'why' }]);
+    });
+
+    test('omits empty reasoning fields', () => {
+        const n = normalizeMessageShape({
+            id: 'a', role: 'assistant', content: 'ok',
+            reasoning: '', reasoningBlocks: [], reasoningDetails: [],
+        }, 1);
+        expect(n.reasoning).toBeUndefined();
+        expect(n.reasoningBlocks).toBeUndefined();
+        expect(n.reasoningDetails).toBeUndefined();
     });
 });

@@ -14,6 +14,7 @@ import {
     createMgSchemaSessionStore,
     MG_GLOBAL_BUCKET_KEY,
     MG_SIDECAR_NAMESPACE,
+    normalizeMessageShape,
 } from '../../public/scripts/extensions/memory-graph/schema-iteration/session-store.js';
 
 function makeSidecarCtx() {
@@ -147,5 +148,29 @@ describe('MG Schema — session store (character scope, sidecar-backed)', () => 
         session.title = 'mutated locally';
         const loaded = await store.load('r');
         expect(loaded?.title).toBe('round');
+    });
+});
+
+describe('MG Schema — normalizeMessageShape reasoning round-trip', () => {
+    test('preserves reasoning / reasoningBlocks / reasoningDetails', () => {
+        const n = normalizeMessageShape({
+            id: 'a', role: 'assistant', content: 'ok', at: 100,
+            reasoning: 'why',
+            reasoningBlocks: [{ type: 'thinking', thinking: 'why' }],
+            reasoningDetails: [{ type: 'reasoning.summary', summary: 'why' }],
+        }, 1);
+        expect(n.reasoning).toBe('why');
+        expect(n.reasoningBlocks).toEqual([{ type: 'thinking', thinking: 'why' }]);
+        expect(n.reasoningDetails).toEqual([{ type: 'reasoning.summary', summary: 'why' }]);
+    });
+
+    test('omits empty reasoning fields', () => {
+        const n = normalizeMessageShape({
+            id: 'a', role: 'assistant', content: 'ok',
+            reasoning: '', reasoningBlocks: [], reasoningDetails: [],
+        }, 1);
+        expect(n.reasoning).toBeUndefined();
+        expect(n.reasoningBlocks).toBeUndefined();
+        expect(n.reasoningDetails).toBeUndefined();
     });
 });
