@@ -1,5 +1,6 @@
 import { renderToolCallChip } from './toolcall.js';
 import { STR } from './strings.js';
+import { resolveAssistantDisplay } from './reasoning.js';
 
 /**
  * @param {Object} message - Persisted iter message
@@ -72,18 +73,25 @@ export function renderMessageCard(message, opts = {}) {
     }
 
     // assistant
-    const content = String(message.content || '');
+    const display = resolveAssistantDisplay(message);
+    const content = display.body;
     const bodyHtml = renderMd ? renderMd(content) : escapeHtml(content).replace(/\n/g, '<br>');
 
-    // Reasoning / thinking chain — display only, never sent back to API
-    const reasoningText = String(message.reasoning || '');
+    // Reasoning / thinking chain — display only, never sent back to API.
+    // Sources: a separate reasoning string, reasoningBlocks / reasoningDetails,
+    // or literal think tags stripped out of the body above.
+    const reasoningText = display.reasoning;
     let reasoningHtml = '';
     if (reasoningText.length > 0) {
         const reasoningBody = renderMd
             ? renderMd(reasoningText)
             : escapeHtml(reasoningText).replace(/\n/g, '<br>');
         reasoningHtml = `<details class="luker_lib_reasoning_details">
-            <summary class="luker_lib_reasoning_summary">${escapeHtml(i18n('Thinking'))}</summary>
+            <summary class="luker_lib_reasoning_summary">
+                <span class="luker_lib_reasoning_label">${escapeHtml(i18n('Thinking'))}</span>
+                <span class="luker_lib_reasoning_arrow fa-solid fa-chevron-down" aria-hidden="true"></span>
+                <button type="button" class="luker_lib_reasoning_copy" data-luker-lib-copy-reasoning title="${escapeHtmlAttr(i18n('Copy'))}" aria-label="${escapeHtmlAttr(i18n('Copy'))}"><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
+            </summary>
             <div class="luker_lib_reasoning_body">${reasoningBody}</div>
         </details>`;
     }

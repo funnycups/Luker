@@ -164,6 +164,42 @@ describe('renderMessageCard', () => {
         );
         expect(html).toContain('Applied');
     });
+
+    const T_OPEN = '<' + 'think' + '>';
+    const T_CLOSE = '<' + '/think' + '>';
+
+    it('renders a collapsible think block from literal think tags and strips them from the body', () => {
+        const html = renderMessageCard(
+            { id: 'mThink', role: 'assistant', content: 'answer ' + T_OPEN + 'secret plan' + T_CLOSE + ' done', toolCalls: [], edits: [] },
+            { toolDisplay: {}, renderEditCard: noopEdit, i18n: ident },
+        );
+        expect(html).toContain('luker_lib_reasoning_details');
+        expect(html).toContain('secret plan');
+        expect(html).not.toContain('&lt;think&gt;');
+        const container = document.createElement('div');
+        container.innerHTML = html;
+        const details = container.querySelector('details.luker_lib_reasoning_details');
+        expect(details).toBeTruthy();
+        expect(details.hasAttribute('open')).toBe(false);
+    });
+
+    it('renders the think block from a separate reasoning field', () => {
+        const html = renderMessageCard(
+            { id: 'mReason', role: 'assistant', content: 'answer', reasoning: 'field reasoning', toolCalls: [], edits: [] },
+            { toolDisplay: {}, renderEditCard: noopEdit, i18n: ident },
+        );
+        expect(html).toContain('luker_lib_reasoning_details');
+        expect(html).toContain('field reasoning');
+    });
+
+    it('renders a turn that is only a think block with no body', () => {
+        const html = renderMessageCard(
+            { id: 'mOnlyThink', role: 'assistant', content: T_OPEN + 'only thought' + T_CLOSE, toolCalls: [], edits: [] },
+            { toolDisplay: {}, renderEditCard: noopEdit, i18n: ident },
+        );
+        expect(html).toContain('luker_lib_reasoning_details');
+        expect(html).toContain('only thought');
+    });
 });
 
 describe('bindChainBrokenBanner', () => {

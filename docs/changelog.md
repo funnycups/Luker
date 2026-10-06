@@ -44,6 +44,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed Memory Graph schema iteration failing to apply valid node-type edits because the read tool exposed fields the set tool's schema does not accept.
 
+### Iteration Studio
+
+- Messages now render one unified collapsible thinking block, fed from the model's reasoning output or from think tags in the body.
+
 ### Fixes
 
 - Fixed LAN Sync status messages and other translated strings showing in English on Chinese locales.
