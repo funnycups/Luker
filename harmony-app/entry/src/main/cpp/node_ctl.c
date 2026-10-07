@@ -687,11 +687,27 @@ static const char *startEmbeddedNode(const char *params) {
    * fallback like the child. */
   if (cfg.dataDir[0]) {
     char logPath[MAX_LINE * 2];
+    char prevPath[MAX_LINE * 2];
     snprintf(logPath, sizeof(logPath), "%s/node-boot.log", cfg.dataDir);
+    snprintf(prevPath, sizeof(prevPath), "%s/node-boot.prev.log", cfg.dataDir);
+    /* Preserve the previous attempt's log before truncating. A crash kills the
+     * process before the ArkTS overlay can export anything, and this file is
+     * the only place the raw node output and the SIGSYS shim's [embed] SIGSYS
+     * line land. Renaming keeps exactly the last (crashed) run for the next
+     * export, while hilog remains the fallback when a launch never reaches
+     * this code. */
+    if (access(logPath, F_OK) == 0) {
+      rename(logPath, prevPath);
+    }
     g_logFd = open(logPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (g_logFd < 0) {
       snprintf(logPath, sizeof(logPath),
                "/data/storage/el2/base/files/luker-data/node-boot.log");
+      snprintf(prevPath, sizeof(prevPath),
+               "/data/storage/el2/base/files/luker-data/node-boot.prev.log");
+      if (access(logPath, F_OK) == 0) {
+        rename(logPath, prevPath);
+      }
       g_logFd = open(logPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
     }
     if (g_logFd >= 0) {

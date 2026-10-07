@@ -84,6 +84,7 @@ export async function exportTo(context: common.UIAbilityContext): Promise<string
   }
 
   copyTail(nodeLogDir + '/node-boot.log', staging + '/node/node-boot.log');
+  copyTail(nodeLogDir + '/node-boot.prev.log', staging + '/node/node-boot.prev.log');
   copyTail(nodeLogDir + '/bootstrap.log', staging + '/node/bootstrap.log');
 
   const zipPath: string = context.cacheDir + '/luker-diagnostics-' + Date.now() + '.zip';
