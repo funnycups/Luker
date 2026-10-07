@@ -5,7 +5,7 @@ import wavefile from 'wavefile';
 import fetch from 'node-fetch';
 import FormData from 'form-data';
 import mime from 'mime-types';
-import { getPipeline } from '../transformers.js';
+import { getPipeline, isLocalInferenceUnavailable, sendLocalInferenceUnavailable } from '../transformers.js';
 import { forwardFetchResponse } from '../util.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 
@@ -53,6 +53,9 @@ router.post('/recognize', async (req, res) => {
 
         return res.json({ text: result.text });
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         console.error(error);
         return res.sendStatus(500);
     }
@@ -78,6 +81,9 @@ router.post('/synthesize', async (req, res) => {
         res.set('Content-Type', 'audio/wav');
         return res.send(Buffer.from(buffer));
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         console.error(error);
         return res.sendStatus(500);
     }

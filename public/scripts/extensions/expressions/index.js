@@ -1112,6 +1112,11 @@ export async function getExpressionLabel(text, expressionsApi = extension_settin
                     const data = await localResult.json();
                     return data.classification[0].label;
                 }
+
+                const body = await localResult.json().catch(() => null);
+                if (body?.error?.message) {
+                    toastr.error(body.error.message);
+                }
             } break;
             // Using LLM
             case EXPRESSION_API.llm: {

@@ -260,7 +260,8 @@ async function captionLocal(base64Img) {
     });
 
     if (!apiResult.ok) {
-        throw new Error('Failed to caption image via local pipeline.');
+        const body = await apiResult.json().catch(() => null);
+        throw new Error(body?.error?.message || 'Failed to caption image via local pipeline.');
     }
 
     const data = await apiResult.json();

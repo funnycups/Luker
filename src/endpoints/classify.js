@@ -1,6 +1,6 @@
 import express from 'express';
 
-import { getPipeline } from '../transformers.js';
+import { getPipeline, isLocalInferenceUnavailable, sendLocalInferenceUnavailable } from '../transformers.js';
 
 const TASK = 'text-classification';
 
@@ -17,6 +17,9 @@ router.post('/labels', async (req, res) => {
         const result = Object.keys(pipe.model.config.label2id);
         return res.json({ labels: result });
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         console.error(error);
         return res.sendStatus(500);
     }
@@ -49,6 +52,9 @@ router.post('/', async (req, res) => {
 
         return res.json({ classification: result });
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         console.error(error);
         return res.sendStatus(500);
     }

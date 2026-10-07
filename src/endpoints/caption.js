@@ -1,5 +1,5 @@
 import express from 'express';
-import { getPipeline, getRawImage } from '../transformers.js';
+import { getPipeline, getRawImage, isLocalInferenceUnavailable, sendLocalInferenceUnavailable } from '../transformers.js';
 
 export const router = express.Router();
 
@@ -23,6 +23,9 @@ router.post('/', async (req, res) => {
 
         return res.json({ caption: text });
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         console.error(error);
         return res.sendStatus(500);
     }

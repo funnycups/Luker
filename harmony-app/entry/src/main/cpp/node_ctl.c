@@ -886,22 +886,24 @@ static const char *startEmbeddedNode(const char *params) {
    *  - --no-verify-heap : disables V8 heap verification on startup
    *    (defensive — avoids allocation checks that can fail under the
    *    constrained runtime). Harmless no-op when the heap is healthy.
-   *
-   * NO --jitless: it removes the WebAssembly global in V8, and Luker loads
-   * WASM at server startup (tiktoken via undici's llhttp). Device-proven:
-   * under --jitless server.js threw `ReferenceError: WebAssembly is not
-   * defined` and node::Start returned 1. The OpenHarmony emulator permits
-   * JIT / executable pages (WASM compiled and ran), so JIT stays enabled. */
+   *  - --jitless : HarmonyOS NEXT enforces W^X + code-signing and refuses
+   *    executable memory, so V8's JIT cannot run; the process crashes when
+   *    the first JIT page is requested. --jitless runs the pure interpreter.
+   *    It also removes the WebAssembly global, which is why the server code
+   *    branches on HAS_WASM (src/runtime-capabilities.js) and falls back to
+   *    pure-JS HTTP, image, and tokenization paths. */
   static char arg0[MAX_LINE * 2];
   static char arg1[] = "--no-verify-heap";
-  static char arg2[MAX_LINE * 2];
+  static char arg2[] = "--jitless";
+  static char arg3[MAX_LINE * 2];
   snprintf(arg0, sizeof(arg0), "%s", nodePath);
-  snprintf(arg2, sizeof(arg2), "%s", cfg.script);
+  snprintf(arg3, sizeof(arg3), "%s", cfg.script);
   g_nodeArgs.start = start;
   g_nodeArgs.argv[0] = arg0;
   g_nodeArgs.argv[1] = arg1;
   g_nodeArgs.argv[2] = arg2;
-  g_nodeArgs.argv[3] = NULL;
+  g_nodeArgs.argv[3] = arg3;
+  g_nodeArgs.argv[4] = NULL;
 
   /* Run node::Start on THIS thread — we are already the detached bootstrap
    * thread with a 32MB stack, so there is no reason to hand off again.
@@ -939,7 +941,7 @@ static const char *startEmbeddedNode(const char *params) {
   logWrite("[embed] bootstrap tid=%ld, calling node::Start", (long)g_nodeTid);
   errno = 0; /* clear any stale errno left by the io_uring preflight so a
               * later CHECK_EQ(ENOMEM, errno) sees the real failure, not EPERM */
-  int rc = start(3, g_nodeArgs.argv);
+  int rc = start(4, g_nodeArgs.argv);
   logWrite("[embed] node::Start returned %d (backend stopped)", rc);
   snprintf(errBuf, sizeof(errBuf), "err:node::Start returned %d", rc);
   setStatus(ST_FAILED, errBuf);

@@ -70,6 +70,7 @@ try {
 
 // local library imports
 import './fetch-patch.js';
+import { HAS_WASM } from './runtime-capabilities.js';
 import { serverDirectory } from './server-directory.js';
 
 import { serverEvents, EVENT_NAMES } from './server-events.js';
@@ -643,6 +644,9 @@ async function preSetupTasks() {
         });
     }
     console.log();
+    if (!HAS_WASM) {
+        console.log(color.yellow('Runtime: WebAssembly unavailable (JITless). HTTP uses node-fetch; local inference, AVIF/WebP images, and non-OpenAI exact tokenization are degraded.'));
+    }
 
     const directories = await getUserDirectoriesList();
 

@@ -8,6 +8,7 @@ import sanitize from 'sanitize-filename';
 import { getNomicAIBatchVector, getNomicAIVector } from '../vectors/nomicai-vectors.js';
 import { getOpenAIVector, getOpenAIBatchVector } from '../vectors/openai-vectors.js';
 import { getTransformersVector, getTransformersBatchVector } from '../vectors/embedding.js';
+import { isLocalInferenceUnavailable, sendLocalInferenceUnavailable } from '../transformers.js';
 import { getExtrasVector, getExtrasBatchVector } from '../vectors/extras-vectors.js';
 import { getMakerSuiteVector, getMakerSuiteBatchVector } from '../vectors/google-vectors.js';
 import { getVertexVector, getVertexBatchVector } from '../vectors/google-vectors.js';
@@ -458,6 +459,9 @@ router.post('/query', async (req, res) => {
         }
         return res.json(results);
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         if (inspect) failEmbeddingInspection(req, error?.message || String(error), 500);
         return regenerateCorruptedIndexErrorHandler(req, res, error);
     }
@@ -538,6 +542,9 @@ router.post('/query-multi', async (req, res) => {
         }
         return res.json(results);
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         if (inspect) failEmbeddingInspection(req, error?.message || String(error), 500);
         return regenerateCorruptedIndexErrorHandler(req, res, error);
     }
@@ -580,6 +587,9 @@ router.post('/rerank', async (req, res) => {
         });
         return res.json(results);
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         console.error('Rerank failed:', error);
         failEmbeddingInspection(req, error?.message || String(error), 500);
         return res.status(500).json({ error: error.message });
@@ -614,6 +624,9 @@ router.post('/insert', async (req, res) => {
         }
         return res.sendStatus(200);
     } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
         if (inspect) failEmbeddingInspection(req, error?.message || String(error), 500);
         return regenerateCorruptedIndexErrorHandler(req, res, error);
     }

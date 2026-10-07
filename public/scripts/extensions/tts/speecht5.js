@@ -186,8 +186,17 @@ class SpeechT5TtsProvider {
         );
 
         if (!response.ok) {
-            toastr.error(response.statusText, 'TTS Generation Failed');
-            throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+            const bodyText = await response.text().catch(() => '');
+            let message = null;
+            try {
+                message = JSON.parse(bodyText)?.error?.message ?? null;
+            } catch { /* not JSON */ }
+            if (message) {
+                toastr.error(message, 'TTS Generation Failed');
+            } else {
+                toastr.error(response.statusText, 'TTS Generation Failed');
+            }
+            throw new Error(`HTTP ${response.status}: ${bodyText}`);
         }
 
         return response;

@@ -231,7 +231,11 @@ async function downloadLanMigrationArchive(sourceUrl, destinationPath) {
         throw new Error(`Failed to download migration archive (${response.status}).`);
     }
 
-    await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destinationPath, { mode: 0o600 }));
+    // The patched global fetch returns a WHATWG stream when WebAssembly is
+    // available (undici) and a Node Readable when it falls back to node-fetch
+    // (jitless). Normalize both to a Node stream before piping.
+    const body = typeof response.body.getReader === 'function' ? Readable.fromWeb(response.body) : response.body;
+    await pipeline(body, fs.createWriteStream(destinationPath, { mode: 0o600 }));
 }
 
 function normalizeRestoreArchiveEntryPath(entryName) {
