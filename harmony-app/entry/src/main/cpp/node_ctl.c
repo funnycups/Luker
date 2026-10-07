@@ -354,217 +354,12 @@ static void installCrashMarkers(void) {
   }
 }
 
-/* ── SIGSYS shim — same as the child launcher's: if a seccomp filter in
- * THIS process traps a syscall node probes (perf_event_open, membarrier,
- * …), convert the kill into a logged ENOSYS. node's ResetSignalHandlers()
- * preserves SA_SIGINFO handlers, so this survives into node's lifetime. ── */
-static const char *syscallName(int sc) {
-  switch (sc) {
-    case 19: return "eventfd2";
-    case 20: return "epoll_create1";
-    case 220: return "clone";
-    case 221: return "execve";
-    case 241: return "perf_event_open";
-    case 265: return "open_by_handle_at";
-    case 270: return "process_vm_readv";
-    case 272: return "kcmp";
-    case 277: return "seccomp";
-    case 278: return "getrandom";
-    case 280: return "bpf";
-    case 281: return "execveat";
-    case 282: return "userfaultfd";
-    case 283: return "membarrier";
-    case 288: return "pkey_mprotect";
-    case 291: return "statx";
-    case 293: return "rseq";
-    case 403: return "clock_gettime64";
-    case 424: return "pidfd_send_signal";
-    case 425: return "io_uring_setup";
-    case 434: return "pidfd_open";
-    case 435: return "clone3";
-    case 436: return "close_range";
-    case 437: return "openat2";
-    case 439: return "faccessat2";
-    case 440: return "process_madvise";
-    default: return "?";
-  }
-}
-
-/* Async-signal-safe log line for use INSIDE signal handlers. The handler
- * must not call printf-family/vsnprintf/OH_LOG_Print: those take libc
- * locks, and when the trapped thread already holds one (device-proven
- * 2026-08-28: second seccomp trap fired mid-stdio on the node thread →
- * strlen SEGV inside the handler's own formatting) the handler crashes.
- * Compose with fixed strings + manual decimal only; write(2) is safe. */
-static void safeAppend(char *b, size_t cap, size_t *n, const char *s) {
-  while (*s && *n < cap) {
-    b[(*n)++] = *s++;
-  }
-}
-
-static void safeAppendInt(char *b, size_t cap, size_t *n, int v) {
-  char tmp[12];
-  int len = 0;
-  if (v < 0 && *n < cap) {
-    b[(*n)++] = '-';
-    v = -v;
-  }
-  do {
-    tmp[len++] = (char)('0' + (v % 10));
-    v /= 10;
-  } while (v > 0 && len < (int)sizeof(tmp));
-  while (len > 0 && *n < cap) {
-    b[(*n)++] = tmp[--len];
-  }
-}
-
-/* Same contract as safeAppendInt, for addresses. Hand-rolled because
- * snprintf is off-limits in a signal handler (see the note above). */
-static void safeAppendHex(char *b, size_t cap, size_t *n, unsigned long v) {
-  int started = 0;
-  for (int shift = 60; shift >= 0; shift -= 4) {
-    unsigned int d = (unsigned int)((v >> shift) & 0xFu);
-    if (d == 0 && !started && shift != 0) continue;
-    started = 1;
-    if (*n >= cap) return;
-    b[(*n)++] = (char)(d < 10 ? ('0' + d) : ('a' + (d - 10)));
-  }
-  if (!started && *n < cap) {
-    b[(*n)++] = '0';
-  }
-}
-
-/* Is there an aarch64 `svc #0` (encoded 0xd4000001) at `pc`?
- *
- * Deciding whether to skip the trapped instruction by comparing the signal
- * frame's PC with si_addr does NOT work: both values come from the same
- * pt_regs, so they agree whether or not the kernel already advanced past
- * the syscall. Device-verified 2026-08-31: the delta was 0, which is
- * consistent with BOTH "PC on the svc" and "PC already past it".
- * Looking at the instruction encoding is the only way to tell. */
-static int pcIsSvcInsn(unsigned long pc) {
-  if (pc == 0 || (pc & 3U) != 0) {
-    return 0;
-  }
-  unsigned int insn = 0;
-  memcpy(&insn, (const void *)pc, sizeof(insn));
-  return (insn & 0xffe0001fu) == 0xd4000001u;
-}
-
-static void sigsysHandler(int sig, siginfo_t *si, void *ctx) {
-  static unsigned int seenBits[16]; /* 512 syscall numbers, logged once each */
-
-  /* Only emulate a real seccomp trap. A SIGSYS delivered by raise()/kill()
-   * carries no syscall context (si_code <= 0) and rewriting the register
-   * file for it corrupts whichever thread happened to be running. */
-  if (!si || !ctx || si->si_code != 1 /* SYS_SECCOMP */) {
-    /* Not a seccomp trap (raise()/kill(), or a filter that delivers SIGSYS
-     * without syscall context): cannot emulate safely, so restore the default
-     * action and let the signal terminate the process. Record it first — this
-     * is the only trace of such a death, which otherwise leaves no crash
-     * marker and no hilog line. */
-    char b[96];
-    size_t n = 0;
-    safeAppend(b, sizeof(b), &n, "[embed] SIGSYS: non-seccomp si_code=");
-    safeAppendInt(b, sizeof(b), &n, si ? (int)si->si_code : -1);
-    safeAppend(b, sizeof(b), &n, " -> default action\n");
-    if (g_logFd >= 0) {
-      ssize_t ign = write(g_logFd, b, n);
-      (void)ign;
-    }
-    signal(sig, SIG_DFL);
-    raise(sig);
-    return;
-  }
-
-  ucontext_t *uc = (ucontext_t *)ctx;
-  unsigned long callAddr = (unsigned long)(uintptr_t)si->si_addr;
-  unsigned long pc = 0;
-#if defined(__aarch64__)
-  pc = uc->uc_mcontext.pc;
-#elif defined(__x86_64__)
-  pc = (unsigned long)uc->uc_mcontext.gregs[REG_RIP];
-#endif
-  int onSvc = pcIsSvcInsn(pc);
-
-  int sc = si->si_syscall;
-  if (sc >= 0 && sc < 512) {
-    unsigned int bit = 1u << (sc & 31);
-    if (!(seenBits[sc >> 5] & bit)) {
-      seenBits[sc >> 5] |= bit;
-      char b[192];
-      size_t n = 0;
-      safeAppend(b, sizeof(b), &n, "[embed] SIGSYS: syscall ");
-      safeAppendInt(b, sizeof(b), &n, sc);
-      safeAppend(b, sizeof(b), &n, " (");
-      safeAppend(b, sizeof(b), &n, syscallName(sc));
-      safeAppend(b, sizeof(b), &n, ") blocked by seccomp -> -1");
-      safeAppend(b, sizeof(b), &n, " pc=0x");
-      safeAppendHex(b, sizeof(b), &n, pc);
-      safeAppend(b, sizeof(b), &n, " call=0x");
-      safeAppendHex(b, sizeof(b), &n, callAddr);
-      safeAppend(b, sizeof(b), &n, " d=");
-      safeAppendInt(b, sizeof(b), &n, (int)(long)(pc - callAddr));
-      safeAppend(b, sizeof(b), &n, " onsvc=");
-      safeAppendInt(b, sizeof(b), &n, onSvc);
-      safeAppend(b, sizeof(b), &n, "\n");
-      /* Raw write() to the boot-log FILE only.
-       *
-       * No logWrite() here. logWrite() is vsnprintf + OH_LOG_Print, and
-       * both take libc locks. Calling them from this handler is
-       * device-proven to crash the trapped thread: on 2026-08-31 the run
-       * that logged pc/call_addr via logWrite() died with
-       *   SIGSEGV code=1 addr=0x0 pc=<musl> lr=<garbage>
-       * immediately after the handler returned. Compose with fixed strings
-       * and hand-rolled number formatting, then a bare write(2) — that is
-       * the only thing allowed here.
-       *
-       * This also used to write to fd 2, the stdio pipe shared with
-       * ArkWeb/Chromium. That pipe can be full (Chromium floods it) and
-       * write() on a full pipe BLOCKS — inside a signal handler, fatal.
-       * The reader thread picks the line up from the boot log and relays it
-       * to hilog in normal context, where locks are actually safe. */
-      if (g_logFd >= 0) {
-        ssize_t ign = write(g_logFd, b, n);
-        (void)ign;
-      }
-    }
-  }
-#if defined(__aarch64__)
-  if (onSvc) {
-    uc->uc_mcontext.pc += 4; /* skip the 4-byte svc instruction */
-  }
-  uc->uc_mcontext.regs[0] = (unsigned long)-1;
-#elif defined(__x86_64__)
-  /* x86-64 `syscall` is 0f 05. */
-  if (pc != 0) {
-    unsigned char c[2] = {0, 0};
-    memcpy(c, (const void *)pc, 2);
-    if (c[0] == 0x0fu && c[1] == 0x05u) {
-      uc->uc_mcontext.gregs[REG_RIP] += 2;
-    }
-  }
-  uc->uc_mcontext.gregs[REG_RAX] = (unsigned long)-1;
-#endif
-  /* Return EXACTLY -1, not -ENOSYS: OHOS musl's syscall() passes the raw
-   * x0 through WITHOUT the __syscall_ret(errno)-translation upstream musl
-   * does, so -38 leaks to callers as a bogus value. Device-proven: libuv's
-   * uv__iou_init() got ringfd=-38 from the seccomp-trapped io_uring_setup,
-   * sailed past its `if (ringfd == -1) return;` guard, failed mmap/epoll_ctl
-   * on the bogus fd, and its cleanup called uv__close(-38) → the very assert
-   * (fd > STDERR_FILENO) that killed the backend. */
-  errno = ENOSYS; /* TLS store — async-signal-safe; for errno-checking callers */
-}
-
-static void installSigsysShim(void) {
-  struct sigaction sa;
-  memset(&sa, 0, sizeof(sa));
-  sa.sa_sigaction = sigsysHandler;
-  sa.sa_flags = SA_SIGINFO;
-  if (sigaction(SIGSYS, &sa, NULL) != 0) {
-    logWrite("[embed] sigaction(SIGSYS) failed: %s", strerror(errno));
-  }
-}
+/* The SIGSYS shim was removed: installing a process-wide SIGSYS handler
+ * collides with ArkWeb/Chromium's own seccomp-bpf SIGSYS requirement in this
+ * same process (the render process logs "Existing signal handler when trying
+ * to install SIGSYS. SIGSYS needs to be reserved for seccomp-bpf"), and the
+ * app main process then dies from SIGSYS. See the io_uring note in
+ * startEmbeddedNode. */
 
 /* Parse "key=value\n" lines (same format the child launcher parses). */
 static void parseEntryParams(const char *params, CtlConfig *cfg,
@@ -848,8 +643,7 @@ static const char *startEmbeddedNode(const char *params) {
    * readable in cloud debug). The reader thread keeps draining so framework
    * printf traffic (ArkWeb config spam) can never block a writer. */
   installCrashMarkers();
-  installSigsysShim();
-  setenv("UV_USE_IO_URING", "0", 1); /* io_uring_setup is seccomp-trapped */
+  setenv("UV_USE_IO_URING", "0", 1); /* best-effort; see the io_uring note below */
   if (g_logFd > 2) {
     int fds[2];
     if (pipe(fds) == 0) {
@@ -941,36 +735,16 @@ static const char *startEmbeddedNode(const char *params) {
    * node::Start returning is abnormal (the server should run forever); log
    * it and let the thread end. NEVER _exit() here: this is the app's own
    * process. */
-  /* Pre-flight the exact syscall libuv is about to make.
-   *
-   * libuv's uv__iou_init() calls io_uring_setup (425) unconditionally: its
-   * UV_USE_IO_URING getenv check sits behind a `tbz w3,#1` on the flags
-   * argument, and uv__platform_loop_init passes flags=0, so the env var is
-   * never consulted and setting it does nothing. The sandbox traps the
-   * syscall, so the SIGSYS shim has to carry it.
-   *
-   * Do the same call here, on a thread we fully control and before node is
-   * up, so a shim that does not work shows up as a logged marker right
-   * before the crash instead of an unexplained SIGSEGV inside node::Start.
-   */
-  {
-    unsigned char iouParams[128];
-    memset(iouParams, 0, sizeof(iouParams));
-    /* Log BEFORE the call too: if the trap handling kills us, "calling"
-     * is the marker that proves the syscall is where we died. */
-    logWrite("[embed] io_uring preflight: calling syscall(425)");
-    errno = 0;
-    long rc = syscall(425 /* __NR_io_uring_setup */, 8, iouParams);
-    int preErrno = errno;
-    logWrite("[embed] io_uring preflight: rc=%ld errno=%d (%s)",
-             rc, preErrno, rc == -1 ? strerror(preErrno) : "not trapped");
-  }
-
+  /* No SIGSYS shim and no io_uring preflight: a process-wide SIGSYS handler
+   * collides with ArkWeb/Chromium's seccomp-bpf SIGSYS requirement in this
+   * same process and the app dies from SIGSYS. libuv may still issue the
+   * seccomp-trapped io_uring_setup (this libuv ignores UV_USE_IO_URING), so
+   * this build is an experiment: if node still dies at startup, io_uring is
+   * the fatal syscall and the handling has to move somewhere that does not
+   * fight Chromium for the SIGSYS disposition. */
   g_nodeTid = (pid_t)syscall(__NR_gettid);
   setStatus(ST_RUNNING, "node::Start");
   logWrite("[embed] bootstrap tid=%ld, calling node::Start", (long)g_nodeTid);
-  errno = 0; /* clear any stale errno left by the io_uring preflight so a
-              * later CHECK_EQ(ENOMEM, errno) sees the real failure, not EPERM */
   int rc = start(4, g_nodeArgs.argv);
   logWrite("[embed] node::Start returned %d (backend stopped)", rc);
   snprintf(errBuf, sizeof(errBuf), "err:node::Start returned %d", rc);
