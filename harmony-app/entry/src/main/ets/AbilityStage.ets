@@ -1,7 +1,8 @@
 import { AbilityStage } from '@kit.AbilityKit';
+import { installCrashWatcher } from './crash/CrashCapture';
 
 export default class LukerAbilityStage extends AbilityStage {
   onCreate(): void {
-    console.info('[LukerAbilityStage] onCreate');
+    installCrashWatcher(this.context.filesDir);
   }
 }

@@ -2,6 +2,17 @@
   "string": [
     { "name": "module_desc", "value": "Luker for HarmonyOS" },
     { "name": "EntryAbility_desc", "value": "Luker" },
-    { "name": "EntryAbility_label", "value": "Luker" }
+    { "name": "EntryAbility_label", "value": "Luker" },
+    { "name": "starting_engine", "value": "Starting Luker … %s" },
+    { "name": "engine_failed", "value": "Engine failed: %s" },
+    { "name": "engine_timeout", "value": "Engine timeout" },
+    { "name": "backend_status", "value": "backend: %s" },
+    { "name": "crash_dialog_title", "value": "Previous run crashed" },
+    { "name": "crash_dialog_intro", "value": "The app exited abnormally last time. Tap \"Export diagnostics\" to save a zip and send it to the developer." },
+    { "name": "crash_dialog_close", "value": "Close" },
+    { "name": "export_diagnostics", "value": "Export diagnostics" },
+    { "name": "export_share_title", "value": "Luker diagnostics" },
+    { "name": "export_failed", "value": "Export failed: %s" },
+    { "name": "no_crash_report", "value": "No crash report" }
   ]
 }
