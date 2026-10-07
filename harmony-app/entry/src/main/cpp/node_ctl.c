@@ -458,6 +458,20 @@ static void sigsysHandler(int sig, siginfo_t *si, void *ctx) {
    * carries no syscall context (si_code <= 0) and rewriting the register
    * file for it corrupts whichever thread happened to be running. */
   if (!si || !ctx || si->si_code != 1 /* SYS_SECCOMP */) {
+    /* Not a seccomp trap (raise()/kill(), or a filter that delivers SIGSYS
+     * without syscall context): cannot emulate safely, so restore the default
+     * action and let the signal terminate the process. Record it first — this
+     * is the only trace of such a death, which otherwise leaves no crash
+     * marker and no hilog line. */
+    char b[96];
+    size_t n = 0;
+    safeAppend(b, sizeof(b), &n, "[embed] SIGSYS: non-seccomp si_code=");
+    safeAppendInt(b, sizeof(b), &n, si ? (int)si->si_code : -1);
+    safeAppend(b, sizeof(b), &n, " -> default action\n");
+    if (g_logFd >= 0) {
+      ssize_t ign = write(g_logFd, b, n);
+      (void)ign;
+    }
     signal(sig, SIG_DFL);
     raise(sig);
     return;
