@@ -64,6 +64,28 @@ test('jitless: the character avatar renders from the JS-generated thumbnail', as
 // directly via page.evaluate(fetch(...)) to pin the jitless server branch.
 // The DOM paths are covered above by the streaming chat test and the
 // real-DOM thumbnail test.
+test('jitless: background metadata skips the dominant-color decode', async ({ page }) => {
+    // On jitless the pure-JS image codec makes a full decode per image take
+    // seconds, and the boot warm-up decodes every background, so the dominant
+    // color is skipped and the neutral placeholder is stored instead. This
+    // guards against a regression that reintroduces the decode at boot.
+    await awaitMainUI(page, server.baseURL);
+    const result = await page.evaluate(async () => {
+        const mod = await import('/script.js');
+        const res = await fetch('/api/image-metadata/all', {
+            method: 'POST',
+            headers: mod.getRequestHeaders(),
+            body: JSON.stringify({ prefix: 'backgrounds/' }),
+        });
+        const data = await res.json();
+        const colors = Object.values(data.images || {}).map(m => m.dominantColor);
+        return { status: res.status, count: colors.length, allFallback: colors.length > 0 && colors.every(c => c === '#808080') };
+    });
+    expect(result.status).toBe(200);
+    expect(result.count).toBeGreaterThan(0);
+    expect(result.allFallback).toBe(true);
+});
+
 test('jitless: server OpenAI token count matches the client js-tiktoken count', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
     const messages = [{ role: 'user', content: 'Count these tokens exactly.' }];

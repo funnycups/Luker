@@ -10,6 +10,7 @@ import { imageSize } from 'image-size';
 import writeFileAtomic from 'write-file-atomic';
 import express from 'express';
 import { Jimp } from '../jimp.js';
+import { HAS_WASM } from '../runtime-capabilities.js';
 import { getConfigValue, getImages, isPathUnderParent, uuidv4 } from '../util.js';
 
 export const METADATA_FILE = 'image-metadata.json';
@@ -131,7 +132,13 @@ export async function generateImageMetadata(filePath, type) {
     }
 
     let dominantColor;
-    if (isAnimated) {
+    if (isAnimated || !HAS_WASM) {
+        // Animated images have no single frame to sample. On jitless runtimes
+        // the WASM image codecs are unavailable, and decoding every image with
+        // the pure-JS codec just to average a placeholder color is orders of
+        // magnitude slower (a single 1920x1080 background decode takes seconds,
+        // and the boot warm-up decodes every background), so the dominant color
+        // is skipped and a neutral placeholder is used instead.
         dominantColor = '#808080';
     } else {
         dominantColor = await getAverageColorWithJimp(buffer);
