@@ -2,10 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mime from 'mime-types';
+import nodeFetch from 'node-fetch';
 import { serverDirectory } from './server-directory.js';
 import { getRequestURL, isFileURL, isPathUnderParent } from './util.js';
+import { HAS_WASM } from './runtime-capabilities.js';
 
 const originalFetch = globalThis.fetch;
+// undici's global fetch parses HTTP/1.1 with a WASM llhttp; --jitless removes
+// WebAssembly, so global fetch call sites fail. Many LLM/vector paths import
+// node-fetch directly and are unaffected. Fall back to node-fetch, which is
+// pure JS. luker-dispatch/response-stream.js already handles both the Node
+// Readable body node-fetch produces and the WHATWG stream undici produces.
+const baseFetch = HAS_WASM ? originalFetch : nodeFetch;
 
 const ALLOWED_EXTENSIONS = [
     '.wasm',
@@ -14,7 +22,10 @@ const ALLOWED_EXTENSIONS = [
 // Patched fetch function that handles file URLs
 globalThis.fetch = async (/** @type {string | URL | Request} */ request, /** @type {RequestInit | undefined} */ options) => {
     if (!isFileURL(request)) {
-        return originalFetch(request, options);
+        // node-fetch v3 rejects a foreign (undici) Request object; this patch
+        // forwards `request` as-is, and src/ has no `fetch(new Request(...))`
+        // caller today.
+        return baseFetch(request, options);
     }
     const url = getRequestURL(request);
     const filePath = path.resolve(fileURLToPath(url));

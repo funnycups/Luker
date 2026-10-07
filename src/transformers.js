@@ -6,6 +6,25 @@ import { Buffer } from 'node:buffer';
 import { pipeline, env, RawImage } from 'sillytavern-transformers';
 import { getConfigValue } from './util.js';
 import { serverDirectory } from './server-directory.js';
+import { HAS_WASM } from './runtime-capabilities.js';
+
+export const LOCAL_INFERENCE_UNAVAILABLE = 'LOCAL_INFERENCE_UNAVAILABLE';
+
+export class LocalInferenceUnavailableError extends Error {
+    constructor() {
+        super('Local transformers.js inference requires WebAssembly, which is unavailable on a JITless runtime. Use a remote vector, classification, or speech source instead.');
+        this.name = 'LocalInferenceUnavailableError';
+        this.code = LOCAL_INFERENCE_UNAVAILABLE;
+    }
+}
+
+export function isLocalInferenceUnavailable(error) {
+    return error?.code === LOCAL_INFERENCE_UNAVAILABLE;
+}
+
+export function sendLocalInferenceUnavailable(res, error) {
+    return res.status(500).json({ error: { code: error.code, message: error.message } });
+}
 
 configureTransformers();
 
@@ -121,6 +140,10 @@ async function migrateCacheToDataDir() {
  * @returns {Promise<import('sillytavern-transformers').Pipeline>} The transformers.js pipeline
  */
 export async function getPipeline(task, forceModel = '') {
+    if (!HAS_WASM) {
+        throw new LocalInferenceUnavailableError();
+    }
+
     await migrateCacheToDataDir();
 
     if (tasks[task].pipeline) {

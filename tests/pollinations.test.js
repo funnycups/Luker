@@ -2,7 +2,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, jest, test } from '@
 
 const fetchMock = jest.fn();
 jest.unstable_mockModule('node-fetch', () => ({ default: fetchMock }));
-jest.unstable_mockModule('../src/transformers.js', () => ({ getPipeline: jest.fn() }));
+jest.unstable_mockModule('../src/transformers.js', () => ({
+    getPipeline: jest.fn(),
+    isLocalInferenceUnavailable: jest.fn(() => false),
+    sendLocalInferenceUnavailable: jest.fn(),
+}));
 jest.unstable_mockModule('../src/endpoints/secrets.js', () => ({
     readSecret: jest.fn(),
     SECRET_KEYS: {},

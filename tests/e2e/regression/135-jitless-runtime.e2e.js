@@ -1,0 +1,139 @@
+// JITless runtime: the server boots with LUKER_FORCE_JITLESS=1 and every
+// WebAssembly-dependent path takes its pure-JS branch. Real server, real
+// Playwright, real DOM gestures; only the upstream LLM API is mocked.
+//
+// True --jitless (no WebAssembly global) is verified separately by the
+// child-process unit tests and the manual boot command in the plan; this
+// spec drives the branch selection end-to-end with a real Node process.
+
+import { test, expect } from '@playwright/test';
+import { startServer, tearDownServer } from '../_lib/server.js';
+import { startMockLLM } from '../_lib/mockLLM.js';
+import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
+import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+
+let server, mock;
+
+test.beforeAll(async () => {
+    mock = await startMockLLM({ scriptedReplies: ['JITless reply from the mock LLM.'] });
+    server = await startServer({
+        batchKey: 'regression',
+        scenarioId: 'jitless',
+        extraEnv: { LUKER_FORCE_JITLESS: '1' },
+        extraConfig: { 'storage.mode': 'fs' },
+    });
+    markOnboarded({ dataRoot: server.dataRoot });
+    bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+    appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
+});
+
+test.afterAll(async () => {
+    await tearDownServer(server);
+    await mock?.stop();
+});
+
+test('jitless: streaming chat completes over the node-fetch base', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    await selectCharacterByName(page, 'Seraphina');
+    const { text } = await sendMessageAndAwaitReply(page, 'Reply with the jitless test line.');
+    expect(text).toContain('JITless reply');
+});
+
+test('jitless: the character avatar renders from the JS-generated thumbnail', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    await selectCharacterByName(page, 'Seraphina');
+
+    // Real DOM path: the character-list card's <img> is populated with
+    // /thumbnail?type=avatar&... by getCharacterBlock. Assert the browser
+    // actually decoded a non-zero image, not just that the endpoint returns
+    // bytes.
+    const avatarImg = page.locator('#rm_print_characters_block .character_select', { hasText: 'Seraphina' }).locator('.avatar img').first();
+    await avatarImg.waitFor({ state: 'attached', timeout: 10_000 });
+    await avatarImg.evaluate((el) => el.complete && el.naturalWidth > 0
+        ? Promise.resolve()
+        : new Promise((resolve, reject) => {
+            el.addEventListener('load', resolve, { once: true });
+            el.addEventListener('error', () => reject(new Error('avatar thumbnail failed to load')), { once: true });
+        }));
+    const { src, naturalWidth } = await avatarImg.evaluate((el) => ({ src: el.src, naturalWidth: el.naturalWidth }));
+    expect(src).toContain('/thumbnail');
+    expect(naturalWidth).toBeGreaterThan(0);
+});
+
+// Tests below are endpoint-level integration tests: they drive the API
+// directly via page.evaluate(fetch(...)) to pin the jitless server branch.
+// The DOM paths are covered above by the streaming chat test and the
+// real-DOM thumbnail test.
+test('jitless: background metadata skips the dominant-color decode', async ({ page }) => {
+    // On jitless the pure-JS image codec makes a full decode per image take
+    // seconds, and the boot warm-up decodes every background, so the dominant
+    // color is skipped and the neutral placeholder is stored instead. This
+    // guards against a regression that reintroduces the decode at boot.
+    await awaitMainUI(page, server.baseURL);
+    const result = await page.evaluate(async () => {
+        const mod = await import('/script.js');
+        const res = await fetch('/api/image-metadata/all', {
+            method: 'POST',
+            headers: mod.getRequestHeaders(),
+            body: JSON.stringify({ prefix: 'backgrounds/' }),
+        });
+        const data = await res.json();
+        const colors = Object.values(data.images || {}).map(m => m.dominantColor);
+        return { status: res.status, count: colors.length, allFallback: colors.length > 0 && colors.every(c => c === '#808080') };
+    });
+    expect(result.status).toBe(200);
+    expect(result.count).toBeGreaterThan(0);
+    expect(result.allFallback).toBe(true);
+});
+
+test('jitless: server OpenAI token count matches the client js-tiktoken count', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    const messages = [{ role: 'user', content: 'Count these tokens exactly.' }];
+    const serverCount = await page.evaluate(async (msgs) => {
+        const mod = await import('/script.js');
+        const res = await fetch('/api/tokenizers/openai/count?model=gpt-4', {
+            method: 'POST',
+            headers: mod.getRequestHeaders(),
+            body: JSON.stringify(msgs),
+        });
+        return { status: res.status, body: await res.json() };
+    }, messages);
+    expect(serverCount.status).toBe(200);
+    expect(serverCount.body.token_count).toBeGreaterThan(0);
+    const clientCount = await page.evaluate(async (msgs) => {
+        const mod = await import('/scripts/client-tokenizers/tiktoken-adapter.js');
+        return mod.countMessages('gpt-4', msgs);
+    }, messages);
+    expect(serverCount.body.token_count).toBe(clientCount);
+});
+
+test('jitless: avatar thumbnail is generated by the JS PNG codec', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    await selectCharacterByName(page, 'Seraphina');
+    const avatar = await page.evaluate(() => {
+        const ctx = window.Luker.getContext();
+        return ctx.characters[ctx.characterId].avatar;
+    });
+    const result = await page.evaluate(async (file) => {
+        const mod = await import('/script.js');
+        const res = await fetch(`/thumbnail?type=avatar&file=${encodeURIComponent(file)}`, {
+            headers: mod.getRequestHeaders(),
+        });
+        return { status: res.status, contentType: res.headers.get('content-type') || '' };
+    }, avatar);
+    expect(result.status).toBe(200);
+    expect(result.contentType).toMatch(/^image\//);
+});
+
+test('jitless: local classification reports a clear failure', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    const status = await page.evaluate(async () => {
+        const mod = await import('/script.js');
+        const res = await fetch('/api/extra/classify/labels', {
+            method: 'POST',
+            headers: mod.getRequestHeaders(),
+        });
+        return res.status;
+    });
+    expect(status).toBe(500);
+});

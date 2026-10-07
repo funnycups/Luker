@@ -20,6 +20,8 @@
         "@jimp/core": "^1.6.0",
         "@jimp/js-bmp": "^1.6.0",
         "@jimp/js-gif": "^1.6.0",
+        "@jimp/js-jpeg": "^1.6.1",
+        "@jimp/js-png": "^1.6.1",
         "@jimp/js-tiff": "^1.6.0",
         "@jimp/plugin-blit": "^1.6.0",
         "@jimp/plugin-circle": "^1.6.0",

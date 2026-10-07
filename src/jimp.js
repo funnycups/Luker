@@ -1,4 +1,7 @@
 import { createJimp } from '@jimp/core';
+import { HAS_WASM } from './runtime-capabilities.js';
+import jsPng from '@jimp/js-png';
+import jsJpeg from '@jimp/js-jpeg';
 
 // Optimized image formats
 import webp from '@jimp/wasm-webp';
@@ -44,9 +47,14 @@ const defaultPlugins = [
     quantize.methods,
 ];
 
-// A custom jimp that uses WASM for optimized formats and JS for the rest
+// WASM codecs need executable memory; without it (jitless), use the pure-JS
+// png/jpeg codecs. AVIF and WebP have no JS codec, so they are unsupported
+// on jitless runtimes and @jimp/core throws a generic error for an
+// unregistered format.
+const optimizedFormats = HAS_WASM ? [webp, png, jpeg, avif] : [jsPng, jsJpeg];
+
 const Jimp = createJimp({
-    formats: [webp, png, jpeg, avif, bmp, msBmp, gif, tiff],
+    formats: [...optimizedFormats, bmp, msBmp, gif, tiff],
     plugins: [...defaultPlugins],
 });
 

@@ -10,11 +10,11 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { Tokenizer } from '@agnai/web-tokenizers';
 import { SentencePieceProcessor } from '@agnai/sentencepiece-js';
-import tiktoken from 'tiktoken';
 
 import { TEXTGEN_TYPES } from '../constants.js';
 import { setAdditionalHeaders } from '../additional-headers.js';
 import { getConfigValue, isValidUrl, trimV1 } from '../util.js';
+import { createTiktokenTokenizer } from '../tiktoken-adapter.js';
 
 /**
  * @typedef { (req: import('express').Request, res: import('express').Response) => Promise<any> } TokenizationHandler
@@ -544,7 +544,7 @@ export function getTiktokenTokenizer(model) {
         return tokenizersCache[model];
     }
 
-    const tokenizer = tiktoken.encoding_for_model(model);
+    const tokenizer = createTiktokenTokenizer(model);
     console.info('Instantiated the tokenizer for', model);
     tokenizersCache[model] = tokenizer;
     return tokenizer;
