@@ -40,8 +40,6 @@ const extension_settings = __ctx.extensionSettings;
 const writeExtensionField = __ctx.writeExtensionField;
 const uuidv4 = __ctx.uuidv4;
 
-const MAX_TOOL_ROUNDS = 10;
-
 // ==================== Tool Definitions ====================
 
 const TOOL_NAMES = Object.freeze({
@@ -2442,8 +2440,9 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
 
     let lastAssistantText = '';
 
-    // Multi-round tool calling loop
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    // Multi-round tool calling loop. Program-driven: any tool call this round
+    // reruns the loop, a plain-text response (no tool calls) exits it.
+    while (true) {
         if (abortSignal?.aborted) {
             throw new Error('Request aborted');
         }
