@@ -64,6 +64,10 @@ test('streaming chunk gap beyond the profile timeout aborts generation and cance
     await expect.poll(() => abortRequests.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
     await page.waitForTimeout(500);
 
+    // 单次超时只发一次 abort：超时拆订阅后,生成循环的 onErrorStreaming 会
+    // abort 同一个 caller signal,监听器未摘除就会重复 POST。
+    expect(abortRequests).toHaveLength(1);
+
     expect(abortRequests[0]).toMatch(/\/api\/generation\/[0-9a-f-]{8,}\/abort$/i);
     expect(abortResponses.length).toBeGreaterThanOrEqual(1);
     expect(abortResponses[0]).toBeGreaterThanOrEqual(200);

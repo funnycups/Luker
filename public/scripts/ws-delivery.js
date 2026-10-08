@@ -101,6 +101,18 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         }
     }
 
+    // Remove the caller-signal abort listener wired at subscribe time. Must
+    // run on every entry teardown (unsubscribe / end / error / close): a
+    // timeout tears the entry down, then the caller's own error handling
+    // aborts the same signal, and a still-attached listener would re-send
+    // the abort notification for a request that is already gone.
+    function detachAbortListener(entry) {
+        if (entry && typeof entry.detachAbort === 'function') {
+            try { entry.detachAbort(); } catch { /* ignore */ }
+            entry.detachAbort = null;
+        }
+    }
+
     function handleEntryTimeout(requestId, entry) {
         entry.timeoutTimer = null;
         const secondsText = String(Math.round((entry.timeoutMs / 1000) * 10) / 10);
@@ -221,6 +233,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 try { entry.controller.enqueue(bytes); } catch { /* ignore */ }
             } else if (msg.type === 'end') {
                 disarmEntryTimer(entry);
+                detachAbortListener(entry);
                 if (typeof msg.seq === 'number') entry.lastSeq = msg.seq;
                 if (!entry.headResolved) {
                     entry.headResolved = true;
@@ -230,6 +243,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 pending.delete(msg.request_id);
             } else if (msg.type === 'error') {
                 disarmEntryTimer(entry);
+                detachAbortListener(entry);
                 // Structured error frame from dispatch (thrown Error path).
                 // If head hasn't resolved, surface as HTTP 502 with the
                 // error message as body so callers can do `await response.text()`
@@ -339,6 +353,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 : 0,
             onTimeout: typeof options.onTimeout === 'function' ? options.onTimeout : null,
             timeoutTimer: null,
+            detachAbort: null,
         };
         pending.set(requestId, entry);
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -351,6 +366,30 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             console.warn(`[ws-delivery] subscribe queued (ws not open, readyState=${ws?.readyState ?? 'null'}) request_id=${requestId}`);
         }
         armEntryTimer(requestId, entry);
+        // Wire the caller-supplied AbortSignal here (not in proxiedFetch) so
+        // the listener is owned by the entry and removed on every teardown
+        // path. A timeout already unsubscribed the entry; without detaching,
+        // the caller's later `abortController.abort()` in its own error
+        // handler fires this listener again and re-sends the abort
+        // notification (duplicate `POST /api/generation/:id/abort`).
+        const callerSignal = options.signal;
+        if (callerSignal && typeof callerSignal.addEventListener === 'function') {
+            const onAbort = () => {
+                const abortErr = new DOMException('The user aborted a request.', 'AbortError');
+                unsubscribe(requestId, abortErr);
+                if (typeof options.onAbort === 'function') {
+                    try { options.onAbort(requestId); } catch (cbErr) {
+                        console.warn('[ws-delivery] onAbort callback threw:', cbErr?.message || cbErr);
+                    }
+                }
+            };
+            if (callerSignal.aborted) {
+                onAbort();
+            } else {
+                callerSignal.addEventListener('abort', onAbort, { once: true });
+                entry.detachAbort = () => callerSignal.removeEventListener('abort', onAbort);
+            }
+        }
         return {
             stream,
             headPromise,
@@ -361,6 +400,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
     function unsubscribe(requestId, reason = null) {
         const entry = pending.get(requestId);
         disarmEntryTimer(entry);
+        detachAbortListener(entry);
         if (ws && ws.readyState === WebSocket.OPEN) {
             try { ws.send(JSON.stringify({ type: 'unsubscribe', request_id: requestId })); } catch { /* ignore */ }
         }
@@ -431,6 +471,7 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             // forever, orphaning their async chains (see unsubscribe).
             for (const entry of pending.values()) {
                 disarmEntryTimer(entry);
+                detachAbortListener(entry);
                 if (!entry.headResolved) {
                     entry.headResolved = true;
                     entry.rejectHead(new Error('ws-delivery: closed'));
@@ -531,11 +572,13 @@ export function installFetchProxy(delivery, options = {}) {
     // constructs a parent-realm Response returned to iframe consumers, so
     // `response instanceof Response` inside the iframe evaluates to `false`
     // (iframe.Response !== parent.Response). Same for Headers instance-checks
-    // on caller `init.headers`, and DOMException-typed abort errors. Shadowing
-    // the outer globals via destructure means the function body below keeps
-    // its existing `Response` / `Headers` / `DOMException` identifiers with no
-    // further edits, but they now resolve to the target-window classes.
-    const { Response, Headers, DOMException } = targetWindow;
+    // on caller `init.headers`. Shadowing the outer globals via destructure
+    // means the function body below keeps its existing `Response` / `Headers`
+    // identifiers with no further edits, but they now resolve to the
+    // target-window classes. (Abort/timeout DOMExceptions are created in the
+    // shared delivery instance and are detected by `.name` / `.code`, not
+    // `instanceof`, so they do not need per-realm rebinding.)
+    const { Response, Headers } = targetWindow;
 
     const shouldProxy = options.shouldProxy || defaultShouldProxy;
     const originalFetch = options.originalFetch || targetWindow.fetch.bind(targetWindow);
@@ -606,30 +649,18 @@ export function installFetchProxy(delivery, options = {}) {
         httpResp.headers.forEach((v, k) => {
             if (k.toLowerCase().startsWith('x-luker-')) initialHeaders[k] = v;
         });
-        const { stream, headPromise, unsubscribe } = delivery.subscribe(requestId, initialHeaders, {
+        const { stream, headPromise } = delivery.subscribe(requestId, initialHeaders, {
             timeoutMs: requestTimeoutMs,
             onTimeout: () => sendAbortNotification(requestId),
+            // Caller-supplied AbortSignal is wired inside the delivery so the
+            // listener is removed on every entry teardown (unsubscribe / end /
+            // error / timeout / close). The handler terminates the caller's
+            // ReadableStream with an AbortError and notifies the server so
+            // upstream generation stops. Server endpoint is best-effort.
+            signal: init?.signal,
+            onAbort: () => sendAbortNotification(requestId),
         });
         console.info(`[ws-delivery] proxiedFetch subscribe request_id=${requestId} url=${String(url).split('?')[0]}`);
-        // Wire caller-supplied AbortSignal: on abort, unsubscribe (which cancels
-        // the WS-side stream) AND notify the server so it can stop the upstream
-        // generation. Server endpoint is best-effort — failure is swallowed.
-        const signal = init?.signal;
-        if (signal) {
-            const onAbort = () => {
-                // Terminate the caller's ReadableStream with an AbortError
-                // so any `for await response.body` loop unwinds immediately.
-                // Then notify the server so upstream generation stops.
-                const abortErr = new DOMException('The user aborted a request.', 'AbortError');
-                unsubscribe(abortErr);
-                sendAbortNotification(requestId);
-            };
-            if (signal.aborted) {
-                onAbort();
-            } else {
-                signal.addEventListener('abort', onAbort, { once: true });
-            }
-        }
         // Wait for the dispatch to publish upstream {status, headers} via a
         // `head` frame, OR fallback to {200, {}} when the first chunk/end/
         // error arrives without a head. Contract: every dispatch emits head
