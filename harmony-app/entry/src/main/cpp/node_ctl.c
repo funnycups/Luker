@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <link.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -37,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -482,6 +484,106 @@ static const char *startBackendAsync(const char *params) {
   return "launching";
 }
 
+/* ── io_uring syscall interposition ──────────────────────────────────────
+ * OHOS seccomp traps io_uring_setup (425) and the framework's own SIGSYS
+ * disposition then terminates the process. libuv issues it unconditionally
+ * for its epoll batching ring: uv__use_io_uring() returns 1 for the
+ * non-SQPOLL case before it ever consults UV_USE_IO_URING (libuv
+ * src/unix/linux.c), so the environment variable cannot turn it off.
+ *
+ * libuv reaches the kernel through the libc syscall() symbol, so after
+ * dlopen we redirect libnode.so's syscall GOT entry to a wrapper that
+ * reports ENOSYS for the io_uring syscalls. libuv's uv__iou_init() reads the
+ * -1 return as "io_uring unavailable" and falls back to plain epoll. Nothing
+ * installs a SIGSYS handler, so there is no collision with ArkWeb/Chromium's
+ * seccomp-bpf SIGSYS requirement in this same process.
+ * ──────────────────────────────────────────────────────────────────────── */
+static long (*g_realSyscall)(long, long, long, long, long, long, long);
+
+static long lukerSyscall(long number, long a1, long a2, long a3, long a4,
+                         long a5, long a6) {
+  if (number == 425 || number == 426 || number == 427) { /* io_uring_* */
+    errno = ENOSYS;
+    return -1;
+  }
+  /* Log each distinct number once. Our wrapper runs before the real syscall,
+   * so if a seccomp trap still kills the process the last logged number names
+   * the trapped syscall. */
+  static unsigned char seen[512];
+  if (number >= 0 && number < (long)sizeof(seen) && !seen[number]) {
+    seen[number] = 1;
+    logWrite("[embed] syscall(%ld)", number);
+  }
+  return g_realSyscall(number, a1, a2, a3, a4, a5, a6);
+}
+
+/* Walk the loaded objects, find libnode.so, read its PT_DYNAMIC, and
+ * overwrite the GOT slot the dynamic linker filled for syscall(). */
+static int patchIouringSyscall(struct dl_phdr_info *info, size_t size,
+                               void *data) {
+  (void)size;
+  (void)data;
+  if (!info->dlpi_name || !strstr(info->dlpi_name, "libnode.so"))
+    return 0;
+
+  const ElfW(Dyn) *dyn = NULL;
+  for (int i = 0; i < info->dlpi_phnum; i++)
+    if (info->dlpi_phdr[i].p_type == PT_DYNAMIC)
+      dyn = (const ElfW(Dyn) *)(info->dlpi_addr + info->dlpi_phdr[i].p_vaddr);
+  if (!dyn) {
+    logWrite("[embed] io_uring patch: no PT_DYNAMIC");
+    return 0;
+  }
+
+  const ElfW(Sym) *symtab = NULL;
+  const char *strtab = NULL;
+  const ElfW(Rela) *jmprel = NULL;
+  size_t pltrelsz = 0;
+  for (const ElfW(Dyn) *d = dyn; d->d_tag != DT_NULL; d++) {
+    switch (d->d_tag) {
+      case DT_SYMTAB:
+        symtab = (const ElfW(Sym) *)(info->dlpi_addr + d->d_un.d_ptr);
+        break;
+      case DT_STRTAB:
+        strtab = (const char *)(info->dlpi_addr + d->d_un.d_ptr);
+        break;
+      case DT_JMPREL:
+        jmprel = (const ElfW(Rela) *)(info->dlpi_addr + d->d_un.d_ptr);
+        break;
+      case DT_PLTRELSZ:
+        pltrelsz = d->d_un.d_val;
+        break;
+    }
+  }
+  if (!symtab || !strtab || !jmprel || pltrelsz == 0) {
+    logWrite("[embed] io_uring patch: dynamic tables missing");
+    return 0;
+  }
+
+  size_t count = pltrelsz / sizeof(ElfW(Rela));
+  for (size_t i = 0; i < count; i++) {
+    const char *name = strtab + symtab[ELF64_R_SYM(jmprel[i].r_info)].st_name;
+    if (strcmp(name, "syscall") != 0)
+      continue;
+
+    void **got = (void **)(info->dlpi_addr + jmprel[i].r_offset);
+    long page = sysconf(_SC_PAGESIZE);
+    void *pageStart = (void *)((uintptr_t)got & ~(uintptr_t)(page - 1));
+    if (mprotect(pageStart, (size_t)page, PROT_READ | PROT_WRITE) != 0) {
+      logWrite("[embed] io_uring patch: mprotect failed: %s", strerror(errno));
+      return 0;
+    }
+    g_realSyscall = (long (*)(long, long, long, long, long, long, long))*got;
+    *got = (void *)lukerSyscall;
+    logWrite("[embed] io_uring patch: syscall GOT %p -> %p (was %p)",
+             (void *)got, (void *)lukerSyscall, (void *)g_realSyscall);
+    return 1;
+  }
+
+  logWrite("[embed] io_uring patch: syscall GOT entry not found");
+  return 0;
+}
+
 static const char *startEmbeddedNode(const char *params) {
   static char errBuf[256];
 
@@ -643,7 +745,7 @@ static const char *startEmbeddedNode(const char *params) {
    * readable in cloud debug). The reader thread keeps draining so framework
    * printf traffic (ArkWeb config spam) can never block a writer. */
   installCrashMarkers();
-  setenv("UV_USE_IO_URING", "0", 1); /* best-effort; see the io_uring note below */
+  setenv("UV_USE_IO_URING", "0", 1); /* covers the SQPOLL path; the ctl ring is GOT-patched below */
   if (g_logFd > 2) {
     int fds[2];
     if (pipe(fds) == 0) {
@@ -706,6 +808,10 @@ static const char *startEmbeddedNode(const char *params) {
   }
   logWrite("[embed] node::Start resolved at %p", (void *)start);
 
+  /* Neutralize io_uring_setup before node::Start runs any libuv code. */
+  if (!dl_iterate_phdr(patchIouringSyscall, NULL))
+    logWrite("[embed] io_uring patch: libnode.so not found in loaded objects");
+
   /* argv must outlive the thread — static storage. V8 flags:
    *  - --no-verify-heap : disables V8 heap verification on startup
    *    (defensive — avoids allocation checks that can fail under the
@@ -735,13 +841,12 @@ static const char *startEmbeddedNode(const char *params) {
    * node::Start returning is abnormal (the server should run forever); log
    * it and let the thread end. NEVER _exit() here: this is the app's own
    * process. */
-  /* No SIGSYS shim and no io_uring preflight: a process-wide SIGSYS handler
-   * collides with ArkWeb/Chromium's seccomp-bpf SIGSYS requirement in this
-   * same process and the app dies from SIGSYS. libuv may still issue the
-   * seccomp-trapped io_uring_setup (this libuv ignores UV_USE_IO_URING), so
-   * this build is an experiment: if node still dies at startup, io_uring is
-   * the fatal syscall and the handling has to move somewhere that does not
-   * fight Chromium for the SIGSYS disposition. */
+  /* No SIGSYS shim: a process-wide SIGSYS handler collides with
+   * ArkWeb/Chromium's seccomp-bpf SIGSYS requirement in this same process and
+   * the app dies from SIGSYS. io_uring_setup is instead neutralized at the
+   * libc syscall() GOT entry (see lukerSyscall), so libuv never issues the
+   * seccomp-trapped syscall and its epoll batching ring falls back to plain
+   * epoll. */
   g_nodeTid = (pid_t)syscall(__NR_gettid);
   setStatus(ST_RUNNING, "node::Start");
   logWrite("[embed] bootstrap tid=%ld, calling node::Start", (long)g_nodeTid);
