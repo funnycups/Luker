@@ -18,6 +18,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Connections & Models
 
+- Fixed a timed-out request's retry reusing the same generation id, which made the retry read the previous attempt's buffered error as its own result and left the previous attempt running in parallel.
 - Fixed the deprecated proxy preset migration losing the profile proxy password and leaving migrated profiles to authenticate with the active provider key.
 
 ### Storage & Sync

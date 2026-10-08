@@ -175,6 +175,15 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
     const replies = [...scriptedReplies];
     const tools = [...scriptedToolCalls];
     const requests = [];
+    // latencyMs may be a number or a function (req, parsed) => ms so a test
+    // can make, say, only the first attempt hang and let the retry answer.
+    let latencyMsGlobal = latencyMs;
+    function setLatencyMs(ms) { latencyMsGlobal = ms; }
+    // Diagnostics: how many /chat/completions requests are open (received but
+    // not yet closed) simultaneously. A value > 1 means the server is running
+    // more than one upstream generation at once.
+    let activeChatRequests = 0;
+    let maxConcurrentChatRequests = 0;
     let stallAfterChunks = Number.isInteger(streamStallAfterChunks) ? streamStallAfterChunks : -1;
     let stallMsGlobal = Math.max(0, Number(streamStallMs) || 0);
     function setStreamStall({ afterChunks = -1, stallMs = 0 } = {}) {
@@ -319,6 +328,17 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         const record = { url: req.url, method: req.method, body: parsed, headers: req.headers, receivedAt: Date.now(), firstByteAt: null };
         requests.push(record);
 
+        if ((req.url || '').includes('/chat/completions')) {
+            activeChatRequests += 1;
+            if (activeChatRequests > maxConcurrentChatRequests) maxConcurrentChatRequests = activeChatRequests;
+            let closed = false;
+            res.on('close', () => {
+                if (closed) return;
+                closed = true;
+                activeChatRequests -= 1;
+            });
+        }
+
         // Patch res.write / res.end once per request so the FIRST byte
         // sent for this response stamps firstByteAt. This is transparent
         // to callers that don't inspect the field.
@@ -333,8 +353,11 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
             return origEnd(chunk, ...rest);
         };
 
-        if (latencyMs > 0) {
-            await waitForCloseOrTimeout(res, latencyMs);
+        const effectiveLatency = typeof latencyMsGlobal === 'function'
+            ? Number(latencyMsGlobal(req, parsed)) || 0
+            : Number(latencyMsGlobal) || 0;
+        if (effectiveLatency > 0) {
+            await waitForCloseOrTimeout(res, effectiveLatency);
             if (res.destroyed || res.writableEnded) return;
         }
 
@@ -658,6 +681,8 @@ export async function startMockLLM({ scriptedReplies = [], scriptedToolCalls = [
         scriptReply(s) { replies.push(s); },
         scriptToolCall(t) { tools.push(t); },
         setStreamChunkDelayMs(ms) { setChunkDelay(ms); },
+        setLatencyMs(ms) { setLatencyMs(ms); },
+        getMaxConcurrentChatRequests() { return maxConcurrentChatRequests; },
         setStreamStall,
         scriptDirectorRun({ route } = {}) { setDirectorRoute(route); },
         clearDirectorRun() { setDirectorRoute(null); },

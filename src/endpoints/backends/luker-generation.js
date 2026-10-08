@@ -513,6 +513,20 @@ export function createGenerationJob(request, options) {
         modelName: '',
     };
 
+    // A recycled job_id (the client re-POSTs the same job_id when it retries a
+    // request) must start from a clean stream state. Without this reset the
+    // retry's `resume from_seq: 1` replays the previous attempt's buffered
+    // head/chunk/error frames into the new attempt, so the client treats the
+    // old attempt's abort as the retry's own result. The previous attempt's
+    // upstream request also survives: its AbortController was only nulled,
+    // never aborted, so it keeps generating in parallel with the retry.
+    if (existing) {
+        try { existing.abortController?.abort('superseded by retry'); } catch { /* ignore */ }
+        job.events = [];
+        job.lastSeq = 0;
+        job.text = '';
+    }
+
     clearGenerationJobPersistenceTimer(job);
     job.status = 'running';
     job.updatedAt = now;
