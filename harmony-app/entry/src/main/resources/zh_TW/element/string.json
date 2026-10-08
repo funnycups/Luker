@@ -7,10 +7,10 @@
     { "name": "engine_failed", "value": "引擎失敗：%s" },
     { "name": "engine_timeout", "value": "引擎逾時" },
     { "name": "backend_status", "value": "後端：%s" },
-    { "name": "crash_dialog_title", "value": "偵測到上次異常結束" },
-    { "name": "crash_dialog_intro", "value": "應用程式在上次執行時異常結束。點擊「匯出診斷包」儲存診斷壓縮檔並回報給開發者。" },
+    { "name": "crash_dialog_title", "value": "偵測到上次異常退出" },
+    { "name": "crash_dialog_intro", "value": "應用程式在上次執行時異常退出。點擊「匯出診斷壓縮包」儲存診斷壓縮檔並回報給開發者；完整報告在壓縮檔內的 crashes/ 目錄下。" },
     { "name": "crash_dialog_close", "value": "關閉" },
-    { "name": "export_diagnostics", "value": "匯出診斷包" },
+    { "name": "export_diagnostics", "value": "匯出診斷壓縮包" },
     { "name": "export_share_title", "value": "Luker 診斷包" },
     { "name": "export_failed", "value": "匯出失敗：%s" },
     { "name": "no_crash_report", "value": "尚無崩潰報告" }

@@ -8,7 +8,7 @@
     { "name": "engine_timeout", "value": "引擎超时" },
     { "name": "backend_status", "value": "后端：%s" },
     { "name": "crash_dialog_title", "value": "检测到上次异常退出" },
-    { "name": "crash_dialog_intro", "value": "应用在上次运行时异常退出。点击「导出诊断包」保存诊断压缩包并反馈给开发者。" },
+    { "name": "crash_dialog_intro", "value": "应用在上次运行时异常退出。点击「导出诊断包」保存诊断压缩包并反馈给开发者；完整报告在压缩包内的 crashes/ 目录下。" },
     { "name": "crash_dialog_close", "value": "关闭" },
     { "name": "export_diagnostics", "value": "导出诊断包" },
     { "name": "export_share_title", "value": "Luker 诊断包" },
