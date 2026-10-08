@@ -19,8 +19,8 @@
 //     and are defined here. Execution dispatches to main.js's legacy
 //     helper-tool runner (renaming the call to the legacy `luker_card_*`
 //     name) so we don't duplicate the read-side logic.
-//   - The two control tools (continue / finalize) are defined here and
-//     namespaced with `luker_cea_editor_*`.
+//   - The popup has no control tools: the auto-continue loop is
+//     program-driven by tool-call presence.
 
 import { runCharacterEditorHelperToolCall } from '../main.js';
 import { CHARACTER_PRESET_READ_TOOL_DEFS } from '/scripts/iteration-library/tools/character-presets-reads.js';
@@ -675,7 +675,6 @@ const WEB_SEARCH_TOOL_DEF = Object.freeze({
  *   - 6 edit tools (cea_*) defined above
  *   - 6 read tools defined above (short canonical names)
  *     (web_search included iff `opts.hasSearchTools` is true)
- *   - 2 control tools (luker_cea_editor_*)
  *
  * The function signature accepts `context` and `settings` for parity with
  * the other adapter `build…ToolSet` helpers in this codebase, even though

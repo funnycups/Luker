@@ -14,7 +14,7 @@
  *                               want i18n must wrap them at the call site
  *                               (this module is pure and has no i18n binding).
  *   - CONTROL_TOOL_NAMES:       names of the runner-side control tools used
- *                               for continue/finalize.
+ *                               for schema resets.
  *   - SESSIONS_BUCKET_KEY:      the extension_settings.memory_graph subkey
  *                               under which iteration sessions live. Exposed
  *                               so the session-store wrapper can derive the

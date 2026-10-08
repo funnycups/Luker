@@ -8,7 +8,7 @@
  *   - `LOOP_ITERATION_CONTRACT_LINES` — the iteration-mode contract
  *     appended to the user-configurable iteration system prompt. Telling
  *     the AI what fields exist, that finalize is forced on, which tool
- *     to use for partial updates, and when to call continue/finalize.
+ *     to use for partial updates, and how the multi-round loop continues.
  *   - `applyLoopProfilePatchArgs` — merges a partial loop-profile patch
  *     on top of a current loop profile and re-sanitizes. Used by both
  *     the diff preview path (`buildLoopIterationPendingDiffState`) and

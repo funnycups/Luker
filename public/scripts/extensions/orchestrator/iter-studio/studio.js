@@ -2471,7 +2471,7 @@ export async function openOrchestratorIterationStudio(deps) {
     /**
      * Build the catalog the runner advertises to the LLM. The mode-aware
      * `buildAiIterationToolSet` returns the per-mode edit tools; we splice
-     * the two popup-side control tools (continue / finalize) alongside.
+     * the two popup-side control tools (the profile resets) alongside.
      * The runner's `isControlCall` predicate (passed below) routes them to
      * onControlCall instead of onToolCall so they never reach the sandbox
      * executor.

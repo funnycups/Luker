@@ -28,10 +28,10 @@
  *                          node / preset by id (visually distinct icon
  *                          but routes through the same sandbox-diff
  *                          normalizer as the `set_*` tools).
- *   - `type: 'control'` — popup-flow control tools (continue / finalize /
- *                          reset). These never reach the sandbox
- *                          executor; the runner routes them through
- *                          `onControlCall` in `iter-studio/studio.js`.
+ *   - `type: 'control'` — popup-flow control tools (profile resets).
+ *                          These never reach the sandbox executor; the
+ *                          runner routes them through `onControlCall` in
+ *                          `iter-studio/studio.js`.
  *
  * `summarize(args, result, i18n)` produces a one-line digest shown next
  * to the chip label so the user doesn't have to expand the args block

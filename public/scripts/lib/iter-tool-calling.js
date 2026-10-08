@@ -153,20 +153,20 @@ export async function requestToolCallWithRetry(context, settings, {
     throw lastError || new Error(`Tool call '${fnName}' failed.`);
 }
 
-// Control-flow tool calls (e.g. continue / finalize an iteration loop) do
-// not represent edits to apply; they steer the runner / iteration loop
-// itself and are routed to `onControlCall` instead of `onToolCall` so
-// popups can update their state machine without treating them as
-// user-visible operations.
+// Control-flow tool calls do not represent edits to apply; they steer the
+// runner / iteration loop itself and are routed to `onControlCall` instead
+// of `onToolCall` so popups can update their state machine without treating
+// them as user-visible operations.
 //
 // Detection is delegated to the caller via `opts.isControlCall` because
 // every popup uses its own namespaced control tool names — orchestrator
-// emits `luker_orch_continue_iteration` / `luker_orch_finalize_iteration`,
-// memory-graph schema iteration emits `luker_mg_schema_continue_iteration`
-// / `_finalize_iteration`, CPA and CEA popups have none. A single hardcoded
-// allowlist in the shared runner would silently misroute calls. When
-// `isControlCall` is omitted the runner treats every call as non-control,
-// so popups without control tools opt out by simply not passing it.
+// emits `luker_orch_reset_live_to_blank` / `luker_orch_reset_live_to_global`,
+// memory-graph schema iteration emits `luker_mg_schema_reset_live_to_blank`
+// / `luker_mg_schema_reset_live_to_global`, CPA and CEA popups have none.
+// A single hardcoded allowlist in the shared runner would silently misroute
+// calls. When `isControlCall` is omitted the runner treats every call as
+// non-control, so popups without control tools opt out by simply not
+// passing it.
 export async function requestToolCallsWithRetry(context, settings, {
     taskMessages = [],
     runtimeWorldInfo = null,

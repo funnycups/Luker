@@ -1,14 +1,12 @@
 /**
  * Unified CEA editor tool-display map — feeds `renderToolCallChip`'s
  * `opts.toolDisplay`. Keys are the tool names the model produces in this
- * adapter (the 6 `cea_*` edit verbs, the 6 short-name read tools, and
- * the 2 `luker_cea_editor_*` control tools); values are
- * `{ icon, label, type, summarize?(args, result, i18n) }`.
+ * adapter (the 6 `cea_*` edit verbs and the 6 short-name read tools);
+ * values are `{ icon, label, type, summarize?(args, result, i18n) }`.
  *
- * Three `type`s drive the shared chip renderer:
+ * Two `type`s drive the shared chip renderer:
  *   - `'edit'`    → applied to state.live via applyPendingEdits
  *   - `'read'`    → produces a tool_result for the next round
- *   - `'control'` → steers the auto-continue loop (not user-visible state)
  *
  * Both `label` and the templates inside `summarize` are the English
  * source strings. `renderToolCallChip` threads the popup's runtime

@@ -53,10 +53,10 @@ export function renderMessageCard(message, opts = {}) {
         </div>`;
     }
     if (role === 'user') {
-        // Auto-continue user messages are internal plumbing — they carry
-        // an LLM-facing nudge ("Continue with the next iteration step.
-        // Call luker_*_finalize_iteration once …") that the user should
-        // never see in the chat. The loop's progression is already
+        // Legacy auto-continue user messages are internal plumbing that
+        // the user should never see in the chat. Current iter-studio
+        // sessions never emit them; this guards sessions from before the
+        // program-driven refactor. The loop's progression is already
         // visible as the next assistant turn.
         if (message.auto) return '';
         const cls = 'luker_lib_message luker_lib_message_user';
