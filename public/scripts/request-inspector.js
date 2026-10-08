@@ -567,6 +567,27 @@ function extractWireMessages(wr) {
     return { systemText, items, otherKeys };
 }
 
+// Surface the reasoning-effort value actually sent upstream. The wire body is
+// provider-native, so probe each dialect's key.
+function extractWireReasoningEffort(wr) {
+    if (!wr || typeof wr !== 'object') return null;
+    if (typeof wr.reasoning_effort === 'string' && wr.reasoning_effort) return wr.reasoning_effort;
+    if (wr.reasoning && typeof wr.reasoning === 'object') {
+        if (typeof wr.reasoning.effort === 'string' && wr.reasoning.effort) return wr.reasoning.effort;
+        if (typeof wr.reasoning.max_tokens === 'number') return `max_tokens: ${wr.reasoning.max_tokens}`;
+    }
+    if (wr.output_config && typeof wr.output_config.effort === 'string' && wr.output_config.effort) return wr.output_config.effort;
+    if (typeof wr.reasoning_format === 'string' && wr.reasoning_format) return `format: ${wr.reasoning_format}`;
+    if (typeof wr.enable_thinking === 'boolean') return wr.enable_thinking ? 'on' : 'off';
+    if (wr.thinking && typeof wr.thinking === 'object' && typeof wr.thinking.type === 'string') return wr.thinking.type;
+    const tc = wr.thinkingConfig || wr.generationConfig?.thinkingConfig;
+    if (tc && typeof tc === 'object') {
+        if (typeof tc.thinkingLevel === 'string') return tc.thinkingLevel;
+        if (typeof tc.thinkingBudget === 'number') return `budget: ${tc.thinkingBudget}`;
+    }
+    return null;
+}
+
 function buildWireRequestHtml(detail, q) {
     const wr = detail.wireRequest;
     if (!wr || typeof wr !== 'object') {
@@ -646,6 +667,10 @@ function buildChatDetailBody(detail) {
 
 function buildChatDetailHtml(detail) {
     const usage = detail.usage || {};
+    const wireReasoningEffort = extractWireReasoningEffort(detail.wireRequest);
+    const reasoningEffortRow = wireReasoningEffort != null
+        ? `<tr><td>${t`Reasoning Effort`}</td><td class="ri-mono">${escapeHtml(wireReasoningEffort)}</td></tr>`
+        : '';
     const cacheInfo = (usage.cache_read != null || usage.cache_write != null)
         ? `<tr><td>${t`Cache Read`}</td><td>${formatTokens(usage.cache_read)}</td></tr>
  <tr><td>${t`Cache Write`}</td><td>${formatTokens(usage.cache_write)}</td></tr>`
@@ -691,6 +716,7 @@ function buildChatDetailHtml(detail) {
  <tr><td>${t`Messages`}</td><td>${detail.messageCount}</td></tr>
  <tr><td>${t`Prompt Chars`}</td><td>${(detail.promptCharLength || 0).toLocaleString()}</td></tr>
  <tr><td>${t`Max Tokens`}</td><td>${detail.maxTokens ?? '\u2014'}</td></tr>
+ ${reasoningEffortRow}
   </table>
  </div>
 
